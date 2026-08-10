@@ -307,13 +307,13 @@ pub(crate) fn finish_source(
     };
     let aborted = writer.abort_source_failure(Error::InvalidArgument("C range source failed"));
     if cleanup_failed(&aborted) {
-        Err(ErrorHandle::source_cleanup_failure(aborted, error).into())
+        Err(ErrorHandle::callback_cleanup_failure(aborted, error).into())
     } else {
         Err(error)
     }
 }
 
-fn cleanup_failed(error: &Error) -> bool {
+pub(crate) fn cleanup_failed(error: &Error) -> bool {
     matches!(
         error,
         Error::TransactionAborted(cause)

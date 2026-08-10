@@ -106,13 +106,13 @@ fn randomized_direct_replacement_matches_scalar_state_and_report() {
 }
 
 #[test]
-fn randomized_retention_refresh_matches_full_delta_semantics() {
-    let files = TestPair::new("retention");
+fn randomized_first_seen_refresh_matches_full_delta_semantics() {
+    let files = TestPair::new("first-seen");
     create_live(
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -142,7 +142,69 @@ fn randomized_retention_refresh_matches_full_delta_semantics() {
         }
 
         let mut workflow = writer
-            .begin_retention_refresh(round, &cancellation)
+            .begin_first_seen_refresh(round, &cancellation)
+            .unwrap();
+        for batch in records.chunks(4) {
+            workflow.add_ranges_v4_slice(batch).unwrap();
+        }
+        let finished = workflow.finish_input().unwrap();
+        assert_report(
+            finished.report(),
+            &before,
+            &after,
+            record_count as u64,
+            boolean_runs(&desired),
+            desired.iter().filter(|&&present| present).count() as u64,
+        );
+        finish(finished);
+        assert_database(&files.main, &after);
+        before = after;
+    }
+    writer.close().unwrap();
+}
+
+#[test]
+fn randomized_last_seen_refresh_matches_cutoff_and_monotonic_time() {
+    let files = TestPair::new("last-seen");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::LAST_SEEN,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
+    let mut random = Random(0xd39a_c624_7b10_5e81);
+    let mut before = [None; DOMAIN];
+
+    for round in 1..=100u32 {
+        let refresh = if round % 7 == 0 { round - 1 } else { round };
+        let cutoff = round.saturating_sub(8);
+        let record_count = random.below(24) as usize;
+        let mut records = Vec::with_capacity(record_count);
+        let mut desired = [false; DOMAIN];
+        for _ in 0..record_count {
+            let (from, to) = random.range();
+            records.push(AddressRange {
+                from: Ipv4Key(from),
+                to: Ipv4Key(to),
+            });
+            desired[from as usize..=to as usize].fill(true);
+        }
+        let mut after = [None; DOMAIN];
+        for index in 0..DOMAIN {
+            after[index] = if desired[index] {
+                Some(before[index].unwrap_or(refresh).max(refresh))
+            } else {
+                before[index].filter(|value| *value > cutoff)
+            };
+        }
+
+        let mut workflow = writer
+            .begin_last_seen_refresh(refresh, cutoff, &cancellation)
             .unwrap();
         for batch in records.chunks(4) {
             workflow.add_ranges_v4_slice(batch).unwrap();

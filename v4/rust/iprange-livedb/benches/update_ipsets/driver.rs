@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::scenarios::{self, ScenarioResult};
 
-const HEADER: &str = "scenario,size,aux,work_units,elapsed_ns,units_per_second,alloc_calls,alloc_bytes,rss_before_kib,rss_after_kib,rss_peak_kib,fds_before,fds_after,file_logical_bytes,file_physical_bytes,range_records,feeds,private_artifacts";
+const HEADER: &str = "scenario,size,aux,work_units,emitted_units,elapsed_ns,units_per_second,alloc_calls,alloc_bytes,rss_before_kib,rss_after_kib,rss_peak_kib,fds_before,fds_after,file_logical_bytes,file_physical_bytes,range_records,feeds,private_artifacts";
 
 #[derive(Clone, Copy)]
 struct Case {
@@ -80,11 +80,12 @@ fn csv(result: &ScenarioResult) -> String {
         result.work_units as f64 / result.measurement.elapsed.as_secs_f64()
     };
     format!(
-        "{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{}",
         result.name,
         result.size,
         result.auxiliary,
         result.work_units,
+        result.emitted_units,
         elapsed_ns,
         rate,
         result.measurement.allocations.calls,
@@ -112,8 +113,10 @@ fn smoke_cases() -> Vec<Case> {
         case("direct-replace", 4_000, 0),
         case("nested-overwrite", 1_000, 0),
         case("nested-overwrite", 4_000, 0),
-        case("retention-refresh", 1_000, 0),
-        case("retention-refresh", 4_000, 0),
+        case("first-seen-refresh", 1_000, 0),
+        case("first-seen-refresh", 4_000, 0),
+        case("last-seen-refresh", 1_000, 0),
+        case("last-seen-refresh", 4_000, 0),
         case("feed-replace", 1_000, 8),
         case("feed-replace", 1_000, 64),
         case("membership-import", 1_000, 64),
@@ -128,6 +131,19 @@ fn smoke_cases() -> Vec<Case> {
         case("live-open", 4_000, 1),
         case("live-open", 4_000, 256),
         case("snapshot", 4_000, 0),
+        case("immutable-feed-random", 1_000, 0),
+        case("history-project", 1_000, 7),
+        case("membership-matching-feeds", 1_000, 64),
+        case("membership-cardinalities", 1_000, 64),
+        case("membership-selected-pair", 1_000, 0),
+        case("membership-all-pairs", 1_000, 8),
+        case("direct-provider-join", 1_000, 0),
+        case("membership-provider-join", 1_000, 0),
+        case("algebra-count", 1_000, 0),
+        case("algebra-compare", 1_000, 0),
+        case("algebra-publish-preserve", 1_000, 0),
+        case("algebra-publish-flat", 1_000, 0),
+        case("update-ipsets-workflow", 1_000, 7),
     ]
 }
 
@@ -135,7 +151,8 @@ fn scale_cases() -> Vec<Case> {
     let mut cases = Vec::new();
     for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("direct-replace", size, 0));
-        cases.push(case("retention-refresh", size, 0));
+        cases.push(case("first-seen-refresh", size, 0));
+        cases.push(case("last-seen-refresh", size, 0));
     }
     for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("nested-overwrite", size, 0));
@@ -172,6 +189,26 @@ fn scale_cases() -> Vec<Case> {
     cases.push(case("live-open", 100_000, 256));
     cases.push(case("snapshot", 100_000, 0));
     cases.push(case("snapshot", 1_000_000, 0));
+    for size in [10_000, 100_000, 1_000_000] {
+        cases.push(case("immutable-feed-random", size, 0));
+        cases.push(case("history-project", size, 7));
+    }
+    cases.push(case("membership-matching-feeds", 100_000, 421));
+    cases.push(case("membership-cardinalities", 1_000_000, 64));
+    cases.push(case("membership-selected-pair", 1_000_000, 0));
+    cases.push(case("membership-all-pairs", 1_000_000, 8));
+    cases.push(case("membership-all-pairs", 100_000, 64));
+    cases.push(case("direct-provider-join", 1_000_000, 0));
+    cases.push(case("membership-provider-join", 1_000_000, 0));
+    cases.push(case("algebra-count", 1_000_000, 0));
+    cases.push(case("algebra-compare", 1_000_000, 0));
+    cases.push(case("algebra-publish-preserve", 1_000_000, 0));
+    cases.push(case("algebra-publish-flat", 1_000_000, 0));
+    cases.push(case("direct-provider-join", 1_000_000, 421));
+    cases.push(case("membership-provider-join", 1_000_000, 421));
+    cases.push(case("algebra-count", 1_000_000, 421));
+    cases.push(case("algebra-publish-preserve", 1_000_000, 421));
+    cases.push(case("update-ipsets-workflow", 1_000_000, 7));
     cases
 }
 

@@ -1,6 +1,7 @@
 //! Shared semantic input and terminal workflow results.
 
 use crate::cardinality::Cardinality129;
+use crate::error::Result;
 
 #[path = "workflow/compare.rs"]
 pub(crate) mod compare;
@@ -12,13 +13,37 @@ pub struct AddressRange<K> {
     pub to: K,
 }
 
+/// One first-seen interval removed by a complete refresh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstSeenRemoval<K> {
+    pub from: K,
+    pub to: K,
+    pub first_seen: u32,
+    pub addresses: Cardinality129,
+}
+
+/// Synchronous consumer for bounded batches of first-seen removals.
+pub trait FirstSeenRemovalSink<K> {
+    fn removals(&mut self, batch: &[FirstSeenRemoval<K>]) -> Result<()>;
+}
+
+impl<K, F> FirstSeenRemovalSink<K> for F
+where
+    F: FnMut(&[FirstSeenRemoval<K>]) -> Result<()>,
+{
+    fn removals(&mut self, batch: &[FirstSeenRemoval<K>]) -> Result<()> {
+        self(batch)
+    }
+}
+
 /// High-level operation that produced a report.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkflowKind {
     CreateFeed,
     ReplaceFeed,
     DirectReplacement,
-    RetentionRefresh,
+    FirstSeenRefresh,
+    LastSeenRefresh,
     MembershipImport,
 }
 

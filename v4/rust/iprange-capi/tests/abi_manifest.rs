@@ -44,14 +44,14 @@ fn generated_symbols_match_the_frozen_spec() {
         .collect::<BTreeSet<_>>();
     let expected = frozen_function_names();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 136);
+    assert_eq!(actual.len(), 158);
 
     let opaque = opaque_names().into_iter().collect::<BTreeSet<_>>();
     assert_eq!(
         opaque,
         frozen_names_after("opaque tags:", "It declares exact callback")
     );
-    assert_eq!(opaque.len(), 12);
+    assert_eq!(opaque.len(), 14);
 
     let callbacks = callback_declarations()
         .iter()
@@ -61,7 +61,7 @@ fn generated_symbols_match_the_frozen_spec() {
         callbacks,
         frozen_names_after("callback typedefs named:", "The source callbacks")
     );
-    assert_eq!(callbacks.len(), 11);
+    assert_eq!(callbacks.len(), 18);
 }
 
 #[test]

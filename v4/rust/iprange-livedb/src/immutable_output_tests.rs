@@ -8,8 +8,10 @@ use crate::key::IpKey;
 use crate::range_cursor::RangeDirection;
 use crate::range_tree;
 use crate::slotted_page;
-use crate::test_alloc::count_thread_allocations;
+use crate::source::SliceSource;
+use crate::test_alloc::{count_thread_allocations, measure_thread_allocations};
 use crate::validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl};
+use crate::workflow::AddressRange;
 
 struct TestPath(PathBuf);
 
@@ -270,6 +272,95 @@ fn membership_output_streams_sparse_words_and_rebuilds_derived_state() {
 }
 
 #[test]
+fn repeated_immutable_membership_references_are_applied_once() {
+    let path = TestPath::new("membership-reference-run");
+    let mut output = builder(&path.0, membership_spec(1), generous_budget());
+    output.push_feed(FeedName::new("feed").unwrap(), 0).unwrap();
+    let membership = output.intern_membership_value(&Words(vec![1])).unwrap();
+
+    let (finished, work) = crate::work::measure(|| {
+        for index in 0..512u32 {
+            let address = Ipv4Key(index * 2);
+            output
+                .push_interned_membership_v4(address, address, membership)
+                .unwrap();
+        }
+        output.finish_owned().unwrap()
+    });
+    assert_eq!(work.membership_refcount_batches, 1);
+    assert_eq!(work.membership_lookups, 1);
+    assert_eq!(finished.meta.range_record_count, 512);
+    drop(finished.file);
+    validate_clean(&path.0);
+}
+
+#[test]
+fn membership_reference_batch_obeys_the_exact_heap_budget() {
+    let mut zero = crate::heap::Heap::new(0);
+    let mut direct = reference_batch::ReferenceBatch::new(true, &mut zero).unwrap();
+    assert_eq!(zero.used(), 0);
+    assert!(matches!(
+        direct.add(1).unwrap(),
+        reference_batch::Add::Direct
+    ));
+
+    let limit = 128;
+    let mut bounded = crate::heap::Heap::new(limit);
+    let mut batch = reference_batch::ReferenceBatch::new(true, &mut bounded).unwrap();
+    assert!(bounded.used() <= limit);
+    assert!(bounded.used() > 0);
+    assert!(matches!(batch.add(1).unwrap(), reference_batch::Add::Added));
+}
+
+#[test]
+fn membership_output_remains_correct_with_zero_heap() {
+    let path = TestPath::new("membership-zero-heap");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path.0)
+        .unwrap();
+    let mut heap = crate::heap::Heap::new(0);
+    let mut output =
+        Builder::new_owned_with_heap(file, membership_spec(1), generous_budget(), &mut heap)
+            .unwrap();
+    output.push_feed(FeedName::new("feed").unwrap(), 0).unwrap();
+    let membership = output.intern_membership_value(&Words(vec![1])).unwrap();
+    output
+        .push_interned_membership_v4(Ipv4Key(1), Ipv4Key(2), membership)
+        .unwrap();
+    drop(output.finish_owned().unwrap().file);
+    assert_eq!(heap.used(), 0);
+    validate_clean(&path.0);
+}
+
+#[test]
+fn unordered_feed_construction_has_one_input_and_one_output_pass_without_per_record_allocations() {
+    let small = [AddressRange {
+        from: Ipv4Key(7),
+        to: Ipv4Key(7),
+    }];
+    let large: Vec<_> = (0..512u32)
+        .rev()
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 2),
+            to: Ipv4Key(index * 2),
+        })
+        .collect();
+
+    let (small_allocations, small_work) = measured_unordered("unordered-small", &small);
+    let (large_allocations, large_work) = measured_unordered("unordered-large", &large);
+    assert_eq!(small_work.input_source_passes, 1);
+    assert_eq!(small_work.output_passes, 1);
+    assert_eq!(large_work.input_source_passes, 1);
+    assert_eq!(large_work.output_passes, 1);
+    assert_eq!(large_work.ranges_consumed, 1_024);
+    assert_eq!(large_work.ranges_emitted, 1_024);
+    assert_eq!(large_allocations, small_allocations);
+}
+
+#[test]
 fn present_empty_metadata_is_distinct_from_absent_metadata() {
     let path = TestPath::new("empty-metadata");
     let mut output = builder(&path.0, direct_spec(AddressFamily::Ipv4), generous_budget());
@@ -414,6 +505,45 @@ fn leaf_rollover_allocates_no_heap() {
     drop(output.finish_owned().unwrap().file);
 }
 
+fn measured_unordered(
+    label: &str,
+    ranges: &[AddressRange<Ipv4Key>],
+) -> (usize, crate::work::Snapshot) {
+    let path = TestPath::new(label);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path.0)
+        .unwrap();
+    let budget = unordered::prepare_budget(unordered::BudgetInput {
+        max_heap_bytes: 2 * 1024 * 1024,
+        max_output_pages: 10_000,
+        max_workspace_pages: 10_000,
+        max_open_files: 3,
+    })
+    .unwrap();
+    let mut source = SliceSource::new(ranges);
+    let ((built, work), allocations) = measure_thread_allocations(|| {
+        crate::work::measure(|| {
+            unordered::build::<Ipv4Key, _>(
+                file,
+                ValueTag::new(b"feed").unwrap(),
+                FeedName::new("feed").unwrap(),
+                None,
+                &mut source,
+                budget,
+                &CancellationToken::new(),
+            )
+        })
+    });
+    match built {
+        Ok(built) => drop(built.finished.file),
+        Err(failure) => panic!("unordered construction failed: {:?}", failure.cause),
+    }
+    (allocations.count, work)
+}
+
 fn builder(path: &Path, spec: OutputSpec, budget: OutputBudget) -> Builder {
     let file = OpenOptions::new()
         .read(true)
@@ -421,14 +551,15 @@ fn builder(path: &Path, spec: OutputSpec, budget: OutputBudget) -> Builder {
         .create_new(true)
         .open(path)
         .unwrap();
-    Builder::new_owned(file, spec, budget).unwrap()
+    let mut heap = crate::heap::Heap::new(2 * 1024 * 1024);
+    Builder::new_owned_with_heap(file, spec, budget, &mut heap).unwrap()
 }
 
 fn direct_spec(address_family: AddressFamily) -> OutputSpec {
     OutputSpec {
         address_family,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id: [3; 16],
         transaction_id: 7,
         commit_nonce: [4; 16],

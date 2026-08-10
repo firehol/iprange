@@ -2,10 +2,12 @@
 
 ## Status
 
-Status: open
+Status: closed
 
-Sub-state: deferred until the Phase-1 v4 format and core SDK are reliable and
-measured
+Sub-state: superseded on 2026-08-10 by active SOW-0021, which incorporates the
+complete algebra scope together with the required update-ipsets timestamp,
+chaining, projection, overlap, and provider-join SDK work. No SOW-0018
+implementation was performed independently.
 
 ## Requirements
 
@@ -211,6 +213,12 @@ Open decisions:
   implementation critical path while preserving the agreed feasibility target.
 - No implementation or detailed API analysis was performed.
 
+### 2026-08-10
+
+- Closed as superseded by SOW-0021 before implementation. All valid requirements,
+  acceptance criteria, risks, and validation obligations are incorporated into
+  that one active SOW so the repository retains one work authority.
+
 ## Validation
 
 Acceptance criteria evidence:
@@ -245,7 +253,7 @@ Artifact maintenance gate:
 - Specs: Phase-1 specs will record only the feasibility boundary.
 - End-user/operator docs: unaffected until the API exists.
 - End-user/operator skills: none currently exist.
-- SOW lifecycle: correctly remains `open` under `.agents/sow/pending/`.
+- SOW lifecycle: closed and moved to `done/` as superseded by SOW-0021.
 
 Specs update:
 
@@ -274,7 +282,7 @@ Follow-up mapping:
 
 ## Outcome
 
-Pending.
+Closed without implementation. SOW-0021 is the sole implementation authority.
 
 ## Lessons Extracted
 

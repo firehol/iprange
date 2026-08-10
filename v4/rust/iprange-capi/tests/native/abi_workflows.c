@@ -63,6 +63,197 @@ static int create_membership(const char *path)
     return 0;
 }
 
+static int create_direct(const char *path, const char *tag)
+{
+    iprange_v4_abi1_byte_slice value_tag = {
+        (const uint8_t *)tag,
+        (uint64_t)strlen(tag),
+    };
+    iprange_v4_abi1_error *error = NULL;
+    iprange_v4_abi1_report *report = NULL;
+    CHECK(iprange_v4_abi1_create_live(
+              path_from(path),
+              IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4,
+              IPRANGE_V4_ABI1_VALUE_KIND_DIRECT,
+              value_tag,
+              4,
+              no_cancellation(),
+              &report,
+              &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(destroy_report(report) == 0);
+    return 0;
+}
+
+typedef struct removal_state {
+    uint64_t calls;
+    uint64_t records;
+    int invalid;
+} removal_state;
+
+static uint32_t removal_callback(
+    void *context,
+    const iprange_v4_abi1_first_seen_removal *records,
+    uint64_t count,
+    iprange_v4_abi1_callback_failure *failure)
+{
+    removal_state *state = context;
+    uint64_t index;
+    (void)failure;
+    state->calls++;
+    state->records += count;
+    for (index = 0; index < count; ++index) {
+        if (records[index].first_seen != 100 || records[index].reserved != 0 ||
+            records[index].addresses.bit128 != 0 ||
+            records[index].addresses.hi != 0 ||
+            records[index].addresses.lo != 1) {
+            state->invalid = 1;
+        }
+    }
+    return IPRANGE_V4_ABI1_SINK_OUTCOME_CONTINUE;
+}
+
+static uint32_t failing_removal_callback(
+    void *context,
+    const iprange_v4_abi1_first_seen_removal *records,
+    uint64_t count,
+    iprange_v4_abi1_callback_failure *failure)
+{
+    static const char message[] = "removal rejected";
+    (void)context;
+    (void)records;
+    (void)count;
+    failure->caller_code = 991;
+    failure->message_pointer = (const uint8_t *)message;
+    failure->message_length = sizeof(message) - 1;
+    return IPRANGE_V4_ABI1_SINK_OUTCOME_ERROR;
+}
+
+static int exercise_first_seen(const char *path)
+{
+    iprange_v4_abi1_error *error = NULL;
+    iprange_v4_abi1_report *report = NULL;
+    iprange_v4_abi1_writer *writer = NULL;
+    iprange_v4_abi1_reader *reader = NULL;
+    iprange_v4_abi1_transaction_budget budget = transaction_budget();
+    iprange_v4_abi1_range initial[] = {ipv4_range(1, 1), ipv4_range(3, 3)};
+    iprange_v4_abi1_range current[] = {ipv4_range(3, 3)};
+    coverage_source input = {0};
+    removal_state removals = {0};
+    iprange_v4_abi1_finish_input_report facts = {0};
+    iprange_v4_abi1_database_info info = {0};
+
+    CHECK(create_direct(path, "first_seen") == 0);
+    CHECK(iprange_v4_abi1_open_live_writer(
+              path_from(path), &budget, no_cancellation(), &writer, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_writer_begin_first_seen_refresh(
+              writer, 100, no_cancellation(), &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    input = (coverage_source){initial, 2, 0};
+    CHECK(iprange_v4_abi1_writer_add_coverage_ranges(
+              writer, coverage_callback, &input, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(finish(writer, IPRANGE_V4_ABI1_WORKFLOW_FIRST_SEEN_REFRESH) == 0);
+    CHECK(commit(writer) == 0);
+
+    CHECK(iprange_v4_abi1_writer_begin_first_seen_refresh(
+              writer, 200, no_cancellation(), &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    input = (coverage_source){current, 1, 0};
+    CHECK(iprange_v4_abi1_writer_add_coverage_ranges(
+              writer, coverage_callback, &input, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_writer_finish_first_seen_with_removals(
+              writer, removal_callback, &removals, &report, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_report_get_finish_input(report, &facts, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(facts.workflow == IPRANGE_V4_ABI1_WORKFLOW_FIRST_SEEN_REFRESH);
+    CHECK(facts.removed_addresses.lo == 1);
+    CHECK(removals.calls == 1 && removals.records == 1 && removals.invalid == 0);
+    CHECK(destroy_report(report) == 0);
+    report = NULL;
+    CHECK(commit(writer) == 0);
+
+    CHECK(iprange_v4_abi1_writer_begin_first_seen_refresh(
+              writer, 300, no_cancellation(), &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_writer_finish_first_seen_with_removals(
+              writer, failing_removal_callback, NULL, &report, &error) ==
+          IPRANGE_V4_ABI1_STATUS_ERROR);
+    CHECK(report == NULL);
+    {
+        uint32_t code = 0;
+        uint8_t caller_present = 0;
+        uint64_t caller_code = 0;
+        CHECK(iprange_v4_abi1_error_code(
+                  error, &code, &caller_present, &caller_code) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_SINK_FAILED);
+        CHECK(caller_present == 1 && caller_code == 991);
+    }
+    CHECK(destroy_error(error) == 0);
+    error = NULL;
+    CHECK(close_writer(writer) == 0);
+    writer = NULL;
+
+    CHECK(iprange_v4_abi1_open_live_reader(
+              path_from(path), no_cancellation(), &reader, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_reader_database_info(reader, &info, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(info.direct_semantic == IPRANGE_V4_ABI1_DIRECT_SEMANTIC_FIRST_SEEN);
+    CHECK(iprange_v4_abi1_reader_close(reader, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_reader_destroy(reader, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    return 0;
+}
+
+static int exercise_last_seen(const char *path)
+{
+    iprange_v4_abi1_error *error = NULL;
+    iprange_v4_abi1_writer *writer = NULL;
+    iprange_v4_abi1_reader *reader = NULL;
+    iprange_v4_abi1_transaction_budget budget = transaction_budget();
+    iprange_v4_abi1_range initial[] = {ipv4_range(1, 3)};
+    iprange_v4_abi1_range current[] = {ipv4_range(2, 2)};
+    coverage_source input = {0};
+    iprange_v4_abi1_database_info info = {0};
+    uint8_t present = 0;
+    uint32_t value = 0;
+
+    CHECK(create_direct(path, "last_seen") == 0);
+    CHECK(iprange_v4_abi1_open_live_writer(
+              path_from(path), &budget, no_cancellation(), &writer, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_writer_begin_last_seen_refresh(
+              writer, 100, 0, no_cancellation(), &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    input = (coverage_source){initial, 1, 0};
+    CHECK(iprange_v4_abi1_writer_add_coverage_ranges(
+              writer, coverage_callback, &input, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(finish(writer, IPRANGE_V4_ABI1_WORKFLOW_LAST_SEEN_REFRESH) == 0);
+    CHECK(commit(writer) == 0);
+    CHECK(iprange_v4_abi1_writer_begin_last_seen_refresh(
+              writer, 200, 100, no_cancellation(), &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    input = (coverage_source){current, 1, 0};
+    CHECK(iprange_v4_abi1_writer_add_coverage_ranges(
+              writer, coverage_callback, &input, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(finish(writer, IPRANGE_V4_ABI1_WORKFLOW_LAST_SEEN_REFRESH) == 0);
+    CHECK(commit(writer) == 0);
+    CHECK(close_writer(writer) == 0);
+    writer = NULL;
+
+    CHECK(iprange_v4_abi1_open_live_reader(
+              path_from(path), no_cancellation(), &reader, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_reader_database_info(reader, &info, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(info.direct_semantic == IPRANGE_V4_ABI1_DIRECT_SEMANTIC_LAST_SEEN);
+    CHECK(iprange_v4_abi1_reader_lookup_direct(
+              reader, ipv4(1), &present, &value, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(present == 0);
+    CHECK(iprange_v4_abi1_reader_lookup_direct(
+              reader, ipv4(2), &present, &value, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(present == 1 && value == 200);
+    CHECK(iprange_v4_abi1_reader_close(reader, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(iprange_v4_abi1_reader_destroy(reader, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    return 0;
+}
+
 static int exercise_membership_workflows(const char *source_path,
                                          const char *destination_path)
 {
@@ -308,8 +499,10 @@ static int exercise_direct_advanced(const char *path)
 
 int main(int argc, char **argv)
 {
-    CHECK(argc == 4);
+    CHECK(argc == 6);
     CHECK(exercise_membership_workflows(argv[1], argv[2]) == 0);
     CHECK(exercise_direct_advanced(argv[3]) == 0);
+    CHECK(exercise_first_seen(argv[4]) == 0);
+    CHECK(exercise_last_seen(argv[5]) == 0);
     return 0;
 }

@@ -267,7 +267,7 @@ pub(super) fn immutable_scan(size: usize, feeds: usize) -> Result<ScenarioResult
     )
 }
 
-fn populated(label: &str, ranges: usize, feeds: usize) -> Result<TestDatabase, String> {
+pub(super) fn populated(label: &str, ranges: usize, feeds: usize) -> Result<TestDatabase, String> {
     let database = TestDatabase::new(label)?;
     create_live(
         database.main(),
@@ -302,6 +302,66 @@ fn populated(label: &str, ranges: usize, feeds: usize) -> Result<TestDatabase, S
                 Ipv4Key(start),
                 Ipv4Key(start + 1),
                 membership,
+                MembershipOperation::Replace,
+            )
+            .map_err(display)?;
+    }
+    require_committed(transaction.commit().map_err(display)?)?;
+    close_writer(&mut writer)?;
+    Ok(database)
+}
+
+pub(super) fn populated_rotating(
+    label: &str,
+    ranges: usize,
+    feeds: usize,
+    width: usize,
+) -> Result<TestDatabase, String> {
+    let feeds = feeds.max(1);
+    let width = width.clamp(1, feeds);
+    let database = TestDatabase::new(label)?;
+    create_membership_file(&database)?;
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(
+        database.main(),
+        transaction_budget(ranges, feeds),
+        &cancellation,
+    )
+    .map_err(display)?;
+    let mut transaction = writer
+        .begin_membership_transaction(&cancellation)
+        .map_err(display)?;
+    let mut feed_refs = Vec::new();
+    feed_refs
+        .try_reserve_exact(feeds)
+        .map_err(|_| "benchmark feed-reference allocation failed".to_owned())?;
+    for index in 0..feeds {
+        feed_refs.push(
+            transaction
+                .ensure_feed(feed_name(index)?)
+                .map_err(display)?,
+        );
+    }
+    let mut memberships = Vec::new();
+    memberships
+        .try_reserve_exact(feeds)
+        .map_err(|_| "benchmark membership-reference allocation failed".to_owned())?;
+    for start in 0..feeds {
+        let mut membership = transaction.empty_membership().map_err(display)?;
+        for offset in 0..width {
+            membership = transaction
+                .add_feed(membership, feed_refs[(start + offset) % feeds])
+                .map_err(display)?;
+        }
+        memberships.push(membership);
+    }
+    for index in 0..ranges {
+        let start = index as u32 * 4;
+        transaction
+            .apply_v4(
+                Ipv4Key(start),
+                Ipv4Key(start + 1),
+                memberships[index % feeds],
                 MembershipOperation::Replace,
             )
             .map_err(display)?;

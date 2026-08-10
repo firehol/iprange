@@ -11,8 +11,21 @@ impl MetaV4 {
 }
 
 #[test]
-fn tag_is_canonical_and_retention_is_exact() {
-    assert_eq!(ValueTag::RETENTION.bytes(), b"retention");
+fn tag_is_canonical_and_timestamp_semantics_are_exact() {
+    assert_eq!(ValueTag::FIRST_SEEN.bytes(), b"first_seen");
+    assert_eq!(ValueTag::LAST_SEEN.bytes(), b"last_seen");
+    assert_eq!(
+        ValueTag::FIRST_SEEN.direct_semantic(),
+        DirectSemantic::FirstSeen
+    );
+    assert_eq!(
+        ValueTag::LAST_SEEN.direct_semantic(),
+        DirectSemantic::LastSeen
+    );
+    assert_eq!(
+        ValueTag::new(b"other").unwrap().direct_semantic(),
+        DirectSemantic::Generic
+    );
     assert!(ValueTag::new(b"123456789012345").is_some());
     assert!(ValueTag::new(b"1234567890123456").is_none());
     assert!(ValueTag::new(b"bad\0tag").is_none());

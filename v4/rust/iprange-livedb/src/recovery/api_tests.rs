@@ -162,7 +162,7 @@ fn incomplete_source(path: &Path) {
         OutputSpec {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
-            value_tag: ValueTag::RETENTION,
+            value_tag: ValueTag::FIRST_SEEN,
             database_id: [0x11; 16],
             transaction_id: 1,
             commit_nonce: [0x22; 16],

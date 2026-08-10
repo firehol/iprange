@@ -43,7 +43,17 @@ pub(crate) struct Snapshot {
     pub(crate) membership_refcount_batches: u64,
     pub(crate) membership_delta_spills: u64,
     pub(crate) source_passes: u64,
+    pub(crate) input_source_passes: u64,
     pub(crate) output_passes: u64,
+    pub(crate) history_window_tests: u64,
+    pub(crate) membership_decodes: u64,
+    pub(crate) membership_decode_cache_hits: u64,
+    pub(crate) membership_word_reads: u64,
+    pub(crate) membership_combinations: u64,
+    pub(crate) membership_intern_cache_hits: u64,
+    pub(crate) aggregation_contributions: u64,
+    pub(crate) aggregation_results: u64,
+    pub(crate) join_advances: u64,
 }
 
 #[cfg(test)]
@@ -105,7 +115,17 @@ event!(membership_leaf_read, membership_leaf_reads);
 event!(membership_refcount_batch, membership_refcount_batches);
 event!(membership_delta_spill, membership_delta_spills);
 event!(source_pass, source_passes);
+event!(input_source_pass, input_source_passes);
 event!(output_pass, output_passes);
+event!(history_window_test, history_window_tests);
+event!(membership_decode, membership_decodes);
+event!(membership_decode_cache_hit, membership_decode_cache_hits);
+event!(membership_word_read, membership_word_reads);
+event!(membership_combination, membership_combinations);
+event!(membership_intern_cache_hit, membership_intern_cache_hits);
+event!(aggregation_contribution, aggregation_contributions);
+event!(aggregation_result, aggregation_results);
+event!(join_advance, join_advances);
 
 #[cfg(test)]
 pub(crate) fn reset() {

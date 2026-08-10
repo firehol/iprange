@@ -211,7 +211,7 @@ fn source_sigbus_is_classified_cleaned_and_restartable() {
 
     fn fault_fixture(path: &Path) -> (crate::contract::MetaV4, [u8; PAGE_SIZE]) {
         let mut meta = bootstrap::tests::empty_direct_meta(1);
-        meta.value_tag = ValueTag::RETENTION;
+        meta.value_tag = ValueTag::FIRST_SEEN;
         meta.page_count = 5;
         meta.range_root = 2;
         meta.range_record_count = 2;

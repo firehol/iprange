@@ -402,12 +402,14 @@ fn residue_operation_registry_is_unambiguous() {
         crate::registry::RESIDUE_OPERATION_LIST_HOUSEKEEPING_ARTIFACTS,
         crate::registry::RESIDUE_OPERATION_REMOVE_HOUSEKEEPING_ARTIFACT,
         crate::registry::RESIDUE_OPERATION_SNAPSHOT_PREPARATION_FAILURE,
+        crate::registry::RESIDUE_OPERATION_IMMUTABLE_FEED_PREPARATION_FAILURE,
+        crate::registry::RESIDUE_OPERATION_ALGEBRA_PREPARATION_FAILURE,
     ];
     let unique = values
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(unique.len(), values.len());
-    assert_eq!(unique, (1..=11).collect());
+    assert_eq!(unique, (1..=13).collect());
 }
 
 #[test]
@@ -418,7 +420,7 @@ fn committed_header_matches_the_rust_boundary() {
         header
             .match_indices("IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL\n")
             .count(),
-        136
+        158
     );
     assert_eq!(
         header
@@ -429,7 +431,7 @@ fn committed_header_matches_the_rust_boundary() {
                     .is_some_and(|(_, value)| value.parse::<u32>().is_ok())
             })
             .count(),
-        292
+        313
     );
 }
 

@@ -5,6 +5,9 @@
 //! private.
 
 #![deny(unsafe_op_in_unsafe_fn)]
+// Constructing the large public Error enum on successful hot-path lookups was
+// measured as dominant work; lazy Option errors are intentional.
+#![allow(clippy::unnecessary_lazy_evaluations)]
 #![warn(missing_debug_implementations)]
 
 mod artifact_name;
@@ -31,6 +34,9 @@ mod feed_range_cursor;
 mod fixed_tree;
 mod format;
 mod free_bitmap;
+mod heap;
+mod history;
+mod immutable_feed;
 mod immutable_output;
 pub mod key;
 mod live_cleanup;
@@ -44,6 +50,7 @@ mod mapped_bytes;
 mod mapping;
 mod membership_delta;
 mod membership_dictionary;
+mod membership_query;
 mod membership_tree;
 mod membership_view;
 mod metadata;
@@ -81,13 +88,19 @@ pub use commit_resolution::{
     LocalFileRelation,
 };
 pub use contract::{
-    AddressFamily, MembershipOperation, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED,
+    AddressFamily, DirectSemantic, MembershipOperation, ValueKind, ValueTag,
+    MAX_METADATA_UNCOMPRESSED,
 };
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use feed::{FeedEntry, FeedName};
 pub use feed_catalog::FeedCursor;
 pub use feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
+pub use history::{HistoryProjectionReport, HistoryWindow, HistoryWindowReport};
+pub use immutable_feed::{
+    create_immutable_feed_v4, create_immutable_feed_v6, ImmutableFeedBudget, ImmutableFeedOutcome,
+    ImmutableFeedPreparationFailure, ImmutableFeedReport, ImmutableFeedResult,
+};
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_lifecycle::{
     initialize_live, reset_live_coordination, resolve_create_live,
@@ -100,25 +113,42 @@ pub use live_reader::{LiveReader, ReaderCloseResult};
 pub use live_writer::{
     create_live, AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
     CommitCleanupArtifacts, CommitDurability, CommitResult, CreateFeed, CreateResult,
-    CreationState, DirectReplacement, DirectTransaction, FeedRef, FinishedWorkflow, LiveWriter,
+    CreationState, DirectReplacement, DirectTransaction, FeedRef, FinishedHistoryProjection,
+    FinishedWorkflow, FirstSeenRefresh, HistoryProjectionSource, LastSeenRefresh, LiveWriter,
     LocalBasename, MembershipImport, MembershipImportSource, MembershipRef, MembershipTransaction,
-    PreparedFeedChange, PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh,
+    PreparedFeedChange, PreparedHistoryProjection, PreparedWorkflow, ReclaimResult, ReplaceFeed,
     TransactionBudget, TransactionFeedCursor,
+};
+pub use membership_query::{
+    AlgebraComparisonReport, AlgebraCountReport, AlgebraOutputBudget, AlgebraOutputMode,
+    AlgebraPreparationFailure, AlgebraSetOperation, AlgebraSetOutcome, AlgebraSetReport,
+    AlgebraSetResult, DirectJoinBudget, DirectJoinCell, DirectJoinReport, DirectJoinSink,
+    DirectJoinSource, FeedCardinality, FeedOverlap, FeedPair, FeedSelection, MatchingFeedSink,
+    MatchingFeedsReport, MembershipAggregateSink, MembershipAggregationMode,
+    MembershipAggregationReport, MembershipAlgebra, MembershipAlgebraBudget, MembershipCrossCell,
+    MembershipJoinReport, MembershipJoinSink, MembershipQuery, MembershipQueryBudget,
+    MembershipScope, UncoveredFeed, UncoveredSide,
 };
 pub use membership_view::MembershipView;
 pub use publication::{
     inspect_publication_residue, remove_publication_residue, resolve_publication,
-    PublicationResidueCoordination, PublicationResidueHandle, PublicationResidueInspection,
-    PublicationResidueMain, PublicationResidueMainContent, PublicationResidueRemoval,
-    PublicationResolutionMode,
+    PublicationPolicy, PublicationResidueCoordination, PublicationResidueHandle,
+    PublicationResidueInspection, PublicationResidueMain, PublicationResidueMainContent,
+    PublicationResidueRemoval, PublicationResolutionMode, PublicationStatus,
 };
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
 pub use snapshot::{
     snapshot_to, SnapshotBudget, SnapshotOutcome, SnapshotPreparationFailure,
     SnapshotPublicationPolicy, SnapshotResult, SnapshotSourceMode,
 };
-pub use source::{RangeSource, SliceSource};
-pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
+pub use source::{
+    DirectRangeSourceV4, DirectRangeSourceV6, FeedRangeSourceV4, FeedRangeSourceV6, RangeSource,
+    SliceSource,
+};
+pub use workflow::{
+    AddressRange, FirstSeenRemoval, FirstSeenRemovalSink, LogicalChange, WorkflowKind,
+    WorkflowReport,
+};
 
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 mod live_crash_tests;

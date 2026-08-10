@@ -42,6 +42,14 @@ pub type DirectSinkFn = Option<
         failure: *mut CallbackFailure,
     ) -> u32,
 >;
+pub type FirstSeenRemovalSinkFn = Option<
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        records: *const FirstSeenRemoval,
+        count: u64,
+        failure: *mut CallbackFailure,
+    ) -> u32,
+>;
 pub type MembershipSinkFn = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
@@ -69,10 +77,19 @@ pub struct Cardinality129 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ByteSlice {
     pub pointer: *const u8,
     pub length: u64,
+}
+
+impl Default for ByteSlice {
+    fn default() -> Self {
+        Self {
+            pointer: std::ptr::null(),
+            length: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -111,6 +128,15 @@ pub struct DirectRange {
     pub range: Range,
     pub value: u32,
     pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FirstSeenRemoval {
+    pub range: Range,
+    pub first_seen: u32,
+    pub reserved: u32,
+    pub addresses: Cardinality129,
 }
 
 #[repr(C)]
@@ -168,6 +194,8 @@ pub struct DatabaseInfo {
     pub struct_size: u32,
     pub address_family: u32,
     pub value_kind: u32,
+    pub direct_semantic: u32,
+    pub reserved: u32,
     pub value_tag: [u8; 16],
     pub database_id: [u8; 16],
     pub transaction_id: u64,
@@ -176,7 +204,7 @@ pub struct DatabaseInfo {
     pub range_record_count: u64,
     pub active_feed_count: u64,
     pub meta_selection: u32,
-    pub reserved: u32,
+    pub reserved2: u32,
 }
 
 #[repr(C)]

@@ -74,7 +74,7 @@ fn create(path: &Path, capacity: u32) {
         path,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         capacity,
         &crate::CancellationToken::new(),
     )
@@ -343,7 +343,7 @@ fn crash_child() {
                 &path,
                 AddressFamily::Ipv4,
                 ValueKind::Direct,
-                ValueTag::RETENTION,
+                ValueTag::FIRST_SEEN,
                 1,
                 &crate::CancellationToken::new(),
             );

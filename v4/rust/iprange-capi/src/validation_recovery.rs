@@ -161,7 +161,7 @@ fn finish_validation(
             *output = Box::into_raw(Box::new(report));
             match adapter.failure {
                 Some(callback) if cleanup_failed => {
-                    Err(ErrorHandle::source_cleanup_failure(failure.cause, callback).into())
+                    Err(ErrorHandle::callback_cleanup_failure(failure.cause, callback).into())
                 }
                 Some(callback) => Err(callback),
                 None => Err(failure.cause.into()),

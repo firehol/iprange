@@ -74,7 +74,7 @@ impl<K, S: RangeStream<K>> RangeStream<K> for Counted<S> {
             self.intervals = self
                 .intervals
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("workflow interval count"))?;
+                .ok_or_else(|| Error::ArithmeticOverflow("workflow interval count"))?;
         }
         Ok(next)
     }
@@ -237,7 +237,7 @@ fn align_starts<K: IpKey>(
         let end = right
             .from
             .checked_previous()
-            .ok_or(Error::ArithmeticOverflow("range comparison prefix"))?;
+            .ok_or_else(|| Error::ArithmeticOverflow("range comparison prefix"))?;
         let prefix = left.from.inclusive_cardinality(end)?;
         add_removed(result, prefix)?;
         left.from = right.from;
@@ -245,7 +245,7 @@ fn align_starts<K: IpKey>(
         let end = left
             .from
             .checked_previous()
-            .ok_or(Error::ArithmeticOverflow("range comparison prefix"))?;
+            .ok_or_else(|| Error::ArithmeticOverflow("range comparison prefix"))?;
         let prefix = right.from.inclusive_cardinality(end)?;
         add_added(result, prefix)?;
         right.from = left.from;
@@ -265,7 +265,7 @@ fn advance<K: IpKey, S: RangeStream<K>>(
         Advance::After(end) => {
             range.from = end
                 .checked_next()
-                .ok_or(Error::ArithmeticOverflow("range comparison cursor"))?;
+                .ok_or_else(|| Error::ArithmeticOverflow("range comparison cursor"))?;
             Ok(Some(range))
         }
     }

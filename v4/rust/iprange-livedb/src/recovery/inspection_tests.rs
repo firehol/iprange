@@ -85,7 +85,7 @@ fn create_source(label: &str) -> TestFile {
         &source.0,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &crate::CancellationToken::new(),
     )

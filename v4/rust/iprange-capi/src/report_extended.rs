@@ -235,10 +235,20 @@ impl ReportHandle {
     pub(crate) fn snapshot_preparation(
         failure: &iprange_livedb::SnapshotPreparationFailure,
     ) -> Self {
+        Self::publication_preparation(
+            failure,
+            registry::RESIDUE_OPERATION_SNAPSHOT_PREPARATION_FAILURE,
+        )
+    }
+
+    pub(crate) fn publication_preparation(
+        failure: &iprange_livedb::SnapshotPreparationFailure,
+        operation: u32,
+    ) -> Self {
         let mut report = Self::new(Body::Residue(ResidueReport {
             abi_version: 1,
             struct_size: size_of::<ResidueReport>() as u32,
-            operation: registry::RESIDUE_OPERATION_SNAPSHOT_PREPARATION_FAILURE,
+            operation,
             cleanup_state: facts::cleanup_state(failure.cleanup_state()),
             coordination_cleanup: facts::coordination_cleanup(failure.coordination_cleanup),
             housekeeping: facts::housekeeping(failure.housekeeping),

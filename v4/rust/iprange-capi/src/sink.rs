@@ -5,7 +5,7 @@ use std::mem::size_of;
 
 use crate::abi::{
     CallbackFailure, CoverageSinkFn, DirectRange, DirectSinkFn, FeedInfo, FeedSinkFn,
-    MembershipRange, MembershipSinkFn, Range,
+    FirstSeenRemoval, FirstSeenRemovalSinkFn, MembershipRange, MembershipSinkFn, Range,
 };
 use crate::error::{BoundaryError, CallError};
 use crate::source::{callback_message, require_empty_failure};
@@ -52,6 +52,12 @@ macro_rules! sink {
 
 sink!(coverage, CoverageSinkFn, Range, "coverage sink");
 sink!(direct, DirectSinkFn, DirectRange, "direct sink");
+sink!(
+    first_seen_removal,
+    FirstSeenRemovalSinkFn,
+    FirstSeenRemoval,
+    "first-seen removal sink"
+);
 sink!(
     membership,
     MembershipSinkFn,

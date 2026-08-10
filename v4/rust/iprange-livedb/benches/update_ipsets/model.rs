@@ -34,6 +34,10 @@ impl TestDatabase {
         self.directory.join("snapshot.v4")
     }
 
+    pub(crate) fn path(&self, name: &str) -> PathBuf {
+        self.directory.join(name)
+    }
+
     pub(crate) fn private_artifacts(&self) -> Result<u64, String> {
         let mut count = 0u64;
         for entry in fs::read_dir(&self.directory).map_err(|error| error.to_string())? {

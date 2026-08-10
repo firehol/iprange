@@ -18,6 +18,8 @@ mod direct;
 mod membership;
 #[path = "scenarios/read.rs"]
 mod read;
+#[path = "scenarios/sdk.rs"]
+mod sdk;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ScenarioResult {
@@ -25,11 +27,20 @@ pub(crate) struct ScenarioResult {
     pub(crate) size: usize,
     pub(crate) auxiliary: usize,
     pub(crate) work_units: u64,
+    pub(crate) emitted_units: u64,
     pub(crate) range_records: u64,
     pub(crate) feeds: u64,
     pub(crate) measurement: Measurement,
     pub(crate) file: FileSize,
     pub(crate) private_artifacts: u64,
+}
+
+pub(crate) struct ImmutableResultSpec {
+    pub(crate) name: &'static str,
+    pub(crate) size: usize,
+    pub(crate) auxiliary: usize,
+    pub(crate) work_units: u64,
+    pub(crate) emitted_units: u64,
 }
 
 pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioResult, String> {
@@ -39,7 +50,8 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
     match name {
         "direct-replace" => direct::replace(size),
         "nested-overwrite" => direct::nested(size),
-        "retention-refresh" => direct::retention(size),
+        "first-seen-refresh" => direct::first_seen(size),
+        "last-seen-refresh" => direct::last_seen(size),
         "feed-replace" => membership::replace_feed(size, auxiliary),
         "feed-first-ascending" => membership::shaped_feed(
             "feed-first-ascending",
@@ -94,6 +106,19 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "immutable-direct-scan" => read::immutable_direct_scan(size),
         "live-open" => read::live_open(size, auxiliary),
         "snapshot" => read::snapshot(size),
+        "immutable-feed-random" => sdk::immutable_feed(size),
+        "history-project" => sdk::history_project(size, auxiliary),
+        "membership-matching-feeds" => sdk::matching_feeds(size, auxiliary),
+        "membership-cardinalities" => sdk::aggregate_cardinalities(size, auxiliary),
+        "membership-selected-pair" => sdk::aggregate_selected_pair(size),
+        "membership-all-pairs" => sdk::aggregate_all_pairs(size, auxiliary),
+        "direct-provider-join" => sdk::direct_join(size, auxiliary),
+        "membership-provider-join" => sdk::membership_join(size, auxiliary),
+        "algebra-count" => sdk::algebra_count(size, auxiliary),
+        "algebra-compare" => sdk::algebra_compare(size, auxiliary),
+        "algebra-publish-preserve" => sdk::algebra_publish(size, auxiliary, false),
+        "algebra-publish-flat" => sdk::algebra_publish(size, auxiliary, true),
+        "update-ipsets-workflow" => sdk::update_ipsets_workflow(size, auxiliary),
         _ => Err(format!("unknown scenario {name:?}")),
     }
 }
@@ -196,8 +221,41 @@ pub(crate) fn result(
         size,
         auxiliary,
         work_units,
+        emitted_units: 0,
         range_records,
         feeds,
+        measurement: measured,
+        file: measure::file_size(file_path).map_err(|error| error.to_string())?,
+        private_artifacts,
+    })
+}
+
+pub(crate) fn immutable_result(
+    spec: ImmutableResultSpec,
+    database: &TestDatabase,
+    measured: Measurement,
+    file_path: &Path,
+) -> Result<ScenarioResult, String> {
+    validate_output(file_path, false)?;
+    let reader =
+        iprange_livedb::ImmutableReader::open(file_path).map_err(|error| error.to_string())?;
+    let info = reader.info();
+    drop(reader);
+    let private_artifacts = database.private_artifacts()?;
+    if private_artifacts != 0 {
+        return Err(format!(
+            "{} left {private_artifacts} private temporary artifacts",
+            spec.name
+        ));
+    }
+    Ok(ScenarioResult {
+        name: spec.name,
+        size: spec.size,
+        auxiliary: spec.auxiliary,
+        work_units: spec.work_units,
+        emitted_units: spec.emitted_units,
+        range_records: info.range_record_count,
+        feeds: info.active_feed_count,
         measurement: measured,
         file: measure::file_size(file_path).map_err(|error| error.to_string())?,
         private_artifacts,

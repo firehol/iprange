@@ -86,6 +86,24 @@ pub(crate) fn output_buffer_slot<T>(pointer: *mut T, count: u64, name: &'static 
     }
 }
 
+pub(crate) fn require_struct_identity(
+    version: u32,
+    actual_size: u32,
+    expected_size: usize,
+) -> Result<(), BoundaryError> {
+    if version != 1 {
+        return Err(BoundaryError::invalid_argument(
+            "structure ABI version is not 1",
+        ));
+    }
+    let expected_size = u32::try_from(expected_size)
+        .map_err(|_| BoundaryError::invalid_length("structure size exceeds the ABI limit"))?;
+    if actual_size != expected_size {
+        return Err(BoundaryError::invalid_length("structure size is invalid"));
+    }
+    Ok(())
+}
+
 fn panic_error(payload: Box<dyn Any + Send>) -> ErrorHandle {
     let detail = payload
         .downcast_ref::<&str>()

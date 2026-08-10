@@ -64,6 +64,7 @@ pub(crate) fn combine<S: RetiringStore>(
     right_words: u32,
     operation: MembershipOperation,
 ) -> Result<Interned> {
+    crate::work::membership_combination(1);
     let left_words = stored_word_count(store, state.id_root, left_id)?;
     require_words(store, state.id_root, right_id, right_words)?;
     if let Some(result) = identity(left_id, left_words, right_id, right_words, operation) {

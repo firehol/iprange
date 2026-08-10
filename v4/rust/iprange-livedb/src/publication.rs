@@ -31,6 +31,7 @@ mod resolver;
 pub(crate) mod result;
 pub(crate) mod security;
 mod types;
+pub(crate) mod workflow;
 
 pub use maintenance::{
     list_abandoned_publication_temps, list_abandoned_reservation_artifacts,

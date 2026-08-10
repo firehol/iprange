@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 
-use iprange_livedb::{AddressFamily, MetaSelection, ValueKind};
+use iprange_livedb::{AddressFamily, DirectSemantic, MetaSelection, ValueKind};
 
 use crate::abi::{DatabaseInfo, FeedInfo, Ip, MutableByteSlice};
 use crate::error::{
@@ -11,6 +11,7 @@ use crate::error::{
 };
 use crate::handle::{BorrowedMembershipViewHandle, MembershipViewHandle, ReaderHandle};
 use crate::ip::{self, Key};
+use crate::registry;
 
 #[no_mangle]
 pub unsafe extern "C" fn iprange_v4_abi1_reader_database_info(
@@ -526,6 +527,13 @@ fn encode_database_info(info: iprange_livedb::DatabaseInfo) -> DatabaseInfo {
             ValueKind::Direct => 1,
             ValueKind::Membership => 2,
         },
+        direct_semantic: match info.direct_semantic() {
+            None => registry::DIRECT_SEMANTIC_NOT_APPLICABLE,
+            Some(DirectSemantic::Generic) => registry::DIRECT_SEMANTIC_GENERIC,
+            Some(DirectSemantic::FirstSeen) => registry::DIRECT_SEMANTIC_FIRST_SEEN,
+            Some(DirectSemantic::LastSeen) => registry::DIRECT_SEMANTIC_LAST_SEEN,
+        },
+        reserved: 0,
         value_tag: *info.value_tag.as_wire(),
         database_id: info.database_id,
         transaction_id: info.transaction_id,
@@ -538,7 +546,7 @@ fn encode_database_info(info: iprange_livedb::DatabaseInfo) -> DatabaseInfo {
             MetaSelection::SoleMeta0 => 2,
             MetaSelection::SoleMeta1 => 3,
         },
-        reserved: 0,
+        reserved2: 0,
     }
 }
 

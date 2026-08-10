@@ -8,7 +8,7 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::bootstrap::{Bootstrap, MetaSelection, OpenMode};
-use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, DirectSemantic, ValueKind, ValueTag};
 use crate::error::Result;
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
@@ -34,6 +34,13 @@ pub struct DatabaseInfo {
     pub range_record_count: u64,
     pub active_feed_count: u64,
     pub meta_selection: MetaSelection,
+}
+
+impl DatabaseInfo {
+    /// Return the tag-derived semantic for a direct database.
+    pub fn direct_semantic(&self) -> Option<DirectSemantic> {
+        (self.value_kind == ValueKind::Direct).then(|| self.value_tag.direct_semantic())
+    }
 }
 
 #[derive(Debug)]

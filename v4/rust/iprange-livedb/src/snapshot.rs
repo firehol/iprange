@@ -9,6 +9,7 @@ mod terminal;
 
 use crate::error::{Error, Result};
 
+pub use crate::publication::PublicationPolicy as SnapshotPublicationPolicy;
 pub use api::snapshot_to;
 pub use terminal::{SnapshotPreparationFailure, SnapshotResult};
 
@@ -18,15 +19,6 @@ pub use terminal::{SnapshotPreparationFailure, SnapshotResult};
 pub enum SnapshotSourceMode {
     Immutable,
     Live,
-}
-
-/// Canonical destination publication policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SnapshotPublicationPolicy {
-    FailIfExists,
-    ReplaceExisting,
-    ReplaceExistingNoRollback,
 }
 
 /// Maximum simultaneously retained snapshot construction resources.

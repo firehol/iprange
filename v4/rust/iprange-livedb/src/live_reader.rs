@@ -10,10 +10,14 @@ use crate::feed_catalog::FeedCursor;
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_writer::CloseOutcome;
+use crate::membership_query::MembershipQuery;
 use crate::membership_view::MembershipView;
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::reader_core::{LiveReaderClose, LiveReaderCore, ReaderCore};
+use crate::source::{
+    DirectRangeSourceV4, DirectRangeSourceV6, FeedRangeSourceV4, FeedRangeSourceV6,
+};
 
 /// Factual, retryable live-reader close result.
 #[derive(Debug)]
@@ -100,6 +104,34 @@ impl LiveReader {
         self.core.read()?.feed_range_cursor_v6(name, direction)
     }
 
+    /// Stream one named IPv4 feed in bounded mapped batches.
+    pub fn named_feed_source_v4(&self, name: &str) -> Result<FeedRangeSourceV4<'_>> {
+        Ok(FeedRangeSourceV4::new(
+            self.feed_range_cursor_v4(name, RangeDirection::Forward)?,
+        ))
+    }
+
+    /// Stream one named IPv6 feed in bounded mapped batches.
+    pub fn named_feed_source_v6(&self, name: &str) -> Result<FeedRangeSourceV6<'_>> {
+        Ok(FeedRangeSourceV6::new(
+            self.feed_range_cursor_v6(name, RangeDirection::Forward)?,
+        ))
+    }
+
+    /// Stream this IPv4 direct map in bounded mapped batches.
+    pub fn direct_range_source_v4(&self) -> Result<DirectRangeSourceV4<'_>> {
+        Ok(DirectRangeSourceV4::new(
+            self.direct_cursor_v4(RangeDirection::Forward)?,
+        ))
+    }
+
+    /// Stream this IPv6 direct map in bounded mapped batches.
+    pub fn direct_range_source_v6(&self) -> Result<DirectRangeSourceV6<'_>> {
+        Ok(DirectRangeSourceV6::new(
+            self.direct_cursor_v6(RangeDirection::Forward)?,
+        ))
+    }
+
     /// Look up one address in this pinned IPv4 membership generation.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
         self.core.read()?.lookup_membership_v4(address)
@@ -108,6 +140,11 @@ impl LiveReader {
     /// Look up one address in this pinned IPv6 membership generation.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
         self.core.read()?.lookup_membership_v6(address)
+    }
+
+    /// Open a format-facing query capability over this pinned membership generation.
+    pub fn membership_query(&self) -> Result<MembershipQuery<'_>> {
+        MembershipQuery::new(self.core()?)
     }
 
     /// Exact decompressed metadata length, or absence.

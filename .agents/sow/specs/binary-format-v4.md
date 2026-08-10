@@ -292,14 +292,25 @@ Phase 1 has no signature or trusted-key statement; a caller that deliberately
 supplies a digest collision is outside these identity predicates.
 
 `value_tag` contains zero through 15 caller-defined non-NUL bytes, followed by
-one mandatory NUL byte. Every byte after the first NUL MUST be zero. The exact
-tag `retention` is encoded as:
+one mandatory NUL byte. Every byte after the first NUL MUST be zero. Direct
+databases derive one engine-defined semantic from two exact tags. `first_seen`
+is encoded as:
 
 ```text
-72 65 74 65 6e 74 69 6f 6e 00 00 00 00 00 00 00
+66 69 72 73 74 5f 73 65 65 6e 00 00 00 00 00 00
 ```
 
-The engine otherwise treats the tag bytes as opaque.
+`last_seen` is encoded as:
+
+```text
+6c 61 73 74 5f 73 65 65 6e 00 00 00 00 00 00 00
+```
+
+For `value_kind == direct`, the SDK reports `DirectSemantic = FirstSeen` or
+`LastSeen` for those exact tags and `Generic` for every other valid tag.
+Membership tags remain opaque and have no direct semantic. The tag bytes remain
+part of immutable file identity; no compatibility alias exists for an older
+experimental tag.
 
 ### 4.2 Meta selection
 
@@ -1389,7 +1400,7 @@ unrepresentable budget before exceeding it. Host `usize`, file-offset, mapping,
 descriptor, page-count, and scratch-space conversions are checked.
 
 Normal ingestion, metadata staging, advanced transactions, lifecycle/direct/
-retention workflows, import, commit, abort, query, and snapshot construction
+timestamp-refresh workflows, import, commit, abort, query, and snapshot construction
 MUST set external-scratch use to zero and MUST NOT create an external scratch or
 sorting file. They use bounded heap, operation-private destination COW pages,
 and—when producing a file—the one private inode that is the final output before
@@ -1822,7 +1833,7 @@ high-level workflow and creates no external file. It MUST avoid quadratic work
 for nested/overlapping input under a fixed budget. Direct input assigns a checked
 monotonic arrival ordinal and applies records exactly in arrival order: a later
 range overwrites only its own inclusive interval, and equal adjacent final values
-coalesce. Value-free feed/retention input computes coverage union, coalescing
+coalesce. Value-free feed/timestamp-refresh input computes coverage union, coalescing
 duplicates, overlap, and adjacency. A wrong-family endpoint, reversed range,
 ordinal exhaustion, source error, sink error, or insufficient private-page
 budget follows the whole-operation abort rule. Immediate source End is a legal
@@ -2207,9 +2218,10 @@ Direct values are opaque `u32` values. The engine compares them only for range
 coalescing. Value zero is valid. In the advanced direct layer the value is
 caller-semantic application data; it is never an SDK storage identifier.
 
-The retention API is available only when `value_kind == direct` and
-`value_tag == retention`. Any other combination returns a typed kind/tag
-mismatch before mutation.
+The first-seen and last-seen refresh APIs are available only when
+`value_kind == direct` and `DirectSemantic` exactly matches the requested
+operation. Any other combination returns a typed kind/tag mismatch before
+mutation.
 
 A live writer owns the lease and permits at most one active advanced transaction
 or high-level workflow. Advanced APIs expose logical mutations only; pages,
@@ -2250,7 +2262,7 @@ Every successful high-level `FinishInput` returns this fixed semantic schema:
 
 ```text
 workflow: CreateFeed | ReplaceFeed | DirectReplacement |
-          RetentionRefresh | MembershipImport
+          FirstSeenRefresh | LastSeenRefresh | MembershipImport
 logical_change: Changed | NoChange
 input_record_count:u64
 input_normalized_interval_count:u64
@@ -2276,7 +2288,7 @@ All record/feed/membership counters are checked and overflow is typed
 `after = unchanged_value + changed_value + added`. For one-feed workflows the
 semantic value is membership in that named feed, so `changed_value_addresses` is
 zero; the address fields and before/after record counts describe the coalesced
-projection of only that feed. For direct replacement and retention they describe
+projection of only that feed. For direct replacement and timestamp refreshes they describe
 the complete direct map and compare exact `u32` values; record counts are
 canonical direct-tree records. For membership import they describe the complete
 destination membership map and compare resolved named-feed sets, never internal
@@ -2408,7 +2420,7 @@ normalization, mutation, cancellation, or cleanup error follows whole-draft
 abort rules. The high-level one-feed restriction does not limit an advanced
 membership transaction, which may intentionally change multiple feeds.
 
-### 16.4 High-level direct replacement and retention refresh
+### 16.4 High-level direct replacement and timestamp refreshes
 
 `BeginDirectReplacement` requires a clean direct writer and owns one private
 draft. Repeated `AddRanges` batches carry `(from,to,value:u32)` records;
@@ -2418,9 +2430,9 @@ exactly in arrival order across batches, with later records overwriting only
 their own intervals. The operation normalizes directly in destination-private
 COW pages and creates no external sorting file.
 
-`BeginRetentionRefresh(tN)` is available only for the exact `retention` tag,
+`BeginFirstSeenRefresh(tN)` is available only for `DirectSemantic == FirstSeen`,
 requires a clean writer, and accepts repeated value-free `AddRanges` batches.
-`FinishInput` unions that unordered complete desired address set and merge-joins
+`FinishInput` unions that unordered complete current address set and merge-joins
 it with the complete committed map:
 
 - addresses in both retain their old value exactly;
@@ -2430,8 +2442,29 @@ it with the complete committed map:
 The rule applies per address and splits partial overlaps. A removed address
 that later reappears is new and receives the later value. No refresh changes
 the timestamp of an address continuously present across both snapshots.
+The caller may select a removal-reporting `FinishInput` variant. It emits
+bounded nonempty batches during this same merge, where each record contains the
+exact removed interval, its old first-seen value, and exact address count. It
+does not rescan or accumulate all removals. Sink failure or stop aborts the
+complete unpublished refresh; the ordinary finish path performs no removal
+record construction or callback work.
 
-Direct replacement and retention refresh return `NoChange` when their
+`BeginLastSeenRefresh(tN, cutoff)` is available only for
+`DirectSemantic == LastSeen`, requires a clean writer, and accepts the same
+complete current address set. `FinishInput` applies this rule per address:
+
+- an address in the current set receives `max(old_value, tN)` when it existed
+  and `tN` when it did not;
+- an absent old address with `old_value > cutoff` remains unchanged; and
+- an absent old address with `old_value <= cutoff` is deleted.
+
+The strict `>` cutoff makes a query for one history window exactly
+`last_seen > cutoff`. The monotonic maximum makes a replay or out-of-order
+refresh unable to move time backwards. One complete last-seen database supports
+all caller-selected windows by changing only the query cutoff; the SDK does not
+create one timestamp database per window.
+
+Direct replacement and both timestamp refreshes return `NoChange` when their
 complete logical result equals the committed direct map. They terminate exactly
 like the no-change feed replacement above: clean private preparation artifacts,
 release operation ownership, invalidate children, leave the writer clean, and
@@ -2441,10 +2474,10 @@ The equality result is derived during the required merge walk; it does not add a
 second pass. After any exact no-op, the caller may still stage metadata normally;
 changed metadata alone then starts and publishes the metadata transaction.
 
-Normal replacement/retention has no best-effort flag. A read error cannot be interpreted
-as intentional deletion.
+Normal replacement and timestamp refreshes have no best-effort flag. A read
+error cannot be interpreted as intentional deletion.
 
-After direct replacement or retention `FinishInput` succeeds, the same private
+After direct replacement or timestamp-refresh `FinishInput` succeeds, the same private
 draft MAY stage exactly one `SetMetadataJSON` or `ClearMetadataJSON`. After that
 workflow, the only legal writer actions are that one optional metadata
 stage, `Commit`, or `Abort`; advanced mutation, a second metadata stage, another
@@ -2493,39 +2526,105 @@ statistics before optional metadata and Commit/Abort. Exact whole-file copy is
 existing direct map because conflicting opaque `u32` values have no natural
 merge; advanced direct assignment or high-level direct replacement is explicit.
 
-### 16.6 Primitive queries and high-level feasibility boundary
+### 16.6 Named membership queries and aggregation
 
 Point lookup returns the direct value or lazy membership view from the pinned
 generation. Forward/backward cursors and bounded-range scans yield borrowed
 records or write into caller storage; warmed movement allocates nothing.
 
-Phase 1 also exposes feed-catalog enumeration and exact name lookup plus an
-ordered cursor for one named feed. These are format-facing primitives. Phase 1
-does not implement or freeze the detailed multi-file union, intersection,
-exclusion, comparison, equality, overlap, or counting API.
+The SDK also exposes feed-catalog enumeration and exact name lookup plus an
+ordered cursor for one named feed. A reusable membership scope resolves either
+all active feeds or one nonempty unique caller list against one pinned
+generation. The scope owns the bounded name-to-local-index mapping; callers
+never supply bit positions or membership IDs.
 
-The preliminary Phase-2 feasibility contract is:
+One point query emits every active feed name matching an address without one
+lookup per catalog feed. One ordered membership scan can emit exact
+`Cardinality129` results for:
 
-- a set-producing result is always a materialized/published v4 file, never an
-  in-memory feed object;
-- merge/union, intersection, and exclusion produce a v4 result plus terminal
-  statistics, while analytical operations may return counters only when no
-  useful result set exists;
-- a result may preserve global named feeds or flatten coverage into one
-  caller-named feed; and
-- equal feed names across supplied files identify one global logical feed.
-  Implementations aggregate its ordered source views virtually and do not first
-  write a physical temporary combined feed. Source feed indexes remain local to
-  their pinned catalogs and have no cross-file identity.
+- every selected feed;
+- one selected feed against every other selected feed;
+- a nonempty caller list of unique feed pairs; or
+- every unordered selected pair.
 
-The catalog, ordered per-feed cursors, ordinary v4 writer/publication, exact
-`Cardinality129`, and explicit resource budgets MUST make this direction
-implementable without an operation-specific page type, persisted derived
-statistics, or another binary format. Exact high-level signatures, result
-statistics, feed projection, direct-value behavior, algebra-specific batching,
-and error precedence are Phase-2 decisions tracked outside this specification's
-Phase-1 implementation gate. The common Phase-1 cancellation and batched sink
-contracts still apply.
+The scan decodes each canonical membership only as required and emits bounded
+terminal batches. Heap is bounded explicitly by scope/catalog size, selected
+pairs, the requested result shape, and reusable decode state; it never scales
+with address cardinality or source range count. Requested all-pairs output is
+necessarily quadratic in selected feed count, but sparse modes MUST NOT perform
+catalog-wide quadratic work.
+
+### 16.7 Ordered provider joins
+
+A membership/direct join merge-walks one named membership scope and one pinned
+direct database of the same address family. It emits exact
+`(feed_name, direct_value)` address cardinalities and an explicit unmapped cell
+per affected feed. The caller bounds the maximum distinct cells. The SDK treats
+the direct `u32` as opaque; ASN, geography, timestamp, and other labels remain
+caller semantics.
+
+A membership/membership join merge-walks two named scopes of the same address
+family. It emits exact left-name/right-name cross cardinalities plus each
+selected feed's coverage that has no selected feed on the other side. Its heap
+and output shape are explicit products of the selected scopes, not hidden
+range-count state.
+
+Provider joins are analytical. They return exact statistics and batched cells,
+not a speculative direct-valued database whose conflict semantics would be
+ambiguous. When the requested result is address coverage, the caller uses the
+set algebra below to publish that coverage as v4.
+
+### 16.8 Immutable feed construction and history projection
+
+`CreateImmutableFeed` consumes one unordered value-free source, unions its
+coverage, and publishes one caller-named membership feed directly in one private
+final database inode. The same inode holds the bounded mapped normalization
+workspace and final canonical output; there is no live intermediate database,
+second copied snapshot, external sorting file, or complete-feed heap image.
+Optional metadata and durable publication use the ordinary v4 authorities. The
+result includes exact input-record, normalized-interval, and address counts.
+
+`ProjectHistory` requires a clean membership writer, one pinned `last_seen`
+direct source of the same address family on a different local inode, and a
+nonempty list of unique destination feed names with cutoffs. It scans the source
+once and updates all requested destination feeds in one private membership
+transaction. Each requested feed contains exactly addresses whose stored value
+is strictly greater than its cutoff. Missing feeds are created, existing feed
+indexes are preserved, unrelated feeds are unchanged, and empty results remain
+cataloged. The operation returns exact per-window and aggregate before/after,
+unchanged, added, and removed statistics. A no-change result leaves no pending
+transaction; a changed result permits the common one metadata stage and then
+Commit or Abort.
+
+### 16.9 Global named-feed algebra
+
+A reusable algebra resolves one or more same-family membership scopes into one
+lexically ordered global feed catalog. Equal names in different inputs identify
+one global logical feed. Local feed indexes and membership IDs never cross their
+source boundary. Ordered K-way enumeration combines those inputs virtually and
+does not create a temporary merged database.
+
+Selections are either every global feed or one nonempty unique caller list.
+Analytical operations are:
+
+- `Count(selection)`, the exact cardinality of the selection's union; and
+- `Compare(left,right)`, returning exact left, right, overlap, left-only,
+  right-only, and union cardinalities plus equality.
+
+Set-producing operations are union, intersection, and exclusion. Union retains
+coverage present in any selected feed; intersection retains coverage present in
+every selected feed; exclusion retains included-union coverage outside the
+excluded union. The output is always one durably published immutable v4 file
+plus exact traversal and output statistics. Preserve mode writes contributing
+global names; flat mode writes the same coverage under one caller-supplied name.
+
+Algebra setup and each operation have explicit source, descriptor, mapped-page,
+and heap budgets. Retained state scales with source/catalog selection and
+requested output shape, never input range count or address cardinality. The
+operation reuses the ordinary mapped reader, canonical membership decoder,
+immutable-output builder, and publication authority; it introduces no page type,
+persisted derived statistics, alternate binary format, or binding-specific
+algorithm.
 
 For update-ipsets, download/parse work MAY run concurrently, but one
 writer serializes and commits one `CreateFeed` or `ReplaceFeed` generation at a

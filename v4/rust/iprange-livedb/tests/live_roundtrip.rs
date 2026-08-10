@@ -59,7 +59,7 @@ fn creation_failure_before_artifacts_is_reported_without_residue() {
         &path,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -198,7 +198,7 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -254,7 +254,7 @@ fn safe_reclaimed_pages_are_reused_while_a_newer_reader_is_pinned() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -314,7 +314,7 @@ fn failed_reclamation_discards_its_complete_private_draft() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -361,7 +361,7 @@ fn cancelled_reclamation_leaves_the_committed_generation_unchanged() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -397,7 +397,7 @@ fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -525,7 +525,7 @@ fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )

@@ -52,7 +52,7 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         LiveWriter::open(&live, transaction_budget(), &CancellationToken::new()).unwrap();
     match fixture.file.as_str() {
         "rust/direct-ipv4.iprdb" => direct_ipv4(&mut writer, fixture),
-        "rust/retention-ipv6.iprdb" => retention_ipv6(&mut writer, fixture),
+        "rust/first-seen-ipv6.iprdb" => first_seen_ipv6(&mut writer, fixture),
         "rust/membership-ipv4.iprdb" => membership_ipv4(&mut writer),
         "rust/membership-ipv6.iprdb" => membership_ipv6(&mut writer, fixture),
         other => panic!("no Rust fixture generator for {other}"),
@@ -93,10 +93,10 @@ fn direct_ipv4(writer: &mut LiveWriter, fixture: &Fixture) {
     transaction.commit().unwrap();
 }
 
-fn retention_ipv6(writer: &mut LiveWriter, fixture: &Fixture) {
+fn first_seen_ipv6(writer: &mut LiveWriter, fixture: &Fixture) {
     let cancellation = CancellationToken::new();
     let mut workflow = writer
-        .begin_retention_refresh(1_700_000_000, &cancellation)
+        .begin_first_seen_refresh(1_700_000_000, &cancellation)
         .unwrap();
     workflow
         .add_ranges_v6_slice(&[AddressRange {

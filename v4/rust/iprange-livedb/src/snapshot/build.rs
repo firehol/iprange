@@ -5,6 +5,7 @@ use std::fs::File;
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, ValueKind};
 use crate::error::{Error, Result};
+use crate::heap::Heap;
 use crate::immutable_output::{Builder, Finished, MembershipWords, OutputBudget};
 use crate::membership_view::MembershipView;
 use crate::range_cursor::RangeDirection;
@@ -25,12 +26,14 @@ pub(super) fn copy(
     cancellation: &CancellationToken,
 ) -> std::result::Result<Finished, Box<Failure>> {
     let reader = source::reader(source);
-    let builder = Builder::new_owned(
+    let mut heap = Heap::new(budget.max_heap_bytes);
+    let builder = Builder::new_owned_with_heap(
         file,
         reader.output_spec(),
         OutputBudget {
             max_output_pages: budget.max_output_pages,
         },
+        &mut heap,
     )
     .map_err(|failure| {
         Box::new(Failure {
@@ -38,7 +41,11 @@ pub(super) fn copy(
             cause: failure.cause,
         })
     })?;
-    copy_into(reader, builder, budget, cancellation)
+    let available = SnapshotBudget {
+        max_heap_bytes: heap.remaining(),
+        ..*budget
+    };
+    copy_into(reader, builder, &available, cancellation)
 }
 
 fn copy_into(

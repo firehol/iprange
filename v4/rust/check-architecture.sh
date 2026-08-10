@@ -85,6 +85,7 @@ untrusted_checksum_pattern='crc32c_source_with_zeroed\(page|u32_le\(page,[[:spac
 empty_database_pattern='fn (empty_meta|write_empty_main)\b|^[[:space:]]*MetaV4[[:space:]]*\{'
 copied_tree_leaf_pattern='\b(LeafBuf|MAX_COPIED_LEAF|copy_leaf)\b'
 membership_delta_delete_pattern='\btake_first\b|fixed_tree::(delete|delete_existing)\b|LeafU64Mutation::Delete'
+sdk_physical_pattern='crate::(mapping|bootstrap|database_file|draft_store|retirement|range_tree|fixed_tree|slotted_page|page_header|page_io|free_bitmap|membership_dictionary|membership_tree|range_mutation)\b|\b(mapping|bootstrap|database_file|draft_store|retirement|range_tree|fixed_tree|slotted_page|page_header|page_io|free_bitmap|membership_dictionary|membership_tree|range_mutation)::|\b(Mapping|MetaV4|Bootstrap|PageBudget|DraftStore|CursorState|ProjectionState)\b'
 
 assert_detects 'reader-adapter' "$reader_bridge_pattern" 'use crate::mapping::Mapping;'
 assert_detects 'physical reader-adapter' "$reader_adapter_physical_pattern" 'use crate::database_file;'
@@ -108,6 +109,8 @@ assert_detects 'empty database construction' "$empty_database_pattern" 'fn empty
 assert_detects 'copied fixed-tree leaf' "$copied_tree_leaf_pattern" 'struct LeafBuf;'
 assert_detects 'per-record membership-delta deletion' \
     "$membership_delta_delete_pattern" 'fixed_tree::delete_existing(store, root, key, retired)'
+assert_detects 'public SDK physical access' "$sdk_physical_pattern" \
+    'use crate::range_mutation;'
 
 bridge="$source_root/c_abi_support.rs"
 import_workflow="$source_root/live_writer/membership_import.rs"
@@ -151,6 +154,18 @@ mapfile -t publication_maintenance < <(
     find "$source_root/publication/maintenance" -type f -name '*.rs' \
         ! -name 'common.rs' ! -name '*_test.rs' ! -name '*_tests.rs' -print
     printf '%s\n' "$source_root/publication/maintenance.rs"
+)
+sdk_adapters=(
+    "$source_root/immutable_feed.rs"
+    "$source_root/history.rs"
+    "$source_root/live_writer/history_projection.rs"
+    "$source_root/membership_query.rs"
+)
+while IFS= read -r source; do
+    sdk_adapters+=("$source")
+done < <(
+    find "$source_root/membership_query" -type f -name '*.rs' \
+        ! -name '*_test.rs' ! -name '*_tests.rs' ! -name 'tests.rs' -print
 )
 
 status=0
@@ -219,6 +234,9 @@ run scan 'A fixed-tree lookup copies a mapped leaf into temporary storage:' \
 run scan 'Membership deltas are consumed through repeated search/delete operations:' \
     "$membership_delta_delete_pattern" \
     "$source_root/membership_delta.rs" || status=1
+run scan 'A public SDK workflow owns physical database operations:' \
+    "$sdk_physical_pattern" \
+    "${sdk_adapters[@]}" || status=1
 
 ((status == 0)) || fail 'Rust v4 ownership boundaries were bypassed'
 

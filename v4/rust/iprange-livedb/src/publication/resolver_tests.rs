@@ -657,7 +657,7 @@ fn publish(
     let spec = OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id,
         transaction_id,
         commit_nonce: [43; 16],
@@ -681,7 +681,7 @@ fn publish_replacement(main: &std::path::Path) -> PublicationResult {
     let spec = OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id: [41; 16],
         transaction_id: 42,
         commit_nonce: [43; 16],

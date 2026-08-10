@@ -57,7 +57,7 @@ fn generate_layout_source(crate_dir: &Path, config: &cbindgen::Config) -> String
     let prefix = config.export.prefix.as_deref().unwrap_or_default();
     let mut layouts = Vec::new();
 
-    for relative in ["src/abi.rs", "src/abi_extra.rs"] {
+    for relative in ["src/abi.rs", "src/abi_extra.rs", "src/abi_sdk.rs"] {
         let source = fs::read_to_string(crate_dir.join(relative)).expect("read ABI layout source");
         let parsed = syn::parse_file(&source).expect("parse ABI layout source");
         for item in parsed.items {

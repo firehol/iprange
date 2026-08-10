@@ -79,16 +79,15 @@ pub fn recover_live<S: RecoverySink>(
 
 #[cfg(any(unix, windows))]
 mod platform {
+    use super::*;
     use crate::contract::{MetaV4, ValueKind};
     use crate::error::Error;
+    use crate::heap::Heap;
     use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
     use crate::publication::cleanup;
     use crate::publication::output::OutputAttempt;
     use crate::publication::problem::Problem;
     use crate::publication::{self, PublicationProblem};
-    use crate::random;
-
-    use super::*;
     use crate::recovery::construction;
     use crate::recovery::direct_build;
     use crate::recovery::membership_build;
@@ -209,12 +208,15 @@ mod platform {
                 ))
             }
         };
-        let builder = match Builder::new_owned(
+        // Recovery reserves its heap budget for salvage state, not output acceleration.
+        let mut heap = Heap::new(0);
+        let builder = match Builder::new_owned_with_heap(
             file,
             spec,
             OutputBudget {
                 max_output_pages: budget.max_output_pages,
             },
+            &mut heap,
         ) {
             Ok(builder) => builder,
             Err(failure) => {
@@ -261,15 +263,12 @@ mod platform {
     }
 
     fn output_spec(meta: MetaV4) -> crate::error::Result<OutputSpec> {
-        Ok(OutputSpec {
-            address_family: meta.address_family,
-            value_kind: meta.value_kind,
-            value_tag: meta.value_tag,
-            database_id: random::nonzero_128()?,
-            transaction_id: 1,
-            commit_nonce: random::nonzero_128()?,
-            feed_index_limit: meta.feed_index_limit,
-        })
+        OutputSpec::fresh(
+            meta.address_family,
+            meta.value_kind,
+            meta.value_tag,
+            meta.feed_index_limit,
+        )
     }
 
     fn build<S: RecoverySink>(

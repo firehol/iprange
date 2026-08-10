@@ -4,13 +4,14 @@ use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::contract::MembershipOperation;
 use crate::draft_store::{
-    DraftStore, FeedMerge, ImportCache, ImportMerge, ImportWords, MembershipHandle, RetentionMerge,
-    TranslatedMembership,
+    DraftStore, FeedMerge, HistoryMerge, HistoryPlan, ImportCache, ImportMerge, ImportWords,
+    MembershipHandle, TimestampMerge, TranslatedMembership,
 };
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::reader_core::MembershipToken;
+use crate::workflow::FirstSeenRemovalSink;
 
 pub(crate) struct WriterEdit<'a> {
     pub(super) store: DraftStore<'a>,
@@ -206,6 +207,52 @@ impl<'a> WriterEdit<'a> {
         merge.finish(&mut self.store, cancellation)
     }
 
+    pub(crate) fn prepare_history_from<K: IpKey, I>(
+        &mut self,
+        window_count: usize,
+        windows: I,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryPlan<K>>
+    where
+        I: IntoIterator<Item = Result<crate::history::HistoryWindow>>,
+    {
+        HistoryPlan::prepare_from(&mut self.store, window_count, windows, cancellation)
+    }
+
+    pub(crate) fn begin_history<K: IpKey>(
+        &mut self,
+        plan: HistoryPlan<K>,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryMerge<K>> {
+        plan.begin(&mut self.store, &self.base, cancellation)
+    }
+
+    pub(crate) fn push_history<K: IpKey>(
+        &mut self,
+        merge: &mut HistoryMerge<K>,
+        from: K,
+        to: K,
+        last_seen: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        merge.push(&mut self.store, from, to, last_seen, cancellation)
+    }
+
+    pub(crate) fn finish_history<K: IpKey>(
+        &mut self,
+        merge: HistoryMerge<K>,
+        source_range_count: u64,
+        source_addresses: crate::cardinality::Cardinality129,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::history::HistoryProjectionReport> {
+        merge.finish(
+            &mut self.store,
+            cancellation,
+            source_range_count,
+            source_addresses,
+        )
+    }
+
     pub(crate) fn delete_current_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
         self.store.delete_current_feed_membership(feed)
     }
@@ -243,12 +290,56 @@ impl<'a> WriterEdit<'a> {
         self.store.finish_direct_workflow(&self.base, cancellation)
     }
 
-    pub(crate) fn merge_retention(
+    pub(crate) fn merge_first_seen(
         &mut self,
         refresh_value: u32,
         cancellation: &CancellationToken,
-    ) -> Result<RetentionMerge> {
+    ) -> Result<TimestampMerge> {
         self.store
-            .merge_retention(&self.base, refresh_value, cancellation)
+            .merge_first_seen(&self.base, refresh_value, cancellation)
+    }
+
+    pub(crate) fn merge_first_seen_v4_with_removals<S>(
+        &mut self,
+        refresh_value: u32,
+        sink: &mut S,
+        cancellation: &CancellationToken,
+    ) -> Result<TimestampMerge>
+    where
+        S: FirstSeenRemovalSink<Ipv4Key>,
+    {
+        self.store.merge_first_seen_with_removals::<Ipv4Key, _>(
+            &self.base,
+            refresh_value,
+            sink,
+            cancellation,
+        )
+    }
+
+    pub(crate) fn merge_first_seen_v6_with_removals<S>(
+        &mut self,
+        refresh_value: u32,
+        sink: &mut S,
+        cancellation: &CancellationToken,
+    ) -> Result<TimestampMerge>
+    where
+        S: FirstSeenRemovalSink<Ipv6Key>,
+    {
+        self.store.merge_first_seen_with_removals::<Ipv6Key, _>(
+            &self.base,
+            refresh_value,
+            sink,
+            cancellation,
+        )
+    }
+
+    pub(crate) fn merge_last_seen(
+        &mut self,
+        refresh_value: u32,
+        cutoff: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<TimestampMerge> {
+        self.store
+            .merge_last_seen(&self.base, refresh_value, cutoff, cancellation)
     }
 }

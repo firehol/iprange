@@ -24,7 +24,7 @@ use crate::random;
 use crate::workflow::{compare, Comparison};
 
 pub(crate) use crate::draft_store::{
-    FeedMerge, ImportCache, ImportWords, MembershipHandle, TranslatedMembership,
+    FeedMerge, ImportCache, ImportWords, MembershipHandle, TimestampMerge, TranslatedMembership,
 };
 pub(crate) use edit::WriterEdit;
 pub(crate) use publication::{CommitAttempt, PublishOutcome};

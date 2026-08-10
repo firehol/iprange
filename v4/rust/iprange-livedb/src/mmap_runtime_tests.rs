@@ -36,7 +36,7 @@ fn persistent_storage_uses_mappings_only() {
         &live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         4,
         &cancellation,
     )
@@ -142,7 +142,7 @@ fn scratch_meta() -> MetaV4 {
     MetaV4 {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id: [0x31; 16],
         txn_id: 7,
         commit_nonce: [0x32; 16],

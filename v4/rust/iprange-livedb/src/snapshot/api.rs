@@ -36,7 +36,7 @@ pub fn snapshot_to(
 mod platform {
     use crate::error::Error;
     use crate::publication::cleanup;
-    use crate::publication::output::{CreatedOutput, OutputAttempt};
+    use crate::publication::output::OutputAttempt;
     use crate::publication::problem::Problem;
     use crate::publication::{self, PublicationProblem};
     use crate::recovery::source_guard::{problem, CurrentSourceMode, Source};
@@ -55,45 +55,19 @@ mod platform {
         budget
             .validate(source_mode, publication_policy)
             .map_err(|cause| Box::new(SnapshotPreparationFailure::early(cause)))?;
-        if publication_policy == SnapshotPublicationPolicy::ReplaceExisting {
-            publication::namespace::require_exchange_available().map_err(|_| {
-                Box::new(SnapshotPreparationFailure::early(
-                    Error::DurabilityUnsupported(
-                        "rollback-safe replacement requires atomic name exchange",
-                    ),
-                ))
-            })?;
-        }
         let source = open_source(source_path, source_mode, cancellation)?;
         if let Err(cause) =
             reject_live_self(&source, source_mode, destination_path, publication_policy)
         {
             return Err(fail_source(source, cause, None));
         }
-        let created = match publication_policy {
-            SnapshotPublicationPolicy::FailIfExists => {
-                CreatedOutput::create_absent(destination_path)
-            }
-            SnapshotPublicationPolicy::ReplaceExisting
-            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
-                CreatedOutput::create(destination_path)
-            }
-        };
-        let created = match created {
-            Ok(created) => created,
-            Err(cause) => return Err(fail_source(source, Problem::output(&cause), None)),
-        };
-        let secured = match created.secure() {
-            Ok(secured) => secured,
-            Err(failure) => {
-                return Err(fail_source(
-                    source,
-                    Problem::output(&failure.cause),
-                    Some(cleanup::discard_created(&failure.owner)),
-                ));
-            }
-        };
-        let (attempt, file) = secured.into_parts();
+        let (attempt, file) =
+            match publication::workflow::create(destination_path, publication_policy) {
+                Ok(output) => output,
+                Err(failure) => {
+                    return Err(fail_source(source, failure.cause, failure.discarded));
+                }
+            };
         if source.identity().bytes == attempt.identity().encode() {
             return Err(fail_attempt(
                 source,
@@ -192,59 +166,24 @@ mod platform {
             )));
         }
         debug_assert!(end.guard.is_none());
-        let prepared = match attempt.prepare_cancellable(finished, cancellation) {
-            Ok(prepared) => prepared,
-            Err(failure) => {
-                let discarded =
-                    cleanup::discard_attempt(&failure.owner.attempt, &failure.owner.finished.file);
-                return Err(Box::new(SnapshotPreparationFailure::discarded(
-                    Problem::output(&failure.cause),
+        match publication::workflow::publish(attempt, finished, policy, cancellation) {
+            Ok(publication) => Ok(SnapshotResult { publication }),
+            Err(publication::workflow::Failure::Early(failure)) => match failure.discarded {
+                Some(discarded) => Err(Box::new(SnapshotPreparationFailure::discarded(
+                    failure.cause,
                     discarded,
                     None,
-                )));
-            }
-        };
-        let prepared = match policy {
-            SnapshotPublicationPolicy::FailIfExists => prepared,
-            SnapshotPublicationPolicy::ReplaceExisting
-            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
-                let bound = match policy {
-                    SnapshotPublicationPolicy::ReplaceExisting => {
-                        publication::replacement::bind(prepared, cancellation)
-                    }
-                    SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
-                        publication::replacement::bind_no_rollback(prepared, cancellation)
-                    }
-                    SnapshotPublicationPolicy::FailIfExists => unreachable!(),
-                };
-                match bound {
-                    Ok(prepared) => prepared,
-                    Err(failure) => {
-                        let discarded =
-                            cleanup::discard_attempt(&failure.output.attempt, &failure.output.file);
-                        return Err(Box::new(SnapshotPreparationFailure::discarded(
-                            Problem::replacement(&failure.cause),
-                            discarded,
-                            None,
-                        )));
-                    }
-                }
-            }
-        };
-        let published = match policy {
-            SnapshotPublicationPolicy::FailIfExists => {
-                publication::attempt::fail_if_exists_cancellable(prepared, cancellation)
-            }
-            SnapshotPublicationPolicy::ReplaceExisting
-            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
-                publication::attempt::replace_existing_cancellable(prepared, cancellation)
-            }
-        };
-        match published {
-            Ok(publication) => Ok(SnapshotResult { publication }),
-            Err(failure) => Err(Box::new(SnapshotPreparationFailure::from_publication(
-                *failure,
-            ))),
+                ))),
+                None => Err(Box::new(SnapshotPreparationFailure::new(
+                    failure.cause,
+                    None,
+                    None,
+                    None,
+                ))),
+            },
+            Err(publication::workflow::Failure::Publication(failure)) => Err(Box::new(
+                SnapshotPreparationFailure::from_publication(*failure),
+            )),
         }
     }
 

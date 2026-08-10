@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::bootstrap::{self, MetaSelection};
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
+use crate::contract::{AddressFamily, DirectSemantic, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::Error;
 use crate::path;
 use std::fs;
@@ -69,14 +69,15 @@ fn opens_empty_direct_database() {
     let path = TestPath::new("open-direct");
     write_image(
         &path.0,
-        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION),
+        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN),
         2,
     );
     let reader = ImmutableReader::open(&path.0).unwrap();
     let info = reader.info();
     assert_eq!(info.address_family, AddressFamily::Ipv4);
     assert_eq!(info.value_kind, ValueKind::Direct);
-    assert_eq!(info.value_tag, ValueTag::RETENTION);
+    assert_eq!(info.value_tag, ValueTag::FIRST_SEEN);
+    assert_eq!(info.direct_semantic(), Some(DirectSemantic::FirstSeen));
     assert_eq!(info.transaction_id, 1);
     assert_eq!(info.page_count, 2);
     assert_eq!(info.range_record_count, 0);
@@ -107,6 +108,7 @@ fn opens_empty_membership_database() {
     let info = reader.info();
     assert_eq!(info.address_family, AddressFamily::Ipv6);
     assert_eq!(info.value_kind, ValueKind::Membership);
+    assert_eq!(info.direct_semantic(), None);
     assert_eq!(info.value_tag.bytes(), b"feeds");
     assert!(matches!(
         reader.lookup_direct_v6(Ipv6Key::MIN),
@@ -117,7 +119,7 @@ fn opens_empty_membership_database() {
 #[test]
 fn open_does_not_validate_non_meta_pages() {
     let path = TestPath::new("no-implicit-validation");
-    let mut meta = empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION);
+    let mut meta = empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN);
     meta.page_count = 3;
     meta.range_record_count = 1;
     meta.range_root = 2;
@@ -130,7 +132,7 @@ fn open_does_not_validate_non_meta_pages() {
 #[test]
 fn open_does_not_validate_the_metadata_chain() {
     let path = TestPath::new("no-implicit-metadata-validation");
-    let mut meta = empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION);
+    let mut meta = empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN);
     meta.page_count = 3;
     meta.metadata_root = 2;
     meta.metadata_uncompressed_len = 0;
@@ -164,7 +166,7 @@ fn open_rejects_a_present_sidecar() {
     let path = TestPath::new("live");
     write_image(
         &path.0,
-        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION),
+        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN),
         2,
     );
     fs::write(path::canonical_sidecar(&path.0).unwrap(), b"present").unwrap();
@@ -180,7 +182,7 @@ fn immutable_reader_holds_the_shared_lifetime_lock() {
     let path = TestPath::new("immutable-lifetime");
     write_image(
         &path.0,
-        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION),
+        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN),
         2,
     );
     let reader = ImmutableReader::open(&path.0).unwrap();
@@ -209,7 +211,7 @@ fn open_rejects_symlinks() {
     let path = TestPath::new("target");
     write_image(
         &path.0,
-        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION),
+        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::FIRST_SEEN),
         2,
     );
 

@@ -7,6 +7,7 @@ mod direct;
 mod direct_workflow;
 mod feed_lifecycle;
 mod feed_workflow;
+mod history_projection;
 mod membership;
 mod membership_import;
 mod reclaim;
@@ -29,9 +30,12 @@ pub use create::{create_live, CreateResult, CreationState};
 pub(crate) use direct::DirectState;
 pub use direct::DirectTransaction;
 pub(crate) use direct_workflow::ExactDirectState;
-pub use direct_workflow::{DirectReplacement, RetentionRefresh};
+pub use direct_workflow::{DirectReplacement, FirstSeenRefresh, LastSeenRefresh};
 pub(crate) use feed_workflow::ExactFeedState;
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
+pub use history_projection::{
+    FinishedHistoryProjection, HistoryProjectionSource, PreparedHistoryProjection,
+};
 pub(crate) use membership::MembershipState;
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub(crate) use membership_import::{finish_import_state, Source as MembershipImportStateSource};
@@ -101,6 +105,10 @@ struct OpenedMain {
 }
 
 impl LiveWriter {
+    pub(crate) fn address_family(&self) -> AddressFamily {
+        self.core.base_info().address_family
+    }
+
     /// Open the only writer lease without validating either page graph.
     pub fn open(
         path: impl AsRef<Path>,

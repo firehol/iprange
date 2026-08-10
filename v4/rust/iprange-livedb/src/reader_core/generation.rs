@@ -79,6 +79,11 @@ impl<'a> GenerationReader<'a> {
         feed_catalog::lookup(self.mapping, &self.meta, name)
     }
 
+    pub(crate) fn lookup_feed_index(self, index: u32) -> Result<Option<FeedEntry>> {
+        feed_catalog::require_membership(&self.meta)?;
+        feed_catalog::lookup_index(self.mapping, &self.meta, index)
+    }
+
     pub(crate) fn feed_cursor(self) -> Result<FeedCursor<'a>> {
         feed_catalog::require_membership(&self.meta)?;
         FeedCursor::new(self.mapping, &self.meta, self.owner_identity)

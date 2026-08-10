@@ -1,5 +1,6 @@
 //! Draft-owned membership interning and refcount finalization.
 
+use crate::cancellation::CancellationToken;
 use crate::contract::{MembershipOperation, ValueKind};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
@@ -156,6 +157,23 @@ impl DraftStore<'_> {
             self.draft.meta.membership_id_root,
             id,
             word_count,
+        )
+    }
+
+    pub(crate) fn selected_membership_bits(
+        &self,
+        id: u32,
+        indexes: &[u32],
+        output: &mut [u8],
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        membership_dictionary::contains_indexes(
+            self,
+            self.draft.meta.membership_id_root,
+            id,
+            indexes,
+            output,
+            cancellation,
         )
     }
 

@@ -20,11 +20,11 @@
       ]
     },
     {
-      "file": "rust/retention-ipv6.iprdb",
+      "file": "rust/first-seen-ipv6.iprdb",
       "producer": "rust",
       "family": "ipv6",
       "kind": "direct",
-      "tag": "retention",
+      "tag": "first_seen",
       "metadata": { "state": "empty" },
       "address_count": "340282366920938463463374607431768211456",
       "direct_ranges": [

@@ -19,6 +19,7 @@ use crate::abi_extra::{
     LiveTransitionReport, PublicationReport, RecoveryCandidatesReport, RecoveryReport,
     ResidueReport, ValidationReport,
 };
+use crate::abi_sdk::{HistoryProjectionReport, HistoryWindowReport};
 use crate::error::{
     call, call_with_output, required_output, BoundaryError, CallError, ErrorHandle,
 };
@@ -42,6 +43,7 @@ const RECOVERY_CANDIDATES_KIND: u32 = registry::REPORT_KIND_RECOVERY_CANDIDATES;
 const RECOVERY_KIND: u32 = registry::REPORT_KIND_RECOVERY;
 const RESIDUE_KIND: u32 = registry::REPORT_KIND_RESIDUE;
 const LIVE_RESIDUE_KIND: u32 = registry::REPORT_KIND_LIVE_RESIDUE;
+const HISTORY_PROJECTION_KIND: u32 = registry::REPORT_KIND_HISTORY_PROJECTION;
 
 /// Opaque owned variable operation report.
 #[repr(C)]
@@ -95,6 +97,10 @@ pub(crate) enum Body {
     Recovery(RecoveryReport),
     Residue(ResidueReport),
     LiveResidue(LiveResidueReport),
+    HistoryProjection {
+        fixed: HistoryProjectionReport,
+        windows: Box<[HistoryWindowReport]>,
+    },
 }
 
 impl ReportHandle {
@@ -127,6 +133,36 @@ impl ReportHandle {
 
     pub(crate) fn finish_input(report: WorkflowReport) -> Self {
         Self::new(Body::FinishInput(encode_finish(report)))
+    }
+
+    pub(crate) fn history_projection(report: iprange_livedb::HistoryProjectionReport) -> Self {
+        let windows = report
+            .windows
+            .iter()
+            .copied()
+            .map(encode_history_window)
+            .collect();
+        let fixed = HistoryProjectionReport {
+            abi_version: 1,
+            struct_size: size_of::<HistoryProjectionReport>() as u32,
+            logical_change: match report.logical_change {
+                LogicalChange::Changed => registry::LOGICAL_CHANGE_CHANGED,
+                LogicalChange::NoChange => registry::LOGICAL_CHANGE_NO_CHANGE,
+            },
+            reserved: 0,
+            source_range_count: report.source_range_count,
+            source_addresses: cardinality(report.source_addresses),
+            created_feed_count: report.created_feed_count,
+            before_interval_count: report.before_interval_count,
+            after_interval_count: report.after_interval_count,
+            before_addresses: cardinality(report.before_addresses),
+            after_addresses: cardinality(report.after_addresses),
+            unchanged_addresses: cardinality(report.unchanged_addresses),
+            added_addresses: cardinality(report.added_addresses),
+            removed_addresses: cardinality(report.removed_addresses),
+            window_count: report.windows.len() as u64,
+        };
+        Self::new(Body::HistoryProjection { fixed, windows })
     }
 
     pub(crate) fn commit(mut result: CommitResult) -> Self {
@@ -230,6 +266,7 @@ impl ReportHandle {
             Body::Recovery(_) => RECOVERY_KIND,
             Body::Residue(_) => RESIDUE_KIND,
             Body::LiveResidue(_) => LIVE_RESIDUE_KIND,
+            Body::HistoryProjection { .. } => HISTORY_PROJECTION_KIND,
         }
     }
 
@@ -385,6 +422,49 @@ pub unsafe extern "C" fn iprange_v4_abi1_report_get_finish_input(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn iprange_v4_abi1_report_get_history_projection(
+    report: *const ReportHandle,
+    output: *mut HistoryProjectionReport,
+    error_output: *mut *mut ErrorHandle,
+) -> u32 {
+    fixed_getter(report, output, error_output, |body| match body {
+        Body::HistoryProjection { fixed, .. } => Some(fixed),
+        _ => None,
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iprange_v4_abi1_report_get_history_window(
+    report: *const ReportHandle,
+    index: u64,
+    output: *mut HistoryWindowReport,
+    error_output: *mut *mut ErrorHandle,
+) -> u32 {
+    call_with_output(
+        error_output,
+        output,
+        "history window output is null",
+        || {
+            // SAFETY: both pointers are validated before use.
+            let output = unsafe { required_output(output, "history window output is null")? };
+            *output = HistoryWindowReport::default();
+            let report =
+                unsafe { crate::handle::required_handle_input(report, "report handle is null")? };
+            let _guard = report.enter()?;
+            let Body::HistoryProjection { windows, .. } = &report.body else {
+                return Err(BoundaryError::wrong_state(
+                    "report is not a history projection",
+                ));
+            };
+            *output = *windows.get(index as usize).ok_or_else(|| {
+                BoundaryError::invalid_argument("history window index is invalid")
+            })?;
+            Ok::<_, BoundaryError>(())
+        },
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn iprange_v4_abi1_report_get_commit(
     report: *const ReportHandle,
     output: *mut CommitReport,
@@ -527,7 +607,8 @@ fn encode_finish(report: WorkflowReport) -> FinishInputReport {
             WorkflowKind::CreateFeed => registry::WORKFLOW_CREATE_FEED,
             WorkflowKind::ReplaceFeed => registry::WORKFLOW_REPLACE_FEED,
             WorkflowKind::DirectReplacement => registry::WORKFLOW_DIRECT_REPLACEMENT,
-            WorkflowKind::RetentionRefresh => registry::WORKFLOW_RETENTION_REFRESH,
+            WorkflowKind::FirstSeenRefresh => registry::WORKFLOW_FIRST_SEEN_REFRESH,
+            WorkflowKind::LastSeenRefresh => registry::WORKFLOW_LAST_SEEN_REFRESH,
             WorkflowKind::MembershipImport => registry::WORKFLOW_MEMBERSHIP_IMPORT,
         },
         logical_change: match report.logical_change {
@@ -610,12 +691,28 @@ pub(crate) fn encode_cleanup(input: &CommitCleanupArtifact) -> CleanupArtifact {
     }
 }
 
-fn cardinality(value: iprange_livedb::Cardinality129) -> Cardinality129 {
+pub(crate) fn cardinality(value: iprange_livedb::Cardinality129) -> Cardinality129 {
     Cardinality129 {
         bit128: value.bit128(),
         reserved: [0; 7],
         hi: value.hi(),
         lo: value.lo(),
+    }
+}
+
+fn encode_history_window(report: iprange_livedb::HistoryWindowReport) -> HistoryWindowReport {
+    HistoryWindowReport {
+        feed_name: crate::query::encode_name(report.feed_name),
+        cutoff: report.cutoff,
+        created: u8::from(report.created),
+        reserved: [0; 3],
+        before_interval_count: report.before_interval_count,
+        after_interval_count: report.after_interval_count,
+        before_addresses: cardinality(report.before_addresses),
+        after_addresses: cardinality(report.after_addresses),
+        unchanged_addresses: cardinality(report.unchanged_addresses),
+        added_addresses: cardinality(report.added_addresses),
+        removed_addresses: cardinality(report.removed_addresses),
     }
 }
 

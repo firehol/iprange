@@ -39,7 +39,27 @@ pub(crate) fn lookup(
     )
 }
 
+pub(crate) fn lookup_index(
+    mapping: &Mapping,
+    meta: &MetaV4,
+    index: u32,
+) -> Result<Option<FeedEntry>> {
+    crate::work::catalog_lookup(1);
+    fixed_tree::query::<IndexCodec, _, _>(
+        &Generation::new(mapping, *meta),
+        meta.catalog_index_root,
+        index,
+        &mut IndexLookup {
+            feed_index_limit: meta.feed_index_limit,
+        },
+    )
+}
+
 struct FeedLookup {
+    feed_index_limit: u64,
+}
+
+struct IndexLookup {
     feed_index_limit: u64,
 }
 
@@ -58,6 +78,24 @@ impl LeafQuery<NameCodec> for FeedLookup {
             return Ok(None);
         }
         decode_leaf(page, header, position, self.feed_index_limit).map(Some)
+    }
+}
+
+impl LeafQuery<IndexCodec> for IndexLookup {
+    type Output = FeedEntry;
+
+    fn inspect<S: ByteSource>(
+        &mut self,
+        _page: S,
+        _header: &Header,
+        _page_number: u32,
+        _position: usize,
+        exact: bool,
+    ) -> Result<Option<Self::Output>> {
+        if !exact {
+            return Ok(None);
+        }
+        decode_leaf(_page, _header, _position, self.feed_index_limit).map(Some)
     }
 }
 

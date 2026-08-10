@@ -6,7 +6,7 @@ use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::{Mapping, PageMut};
 use crate::range_bulk::{Builder, Sink};
 
-use super::{reserve_page, OutputBudget};
+use super::{reserve_page, with_output_protection, OutputBudget};
 
 pub(super) use crate::range_bulk::Record;
 
@@ -32,6 +32,7 @@ impl Ranges {
         mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
+        fault_protection: bool,
         record: Record<Ipv4Key>,
     ) -> Result<()> {
         match self {
@@ -40,6 +41,7 @@ impl Ranges {
                     mapping,
                     meta,
                     budget,
+                    fault_protection,
                 },
                 record,
             ),
@@ -54,6 +56,7 @@ impl Ranges {
         mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
+        fault_protection: bool,
         record: Record<Ipv6Key>,
     ) -> Result<()> {
         match self {
@@ -62,6 +65,7 @@ impl Ranges {
                     mapping,
                     meta,
                     budget,
+                    fault_protection,
                 },
                 record,
             ),
@@ -76,17 +80,20 @@ impl Ranges {
         mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
+        fault_protection: bool,
     ) -> Result<(u32, u64)> {
         match self {
             Self::V4(ranges) => ranges.finish(&mut OutputSink {
                 mapping,
                 meta,
                 budget,
+                fault_protection,
             }),
             Self::V6(ranges) => ranges.finish(&mut OutputSink {
                 mapping,
                 meta,
                 budget,
+                fault_protection,
             }),
         }
     }
@@ -96,6 +103,7 @@ struct OutputSink<'a> {
     mapping: &'a mut Mapping,
     meta: &'a mut MetaV4,
     budget: OutputBudget,
+    fault_protection: bool,
 }
 
 impl Sink for OutputSink<'_> {
@@ -115,8 +123,11 @@ impl Sink for OutputSink<'_> {
         if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
             return Err(Error::Corrupt("immutable range page is outside bounds"));
         }
-        let region = self.mapping.region()?;
-        crate::worker::probe_output_region(region, || {
+        let region = self
+            .fault_protection
+            .then(|| self.mapping.region())
+            .transpose()?;
+        with_output_protection(region, || {
             let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
             update(&mut page)
         })

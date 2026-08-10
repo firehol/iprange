@@ -37,17 +37,18 @@ separate persistent concerns with separate owners.
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
 directions. The final 2026-08-10 inventory counts tracked implementation files
 under the two library `src/` trees while excluding dedicated test modules. It
-contains 285 files and 77,503 newline-counted source lines; Lizard reports
-70,274 code lines across 4,273 functions. Functions average 13.7 code lines and
+contains 313 files and 88,712 newline-counted source lines; Lizard reports
+80,518 code lines across 4,795 functions. Functions average 13.9 code lines and
 cyclomatic complexity 3.4. The largest is a 191-line recovery-attempt state
-machine. Thirty-nine files exceed the directional 500-line target, while the
+machine. Forty-eight files exceed the directional 500-line target, while the
 largest file has 859 lines and no file reaches 1,000.
 
-At a strict 15-line/100-token threshold, exact clone detection finds 12 small
-shapes totaling 218 lines (0.28%). They are frozen C-report and entry-point
-forms, public workflow/typestate adapters, two page-source adapters, distinct
-publication-file setup, and separate damaged-input policies—not duplicate
-persistent-format operations. These measurements do not prove every line is
+At a strict 15-line/100-token threshold, exact clone detection finds 17 small
+shapes totaling 328 lines (0.37%). They are frozen C-report forms, maintenance
+and typestate wrappers, source adapters, output error plumbing, lifecycle-state
+wrappers, publication setup, and separate direct/membership recovery
+policies—not duplicate persistent-format operations. These measurements do not
+prove every line is
 intrinsically required; they make the remaining size and review boundary
 explicit.
 
@@ -62,8 +63,9 @@ There is one main-file format with two explicit operating modes:
 Each file has one address family, one value kind, a random database identity,
 and a value tag containing up to 15 non-NUL bytes plus its required NUL.
 
-- `direct` ranges contain opaque caller-defined `u32` values. The exact
-  `retention` tag enables the separate retention-refresh workflow.
+- `direct` ranges contain opaque caller-defined `u32` values. Exact
+  `first_seen` and `last_seen` tags select their specialized timestamp-refresh
+  workflows; every other direct tag remains generic.
 - `membership` ranges refer to canonical in-file feed combinations. The SDK
   owns feed indexes, bitmap combinations, and membership IDs; callers use feed
   names and generation-bound references.
@@ -86,16 +88,27 @@ The public Rust SDK exposes:
 - advanced direct and membership transactions;
 - named-feed create, replace, rename, and delete workflows;
 - complete direct-map replacement;
-- exact retention refresh, where surviving addresses keep their original
-  value, new addresses receive the new refresh value, and missing addresses are
-  removed;
+- exact first-seen refresh, where continuously present addresses keep their
+  original timestamp, new addresses receive the refresh timestamp, and absent
+  addresses are removed;
+- exact last-seen refresh, where current addresses receive the monotonic refresh
+  timestamp, recent absence is retained above a cutoff, and old absence expires;
 - name-based multi-feed membership import;
+- mapped named-feed sources that chain one v4 reader directly into create,
+  replace, timestamp, and output workflows;
+- one-pass unordered immutable single-feed construction in its final inode;
+- one-pass projection of one last-seen map into every requested history feed;
+- named membership scopes, point matching, cardinality/pair aggregation, and
+  ordered direct or membership provider joins;
+- same-name global multi-file count and comparison;
+- union, intersection, and exclusion published directly as immutable v4 with
+  preserved feeds or one flat feed;
 - one optional metadata replacement in the same committed generation;
 - compact immutable snapshot construction.
 
 An operation either publishes its complete draft or aborts it. A commit reports
 `NotCommitted`, `Committed`, or `OutcomeUnknown` with exact resolution
-evidence. Normal replacement and retention deliberately have no best-effort
+evidence. Normal replacement and timestamp refreshes deliberately have no best-effort
 flag because a read failure cannot safely mean deletion.
 
 Normal ingestion, import, commit, queries, and snapshot construction use no
@@ -181,7 +194,7 @@ mandatory only after the accepted Rust result is ported independently to Go.
 
 ## C ABI
 
-The committed boundary has 136 generation-1 functions. Its generated public
+The committed boundary has 158 generation-1 functions. Its generated public
 artifacts are:
 
 - [`iprange_v4.h`](iprange-capi/include/iprange_v4.h)
@@ -203,14 +216,15 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
 ```
 
 Five local Linux runs on 2026-08-09, each pinned to one performance core,
-produced these medians and observed ranges. Each case processes at least one
-million inputs or timed reader operations; setup, snapshot construction, open,
-close, and explicit validation are outside the reader timer.
+produced these established core-path medians and observed ranges. Each case
+processes at least one million inputs or timed reader operations; setup,
+snapshot construction, open, close, and explicit validation are outside the
+reader timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
 | Direct replacement, dispersed input | 1,000,000 ranges | 0.4951 s | 0.3443-0.6565 s | 2.02 million/s |
-| Retention refresh | 1,000,000 ranges | 0.3606 s | 0.3433-0.4737 s | 2.77 million/s |
+| First-seen refresh | 1,000,000 ranges | 0.3606 s | 0.3433-0.4737 s | 2.77 million/s |
 | Nested arrival-order overwrite | 1,000,000 ranges | 0.3010 s | 0.2749-0.3666 s | 3.32 million/s |
 | Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.3515 s | 0.3407-0.4075 s | 2.85 million/s |
 | Membership import, 421 feeds | 1,000,000 ranges | 0.0441 s | 0.0408-0.0545 s | 22.66 million/s |
@@ -223,6 +237,34 @@ close, and explicit validation are outside the reader timer.
 | Immutable direct ordered scan | 1,000,000 ranges | 0.00777 s | 0.00677-0.00949 s | 128.73 million/s |
 | Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01199 s | 0.00874-0.01620 s | 83.40 million/s |
 | Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01146 s | 0.00814-0.01351 s | 87.25 million/s |
+
+Five candidate-completion runs on 2026-08-10, pinned to the same performance
+core, measured the new update-ipsets SDK paths. “Work” is scanned input work;
+“emitted” makes requested output density explicit. Allocations are fixed setup
+or output-shape allocations, not per source range.
+
+| Scenario | Work | Emitted | Median | Observed range | Allocations / bytes |
+|---|---:|---:|---:|---:|---:|
+| Immutable random feed construction | 1,000,000 | 1,000,000 | 0.418041 s | 0.370889-0.662836 s | 18 / 33,383 |
+| First-seen refresh | 1,000,000 | 0 | 0.372223 s | 0.333675-0.723056 s | 21 / 422 |
+| Last-seen refresh | 1,000,000 | 0 | 0.372447 s | 0.353455-0.482373 s | 21 / 418 |
+| Seven-window history projection | 1,000,000 | 876,480 | 0.123923 s | 0.072064-0.156072 s | 31 / 6,320 |
+| Point-match name enumeration | 1,000,000 | 4,000,000 | 0.694187 s | 0.682795-1.126924 s | 0 / 0 |
+| Feed cardinalities | 1,000,000 | 64 | 0.043615 s | 0.029790-0.047857 s | 5 / 313,152 |
+| Selected-pair aggregation | 1,000,000 | 3 | 0.036133 s | 0.026018-0.037131 s | 7 / 311,418 |
+| All-pairs aggregation, 8 feeds | 1,000,000 | 36 | 0.042920 s | 0.040555-0.067287 s | 7 / 312,264 |
+| Direct-provider join, 421 feeds | 1,000,000 | 105,671 | 0.112441 s | 0.100419-0.128415 s | 6 / 10,831,697 |
+| Membership-provider join, 421 feeds | 1,000,000 | 178,083 | 0.151715 s | 0.120945-0.171469 s | 11 / 4,900,794 |
+| Global algebra count, 421 feeds | 2,000,000 | 1 | 0.171804 s | 0.165284-0.229864 s | 13 / 635,510 |
+| Global algebra compare | 2,000,000 | 1 | 0.136740 s | 0.110787-0.153472 s | 17 / 626,304 |
+| Preserve-feed algebra publication | 2,000,000 | 1,000,000 | 0.227414 s | 0.214460-0.334738 s | 35 / 988,605 |
+| Flat algebra publication | 2,000,000 | 1,000,000 | 0.224760 s | 0.180685-0.236736 s | 35 / 970,995 |
+| Complete publisher-shaped workflow | 13,600,000 | 3,201,805 | 1.776214 s | 1.626496-2.095668 s | 250 / 2,446,063 |
+
+Every individual linear SDK operation is below one second at its one-million-
+range scale median. The final row deliberately combines construction, both
+timestamp refreshes, central/history updates, aggregation, two provider joins,
+algebra, and final enumeration; it is not one primitive's latency.
 
 The feed-construction matrix also measures the input shapes that exercise the
 normalizer's edge and arbitrary-location paths. A first-feed timer includes
@@ -247,7 +289,7 @@ cases keep file descriptors stable, leave no private artifact, and build pages
 directly in the mapped destination without a sorting file.
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
-explicitly validated every output after timing. Direct, retention, nested,
+explicitly validated every output after timing. Direct, first-seen, nested,
 feed-replacement, import, and snapshot construction respectively made
 21/21/21/22/20/31 fixed setup allocations totaling
 406/418/406/436/474/939 bytes. Those counts are constant rather than per
@@ -267,7 +309,7 @@ and other platforms retain the process-ID fallback.
 
 The current flat update-ipsets set remains faster for simple lookup and scan,
 but it does not provide COW publication, live readers, direct values, named
-feeds, retention refresh, recovery, or portable snapshots. The Rust SDK proves
+feeds, timestamp refreshes, recovery, or portable snapshots. The Rust SDK proves
 the required publisher primitives and bounded resource shape; final product
 acceptance and consumer integration remain separate gates.
 

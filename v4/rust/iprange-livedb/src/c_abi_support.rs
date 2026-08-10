@@ -1,8 +1,10 @@
 //! Internal ownership bridge for the stable C binding.
 
+mod membership_query;
 mod reader;
 mod writer;
 
+pub use membership_query::{MembershipAlgebra, MembershipScope};
 pub use reader::{MembershipToken, Reader, ReaderCursor, ReaderCursorItem};
 pub use writer::Writer;
 

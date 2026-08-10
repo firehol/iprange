@@ -72,7 +72,7 @@ fn maximum_metadata_uses_the_exact_minimum_heap_budget() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -124,7 +124,7 @@ fn oversized_input_is_a_precondition_error_and_preserves_the_draft() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )

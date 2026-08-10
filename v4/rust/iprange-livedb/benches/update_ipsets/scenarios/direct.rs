@@ -40,16 +40,35 @@ pub(super) fn nested(size: usize) -> Result<ScenarioResult, String> {
     )
 }
 
-pub(super) fn retention(size: usize) -> Result<ScenarioResult, String> {
-    let database = create_direct("retention", ValueTag::RETENTION, 1)?;
-    apply_retention(&database, AddressSource::new(size, 0)?, size, 100)?;
+pub(super) fn first_seen(size: usize) -> Result<ScenarioResult, String> {
+    let database = create_direct("first-seen", ValueTag::FIRST_SEEN, 1)?;
+    apply_first_seen(&database, AddressSource::new(size, 0)?, size, 100)?;
     let shift = (size / 10).max(1) as u32;
     let (operation, measured) = measure::operation(|| {
-        apply_retention(&database, AddressSource::new(size, shift)?, size, 200)
+        apply_first_seen(&database, AddressSource::new(size, shift)?, size, 200)
     });
     operation?;
     result(
-        "retention-refresh",
+        "first-seen-refresh",
+        size,
+        0,
+        size as u64,
+        &database,
+        measured,
+        database.main(),
+    )
+}
+
+pub(super) fn last_seen(size: usize) -> Result<ScenarioResult, String> {
+    let database = create_direct("last-seen", ValueTag::LAST_SEEN, 1)?;
+    apply_last_seen(&database, AddressSource::new(size, 0)?, size, 100, 0)?;
+    let shift = (size / 10).max(1) as u32;
+    let (operation, measured) = measure::operation(|| {
+        apply_last_seen(&database, AddressSource::new(size, shift)?, size, 200, 100)
+    });
+    operation?;
+    result(
+        "last-seen-refresh",
         size,
         0,
         size as u64,
@@ -64,7 +83,16 @@ pub(super) fn seeded_direct(
     size: usize,
     reader_capacity: u32,
 ) -> Result<TestDatabase, String> {
-    let database = create_direct(label, direct_tag(b"timestamp")?, reader_capacity)?;
+    seeded_direct_with_tag(label, size, reader_capacity, direct_tag(b"timestamp")?)
+}
+
+pub(super) fn seeded_direct_with_tag(
+    label: &str,
+    size: usize,
+    reader_capacity: u32,
+    tag: ValueTag,
+) -> Result<TestDatabase, String> {
+    let database = create_direct(label, tag, reader_capacity)?;
     apply_direct(&database, DirectSource::unordered(size)?, size)?;
     Ok(database)
 }
@@ -110,7 +138,7 @@ fn apply_direct(
     close_writer(&mut writer)
 }
 
-fn apply_retention(
+fn apply_first_seen(
     database: &TestDatabase,
     mut input: AddressSource,
     size: usize,
@@ -120,7 +148,32 @@ fn apply_retention(
     let mut writer = LiveWriter::open(database.main(), transaction_budget(size, 1), &cancellation)
         .map_err(display)?;
     let mut workflow = writer
-        .begin_retention_refresh(refresh, &cancellation)
+        .begin_first_seen_refresh(refresh, &cancellation)
+        .map_err(display)?;
+    workflow.add_ranges_v4(&mut input).map_err(display)?;
+    match workflow.finish_input().map_err(display)? {
+        FinishedWorkflow::Changed(prepared) => {
+            require_committed(prepared.commit().map_err(display)?)?;
+        }
+        FinishedWorkflow::NoChange(report) => {
+            return Err(format!("refresh unexpectedly changed nothing: {report:?}"));
+        }
+    }
+    close_writer(&mut writer)
+}
+
+fn apply_last_seen(
+    database: &TestDatabase,
+    mut input: AddressSource,
+    size: usize,
+    refresh: u32,
+    cutoff: u32,
+) -> Result<(), String> {
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(database.main(), transaction_budget(size, 1), &cancellation)
+        .map_err(display)?;
+    let mut workflow = writer
+        .begin_last_seen_refresh(refresh, cutoff, &cancellation)
         .map_err(display)?;
     workflow.add_ranges_v4(&mut input).map_err(display)?;
     match workflow.finish_input().map_err(display)? {

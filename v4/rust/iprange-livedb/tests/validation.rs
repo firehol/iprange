@@ -49,7 +49,7 @@ fn empty_immutable_database_validates_explicitly() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -83,7 +83,7 @@ fn populated_direct_database_validates_explicitly() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -161,7 +161,7 @@ fn page_crc_damage_is_a_factual_invalid_report() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )
@@ -215,7 +215,7 @@ fn live_current_validation_pins_and_releases_its_reader_slot() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -257,7 +257,7 @@ fn live_validation_checks_cancellation_across_reader_capacity() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         64,
         &CancellationToken::new(),
     )
@@ -355,7 +355,7 @@ fn terminal_sink_result_wins_over_a_later_sidecar_sigbus() {
             &paths.live,
             AddressFamily::Ipv4,
             ValueKind::Direct,
-            ValueTag::RETENTION,
+            ValueTag::FIRST_SEEN,
             1,
             &CancellationToken::new(),
         )
@@ -441,7 +441,7 @@ fn bound_live_database_can_report_an_unselectable_bootstrap() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )

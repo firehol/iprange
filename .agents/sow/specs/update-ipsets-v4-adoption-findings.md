@@ -1,8 +1,8 @@
 # update-ipsets Adoption Evidence for iprange v4
 
 **Status:** Non-normative consumer analysis
-**Evidence checked:** `firehol/update-ipsets @ e593366f7b0a`
-**Last updated:** 2026-07-21
+**Evidence checked:** `firehol/update-ipsets @ f299ee780dc0ce09a15a46d0ee660611399c2d48`
+**Last updated:** 2026-08-10
 
 This document explains how the unsigned Phase-1 v4 contracts fit the current
 `update-ipsets` workflow. It does not define the wire format; the normative
@@ -42,7 +42,7 @@ The v4 integration must retain at least this failure isolation and atomic
 publication behavior. It must not expose a partially replaced feed or generate
 a missing public artifact in a request handler.
 
-### Retention currently rebuilds state from cohort files
+### Historical state currently rebuilds from cohort files
 
 Retention enumerates a feed's saved cohorts, opens batches of historical files,
 compares each cohort with the complete current set, and rewrites or deletes the
@@ -57,10 +57,12 @@ eligible saved snapshots:
 
 - `pkg/engine/feed_body_stage.go:400-462`
 
-This is the direct fit for a `direct` v4 database tagged `retention`: keep each
-continuously present address's original timestamp, add only new addresses with
-the refresh timestamp, and remove addresses missing from the complete new
-download.
+This requires two direct v4 timestamp databases per feed. `first_seen` keeps
+each continuously present address's original timestamp, adds only new addresses
+with the refresh timestamp, and removes addresses missing from the complete new
+download. `last_seen` timestamps current addresses, retains absent addresses
+newer than a caller cutoff, and removes older absent addresses. One last-seen
+map can project every configured history window.
 
 ### Pairwise comparisons scale quadratically in feed count
 
@@ -97,10 +99,10 @@ membership layer may update several named feeds atomically for other callers,
 and the dedicated name-based import copies a multi-feed membership file while
 translating all source indexes and membership IDs inside the SDK.
 
-### Retention state
+### First-seen and last-seen state
 
-Each retained feed uses a direct database whose immutable tag is exactly
-`retention`.
+Each feed uses two direct databases whose immutable tags are exactly
+`first_seen` and `last_seen`.
 
 For a complete downloaded set at refresh value `tN`:
 
@@ -114,6 +116,16 @@ The refresh requires a clean writer and a private draft. Any failure before
 commit discards the complete draft, so unreadable input cannot be published as
 mass deletion.
 
+For the same complete downloaded set at refresh value `tN`, last-seen also
+takes a cutoff:
+
+- current addresses receive `max(old_value, tN)`, or `tN` when new;
+- absent addresses newer than the cutoff remain; and
+- absent addresses at or below the cutoff are removed.
+
+All configured history windows are membership projections from one last-seen
+scan, not independent timestamp databases or repeated scans.
+
 ### Application metadata
 
 The engine-defined catalog is structural. Publisher annotations, source facts,
@@ -123,6 +135,27 @@ opaque JSON payload.
 The engine preserves the exact uncompressed bytes but does not understand or
 merge them. `update-ipsets` owns their JSON schema and must update any
 application-level feed-name references when renaming a feed.
+
+### Implemented Rust SDK capability
+
+The current Rust candidate supplies the complete format-side operations needed
+for the intended publisher flow without changing `update-ipsets` itself:
+
+- one-pass unordered construction of the downloaded current-feed v4 file;
+- mapped current-feed sources for first-seen, last-seen, create/replace, and
+  immutable-output workflows;
+- exact first-seen removals and monotonic last-seen expiration reports;
+- one last-seen scan projecting every configured history feed;
+- reusable named scopes, point matches, feed cardinalities, selected/all-pair
+  overlaps, and direct/membership provider joins;
+- same-name global multi-file count and comparison; and
+- union, intersection, and exclusion published directly as immutable v4 in
+  preserved-feed or flat mode, always with exact statistics.
+
+Provider joins are analytical because a generic direct value has no universal
+set-output conflict rule. When the required result is address coverage, the
+algebra publisher creates the v4 result. No operation creates a temporary
+combined feed, external sorting file, or complete-feed heap image.
 
 ### Phase-1 snapshot proof
 
@@ -137,7 +170,9 @@ Phase-1 v4 integration path is:
    deleted bytes into the one private final-output inode;
 5. atomically publish that unsigned snapshot only to the Phase-1 test/integration
    destination through the durable namespace reservation protocol; and
-6. reopen, compare, and benchmark it through both SDK implementations.
+6. reopen, compare, and benchmark it through the Rust SDK; repeat the same
+   cross-open proof after the accepted Rust result is ported independently to
+   Go.
 
 Phase 1 does not replace update-ipsets' current public distribution path and
 does not introduce signing keys, signature verification, trust rotation, or
@@ -186,16 +221,25 @@ must be migrated and tested separately.
 
 ## Adoption order
 
-The long-term-best order is:
+The Rust format-side primitives above must first pass their final acceptance
+gate. Consumer migration then proceeds in independently verifiable slices:
 
-1. exact retention refresh, because its current cohort-file loop is isolated and
-   I/O-heavy;
-2. named-feed create/replace/delete plus compact unsigned snapshot proof;
-3. membership-based comparison/query reads after scale benchmarks prove the
-   replacement;
-4. history/merge composition where semantic parity is demonstrated;
-5. broader direct-value uses such as ASN or geography only when each consumer's
-   provider and overlap model fits one value per address.
+1. create the immutable current-feed file and refresh its first-seen and
+   last-seen files from the same downloaded coverage;
+2. replace that name in the central all-feeds membership file and project all
+   history windows;
+3. build the critical-infrastructure, ASN-provider, and geography-provider
+   multi-feed databases through the same named-feed lifecycle;
+4. replace pairwise application loops with the proven aggregation and provider
+   joins while comparing exact old/new reports; and
+5. switch every set-producing comparison/artifact path to v4 algebra output,
+   then remove superseded cohort and temporary-format paths only after parity.
+
+The SDK remains the owner of interval normalization, named-feed mapping,
+membership combinations, timestamp transitions, ordered joins, algebra, and v4
+publication. `update-ipsets` remains the owner of download/extraction, schedule,
+application metadata schemas, text/website artifacts, and cross-file workflow
+coordination.
 
 Authenticated public snapshot publication is the separate Phase 2 tracked by
 SOW-0017 after this sequence proves the SDK reliable and measures its behavior.

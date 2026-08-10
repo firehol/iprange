@@ -282,6 +282,19 @@ static uint32_t stopping_sink(void *context,
     return IPRANGE_V4_ABI1_SINK_OUTCOME_STOP;
 }
 
+static uint32_t first_seen_removal_sink(
+    void *context,
+    const iprange_v4_abi1_first_seen_removal *records,
+    uint64_t count,
+    iprange_v4_abi1_callback_failure *failure)
+{
+    (void)context;
+    (void)records;
+    (void)count;
+    (void)failure;
+    return IPRANGE_V4_ABI1_SINK_OUTCOME_CONTINUE;
+}
+
 static int expect_direct(iprange_v4_abi1_reader *reader,
                          uint32_t address,
                          uint32_t expected)
@@ -401,11 +414,28 @@ int main(int argc, char **argv)
     CHECK(destroy_error(error) == 0);
     error = NULL;
 
-    CHECK(iprange_v4_abi1_writer_begin_retention_refresh(
+    CHECK(iprange_v4_abi1_writer_begin_first_seen_refresh(
               writer, 1234, no_cancellation(), &error) ==
           IPRANGE_V4_ABI1_STATUS_ERROR);
     code = inspect_error(error, &caller_present, &caller_code);
     CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_WRONG_VALUE_TAG);
+    CHECK(destroy_error(error) == 0);
+    error = NULL;
+
+    CHECK(iprange_v4_abi1_writer_begin_last_seen_refresh(
+              writer, 1234, 1000, no_cancellation(), &error) ==
+          IPRANGE_V4_ABI1_STATUS_ERROR);
+    code = inspect_error(error, &caller_present, &caller_code);
+    CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_WRONG_VALUE_TAG);
+    CHECK(destroy_error(error) == 0);
+    error = NULL;
+
+    CHECK(iprange_v4_abi1_writer_finish_first_seen_with_removals(
+              writer, first_seen_removal_sink, NULL, &report, &error) ==
+          IPRANGE_V4_ABI1_STATUS_ERROR);
+    CHECK(report == NULL);
+    code = inspect_error(error, &caller_present, &caller_code);
+    CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_WRONG_STATE);
     CHECK(destroy_error(error) == 0);
     error = NULL;
 

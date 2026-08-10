@@ -7,7 +7,7 @@ mod exports;
 pub use boundary::native_test_panic_probe;
 pub(crate) use boundary::{
     call, call_with_output, call_with_outputs, input_slice, output_buffer_slot, output_slice,
-    output_slot, required_input, required_output,
+    output_slot, require_struct_identity, required_input, required_output,
 };
 pub use exports::{
     iprange_v4_abi1_error_cause, iprange_v4_abi1_error_cleanup_artifact_count,
@@ -227,12 +227,23 @@ impl ErrorHandle {
         error
     }
 
-    pub(crate) fn source_cleanup_failure(aborted: Error, primary: CallError) -> Self {
+    pub(crate) fn callback_cleanup_failure(aborted: Error, primary: CallError) -> Self {
         let mut error: Self = aborted.into();
         let primary = Box::new(primary.into_error_handle());
         if let Some(primary) = error.replace_cause(ErrorCode::InvalidArgument as u32, primary) {
             error.append_cause(*primary);
         }
+        error
+    }
+
+    pub(crate) fn callback_publication_failure(
+        primary: CallError,
+        problem: PublicationProblem,
+        cleanup: Vec<CleanupArtifact>,
+    ) -> Self {
+        let mut error = primary.into_error_handle();
+        error.cleanup = cleanup;
+        error.append_cause(Self::from_publication_problem(problem));
         error
     }
 
@@ -369,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn source_cleanup_failure_preserves_callback_and_cleanup_details() {
+    fn callback_cleanup_failure_preserves_callback_and_cleanup_details() {
         let aborted = Error::TransactionAborted(Box::new(Error::CleanupIncomplete {
             cause: Box::new(Error::InvalidArgument("source failed")),
             cleanup: Box::new(Error::Io(std::io::Error::from_raw_os_error(2))),
@@ -379,7 +390,7 @@ mod tests {
             caller_code: 42,
             message: "caller source failed".to_owned(),
         };
-        let handle = ErrorHandle::source_cleanup_failure(aborted, primary);
+        let handle = ErrorHandle::callback_cleanup_failure(aborted, primary);
         let incomplete = handle.cause.as_deref().unwrap();
         let source = incomplete.cause.as_deref().unwrap();
         let cleanup = source.cause.as_deref().unwrap();

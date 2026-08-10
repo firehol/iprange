@@ -187,7 +187,7 @@ fn decode_source_mode(value: u32) -> Result<SnapshotSourceMode, BoundaryError> {
     }
 }
 
-fn decode_policy(value: u32) -> Result<SnapshotPublicationPolicy, BoundaryError> {
+pub(crate) fn decode_policy(value: u32) -> Result<SnapshotPublicationPolicy, BoundaryError> {
     match value {
         1 => Ok(SnapshotPublicationPolicy::FailIfExists),
         2 => Ok(SnapshotPublicationPolicy::ReplaceExisting),

@@ -15,6 +15,7 @@ const NATIVE_SOURCES: &[&str] = &[
     include_str!("native/abi_maintenance.c"),
     include_str!("native/abi_membership.c"),
     include_str!("native/abi_workflows.c"),
+    include_str!("native/abi_sdk.c"),
 ];
 
 struct TestFiles {
@@ -88,11 +89,36 @@ fn native_c_workflows_use_the_real_shared_library() {
     let source = files.directory.join("source.ipr");
     let destination = files.directory.join("destination.ipr");
     let direct = files.directory.join("direct.ipr");
+    let first_seen = files.directory.join("first-seen.ipr");
+    let last_seen = files.directory.join("last-seen.ipr");
     let executable = compile_c_fixture(&files, "abi_workflows.c", &[]);
-    let output = run_fixture(&executable, [&source, &destination, &direct]);
+    let output = run_fixture(
+        &executable,
+        [&source, &destination, &direct, &first_seen, &last_seen],
+    );
     assert!(
         output.status.success(),
         "native C workflow behavior failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn native_c_update_ipsets_sdk_surface_uses_the_real_shared_library() {
+    let files = TestFiles::new();
+    let executable = compile_c_fixture(&files, "abi_sdk.c", &[]);
+    let arguments = [
+        files.directory.join("sdk-a.ipr"),
+        files.directory.join("sdk-b.ipr"),
+        files.directory.join("sdk-direct.ipr"),
+        files.directory.join("sdk-history.ipr"),
+        files.directory.join("sdk-algebra.ipr"),
+    ];
+    let output = run_fixture(&executable, &arguments);
+    assert!(
+        output.status.success(),
+        "native C SDK behavior failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -246,7 +272,7 @@ fn shared_library_exports_exactly_the_frozen_symbols() {
         .map(|function| function["name"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 136);
+    assert_eq!(actual.len(), 158);
 }
 
 #[test]
@@ -262,7 +288,7 @@ fn native_c_fixtures_reference_every_frozen_function() {
         })
         .collect::<Vec<_>>();
     assert!(missing.is_empty(), "native C fixture gaps: {missing:?}");
-    assert_eq!(functions.len(), 136);
+    assert_eq!(functions.len(), 158);
 }
 
 fn shared_library() -> PathBuf {

@@ -58,7 +58,7 @@ release requirements. They are not optional hardening phases.
 
 Rust implements and proves the complete v4 behavior first: creation, lookup,
 scans, advanced logical changes, exact high-level replacement/import workflows,
-feed lifecycle, retention refresh, validation, recovery, reclamation, and
+feed lifecycle, first-seen and last-seen refresh, validation, recovery, reclamation, and
 unsigned snapshotting. It must then be benchmarked on realistic
 `update-ipsets` workloads and accepted as a material architectural improvement
 before the Go port begins.
@@ -72,28 +72,27 @@ Neither implementation's physical tree layout, page allocation order, or zlib
 output is the wire oracle. The normative specification and shared corpus are
 the oracle.
 
-### Two semantic API layers
+### Two architectural levels
 
-The v4 writer exposes two public semantic layers over the same COW format:
+The implementation has two authority levels over one COW format:
 
-- The **advanced logical layer** has separate direct and membership transaction
-  surfaces. Direct callers assign semantic `u32` values to ranges. Membership
-  callers use SDK-issued feed and membership references and may intentionally
-  change several feeds atomically. The SDK alone owns feed indexes, bitmaps,
-  membership IDs, dictionary entries, refcounts, pages, roots, allocation, and
-  publication.
-- The **high-level workflow layer** implements single-use named-feed
-  create/replace, direct-map replacement, exact retention refresh, whole-file
-  snapshot/copy, and membership-file import. Ingestion is
-  `Begin -> AddRanges` in bounded batches `-> FinishInput ->` optional one JSON
-  metadata change `-> Commit` or `Abort`.
+- The **public SDK level** exposes logical operations only. Its advanced direct
+  and membership transactions support callers that need exact low-level logical
+  control; its typed workflows provide named-feed lifecycle, direct-map and
+  timestamp refresh, immutable construction, history projection, queries,
+  provider joins, algebra, snapshot, validation, and recovery. Membership
+  callers use SDK-issued feed and membership references. They never control
+  physical indexes, IDs, pages, or bitmap combinations.
+- The **internal format level** implements each persistent read, mutation,
+  allocation, retirement, encoding, sealing, and publication operation exactly
+  once. Public Rust workflows and the C adapter compose those operations; they
+  do not contain another tree, merge, page, or publication implementation.
 
-Both layers accept unordered, duplicate, and overlapping range input and produce
-the canonical normalized map inside the same caller-facing operation. Public
-APIs expose logical state changes, never physical storage operations. Rust
-defines and proves the semantics first. The later Go port may use idiomatic
-names, while the Rust-provided C ABI freezes its exact symbol and layout
-manifest only after the Rust API is stable.
+Unordered, duplicate, and overlapping range input becomes one canonical map
+inside the same caller-facing operation. Public APIs expose logical state
+changes, never physical storage operations. Rust defines and proves the
+semantics first. The later Go port may use idiomatic names, while the
+Rust-provided C ABI freezes its generated symbol and layout manifest.
 
 ### Authoritative internal ownership
 
@@ -182,9 +181,12 @@ owns feed indexes; callers use names or snapshot/transaction-bound handles and
 never assign bare bits. Application annotations belong in the optional opaque
 file-level JSON payload, not in the structural catalog.
 
-The exact `retention` direct tag enables the specialized full-snapshot
-retention refresh. Existing addresses preserve their original values, new
-addresses receive the new refresh value, and removed addresses disappear.
+The exact direct tags `first_seen` and `last_seen` select specialized
+full-snapshot refreshes. First-seen preserves continuously present addresses,
+timestamps new addresses, and removes absent addresses. Last-seen timestamps
+current addresses, retains recently absent addresses above a caller cutoff, and
+removes older absent addresses. Every other direct tag remains generic and
+opaque; ASN and geography data do not require new physical value kinds.
 
 ## Processing model
 
@@ -199,7 +201,7 @@ across input batches. A later assignment overwrites only its own inclusive
 interval; earlier values survive on uncovered sides. Implementations may batch
 or reorder only work proven not to change that per-address result.
 
-High-level feed/direct/retention ingestion normalizes unordered input directly
+High-level feed/direct/timestamp ingestion normalizes unordered input directly
 into operation-private COW state in the destination. It never requires the
 caller to presort input and never creates an external sorting file.
 
@@ -221,8 +223,8 @@ mapped destination bytes. Transaction capacity is checked, sparsely extended,
 and mapped before the hot mutation path; remap invalidates every prior internal
 view.
 
-Exact high-level replacements/imports, feed lifecycle operations, and retention
-refresh use clean writers and private transactional drafts. `SnapshotTo` instead
+Exact high-level replacements/imports, feed lifecycle operations, and timestamp
+refreshes use clean writers and private transactional drafts. `SnapshotTo` instead
 owns an isolated destination output and may coexist with source writes by pinning
 one reader generation. None exposes partial work as a successful output.
 Namespace publication distinguishes rollback-safe replacement from explicit
@@ -415,30 +417,36 @@ does not prove cross-read compatibility.
 metadata, scheduling, and text artifacts. The engine owns durable IP interval
 state and exact transformations.
 
-The Phase-1 high-level integration is:
+The Phase-1 SDK integration is:
 
 1. download and parse feed streams, potentially in parallel, without requiring
-   caller-side sorting or normalization;
-2. serialize independent high-level `CreateFeed` or `ReplaceFeed` workflows
-   through one membership writer;
-3. preserve each previously committed feed when its replacement fails;
-4. pin a reader after the selected successful feed commits for later aggregate
-   comparisons and publication;
-5. refresh each retention database from the complete downloaded snapshot;
-6. produce compact unsigned snapshots for side-by-side SDK proof, never a live
-   file or its sidecar.
+   caller-side sorting or normalization, directly into one immutable current-feed
+   v4 file;
+2. refresh that feed's first-seen and last-seen direct databases from the same
+   current-feed coverage through mapped batched sources;
+3. serialize the independent replacement of its named feed in the central
+   membership database, preserving the prior committed feed on failure;
+4. project every configured history window from one last-seen scan in one
+   membership transaction;
+5. pin the chosen generations and run one-scan overlap aggregation, ordered
+   provider joins, and global-name algebra without temporary merged feeds; and
+6. publish each set result as an immutable v4 file with exact statistics, then
+   produce compact unsigned snapshots where a live database is the source.
 
 The high-level update-ipsets workflow has no general atomic multi-feed batch.
 One failed feed does not roll back unrelated feeds that already committed
 successfully. This does not restrict the advanced logical membership layer,
 which may intentionally update several feeds in one transaction.
 
-Phase 1 implements the format-facing primitives, named-feed/direct/retention
-workflows, exact snapshot/copy, and membership multi-feed import. Detailed
-general multi-file algebra and every set-producing result are Phase-2 work; a
-result feed is a published v4 file, never an in-memory feed object. Same-named
-feeds across input files form one virtual global feed through ordered
-enumeration rather than a mandatory temporary combined file.
+Phase 1 implements the format-facing primitives, named-feed/direct/timestamp
+workflows, one-inode immutable feed construction, one-pass history projection,
+named membership aggregation, ordered provider joins, exact snapshot/copy,
+membership multi-feed import, and global multi-file algebra. A result feed is a
+published v4 file, never an in-memory feed object. Same-named feeds across input
+files form one virtual global feed through ordered enumeration rather than a
+temporary combined file. Provider-value joins are analytical; address-set
+results use the algebra publisher rather than inventing ambiguous direct-value
+conflict semantics.
 
 Adoption should proceed only from proven behavior. Existing text outputs and
 released operational workflows remain until the v4 path and later high-level

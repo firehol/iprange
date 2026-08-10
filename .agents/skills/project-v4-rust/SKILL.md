@@ -7,7 +7,7 @@ description: Verify, benchmark, review, or change the Rust v4 database engine, i
 
 Keep Rust v4 work inside the approved exact-v4 contract and prove claims with
 the compiled implementation. Do not infer current behavior from obsolete source
-files, historical SOW claims, or aspirational Phase-2 work.
+files, historical SOW claims, or unapproved future work.
 
 ## Establish the boundary
 
@@ -18,7 +18,7 @@ files, historical SOW claims, or aspirational Phase-2 work.
 3. Inspect `git status --short`. Preserve unrelated changes and stage files
    explicitly.
 4. Keep Phase 1 unsigned and exact. Do not restore v3, add signing, start Go,
-   or invent high-level set algebra without explicit authorization.
+   add another physical layout, or invent semantics beyond the current specs.
 5. Keep validation explicit. Ordinary open and read paths must not perform a
    whole-file validation.
 
@@ -64,12 +64,13 @@ Do not weaken its patterns to permit a new physical-state bypass. When adding a
 persistent operation, put it in the existing owning layer or update the active
 SOW's ownership inventory before implementation.
 
-Treat the implementation as two levels:
+Treat the implementation as two authority levels:
 
 - Public semantic adapters own Rust/C handles, typed workflows, logical
-  sequencing, cancellation, and result translation. They must not inspect a
-  mapping, metadata page, root, page number, allocator, raw membership ID,
-  bitmap width, dictionary hash/refcount, or persistent record.
+  sequencing, named scopes, joins, algebra, cancellation, and result
+  translation. They must not inspect a mapping, metadata page, root, page
+  number, allocator, raw membership ID, bitmap width, dictionary hash/refcount,
+  or persistent record.
 - The private engine owns mapped byte access, canonical codecs, fixed-tree
   query/cursor/mutation, ordered range construction, COW allocation,
   retirement, sealing, and selected-generation read/write cores.
@@ -133,7 +134,7 @@ CARGO_TARGET_DIR=/tmp/iprange-v4-msrv \
 For a C ABI change, additionally prove:
 
 - generated header and manifest equal the committed files;
-- all 136 frozen symbols are exported exactly;
+- all 158 frozen symbols are exported exactly;
 - the header compiles as C11 and C++17;
 - all native C behavior programs pass;
 - numeric constants, layouts, callbacks, ownership, and error contracts did not
@@ -166,11 +167,14 @@ Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and
 temporary residue. Check scaling, not only one result. Ordinary unordered
 ingestion and snapshot construction must not use an external sorting file.
-The acceptance matrix includes one million direct replacements, retention
-inputs, nested arrival-order overwrites, exact feed inputs with 421 feeds,
-membership imports with 421 feeds, and snapshot ranges. It also includes one
-million real live and immutable direct lookups, membership lookups, direct
-cursor outputs, and named-feed cursor outputs.
+The acceptance matrix includes one million direct replacements, first-seen and
+last-seen inputs, nested arrival-order overwrites, exact feed inputs with 421
+feeds, membership imports with 421 feeds, immutable unordered construction,
+multi-window history projection, named point matches, overlap aggregation,
+both provider joins, global algebra analysis/publication, the complete
+publisher-shaped workflow, and snapshot ranges. It also includes one million
+real live and immutable direct lookups, membership lookups, direct cursor
+outputs, and named-feed cursor outputs.
 For feed normalization, additionally measure one million ascending disjoint,
 descending disjoint, deterministic random disjoint, and deterministic random
 overlap-chain inputs both as the first feed in a new file and as a second feed
@@ -194,14 +198,14 @@ proof machinery, not a public observability API. A final release build must have
 no `iprange_livedb::work` symbol, counter field string, counter storage, or
 counter call left in the benchmark executable.
 
-For a candidate-complete performance claim, profile the exact timed region of
-feed replacement, nested overwrite, membership import, membership lookup, and
-named-feed scan with frame pointers. Classify every dominant cost against a
-required semantic, mapped-page access, tree descent, COW edit, output build,
-commit seal, or durability action. Implicit validation, pre-commit checksum,
-per-record allocation, repeated lookup/delete, page reconstruction, cache
-churn, and an extra comparison/source pass are findings, not acceptable
-overhead.
+For a candidate-complete performance claim, profile the exact timed regions of
+unordered immutable construction, timestamp refresh, representative query/join,
+algebra publication, and the complete publisher-shaped workflow with frame
+pointers. Classify every dominant cost against a required semantic, mapped-page
+access, tree descent, COW edit, output build, commit seal, or durability action.
+Implicit validation, pre-commit checksum, per-record allocation, repeated
+lookup/delete, page reconstruction, cache churn, and an extra comparison/source
+pass are findings, not acceptable overhead.
 
 Audit production source separately from tests. Review file/function size and
 cyclomatic complexity as signals; do not create helper chains merely to lower a

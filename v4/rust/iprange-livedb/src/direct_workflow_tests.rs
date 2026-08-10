@@ -101,13 +101,13 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
 }
 
 #[test]
-fn retention_ingestion_and_merge_allocate_nothing_per_record() {
+fn first_seen_ingestion_and_merge_allocate_nothing_per_record() {
     let files = TestPair::new();
     create_live(
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
     )
@@ -133,16 +133,16 @@ fn retention_ingestion_and_merge_allocate_nothing_per_record() {
         })
         .collect();
 
-    let mut seed = writer.begin_retention_refresh(10, &cancellation).unwrap();
+    let mut seed = writer.begin_first_seen_refresh(10, &cancellation).unwrap();
     seed.add_ranges_v4_slice(&first).unwrap();
     match seed.finish_input().unwrap() {
         FinishedWorkflow::Changed(prepared) => {
             prepared.commit().unwrap();
         }
-        FinishedWorkflow::NoChange(_) => panic!("initial retention refresh changed nothing"),
+        FinishedWorkflow::NoChange(_) => panic!("initial first-seen refresh changed nothing"),
     }
 
-    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    let mut refresh = writer.begin_first_seen_refresh(20, &cancellation).unwrap();
     let ((result, work), allocations) =
         count_thread_allocations(|| crate::work::measure(|| refresh.add_ranges_v4_slice(&second)));
     result.unwrap();

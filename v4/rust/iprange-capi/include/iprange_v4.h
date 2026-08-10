@@ -37,6 +37,8 @@ typedef struct iprange_v4_abi1_membership_builder iprange_v4_abi1_membership_bui
 typedef struct iprange_v4_abi1_membership_ref iprange_v4_abi1_membership_ref;
 typedef struct iprange_v4_abi1_cleanup_guard iprange_v4_abi1_cleanup_guard;
 typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
+typedef struct iprange_v4_abi1_membership_scope iprange_v4_abi1_membership_scope;
+typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_algebra;
 
 /*
  * Generation-1 pointer and ownership contract
@@ -129,6 +131,32 @@ typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 #define IPRANGE_V4_ABI1_MEMBERSHIP_OPERATION_INTERSECTION 4
 
 #define IPRANGE_V4_ABI1_MEMBERSHIP_OPERATION_XOR 5
+
+#define IPRANGE_V4_ABI1_MEMBERSHIP_AGGREGATION_CARDINALITIES 1
+
+#define IPRANGE_V4_ABI1_MEMBERSHIP_AGGREGATION_ALL_PAIRS 2
+
+#define IPRANGE_V4_ABI1_MEMBERSHIP_AGGREGATION_TARGET_AGAINST_SCOPE 3
+
+#define IPRANGE_V4_ABI1_MEMBERSHIP_AGGREGATION_SELECTED_PAIRS 4
+
+#define IPRANGE_V4_ABI1_UNCOVERED_SIDE_LEFT 1
+
+#define IPRANGE_V4_ABI1_UNCOVERED_SIDE_RIGHT 2
+
+#define IPRANGE_V4_ABI1_FEED_SELECTION_ALL 1
+
+#define IPRANGE_V4_ABI1_FEED_SELECTION_NAMED 2
+
+#define IPRANGE_V4_ABI1_ALGEBRA_SET_UNION 1
+
+#define IPRANGE_V4_ABI1_ALGEBRA_SET_INTERSECTION 2
+
+#define IPRANGE_V4_ABI1_ALGEBRA_SET_EXCLUSION 3
+
+#define IPRANGE_V4_ABI1_ALGEBRA_OUTPUT_PRESERVE_FEEDS 1
+
+#define IPRANGE_V4_ABI1_ALGEBRA_OUTPUT_FLAT 2
 
 #define IPRANGE_V4_ABI1_VALIDATION_MODE_LIVE_CURRENT 1
 
@@ -364,15 +392,25 @@ typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 
 #define IPRANGE_V4_ABI1_LOGICAL_CHANGE_NO_CHANGE 2
 
+#define IPRANGE_V4_ABI1_DIRECT_SEMANTIC_NOT_APPLICABLE 0
+
+#define IPRANGE_V4_ABI1_DIRECT_SEMANTIC_GENERIC 1
+
+#define IPRANGE_V4_ABI1_DIRECT_SEMANTIC_FIRST_SEEN 2
+
+#define IPRANGE_V4_ABI1_DIRECT_SEMANTIC_LAST_SEEN 3
+
 #define IPRANGE_V4_ABI1_WORKFLOW_CREATE_FEED 1
 
 #define IPRANGE_V4_ABI1_WORKFLOW_REPLACE_FEED 2
 
 #define IPRANGE_V4_ABI1_WORKFLOW_DIRECT_REPLACEMENT 3
 
-#define IPRANGE_V4_ABI1_WORKFLOW_RETENTION_REFRESH 4
+#define IPRANGE_V4_ABI1_WORKFLOW_FIRST_SEEN_REFRESH 4
 
-#define IPRANGE_V4_ABI1_WORKFLOW_MEMBERSHIP_IMPORT 5
+#define IPRANGE_V4_ABI1_WORKFLOW_LAST_SEEN_REFRESH 5
+
+#define IPRANGE_V4_ABI1_WORKFLOW_MEMBERSHIP_IMPORT 6
 
 #define IPRANGE_V4_ABI1_REPORT_KIND_SCAN 1
 
@@ -408,6 +446,8 @@ typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 
 #define IPRANGE_V4_ABI1_REPORT_KIND_LIVE_RESIDUE 17
 
+#define IPRANGE_V4_ABI1_REPORT_KIND_HISTORY_PROJECTION 18
+
 #define IPRANGE_V4_ABI1_RESIDUE_OPERATION_INSPECT_PUBLICATION 1
 
 #define IPRANGE_V4_ABI1_RESIDUE_OPERATION_REMOVE_PUBLICATION 2
@@ -429,6 +469,10 @@ typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 #define IPRANGE_V4_ABI1_RESIDUE_OPERATION_REMOVE_HOUSEKEEPING_ARTIFACT 10
 
 #define IPRANGE_V4_ABI1_RESIDUE_OPERATION_SNAPSHOT_PREPARATION_FAILURE 11
+
+#define IPRANGE_V4_ABI1_RESIDUE_OPERATION_IMMUTABLE_FEED_PREPARATION_FAILURE 12
+
+#define IPRANGE_V4_ABI1_RESIDUE_OPERATION_ALGEBRA_PREPARATION_FAILURE 13
 
 #define IPRANGE_V4_ABI1_RESIDUE_COORDINATION_ABSENT 1
 
@@ -650,6 +694,129 @@ typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 
 #define IPRANGE_V4_ABI1_ERROR_CODE_CLEANUP_IN_PROGRESS 64
 
+typedef struct iprange_v4_abi1_membership_algebra_budget {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t max_heap_bytes;
+    uint32_t max_sources;
+    uint32_t reserved;
+} iprange_v4_abi1_membership_algebra_budget;
+
+typedef uint8_t (*iprange_v4_abi1_cancel_fn)(void *context);
+
+typedef struct iprange_v4_abi1_cancellation {
+    iprange_v4_abi1_cancel_fn callback;
+    void *context;
+} iprange_v4_abi1_cancellation;
+
+typedef struct iprange_v4_abi1_feed_name_value {
+    uint32_t length;
+    uint8_t bytes[255];
+    uint8_t reserved;
+} iprange_v4_abi1_feed_name_value;
+
+typedef struct iprange_v4_abi1_callback_failure {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t caller_code;
+    const uint8_t *message_pointer;
+    uint64_t message_length;
+} iprange_v4_abi1_callback_failure;
+
+typedef uint32_t (*iprange_v4_abi1_feed_name_sink_fn)(void *context,
+                                                      const struct iprange_v4_abi1_feed_name_value *records,
+                                                      uint64_t count,
+                                                      struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_byte_slice {
+    const uint8_t *pointer;
+    uint64_t length;
+} iprange_v4_abi1_byte_slice;
+
+typedef struct iprange_v4_abi1_feed_selection_input {
+    uint32_t kind;
+    uint32_t reserved;
+    const struct iprange_v4_abi1_byte_slice *names;
+    uint64_t name_count;
+} iprange_v4_abi1_feed_selection_input;
+
+typedef struct iprange_v4_abi1_cardinality129 {
+    uint8_t bit128;
+    uint8_t reserved[7];
+    uint64_t hi;
+    uint64_t lo;
+} iprange_v4_abi1_cardinality129;
+
+typedef struct iprange_v4_abi1_algebra_count_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t source_count;
+    uint64_t source_range_count;
+    uint64_t joined_segment_count;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_algebra_count_report;
+
+typedef struct iprange_v4_abi1_algebra_comparison_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t source_count;
+    uint64_t source_range_count;
+    uint64_t joined_segment_count;
+    struct iprange_v4_abi1_cardinality129 left_addresses;
+    struct iprange_v4_abi1_cardinality129 right_addresses;
+    struct iprange_v4_abi1_cardinality129 overlap_addresses;
+    struct iprange_v4_abi1_cardinality129 left_only_addresses;
+    struct iprange_v4_abi1_cardinality129 right_only_addresses;
+    struct iprange_v4_abi1_cardinality129 union_addresses;
+    uint32_t equal;
+    uint32_t reserved;
+} iprange_v4_abi1_algebra_comparison_report;
+
+typedef struct iprange_v4_abi1_path {
+    uint32_t kind;
+    uint32_t reserved;
+    const void *pointer;
+    uint64_t length;
+} iprange_v4_abi1_path;
+
+typedef struct iprange_v4_abi1_algebra_set_operation_input {
+    uint32_t kind;
+    uint32_t reserved;
+    struct iprange_v4_abi1_feed_selection_input included;
+    struct iprange_v4_abi1_feed_selection_input excluded;
+} iprange_v4_abi1_algebra_set_operation_input;
+
+typedef struct iprange_v4_abi1_algebra_output_mode_input {
+    uint32_t kind;
+    uint32_t reserved;
+    struct iprange_v4_abi1_byte_slice flat_name;
+} iprange_v4_abi1_algebra_output_mode_input;
+
+typedef struct iprange_v4_abi1_optional_byte_slice {
+    uint8_t present;
+    uint8_t reserved[7];
+    struct iprange_v4_abi1_byte_slice value;
+} iprange_v4_abi1_optional_byte_slice;
+
+typedef struct iprange_v4_abi1_algebra_output_budget {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t max_output_pages;
+    uint32_t max_open_files;
+    uint32_t reserved;
+} iprange_v4_abi1_algebra_output_budget;
+
+typedef struct iprange_v4_abi1_algebra_set_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t source_count;
+    uint64_t source_range_count;
+    uint64_t joined_segment_count;
+    uint64_t output_feed_count;
+    uint64_t output_range_count;
+    struct iprange_v4_abi1_cardinality129 output_addresses;
+} iprange_v4_abi1_algebra_set_report;
+
 typedef struct iprange_v4_abi1_ip {
     uint32_t family;
     uint8_t bytes[16];
@@ -716,19 +883,35 @@ typedef struct iprange_v4_abi1_cleanup_artifact {
     uint32_t reserved4;
 } iprange_v4_abi1_cleanup_artifact;
 
-typedef struct iprange_v4_abi1_path {
-    uint32_t kind;
+typedef struct iprange_v4_abi1_history_window_input {
+    struct iprange_v4_abi1_byte_slice feed_name;
+    uint32_t cutoff;
     uint32_t reserved;
-    const void *pointer;
-    uint64_t length;
-} iprange_v4_abi1_path;
+} iprange_v4_abi1_history_window_input;
 
-typedef uint8_t (*iprange_v4_abi1_cancel_fn)(void *context);
+typedef uint32_t (*iprange_v4_abi1_coverage_source_fn)(void *context,
+                                                       struct iprange_v4_abi1_range *records,
+                                                       uint64_t capacity,
+                                                       uint64_t *count,
+                                                       struct iprange_v4_abi1_callback_failure *failure);
 
-typedef struct iprange_v4_abi1_cancellation {
-    iprange_v4_abi1_cancel_fn callback;
-    void *context;
-} iprange_v4_abi1_cancellation;
+typedef struct iprange_v4_abi1_immutable_feed_budget {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t max_heap_bytes;
+    uint64_t max_output_pages;
+    uint64_t max_workspace_pages;
+    uint32_t max_open_files;
+    uint32_t reserved;
+} iprange_v4_abi1_immutable_feed_budget;
+
+typedef struct iprange_v4_abi1_immutable_feed_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t input_record_count;
+    uint64_t normalized_interval_count;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_immutable_feed_report;
 
 typedef struct iprange_v4_abi1_transaction_budget {
     uint32_t abi_version;
@@ -739,11 +922,6 @@ typedef struct iprange_v4_abi1_transaction_budget {
     uint32_t max_open_files;
     uint32_t reserved;
 } iprange_v4_abi1_transaction_budget;
-
-typedef struct iprange_v4_abi1_byte_slice {
-    const uint8_t *pointer;
-    uint64_t length;
-} iprange_v4_abi1_byte_slice;
 
 typedef struct iprange_v4_abi1_optional_identity {
     uint8_t present;
@@ -785,14 +963,6 @@ typedef struct iprange_v4_abi1_artifact_record {
     struct iprange_v4_abi1_publication_digest previous_digest;
     struct iprange_v4_abi1_local_basename basename;
 } iprange_v4_abi1_artifact_record;
-
-typedef struct iprange_v4_abi1_callback_failure {
-    uint32_t abi_version;
-    uint32_t struct_size;
-    uint64_t caller_code;
-    const uint8_t *message_pointer;
-    uint64_t message_length;
-} iprange_v4_abi1_callback_failure;
 
 typedef uint32_t (*iprange_v4_abi1_artifact_sink_fn)(void *context,
                                                      const struct iprange_v4_abi1_artifact_record *records,
@@ -884,12 +1054,6 @@ typedef uint32_t (*iprange_v4_abi1_feed_sink_fn)(void *context,
                                                  uint64_t count,
                                                  struct iprange_v4_abi1_callback_failure *failure);
 
-typedef uint32_t (*iprange_v4_abi1_coverage_source_fn)(void *context,
-                                                       struct iprange_v4_abi1_range *records,
-                                                       uint64_t capacity,
-                                                       uint64_t *count,
-                                                       struct iprange_v4_abi1_callback_failure *failure);
-
 typedef struct iprange_v4_abi1_snapshot_budget {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -899,11 +1063,129 @@ typedef struct iprange_v4_abi1_snapshot_budget {
     uint32_t reserved;
 } iprange_v4_abi1_snapshot_budget;
 
+typedef struct iprange_v4_abi1_membership_query_budget {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t max_heap_bytes;
+} iprange_v4_abi1_membership_query_budget;
+
+typedef struct iprange_v4_abi1_matching_feeds_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t matching_feed_count;
+} iprange_v4_abi1_matching_feeds_report;
+
+typedef struct iprange_v4_abi1_feed_pair_input {
+    struct iprange_v4_abi1_byte_slice left;
+    struct iprange_v4_abi1_byte_slice right;
+} iprange_v4_abi1_feed_pair_input;
+
+typedef struct iprange_v4_abi1_feed_cardinality {
+    struct iprange_v4_abi1_feed_name_value feed;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_feed_cardinality;
+
+typedef uint32_t (*iprange_v4_abi1_feed_cardinality_sink_fn)(void *context,
+                                                             const struct iprange_v4_abi1_feed_cardinality *records,
+                                                             uint64_t count,
+                                                             struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_feed_overlap {
+    struct iprange_v4_abi1_feed_name_value left;
+    struct iprange_v4_abi1_feed_name_value right;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_feed_overlap;
+
+typedef uint32_t (*iprange_v4_abi1_feed_overlap_sink_fn)(void *context,
+                                                         const struct iprange_v4_abi1_feed_overlap *records,
+                                                         uint64_t count,
+                                                         struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_membership_aggregation_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t scanned_range_count;
+    struct iprange_v4_abi1_cardinality129 scanned_addresses;
+    uint64_t feed_result_count;
+    uint64_t pair_result_count;
+} iprange_v4_abi1_membership_aggregation_report;
+
+typedef struct iprange_v4_abi1_direct_join_budget {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t max_result_cells;
+} iprange_v4_abi1_direct_join_budget;
+
+typedef struct iprange_v4_abi1_direct_join_cell {
+    struct iprange_v4_abi1_feed_name_value feed;
+    uint8_t direct_present;
+    uint8_t reserved[3];
+    uint32_t direct_value;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_direct_join_cell;
+
+typedef uint32_t (*iprange_v4_abi1_direct_join_sink_fn)(void *context,
+                                                        const struct iprange_v4_abi1_direct_join_cell *records,
+                                                        uint64_t count,
+                                                        struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_direct_join_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t membership_range_count;
+    uint64_t direct_ranges_visited;
+    uint64_t joined_segment_count;
+    struct iprange_v4_abi1_cardinality129 selected_addresses;
+    struct iprange_v4_abi1_cardinality129 mapped_addresses;
+    struct iprange_v4_abi1_cardinality129 unmapped_addresses;
+    uint64_t result_cell_count;
+} iprange_v4_abi1_direct_join_report;
+
+typedef struct iprange_v4_abi1_membership_cross_cell {
+    struct iprange_v4_abi1_feed_name_value left;
+    struct iprange_v4_abi1_feed_name_value right;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_membership_cross_cell;
+
+typedef uint32_t (*iprange_v4_abi1_membership_cross_sink_fn)(void *context,
+                                                             const struct iprange_v4_abi1_membership_cross_cell *records,
+                                                             uint64_t count,
+                                                             struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_uncovered_feed {
+    uint32_t side;
+    uint32_t reserved;
+    struct iprange_v4_abi1_feed_name_value feed;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_uncovered_feed;
+
+typedef uint32_t (*iprange_v4_abi1_uncovered_feed_sink_fn)(void *context,
+                                                           const struct iprange_v4_abi1_uncovered_feed *records,
+                                                           uint64_t count,
+                                                           struct iprange_v4_abi1_callback_failure *failure);
+
+typedef struct iprange_v4_abi1_membership_join_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t left_range_count;
+    uint64_t right_range_count;
+    uint64_t joined_segment_count;
+    struct iprange_v4_abi1_cardinality129 left_addresses;
+    struct iprange_v4_abi1_cardinality129 right_addresses;
+    struct iprange_v4_abi1_cardinality129 overlap_addresses;
+    struct iprange_v4_abi1_cardinality129 left_uncovered_addresses;
+    struct iprange_v4_abi1_cardinality129 right_uncovered_addresses;
+    uint64_t cross_result_count;
+    uint64_t uncovered_result_count;
+} iprange_v4_abi1_membership_join_report;
+
 typedef struct iprange_v4_abi1_database_info {
     uint32_t abi_version;
     uint32_t struct_size;
     uint32_t address_family;
     uint32_t value_kind;
+    uint32_t direct_semantic;
+    uint32_t reserved;
     uint8_t value_tag[16];
     uint8_t database_id[16];
     uint64_t transaction_id;
@@ -912,7 +1194,7 @@ typedef struct iprange_v4_abi1_database_info {
     uint64_t range_record_count;
     uint64_t active_feed_count;
     uint32_t meta_selection;
-    uint32_t reserved;
+    uint32_t reserved2;
 } iprange_v4_abi1_database_info;
 
 typedef struct iprange_v4_abi1_scan_report {
@@ -922,13 +1204,6 @@ typedef struct iprange_v4_abi1_scan_report {
     uint8_t completed;
     uint8_t reserved[7];
 } iprange_v4_abi1_scan_report;
-
-typedef struct iprange_v4_abi1_cardinality129 {
-    uint8_t bit128;
-    uint8_t reserved[7];
-    uint64_t hi;
-    uint64_t lo;
-} iprange_v4_abi1_cardinality129;
 
 typedef struct iprange_v4_abi1_finish_input_report {
     uint32_t abi_version;
@@ -952,6 +1227,38 @@ typedef struct iprange_v4_abi1_finish_input_report {
     uint64_t source_distinct_membership_count;
     uint64_t translated_membership_count;
 } iprange_v4_abi1_finish_input_report;
+
+typedef struct iprange_v4_abi1_history_projection_report {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t logical_change;
+    uint32_t reserved;
+    uint64_t source_range_count;
+    struct iprange_v4_abi1_cardinality129 source_addresses;
+    uint64_t created_feed_count;
+    uint64_t before_interval_count;
+    uint64_t after_interval_count;
+    struct iprange_v4_abi1_cardinality129 before_addresses;
+    struct iprange_v4_abi1_cardinality129 after_addresses;
+    struct iprange_v4_abi1_cardinality129 unchanged_addresses;
+    struct iprange_v4_abi1_cardinality129 added_addresses;
+    struct iprange_v4_abi1_cardinality129 removed_addresses;
+    uint64_t window_count;
+} iprange_v4_abi1_history_projection_report;
+
+typedef struct iprange_v4_abi1_history_window_report {
+    struct iprange_v4_abi1_feed_name_value feed_name;
+    uint32_t cutoff;
+    uint8_t created;
+    uint8_t reserved[3];
+    uint64_t before_interval_count;
+    uint64_t after_interval_count;
+    struct iprange_v4_abi1_cardinality129 before_addresses;
+    struct iprange_v4_abi1_cardinality129 after_addresses;
+    struct iprange_v4_abi1_cardinality129 unchanged_addresses;
+    struct iprange_v4_abi1_cardinality129 added_addresses;
+    struct iprange_v4_abi1_cardinality129 removed_addresses;
+} iprange_v4_abi1_history_window_report;
 
 typedef struct iprange_v4_abi1_commit_report {
     uint32_t abi_version;
@@ -1315,9 +1622,73 @@ typedef uint32_t (*iprange_v4_abi1_direct_source_fn)(void *context,
                                                      uint64_t *count,
                                                      struct iprange_v4_abi1_callback_failure *failure);
 
+typedef struct iprange_v4_abi1_first_seen_removal {
+    struct iprange_v4_abi1_range range;
+    uint32_t first_seen;
+    uint32_t reserved;
+    struct iprange_v4_abi1_cardinality129 addresses;
+} iprange_v4_abi1_first_seen_removal;
+
+typedef uint32_t (*iprange_v4_abi1_first_seen_removal_sink_fn)(void *context,
+                                                               const struct iprange_v4_abi1_first_seen_removal *records,
+                                                               uint64_t count,
+                                                               struct iprange_v4_abi1_callback_failure *failure);
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_create(const iprange_v4_abi1_membership_scope *const *scopes,
+                                                   uint64_t scope_count,
+                                                   const struct iprange_v4_abi1_membership_algebra_budget *budget,
+                                                   struct iprange_v4_abi1_cancellation cancellation,
+                                                   iprange_v4_abi1_membership_algebra **output,
+                                                   iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_feeds(const iprange_v4_abi1_membership_algebra *algebra,
+                                                  iprange_v4_abi1_feed_name_sink_fn callback,
+                                                  void *context,
+                                                  struct iprange_v4_abi1_cancellation cancellation,
+                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_count(const iprange_v4_abi1_membership_algebra *algebra,
+                                                  struct iprange_v4_abi1_feed_selection_input selection,
+                                                  struct iprange_v4_abi1_cancellation cancellation,
+                                                  struct iprange_v4_abi1_algebra_count_report *output,
+                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_compare(const iprange_v4_abi1_membership_algebra *algebra,
+                                                    struct iprange_v4_abi1_feed_selection_input left,
+                                                    struct iprange_v4_abi1_feed_selection_input right,
+                                                    struct iprange_v4_abi1_cancellation cancellation,
+                                                    struct iprange_v4_abi1_algebra_comparison_report *output,
+                                                    iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_publish_set(const iprange_v4_abi1_membership_algebra *algebra,
+                                                        struct iprange_v4_abi1_path destination,
+                                                        struct iprange_v4_abi1_byte_slice value_tag,
+                                                        struct iprange_v4_abi1_algebra_set_operation_input operation,
+                                                        struct iprange_v4_abi1_algebra_output_mode_input mode,
+                                                        struct iprange_v4_abi1_optional_byte_slice metadata_json,
+                                                        uint32_t destination_policy,
+                                                        const struct iprange_v4_abi1_algebra_output_budget *budget,
+                                                        struct iprange_v4_abi1_cancellation cancellation,
+                                                        struct iprange_v4_abi1_algebra_set_report *semantic_output,
+                                                        iprange_v4_abi1_report **report_output,
+                                                        iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_close(iprange_v4_abi1_membership_algebra *algebra,
+                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_algebra_destroy(iprange_v4_abi1_membership_algebra *algebra,
+                                                    iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_reader_open_direct_cursor(const iprange_v4_abi1_reader *reader,
@@ -1410,6 +1781,30 @@ uint32_t iprange_v4_abi1_error_destroy(iprange_v4_abi1_error *error);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_version(void);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_project_history(const iprange_v4_abi1_writer *writer,
+                                                const iprange_v4_abi1_reader *last_seen_reader,
+                                                const struct iprange_v4_abi1_history_window_input *windows,
+                                                uint64_t window_count,
+                                                struct iprange_v4_abi1_cancellation cancellation,
+                                                iprange_v4_abi1_report **report_output,
+                                                iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_create_immutable_feed(struct iprange_v4_abi1_path destination,
+                                               uint32_t address_family,
+                                               struct iprange_v4_abi1_byte_slice value_tag,
+                                               struct iprange_v4_abi1_byte_slice feed_name,
+                                               struct iprange_v4_abi1_optional_byte_slice metadata_json,
+                                               uint32_t destination_policy,
+                                               iprange_v4_abi1_coverage_source_fn source_callback,
+                                               void *source_context,
+                                               const struct iprange_v4_abi1_immutable_feed_budget *budget,
+                                               struct iprange_v4_abi1_cancellation cancellation,
+                                               struct iprange_v4_abi1_immutable_feed_report *semantic_output,
+                                               iprange_v4_abi1_report **report_output,
+                                               iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_open_immutable_reader(struct iprange_v4_abi1_path source,
@@ -1701,6 +2096,79 @@ uint32_t iprange_v4_abi1_remove_publication_residue(iprange_v4_abi1_residue *res
                                                     iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_all_feeds_scope(const iprange_v4_abi1_reader *reader,
+                                                const struct iprange_v4_abi1_membership_query_budget *budget,
+                                                struct iprange_v4_abi1_cancellation cancellation,
+                                                iprange_v4_abi1_membership_scope **output,
+                                                iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_named_feeds_scope(const iprange_v4_abi1_reader *reader,
+                                                  const struct iprange_v4_abi1_byte_slice *names,
+                                                  uint64_t name_count,
+                                                  const struct iprange_v4_abi1_membership_query_budget *budget,
+                                                  struct iprange_v4_abi1_cancellation cancellation,
+                                                  iprange_v4_abi1_membership_scope **output,
+                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_feeds(const iprange_v4_abi1_membership_scope *scope,
+                                                iprange_v4_abi1_feed_sink_fn callback,
+                                                void *context,
+                                                struct iprange_v4_abi1_cancellation cancellation,
+                                                iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_matching_feeds(const iprange_v4_abi1_reader *reader,
+                                               struct iprange_v4_abi1_ip address,
+                                               iprange_v4_abi1_feed_name_sink_fn callback,
+                                               void *context,
+                                               struct iprange_v4_abi1_cancellation cancellation,
+                                               struct iprange_v4_abi1_matching_feeds_report *output,
+                                               iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_aggregate(const iprange_v4_abi1_membership_scope *scope,
+                                                    uint32_t mode,
+                                                    struct iprange_v4_abi1_byte_slice target,
+                                                    const struct iprange_v4_abi1_feed_pair_input *pairs,
+                                                    uint64_t pair_count,
+                                                    iprange_v4_abi1_feed_cardinality_sink_fn cardinality_callback,
+                                                    iprange_v4_abi1_feed_overlap_sink_fn overlap_callback,
+                                                    void *context,
+                                                    struct iprange_v4_abi1_cancellation cancellation,
+                                                    struct iprange_v4_abi1_membership_aggregation_report *output,
+                                                    iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_join_direct(const iprange_v4_abi1_membership_scope *scope,
+                                                      const iprange_v4_abi1_reader *direct_reader,
+                                                      const struct iprange_v4_abi1_direct_join_budget *budget,
+                                                      iprange_v4_abi1_direct_join_sink_fn callback,
+                                                      void *context,
+                                                      struct iprange_v4_abi1_cancellation cancellation,
+                                                      struct iprange_v4_abi1_direct_join_report *output,
+                                                      iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_join_membership(const iprange_v4_abi1_membership_scope *left,
+                                                          const iprange_v4_abi1_membership_scope *right,
+                                                          iprange_v4_abi1_membership_cross_sink_fn cross_callback,
+                                                          iprange_v4_abi1_uncovered_feed_sink_fn uncovered_callback,
+                                                          void *context,
+                                                          struct iprange_v4_abi1_cancellation cancellation,
+                                                          struct iprange_v4_abi1_membership_join_report *output,
+                                                          iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_close(iprange_v4_abi1_membership_scope *scope,
+                                                iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_membership_scope_destroy(iprange_v4_abi1_membership_scope *scope,
+                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_reader_database_info(const iprange_v4_abi1_reader *reader,
                                               struct iprange_v4_abi1_database_info *output,
                                               iprange_v4_abi1_error **error_output);
@@ -1811,6 +2279,17 @@ IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_report_get_finish_input(const iprange_v4_abi1_report *report,
                                                  struct iprange_v4_abi1_finish_input_report *output,
                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_report_get_history_projection(const iprange_v4_abi1_report *report,
+                                                       struct iprange_v4_abi1_history_projection_report *output,
+                                                       iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_report_get_history_window(const iprange_v4_abi1_report *report,
+                                                   uint64_t index,
+                                                   struct iprange_v4_abi1_history_window_report *output,
+                                                   iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_report_get_commit(const iprange_v4_abi1_report *report,
@@ -2071,8 +2550,15 @@ uint32_t iprange_v4_abi1_writer_begin_direct_replacement(const iprange_v4_abi1_w
                                                          iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
-uint32_t iprange_v4_abi1_writer_begin_retention_refresh(const iprange_v4_abi1_writer *writer,
+uint32_t iprange_v4_abi1_writer_begin_first_seen_refresh(const iprange_v4_abi1_writer *writer,
+                                                         uint32_t refresh_value,
+                                                         struct iprange_v4_abi1_cancellation cancellation,
+                                                         iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_begin_last_seen_refresh(const iprange_v4_abi1_writer *writer,
                                                         uint32_t refresh_value,
+                                                        uint32_t cutoff,
                                                         struct iprange_v4_abi1_cancellation cancellation,
                                                         iprange_v4_abi1_error **error_output);
 
@@ -2098,6 +2584,13 @@ IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_writer_finish_input(const iprange_v4_abi1_writer *writer,
                                              iprange_v4_abi1_report **report_output,
                                              iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_finish_first_seen_with_removals(const iprange_v4_abi1_writer *writer,
+                                                                iprange_v4_abi1_first_seen_removal_sink_fn callback,
+                                                                void *context,
+                                                                iprange_v4_abi1_report **report_output,
+                                                                iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_writer_metadata_query(const iprange_v4_abi1_writer *writer,

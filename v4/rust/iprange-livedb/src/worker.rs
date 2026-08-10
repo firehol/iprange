@@ -176,6 +176,11 @@ impl Drop for Context {
     }
 }
 
+#[inline]
+pub(crate) fn fault_protection_active() -> bool {
+    CURRENT_CONTROL.with(|current| !current.get().is_null())
+}
+
 pub(crate) fn probe_source<T>(
     mapping: &crate::mapping::Mapping,
     operation: impl FnOnce() -> crate::error::Result<T>,
@@ -212,13 +217,6 @@ pub(crate) fn enter_artifact(
         control::MappingRole::Output
     };
     enter_region(mapping.region()?, role)
-}
-
-pub(crate) fn probe_output<T>(
-    mapping: &crate::mapping::Mapping,
-    operation: impl FnOnce() -> crate::error::Result<T>,
-) -> crate::error::Result<T> {
-    probe_output_region(mapping.region()?, operation)
 }
 
 pub(crate) fn probe_scratch<T>(

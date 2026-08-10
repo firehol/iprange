@@ -73,6 +73,15 @@ pub enum ValueKind {
     Membership = 2,
 }
 
+/// Engine-defined meaning of a direct database's immutable value tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum DirectSemantic {
+    Generic = 1,
+    FirstSeen = 2,
+    LastSeen = 3,
+}
+
 /// One per-address membership operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MembershipOperation {
@@ -97,7 +106,8 @@ impl ValueKind {
 pub struct ValueTag([u8; 16]);
 
 impl ValueTag {
-    pub const RETENTION: Self = Self(*b"retention\0\0\0\0\0\0\0");
+    pub const FIRST_SEEN: Self = Self(*b"first_seen\0\0\0\0\0\0");
+    pub const LAST_SEEN: Self = Self(*b"last_seen\0\0\0\0\0\0\0");
 
     pub fn new(bytes: &[u8]) -> Option<Self> {
         if bytes.len() > 15 || bytes.contains(&0) {
@@ -125,6 +135,18 @@ impl ValueTag {
     pub fn bytes(&self) -> &[u8] {
         let len = self.0.iter().position(|&byte| byte == 0).unwrap_or(15);
         &self.0[..len]
+    }
+
+    /// Classify an exact direct tag without changing its opaque wire identity.
+    #[inline]
+    pub fn direct_semantic(self) -> DirectSemantic {
+        if self == Self::FIRST_SEEN {
+            DirectSemantic::FirstSeen
+        } else if self == Self::LAST_SEEN {
+            DirectSemantic::LastSeen
+        } else {
+            DirectSemantic::Generic
+        }
     }
 }
 

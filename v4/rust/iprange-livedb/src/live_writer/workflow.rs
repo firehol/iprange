@@ -4,11 +4,12 @@ use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
 use crate::contract::AddressFamily;
 use crate::error::{Error, Result};
-use crate::source::RangeSource;
 use crate::workflow::{Comparison, WorkflowReport};
 use crate::writer_core::WriterEdit;
 
 use super::{AbortResult, CommitResult, LiveWriter};
+
+pub(super) use crate::source::drain as drain_source;
 
 /// Result of `FinishInput`.
 #[derive(Debug)]
@@ -31,7 +32,7 @@ pub struct PreparedFeedChange<'a> {
 }
 
 #[derive(Debug)]
-struct PreparedOperation<'a> {
+pub(super) struct PreparedOperation<'a> {
     writer: &'a mut LiveWriter,
     state: PreparedState,
 }
@@ -116,23 +117,23 @@ impl<'a> PreparedFeedChange<'a> {
 }
 
 impl<'a> PreparedOperation<'a> {
-    fn new(writer: &'a mut LiveWriter, state: PreparedState) -> Self {
+    pub(super) fn new(writer: &'a mut LiveWriter, state: PreparedState) -> Self {
         Self { writer, state }
     }
 
-    fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
+    pub(super) fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
         self.state.set_metadata_json(self.writer, input)
     }
 
-    fn clear_metadata_json(&mut self) -> Result<bool> {
+    pub(super) fn clear_metadata_json(&mut self) -> Result<bool> {
         self.state.clear_metadata_json(self.writer)
     }
 
-    fn commit(self) -> Result<CommitResult> {
+    pub(super) fn commit(self) -> Result<CommitResult> {
         self.writer.commit_operation(&self.state.cancellation)
     }
 
-    fn abort(self) -> Result<AbortResult> {
+    pub(super) fn abort(self) -> Result<AbortResult> {
         self.writer.abort()
     }
 }
@@ -223,40 +224,6 @@ pub(super) fn complete_workflow(
 impl Drop for PreparedOperation<'_> {
     fn drop(&mut self) {
         self.writer.core.abandon_operation();
-    }
-}
-
-pub(super) fn drain_source<R, S, F>(
-    source: &mut S,
-    cancellation: &CancellationToken,
-    input_records: &mut u64,
-    mut apply: F,
-) -> Result<()>
-where
-    R: Copy,
-    S: RangeSource<R>,
-    F: FnMut(R) -> Result<()>,
-{
-    crate::work::source_pass(1);
-    loop {
-        cancellation.check()?;
-        let Some(batch) = source.next_batch()? else {
-            return Ok(());
-        };
-        if batch.is_empty() {
-            return Err(Error::InvalidArgument(
-                "range source returned an empty batch",
-            ));
-        }
-        for &record in batch {
-            cancellation.check()?;
-            let next = input_records
-                .checked_add(1)
-                .ok_or_else(|| Error::arithmetic_overflow("workflow input record count"))?;
-            apply(record)?;
-            crate::work::range_consumed(1);
-            *input_records = next;
-        }
     }
 }
 

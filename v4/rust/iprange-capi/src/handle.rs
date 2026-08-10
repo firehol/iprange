@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use iprange_livedb::c_abi_support::{MembershipAlgebra, MembershipScope};
 use iprange_livedb::c_abi_support::{MembershipToken, Reader, ReaderCursor, Writer};
 
 use crate::error::{BoundaryError, CallError};
@@ -24,6 +25,8 @@ pub(crate) const CLEANUP_GUARD_KIND: u32 = 9;
 pub(crate) const RESIDUE_KIND: u32 = 10;
 pub(crate) const ERROR_KIND: u32 = 11;
 pub(crate) const REPORT_KIND: u32 = 12;
+pub(crate) const MEMBERSHIP_SCOPE_KIND: u32 = 13;
+pub(crate) const MEMBERSHIP_ALGEBRA_KIND: u32 = 14;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -458,6 +461,14 @@ unsafe impl OpaqueHandle for MembershipRefHandle {
     const KIND: u32 = MEMBERSHIP_REF_KIND;
 }
 
+unsafe impl OpaqueHandle for MembershipScopeHandle {
+    const KIND: u32 = MEMBERSHIP_SCOPE_KIND;
+}
+
+unsafe impl OpaqueHandle for MembershipAlgebraHandle {
+    const KIND: u32 = MEMBERSHIP_ALGEBRA_KIND;
+}
+
 unsafe impl OpaqueHandle for ReaderHandle {
     const KIND: u32 = READER_KIND;
 }
@@ -504,6 +515,134 @@ impl ReaderHandle {
 
     pub(crate) fn is_closed(&self) -> bool {
         self.reader.is_none()
+    }
+}
+
+/// Opaque reusable named membership scope.
+#[repr(C)]
+pub struct MembershipScopeHandle {
+    header: Header,
+    busy: AtomicBool,
+    scope: UnsafeCell<Option<Arc<MembershipScope>>>,
+}
+
+unsafe impl Send for MembershipScopeHandle {}
+unsafe impl Sync for MembershipScopeHandle {}
+
+impl std::fmt::Debug for MembershipScopeHandle {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("MembershipScopeHandle { .. }")
+    }
+}
+
+impl MembershipScopeHandle {
+    pub(crate) fn new(scope: MembershipScope) -> Self {
+        Self {
+            header: Header::new(MEMBERSHIP_SCOPE_KIND),
+            busy: AtomicBool::new(false),
+            scope: UnsafeCell::new(Some(Arc::new(scope))),
+        }
+    }
+
+    pub(crate) fn with<T>(
+        &self,
+        operation: impl FnOnce(&MembershipScope) -> Result<T, CallError>,
+    ) -> Result<T, CallError> {
+        self.header.require(MEMBERSHIP_SCOPE_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate protects the lifetime slot.
+        let scope = unsafe { &*self.scope.get() }
+            .as_deref()
+            .ok_or_else(|| BoundaryError::wrong_state("membership scope is closed"))?;
+        operation(scope)
+    }
+
+    pub(crate) fn close(&self) -> Result<(), BoundaryError> {
+        self.header.require(MEMBERSHIP_SCOPE_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate provides exclusive access to the lifetime slot.
+        if unsafe { &mut *self.scope.get() }.take().is_none() {
+            return Err(BoundaryError::wrong_state(
+                "membership scope is already closed",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clone_scope(&self) -> Result<Arc<MembershipScope>, BoundaryError> {
+        self.header.require(MEMBERSHIP_SCOPE_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate protects the lifetime slot while the Arc is cloned.
+        unsafe { &*self.scope.get() }
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| BoundaryError::wrong_state("membership scope is closed"))
+    }
+
+    pub(crate) fn is_closed(&self) -> Result<bool, BoundaryError> {
+        self.header.require(MEMBERSHIP_SCOPE_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate protects the lifetime slot.
+        Ok(unsafe { &*self.scope.get() }.is_none())
+    }
+}
+
+/// Opaque reusable global membership algebra.
+#[repr(C)]
+pub struct MembershipAlgebraHandle {
+    header: Header,
+    busy: AtomicBool,
+    algebra: UnsafeCell<Option<MembershipAlgebra>>,
+}
+
+unsafe impl Send for MembershipAlgebraHandle {}
+unsafe impl Sync for MembershipAlgebraHandle {}
+
+impl std::fmt::Debug for MembershipAlgebraHandle {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("MembershipAlgebraHandle { .. }")
+    }
+}
+
+impl MembershipAlgebraHandle {
+    pub(crate) fn new(algebra: MembershipAlgebra) -> Self {
+        Self {
+            header: Header::new(MEMBERSHIP_ALGEBRA_KIND),
+            busy: AtomicBool::new(false),
+            algebra: UnsafeCell::new(Some(algebra)),
+        }
+    }
+
+    pub(crate) fn with<T>(
+        &self,
+        operation: impl FnOnce(&MembershipAlgebra) -> Result<T, CallError>,
+    ) -> Result<T, CallError> {
+        self.header.require(MEMBERSHIP_ALGEBRA_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate protects the lifetime slot.
+        let algebra = unsafe { &*self.algebra.get() }
+            .as_ref()
+            .ok_or_else(|| BoundaryError::wrong_state("membership algebra is closed"))?;
+        operation(algebra)
+    }
+
+    pub(crate) fn close(&self) -> Result<(), BoundaryError> {
+        self.header.require(MEMBERSHIP_ALGEBRA_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate provides exclusive access to the lifetime slot.
+        if unsafe { &mut *self.algebra.get() }.take().is_none() {
+            return Err(BoundaryError::wrong_state(
+                "membership algebra is already closed",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_closed(&self) -> Result<bool, BoundaryError> {
+        self.header.require(MEMBERSHIP_ALGEBRA_KIND)?;
+        let _guard = Gate::enter(&self.busy)?;
+        // SAFETY: the gate protects the lifetime slot.
+        Ok(unsafe { &*self.algebra.get() }.is_none())
     }
 }
 

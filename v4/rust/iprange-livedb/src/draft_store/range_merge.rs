@@ -60,6 +60,7 @@ pub(crate) struct OrderedMerge<K, V, P> {
     base_count: u64,
     input_seen: bool,
     old_refcounts: Option<RefcountRun>,
+    cancellation_work: u16,
     value: std::marker::PhantomData<V>,
 }
 
@@ -79,7 +80,6 @@ where
     let mut merge = OrderedMerge::new(store, base, policy, cancellation)?;
     let mut input_intervals = 0u64;
     while let Some(range) = coverage.next(store)? {
-        cancellation.check()?;
         input_intervals = input_intervals
             .checked_add(1)
             .ok_or_else(|| Error::arithmetic_overflow(count_context))?;
@@ -118,6 +118,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
             input_seen: false,
             old_refcounts: (base.meta.value_kind == ValueKind::Membership)
                 .then(RefcountRun::default),
+            cancellation_work: 0,
             value: std::marker::PhantomData,
         })
     }
@@ -132,7 +133,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
         self.input_seen = true;
         self.previous_input_end = Some(incoming.to);
         loop {
-            cancellation.check()?;
+            self.checkpoint(cancellation)?;
             let Some(mut old) = self.old else {
                 return self.emit(
                     store,
@@ -196,7 +197,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
             return self.finish_preserved(store, cancellation);
         }
         while let Some(old) = self.old {
-            cancellation.check()?;
+            self.checkpoint(cancellation)?;
             self.account_old(store)?;
             self.emit(store, old.from, old.to, Some(old.value), None)?;
             self.advance_old(store)?;
@@ -205,7 +206,16 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
             refcounts.flush(store, -1)?;
         }
         let (root, record_count) = self.output.finish(store)?;
-        range_mutation::retire_tree::<K, _, _>(store, self.base_root, || cancellation.check())?;
+        let mut retirement_work = 0u16;
+        range_mutation::retire_tree::<K, _, _>(store, self.base_root, || {
+            retirement_work += 1;
+            if retirement_work == 4096 {
+                retirement_work = 0;
+                cancellation.check()?;
+            }
+            Ok(())
+        })?;
+        cancellation.check()?;
         store.draft.base_range_tree_retired = true;
         store.draft.meta.range_root = root;
         store.draft.meta.range_record_count = record_count;
@@ -220,7 +230,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
         cancellation: &CancellationToken,
     ) -> Result<Finished<P::Output>> {
         while let Some(old) = self.old {
-            cancellation.check()?;
+            self.checkpoint(cancellation)?;
             self.policy
                 .observe(old.from, old.to, Some(old.value), None, Some(old.value))?;
             self.advance_old(store)?;
@@ -230,6 +240,16 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
         Ok(Finished {
             output: self.policy.finish()?,
         })
+    }
+
+    #[inline]
+    fn checkpoint(&mut self, cancellation: &CancellationToken) -> Result<()> {
+        self.cancellation_work += 1;
+        if self.cancellation_work == 4096 {
+            self.cancellation_work = 0;
+            cancellation.check()?;
+        }
+        Ok(())
     }
 
     fn emit(
@@ -380,6 +400,15 @@ impl MapComparison {
         new: Option<u32>,
     ) -> Result<()> {
         let count = from.inclusive_cardinality(to)?;
+        self.observe_count(count, old, new)
+    }
+
+    pub(crate) fn observe_count(
+        &mut self,
+        count: Cardinality129,
+        old: Option<u32>,
+        new: Option<u32>,
+    ) -> Result<()> {
         if old.is_some() {
             self.value.before = add(self.value.before, count)?;
         }

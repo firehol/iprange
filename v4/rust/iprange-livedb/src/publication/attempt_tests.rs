@@ -502,7 +502,7 @@ fn direct_spec() -> OutputSpec {
     OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id: [31; 16],
         transaction_id: 32,
         commit_nonce: [33; 16],

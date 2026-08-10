@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
+use crate::heap::Heap;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::{Mapping, PageMut, PageView};
 use crate::membership_delta::Delta;
@@ -18,7 +19,9 @@ use crate::used_bitmap::{self, Kind};
 
 mod membership;
 mod ranges;
+mod reference_batch;
 mod setup;
+pub(crate) mod unordered;
 
 pub(crate) use membership::MembershipWords;
 
@@ -31,6 +34,25 @@ pub(crate) struct OutputSpec {
     pub(crate) transaction_id: u64,
     pub(crate) commit_nonce: [u8; 16],
     pub(crate) feed_index_limit: u64,
+}
+
+impl OutputSpec {
+    pub(crate) fn fresh(
+        address_family: AddressFamily,
+        value_kind: ValueKind,
+        value_tag: ValueTag,
+        feed_index_limit: u64,
+    ) -> Result<Self> {
+        Ok(Self {
+            address_family,
+            value_kind,
+            value_tag,
+            database_id: crate::random::nonzero_128()?,
+            transaction_id: 1,
+            commit_nonce: crate::random::nonzero_128()?,
+            feed_index_limit,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -63,18 +85,43 @@ pub(crate) struct Builder {
     meta: MetaV4,
     budget: OutputBudget,
     ranges: ranges::Ranges,
+    fault_protection: bool,
+    membership_references: reference_batch::ReferenceBatch,
     metadata_staged: bool,
     failed: bool,
 }
 
 impl Builder {
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
     pub(crate) fn new_owned(
         file: File,
         spec: OutputSpec,
         budget: OutputBudget,
     ) -> std::result::Result<Self, NewFailure> {
-        let capacity = match budget
+        let mut heap = Heap::new(0);
+        Self::new_owned_with_heap(file, spec, budget, &mut heap)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn new_owned_with_heap(
+        file: File,
+        spec: OutputSpec,
+        budget: OutputBudget,
+        heap: &mut Heap,
+    ) -> std::result::Result<Self, NewFailure> {
+        Self::new_owned_with_extent(file, spec, budget, budget.max_output_pages, heap)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn new_owned_with_extent(
+        file: File,
+        spec: OutputSpec,
+        budget: OutputBudget,
+        physical_pages: u64,
+        heap: &mut Heap,
+    ) -> std::result::Result<Self, NewFailure> {
+        let output_capacity = match budget
             .max_output_pages
             .checked_mul(PAGE_SIZE as u64)
             .ok_or(Error::ArithmeticOverflow("immutable output capacity"))
@@ -82,11 +129,31 @@ impl Builder {
             Ok(capacity) => capacity,
             Err(cause) => return Err(NewFailure { file, cause }),
         };
+        let physical_capacity = match physical_pages
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(Error::ArithmeticOverflow("immutable construction extent"))
+        {
+            Ok(capacity) => capacity,
+            Err(cause) => return Err(NewFailure { file, cause }),
+        };
+        if physical_pages < budget.max_output_pages || physical_pages > MAX_PAGE_COUNT {
+            return Err(NewFailure {
+                file,
+                cause: Error::InvalidArgument("immutable construction extent is invalid"),
+            });
+        }
         if let Err(cause) = setup::require_new_output(&file, spec, budget)
-            .and_then(|()| file.set_len(capacity).map_err(Error::from))
+            .and_then(|()| file.set_len(physical_capacity).map_err(Error::from))
         {
             return Err(NewFailure { file, cause });
         }
+        let membership_references = match reference_batch::ReferenceBatch::new(
+            spec.value_kind == ValueKind::Membership,
+            heap,
+        ) {
+            Ok(batch) => batch,
+            Err(cause) => return Err(NewFailure { file, cause }),
+        };
         let mapped_file = match file.try_clone() {
             Ok(mapped_file) => mapped_file,
             Err(error) => {
@@ -96,7 +163,7 @@ impl Builder {
                 });
             }
         };
-        let mapping = match Mapping::read_write(mapped_file, capacity) {
+        let mapping = match Mapping::read_write(mapped_file, output_capacity) {
             Ok(mapping) => mapping,
             Err(cause) => return Err(NewFailure { file, cause }),
         };
@@ -115,6 +182,8 @@ impl Builder {
             meta,
             budget,
             ranges: ranges::Ranges::new(meta.address_family, meta.txn_id, meta.value_kind),
+            fault_protection: crate::worker::fault_protection_active(),
+            membership_references,
             metadata_staged: false,
             failed: false,
         })
@@ -150,6 +219,28 @@ impl Builder {
         self.mutate(|output| output.push_membership_v6_inner(from, to, words))
     }
 
+    pub(crate) fn intern_membership_value<W: MembershipWords>(&mut self, words: &W) -> Result<u32> {
+        self.mutate(|output| output.intern_membership(words))
+    }
+
+    pub(crate) fn push_interned_membership_v4(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        value: u32,
+    ) -> Result<()> {
+        self.mutate(|output| output.push_interned_membership_v4_inner(from, to, value))
+    }
+
+    pub(crate) fn push_interned_membership_v6(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        value: u32,
+    ) -> Result<()> {
+        self.mutate(|output| output.push_interned_membership_v6_inner(from, to, value))
+    }
+
     pub(crate) fn write_metadata_with_budget(
         &mut self,
         input: &[u8],
@@ -183,6 +274,10 @@ impl Builder {
 
     pub(crate) fn into_file(self) -> File {
         self.mapping.into_file()
+    }
+
+    pub(crate) fn clone_file(&self) -> Result<File> {
+        Ok(self.mapping.file().try_clone()?)
     }
 
     pub(crate) fn meta(&self) -> MetaV4 {
@@ -255,6 +350,7 @@ impl Builder {
             &mut self.mapping,
             &mut self.meta,
             self.budget,
+            self.fault_protection,
             ranges::Record { from, to, value },
         )
     }
@@ -265,6 +361,7 @@ impl Builder {
             &mut self.mapping,
             &mut self.meta,
             self.budget,
+            self.fault_protection,
             ranges::Record { from, to, value },
         )
     }
@@ -281,6 +378,7 @@ impl Builder {
             &mut self.mapping,
             &mut self.meta,
             self.budget,
+            self.fault_protection,
             ranges::Record { from, to, value },
         )?;
         self.add_membership_reference(value)
@@ -298,6 +396,41 @@ impl Builder {
             &mut self.mapping,
             &mut self.meta,
             self.budget,
+            self.fault_protection,
+            ranges::Record { from, to, value },
+        )?;
+        self.add_membership_reference(value)
+    }
+
+    fn push_interned_membership_v4_inner(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        value: u32,
+    ) -> Result<()> {
+        self.require_mode(ValueKind::Membership, AddressFamily::Ipv4)?;
+        self.ranges.push_v4(
+            &mut self.mapping,
+            &mut self.meta,
+            self.budget,
+            self.fault_protection,
+            ranges::Record { from, to, value },
+        )?;
+        self.add_membership_reference(value)
+    }
+
+    fn push_interned_membership_v6_inner(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        value: u32,
+    ) -> Result<()> {
+        self.require_mode(ValueKind::Membership, AddressFamily::Ipv6)?;
+        self.ranges.push_v6(
+            &mut self.mapping,
+            &mut self.meta,
+            self.budget,
+            self.fault_protection,
             ranges::Record { from, to, value },
         )?;
         self.add_membership_reference(value)
@@ -308,6 +441,22 @@ impl Builder {
     }
 
     fn add_membership_reference(&mut self, value: u32) -> Result<()> {
+        match self.membership_references.add(value)? {
+            reference_batch::Add::Added => return Ok(()),
+            reference_batch::Add::Direct => return self.apply_membership_reference(value),
+            reference_batch::Add::Full => {}
+        }
+        self.flush_membership_references()?;
+        match self.membership_references.add(value)? {
+            reference_batch::Add::Added => Ok(()),
+            reference_batch::Add::Full => Err(Error::Corrupt(
+                "empty membership reference batch stayed full",
+            )),
+            reference_batch::Add::Direct => self.apply_membership_reference(value),
+        }
+    }
+
+    fn apply_membership_reference(&mut self, value: u32) -> Result<()> {
         let mut state = self.membership_state();
         membership_dictionary::apply_delta(
             self,
@@ -318,6 +467,23 @@ impl Builder {
             },
         )?;
         self.store_membership_state(state);
+        crate::work::membership_refcount_batch(1);
+        Ok(())
+    }
+
+    fn flush_membership_references(&mut self) -> Result<()> {
+        if self.membership_references.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.membership_state();
+        for index in 0..self.membership_references.len() {
+            if let Some(delta) = self.membership_references.take(index) {
+                membership_dictionary::apply_delta(self, &mut state, delta)?;
+            }
+        }
+        self.membership_references.finish_flush();
+        self.store_membership_state(state);
+        crate::work::membership_refcount_batch(1);
         Ok(())
     }
 
@@ -366,14 +532,24 @@ impl Builder {
         self.meta.membership_entry_count = state.entry_count;
         self.meta.membership_id_limit = state.id_limit;
     }
+
+    #[inline]
+    fn protected_region(&self) -> Result<Option<(*const u8, usize)>> {
+        self.fault_protection
+            .then(|| self.mapping.region())
+            .transpose()
+    }
 }
 
 fn finish(output: &mut Builder) -> Result<()> {
     output.require_active()?;
-    let (range_root, range_record_count) =
-        output
-            .ranges
-            .finish(&mut output.mapping, &mut output.meta, output.budget)?;
+    output.flush_membership_references()?;
+    let (range_root, range_record_count) = output.ranges.finish(
+        &mut output.mapping,
+        &mut output.meta,
+        output.budget,
+        output.fault_protection,
+    )?;
     output.meta.range_root = range_root;
     output.meta.range_record_count = range_record_count;
     seal_pages(output)?;
@@ -383,8 +559,8 @@ fn finish(output: &mut Builder) -> Result<()> {
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(Error::ArithmeticOverflow("immutable output length"))?;
     output.mapping.resize(bytes)?;
-    let region = output.mapping.region()?;
-    crate::worker::probe_output_region(region, || {
+    let region = output.protected_region()?;
+    with_output_protection(region, || {
         output
             .meta
             .encode_mapped(output.mapping.page_mut(0, output.meta.page_count)?)?;
@@ -410,10 +586,10 @@ fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
 }
 
 fn seal_pages(output: &mut Builder) -> Result<()> {
-    for page_number in 2..output.meta.page_count {
-        let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;
-        let region = output.mapping.region()?;
-        crate::worker::probe_output_region(region, || {
+    let region = output.protected_region()?;
+    with_output_protection(region, || {
+        for page_number in 2..output.meta.page_count {
+            let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;
             let mut page = output
                 .mapping
                 .page_mut(page_number, output.meta.page_count)?;
@@ -421,10 +597,10 @@ fn seal_pages(output: &mut Builder) -> Result<()> {
             if !page_header::owned_by(view, output.meta.txn_id) {
                 return Err(Error::Corrupt("immutable output page ownership is invalid"));
             }
-            page_checksum::seal_mapped(&mut page)
-        })?;
-    }
-    Ok(())
+            page_checksum::seal_mapped(&mut page)?;
+        }
+        Ok(())
+    })
 }
 
 impl Store for Builder {
@@ -450,7 +626,8 @@ impl Store for Builder {
         F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
     {
         require_output_page(page_number, self.meta.page_count)?;
-        crate::worker::probe_output(&self.mapping, || {
+        let region = self.protected_region()?;
+        with_output_protection(region, || {
             inspect(self.mapping.page(page_number, self.meta.page_count)?)
         })
     }
@@ -464,8 +641,8 @@ impl Store for Builder {
         F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
     {
         require_output_page(page_number, self.meta.page_count)?;
-        let region = self.mapping.region()?;
-        crate::worker::probe_output_region(region, || {
+        let region = self.protected_region()?;
+        with_output_protection(region, || {
             let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
             let result = update(&mut page)?;
             require_output_owner(page.view(), self.meta.txn_id)?;
@@ -479,8 +656,8 @@ impl Store for Builder {
     {
         require_output_page(source, self.meta.page_count)?;
         require_output_page(destination, self.meta.page_count)?;
-        let region = self.mapping.region()?;
-        crate::worker::probe_output_region(region, || {
+        let region = self.protected_region()?;
+        with_output_protection(region, || {
             let (source, mut destination) =
                 self.mapping
                     .page_pair(source, destination, self.meta.page_count)?;
@@ -495,6 +672,17 @@ impl Store for Builder {
         Err(Error::Corrupt(
             "immutable output attempted to discard an append-only page",
         ))
+    }
+}
+
+#[inline]
+fn with_output_protection<T>(
+    region: Option<(*const u8, usize)>,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match region {
+        Some(region) => crate::worker::probe_output_region(region, operation),
+        None => operation(),
     }
 }
 

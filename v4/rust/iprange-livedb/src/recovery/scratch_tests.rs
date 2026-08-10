@@ -177,7 +177,7 @@ fn meta() -> MetaV4 {
     MetaV4 {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
-        value_tag: ValueTag::RETENTION,
+        value_tag: ValueTag::FIRST_SEEN,
         database_id: [0x11; 16],
         txn_id: 9,
         commit_nonce: [0x22; 16],

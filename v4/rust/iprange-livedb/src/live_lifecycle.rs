@@ -98,7 +98,7 @@ mod freebsd_tests {
         let create = CreateResult {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
-            value_tag: ValueTag::RETENTION,
+            value_tag: ValueTag::FIRST_SEEN,
             database_id: [1; 16],
             commit_nonce: [1; 16],
             sidecar_id: [2; 16],

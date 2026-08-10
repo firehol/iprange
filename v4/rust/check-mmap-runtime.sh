@@ -78,7 +78,10 @@ fi
 
 require_mapping() {
     local fragment=$1
-    if ! rg '^[0-9]+ mmap\(' "$trace" | rg --fixed-strings --quiet "$fragment"; then
+    # One process avoids pipefail turning an early successful match into SIGPIPE.
+    if ! awk -v fragment="$fragment" \
+        '$0 ~ /^[0-9]+ mmap\(/ && index($0, fragment) { found = 1; exit }
+         END { exit !found }' "$trace"; then
         fail "runtime probe did not map expected artifact: $fragment"
     fi
 }

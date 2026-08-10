@@ -6,7 +6,7 @@ use crate::range_cursor::RangeDirection;
 use crate::reader_core::ReaderCore;
 use crate::{
     CancellationToken, CloseOutcome, DatabaseInfo, FeedEntry, ImmutableReader, LiveReader,
-    MembershipImportSource,
+    MatchingFeedSink, MatchingFeedsReport, MembershipImportSource, MembershipQuery,
 };
 
 pub use crate::reader_core::{MembershipToken, ReaderCursor, ReaderCursorItem};
@@ -55,6 +55,24 @@ impl Reader {
 
     pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
         self.core()?.read().lookup_feed(name)
+    }
+
+    pub fn matching_feeds_v4<S: MatchingFeedSink>(
+        &self,
+        address: Ipv4Key,
+        sink: &mut S,
+        cancellation: &CancellationToken,
+    ) -> Result<MatchingFeedsReport> {
+        MembershipQuery::new(self.core()?)?.matching_feeds_v4(address, sink, cancellation)
+    }
+
+    pub fn matching_feeds_v6<S: MatchingFeedSink>(
+        &self,
+        address: Ipv6Key,
+        sink: &mut S,
+        cancellation: &CancellationToken,
+    ) -> Result<MatchingFeedsReport> {
+        MembershipQuery::new(self.core()?)?.matching_feeds_v6(address, sink, cancellation)
     }
 
     pub fn open_direct_cursor(&self, direction: RangeDirection) -> Result<ReaderCursor> {
@@ -227,6 +245,14 @@ impl Reader {
         }
     }
 
+    pub(super) fn history_source(&self) -> Result<crate::HistoryProjectionSource<'_>> {
+        match &self.inner {
+            ReaderInner::Immutable(reader) => Ok(crate::HistoryProjectionSource::Immutable(reader)),
+            ReaderInner::Live(reader) => Ok(crate::HistoryProjectionSource::Live(reader)),
+            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
+        }
+    }
+
     fn with_membership_v4<T>(
         &self,
         address: Ipv4Key,
@@ -243,7 +269,7 @@ impl Reader {
         operation(self.core()?.read().lookup_membership_v6(address)?)
     }
 
-    fn core(&self) -> Result<&ReaderCore> {
+    pub(super) fn core(&self) -> Result<&ReaderCore> {
         match &self.inner {
             ReaderInner::Immutable(reader) => Ok(reader.core()),
             ReaderInner::Live(reader) => reader.core(),

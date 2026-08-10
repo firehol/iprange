@@ -35,6 +35,8 @@ typedef struct iprange_v4_abi1_membership_builder iprange_v4_abi1_membership_bui
 typedef struct iprange_v4_abi1_membership_ref iprange_v4_abi1_membership_ref;
 typedef struct iprange_v4_abi1_cleanup_guard iprange_v4_abi1_cleanup_guard;
 typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
+typedef struct iprange_v4_abi1_membership_scope iprange_v4_abi1_membership_scope;
+typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_algebra;
 
 /*
  * Generation-1 pointer and ownership contract
@@ -81,6 +83,8 @@ exclude = [
     "BorrowedMembershipViewHandle",
     "MembershipBuilderHandle",
     "MembershipRefHandle",
+    "MembershipScopeHandle",
+    "MembershipAlgebraHandle",
     "ErrorHandle",
     "ReportHandle",
     "CleanupGuardHandle",
@@ -118,6 +122,8 @@ remove_underscores = false
 "ErrorHandle" = "error"
 "FeedInfo" = "feed_info"
 "FeedSinkFn" = "feed_sink_fn"
+"FirstSeenRemoval" = "first_seen_removal"
+"FirstSeenRemovalSinkFn" = "first_seen_removal_sink_fn"
 "FinishInputReport" = "finish_input_report"
 "HousekeepingArtifact" = "housekeeping_artifact"
 "HousekeepingPayload" = "housekeeping_payload"
@@ -132,6 +138,8 @@ remove_underscores = false
 "MembershipBuilderHandle" = "membership_builder"
 "MembershipRange" = "membership_range"
 "MembershipRefHandle" = "membership_ref"
+"MembershipScopeHandle" = "membership_scope"
+"MembershipAlgebraHandle" = "membership_algebra"
 "MembershipSinkFn" = "membership_sink_fn"
 "MembershipViewHandle" = "membership_view"
 "MutableByteSlice" = "mutable_byte_slice"
@@ -168,6 +176,39 @@ remove_underscores = false
 "ValidationReport" = "validation_report"
 "WriterFeedRefHandle" = "writer_feed_ref"
 "WriterHandle" = "writer"
+"MembershipQueryBudget" = "membership_query_budget"
+"DirectJoinBudget" = "direct_join_budget"
+"FeedNameValue" = "feed_name_value"
+"FeedPairInput" = "feed_pair_input"
+"MatchingFeedsReport" = "matching_feeds_report"
+"FeedCardinality" = "feed_cardinality"
+"FeedOverlap" = "feed_overlap"
+"MembershipAggregationReport" = "membership_aggregation_report"
+"DirectJoinCell" = "direct_join_cell"
+"DirectJoinReport" = "direct_join_report"
+"MembershipCrossCell" = "membership_cross_cell"
+"UncoveredFeed" = "uncovered_feed"
+"MembershipJoinReport" = "membership_join_report"
+"FeedNameSinkFn" = "feed_name_sink_fn"
+"FeedCardinalitySinkFn" = "feed_cardinality_sink_fn"
+"FeedOverlapSinkFn" = "feed_overlap_sink_fn"
+"DirectJoinSinkFn" = "direct_join_sink_fn"
+"MembershipCrossSinkFn" = "membership_cross_sink_fn"
+"UncoveredFeedSinkFn" = "uncovered_feed_sink_fn"
+"HistoryWindowInput" = "history_window_input"
+"HistoryWindowReport" = "history_window_report"
+"HistoryProjectionReport" = "history_projection_report"
+"OptionalByteSlice" = "optional_byte_slice"
+"ImmutableFeedBudget" = "immutable_feed_budget"
+"ImmutableFeedReport" = "immutable_feed_report"
+"MembershipAlgebraBudget" = "membership_algebra_budget"
+"AlgebraOutputBudget" = "algebra_output_budget"
+"FeedSelectionInput" = "feed_selection_input"
+"AlgebraSetOperationInput" = "algebra_set_operation_input"
+"AlgebraOutputModeInput" = "algebra_output_mode_input"
+"AlgebraCountReport" = "algebra_count_report"
+"AlgebraComparisonReport" = "algebra_comparison_report"
+"AlgebraSetReport" = "algebra_set_report"
 
 [fn]
 prefix = "IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL"

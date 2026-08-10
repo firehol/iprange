@@ -7,6 +7,8 @@
 
 mod abi;
 mod abi_extra;
+mod abi_sdk;
+mod algebra_ops;
 mod callback;
 mod cursor;
 mod error;
@@ -14,6 +16,8 @@ mod export;
 mod facts;
 mod feed_batch;
 mod handle;
+mod history_ops;
+mod immutable_feed_ops;
 mod ip;
 mod lifecycle;
 mod lifecycle_ops;
@@ -23,6 +27,7 @@ mod membership;
 mod obligation;
 mod path;
 mod publication_ops;
+mod query;
 mod reader;
 mod registry;
 mod report;
@@ -36,10 +41,12 @@ mod writer;
 
 pub use abi::*;
 pub use abi_extra::*;
+pub use abi_sdk::*;
 pub use error::*;
 pub use handle::{
-    BorrowedMembershipViewHandle, CursorHandle, MembershipBuilderHandle, MembershipRefHandle,
-    MembershipViewHandle, ReaderHandle, WriterFeedRefHandle, WriterHandle,
+    BorrowedMembershipViewHandle, CursorHandle, MembershipAlgebraHandle, MembershipBuilderHandle,
+    MembershipRefHandle, MembershipScopeHandle, MembershipViewHandle, ReaderHandle,
+    WriterFeedRefHandle, WriterHandle,
 };
 pub use obligation::{CleanupGuardHandle, ResidueHandle};
 pub use registry::*;
@@ -47,3 +54,5 @@ pub use report::ReportHandle;
 
 #[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, unix))]
+mod tests_sdk;

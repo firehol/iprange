@@ -4,6 +4,8 @@
 mod catalog_ops;
 #[path = "draft_store/feed_merge.rs"]
 mod feed_merge;
+#[path = "draft_store/history.rs"]
+mod history;
 #[path = "draft_store/import_cache.rs"]
 mod import_cache;
 #[path = "draft_store/import_merge.rs"]
@@ -14,10 +16,10 @@ mod membership_ops;
 mod metadata_ops;
 #[path = "draft_store/range_merge.rs"]
 mod range_merge;
-#[path = "draft_store/retention.rs"]
-mod retention;
 #[path = "draft_store/storage.rs"]
 mod storage;
+#[path = "draft_store/timestamp_refresh.rs"]
+mod timestamp_refresh;
 #[path = "draft_store/workflow.rs"]
 mod workflow_ops;
 
@@ -39,10 +41,11 @@ pub(crate) struct PageBudget {
 }
 
 pub(crate) use feed_merge::FeedMerge;
+pub(crate) use history::{HistoryMerge, HistoryPlan};
 pub(crate) use import_cache::{ImportCache, ImportWords};
 pub(crate) use import_merge::{ImportMerge, TranslatedMembership};
 pub(crate) use membership_ops::MembershipHandle;
-pub(crate) use retention::RetentionMerge;
+pub(crate) use timestamp_refresh::TimestampMerge;
 
 #[derive(Debug)]
 pub(crate) struct Draft {

@@ -1,8 +1,9 @@
 # iprange v4 C ABI Generation 1
 
-**Status:** Normative Phase-1 binding rules and frozen generation-1 symbol/numeric surface; exact generated prototype/layout manifest is an implementation deliverable after Rust proof
+**Status:** Normative Phase-1 binding rules and frozen generation-1 symbol,
+numeric, prototype, and layout surface
 **ABI generation:** 1
-**Last updated:** 2026-07-27
+**Last updated:** 2026-08-10
 
 This document defines the stable C boundary exported by the Rust v4 engine. The
 semantic behavior and durable file contract remain normative in
@@ -22,10 +23,11 @@ The ABI has three checked artifacts:
    structure size/alignment/offsets, callback signatures, and ownership; and
 3. native C compile, link, and behavior tests against the built Rust library.
 
-The header and manifest are generated only after the corresponding Rust
-Phase-1 surface is implemented and proven. Once checked in, an incompatible
-change requires a new ABI generation and symbol prefix; generation 1 is never
-silently regenerated with incompatible declarations.
+The checked header and manifest are generated from the implemented Rust surface
+and are the exact mechanical authority. Before the first v4 release, an approved
+incompatible correction replaces this unreleased generation-1 contract rather
+than adding compatibility. After release, an incompatible change requires a new
+ABI generation and symbol prefix.
 
 ## ABI identity and calling convention
 
@@ -38,9 +40,9 @@ silently regenerated with incompatible declarations.
   and counts are `uint64_t` unless the v4 semantic contract fixes a narrower
   type. `size_t`, C enums, bitfields, `bool`, `long`, and compiler-dependent
   packing are not part of the ABI.
-- Every extensible input/output structure begins with `uint32_t abi_version`
-  and `uint32_t struct_size`. Unknown trailing input bytes must be zero. A caller
-  may pass a supported smaller historical size; required fields must be present.
+- Every versioned input/output structure begins with `uint32_t abi_version`
+  and `uint32_t struct_size`. Generation 1 accepts exactly its generated size;
+  the unreleased ABI has no historical smaller layouts to preserve.
 - Reserved fields and padding named by the header must be zero on input and are
   written as zero on output.
 
@@ -113,7 +115,8 @@ guard only when no factual report is returned. The guard is never duplicated.
 Stateful and variable-size values are opaque handles. Generation 1 includes
 opaque families for readers, writers, cursors, writer feed references,
 membership views/references/builders, variable operation results, typed errors,
-cleanup guards, and residue inspection. Reader feed enumeration/name lookup
+cleanup guards, residue inspection, reusable named membership scopes, and
+reusable multi-source membership algebra. Reader feed enumeration/name lookup
 copies `{name,index}` entries and does not require a reader feed-reference
 handle. No declaration exposes a Rust struct or trait object.
 
@@ -121,8 +124,8 @@ handle. No declaration exposes a Rust struct or trait object.
   released only by its matching ABI function.
 - Borrowed buffers, batches, names, and records are valid only for the documented
   call or callback. C never frees them and must not retain their pointers.
-- Reader children borrow their parent. Reader Close returns `HandleBusy` while a
-  cursor, membership view, or other persistent child exists and
+- Reader children retain their parent. Reader Close returns `HandleBusy` while a
+  cursor, membership view, membership scope, or algebra-retained scope exists and
   admits no new child after Close begins.
 - Transaction-bound feed/membership references become invalid after commit,
   abort, failed whole-draft cleanup, or writer reopen even when the same logical
@@ -201,7 +204,7 @@ surface in these groups:
   ensure/lookup/enumerate/rename/delete, membership building, and
   Replace/Union/Difference/Intersection/Xor range application;
 - high-level named-feed create/replace/delete/rename, direct replacement,
-  retention refresh, and name-based multi-feed membership import;
+  first-seen/last-seen refresh, and name-based multi-feed membership import;
 - repeated bounded range ingestion, `FinishInput` statistics, one metadata stage,
   `Commit`, `Abort`, and pending-writer Close;
 - bounded `Reclaim`;
@@ -212,10 +215,20 @@ surface in these groups:
 - exact cleanup-ledger, coordination-cleanup, access-state, and Windows
   housekeeping inspection/removal.
 
+The update-ipsets SDK surface additionally includes:
+
+- one-inode immutable single-feed creation from unordered batched coverage;
+- exact one-pass projection from one `last_seen` direct database into several
+  named history feeds prepared for the normal writer commit;
+- reusable all-feed or named-feed scopes, point matching, exact cardinality and
+  overlap aggregation, and ordered direct/membership provider joins; and
+- reusable global-name algebra over retained scopes, including analytical
+  count/compare and direct immutable publication in preserved-feed or flat mode.
+
 The ABI does not expose page numbers, roots, COW paths, free/retirement storage,
 feed bit positions as mutation authority, membership IDs, bitmap ownership,
-dictionary hashes/refcounts, mmap pointers, Rust allocation, or Phase-2
-multi-file algebra.
+dictionary hashes/refcounts, mmap pointers, Rust allocation, or a second
+binding-specific algebra implementation.
 
 Explicit validation and recovery may internally use the version-matched
 SDK-provided fault worker required by the binary-format contract. The worker is
@@ -366,8 +379,11 @@ listed.
   `FEED_USED_BITMAP=11`, `MEMBERSHIP_USED_BITMAP=12`,
   `RETIREMENT_TREE=13`, `RETIREMENT_BLOB=14`;
 - logical change: `CHANGED=1`, `NO_CHANGE=2`;
+- direct semantic: `NOT_APPLICABLE=0`, `GENERIC=1`, `FIRST_SEEN=2`,
+  `LAST_SEEN=3`;
 - workflow: `CREATE_FEED=1`, `REPLACE_FEED=2`, `DIRECT_REPLACEMENT=3`,
-  `RETENTION_REFRESH=4`, `MEMBERSHIP_IMPORT=5`; and
+  `FIRST_SEEN_REFRESH=4`, `LAST_SEEN_REFRESH=5`,
+  `MEMBERSHIP_IMPORT=6`; and
 - report kind: `SCAN=1`, `FINISH_INPUT=2`, `COMMIT=3`,
   `COMMIT_RESOLUTION=4`, `ABORT=5`, `CLOSE=6`, `RECLAIM=7`, `CREATE=8`,
   `LIVE_TRANSITION=9`, `CREATE_RESOLUTION=10`,
@@ -527,6 +543,8 @@ iprange_v4_abi1_membership_builder
 iprange_v4_abi1_membership_ref
 iprange_v4_abi1_cleanup_guard
 iprange_v4_abi1_residue
+iprange_v4_abi1_membership_scope
+iprange_v4_abi1_membership_algebra
 ```
 
 It declares exact callback typedefs named:
@@ -537,12 +555,19 @@ iprange_v4_abi1_coverage_source_fn
 iprange_v4_abi1_direct_source_fn
 iprange_v4_abi1_coverage_sink_fn
 iprange_v4_abi1_direct_sink_fn
+iprange_v4_abi1_first_seen_removal_sink_fn
 iprange_v4_abi1_membership_sink_fn
 iprange_v4_abi1_feed_sink_fn
 iprange_v4_abi1_validation_finding_sink_fn
 iprange_v4_abi1_recovery_unknown_sink_fn
 iprange_v4_abi1_artifact_sink_fn
 iprange_v4_abi1_housekeeping_sink_fn
+iprange_v4_abi1_feed_name_sink_fn
+iprange_v4_abi1_feed_cardinality_sink_fn
+iprange_v4_abi1_feed_overlap_sink_fn
+iprange_v4_abi1_direct_join_sink_fn
+iprange_v4_abi1_membership_cross_sink_fn
+iprange_v4_abi1_uncovered_feed_sink_fn
 ```
 
 The source callbacks receive context, mutable engine-lent record array/capacity,
@@ -552,6 +577,12 @@ callback-failure output, and return the frozen sink outcome. Cancellation
 receives only context and returns `uint8_t` zero or one; other values are treated
 as one. Exact C declarations and offsets are emitted in the checked generated
 header and machine manifest before the first ABI-bearing build.
+
+A first-seen removal record contains one normal ABI range, the old
+`first_seen:u32`, zero reserved bytes, and exact `Cardinality129` interval
+length. `writer_finish_first_seen_with_removals` is valid only for an active
+first-seen workflow and emits bounded batches during its required merge; sink
+failure or `Stop` aborts the unpublished draft.
 
 ## Frozen generation-1 symbol manifest
 
@@ -576,6 +607,8 @@ iprange_v4_abi1_error_destroy
 iprange_v4_abi1_report_kind
 iprange_v4_abi1_report_get_scan
 iprange_v4_abi1_report_get_finish_input
+iprange_v4_abi1_report_get_history_projection
+iprange_v4_abi1_report_get_history_window
 iprange_v4_abi1_report_get_commit
 iprange_v4_abi1_report_get_commit_resolution
 iprange_v4_abi1_report_get_abort
@@ -607,6 +640,7 @@ iprange_v4_abi1_report_destroy
 
 ```text
 iprange_v4_abi1_create_live
+iprange_v4_abi1_create_immutable_feed
 iprange_v4_abi1_initialize_live
 iprange_v4_abi1_reset_live_coordination
 iprange_v4_abi1_resolve_create_live
@@ -661,6 +695,22 @@ iprange_v4_abi1_writer_metadata_query
 iprange_v4_abi1_writer_metadata_read
 iprange_v4_abi1_writer_set_metadata_json
 iprange_v4_abi1_writer_clear_metadata_json
+iprange_v4_abi1_reader_all_feeds_scope
+iprange_v4_abi1_reader_named_feeds_scope
+iprange_v4_abi1_reader_matching_feeds
+iprange_v4_abi1_membership_scope_feeds
+iprange_v4_abi1_membership_scope_aggregate
+iprange_v4_abi1_membership_scope_join_direct
+iprange_v4_abi1_membership_scope_join_membership
+iprange_v4_abi1_membership_scope_close
+iprange_v4_abi1_membership_scope_destroy
+iprange_v4_abi1_membership_algebra_create
+iprange_v4_abi1_membership_algebra_feeds
+iprange_v4_abi1_membership_algebra_count
+iprange_v4_abi1_membership_algebra_compare
+iprange_v4_abi1_membership_algebra_publish_set
+iprange_v4_abi1_membership_algebra_close
+iprange_v4_abi1_membership_algebra_destroy
 ```
 
 ### Advanced logical operations
@@ -693,11 +743,14 @@ iprange_v4_abi1_writer_begin_replace_feed
 iprange_v4_abi1_writer_delete_feed
 iprange_v4_abi1_writer_rename_feed
 iprange_v4_abi1_writer_begin_direct_replacement
-iprange_v4_abi1_writer_begin_retention_refresh
+iprange_v4_abi1_writer_begin_first_seen_refresh
+iprange_v4_abi1_writer_begin_last_seen_refresh
 iprange_v4_abi1_writer_begin_membership_import
+iprange_v4_abi1_writer_project_history
 iprange_v4_abi1_writer_add_coverage_ranges
 iprange_v4_abi1_writer_add_direct_ranges
 iprange_v4_abi1_writer_finish_input
+iprange_v4_abi1_writer_finish_first_seen_with_removals
 iprange_v4_abi1_writer_commit
 iprange_v4_abi1_writer_abort
 iprange_v4_abi1_writer_reclaim
@@ -726,10 +779,10 @@ iprange_v4_abi1_list_housekeeping_artifacts
 iprange_v4_abi1_remove_housekeeping_artifact
 ```
 
-The exact prototype/layout manifest remains an implementation deliverable after
-the Rust Phase-1 API is proven. It must use only the frozen symbols and semantics
-above, and its first checked-in version closes the remaining mechanical sizes,
-offsets, and function parameter order before any ABI-bearing release artifact is
-built. This mechanical generation step is not an open product decision, but an
-ABI build cannot pass acceptance until the generated header and machine manifest
-are complete and clean.
+The exact prototype/layout manifest remains the committed mechanical authority.
+It freezes all 158 functions, 14 opaque handle families, 18 callback types,
+numeric constants, structure layouts, offsets, and function parameter order.
+Tests regenerate and compare both artifacts, inspect the shared-library exports,
+compile the header as C11 and C++17, and execute the native C behavior programs.
+An ABI-bearing build cannot pass acceptance when any generated declaration or
+manifest entry differs.

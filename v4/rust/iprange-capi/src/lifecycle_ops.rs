@@ -254,7 +254,7 @@ fn decode_commit_mode(source_mode: u32) -> Result<CommitResolutionMode, Boundary
     }
 }
 
-fn decode_family(value: u32) -> Result<AddressFamily, BoundaryError> {
+pub(crate) fn decode_family(value: u32) -> Result<AddressFamily, BoundaryError> {
     u8::try_from(value)
         .ok()
         .and_then(AddressFamily::from_wire)
@@ -268,7 +268,7 @@ fn decode_value_kind(value: u32) -> Result<ValueKind, BoundaryError> {
         .ok_or_else(|| BoundaryError::invalid_enum("unknown value kind"))
 }
 
-unsafe fn decode_value_tag(value: ByteSlice) -> Result<ValueTag, BoundaryError> {
+pub(crate) unsafe fn decode_value_tag(value: ByteSlice) -> Result<ValueTag, BoundaryError> {
     // SAFETY: the tagged byte slice is validated before it is read.
     let bytes = unsafe { input_slice(value.pointer, value.length)? };
     ValueTag::new(bytes).ok_or_else(|| {

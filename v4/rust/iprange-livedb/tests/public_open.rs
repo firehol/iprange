@@ -35,7 +35,7 @@ fn single_range_image() -> Vec<u8> {
     meta[10] = 12;
     meta[11] = AddressFamily::Ipv6 as u8;
     meta[12] = ValueKind::Direct as u8;
-    meta[16..32].copy_from_slice(ValueTag::RETENTION.as_wire());
+    meta[16..32].copy_from_slice(ValueTag::FIRST_SEEN.as_wire());
     meta[32..48].fill(1);
     meta[48..56].copy_from_slice(&1u64.to_le_bytes());
     meta[56..72].fill(2);
@@ -90,7 +90,7 @@ fn public_immutable_open_and_direct_lookup() {
     let info = reader.info();
     assert_eq!(info.address_family, AddressFamily::Ipv6);
     assert_eq!(info.value_kind, ValueKind::Direct);
-    assert_eq!(info.value_tag, ValueTag::RETENTION);
+    assert_eq!(info.value_tag, ValueTag::FIRST_SEEN);
     assert_eq!(info.transaction_id, 1);
     assert_eq!(info.page_count, 3);
     assert_eq!(info.range_record_count, 1);

@@ -302,7 +302,7 @@ fn populated_direct(files: TestFiles, reader_capacity: u32) -> TestFiles {
         &files.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         reader_capacity,
         &CancellationToken::new(),
     )

@@ -156,6 +156,58 @@ pub(crate) fn reference_matches<S: Store>(
     Ok(found.record.word_count == word_count)
 }
 
+pub(crate) fn contains_indexes<S: Store>(
+    store: &S,
+    id_root: u32,
+    id: u32,
+    indexes: &[u32],
+    output: &mut [u8],
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<()> {
+    if indexes.len() != output.len() {
+        return Err(Error::InvalidArgument(
+            "membership index selection is not canonical",
+        ));
+    }
+    for (work, pair) in indexes.windows(2).enumerate() {
+        if work & 4095 == 4095 {
+            cancellation.check()?;
+        }
+        if pair[0] >= pair[1] {
+            return Err(Error::InvalidArgument(
+                "membership index selection is not canonical",
+            ));
+        }
+    }
+    output.fill(0);
+    if id == 0 || indexes.is_empty() {
+        return Ok(());
+    }
+    let found =
+        find_record(store, id_root, id)?.ok_or(Error::Corrupt("membership ID is missing"))?;
+    let mut cached = None;
+    for (work, (&index, present)) in indexes.iter().zip(output).enumerate() {
+        if work & 4095 == 4095 {
+            cancellation.check()?;
+        }
+        let word_index = index / 64;
+        if word_index >= found.record.word_count {
+            break;
+        }
+        let word = match cached {
+            Some((cached_index, word)) if cached_index == word_index => word,
+            _ => {
+                let mut value = [0u64; 1];
+                read_record_words(store, &found, word_index, &mut value)?;
+                cached = Some((word_index, value[0]));
+                value[0]
+            }
+        };
+        *present = u8::from(word & (1u64 << (index % 64)) != 0);
+    }
+    Ok(())
+}
+
 pub(super) fn intern<S: RetiringStore, W: Words<S>>(
     store: &mut S,
     state: &mut State,

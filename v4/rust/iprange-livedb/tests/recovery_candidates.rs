@@ -99,7 +99,7 @@ fn live_inspection_checks_cancellation_across_reader_capacity() {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         64,
         &CancellationToken::new(),
     )
@@ -282,7 +282,7 @@ fn populated(paths: Paths) -> Paths {
         &paths.live,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
     )

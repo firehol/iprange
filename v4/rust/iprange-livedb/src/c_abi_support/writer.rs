@@ -8,11 +8,12 @@ use crate::live_writer::{
     MembershipImportStateSource, MembershipState, PreparedState,
 };
 use crate::range_cursor::DirectRange;
-use crate::source::SliceSource;
+use crate::source::RangeSource;
 use crate::workflow::{AddressRange, WorkflowKind, WorkflowReport};
 use crate::{
-    AbortResult, CancellationToken, CommitResult, FeedName, FeedRef, LiveWriter,
-    MembershipOperation, MembershipRef, ReclaimResult, TransactionBudget,
+    AbortResult, AddressFamily, CancellationToken, CommitResult, DirectSemantic, FeedName, FeedRef,
+    FirstSeenRemovalSink, HistoryProjectionReport, HistoryWindow, LiveWriter, MembershipOperation,
+    MembershipRef, ReclaimResult, TransactionBudget,
 };
 
 use super::Reader;
@@ -35,7 +36,7 @@ enum Operation {
     ExactFeed(ExactFeedState),
     ExactDirect {
         state: ExactDirectState,
-        retention_value: Option<u32>,
+        input: ExactDirectInput,
     },
     Import {
         source: Arc<Reader>,
@@ -44,7 +45,18 @@ enum Operation {
     Prepared(PreparedState),
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExactDirectInput {
+    Replacement,
+    FirstSeen { refresh_value: u32 },
+    LastSeen { refresh_value: u32, cutoff: u32 },
+}
+
 impl Writer {
+    pub fn address_family(&self) -> AddressFamily {
+        self.inner.address_family()
+    }
+
     pub fn open(
         path: impl AsRef<Path>,
         budget: TransactionBudget,
@@ -304,20 +316,47 @@ impl Writer {
             state: self
                 .inner
                 .begin_exact_direct_state(WorkflowKind::DirectReplacement, cancellation)?,
-            retention_value: None,
+            input: ExactDirectInput::Replacement,
         };
         Ok(())
     }
 
-    pub fn begin_retention_refresh(
+    pub fn begin_first_seen_refresh(
         &mut self,
         value: u32,
         cancellation: &CancellationToken,
     ) -> Result<()> {
         self.require_clean()?;
         self.operation = Operation::ExactDirect {
-            state: self.inner.begin_retention_state(cancellation)?,
-            retention_value: Some(value),
+            state: self.inner.begin_timestamp_state(
+                DirectSemantic::FirstSeen,
+                WorkflowKind::FirstSeenRefresh,
+                cancellation,
+            )?,
+            input: ExactDirectInput::FirstSeen {
+                refresh_value: value,
+            },
+        };
+        Ok(())
+    }
+
+    pub fn begin_last_seen_refresh(
+        &mut self,
+        refresh_value: u32,
+        cutoff: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        self.require_clean()?;
+        self.operation = Operation::ExactDirect {
+            state: self.inner.begin_timestamp_state(
+                DirectSemantic::LastSeen,
+                WorkflowKind::LastSeenRefresh,
+                cancellation,
+            )?,
+            input: ExactDirectInput::LastSeen {
+                refresh_value,
+                cutoff,
+            },
         };
         Ok(())
     }
@@ -337,58 +376,123 @@ impl Writer {
         Ok(())
     }
 
-    pub fn add_coverage_v4(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
-        let mut source = SliceSource::new(ranges);
-        match &mut self.operation {
-            Operation::ExactFeed(state) => state.add_ranges_v4(&mut self.inner, &mut source),
+    pub fn project_history(
+        &mut self,
+        source: Arc<Reader>,
+        windows: &[HistoryWindow],
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryProjectionReport> {
+        self.require_clean()?;
+        let finished =
+            self.inner
+                .project_history_state(source.history_source()?, windows, cancellation)?;
+        if let Some(state) = finished.state {
+            self.operation = Operation::Prepared(state);
+        }
+        Ok(finished.report)
+    }
+
+    pub fn project_history_from<I>(
+        &mut self,
+        source: Arc<Reader>,
+        window_count: usize,
+        windows: I,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryProjectionReport>
+    where
+        I: IntoIterator<Item = Result<HistoryWindow>>,
+    {
+        self.require_clean()?;
+        let finished = self.inner.project_history_state_from(
+            source.history_source()?,
+            window_count,
+            windows,
+            cancellation,
+        )?;
+        if let Some(state) = finished.state {
+            self.operation = Operation::Prepared(state);
+        }
+        Ok(finished.report)
+    }
+
+    pub fn add_coverage_v4<S>(&mut self, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<AddressRange<Ipv4Key>>,
+    {
+        let result = match &mut self.operation {
+            Operation::ExactFeed(state) => state.add_ranges_v4(&mut self.inner, source),
             Operation::ExactDirect {
                 state,
-                retention_value: Some(value),
-            } => state.add_retention_v4(&mut self.inner, *value, &mut source),
+                input:
+                    ExactDirectInput::FirstSeen {
+                        refresh_value: value,
+                    }
+                    | ExactDirectInput::LastSeen {
+                        refresh_value: value,
+                        ..
+                    },
+            } => state.add_timestamp_v4(&mut self.inner, *value, source),
             _ => Err(Error::WrongState(
                 "coverage input does not match the active workflow",
             )),
-        }
+        };
+        self.finish_source_input(result)
     }
 
-    pub fn add_coverage_v6(&mut self, ranges: &[AddressRange<Ipv6Key>]) -> Result<()> {
-        let mut source = SliceSource::new(ranges);
-        match &mut self.operation {
-            Operation::ExactFeed(state) => state.add_ranges_v6(&mut self.inner, &mut source),
+    pub fn add_coverage_v6<S>(&mut self, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<AddressRange<Ipv6Key>>,
+    {
+        let result = match &mut self.operation {
+            Operation::ExactFeed(state) => state.add_ranges_v6(&mut self.inner, source),
             Operation::ExactDirect {
                 state,
-                retention_value: Some(value),
-            } => state.add_retention_v6(&mut self.inner, *value, &mut source),
+                input:
+                    ExactDirectInput::FirstSeen {
+                        refresh_value: value,
+                    }
+                    | ExactDirectInput::LastSeen {
+                        refresh_value: value,
+                        ..
+                    },
+            } => state.add_timestamp_v6(&mut self.inner, *value, source),
             _ => Err(Error::WrongState(
                 "coverage input does not match the active workflow",
             )),
-        }
+        };
+        self.finish_source_input(result)
     }
 
-    pub fn add_direct_v4(&mut self, ranges: &[DirectRange<Ipv4Key>]) -> Result<()> {
-        let mut source = SliceSource::new(ranges);
-        match &mut self.operation {
+    pub fn add_direct_v4<S>(&mut self, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<DirectRange<Ipv4Key>>,
+    {
+        let result = match &mut self.operation {
             Operation::ExactDirect {
                 state,
-                retention_value: None,
-            } => state.add_direct_v4(&mut self.inner, &mut source),
+                input: ExactDirectInput::Replacement,
+            } => state.add_direct_v4(&mut self.inner, source),
             _ => Err(Error::WrongState(
                 "direct input does not match the active workflow",
             )),
-        }
+        };
+        self.finish_source_input(result)
     }
 
-    pub fn add_direct_v6(&mut self, ranges: &[DirectRange<Ipv6Key>]) -> Result<()> {
-        let mut source = SliceSource::new(ranges);
-        match &mut self.operation {
+    pub fn add_direct_v6<S>(&mut self, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<DirectRange<Ipv6Key>>,
+    {
+        let result = match &mut self.operation {
             Operation::ExactDirect {
                 state,
-                retention_value: None,
-            } => state.add_direct_v6(&mut self.inner, &mut source),
+                input: ExactDirectInput::Replacement,
+            } => state.add_direct_v6(&mut self.inner, source),
             _ => Err(Error::WrongState(
                 "direct input does not match the active workflow",
             )),
-        }
+        };
+        self.finish_source_input(result)
     }
 
     pub fn finish_input(&mut self) -> Result<WorkflowReport> {
@@ -397,12 +501,20 @@ impl Writer {
             Operation::ExactFeed(state) => state.finish_state(&mut self.inner),
             Operation::ExactDirect {
                 state,
-                retention_value: None,
+                input: ExactDirectInput::Replacement,
             } => state.finish_replacement_state(&mut self.inner),
             Operation::ExactDirect {
                 state,
-                retention_value: Some(value),
-            } => state.finish_retention_state(&mut self.inner, value),
+                input: ExactDirectInput::FirstSeen { refresh_value },
+            } => state.finish_first_seen_state(&mut self.inner, refresh_value),
+            Operation::ExactDirect {
+                state,
+                input:
+                    ExactDirectInput::LastSeen {
+                        refresh_value,
+                        cutoff,
+                    },
+            } => state.finish_last_seen_state(&mut self.inner, refresh_value, cutoff),
             Operation::Import {
                 source,
                 cancellation,
@@ -415,11 +527,55 @@ impl Writer {
                 return Err(Error::WrongState("no exact workflow input is active"));
             }
         }?;
+        Ok(self.store_finished(finished))
+    }
+
+    pub fn finish_first_seen_with_removals_v4<S>(&mut self, sink: &mut S) -> Result<WorkflowReport>
+    where
+        S: FirstSeenRemovalSink<Ipv4Key>,
+    {
+        let operation = std::mem::replace(&mut self.operation, Operation::Clean);
+        let finished = match operation {
+            Operation::ExactDirect {
+                state,
+                input: ExactDirectInput::FirstSeen { refresh_value },
+            } => {
+                state.finish_first_seen_with_removals_v4_state(&mut self.inner, refresh_value, sink)
+            }
+            other => {
+                self.operation = other;
+                return Err(Error::WrongState("no first-seen workflow input is active"));
+            }
+        }?;
+        Ok(self.store_finished(finished))
+    }
+
+    pub fn finish_first_seen_with_removals_v6<S>(&mut self, sink: &mut S) -> Result<WorkflowReport>
+    where
+        S: FirstSeenRemovalSink<Ipv6Key>,
+    {
+        let operation = std::mem::replace(&mut self.operation, Operation::Clean);
+        let finished = match operation {
+            Operation::ExactDirect {
+                state,
+                input: ExactDirectInput::FirstSeen { refresh_value },
+            } => {
+                state.finish_first_seen_with_removals_v6_state(&mut self.inner, refresh_value, sink)
+            }
+            other => {
+                self.operation = other;
+                return Err(Error::WrongState("no first-seen workflow input is active"));
+            }
+        }?;
+        Ok(self.store_finished(finished))
+    }
+
+    fn store_finished(&mut self, finished: FinishedState) -> WorkflowReport {
         let report = *finished.report();
         if let FinishedState::Changed { state, .. } = finished {
             self.operation = Operation::Prepared(state);
         }
-        Ok(report)
+        report
     }
 
     pub fn commit(&mut self) -> Result<CommitResult> {
@@ -464,6 +620,17 @@ impl Writer {
     pub fn abort_source_failure(&mut self, cause: Error) -> Error {
         self.operation = Operation::Clean;
         self.inner.abort_after(cause)
+    }
+
+    fn finish_source_input(&mut self, result: Result<()>) -> Result<()> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(error @ Error::TransactionAborted(_)) => {
+                self.operation = Operation::Clean;
+                Err(error)
+            }
+            Err(error) => Err(self.abort_source_failure(error)),
+        }
     }
 
     fn begin_feed(

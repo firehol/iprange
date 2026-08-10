@@ -189,7 +189,7 @@ fn every_constructible_live_entry_rejects_before_mutation() {
         &created,
         AddressFamily::Ipv4,
         ValueKind::Direct,
-        ValueTag::RETENTION,
+        ValueTag::FIRST_SEEN,
         1,
         &cancellation,
     ));

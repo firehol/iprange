@@ -364,7 +364,7 @@ pub(super) fn source_builder(path: &Path) -> Builder {
         OutputSpec {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
-            value_tag: ValueTag::RETENTION,
+            value_tag: ValueTag::FIRST_SEEN,
             database_id: [1; 16],
             transaction_id: 7,
             commit_nonce: [2; 16],
@@ -381,7 +381,7 @@ pub(super) fn output_builder(path: &Path) -> Builder {
         OutputSpec {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
-            value_tag: ValueTag::RETENTION,
+            value_tag: ValueTag::FIRST_SEEN,
             database_id: [3; 16],
             transaction_id: 1,
             commit_nonce: [4; 16],
