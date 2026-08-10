@@ -460,6 +460,22 @@ mod tests {
         assert_eq!(range.array::<2>(1), None);
     }
 
+    #[test]
+    fn contiguous_zero_checks_cover_unaligned_words_and_tails() {
+        let mut bytes = [0u8; 33];
+        for at in 0..=bytes.len() {
+            assert!(bytes.as_slice().all_zero(at, bytes.len() - at));
+        }
+        for changed in 0..bytes.len() {
+            bytes[changed] = 1;
+            assert!(!bytes.as_slice().all_zero(0, bytes.len()));
+            let range = ByteRange::new(&bytes, changed, 1).unwrap();
+            assert!(!range.all_zero(0, 1));
+            bytes[changed] = 0;
+        }
+        assert!(!bytes.as_slice().all_zero(bytes.len(), 1));
+    }
+
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn compact_subrange_rejects_unrepresentable_offsets_and_lengths() {

@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::mapping::{Mapping, PageView};
 
 use super::{
-    membership_table::{InsertResult, Slot, Table},
+    membership_table::{CountResult, InsertResult, Slot, Table},
     PhysicalByteInterval, ValidationAddressFence, ValidationBudget, ValidationFinding,
     ValidationObject, ValidationProgress, ValidationReason, ValidationSink, ValidationSinkControl,
 };
@@ -88,12 +88,13 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         self.progress.mark_untraversable(unbounded)
     }
 
-    pub(crate) fn count_membership_range(&mut self, id: u32) -> Result<InsertResult> {
+    pub(crate) fn count_membership_range(&mut self, id: u32) -> CountResult {
         let cancellation = self.cancellation;
         self.memberships
             .as_mut()
-            .ok_or(Error::Corrupt("direct validation has no membership table"))?
-            .count_range(id, cancellation)
+            .map_or(CountResult::Unavailable, |table| {
+                table.count_range(id, cancellation)
+            })
     }
 
     pub(crate) fn define_membership(

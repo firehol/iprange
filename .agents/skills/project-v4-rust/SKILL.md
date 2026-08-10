@@ -156,12 +156,28 @@ bidirectional cross-language proof.
 
 ## Prove bounded update-ipsets workloads
 
-Run the public-SDK benchmark:
+Build the exact fault worker in the benchmark profile, then run the public-SDK
+benchmark:
 
 ```bash
+cargo build --manifest-path v4/rust/Cargo.toml \
+  --profile bench -p iprange-livedb --bin iprange-v4-worker
 cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- smoke
 cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- scale
+cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- local
+cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- ci
+cargo bench --manifest-path v4/rust/Cargo.toml --bench component_floors -- suite
 ```
+
+`smoke` and `scale` are single-pass investigation matrices. `local` is the
+performance acceptance runner: one untimed warm-up and five isolated samples
+per scale case, with machine/compiler/profile metadata, distribution output,
+resource accounting, and repeated semantic-result checks. Run it only after
+profiles find no remaining actionable waste. `ci` runs three samples of a
+representative subset against the committed baseline. Its roughly 2x limits
+plus absolute noise allowance detect disasters; they do not establish local
+optimality. Component floors classify mapped access, page search/build,
+checksum, digest, and durability costs but are not full-operation targets.
 
 Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and
@@ -206,6 +222,12 @@ access, tree descent, COW edit, output build, commit seal, or durability action.
 Implicit validation, pre-commit checksum, per-record allocation, repeated
 lookup/delete, page reconstruction, cache churn, and an extra comparison/source
 pass are findings, not acceptable overhead.
+
+Replay authorized public feed data through a separate mapped source harness at
+median, p99, and largest observed shapes. Include parsing, creation, commit,
+and close in the replay timer, and time explicit validation separately. Record
+only aggregate input/canonical counts, timings, and profile attribution; never
+record source names, paths, literal ranges, or operational configuration.
 
 Audit production source separately from tests. Review file/function size and
 cyclomatic complexity as signals; do not create helper chains merely to lower a

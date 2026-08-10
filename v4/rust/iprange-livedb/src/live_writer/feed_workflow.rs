@@ -38,6 +38,7 @@ pub(crate) struct ExactFeedState {
     cancellation: CancellationToken,
     workflow: WorkflowKind,
     create: bool,
+    empty_map_create: bool,
     member: MembershipHandle,
     input_records: u64,
     coverage: FeedCoverageState,
@@ -45,8 +46,8 @@ pub(crate) struct ExactFeedState {
 
 #[derive(Debug)]
 enum FeedCoverageState {
-    V4(crate::range_mutation::UnionState<Ipv4Key>),
-    V6(crate::range_mutation::UnionState<Ipv6Key>),
+    V4(crate::range_mutation::UnionInput<Ipv4Key>),
+    V6(crate::range_mutation::UnionInput<Ipv6Key>),
 }
 
 impl LiveWriter {
@@ -83,9 +84,15 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<ExactFeedState> {
         let existing = self.check_feed_precondition(name, create, cancellation)?;
+        let empty_map_create = create && self.core.base_info().range_record_count == 0;
         self.start_feed_workflow_draft()?;
-        let member =
-            self.mutate(|store| setup_feed(store, name, existing, create, cancellation))?;
+        let member = self.mutate(|store| {
+            let member = setup_feed(store, name, existing, create, cancellation)?;
+            if empty_map_create {
+                store.begin_empty_map_feed()?;
+            }
+            Ok(member)
+        })?;
         Ok(ExactFeedState {
             cancellation: cancellation.clone(),
             workflow: if create {
@@ -94,6 +101,7 @@ impl LiveWriter {
                 WorkflowKind::ReplaceFeed
             },
             create,
+            empty_map_create,
             member,
             input_records: 0,
             coverage: match self.core.base_info().address_family {
@@ -201,6 +209,16 @@ impl ExactFeedState {
                 writer.abort_after(Error::Corrupt("feed coverage state address family changed"))
             );
         };
+        if self.empty_map_create {
+            return add_empty_map_feed_ranges(
+                writer,
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                self.member,
+                state,
+            );
+        }
         add_ranges(
             writer,
             source,
@@ -220,6 +238,16 @@ impl ExactFeedState {
                 writer.abort_after(Error::Corrupt("feed coverage state address family changed"))
             );
         };
+        if self.empty_map_create {
+            return add_empty_map_feed_ranges(
+                writer,
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                self.member,
+                state,
+            );
+        }
         add_ranges(
             writer,
             source,
@@ -236,6 +264,9 @@ impl ExactFeedState {
 
     pub(crate) fn finish_state(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
         self.require_active(writer)?;
+        if self.empty_map_create {
+            return self.finish_empty_map_create(writer);
+        }
         let cancellation = self.cancellation.clone();
         writer.mutate(|store| match &mut self.coverage {
             FeedCoverageState::V4(state) => store.finish_feed_coverage(state),
@@ -245,6 +276,36 @@ impl ExactFeedState {
             writer.mutate(|store| store.merge_feed(self.member, self.create, &cancellation))?;
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
         let report = self.prepare_report(merged)?;
+        complete_workflow(writer, report, cancellation, |edit, cancellation| {
+            edit.finish_membership_workflow(cancellation)
+        })
+    }
+
+    fn finish_empty_map_create(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
+        let cancellation = self.cancellation.clone();
+        writer.mutate(|store| match &mut self.coverage {
+            FeedCoverageState::V4(state) => store.finish_empty_map_feed_ranges(self.member, state),
+            FeedCoverageState::V6(state) => store.finish_empty_map_feed_ranges(self.member, state),
+        })?;
+        writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
+        let before = writer.core.base_info();
+        let after = writer.core.current_info();
+        let comparison = writer
+            .core
+            .compare_maps(&cancellation)
+            .map_err(|error| writer.abort_after(error))?;
+        let report = WorkflowReport::replacement(
+            ReplacementReportInput {
+                workflow: self.workflow,
+                logical_change: LogicalChange::Changed,
+                input_record_count: self.input_records,
+                input_normalized_interval_count: after.range_record_count,
+                before_range_record_count: before.range_record_count,
+                after_range_record_count: after.range_record_count,
+                input_addresses: comparison.after,
+            },
+            comparison,
+        );
         complete_workflow(writer, report, cancellation, |edit, cancellation| {
             edit.finish_membership_workflow(cancellation)
         })
@@ -280,7 +341,7 @@ fn add_ranges<K, S>(
     source: &mut S,
     cancellation: &CancellationToken,
     input_records: &mut u64,
-    state: &mut crate::range_mutation::UnionState<K>,
+    state: &mut crate::range_mutation::UnionInput<K>,
 ) -> Result<()>
 where
     K: IpKey,
@@ -291,6 +352,26 @@ where
             require_ordered(range.from, range.to)?;
             store.add_feed_coverage(range.from, range.to, state)?;
             Ok(())
+        })
+    })
+}
+
+fn add_empty_map_feed_ranges<K, S>(
+    writer: &mut LiveWriter,
+    source: &mut S,
+    cancellation: &CancellationToken,
+    input_records: &mut u64,
+    member: MembershipHandle,
+    state: &mut crate::range_mutation::UnionInput<K>,
+) -> Result<()>
+where
+    K: IpKey,
+    S: RangeSource<AddressRange<K>>,
+{
+    writer.mutate(|store| {
+        drain_source(source, cancellation, input_records, |range| {
+            require_ordered(range.from, range.to)?;
+            store.add_empty_map_feed_range(range.from, range.to, member, state)
         })
     })
 }

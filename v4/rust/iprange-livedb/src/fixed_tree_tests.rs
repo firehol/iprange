@@ -483,6 +483,45 @@ fn lower_bound_reuses_its_final_probe() {
 }
 
 #[test]
+fn fixed_search_rejects_a_forged_page_shape_before_slot_access() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    insert::<U32Codec, _>(
+        &mut store,
+        &mut root,
+        &record(1, 1),
+        &mut RetiredPages::new(),
+    )
+    .unwrap();
+    let mut header =
+        page::parse::<U32Codec, _>(&store.pages[root as usize], store.target_txn, None).unwrap();
+    header.item_count += 1;
+    assert!(
+        page::lower_bound::<U32Codec, _>(&store.pages[root as usize], &header, 1, true,).is_err()
+    );
+}
+
+#[test]
+fn fixed_search_checks_each_persistent_slot_extent() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    insert::<U32Codec, _>(
+        &mut store,
+        &mut root,
+        &record(1, 1),
+        &mut RetiredPages::new(),
+    )
+    .unwrap();
+    let header =
+        page::parse::<U32Codec, _>(&store.pages[root as usize], store.target_txn, None).unwrap();
+    store.pages[root as usize][slotted_page::HEADER_SIZE..slotted_page::HEADER_SIZE + 2]
+        .copy_from_slice(&0u16.to_le_bytes());
+    assert!(
+        page::lower_bound::<U32Codec, _>(&store.pages[root as usize], &header, 1, true,).is_err()
+    );
+}
+
+#[test]
 fn fixed_replacement_uses_one_capacity_probe_and_no_slot_scan() {
     let mut store = MemoryStore::new();
     let mut root = 0;

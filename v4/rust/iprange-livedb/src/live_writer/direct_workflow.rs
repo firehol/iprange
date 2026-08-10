@@ -47,6 +47,14 @@ pub(crate) struct ExactDirectState {
     cancellation: CancellationToken,
     workflow: WorkflowKind,
     input_records: u64,
+    input: DirectInputState,
+}
+
+#[derive(Debug)]
+enum DirectInputState {
+    Replacement,
+    TimestampV4(crate::range_mutation::UnionInput<Ipv4Key>),
+    TimestampV6(crate::range_mutation::UnionInput<Ipv6Key>),
 }
 
 impl LiveWriter {
@@ -133,10 +141,19 @@ impl LiveWriter {
         }
         cancellation.check()?;
         self.core.begin_range_workflow()?;
+        let timestamp = matches!(
+            workflow,
+            WorkflowKind::FirstSeenRefresh | WorkflowKind::LastSeenRefresh
+        );
         Ok(ExactDirectState {
             cancellation: cancellation.clone(),
             workflow,
             input_records: 0,
+            input: match (timestamp, self.core.base_info().address_family) {
+                (false, _) => DirectInputState::Replacement,
+                (true, AddressFamily::Ipv4) => DirectInputState::TimestampV4(Default::default()),
+                (true, AddressFamily::Ipv6) => DirectInputState::TimestampV6(Default::default()),
+            },
         })
     }
 }
@@ -277,6 +294,11 @@ impl ExactDirectState {
         S: RangeSource<DirectRange<Ipv4Key>>,
     {
         self.require_family(writer, AddressFamily::Ipv4)?;
+        if !matches!(self.input, DirectInputState::Replacement) {
+            return Err(writer.abort_after(Error::WrongState(
+                "timestamp workflow received direct values",
+            )));
+        }
         self.drain(writer, source, |edit, range| {
             require_ordered(range.from, range.to)?;
             edit.assign_v4(range.from, range.to, range.value)?;
@@ -289,6 +311,11 @@ impl ExactDirectState {
         S: RangeSource<DirectRange<Ipv6Key>>,
     {
         self.require_family(writer, AddressFamily::Ipv6)?;
+        if !matches!(self.input, DirectInputState::Replacement) {
+            return Err(writer.abort_after(Error::WrongState(
+                "timestamp workflow received direct values",
+            )));
+        }
         self.drain(writer, source, |edit, range| {
             require_ordered(range.from, range.to)?;
             edit.assign_v6(range.from, range.to, range.value)?;
@@ -306,10 +333,25 @@ impl ExactDirectState {
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
         self.require_family(writer, AddressFamily::Ipv4)?;
-        self.drain(writer, source, move |edit, range| {
-            require_ordered(range.from, range.to)?;
-            edit.assign_v4(range.from, range.to, value)?;
-            Ok(())
+        let DirectInputState::TimestampV4(state) = &mut self.input else {
+            return Err(writer.abort_after(Error::WrongState(
+                "timestamp workflow address family changed",
+            )));
+        };
+        writer.mutate(|edit| {
+            drain_source(
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                |range| {
+                    require_ordered(range.from, range.to)?;
+                    if state.is_general() {
+                        edit.assign_v4(range.from, range.to, value).map(|_| ())
+                    } else {
+                        edit.add_private_constant_range(range.from, range.to, value, state)
+                    }
+                },
+            )
         })
     }
 
@@ -323,10 +365,25 @@ impl ExactDirectState {
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
         self.require_family(writer, AddressFamily::Ipv6)?;
-        self.drain(writer, source, move |edit, range| {
-            require_ordered(range.from, range.to)?;
-            edit.assign_v6(range.from, range.to, value)?;
-            Ok(())
+        let DirectInputState::TimestampV6(state) = &mut self.input else {
+            return Err(writer.abort_after(Error::WrongState(
+                "timestamp workflow address family changed",
+            )));
+        };
+        writer.mutate(|edit| {
+            drain_source(
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                |range| {
+                    require_ordered(range.from, range.to)?;
+                    if state.is_general() {
+                        edit.assign_v6(range.from, range.to, value).map(|_| ())
+                    } else {
+                        edit.add_private_constant_range(range.from, range.to, value, state)
+                    }
+                },
+            )
         })
     }
 
@@ -450,7 +507,7 @@ impl ExactDirectState {
         Ok(())
     }
 
-    fn finish_timestamp<F>(self, writer: &mut LiveWriter, merge: F) -> Result<FinishedState>
+    fn finish_timestamp<F>(mut self, writer: &mut LiveWriter, merge: F) -> Result<FinishedState>
     where
         F: FnOnce(
             &mut crate::writer_core::WriterEdit<'_>,
@@ -459,6 +516,13 @@ impl ExactDirectState {
     {
         let before = writer.core.base_info();
         let cancellation = self.cancellation.clone();
+        writer.mutate(|edit| match &mut self.input {
+            DirectInputState::TimestampV4(state) => edit.finish_private_constant_ranges(state),
+            DirectInputState::TimestampV6(state) => edit.finish_private_constant_ranges(state),
+            DirectInputState::Replacement => Err(Error::WrongState(
+                "timestamp workflow has direct replacement input",
+            )),
+        })?;
         let merged = writer.mutate(|edit| merge(edit, &cancellation))?;
         let after = writer.core.current_info();
         let logical_change = classify(&merged.comparison);

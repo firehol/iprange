@@ -49,6 +49,7 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
     }
     match name {
         "direct-replace" => direct::replace(size),
+        "direct-commit" => direct::commit(size),
         "nested-overwrite" => direct::nested(size),
         "first-seen-refresh" => direct::first_seen(size),
         "last-seen-refresh" => direct::last_seen(size),
@@ -106,6 +107,9 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "immutable-direct-scan" => read::immutable_direct_scan(size),
         "live-open" => read::live_open(size, auxiliary),
         "snapshot" => read::snapshot(size),
+        "live-validation" => read::live_validation(size),
+        "live-membership-validation" => read::live_membership_validation(size, auxiliary),
+        "immutable-validation" => read::immutable_validation(size),
         "immutable-feed-random" => sdk::immutable_feed(size),
         "history-project" => sdk::history_project(size, auxiliary),
         "membership-matching-feeds" => sdk::matching_feeds(size, auxiliary),

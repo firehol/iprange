@@ -13,7 +13,7 @@ use crate::feed::FeedName;
 use crate::heap::Heap;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
-use crate::range_mutation::{self, UnionState};
+use crate::range_mutation::{self, UnionInput};
 use crate::range_store_cursor::Cursor;
 use crate::source::{self, RangeSource};
 use crate::workflow::AddressRange;
@@ -218,19 +218,20 @@ where
     let mut input_record_count = 0u64;
     let mut root = 0u32;
     let mut record_count = 0u64;
-    let mut union = UnionState::default();
+    let mut union = UnionInput::default();
     source::drain(source, cancellation, &mut input_record_count, |range| {
-        range_mutation::union_private_untracked(
+        range_mutation::push_private_untracked(
             workspace,
             &mut root,
             &mut record_count,
             range.from,
             range.to,
+            1,
             &mut union,
         )?;
         Ok(())
     })?;
-    range_mutation::finish_private_untracked(workspace, &mut root, &mut union)?;
+    range_mutation::finish_input_untracked(workspace, &mut root, &mut record_count, &mut union)?;
     cancellation.check()?;
     Ok(Normalized {
         root,

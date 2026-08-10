@@ -19,15 +19,52 @@ pub(crate) struct FeedMerge {
 }
 
 impl DraftStore<'_> {
+    pub(crate) fn begin_empty_map_feed(&mut self) -> Result<()> {
+        if self.draft.base.range_root != 0
+            || self.draft.base.range_record_count != 0
+            || self.draft.meta.range_root != 0
+            || self.draft.meta.range_record_count != 0
+        {
+            return Err(Error::Corrupt("empty-map feed range tree is not empty"));
+        }
+        self.draft.range_tree_private = true;
+        Ok(())
+    }
+
+    pub(crate) fn add_empty_map_feed_range<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        member: MembershipHandle,
+        state: &mut range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.add_private_constant_range(from, to, member.stored().0, state)
+    }
+
+    pub(crate) fn finish_empty_map_feed_ranges<K: IpKey>(
+        &mut self,
+        member: MembershipHandle,
+        state: &mut range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.finish_private_constant_ranges(state)?;
+        let (value, _) = member.stored();
+        let count = i64::try_from(self.draft.meta.range_record_count)
+            .map_err(|_| Error::arithmetic_overflow("membership range refcount"))?;
+        if count != 0 {
+            self.track_membership_refcount(value, count)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn add_feed_coverage<K: IpKey>(
         &mut self,
         from: K,
         to: K,
-        state: &mut range_mutation::UnionState<K>,
+        state: &mut range_mutation::UnionInput<K>,
     ) -> Result<()> {
         let mut root = self.draft.workflow_range_root;
         let mut count = self.draft.workflow_range_count;
-        range_mutation::union_private_untracked(self, &mut root, &mut count, from, to, state)?;
+        range_mutation::push_private_untracked(self, &mut root, &mut count, from, to, 1, state)?;
         self.draft.workflow_range_root = root;
         self.draft.workflow_range_count = count;
         Ok(())
@@ -35,11 +72,13 @@ impl DraftStore<'_> {
 
     pub(crate) fn finish_feed_coverage<K: IpKey>(
         &mut self,
-        state: &mut range_mutation::UnionState<K>,
+        state: &mut range_mutation::UnionInput<K>,
     ) -> Result<()> {
         let mut root = self.draft.workflow_range_root;
-        range_mutation::finish_private_untracked(self, &mut root, state)?;
+        let mut count = self.draft.workflow_range_count;
+        range_mutation::finish_input_untracked(self, &mut root, &mut count, state)?;
         self.draft.workflow_range_root = root;
+        self.draft.workflow_range_count = count;
         Ok(())
     }
 

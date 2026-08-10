@@ -1,11 +1,12 @@
 use crate::contract::{AddressFamily, ValueKind, MAX_TREE_LEVEL};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
-use crate::mapping::{ByteSource, PageView};
+use crate::mapping::{ByteRange, ByteSource, PageView};
 use crate::range_tree::{self, Record as Range};
+use crate::slotted_page::LayoutInspection;
 
 use super::context::Context;
-use super::membership_table::InsertResult;
+use super::membership_table::CountResult;
 use super::page::{self, TreePageSpec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
 
@@ -51,16 +52,16 @@ fn validate_node<K: IpKey, S: ValidationSink>(
         state.previous = None;
         return Ok(None);
     };
-    let Some(header) =
+    let Some((header, cells)) =
         validate_range_page::<K, S>(context, page_number, page, expected_level, root)?
     else {
         state.previous = None;
         return Ok(None);
     };
     if header.level == 0 {
-        validate_leaf(context, page_number, page, header, state)
+        validate_leaf(context, page_number, cells, state)
     } else {
-        validate_branch(context, page_number, page, header, path, depth, state)
+        validate_branch(context, page_number, cells, header, path, depth, state)
     }
 }
 
@@ -84,13 +85,13 @@ fn read_range_page<'m, S: ValidationSink>(
     context.read_graph_page(page_number, ValidationObject::RangeTree, &path[..depth])
 }
 
-fn validate_range_page<K: IpKey, S: ValidationSink>(
-    context: &mut Context<'_, S>,
+fn validate_range_page<'m, K: IpKey, S: ValidationSink>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: PageView<'_>,
+    page: PageView<'m>,
     expected_level: Option<u16>,
     root: bool,
-) -> Result<Option<page::SlottedHeader>> {
+) -> Result<Option<(page::SlottedHeader, LayoutInspection<PageView<'m>>)>> {
     let Some(header) = page::slotted_header(
         context,
         page_number,
@@ -108,17 +109,18 @@ fn validate_range_page<K: IpKey, S: ValidationSink>(
     };
     report_degenerate_root(context, page_number, header, root)?;
     let cell_len = range_cell_len::<K>(header.level);
-    if !page::validate_fixed_cells(
+    let Some(cells) = page::validate_fixed_cells(
         context,
         page_number,
         page,
         ValidationObject::RangeTree,
         header,
         cell_len,
-    )? {
+    )?
+    else {
         return Ok(None);
-    }
-    Ok(Some(header))
+    };
+    Ok(Some((header, cells)))
 }
 
 fn report_degenerate_root<S: ValidationSink>(
@@ -150,14 +152,25 @@ fn range_cell_len<K: IpKey>(level: u16) -> usize {
 fn validate_leaf<K: IpKey, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: PageView<'_>,
-    header: page::SlottedHeader,
+    cells: LayoutInspection<PageView<'_>>,
+    state: &mut RangeState<K>,
+) -> Result<Option<K>> {
+    if context.meta.value_kind == ValueKind::Membership {
+        validate_leaf_cells::<K, S, true>(context, page_number, cells, state)
+    } else {
+        validate_leaf_cells::<K, S, false>(context, page_number, cells, state)
+    }
+}
+
+fn validate_leaf_cells<K: IpKey, S: ValidationSink, const MEMBERSHIP: bool>(
+    context: &mut Context<'_, S>,
+    page_number: u32,
+    cells: LayoutInspection<PageView<'_>>,
     state: &mut RangeState<K>,
 ) -> Result<Option<K>> {
     let mut order = LeafOrder::default();
-    for index in 0..header.item_count {
-        context.checkpoint()?;
-        validate_leaf_cell(context, page_number, page, header, index, &mut order, state)?;
+    for cell in cells.cells() {
+        validate_leaf_cell::<K, S, _, MEMBERSHIP>(context, page_number, cell, &mut order, state)?;
     }
     Ok(order.first)
 }
@@ -177,149 +190,101 @@ impl<K> Default for LeafOrder<K> {
 }
 
 impl<K: IpKey> LeafOrder<K> {
-    fn observe<S: ValidationSink>(
-        &mut self,
-        context: &mut Context<'_, S>,
-        page_number: u32,
-        key: K,
-    ) -> Result<()> {
+    fn observe(&mut self, key: K) -> bool {
         self.first.get_or_insert(key);
-        if self.previous.is_some_and(|previous| previous >= key) {
-            context.emit(
-                ValidationReason::TreeOrderInvalid,
-                ValidationObject::RangeTree,
-                Some(page_number),
-                None,
-                None,
-            )?;
-        }
+        let invalid = self.previous.is_some_and(|previous| previous >= key);
         self.previous = Some(key);
-        Ok(())
+        invalid
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource>(
+fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const MEMBERSHIP: bool>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: P,
-    header: page::SlottedHeader,
-    index: usize,
+    cell: ByteRange<P>,
     order: &mut LeafOrder<K>,
     state: &mut RangeState<K>,
 ) -> Result<()> {
-    let current = read_range_cell::<K, _>(page, header, index)?;
-    order.observe(context, page_number, current.from)?;
-    increment_count(state)?;
-    if !range_shape_valid(context, page_number, current, state)? {
+    let current = read_range_cell::<K, _>(cell)?;
+    if order.observe(current.from) {
+        emit_range_finding(context, page_number, ValidationReason::TreeOrderInvalid)?;
+    }
+    // Every reachable page number and every per-page slot count fit in u32 and
+    // u16 respectively, so the total range count cannot overflow u64.
+    state.count += 1;
+    if current.from > current.to {
+        emit_range_finding(context, page_number, ValidationReason::RangeReversed)?;
+        state.previous = None;
         return Ok(());
     }
-    validate_range_value(context, page_number, current.value)?;
-    validate_neighbor(context, page_number, state.previous, current)?;
+    if MEMBERSHIP {
+        if current.value == 0 {
+            emit_range_finding(
+                context,
+                page_number,
+                ValidationReason::MembershipBitmapInvalid,
+            )?;
+        } else {
+            match context.count_membership_range(current.value) {
+                CountResult::Full => emit_range_finding(
+                    context,
+                    page_number,
+                    ValidationReason::MembershipRefcountInvalid,
+                )?,
+                CountResult::Cancelled => return Err(Error::Cancelled),
+                CountResult::Unavailable => {
+                    return Err(Error::Corrupt(
+                        "membership validation has no membership table",
+                    ));
+                }
+                CountResult::Inserted | CountResult::Existing => {}
+            }
+        }
+    }
+    if let Some(reason) = neighbor_problem(state.previous, current) {
+        emit_range_finding(context, page_number, reason)?;
+    }
     state.previous = Some(current);
     Ok(())
 }
 
-fn read_range_cell<K: IpKey, P: ByteSource>(
-    page: P,
-    header: page::SlottedHeader,
-    index: usize,
-) -> Result<Range<K>> {
-    let cell = page::fixed_cell(page, header, index, range_tree::record_size::<K>())?;
+fn read_range_cell<K: IpKey, P: ByteSource>(cell: ByteRange<P>) -> Result<Range<K>> {
     range_tree::decode_fields(cell)
 }
 
-fn increment_count<K>(state: &mut RangeState<K>) -> Result<()> {
-    state.count = state
-        .count
-        .checked_add(1)
-        .ok_or(crate::error::Error::ArithmeticOverflow(
-            "validation range count",
-        ))?;
-    Ok(())
-}
-
-fn range_shape_valid<K: IpKey, S: ValidationSink>(
+fn emit_range_finding<S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    current: Range<K>,
-    state: &mut RangeState<K>,
-) -> Result<bool> {
-    if current.from <= current.to {
-        return Ok(true);
-    }
+    reason: ValidationReason,
+) -> Result<()> {
     context.emit(
-        ValidationReason::RangeReversed,
+        reason,
         ValidationObject::RangeTree,
         Some(page_number),
         None,
         None,
-    )?;
-    state.previous = None;
-    Ok(false)
+    )
 }
 
-fn validate_range_value<S: ValidationSink>(
-    context: &mut Context<'_, S>,
-    page_number: u32,
-    value: u32,
-) -> Result<()> {
-    if context.meta.value_kind != ValueKind::Membership {
-        return Ok(());
-    }
-    if value == 0 {
-        context.emit(
-            ValidationReason::MembershipBitmapInvalid,
-            ValidationObject::RangeTree,
-            Some(page_number),
-            None,
-            None,
-        )?;
-    } else if matches!(context.count_membership_range(value)?, InsertResult::Full) {
-        context.emit(
-            ValidationReason::MembershipRefcountInvalid,
-            ValidationObject::RangeTree,
-            Some(page_number),
-            None,
-            None,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_neighbor<K: IpKey, S: ValidationSink>(
-    context: &mut Context<'_, S>,
-    page_number: u32,
+fn neighbor_problem<K: IpKey>(
     previous: Option<Range<K>>,
     current: Range<K>,
-) -> Result<()> {
-    let Some(previous) = previous else {
-        return Ok(());
-    };
+) -> Option<ValidationReason> {
+    let previous = previous?;
     if current.from <= previous.to {
-        context.emit(
-            ValidationReason::RangeOverlap,
-            ValidationObject::RangeTree,
-            Some(page_number),
-            None,
-            None,
-        )?;
+        Some(ValidationReason::RangeOverlap)
     } else if previous.to.checked_next() == Some(current.from) && previous.value == current.value {
-        context.emit(
-            ValidationReason::RangeNotCoalesced,
-            ValidationObject::RangeTree,
-            Some(page_number),
-            None,
-            None,
-        )?;
+        Some(ValidationReason::RangeNotCoalesced)
+    } else {
+        None
     }
-    Ok(())
 }
 
 fn validate_branch<K: IpKey, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: PageView<'_>,
+    cells: LayoutInspection<PageView<'_>>,
     header: page::SlottedHeader,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
     depth: usize,
@@ -327,8 +292,7 @@ fn validate_branch<K: IpKey, S: ValidationSink>(
 ) -> Result<Option<K>> {
     let mut first = None;
     let mut previous = None;
-    for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, range_tree::branch_size::<K>())?;
+    for cell in cells.cells() {
         let (key, child) = range_tree::decode_branch(cell)?;
         first.get_or_insert(key);
         if previous.is_some_and(|prior| prior >= key) {

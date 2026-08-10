@@ -31,6 +31,13 @@ fn zeroed_range_matches_a_copy() {
         crc32c_source_with_zeroed(original, 2, 4),
         Some(reference(&copy))
     );
+    let range = crate::mapping::ByteRange::new(original, 1, 6).unwrap();
+    let mut ranged = original[1..7].to_vec();
+    ranged[1..5].fill(0);
+    assert_eq!(
+        crc32c_source_with_zeroed(range, 1, 4),
+        Some(reference(&ranged))
+    );
 }
 
 #[test]
@@ -49,6 +56,10 @@ fn dispatched_backend_matches_the_independent_reference() {
             expected[zero_at..zero_at + zero_len].fill(0);
             assert_eq!(
                 crc32c_with_zeroed(&bytes, zero_at, zero_len),
+                Some(reference(&expected))
+            );
+            assert_eq!(
+                crc32c_source_with_zeroed(&bytes, zero_at, zero_len),
                 Some(reference(&expected))
             );
         }

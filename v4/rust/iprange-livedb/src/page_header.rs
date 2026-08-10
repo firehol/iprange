@@ -1,12 +1,13 @@
 //! Canonical common header fields for mapped v4 database pages.
 
-use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u16_le, u32_le, u32_source, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::Result;
 use crate::mapping::ByteSource;
 use crate::page_io::PageSink;
 
 pub(crate) const SIZE: usize = 32;
 const MAGIC: usize = 0;
+const MAGIC_WORD: u32 = u32::from_le_bytes(PAGE_MAGIC);
 pub(crate) const TYPE: usize = 4;
 pub(crate) const FLAGS: usize = 5;
 pub(crate) const HEADER_BYTES: usize = 6;
@@ -65,7 +66,7 @@ pub(crate) fn common_valid<S: ByteSource>(page: S) -> bool {
 }
 
 pub(crate) fn has_magic<S: ByteSource>(page: S) -> bool {
-    page.equals(MAGIC, &PAGE_MAGIC)
+    u32_source(page, MAGIC) == Some(MAGIC_WORD)
 }
 
 pub(crate) fn owned_by<S: ByteSource>(page: S, txn: u64) -> bool {

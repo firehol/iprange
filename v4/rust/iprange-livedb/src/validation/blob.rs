@@ -3,6 +3,7 @@ use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::Result;
 use crate::mapping::{ByteSource, BytesView, PageView};
 use crate::page_header::{self, CommonProblem};
+use crate::slotted_page::LayoutInspection;
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
@@ -188,10 +189,10 @@ where
     S: ValidationSink,
     F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
-    let Some(header) = branch_header(context, page_number, page, expected_level)? else {
+    let Some((header, cells)) = branch_header(context, page_number, page, expected_level)? else {
         return Ok(None);
     };
-    if !branch_records_valid(context, page_number, page, header, expected_start, length)? {
+    if !branch_records_valid(context, page_number, cells, expected_start, length)? {
         context.mark_untraversable(false)?;
         return Ok(None);
     }
@@ -199,7 +200,7 @@ where
     scan_branch_children(
         context,
         page_number,
-        page,
+        cells,
         header,
         length,
         path,
@@ -208,12 +209,12 @@ where
     )
 }
 
-fn branch_header<S: ValidationSink>(
-    context: &mut Context<'_, S>,
+fn branch_header<'m, S: ValidationSink>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: PageView<'_>,
+    page: PageView<'m>,
     expected_level: Option<u16>,
-) -> Result<Option<page::SlottedHeader>> {
+) -> Result<Option<(page::SlottedHeader, LayoutInspection<PageView<'m>>)>> {
     let header = page::slotted_header(
         context,
         page_number,
@@ -230,7 +231,7 @@ fn branch_header<S: ValidationSink>(
         context.mark_untraversable(false)?;
         return Ok(None);
     };
-    let cells_valid = page::validate_fixed_cells(
+    let cells = page::validate_fixed_cells(
         context,
         page_number,
         page,
@@ -238,18 +239,22 @@ fn branch_header<S: ValidationSink>(
         header,
         blob_tree::BRANCH_RECORD_SIZE,
     )?;
-    if header.level == 0 || !cells_valid {
+    let Some(cells) = cells else {
+        context.mark_untraversable(false)?;
+        return Ok(None);
+    };
+    if header.level == 0 {
         context.mark_untraversable(false)?;
         return Ok(None);
     }
-    Ok(Some(header))
+    Ok(Some((header, cells)))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn scan_branch_children<'m, S, F>(
     context: &mut Context<'m, S>,
     page_number: u32,
-    page: PageView<'m>,
+    cells: LayoutInspection<PageView<'m>>,
     header: page::SlottedHeader,
     length: u64,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -263,8 +268,7 @@ where
     let mut first = None;
     let mut previous_end = None;
     let mut complete = true;
-    for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+    for cell in cells.cells() {
         let record = blob_tree::decode_branch_record(cell)
             .expect("branch validation accepted this fixed record");
         let result = scan_node(
@@ -300,14 +304,12 @@ where
 fn branch_records_valid<S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: PageView<'_>,
-    header: page::SlottedHeader,
+    cells: LayoutInspection<PageView<'_>>,
     expected_start: u64,
     length: u64,
 ) -> Result<bool> {
     let mut previous = None;
-    for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+    for (index, cell) in cells.cells().enumerate() {
         let Ok(record) = blob_tree::decode_branch_record(cell) else {
             finding(context, Some(page_number))?;
             return Ok(false);

@@ -147,8 +147,25 @@ pub(super) fn lower_bound<C: Codec, S: ByteSource>(
     key: C::Key,
     insertion: bool,
 ) -> Result<(usize, bool)> {
+    if let Some(cell_len) = C::fixed_cell_size(header.level) {
+        return lower_bound_fixed::<C, _>(page, header, key, insertion, cell_len);
+    }
     lower_bound_by::<C, _>(header, key, insertion, |index| {
         key_at::<C, _>(page, header, index)
+    })
+}
+
+fn lower_bound_fixed<C: Codec, S: ByteSource>(
+    page: S,
+    header: &Header,
+    key: C::Key,
+    insertion: bool,
+    cell_len: usize,
+) -> Result<(usize, bool)> {
+    let search = slotted_page::FixedSearch::new(page, header, cell_len)?;
+    lower_bound_by::<C, _>(header, key, insertion, |index| {
+        // SAFETY: `lower_bound_by` probes only indexes below `item_count`.
+        C::read_key(unsafe { search.cell_at(index)? }, header.level)
     })
 }
 

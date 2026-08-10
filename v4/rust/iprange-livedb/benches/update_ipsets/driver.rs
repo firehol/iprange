@@ -5,11 +5,11 @@ use crate::scenarios::{self, ScenarioResult};
 
 const HEADER: &str = "scenario,size,aux,work_units,emitted_units,elapsed_ns,units_per_second,alloc_calls,alloc_bytes,rss_before_kib,rss_after_kib,rss_peak_kib,fds_before,fds_after,file_logical_bytes,file_physical_bytes,range_records,feeds,private_artifacts";
 
-#[derive(Clone, Copy)]
-struct Case {
-    name: &'static str,
-    size: usize,
-    auxiliary: usize,
+#[derive(Clone)]
+pub(crate) struct Case {
+    pub(crate) name: String,
+    pub(crate) size: usize,
+    pub(crate) auxiliary: usize,
 }
 
 pub(crate) fn run() -> Result<(), String> {
@@ -20,15 +20,36 @@ pub(crate) fn run() -> Result<(), String> {
     match arguments.first().map(String::as_str) {
         None | Some("smoke") => run_matrix(smoke_cases()),
         Some("scale") => run_matrix(scale_cases()),
+        Some("local") => crate::report::run_repeated(scale_cases(), 1, 5, false),
+        Some("ci") => crate::report::run_repeated(ci_cases(), 1, 3, true),
+        Some("sample") => run_sample(&arguments),
         Some("case") => run_case(&arguments),
         Some("header") => {
             println!("{HEADER}");
             Ok(())
         }
         Some(other) => Err(format!(
-            "unknown mode {other:?}; expected smoke, scale, or case"
+            "unknown mode {other:?}; expected smoke, scale, local, ci, sample, or case"
         )),
     }
+}
+
+fn run_sample(arguments: &[String]) -> Result<(), String> {
+    if !(4..=5).contains(&arguments.len()) {
+        return Err("sample requires: sample SCENARIO SIZE AUX [SAMPLES]".to_owned());
+    }
+    let name = arguments[1].as_str();
+    let size = arguments[2]
+        .parse()
+        .map_err(|_| format!("invalid size {:?}", arguments[2]))?;
+    let auxiliary = arguments[3]
+        .parse()
+        .map_err(|_| format!("invalid auxiliary value {:?}", arguments[3]))?;
+    let samples = arguments
+        .get(4)
+        .map_or(Ok(5usize), |value| value.parse())
+        .map_err(|_| "invalid sample count".to_owned())?;
+    crate::report::run_repeated(vec![case(name, size, auxiliary)], 1, samples, false)
 }
 
 fn run_matrix(cases: Vec<Case>) -> Result<(), String> {
@@ -37,7 +58,7 @@ fn run_matrix(cases: Vec<Case>) -> Result<(), String> {
     for case in cases {
         let output = Command::new(&executable)
             .arg("case")
-            .arg(case.name)
+            .arg(&case.name)
             .arg(case.size.to_string())
             .arg(case.auxiliary.to_string())
             .output()
@@ -111,6 +132,7 @@ fn smoke_cases() -> Vec<Case> {
     vec![
         case("direct-replace", 1_000, 0),
         case("direct-replace", 4_000, 0),
+        case("direct-commit", 4_000, 0),
         case("nested-overwrite", 1_000, 0),
         case("nested-overwrite", 4_000, 0),
         case("first-seen-refresh", 1_000, 0),
@@ -131,18 +153,21 @@ fn smoke_cases() -> Vec<Case> {
         case("live-open", 4_000, 1),
         case("live-open", 4_000, 256),
         case("snapshot", 4_000, 0),
+        case("live-validation", 4_000, 0),
+        case("live-membership-validation", 4_000, 64),
+        case("immutable-validation", 4_000, 0),
         case("immutable-feed-random", 1_000, 0),
         case("history-project", 1_000, 7),
         case("membership-matching-feeds", 1_000, 64),
         case("membership-cardinalities", 1_000, 64),
-        case("membership-selected-pair", 1_000, 0),
+        case("membership-selected-pair", 1_000, 2),
         case("membership-all-pairs", 1_000, 8),
-        case("direct-provider-join", 1_000, 0),
-        case("membership-provider-join", 1_000, 0),
-        case("algebra-count", 1_000, 0),
-        case("algebra-compare", 1_000, 0),
-        case("algebra-publish-preserve", 1_000, 0),
-        case("algebra-publish-flat", 1_000, 0),
+        case("direct-provider-join", 1_000, 1),
+        case("membership-provider-join", 1_000, 1),
+        case("algebra-count", 1_000, 2),
+        case("algebra-compare", 1_000, 2),
+        case("algebra-publish-preserve", 1_000, 2),
+        case("algebra-publish-flat", 1_000, 2),
         case("update-ipsets-workflow", 1_000, 7),
     ]
 }
@@ -154,6 +179,7 @@ fn scale_cases() -> Vec<Case> {
         cases.push(case("first-seen-refresh", size, 0));
         cases.push(case("last-seen-refresh", size, 0));
     }
+    cases.push(case("direct-commit", 1_000_000, 0));
     for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("nested-overwrite", size, 0));
     }
@@ -174,7 +200,8 @@ fn scale_cases() -> Vec<Case> {
         "feed-first-overlap",
         "feed-second-overlap",
     ] {
-        cases.push(case(name, 1_000_000, 0));
+        let second = usize::from(name.starts_with("feed-second-"));
+        cases.push(case(name, 1_000_000, second));
     }
     cases.push(case("membership-import", 10_000, 421));
     cases.push(case("membership-import", 100_000, 421));
@@ -189,21 +216,24 @@ fn scale_cases() -> Vec<Case> {
     cases.push(case("live-open", 100_000, 256));
     cases.push(case("snapshot", 100_000, 0));
     cases.push(case("snapshot", 1_000_000, 0));
+    cases.push(case("live-validation", 1_000_000, 0));
+    cases.push(case("live-membership-validation", 1_000_000, 421));
+    cases.push(case("immutable-validation", 1_000_000, 0));
     for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("immutable-feed-random", size, 0));
         cases.push(case("history-project", size, 7));
     }
     cases.push(case("membership-matching-feeds", 100_000, 421));
     cases.push(case("membership-cardinalities", 1_000_000, 64));
-    cases.push(case("membership-selected-pair", 1_000_000, 0));
+    cases.push(case("membership-selected-pair", 1_000_000, 2));
     cases.push(case("membership-all-pairs", 1_000_000, 8));
     cases.push(case("membership-all-pairs", 100_000, 64));
-    cases.push(case("direct-provider-join", 1_000_000, 0));
-    cases.push(case("membership-provider-join", 1_000_000, 0));
-    cases.push(case("algebra-count", 1_000_000, 0));
-    cases.push(case("algebra-compare", 1_000_000, 0));
-    cases.push(case("algebra-publish-preserve", 1_000_000, 0));
-    cases.push(case("algebra-publish-flat", 1_000_000, 0));
+    cases.push(case("direct-provider-join", 1_000_000, 1));
+    cases.push(case("membership-provider-join", 1_000_000, 1));
+    cases.push(case("algebra-count", 1_000_000, 2));
+    cases.push(case("algebra-compare", 1_000_000, 2));
+    cases.push(case("algebra-publish-preserve", 1_000_000, 2));
+    cases.push(case("algebra-publish-flat", 1_000_000, 2));
     cases.push(case("direct-provider-join", 1_000_000, 421));
     cases.push(case("membership-provider-join", 1_000_000, 421));
     cases.push(case("algebra-count", 1_000_000, 421));
@@ -212,9 +242,26 @@ fn scale_cases() -> Vec<Case> {
     cases
 }
 
-const fn case(name: &'static str, size: usize, auxiliary: usize) -> Case {
+fn ci_cases() -> Vec<Case> {
+    vec![
+        case("direct-replace", 1_000_000, 0),
+        case("last-seen-refresh", 1_000_000, 0),
+        case("feed-first-ascending", 1_000_000, 0),
+        case("feed-first-random", 1_000_000, 0),
+        case("live-direct-lookup", 100_000, 0),
+        case("live-direct-scan", 100_000, 0),
+        case("live-membership-lookup", 100_000, 421),
+        case("live-feed-scan", 100_000, 421),
+        case("membership-cardinalities", 1_000_000, 64),
+        case("live-validation", 1_000_000, 0),
+        case("live-membership-validation", 1_000_000, 421),
+        case("update-ipsets-workflow", 1_000_000, 7),
+    ]
+}
+
+fn case(name: &str, size: usize, auxiliary: usize) -> Case {
     Case {
-        name,
+        name: name.to_owned(),
         size,
         auxiliary,
     }

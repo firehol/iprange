@@ -45,3 +45,7 @@ path = "src/bin/iprange-v4-worker.rs"
 [[bench]]
 name = "update_ipsets"
 harness = false
+
+[[bench]]
+name = "component_floors"
+harness = false

@@ -8,8 +8,8 @@ pub(crate) struct Slot {
     pub(crate) id: u32,
     pub(crate) range_count: u64,
     pub(crate) stored_refcount: u64,
-    pub(crate) word_count: u32,
-    pub(crate) digest: [u8; 32],
+    word_count: u32,
+    digest: [u8; 32],
     pub(crate) defined: bool,
     pub(crate) reverse_seen: bool,
 }
@@ -30,6 +30,21 @@ pub(crate) enum InsertResult {
     Inserted,
     Existing,
     Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CountResult {
+    Inserted,
+    Existing,
+    Full,
+    Cancelled,
+    Unavailable,
+}
+
+enum ProbeResult {
+    Index(usize),
+    Missing,
+    Cancelled,
 }
 
 pub(crate) struct Table {
@@ -77,25 +92,22 @@ impl Table {
         self.slots.len() as u64 * mem::size_of::<Slot>() as u64
     }
 
-    pub(crate) fn count_range(
-        &mut self,
-        id: u32,
-        cancellation: &CancellationToken,
-    ) -> Result<InsertResult> {
-        let Some(index) = self.find_or_empty(id, cancellation)? else {
-            return Ok(InsertResult::Full);
+    pub(crate) fn count_range(&mut self, id: u32, cancellation: &CancellationToken) -> CountResult {
+        let index = match self.probe(id, true, cancellation) {
+            ProbeResult::Index(index) => index,
+            ProbeResult::Missing => return CountResult::Full,
+            ProbeResult::Cancelled => return CountResult::Cancelled,
         };
         let result = if self.slots[index].id == 0 {
             self.slots[index].id = id;
-            InsertResult::Inserted
+            CountResult::Inserted
         } else {
-            InsertResult::Existing
+            CountResult::Existing
         };
-        self.slots[index].range_count = self.slots[index]
-            .range_count
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("validation membership refcount"))?;
-        Ok(result)
+        // A membership's count cannot exceed the total ranges addressable by
+        // u32 pages and u16 page slots, so this cannot overflow u64.
+        self.slots[index].range_count += 1;
+        result
     }
 
     pub(crate) fn define(
@@ -109,16 +121,17 @@ impl Table {
         let Some(index) = self.find_or_empty(id, cancellation)? else {
             return Ok(InsertResult::Full);
         };
-        let slot = &mut self.slots[index];
-        if slot.id == 0 {
-            slot.id = id;
-        } else if slot.defined {
+        if self.slots[index].id == 0 {
+            self.slots[index].id = id;
+        } else if self.slots[index].defined {
             return Ok(InsertResult::Existing);
         }
+        let slot = &mut self.slots[index];
         slot.stored_refcount = stored_refcount;
         slot.word_count = word_count;
         slot.digest = digest;
         slot.defined = true;
+        slot.reverse_seen = false;
         Ok(InsertResult::Inserted)
     }
 
@@ -149,41 +162,53 @@ impl Table {
     }
 
     pub(crate) fn slot(&self, index: usize) -> Option<Slot> {
-        self.slots.get(index).copied().filter(|slot| slot.id != 0)
+        let slot = *self.slots.get(index)?;
+        if slot.id == 0 {
+            return None;
+        }
+        Some(slot)
     }
 
     fn find(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
-        self.probe(id, false, cancellation)
+        self.probe_result(id, false, cancellation)
     }
 
     fn find_or_empty(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
-        self.probe(id, true, cancellation)
+        self.probe_result(id, true, cancellation)
     }
 
-    fn probe(
+    fn probe_result(
         &self,
         id: u32,
         accept_empty: bool,
         cancellation: &CancellationToken,
     ) -> Result<Option<usize>> {
+        match self.probe(id, accept_empty, cancellation) {
+            ProbeResult::Index(index) => Ok(Some(index)),
+            ProbeResult::Missing => Ok(None),
+            ProbeResult::Cancelled => Err(Error::Cancelled),
+        }
+    }
+
+    fn probe(&self, id: u32, accept_empty: bool, cancellation: &CancellationToken) -> ProbeResult {
         if self.slots.is_empty() || id == 0 {
-            return Ok(None);
+            return ProbeResult::Missing;
         }
         let mut index = hash(id) & self.mask;
         for probe in 0..self.slots.len() {
-            if probe & 63 == 0 {
-                cancellation.check()?;
+            if probe != 0 && probe & 63 == 0 && cancellation.is_cancelled() {
+                return ProbeResult::Cancelled;
             }
             let found = self.slots[index].id;
             if found == id || (accept_empty && found == 0) {
-                return Ok(Some(index));
+                return ProbeResult::Index(index);
             }
             if found == 0 {
-                return Ok(None);
+                return ProbeResult::Missing;
             }
             index = (index + 1) & self.mask;
         }
-        Ok(None)
+        ProbeResult::Missing
     }
 }
 
@@ -203,18 +228,39 @@ mod tests {
         let mut table = Table::new(64, u64::MAX).unwrap();
         let ready = CancellationToken::new();
         for index in 0..64 {
-            table.count_range(1 + index * 128, &ready).unwrap();
+            assert_ne!(
+                table.count_range(1 + index * 128, &ready),
+                CountResult::Cancelled
+            );
         }
 
         let polls = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&polls);
         let cancellation = CancellationToken::from_poll(Arc::new(move || {
-            observed.fetch_add(1, Ordering::SeqCst) >= 1
+            observed.fetch_add(1, Ordering::SeqCst);
+            true
         }));
         assert!(matches!(
             table.count_range(1 + 64 * 128, &cancellation),
-            Err(Error::Cancelled)
+            CountResult::Cancelled
         ));
-        assert_eq!(polls.load(Ordering::SeqCst), 2);
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ordinary_probe_does_not_repeat_the_callers_checkpoint() {
+        let mut table = Table::new(1, u64::MAX).unwrap();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&polls);
+        let cancellation = CancellationToken::from_poll(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            false
+        }));
+
+        assert!(matches!(
+            table.count_range(1, &cancellation),
+            CountResult::Inserted
+        ));
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
     }
 }

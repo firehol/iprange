@@ -14,6 +14,15 @@ pub(crate) trait ByteSource: Copy {
     fn len(self) -> usize;
     fn byte(self, at: usize) -> Option<u8>;
 
+    /// Return this complete contiguous extent without creating a Rust reference.
+    ///
+    /// The pointer is valid only while the source's mapping or ordinary byte
+    /// storage remains retained. Callers must check `len()` before access and
+    /// must not turn mapped storage into an ordinary reference.
+    fn contiguous_ptr(self) -> Option<*const u8> {
+        None
+    }
+
     /// Read an array whose complete range the caller already checked.
     ///
     /// # Safety
@@ -52,8 +61,18 @@ pub(crate) trait ByteSource: Copy {
     }
 
     fn all_zero(self, at: usize, len: usize) -> bool {
-        at.checked_add(len).is_some_and(|end| end <= self.len())
-            && (at..at + len).all(|index| self.byte(index) == Some(0))
+        let Some(end) = at.checked_add(len) else {
+            return false;
+        };
+        if end > self.len() {
+            return false;
+        }
+        if let Some(pointer) = self.contiguous_ptr() {
+            // SAFETY: The complete extent was checked above and a contiguous
+            // byte source guarantees that its pointer covers `self.len()`.
+            return unsafe { pointer_all_zero(pointer.add(at), len) };
+        }
+        (at..end).all(|index| self.byte(index) == Some(0))
     }
 
     fn same(self, other: Self, at: usize, len: usize) -> bool {
@@ -102,6 +121,29 @@ pub(crate) trait ByteSource: Copy {
     }
 }
 
+unsafe fn pointer_all_zero(mut pointer: *const u8, mut len: usize) -> bool {
+    while len >= 8 {
+        // SAFETY: The caller guarantees `len` readable bytes. Mapped fields
+        // need not be aligned to a machine word.
+        if unsafe { ptr::read_unaligned(pointer.cast::<u64>()) } != 0 {
+            return false;
+        }
+        // SAFETY: Eight readable bytes were consumed above.
+        pointer = unsafe { pointer.add(8) };
+        len -= 8;
+    }
+    while len != 0 {
+        // SAFETY: At least one readable byte remains.
+        if unsafe { ptr::read(pointer) } != 0 {
+            return false;
+        }
+        // SAFETY: One readable byte was consumed above.
+        pointer = unsafe { pointer.add(1) };
+        len -= 1;
+    }
+    true
+}
+
 impl ByteSource for &[u8] {
     fn len(self) -> usize {
         <[u8]>::len(self)
@@ -109,6 +151,10 @@ impl ByteSource for &[u8] {
 
     fn byte(self, at: usize) -> Option<u8> {
         self.get(at).copied()
+    }
+
+    fn contiguous_ptr(self) -> Option<*const u8> {
+        Some(self.as_ptr())
     }
 
     fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {
@@ -148,6 +194,10 @@ impl<const N: usize> ByteSource for &[u8; N] {
 
     fn byte(self, at: usize) -> Option<u8> {
         self.get(at).copied()
+    }
+
+    fn contiguous_ptr(self) -> Option<*const u8> {
+        Some(self.as_ptr())
     }
 
     fn array<const M: usize>(self, at: usize) -> Option<[u8; M]> {
@@ -190,6 +240,21 @@ impl<S: ByteSource> ByteRange<S> {
         })
     }
 
+    /// Construct a range after its complete extent was checked by the caller.
+    ///
+    /// # Safety
+    ///
+    /// `at..at + len` must fit in `source`, and both values must fit in `u32`.
+    pub(crate) unsafe fn new_unchecked(source: S, at: usize, len: usize) -> Self {
+        debug_assert!(at.checked_add(len).is_some_and(|end| end <= source.len()));
+        debug_assert!(u32::try_from(at).is_ok() && u32::try_from(len).is_ok());
+        Self {
+            source,
+            at: at as u32,
+            len: len as u32,
+        }
+    }
+
     pub(crate) const fn source_offset(self) -> usize {
         self.at as usize
     }
@@ -213,6 +278,14 @@ impl<S: ByteSource> ByteSource for ByteRange<S> {
             .then(|| self.source_offset().checked_add(at))
             .flatten()
             .and_then(|index| self.source.byte(index))
+    }
+
+    fn contiguous_ptr(self) -> Option<*const u8> {
+        Some(
+            self.source
+                .contiguous_ptr()?
+                .wrapping_add(self.source_offset()),
+        )
     }
 
     fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {
@@ -347,6 +420,10 @@ impl<S: MappedSource> ByteSource for S {
 
     fn byte(self, at: usize) -> Option<u8> {
         read_byte(self.pointer(), self.extent(), at)
+    }
+
+    fn contiguous_ptr(self) -> Option<*const u8> {
+        Some(self.pointer())
     }
 
     fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {

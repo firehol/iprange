@@ -248,6 +248,7 @@ pub(crate) fn insert_if_edge_gap<C, S, G>(
     leaf_cell: &[u8],
     mut cached: PrivateEdge<C::Key>,
     edge: Edge,
+    known_gap: bool,
     gap: &mut G,
 ) -> Result<EdgeInsert<C::Key, G::Reject>>
 where
@@ -278,11 +279,21 @@ where
             Edge::Last if key == boundary_key => (header.item_count - 1, true),
             _ => return Err(Error::Corrupt("cached B+tree edge order changed")),
         };
-        let mut selector = GapSelector::<C, G>::new(key, leaf_cell.len(), gap);
-        Ok((
-            header,
-            selector.select_at(page, &header, &cached.position.path, index, exists)?,
-        ))
+        let decision = if known_gap {
+            if exists {
+                return Err(Error::Corrupt("known B+tree edge gap contains its key"));
+            }
+            // The ordered-input owner retained the immediately preceding edge
+            // interval and proved this interval is separate from it.
+            GapDecision::Insert {
+                index,
+                fits: slotted_page::insert_fits(&header, leaf_cell.len()),
+            }
+        } else {
+            let mut selector = GapSelector::<C, G>::new(key, leaf_cell.len(), gap);
+            selector.select_at(page, &header, &cached.position.path, index, exists)?
+        };
+        Ok((header, decision))
     })?;
     let (index, fits) = match decision {
         GapDecision::Insert { index, fits } => (index, fits),

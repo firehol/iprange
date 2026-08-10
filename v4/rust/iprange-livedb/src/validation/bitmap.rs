@@ -152,7 +152,6 @@ fn validate_leaf<S: ValidationSink, P: ByteSource>(
 ) -> Result<Option<NodeResult>> {
     let mut totals = LeafTotals::default();
     for index in 0..LEAF_WORDS {
-        context.checkpoint()?;
         let word = bitmap_page::leaf_word(page, index)?;
         let (word_base, valid, valid_mask) =
             validate_leaf_word(context, page_number, base, limit, kind, index, word)?;
@@ -251,7 +250,6 @@ fn validate_branch<S: ValidationSink, P: ByteSource>(
     let child_span = coverage(header.level - 1)?;
     let mut totals = BranchTotals::default();
     for index in 0..BRANCH_CHILDREN {
-        context.checkpoint()?;
         let child = bitmap_page::branch_child(page, index)?;
         totals.child_count += usize::from(child != 0);
         let result = validate_branch_child(

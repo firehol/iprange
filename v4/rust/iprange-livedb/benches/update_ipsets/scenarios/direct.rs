@@ -40,6 +40,34 @@ pub(super) fn nested(size: usize) -> Result<ScenarioResult, String> {
     )
 }
 
+pub(super) fn commit(size: usize) -> Result<ScenarioResult, String> {
+    let database = create_direct("direct-commit", direct_tag(b"timestamp")?, 1)?;
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(database.main(), transaction_budget(size, 1), &cancellation)
+        .map_err(display)?;
+    let mut workflow = writer
+        .begin_direct_replacement(&cancellation)
+        .map_err(display)?;
+    workflow
+        .add_ranges_v4(&mut DirectSource::unordered(size)?)
+        .map_err(display)?;
+    let FinishedWorkflow::Changed(prepared) = workflow.finish_input().map_err(display)? else {
+        return Err("prepared commit unexpectedly changed nothing".to_owned());
+    };
+    let (operation, measured) = measure::operation(|| prepared.commit());
+    require_committed(operation.map_err(display)?)?;
+    close_writer(&mut writer)?;
+    result(
+        "direct-commit",
+        size,
+        0,
+        size as u64,
+        &database,
+        measured,
+        database.main(),
+    )
+}
+
 pub(super) fn first_seen(size: usize) -> Result<ScenarioResult, String> {
     let database = create_direct("first-seen", ValueTag::FIRST_SEEN, 1)?;
     apply_first_seen(&database, AddressSource::new(size, 0)?, size, 100)?;

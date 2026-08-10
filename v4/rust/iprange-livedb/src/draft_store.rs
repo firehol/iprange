@@ -198,6 +198,37 @@ impl<'a> DraftStore<'a> {
         Ok(changed)
     }
 
+    pub(crate) fn add_private_constant_range<K: crate::key::IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        value: u32,
+        state: &mut range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        let mut root = self.draft.meta.range_root;
+        let mut count = self.draft.meta.range_record_count;
+        let changed = range_mutation::push_private_untracked(
+            self, &mut root, &mut count, from, to, value, state,
+        )?;
+        self.draft.meta.range_root = root;
+        self.draft.meta.range_record_count = count;
+        self.draft.changed |= changed;
+        Ok(())
+    }
+
+    pub(crate) fn finish_private_constant_ranges<K: crate::key::IpKey>(
+        &mut self,
+        state: &mut range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        let mut root = self.draft.meta.range_root;
+        let mut count = self.draft.meta.range_record_count;
+        let changed = range_mutation::finish_input_untracked(self, &mut root, &mut count, state)?;
+        self.draft.meta.range_root = root;
+        self.draft.meta.range_record_count = count;
+        self.draft.changed |= changed;
+        Ok(())
+    }
+
     pub(crate) fn clear_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
         self.clear(from, to)
     }

@@ -19,11 +19,17 @@ mod measure;
 #[path = "update_ipsets/model.rs"]
 mod model;
 #[cfg(not(target_os = "freebsd"))]
+#[path = "update_ipsets/report.rs"]
+mod report;
+#[cfg(not(target_os = "freebsd"))]
 #[path = "update_ipsets/scenarios.rs"]
 mod scenarios;
 #[cfg(not(target_os = "freebsd"))]
 #[path = "update_ipsets/source.rs"]
 mod source;
+#[cfg(not(target_os = "freebsd"))]
+#[path = "update_ipsets/timing.rs"]
+mod timing;
 
 #[cfg(not(target_os = "freebsd"))]
 fn main() {

@@ -2,18 +2,14 @@
 
 use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
-use crate::mapping::{ByteRange, ByteSource};
+use crate::mapping::ByteSource;
 use crate::slotted_page::Header;
 
-use super::page::{branch_child, lower_bound, lower_bound_by, parse};
+use super::page::{branch_child, lower_bound, parse};
 use super::{Codec, PageSource};
 
 pub(crate) trait LeafQuery<C: Codec> {
     type Output;
-
-    fn read_key<S: ByteSource>(&mut self, cell: ByteRange<S>) -> Result<C::Key> {
-        C::read_key(cell, 0)
-    }
 
     fn inspect<S: ByteSource>(
         &mut self,
@@ -53,9 +49,7 @@ where
         let step = source.view_page(page_number, |page| {
             let header = parse::<C, _>(page, source.selected_txn(), expected_level)?;
             if header.level == 0 {
-                let (position, exact) = lower_bound_by::<C, _>(&header, key, true, |index| {
-                    leaf.read_key(C::leaf_cell(page, &header, index)?)
-                })?;
+                let (position, exact) = lower_bound::<C, _>(page, &header, key, true)?;
                 return leaf
                     .inspect(page, &header, page_number, position, exact)
                     .map(Step::Found);

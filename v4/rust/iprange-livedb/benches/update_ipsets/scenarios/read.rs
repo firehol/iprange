@@ -1,13 +1,16 @@
 use std::hint::black_box;
 
 use iprange_livedb::{
-    snapshot_to, CancellationToken, ImmutableReader, LiveReader, RangeDirection,
-    SnapshotPublicationPolicy, SnapshotSourceMode,
+    snapshot_to,
+    validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl},
+    CancellationToken, ImmutableReader, LiveReader, RangeDirection, SnapshotPublicationPolicy,
+    SnapshotSourceMode,
 };
 
 use crate::measure;
 use crate::model::snapshot_budget;
 use crate::scenarios::direct::seeded_direct;
+use crate::scenarios::membership::populated_rotating;
 use crate::scenarios::{
     close_reader, count_cursor, count_points, immutable_snapshot, reader_work, require_count,
     result, ScenarioResult,
@@ -189,6 +192,84 @@ pub(super) fn snapshot(size: usize) -> Result<ScenarioResult, String> {
         &database,
         measured,
         &output,
+    )
+}
+
+pub(super) fn live_validation(size: usize) -> Result<ScenarioResult, String> {
+    let database = seeded_direct("live-validation", size, 1)?;
+    validate_case(
+        "live-validation",
+        size,
+        &database,
+        database.main(),
+        ValidationMode::LiveCurrent,
+        0,
+    )
+}
+
+pub(super) fn immutable_validation(size: usize) -> Result<ScenarioResult, String> {
+    let database = seeded_direct("immutable-validation", size, 1)?;
+    let snapshot = immutable_snapshot(&database, size)?;
+    validate_case(
+        "immutable-validation",
+        size,
+        &database,
+        &snapshot,
+        ValidationMode::ImmutableCurrent,
+        0,
+    )
+}
+
+pub(super) fn live_membership_validation(
+    size: usize,
+    feeds: usize,
+) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let database = populated_rotating("live-membership-validation", size, feeds, feeds.min(8))?;
+    validate_case(
+        "live-membership-validation",
+        size,
+        &database,
+        database.main(),
+        ValidationMode::LiveCurrent,
+        feeds,
+    )
+}
+
+fn validate_case(
+    name: &'static str,
+    size: usize,
+    database: &crate::model::TestDatabase,
+    file: &std::path::Path,
+    mode: ValidationMode,
+    auxiliary: usize,
+) -> Result<ScenarioResult, String> {
+    let (operation, measured) = measure::operation(|| {
+        let mut sink =
+            |_: &iprange_livedb::validation::ValidationFinding| Ok(ValidationSinkControl::Continue);
+        validate(
+            file,
+            mode,
+            &ValidationBudget::heap_only(64 * 1024 * 1024, 2),
+            &CancellationToken::new(),
+            &mut sink,
+        )
+    });
+    let validated = operation.map_err(|failure| format!("{failure:?}"))?;
+    if !validated.valid {
+        return Err(format!(
+            "{name} found {} validation failures",
+            validated.progress.finding_count
+        ));
+    }
+    result(
+        name,
+        size,
+        auxiliary,
+        validated.progress.checked_unique_pages,
+        database,
+        measured,
+        file,
     )
 }
 

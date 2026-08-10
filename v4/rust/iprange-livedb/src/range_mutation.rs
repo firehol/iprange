@@ -10,9 +10,9 @@ mod assign;
 mod coverage;
 
 pub(crate) use assign::{assign, assign_private, clear, retire_tree, transform};
+pub(crate) use coverage::{finish_input_untracked, push_private_untracked, UnionInput};
 #[cfg(test)]
-use coverage::{finish_private, union_private};
-pub(crate) use coverage::{finish_private_untracked, union_private_untracked, UnionState};
+use coverage::{finish_private, union_private, UnionState};
 
 pub(crate) trait RangeStore: RetiringStore {
     fn range_record_added(&mut self, value: u32) -> Result<()>;

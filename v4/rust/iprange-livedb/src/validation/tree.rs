@@ -1,6 +1,7 @@
 use crate::contract::MAX_TREE_LEVEL;
 use crate::error::Result;
 use crate::mapping::{ByteRange, ByteSource, PageView};
+use crate::slotted_page::LayoutInspection;
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
@@ -84,17 +85,17 @@ where
     };
     validate_root_shape(context, page_number, object, root, header)?;
     let layout = node_layout::<C>(header.level);
-    if !validate_layout(context, page_number, page, object, header, layout)? {
+    let Some(cells) = validate_layout(context, page_number, page, object, header, layout)? else {
         state.previous = None;
         return Ok(None);
-    }
+    };
     if header.level == 0 {
-        walk_leaf::<C, S, F>(context, page_number, page, header, object, state, leaf)
+        walk_leaf::<C, S, F>(context, page_number, cells, object, state, leaf)
     } else {
         walk_branch::<C, S, F>(
             context,
             page_number,
-            page,
+            cells,
             header,
             object,
             path,
@@ -178,7 +179,7 @@ fn node_layout<C: Codec>(level: u16) -> CellLayout {
 fn walk_branch<'m, C, S, F>(
     context: &mut Context<'m, S>,
     page_number: u32,
-    page: PageView<'m>,
+    cells: LayoutInspection<PageView<'m>>,
     header: page::SlottedHeader,
     object: ValidationObject,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -193,9 +194,7 @@ where
 {
     let mut first = None;
     let mut previous = None;
-    for index in 0..header.item_count {
-        context.checkpoint()?;
-        let cell = cell(page, header, index, C::BRANCH_LAYOUT)?;
+    for cell in cells.cells() {
         let Some((key, child)) =
             branch_entry::<C, S, _>(context, page_number, object, cell, state)?
         else {
@@ -277,8 +276,7 @@ fn validate_fence<K: Copy + PartialEq, S: ValidationSink>(
 fn walk_leaf<'m, C, S, F>(
     context: &mut Context<'m, S>,
     page_number: u32,
-    page: PageView<'m>,
-    header: page::SlottedHeader,
+    cells: LayoutInspection<PageView<'m>>,
     object: ValidationObject,
     state: &mut State<C::Key>,
     leaf: &mut F,
@@ -289,9 +287,7 @@ where
     F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     let mut first = None;
-    for index in 0..header.item_count {
-        context.checkpoint()?;
-        let cell = cell(page, header, index, C::LEAF_LAYOUT)?;
+    for cell in cells.cells() {
         walk_leaf_cell::<C, S, F>(context, page_number, cell, object, state, &mut first, leaf)?;
     }
     Ok(first)
@@ -348,7 +344,7 @@ fn validate_layout<S: ValidationSink, P: ByteSource>(
     object: ValidationObject,
     header: page::SlottedHeader,
     layout: CellLayout,
-) -> Result<bool> {
+) -> Result<Option<LayoutInspection<P>>> {
     match layout {
         CellLayout::Fixed(length) => {
             page::validate_fixed_cells(context, page_number, page, object, header, length)
@@ -362,19 +358,5 @@ fn validate_layout<S: ValidationSink, P: ByteSource>(
             minimum,
             maximum,
         ),
-    }
-}
-
-fn cell<'m>(
-    page: PageView<'m>,
-    header: page::SlottedHeader,
-    index: usize,
-    layout: CellLayout,
-) -> Result<ByteRange<PageView<'m>>> {
-    match layout {
-        CellLayout::Fixed(length) => page::fixed_cell(page, header, index, length),
-        CellLayout::Variable { minimum, maximum } => {
-            page::variable_cell(page, header, index, minimum, maximum)
-        }
     }
 }

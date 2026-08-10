@@ -149,6 +149,79 @@ fn first_seen_ingestion_and_merge_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.source_passes, 1);
     assert_eq!(work.ranges_consumed, second.len() as u64);
+    assert_eq!(work.edge_path_checks, 1);
+    assert!(
+        work.tree_lookups < second.len() as u64 / 10,
+        "ordered timestamp ingestion descended per range: {work:?}"
+    );
+
+    let ((finished, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| refresh.finish_input()));
+    let finished = finished.unwrap();
+    assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 2);
+    assert_eq!(work.output_passes, 1);
+    assert_eq!(work.ranges_consumed, (first.len() + second.len()) as u64);
+    assert!(work.ranges_emitted > 0);
+    assert!(work.pages_retired > 0);
+    assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
+    finished.abort().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn last_seen_ingestion_and_merge_allocate_nothing_per_record() {
+    let files = TestPair::new();
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::LAST_SEEN,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let budget = TransactionBudget {
+        max_heap_bytes: 1,
+        max_private_pages: 20_000,
+        max_file_growth_pages: 20_000,
+        max_open_files: 2,
+    };
+    let mut writer = LiveWriter::open(&files.main, budget, &CancellationToken::new()).unwrap();
+    let cancellation = CancellationToken::new();
+    let first: Vec<_> = (0..1_000)
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 4),
+            to: Ipv4Key(index * 4 + 1),
+        })
+        .collect();
+    let second: Vec<_> = (0..1_000)
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 4 + 1),
+            to: Ipv4Key(index * 4 + 2),
+        })
+        .collect();
+
+    let mut seed = writer
+        .begin_last_seen_refresh(10, 0, &cancellation)
+        .unwrap();
+    seed.add_ranges_v4_slice(&first).unwrap();
+    changed(seed.finish_input().unwrap()).commit().unwrap();
+
+    let mut refresh = writer
+        .begin_last_seen_refresh(20, 10, &cancellation)
+        .unwrap();
+    let ((result, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| refresh.add_ranges_v4_slice(&second)));
+    result.unwrap();
+    assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 1);
+    assert_eq!(work.ranges_consumed, second.len() as u64);
+    assert_eq!(work.edge_path_checks, 1);
+    assert!(
+        work.tree_lookups < second.len() as u64 / 10,
+        "ordered timestamp ingestion descended per range: {work:?}"
+    );
 
     let ((finished, work), allocations) =
         count_thread_allocations(|| crate::work::measure(|| refresh.finish_input()));

@@ -43,6 +43,24 @@ impl<'a> WriterEdit<'a> {
         self.store.clear_v6(from, to)
     }
 
+    pub(crate) fn add_private_constant_range<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        value: u32,
+        state: &mut crate::range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.store
+            .add_private_constant_range(from, to, value, state)
+    }
+
+    pub(crate) fn finish_private_constant_ranges<K: IpKey>(
+        &mut self,
+        state: &mut crate::range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.store.finish_private_constant_ranges(state)
+    }
+
     pub(crate) fn set_metadata(&mut self, input: &[u8]) -> Result<bool> {
         self.store.set_metadata(input)
     }
@@ -109,18 +127,40 @@ impl<'a> WriterEdit<'a> {
             .apply_membership_v6(from, to, membership, operation)
     }
 
+    pub(crate) fn begin_empty_map_feed(&mut self) -> Result<()> {
+        self.store.begin_empty_map_feed()
+    }
+
+    pub(crate) fn add_empty_map_feed_range<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        member: MembershipHandle,
+        state: &mut crate::range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.store.add_empty_map_feed_range(from, to, member, state)
+    }
+
+    pub(crate) fn finish_empty_map_feed_ranges<K: IpKey>(
+        &mut self,
+        member: MembershipHandle,
+        state: &mut crate::range_mutation::UnionInput<K>,
+    ) -> Result<()> {
+        self.store.finish_empty_map_feed_ranges(member, state)
+    }
+
     pub(crate) fn add_feed_coverage<K: IpKey>(
         &mut self,
         from: K,
         to: K,
-        state: &mut crate::range_mutation::UnionState<K>,
+        state: &mut crate::range_mutation::UnionInput<K>,
     ) -> Result<()> {
         self.store.add_feed_coverage(from, to, state)
     }
 
     pub(crate) fn finish_feed_coverage<K: IpKey>(
         &mut self,
-        state: &mut crate::range_mutation::UnionState<K>,
+        state: &mut crate::range_mutation::UnionInput<K>,
     ) -> Result<()> {
         self.store.finish_feed_coverage(state)
     }

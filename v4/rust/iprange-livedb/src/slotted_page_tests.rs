@@ -193,6 +193,69 @@ fn fixed_run_removal_compacts_unordered_payload_once() {
     }
 }
 
+#[test]
+fn layout_inspection_detects_overlap_and_nonzero_gaps_by_extent() {
+    let mut page = [0; PAGE_SIZE];
+    let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+    builder.push(&[1; 16]).unwrap();
+    builder.push(&[2; 16]).unwrap();
+    builder.finish().unwrap();
+
+    <[u8]>::copy_within(&mut page, PAGE_SIZE - 32..PAGE_SIZE - 16, PAGE_SIZE - 48);
+    page[PAGE_SIZE - 32..PAGE_SIZE - 16].fill(0);
+    put_u16(&mut page, HEADER_SIZE + 2, (PAGE_SIZE - 48) as u16);
+    put_u16(&mut page, page_header::UPPER, (PAGE_SIZE - 48) as u16);
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    let inspection = inspect_layout(&page, &header, CellLayout::Fixed(16)).unwrap();
+    assert!(!inspection.reserved_nonzero);
+
+    page[PAGE_SIZE - 24] = 1;
+    let inspection = inspect_layout(&page, &header, CellLayout::Fixed(16)).unwrap();
+    assert!(inspection.reserved_nonzero);
+    page[PAGE_SIZE - 24] = 0;
+
+    put_u16(&mut page, HEADER_SIZE, (PAGE_SIZE - 46) as u16);
+    assert!(inspect_layout(&page, &header, CellLayout::Fixed(16)).is_none());
+}
+
+#[test]
+fn inspected_layout_iterates_proven_fixed_and_variable_cells() {
+    let mut fixed_page = [0; PAGE_SIZE];
+    let mut fixed = Builder::new(&mut fixed_page, 2, 7, 0, 4);
+    fixed.push(&11u32.to_le_bytes()).unwrap();
+    fixed.push(&22u32.to_le_bytes()).unwrap();
+    fixed.finish().unwrap();
+    let header = parse(&fixed_page, 7, 2, 4, Some(0)).unwrap();
+    let values: Vec<_> = inspect_layout(&fixed_page, &header, CellLayout::Fixed(4))
+        .unwrap()
+        .cells()
+        .map(|cell| u32_le(cell, 0))
+        .collect();
+    assert_eq!(values, [11, 22]);
+
+    let records = [[4, 0, 1, 2].as_slice(), [6, 0, 3, 4, 5, 6].as_slice()];
+    let mut variable_page = [0; PAGE_SIZE];
+    let mut variable = Builder::new(&mut variable_page, 2, 7, 0, 4);
+    for record in records {
+        variable.push(record).unwrap();
+    }
+    variable.finish().unwrap();
+    let header = parse(&variable_page, 7, 2, 4, Some(0)).unwrap();
+    let actual: Vec<_> = inspect_layout(
+        &variable_page,
+        &header,
+        CellLayout::Variable {
+            minimum: 4,
+            maximum: 6,
+        },
+    )
+    .unwrap()
+    .cells()
+    .map(|cell| cell.as_slice().to_vec())
+    .collect();
+    assert_eq!(actual, records);
+}
+
 fn fixed_unordered_page() -> [u8; PAGE_SIZE] {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, 2, 7, 0, 4);

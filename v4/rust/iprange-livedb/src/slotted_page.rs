@@ -33,8 +33,110 @@ pub(crate) enum CellLayout {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct LayoutInspection {
+pub(crate) struct LayoutInspection<S> {
     pub(crate) reserved_nonzero: bool,
+    page: S,
+    header: Header,
+    layout: CellLayout,
+}
+
+impl<S: ByteSource> LayoutInspection<S> {
+    pub(crate) fn cells(self) -> LayoutCells<S> {
+        LayoutCells {
+            inspection: self,
+            index: 0,
+        }
+    }
+}
+
+pub(crate) struct LayoutCells<S> {
+    inspection: LayoutInspection<S>,
+    index: usize,
+}
+
+impl<S: ByteSource> Iterator for LayoutCells<S> {
+    type Item = ByteRange<S>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.inspection.header.item_count {
+            return None;
+        }
+        crate::work::cell_probe(1);
+        crate::work::slot_read(1);
+        let slot = HEADER_SIZE + self.index * 2;
+        self.index += 1;
+        // SAFETY: `inspect_layout` proved the complete slot array.
+        let start = usize::from(u16::from_le_bytes(unsafe {
+            self.inspection.page.array_unchecked(slot)
+        }));
+        let len = match self.inspection.layout {
+            CellLayout::Fixed(len) => len,
+            CellLayout::Variable { .. } => {
+                // SAFETY: `inspect_layout` proved the variable record header.
+                usize::from(u16::from_le_bytes(unsafe {
+                    self.inspection.page.array_unchecked(start)
+                }))
+            }
+        };
+        // SAFETY: `inspect_layout` proved this complete record extent, and all
+        // page offsets and record lengths fit in `u32`.
+        Some(unsafe { ByteRange::new_unchecked(self.inspection.page, start, len) })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.inspection.header.item_count - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<S: ByteSource> ExactSizeIterator for LayoutCells<S> {}
+
+/// One fixed-record page whose common shape has been checked once for search.
+#[derive(Clone, Copy)]
+pub(crate) struct FixedSearch<S> {
+    page: S,
+    header: Header,
+    cell_len: usize,
+}
+
+impl<S: ByteSource> FixedSearch<S> {
+    pub(crate) fn new(page: S, header: &Header, cell_len: usize) -> Result<Self> {
+        if page.len() != PAGE_SIZE || !shape_valid(*header) || cell_len == 0 || cell_len > PAGE_SIZE
+        {
+            return Err(Error::Corrupt("fixed slotted-page search shape is invalid"));
+        }
+        Ok(Self {
+            page,
+            header: *header,
+            cell_len,
+        })
+    }
+
+    /// Read a fixed cell at an index already bounded by the search algorithm.
+    ///
+    /// The slot offset follows from the checked page shape. The persistent slot
+    /// value remains untrusted and is checked on every probe.
+    #[inline(always)]
+    pub(crate) unsafe fn cell_at(self, index: usize) -> Result<ByteRange<S>> {
+        debug_assert!(index < self.header.item_count);
+        crate::work::cell_probe(1);
+        crate::work::slot_read(1);
+        let slot = HEADER_SIZE + index * 2;
+        // SAFETY: `FixedSearch::new` checked the canonical slot-array shape and
+        // the caller guarantees `index < item_count`.
+        let start = usize::from(u16::from_le_bytes(unsafe {
+            self.page.array_unchecked(slot)
+        }));
+        if start < self.header.upper || start > PAGE_SIZE - self.cell_len {
+            return Err(Error::Corrupt(
+                "slotted-page cell is outside the record area",
+            ));
+        }
+        // SAFETY: The extent check above proves the complete cell is in-page;
+        // page offsets and fixed cell sizes trivially fit in `u32`.
+        Ok(unsafe { ByteRange::new_unchecked(self.page, start, self.cell_len) })
+    }
 }
 
 pub(crate) fn inspect_tree_header<S: ByteSource>(
@@ -52,7 +154,7 @@ pub(crate) fn inspect_tree_header<S: ByteSource>(
     if !page_header::born_valid(page, selected_txn) {
         return Err(HeaderProblem::Born);
     }
-    if !tree_kind_valid(page, branch_type, leaf_type, aux) {
+    if !tree_kind_valid_at_level(page, header.level, branch_type, leaf_type, aux) {
         return Err(HeaderProblem::Type);
     }
     if header.level > MAX_TREE_LEVEL
@@ -72,11 +174,17 @@ pub(crate) fn tree_kind_valid<S: ByteSource>(
     leaf_type: u8,
     aux: u32,
 ) -> bool {
-    let expected_type = if page_header::level(page) == 0 {
-        leaf_type
-    } else {
-        branch_type
-    };
+    tree_kind_valid_at_level(page, page_header::level(page), branch_type, leaf_type, aux)
+}
+
+fn tree_kind_valid_at_level<S: ByteSource>(
+    page: S,
+    level: u16,
+    branch_type: u8,
+    leaf_type: u8,
+    aux: u32,
+) -> bool {
+    let expected_type = if level == 0 { leaf_type } else { branch_type };
     page_header::kind_valid(page, expected_type, aux)
 }
 
@@ -162,12 +270,11 @@ fn raw_header<S: ByteSource>(page: S) -> Header {
 }
 
 fn shape_valid(header: Header) -> bool {
-    let expected_lower = header
-        .item_count
-        .checked_mul(2)
-        .and_then(|size| size.checked_add(HEADER_SIZE));
+    // `item_count` comes from one u16 wire field, so this arithmetic fits even
+    // on the supported 32-bit targets.
+    let expected_lower = HEADER_SIZE + header.item_count * 2;
     header.item_count != 0
-        && expected_lower == Some(header.lower)
+        && expected_lower == header.lower
         && header.lower <= header.upper
         && header.upper < PAGE_SIZE
 }
@@ -226,48 +333,141 @@ pub(crate) fn inspect_layout<S: ByteSource>(
     page: S,
     header: &Header,
     layout: CellLayout,
-) -> Option<LayoutInspection> {
-    let mut used = [0u64; PAGE_SIZE / 64];
-    let mut minimum = PAGE_SIZE;
-    for index in 0..header.item_count {
-        let record = match layout {
-            CellLayout::Fixed(length) => cell(page, header, index, length).ok()?,
-            CellLayout::Variable { minimum, maximum } => {
-                record(page, header, index, minimum, maximum).ok()?
-            }
-        };
-        let start = record.source_offset();
-        let end = start.checked_add(record.len())?;
-        if !mark_extent(&mut used, start, end) {
-            return None;
-        }
-        minimum = minimum.min(start);
+) -> Option<LayoutInspection<S>> {
+    if page.len() != PAGE_SIZE || !shape_valid(*header) {
+        return None;
     }
+    let mut used = [0u64; PAGE_SIZE / 64];
+    let minimum = match layout {
+        CellLayout::Fixed(length) => inspect_fixed_extents(page, header, length, &mut used)?,
+        CellLayout::Variable { minimum, maximum } => {
+            inspect_variable_extents(page, header, minimum, maximum, &mut used)?
+        }
+    };
     if minimum != header.upper {
         return None;
     }
     let mut reserved_nonzero = !page.all_zero(header.lower, header.upper - header.lower);
     if !reserved_nonzero {
-        reserved_nonzero = (header.upper..PAGE_SIZE)
-            .any(|offset| !extent_marked(&used, offset) && page.byte(offset) != Some(0));
+        reserved_nonzero = unmarked_nonzero(page, &used, header.upper);
     }
-    Some(LayoutInspection { reserved_nonzero })
+    Some(LayoutInspection {
+        reserved_nonzero,
+        page,
+        header: *header,
+        layout,
+    })
+}
+
+fn inspect_fixed_extents<S: ByteSource>(
+    page: S,
+    header: &Header,
+    length: usize,
+    used: &mut [u64; PAGE_SIZE / 64],
+) -> Option<usize> {
+    let maximum_start = PAGE_SIZE.checked_sub(length)?;
+    let mut minimum = PAGE_SIZE;
+    for index in 0..header.item_count {
+        crate::work::cell_probe(1);
+        crate::work::slot_read(1);
+        let slot = HEADER_SIZE + index * 2;
+        // SAFETY: `inspect_layout` checked the canonical slot-array shape and
+        // this loop keeps `index < item_count`.
+        let start = usize::from(u16::from_le_bytes(unsafe { page.array_unchecked(slot) }));
+        if start < header.upper || start > maximum_start {
+            return None;
+        }
+        if !mark_extent(used, start, start + length) {
+            return None;
+        }
+        minimum = minimum.min(start);
+    }
+    Some(minimum)
+}
+
+fn inspect_variable_extents<S: ByteSource>(
+    page: S,
+    header: &Header,
+    minimum_len: usize,
+    maximum_len: usize,
+    used: &mut [u64; PAGE_SIZE / 64],
+) -> Option<usize> {
+    let mut minimum = PAGE_SIZE;
+    for index in 0..header.item_count {
+        let record = record(page, header, index, minimum_len, maximum_len).ok()?;
+        let start = record.source_offset();
+        let end = start.checked_add(record.len())?;
+        if !mark_extent(used, start, end) {
+            return None;
+        }
+        minimum = minimum.min(start);
+    }
+    Some(minimum)
 }
 
 fn mark_extent(bits: &mut [u64; PAGE_SIZE / 64], start: usize, end: usize) -> bool {
-    for offset in start..end {
-        let word = offset / 64;
-        let mask = 1u64 << (offset % 64);
-        if bits[word] & mask != 0 {
+    if start >= end || end > PAGE_SIZE {
+        return false;
+    }
+    let first = start / 64;
+    let last = (end - 1) / 64;
+    if first == last {
+        let mask = (u64::MAX << (start % 64)) & end_mask(end % 64);
+        return mark_word(&mut bits[first], mask);
+    }
+    if !mark_word(&mut bits[first], u64::MAX << (start % 64)) {
+        return false;
+    }
+    for word in &mut bits[first + 1..last] {
+        if !mark_word(word, u64::MAX) {
             return false;
         }
-        bits[word] |= mask;
     }
+    mark_word(&mut bits[last], end_mask(end % 64))
+}
+
+#[inline]
+fn end_mask(bit: usize) -> u64 {
+    if bit == 0 {
+        u64::MAX
+    } else {
+        (1u64 << bit) - 1
+    }
+}
+
+#[inline]
+fn mark_word(word: &mut u64, mask: u64) -> bool {
+    if *word & mask != 0 {
+        return false;
+    }
+    *word |= mask;
     true
 }
 
-fn extent_marked(bits: &[u64; PAGE_SIZE / 64], offset: usize) -> bool {
-    bits[offset / 64] & (1u64 << (offset % 64)) != 0
+fn unmarked_nonzero<S: ByteSource>(page: S, used: &[u64; PAGE_SIZE / 64], start: usize) -> bool {
+    for (word_index, marked) in used.iter().enumerate().skip(start / 64) {
+        let base = word_index * 64;
+        let in_range = if base < start {
+            u64::MAX << (start - base)
+        } else {
+            u64::MAX
+        };
+        let mut unmarked = !marked & in_range;
+        while unmarked != 0 {
+            let bit = unmarked.trailing_zeros() as usize;
+            let length = (unmarked >> bit).trailing_ones() as usize;
+            if !page.all_zero(base + bit, length) {
+                return true;
+            }
+            let mask = if length == 64 {
+                u64::MAX
+            } else {
+                ((1u64 << length) - 1) << bit
+            };
+            unmarked &= !mask;
+        }
+    }
+    false
 }
 
 fn slot_start<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<usize> {
@@ -300,7 +500,9 @@ pub(crate) fn insert<D: PageEdit, S: ByteSource>(
     let upper = header.upper - cell.len();
     let lower = header.lower + 2;
     let slot = HEADER_SIZE + index * 2;
-    page.copy_within(slot, slot + 2, header.lower - slot)?;
+    if slot != header.lower {
+        page.copy_within(slot, slot + 2, header.lower - slot)?;
+    }
     page.write_source(upper, cell)?;
     page.put_u16(slot, upper as u16)?;
     page.put_u16(page_header::ITEM_COUNT, (header.item_count + 1) as u16)?;

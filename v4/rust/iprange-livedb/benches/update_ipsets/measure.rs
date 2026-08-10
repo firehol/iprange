@@ -1,9 +1,9 @@
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::allocation::{self, AllocationStats};
+use crate::allocation::AllocationStats;
+use crate::timing;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FileSize {
@@ -25,18 +25,14 @@ pub(crate) struct Measurement {
 pub(crate) fn operation<T>(callback: impl FnOnce() -> T) -> (T, Measurement) {
     let rss_before_kib = current_rss_kib();
     let fds_before = open_file_descriptors();
-    profiler_command(b"enable\n");
-    let started = Instant::now();
-    let (result, allocations) = allocation::measure(callback);
-    let elapsed = started.elapsed();
-    profiler_command(b"disable\n");
+    let (result, timed) = timing::operation(callback);
     let fds_after = open_file_descriptors();
     let rss_after_kib = current_rss_kib();
     (
         result,
         Measurement {
-            elapsed,
-            allocations,
+            elapsed: timed.elapsed,
+            allocations: timed.allocations,
             rss_before_kib,
             rss_after_kib,
             rss_peak_kib: peak_rss_kib(),
@@ -44,19 +40,6 @@ pub(crate) fn operation<T>(callback: impl FnOnce() -> T) -> (T, Measurement) {
             fds_after,
         },
     )
-}
-
-fn profiler_command(command: &[u8]) {
-    let Some(path) = std::env::var_os("IPRANGE_PERF_CONTROL") else {
-        return;
-    };
-    let mut control = fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap_or_else(|error| panic!("open perf control {path:?}: {error}"));
-    control
-        .write_all(command)
-        .unwrap_or_else(|error| panic!("write perf control {path:?}: {error}"));
 }
 
 pub(crate) fn file_size(path: &Path) -> std::io::Result<FileSize> {

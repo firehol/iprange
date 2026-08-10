@@ -76,6 +76,7 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.source_passes, 1);
     assert_eq!(work.ranges_consumed, ranges.len() as u64);
+    assert_eq!(work.ranges_emitted, ranges.len() as u64 - 1);
     assert_eq!(work.membership_lookups, 0);
     assert_eq!(work.membership_interns, 0);
     assert_eq!(work.output_passes, 0);
@@ -86,9 +87,9 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.tree_lookups, 1);
     assert_eq!(work.source_passes, 3);
-    assert_eq!(work.output_passes, 1);
+    assert_eq!(work.output_passes, 0);
     assert_eq!(work.ranges_consumed, ranges.len() as u64);
-    assert_eq!(work.ranges_emitted, ranges.len() as u64);
+    assert_eq!(work.ranges_emitted, 1);
     assert_eq!(work.membership_lookups, 1);
     assert_eq!(work.membership_interns, 0);
     assert_eq!(work.membership_refcount_batches, 1);
