@@ -1,19 +1,24 @@
 use std::ffi::c_void;
 use std::mem::size_of;
 
+#[cfg(not(target_os = "freebsd"))]
 use iprange_livedb::{
-    create_live, AddressFamily, AddressRange, CancellationToken, DirectRange, FinishedWorkflow,
-    ImmutableReader, Ipv4Key, LiveReader, LiveWriter, RangeDirection, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, DirectRange, FinishedWorkflow, LiveReader,
+    LiveWriter, ValueKind, ValueTag,
 };
+use iprange_livedb::{AddressRange, ImmutableReader, Ipv4Key, RangeDirection};
 
-use crate::abi::{CallbackFailure, Cancellation, Range, TransactionBudget};
-use crate::abi_sdk::{
-    HistoryProjectionReport, HistoryWindowInput, HistoryWindowReport, ImmutableFeedBudget,
-    ImmutableFeedReport, OptionalByteSlice,
-};
+#[cfg(not(target_os = "freebsd"))]
+use crate::abi::TransactionBudget;
+use crate::abi::{CallbackFailure, Cancellation, Range};
+#[cfg(not(target_os = "freebsd"))]
+use crate::abi_sdk::{HistoryProjectionReport, HistoryWindowInput, HistoryWindowReport};
+use crate::abi_sdk::{ImmutableFeedBudget, ImmutableFeedReport, OptionalByteSlice};
 use crate::registry;
 
-use super::{abi_path, assert_ok, bytes, transaction_budget, Files};
+#[cfg(not(target_os = "freebsd"))]
+use super::transaction_budget;
+use super::{abi_path, assert_ok, bytes, Files};
 
 struct CoverageSource {
     emitted: bool,
@@ -114,6 +119,7 @@ fn c_immutable_builder_ingests_unordered_ranges_into_the_final_inode() {
 }
 
 #[test]
+#[cfg(not(target_os = "freebsd"))]
 fn c_history_projection_prepares_exact_windows_for_normal_commit() {
     let mut files = Files::new();
     let source_path = files.path("history-source");
@@ -252,6 +258,7 @@ fn c_history_projection_prepares_exact_windows_for_normal_commit() {
     reader.close().unwrap();
 }
 
+#[cfg(not(target_os = "freebsd"))]
 fn create_last_seen(path: &std::path::Path) {
     let cancellation = CancellationToken::new();
     create_live(
@@ -288,6 +295,7 @@ fn create_last_seen(path: &std::path::Path) {
     writer.close().unwrap();
 }
 
+#[cfg(not(target_os = "freebsd"))]
 fn assert_feed(reader: &LiveReader, name: &str, from: u32, to: u32) {
     let mut cursor = reader
         .feed_range_cursor_v4(name, RangeDirection::Forward)

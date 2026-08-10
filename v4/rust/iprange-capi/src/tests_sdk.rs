@@ -1,25 +1,32 @@
-use std::ffi::c_void;
 use std::fs;
-use std::mem::size_of;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path as FsPath, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "freebsd"))]
+use std::{ffi::c_void, mem::size_of};
+
+#[cfg(not(target_os = "freebsd"))]
 use iprange_livedb::{
     create_live, AddressFamily, AddressRange, CancellationToken, Cardinality129, FeedName,
     FinishedWorkflow, ImmutableReader, Ipv4Key, LiveWriter,
     TransactionBudget as CoreTransactionBudget, ValueKind, ValueTag,
 };
 
-use crate::abi::{ByteSlice, CallbackFailure, Cancellation, Path};
+use crate::abi::{ByteSlice, Path};
+#[cfg(not(target_os = "freebsd"))]
+use crate::abi::{CallbackFailure, Cancellation};
+#[cfg(not(target_os = "freebsd"))]
 use crate::abi_sdk::{
     AlgebraComparisonReport, AlgebraCountReport, AlgebraOutputBudget, AlgebraOutputModeInput,
     AlgebraSetOperationInput, AlgebraSetReport, FeedNameValue, FeedSelectionInput,
     MembershipAlgebraBudget as AbiAlgebraBudget, MembershipQueryBudget, OptionalByteSlice,
 };
 use crate::error::ErrorHandle;
+#[cfg(not(target_os = "freebsd"))]
 use crate::handle::{MembershipAlgebraHandle, MembershipScopeHandle, ReaderHandle};
 use crate::registry;
+#[cfg(not(target_os = "freebsd"))]
 use crate::report::ReportHandle;
 
 struct Files(Vec<PathBuf>);
@@ -54,6 +61,7 @@ impl Drop for Files {
     }
 }
 
+#[cfg(not(target_os = "freebsd"))]
 fn transaction_budget() -> CoreTransactionBudget {
     CoreTransactionBudget {
         max_heap_bytes: 2 * 1024 * 1024,
@@ -63,6 +71,7 @@ fn transaction_budget() -> CoreTransactionBudget {
     }
 }
 
+#[cfg(not(target_os = "freebsd"))]
 fn create_membership(path: &FsPath, feeds: &[(&str, &[(u32, u32)])]) {
     let cancellation = CancellationToken::new();
     create_live(
@@ -122,6 +131,7 @@ fn assert_ok(status: u32, error: *mut ErrorHandle) {
     panic!("ABI call failed with status {status} and error {error:p}");
 }
 
+#[cfg(not(target_os = "freebsd"))]
 unsafe fn open_live(path: &FsPath) -> *mut ReaderHandle {
     let mut reader = std::ptr::null_mut();
     let mut error = std::ptr::null_mut();
@@ -137,6 +147,7 @@ unsafe fn open_live(path: &FsPath) -> *mut ReaderHandle {
     reader
 }
 
+#[cfg(not(target_os = "freebsd"))]
 unsafe fn all_scope(reader: *const ReaderHandle) -> *mut MembershipScopeHandle {
     let budget = MembershipQueryBudget {
         abi_version: 1,
@@ -158,6 +169,7 @@ unsafe fn all_scope(reader: *const ReaderHandle) -> *mut MembershipScopeHandle {
     scope
 }
 
+#[cfg(not(target_os = "freebsd"))]
 unsafe extern "C" fn collect_names(
     context: *mut c_void,
     records: *const FeedNameValue,
@@ -178,6 +190,7 @@ unsafe extern "C" fn collect_names(
 }
 
 #[test]
+#[cfg(not(target_os = "freebsd"))]
 fn c_algebra_retains_scopes_and_reuses_the_rust_scan_and_publisher() {
     let mut files = Files::new();
     let a_path = files.path("algebra-a");
@@ -373,6 +386,7 @@ fn c_algebra_retains_scopes_and_reuses_the_rust_scan_and_publisher() {
 }
 
 #[path = "tests_sdk/query.rs"]
+#[cfg(not(target_os = "freebsd"))]
 mod query;
 #[path = "tests_sdk/workflows.rs"]
 mod workflows;
