@@ -36,3 +36,8 @@ packaging/iprange.spec
 # Rust / Go workspaces
 v4/rust/target/
 v4/go/bin/
+
+# Local generated build trees and test executables
+/build-*/
+/src/.dirstamp
+/v4/go/*.test
