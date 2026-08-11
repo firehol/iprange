@@ -542,6 +542,47 @@ Use these sections in this order:
 - Confirmed no Go implementation edit was made. This file defines the future
   port; it does not start it.
 
+### 2026-08-11 - Milestone 0 completed (read-only)
+
+- Files changed: created
+  `.agents/sow/milestones/SOW-0025-milestone-0-report.md` (full inventory,
+  parity matrix, proposed module/API graph, per-file classification, exact
+  deletion set, risk register, size projection); appended this execution-log
+  entry. No production or test file in `v4/go/` was touched.
+- Commits: `972960a` is the pre-milestone HEAD; the report and this entry are
+  committed together as the Milestone 0 closure commit (local `master`, no
+  remote push — per the controlled-handoff rule).
+- Commands and results: `go test ./...` exit 0, `go vet ./...` exit 0,
+  `gofmt -l .` empty, at HEAD `972960add710` with a clean tree. Measured:
+  50 production files / 44,088 newline-counted lines, 59 test files / 37,403
+  lines, 4 files with content-transfer calls, 24 files with complete page
+  arrays, zero conformance references, 64 matched error codes (65-69 missing),
+  sidecar stale magics/layouts, Rust production base 82,516 lines (livedb).
+- Milestone 0 report outcome:
+  - transfer files (6 production + 5 tests): `errors.go`, `key.go`,
+    `cardinality.go`, `page.go`, `name_binding.go`, `process_identity.go`
+    and their tests — each re-verified against literal vectors in Milestone 1
+    before reuse;
+  - proposed tracked deletions: 98 files (44 production + 54 test) — exact
+    list in the milestone report, awaiting user approval (Decision 1);
+  - fault-worker native-boundary policy: pure-Go feasibility proof is a
+    Milestone 1 exit criterion; minimal project-owned assembly shim requires
+    user decision (Decision 2);
+  - projected Go production size: ~32-44k lines (midpoint ~37k), ~40-53% of
+    the Rust base;
+  - next milestone safe to start once Decisions 1 and 2 are answered.
+- Same-failure and authority searches: content-transfer (4 files), complete
+  page arrays (24 files), stale constants (retention 2 files, 1 MiB limit 1
+  file, v3 zero), structured/threat/conformance references (zero) — each class
+  is re-searched as a gate in later milestones; the old tree has one read and
+  one write boundary internally, but that authority design is the rejected
+  one, so the new tree mechanically enforces owner boundaries with a
+  check-go-architecture.sh.
+- No deviation from the approved SOW plan. Decisions requested from the user:
+  (1) approve the 98-file deletion set; (2) choose the fault-worker boundary
+  policy. Both are recorded in the milestone report with evidence and
+  recommendations.
+
 ## Validation
 
 Acceptance criteria evidence:
