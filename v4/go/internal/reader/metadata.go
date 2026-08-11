@@ -16,7 +16,17 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	if meta.MetadataRoot == 0 {
 		return nil, false, nil
 	}
-	compressed := make([]byte, 0, int(meta.MetadataCompressed))
+	// Pre-allocation is bounded by the section-11 compressed bound (itself
+	// enforced at bootstrap) and independently by the physical page count;
+	// append grows beyond the bound if a corrupt chain slips through.
+	bound := format.MetadataCompressedBound(meta.MetadataUncompressed)
+	if pages := uint64(0); meta.PageCount >= 2 {
+		pages = (meta.PageCount - 2) * format.MaxMetadataChunkLen
+		if pages < bound {
+			bound = pages
+		}
+	}
+	compressed := make([]byte, 0, int(bound))
 	pgno := meta.MetadataRoot
 	offset := uint64(0)
 	for {

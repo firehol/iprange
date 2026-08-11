@@ -201,6 +201,9 @@ func (m *Meta) ValidateKindInvariants() error {
 		if m.MetadataUncompressed > MaxMetadataUncompressed {
 			return &errMeta{reason: "metadata uncompressed length over limit", code: ErrFormat}
 		}
+		if m.MetadataCompressed > MetadataCompressedBound(m.MetadataUncompressed) {
+			return &errMeta{reason: "metadata compressed length beyond bound", code: ErrFormat}
+		}
 	}
 	if m.RetiredExtentCount == 0 {
 		if m.RetirementRoot != 0 {

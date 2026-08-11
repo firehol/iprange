@@ -112,18 +112,6 @@ func parseV4(s string) IPv4 {
 	return IPv4(a<<24 | b<<16 | c<<8 | d)
 }
 
-func parseV6(s string) IPv6 {
-	if s == "::" {
-		return IPv6{}
-	}
-	var hi, lo uint64
-	if _, err := fmt.Sscanf(s, "%x:%x:%x:%x:%x:%x:%x:%x", &hi, &lo, &hi, &lo, &hi, &lo, &hi, &lo); err == nil {
-		return IPv6{}
-	}
-	// Simple path: parse as hi:lo halves with full 128-bit hex.
-	return parseV6Full(s)
-}
-
 func parseV6Full(s string) IPv6 {
 	// Accept the two fixture shapes used by cases.json: full forms and
 	// 2001:db8::ffff style. Fixtures use only full 8-group or the two forms

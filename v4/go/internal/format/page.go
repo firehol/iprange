@@ -127,8 +127,14 @@ func OpenSlotted(page []byte, selectedTxn uint64, expectedType PageType, auxExpe
 	if uint32(h.Lower) < uint32(32)+uint32(h.ItemCount)*2 {
 		return SlottedPage{}, headerErr("lower %d below slot array", h.Lower)
 	}
+	if h.Lower > PageSize {
+		return SlottedPage{}, headerErr("lower %d above page size", h.Lower)
+	}
 	if h.Upper < h.Lower {
 		return SlottedPage{}, headerErr("upper %d below lower %d", h.Upper, h.Lower)
+	}
+	if h.Upper > PageSize {
+		return SlottedPage{}, headerErr("upper %d above page size", h.Upper)
 	}
 	return SlottedPage{Page: page, Header: h}, nil
 }
@@ -145,8 +151,8 @@ func (s SlottedPage) SlotOffset(i int) (uint16, error) {
 	if uint32(off) < uint32(s.Header.Upper) {
 		return 0, headerErr("record offset %d below upper %d", off, s.Header.Upper)
 	}
-	if uint32(off)+4096 < uint32(off) {
-		return 0, headerErr("record offset overflow")
+	if uint32(off) > PageSize {
+		return 0, headerErr("record offset %d above page size", off)
 	}
 	return off, nil
 }

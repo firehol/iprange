@@ -93,8 +93,13 @@ Production LOC added: `internal/format` 1,497; `internal/mapping` 161;
   (including index-5 `feed-reused`);
 - membership bitmaps verified at word level (inline words 0/1 across the
   64-bit boundary and ContainsIndex for 5-combination bitmaps);
-- blob-backed membership (v6 fixture) and structured threat memberships
-  verified through the blob tree and structure radix;
+- blob-backed membership verified at word level: the committed fixtures
+  store every bitmap inline (v4 fixture: 2 words; v6 fixture: 1 word), so
+  the official corpus cannot exercise multi-page blobs. A synthetic v4
+  membership database with a 600-word (4,800-byte) bitmap in two blob leaves
+  under one blob branch is hand-built in `internal/reader/blob_test.go` and
+  read through the public path, including words crossing the leaf boundary
+  and the binary-search branch descent;
 - structured values verified field-exact (ASN, country/state/city, location
   flag + microdegrees, threat feeds per range);
 - all three invalid mutations rejected with code 32 (format-invalid), with
@@ -164,7 +169,44 @@ bounded by the 20 MiB limit), matching the contract.
 - FreeBSD live coordination (error 44 before path access) is a later
   milestone; the immutable reader itself is platform-neutral (mmap + flock).
 
-## 9. Pure-Go fault-worker feasibility — evidence and stop point
+## 9. Review findings and repairs (2026-08-11, second pass)
+
+An independent first-principles review of the milestone diff found three
+blocking issues, all verified and fixed, plus two nits and one report
+correction:
+
+1. Blob-branch descent passed `selectedTxn = 0` into `OpenSlotted`
+   (`membership.go`), which rejected every multi-page blob (every committed
+   page has born_txn >= 1); single-leaf blobs were unaffected, so the
+   committed fixtures could not catch it. Fixed by threading the selected
+   transaction; regression-tested by the new synthetic 2-leaf blob database
+   (`blob_test.go`). The blob leaf item-count check was also corrected to
+   apply to leaves only (branches legitimately hold many entries).
+2. Crafted slotted pages with `upper` or slot offsets beyond the page size
+   could panic the process with a slice-bounds fault instead of a typed
+   error (the old overflow guard was dead code over a uint16). Fixed in
+   `format/page.go` (lower/upper bounded to PageSize, slot offsets bounded);
+   regression tests craft `upper = 60000` and `slot = 60000` pages and
+   require typed rejection.
+3. Metadata read pre-allocated from the wire `metadata_compressed_len`
+   without a bound. Fixed twice: bootstrap now enforces the section-11
+   compressed bound (`compressed <= bound(uncompressed)`) as part of meta
+   invariants, and the reader caps the pre-allocation by the physical page
+   count as a second defense. Regression tests cover both.
+4. Catalog name records: the three reserved bytes after `name_len` are now
+   checked (format/catalog.go) with unit vectors.
+5. Dead `parseV6` helper removed from the conformance test.
+6. Report correction: the committed v6 fixture's bitmap is inline (1 word);
+   the 1 MiB object in that fixture is the uncompressed metadata, not a
+   bitmap. The report no longer claims a corpus-exercised multi-page blob;
+   that claim now rests on the synthetic blob test.
+
+Review verdict on the repaired tree: codec layouts, bootstrap rules,
+selection matrix, error table 1-69, and the zero-allocation claims for
+lookups/scans were checked against the normative spec and Rust sources with
+no remaining actionable finding in the milestone scope.
+
+## 10. Pure-Go fault-worker feasibility — evidence and stop point
 
 Per Decision 2 (recorded Milestone 0), feasibility evidence was collected
 before any boundary decision. Empirical probe (`/tmp/wprobe`, not committed):
@@ -207,7 +249,7 @@ proven on real Windows in the platform milestone.
 - C. adjust/qualify the contract instead (requires a spec change + user
   design decision; not recommended).
 
-## 10. Deviations and open items
+## 11. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
   evidence). The old Go tree is untouched and green.
@@ -221,16 +263,18 @@ proven on real Windows in the platform milestone.
 - Metadata bytes and feed names are caller-visible values; their heap copies
   are the contract's "bounded encoded records", not pages.
 
-## 11. Milestone 1 close-out
+## 12. Milestone 1 close-out
 
 Acceptance criteria evidence: portable codecs (literal vectors), mapping
 owner (geometry/lifetime/lock), public immutable reader, all five Rust
 fixture cross-reads with `cases.json` semantics, malformed bootstrap
 rejection, zero-allocation lookups/scans, first platform/worker feasibility
-report — all executed and recorded above. No reviewer findings yet beyond the
-locals above; the same-failure searches (content-transfer, page arrays,
-stale constants, PID-slot model) were re-run over the new tree: none present
-(the new tree contains no read/write/seek content calls, no `[PageSize]byte`
-arrays, no stale tags, no sidecar code). Next milestone is safe to start once
-Decisions 1 (deletion set, evidence now available) and 2 (worker boundary)
-are answered.
+report — all executed and recorded above. The independent review found three
+blocking issues and two nits; all were verified, fixed, and regression-tested
+(section 9), and the reviewer's verdict on the repaired tree was that no
+actionable finding remains in the milestone scope. The same-failure searches
+(content-transfer, page arrays, stale constants, PID-slot model) were re-run
+over the new tree: none present (the new tree contains no read/write/seek
+content calls, no `[PageSize]byte` arrays, no stale tags, no sidecar code).
+Next milestone is safe to start once Decisions 1 (deletion set, evidence now
+available) and 2 (worker boundary) are answered.

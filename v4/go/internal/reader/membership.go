@@ -293,20 +293,23 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, off, length uint64)
 		if h.Aux != kind {
 			return nil, corrupt("blob kind %d expected %d", h.Aux, kind)
 		}
-		if h.ItemCount != 1 {
-			return nil, corrupt("blob page item count %d", h.ItemCount)
-		}
 		switch h.PageType {
 		case format.PageTypeBlobBranch:
 			if level == 0 {
 				return nil, corrupt("zero-level blob branch")
 			}
-			child, err := blobBranchChild(page, off, kind, r.meta.PageCount)
+			if h.ItemCount < 1 {
+				return nil, corrupt("empty blob branch")
+			}
+			child, err := blobBranchChild(page, off, kind, r.meta.PageCount, r.meta.TxnID)
 			if err != nil {
 				return nil, err
 			}
 			cur, level = child, level-1
 		case format.PageTypeBlobLeaf:
+			if h.ItemCount != 1 {
+				return nil, corrupt("blob leaf item count %d", h.ItemCount)
+			}
 			leaf, err := format.DecodeBlobLeaf(page)
 			if err != nil {
 				return nil, err
@@ -326,9 +329,10 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, off, length uint64)
 }
 
 // blobBranchChild finds the greatest branch entry with logical_offset <= off
-// by binary search over the fixed 16-byte slotted records.
-func blobBranchChild(page []byte, off uint64, kind uint32, pageCount uint64) (uint32, error) {
-	sl, err := format.OpenSlotted(page, 0, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
+// by binary search over the fixed 16-byte slotted records. selectedTxn is
+// the committed generation the entire traversal is bound to.
+func blobBranchChild(page []byte, off uint64, kind uint32, pageCount uint64, selectedTxn uint64) (uint32, error) {
+	sl, err := format.OpenSlotted(page, selectedTxn, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
 	if err != nil {
 		return 0, err
 	}

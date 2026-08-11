@@ -58,6 +58,9 @@ func DecodeCatalogNameRecord(b []byte) (CatalogNameRecord, error) {
 	}
 	feedIndex := U32(b[4:8])
 	nameLen := int(b[8])
+	if b[9] != 0 || b[10] != 0 || b[11] != 0 {
+		return CatalogNameRecord{}, headerErr("catalog record reserved bytes")
+	}
 	if int(recordLen) != nameRecordFixed+nameLen {
 		return CatalogNameRecord{}, headerErr("catalog record length %d vs name %d", recordLen, nameLen)
 	}
@@ -91,6 +94,9 @@ func DecodeCatalogNameBranch(b []byte) (CatalogNameBranchRecord, error) {
 		return CatalogNameBranchRecord{}, headerErr("catalog child out of range")
 	}
 	nameLen := int(b[8])
+	if b[9] != 0 || b[10] != 0 || b[11] != 0 {
+		return CatalogNameBranchRecord{}, headerErr("catalog branch reserved bytes")
+	}
 	if int(recordLen) != nameRecordFixed+nameLen {
 		return CatalogNameBranchRecord{}, headerErr("catalog branch name mismatch")
 	}
