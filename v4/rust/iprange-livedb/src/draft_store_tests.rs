@@ -222,6 +222,68 @@ fn retained_aborted_tail_is_linked_into_the_retry_dirty_chain() {
 }
 
 #[test]
+fn retained_aborted_free_page_is_relinked_before_or_after_sealing() {
+    for sealed in [false, true] {
+        let mut test = TestFile::new();
+        test.mapping.resize((10 * PAGE_SIZE) as u64).unwrap();
+        let mut creation = empty_direct_meta(1);
+        creation.page_count = 10;
+        let budget = PageBudget {
+            max_heap_bytes: 0,
+            max_private_pages: 8,
+            max_growth_pages: 8,
+        };
+
+        let mut aborted = Draft::new(creation, [3; 16]).unwrap();
+        {
+            let mut store =
+                DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut aborted);
+            store.claim_allocated(5).unwrap();
+            initialize_test_range_page(&mut store, 5, 2);
+            if sealed {
+                store.seal_private_pages(&mut || Ok(())).unwrap();
+            }
+        }
+        assert_eq!(aborted.meta.txn_id, 2);
+        assert_eq!(aborted.dirty_head, if sealed { 0 } else { 5 });
+        assert_eq!(aborted.private_pages, 1);
+
+        let mut retry = Draft::new(creation, [4; 16]).unwrap();
+        {
+            let mut store =
+                DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut retry);
+            store.claim_allocated(5).unwrap();
+            initialize_test_range_page(&mut store, 5, 2);
+            store.seal_private_pages(&mut || Ok(())).unwrap();
+        }
+        assert_eq!(retry.dirty_head, 0);
+        assert_eq!(retry.private_pages, 1);
+        assert!(crate::page_checksum::valid(
+            test.mapping.page(5, retry.meta.page_count).unwrap()
+        ));
+    }
+}
+
+fn initialize_test_range_page(store: &mut DraftStore<'_>, page_number: u32, txn: u64) {
+    store
+        .update_page(page_number, |page| {
+            crate::page_header::initialize(
+                page,
+                crate::page_header::Fields {
+                    page_type: crate::range_tree::RANGE_LEAF,
+                    born_txn: txn,
+                    item_count: 0,
+                    level: 0,
+                    lower: crate::page_header::SIZE as u16,
+                    upper: PAGE_SIZE as u16,
+                    aux: crate::contract::AddressFamily::Ipv4 as u32,
+                },
+            )
+        })
+        .unwrap();
+}
+
+#[test]
 fn mutation_defers_each_data_page_checksum_until_prepare() {
     let mut test = TestFile::new();
     let creation = empty_direct_meta(1);

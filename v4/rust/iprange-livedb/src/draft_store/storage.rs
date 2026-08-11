@@ -159,7 +159,33 @@ impl DraftStore<'_> {
         let owned_data = page_header::owned_by(page, self.draft.meta.txn_id);
         let private_stack = is_private_page(page, self.draft.meta.txn_id);
         let tag = u32_le(page, page_checksum::OFFSET);
-        Ok(((owned_data || private_stack) && tag != 0).then_some(tag))
+        if !(owned_data || private_stack) || tag == 0 {
+            return Ok(None);
+        }
+        Ok(self.dirty_chain_contains(page_number)?.then_some(tag))
+    }
+
+    fn dirty_chain_contains(&self, expected: u32) -> Result<bool> {
+        let txn = self.draft.meta.txn_id;
+        let limit = self.draft.meta.page_count;
+        let mut page_number = self.draft.dirty_head;
+        let mut remaining = self.draft.private_pages;
+        while page_number != 0 {
+            if remaining == 0 {
+                return Err(Error::Corrupt("draft dirty-page chain is cyclic"));
+            }
+            remaining -= 1;
+            if page_number == expected {
+                return Ok(true);
+            }
+            require_page(page_number, limit)?;
+            let page = self.mapping.page(page_number, limit)?;
+            if !page_header::owned_by(page, txn) && !is_private_page(page, txn) {
+                return Err(Error::Corrupt("dirty page has the wrong transaction"));
+            }
+            page_number = dirty_next(u32_le(page, page_checksum::OFFSET), page_number, limit)?;
+        }
+        Ok(false)
     }
 
     pub(super) fn claim_allocated(&mut self, page_number: u32) -> Result<()> {

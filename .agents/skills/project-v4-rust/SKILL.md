@@ -184,6 +184,13 @@ public live writer and `snapshot_to`; do not add a test-only encoder. Until the
 Go port exists, describe the corpus as Rust-first and never claim
 bidirectional cross-language proof.
 
+Structured mutation changes must keep
+`tests/structured_value_properties.rs` green. That test is the independent
+public-API state-machine proof: deterministic multi-seed arrival-order
+assign/clear operations, commits and aborts, point and canonical cursor checks,
+named-feed projections, and explicit validation after every transaction. Do
+not replace its per-address model with engine normalization or physical IDs.
+
 ## Prove bounded update-ipsets workloads
 
 Build the exact fault worker in the benchmark profile, then run the public-SDK
