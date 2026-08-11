@@ -115,7 +115,7 @@ func OpenSlotted(page []byte, selectedTxn uint64, expectedType PageType, auxExpe
 	if h.PageType != expectedType {
 		return SlottedPage{}, headerErr("page type %d expected %d", h.PageType, expectedType)
 	}
-	if auxExpected != 0 && h.Aux != auxExpected {
+	if h.Aux != auxExpected {
 		return SlottedPage{}, headerErr("aux %d expected %d", h.Aux, auxExpected)
 	}
 	if h.ItemCount < 1 {

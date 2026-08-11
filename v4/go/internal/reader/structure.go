@@ -9,40 +9,33 @@ import (
 // read re-derives a checked mapped view at call time.
 
 // NetworkEnrichmentV1View exposes one network_enrichment_v1 structure entry.
+// The payload is validated and decoded during the lookup, mirroring
+// structured_value/view.rs (decode_mapped inside the lookup).
 type NetworkEnrichmentV1View struct {
-	r            *ImmutableReader
-	id           uint32
-	recordPage   uint32
-	recordOff    uint16
-	membershipID uint32
+	r     *ImmutableReader
+	id    uint32
+	value format.NetworkEnrichmentV1
 }
 
 // ID returns the internal structure ID.
 func (v NetworkEnrichmentV1View) ID() uint32 { return v.id }
 
 // MembershipID returns the payload's internal membership ID (zero = none).
-func (v NetworkEnrichmentV1View) MembershipID() uint32 { return v.membershipID }
+func (v NetworkEnrichmentV1View) MembershipID() uint32 { return v.value.MembershipID }
 
-// Value returns the decoded network_enrichment_v1 payload.
+// Value returns the payload decoded at lookup time; it performs no further
+// mapped access.
 func (v NetworkEnrichmentV1View) Value() (format.NetworkEnrichmentV1, error) {
-	page, err := v.r.page(v.recordPage)
-	if err != nil {
-		return format.NetworkEnrichmentV1{}, err
-	}
-	rec, err := structureRecordAt(page, v.r.meta, v.id, v.recordOff)
-	if err != nil {
-		return format.NetworkEnrichmentV1{}, err
-	}
-	return format.DecodeNetworkEnrichmentV1(rec.Payload)
+	return v.value, nil
 }
 
 // ThreatMembership returns the linked membership bitmap, or a zero view when
 // the payload has no threat membership.
 func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
-	if v.membershipID == 0 {
+	if v.value.MembershipID == 0 {
 		return MembershipView{}, nil
 	}
-	return v.r.lookupMembershipID(v.membershipID)
+	return v.r.lookupMembershipID(v.value.MembershipID)
 }
 
 // LookupNetworkEnrichmentV14 returns the structure covering addr, or false
@@ -117,16 +110,18 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 	if err != nil {
 		return NetworkEnrichmentV1View{}, err
 	}
-	rec, err := structureRecordAt(page, r.meta, id, 0)
+	rec, err := structureRecordAt(page, r.meta, id)
 	if err != nil {
 		return NetworkEnrichmentV1View{}, err
 	}
+	value, err := format.DecodeNetworkEnrichmentV1(rec.Payload)
+	if err != nil {
+		return NetworkEnrichmentV1View{}, corrupt("structure payload: %v", err)
+	}
 	return NetworkEnrichmentV1View{
-		r:            r,
-		id:           id,
-		recordPage:   cur,
-		recordOff:    rec.slotOff,
-		membershipID: payloadMembershipID(page, rec),
+		r:     r,
+		id:    id,
+		value: value,
 	}, nil
 }
 
@@ -162,10 +157,8 @@ type structureRecord struct {
 	format.StructureIDRecord
 }
 
-// structureRecordAt decodes the record at the implied slot for id. When
-// slotOff is zero, the slot is derived from the ID; otherwise the slot is
-// used as-is (view re-reads).
-func structureRecordAt(page []byte, meta format.Meta, id uint32, slotOff uint16) (structureRecord, error) {
+// structureRecordAt decodes the record at the implied slot for id.
+func structureRecordAt(page []byte, meta format.Meta, id uint32) (structureRecord, error) {
 	h, err := format.DecodePageHeader(page, meta.TxnID)
 	if err != nil {
 		return structureRecord{}, err
@@ -173,9 +166,7 @@ func structureRecordAt(page []byte, meta format.Meta, id uint32, slotOff uint16)
 	if h.PageType != format.PageTypeStructureIDRecord || h.Aux != uint32(meta.StructureKind) || h.Level != 0 {
 		return structureRecord{}, corrupt("structure record page")
 	}
-	if slotOff == 0 {
-		slotOff = uint16(uint64(id) % format.StructureRecordSlots)
-	}
+	slotOff := uint16(uint64(id) % format.StructureRecordSlots)
 	slot := uint32(slotOff)
 	if slot >= format.StructureRecordSlots {
 		return structureRecord{}, corrupt("structure slot %d beyond capacity", slot)
@@ -192,14 +183,6 @@ func structureRecordAt(page []byte, meta format.Meta, id uint32, slotOff uint16)
 		return structureRecord{}, corrupt("structure id %d at slot implying %d", rec.StructureID, id)
 	}
 	return structureRecord{slotOff: slotOff, StructureIDRecord: rec}, nil
-}
-
-// payloadMembershipID extracts the payload's membership reference without a
-// second decode pass: record base 32 + slot*80, payload at +48, membership
-// field at payload offset 24.
-func payloadMembershipID(page []byte, rec structureRecord) uint32 {
-	base := uint32(32) + uint32(rec.slotOff)*format.StructureRecordSize + 48 + 24
-	return format.U32(page[base : base+4])
 }
 
 func (r *ImmutableReader) structureLevel(pgno uint32) (uint32, error) {

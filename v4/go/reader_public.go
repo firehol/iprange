@@ -612,5 +612,11 @@ func publicError(err error) error {
 			return &Error{Code: ErrorCode(e.Code), Detail: e.Detail}
 		}
 	}
+	// Internal header/decode validation failures (fixedsize header errors
+	// and similar) are structural corruption at the public boundary.
+	var herr *format.HeaderError
+	if errors.As(err, &herr) {
+		return &Error{Code: ErrorFormatInvalid, Detail: herr.Error()}
+	}
 	return err
 }

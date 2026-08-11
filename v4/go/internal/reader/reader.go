@@ -40,7 +40,7 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	if err := namespaceChecks(path); err != nil {
 		return nil, err
 	}
-	m, err := mapping.OpenImmutable(path)
+	m, err := mapping.OpenImmutable(path, sidecarAbsentUnderLock)
 	if err != nil {
 		if ferr, ok := err.(*format.Error); ok {
 			return nil, ferr
@@ -55,8 +55,31 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	return r, nil
 }
 
-// namespaceChecks applies the section-3 basename rules and requires the
-// canonical external sidecar (.readers) to be absent for an immutable open.
+// sidecarAbsentUnderLock runs after the shared lifetime lock is held and
+// refuses the immutable open when the canonical external sidecar exists.
+// Absence is the only accepted answer: an unreadable sidecar path is a
+// refused open, not a silently ignored error.
+func sidecarAbsentUnderLock(clean string) error {
+	_, err := os.Stat(sidecarPath(clean))
+	switch {
+	case err == nil:
+		return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "external sidecar present; immutable open of a live database is refused"}
+	case os.IsNotExist(err):
+		return nil
+	default:
+		return &format.Error{Code: format.CodeIO, Detail: "sidecar stat: " + err.Error()}
+	}
+}
+
+// sidecarPath returns the canonical external sidecar component: the accepted
+// main basename plus lowercase ".readers".
+func sidecarPath(clean string) string {
+	return filepath.Join(filepath.Dir(clean), filepath.Base(clean)+".readers")
+}
+
+// namespaceChecks applies the section-3 basename rules and the sidecar
+// component-limit rule before opening; the authoritative absence check runs
+// again under the lifetime lock (sidecarAbsentUnderLock).
 func namespaceChecks(path string) error {
 	clean := filepath.Clean(path)
 	base := filepath.Base(clean)
@@ -67,9 +90,10 @@ func namespaceChecks(path string) error {
 	if strings.HasPrefix(lower, ".iprange-") || strings.HasSuffix(lower, ".readers") {
 		return &format.Error{Code: format.CodeNameInvalid, Detail: "reserved basename"}
 	}
-	sidecar := filepath.Join(filepath.Dir(clean), base+".readers")
-	if _, err := os.Stat(sidecar); err == nil {
-		return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "external sidecar present; immutable open of a live database is refused"}
+	// The canonical sidecar (main + ".readers") must fit the target
+	// filesystem component limit (POSIX NAME_MAX).
+	if len(base)+len(".readers") > 255 {
+		return &format.Error{Code: format.CodeNameInvalid, Detail: "canonical sidecar name exceeds component limit"}
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ type Mapping struct {
 }
 
 // OpenImmutable refuses every Windows open in milestone 1.
-func OpenImmutable(path string) (*Mapping, error) {
+func OpenImmutable(path string, _ func(clean string) error) (*Mapping, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 

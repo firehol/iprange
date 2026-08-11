@@ -93,6 +93,13 @@ func ParseIdentity(page []byte) (Meta, bool) {
 			return m, false
 		}
 	}
+	// Bytes [256,4096) MUST be zero (section 4.1); CRC bytes [252,256) do
+	// not participate in identity.
+	for _, b := range page[256:] {
+		if b != 0 {
+			return m, false
+		}
+	}
 	m.MetaCRC32C = U32(page[252:256])
 	if MetaCRC32C(page) != m.MetaCRC32C {
 		return m, false

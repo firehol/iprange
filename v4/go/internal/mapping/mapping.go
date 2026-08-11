@@ -33,17 +33,22 @@ type Mapping struct {
 // OpenImmutable opens path as a regular, symlink-free, page-aligned file and
 // maps exactly its committed extent read-only under a shared lifetime lock.
 // Geometry refusals carry CodeFormatInvalid; operating-system failures carry
-// CodeIO.
-func OpenImmutable(path string) (*Mapping, error) {
+// CodeIO. The optional check runs after the shared lifetime lock is held and
+// before any byte of the file is mapped, so namespace decisions observe one
+// consistent locking state.
+func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(path)
+	// Stat the final name, then reopen with O_NOFOLLOW and verify the file
+	// identity again after open: the EvalSymlinks+reopen pattern alone
+	// leaves a swap race between check and open.
+	before, err := os.Stat(clean)
 	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "resolving path: " + err.Error()}
+		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
-	if resolved != clean {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "path traverses a symbolic link"}
+	if !before.Mode().IsRegular() {
+		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	f, err := os.OpenFile(clean, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
 	}
@@ -61,6 +66,9 @@ func OpenImmutable(path string) (*Mapping, error) {
 	if !st.Mode().IsRegular() {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
 	}
+	if !os.SameFile(before, st) {
+		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file replaced between stat and open"}
+	}
 	size := uint64(st.Size())
 	if size < 2*format.PageSize {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file smaller than two pages"}
@@ -68,9 +76,17 @@ func OpenImmutable(path string) (*Mapping, error) {
 	if size%format.PageSize != 0 {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file size not page-aligned"}
 	}
+	if size > uint64(^uint(0)>>1) {
+		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
+	}
 
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "shared lock: " + err.Error()}
+	}
+	if check != nil {
+		if err := check(clean); err != nil {
+			return nil, err
+		}
 	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
