@@ -207,9 +207,12 @@ fn decode_leaf<S: ByteSource>(
 }
 
 pub(crate) fn require_membership(meta: &MetaV4) -> Result<()> {
-    if meta.value_kind != ValueKind::Membership {
+    if !matches!(
+        meta.value_kind,
+        ValueKind::Membership | ValueKind::Structured
+    ) {
         return Err(Error::WrongValueKind(
-            "feed access requires a membership database",
+            "feed access requires a membership-capable database",
         ));
     }
     Ok(())

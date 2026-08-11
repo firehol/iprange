@@ -10,7 +10,7 @@ pub const PAGE_SHIFT: u8 = 12;
 pub const META_SIZE: u16 = 256;
 pub const MAX_PAGE_COUNT: u64 = 1u64 << 32;
 pub const MAX_TREE_LEVEL: u16 = 31;
-pub const MAX_METADATA_UNCOMPRESSED: u64 = 1_048_576;
+pub const MAX_METADATA_UNCOMPRESSED: u64 = 20 * 1024 * 1024;
 pub const META_MAGIC: [u8; 8] = *b"IPRANGE4";
 pub const PAGE_MAGIC: [u8; 4] = *b"IP4P";
 
@@ -21,6 +21,7 @@ const META_SIZE_OFFSET: usize = 8;
 const PAGE_SHIFT_OFFSET: usize = 10;
 const ADDRESS_FAMILY_OFFSET: usize = 11;
 const VALUE_KIND_OFFSET: usize = 12;
+const STRUCTURE_KIND_OFFSET: usize = 13;
 const VALUE_TAG_OFFSET: usize = 16;
 const DATABASE_ID_OFFSET: usize = 32;
 const TXN_ID_OFFSET: usize = 48;
@@ -45,9 +46,14 @@ const METADATA_ROOT_OFFSET: usize = 172;
 const FREE_BITMAP_ROOT_OFFSET: usize = 176;
 const RETIREMENT_ROOT_OFFSET: usize = 180;
 const ALLOCATOR_RESERVE_OFFSET: usize = 184;
-const RESERVED_HEADER_OFFSET: usize = 13;
-const RESERVED_HEADER_LEN: usize = 3;
-const RESERVED_BODY_OFFSET: usize = 200;
+const STRUCTURE_ENTRY_COUNT_OFFSET: usize = 200;
+const STRUCTURE_ID_LIMIT_OFFSET: usize = 208;
+const STRUCTURE_ID_ROOT_OFFSET: usize = 216;
+const STRUCTURE_HASH_ROOT_OFFSET: usize = 220;
+const STRUCTURE_USED_ROOT_OFFSET: usize = 224;
+const RESERVED_HEADER_OFFSET: usize = 14;
+const RESERVED_HEADER_LEN: usize = 2;
+const RESERVED_BODY_OFFSET: usize = 228;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -71,6 +77,25 @@ impl AddressFamily {
 pub enum ValueKind {
     Direct = 1,
     Membership = 2,
+    Structured = 3,
+}
+
+/// Hardcoded structure selected by one structured database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum StructureKind {
+    None = 0,
+    NetworkEnrichmentV1 = 1,
+}
+
+impl StructureKind {
+    pub const fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::None),
+            1 => Some(Self::NetworkEnrichmentV1),
+            _ => None,
+        }
+    }
 }
 
 /// Engine-defined meaning of a direct database's immutable value tag.
@@ -97,6 +122,7 @@ impl ValueKind {
         match value {
             1 => Some(Self::Direct),
             2 => Some(Self::Membership),
+            3 => Some(Self::Structured),
             _ => None,
         }
     }
@@ -154,6 +180,7 @@ impl ValueTag {
 pub(crate) struct MetaV4 {
     pub(crate) address_family: AddressFamily,
     pub(crate) value_kind: ValueKind,
+    pub(crate) structure_kind_code: u8,
     pub(crate) value_tag: ValueTag,
     pub(crate) database_id: [u8; 16],
     pub(crate) txn_id: u64,
@@ -178,6 +205,11 @@ pub(crate) struct MetaV4 {
     pub(crate) free_bitmap_root: u32,
     pub(crate) retirement_root: u32,
     pub(crate) allocator_reserve: [u32; 4],
+    pub(crate) structure_entry_count: u64,
+    pub(crate) structure_id_limit: u64,
+    pub(crate) structure_id_root: u32,
+    pub(crate) structure_hash_root: u32,
+    pub(crate) structure_used_root: u32,
 }
 
 impl MetaV4 {
@@ -195,6 +227,7 @@ impl MetaV4 {
         page.set_byte(PAGE_SHIFT_OFFSET, PAGE_SHIFT)?;
         page.set_byte(ADDRESS_FAMILY_OFFSET, self.address_family as u8)?;
         page.set_byte(VALUE_KIND_OFFSET, self.value_kind as u8)?;
+        page.set_byte(STRUCTURE_KIND_OFFSET, self.structure_kind_code)?;
         page.write(VALUE_TAG_OFFSET, self.value_tag.as_wire())?;
         page.write(DATABASE_ID_OFFSET, &self.database_id)?;
         page.put_u64(TXN_ID_OFFSET, self.txn_id)?;
@@ -224,6 +257,11 @@ impl MetaV4 {
         for (index, page_number) in self.allocator_reserve.iter().enumerate() {
             page.put_u32(ALLOCATOR_RESERVE_OFFSET + index * 4, *page_number)?;
         }
+        page.put_u64(STRUCTURE_ENTRY_COUNT_OFFSET, self.structure_entry_count)?;
+        page.put_u64(STRUCTURE_ID_LIMIT_OFFSET, self.structure_id_limit)?;
+        page.put_u32(STRUCTURE_ID_ROOT_OFFSET, self.structure_id_root)?;
+        page.put_u32(STRUCTURE_HASH_ROOT_OFFSET, self.structure_hash_root)?;
+        page.put_u32(STRUCTURE_USED_ROOT_OFFSET, self.structure_used_root)?;
         Ok(())
     }
 
@@ -234,6 +272,7 @@ impl MetaV4 {
         Some(Self {
             address_family: AddressFamily::from_wire(page.byte(ADDRESS_FAMILY_OFFSET)?)?,
             value_kind: ValueKind::from_wire(page.byte(VALUE_KIND_OFFSET)?)?,
+            structure_kind_code: page.byte(STRUCTURE_KIND_OFFSET)?,
             value_tag: ValueTag::from_wire(tag)?,
             database_id,
             txn_id: u64_source(page, TXN_ID_OFFSET)?,
@@ -263,17 +302,23 @@ impl MetaV4 {
                 u32_source(page, ALLOCATOR_RESERVE_OFFSET + 8)?,
                 u32_source(page, ALLOCATOR_RESERVE_OFFSET + 12)?,
             ],
+            structure_entry_count: u64_source(page, STRUCTURE_ENTRY_COUNT_OFFSET)?,
+            structure_id_limit: u64_source(page, STRUCTURE_ID_LIMIT_OFFSET)?,
+            structure_id_root: u32_source(page, STRUCTURE_ID_ROOT_OFFSET)?,
+            structure_hash_root: u32_source(page, STRUCTURE_HASH_ROOT_OFFSET)?,
+            structure_used_root: u32_source(page, STRUCTURE_USED_ROOT_OFFSET)?,
         })
     }
 
     pub(crate) fn static_identity_eq(&self, other: &Self) -> bool {
         self.address_family == other.address_family
             && self.value_kind == other.value_kind
+            && self.structure_kind_code == other.structure_kind_code
             && self.value_tag == other.value_tag
             && self.database_id == other.database_id
     }
 
-    pub(crate) const fn roots(&self) -> [u32; 10] {
+    pub(crate) const fn roots(&self) -> [u32; 13] {
         [
             self.range_root,
             self.catalog_name_root,
@@ -285,7 +330,14 @@ impl MetaV4 {
             self.metadata_root,
             self.free_bitmap_root,
             self.retirement_root,
+            self.structure_id_root,
+            self.structure_hash_root,
+            self.structure_used_root,
         ]
+    }
+
+    pub(crate) const fn structure_kind(&self) -> Option<StructureKind> {
+        StructureKind::from_wire(self.structure_kind_code)
     }
 }
 

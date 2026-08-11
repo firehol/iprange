@@ -8,7 +8,7 @@ use std::process::Command;
 use crate::driver::Case;
 
 const FIXTURE_ID: &str = "iprange-v4-update-ipsets-v1";
-const BASELINE_ID: &str = "rust-v4-local-20260810";
+const BASELINE_ID: &str = "rust-v4-local-20260811";
 const BASELINE: &str = include_str!("accepted-baseline.csv");
 const HEADER: &str = "scenario,size,aux,samples,min_ns,p50_ns,p90_ns,max_ns,median_units_per_second,alloc_calls,alloc_bytes,max_rss_peak_kib,max_fds_after,file_logical_bytes,range_records,feeds,accepted_median_ns,ci_limit_ns,ratio,status";
 

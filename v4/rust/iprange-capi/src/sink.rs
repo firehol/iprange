@@ -5,7 +5,8 @@ use std::mem::size_of;
 
 use crate::abi::{
     CallbackFailure, CoverageSinkFn, DirectRange, DirectSinkFn, FeedInfo, FeedSinkFn,
-    FirstSeenRemoval, FirstSeenRemovalSinkFn, MembershipRange, MembershipSinkFn, Range,
+    FirstSeenRemoval, FirstSeenRemovalSinkFn, MembershipRange, MembershipSinkFn,
+    NetworkEnrichmentV1Range, NetworkEnrichmentV1SinkFn, Range,
 };
 use crate::error::{BoundaryError, CallError};
 use crate::source::{callback_message, require_empty_failure};
@@ -65,6 +66,12 @@ sink!(
     "membership sink"
 );
 sink!(feed, FeedSinkFn, FeedInfo, "feed sink");
+sink!(
+    network_enrichment_v1,
+    NetworkEnrichmentV1SinkFn,
+    NetworkEnrichmentV1Range,
+    "network enrichment sink"
+);
 
 pub(crate) fn records<T>(
     callback: Option<unsafe extern "C" fn(*mut c_void, *const T, u64, *mut CallbackFailure) -> u32>,

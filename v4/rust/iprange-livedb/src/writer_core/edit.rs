@@ -5,7 +5,7 @@ use crate::cancellation::CancellationToken;
 use crate::contract::MembershipOperation;
 use crate::draft_store::{
     DraftStore, FeedMerge, HistoryMerge, HistoryPlan, ImportCache, ImportMerge, ImportWords,
-    MembershipHandle, TimestampMerge, TranslatedMembership,
+    MembershipHandle, StructureHandle, TimestampMerge, TranslatedMembership,
 };
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
@@ -13,6 +13,7 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::reader_core::MembershipToken;
 use crate::workflow::FirstSeenRemovalSink;
 use crate::Cardinality129;
+use crate::NetworkEnrichmentV1;
 
 pub(crate) struct WriterEdit<'a> {
     pub(super) store: DraftStore<'a>,
@@ -148,6 +149,47 @@ impl<'a> WriterEdit<'a> {
     ) -> Result<bool> {
         self.store
             .apply_membership_v6(from, to, membership, operation)
+    }
+
+    pub(crate) fn intern_network_enrichment_v1(
+        &mut self,
+        value: NetworkEnrichmentV1,
+        membership: MembershipHandle,
+    ) -> Result<StructureHandle> {
+        self.store.intern_network_enrichment_v1(value, membership)
+    }
+
+    pub(crate) fn assign_structure_input_v4(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        structure: StructureHandle,
+        input: &mut crate::range_mutation::AssignmentInput<Ipv4Key>,
+    ) -> Result<bool> {
+        self.store
+            .assign_structure_input_v4(from, to, structure, input)
+    }
+
+    pub(crate) fn assign_structure_input_v6(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        structure: StructureHandle,
+        input: &mut crate::range_mutation::AssignmentInput<Ipv6Key>,
+    ) -> Result<bool> {
+        self.store
+            .assign_structure_input_v6(from, to, structure, input)
+    }
+
+    pub(crate) fn delete_current_structured_feed<F>(
+        &mut self,
+        feed: FeedEntry,
+        checkpoint: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        self.store.delete_current_structured_feed(feed, checkpoint)
     }
 
     pub(crate) fn begin_empty_map_feed(&mut self) -> Result<()> {

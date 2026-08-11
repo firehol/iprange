@@ -7,6 +7,7 @@ use crate::reader_core::ReaderCore;
 use crate::{
     CancellationToken, CloseOutcome, DatabaseInfo, FeedEntry, ImmutableReader, LiveReader,
     MatchingFeedSink, MatchingFeedsReport, MembershipImportSource, MembershipQuery,
+    NetworkEnrichmentV1,
 };
 
 pub use crate::reader_core::{MembershipToken, ReaderCursor, ReaderCursorItem};
@@ -22,6 +23,13 @@ enum ReaderInner {
     Immutable(ImmutableReader),
     Live(LiveReader),
     Closed,
+}
+
+/// Borrow-free typed enrichment result for language bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetworkEnrichmentV1Token {
+    pub value: NetworkEnrichmentV1,
+    pub membership: Option<MembershipToken>,
 }
 
 impl Reader {
@@ -83,6 +91,15 @@ impl Reader {
         self.core()?.read().open_membership_state(direction)
     }
 
+    pub fn open_network_enrichment_v1_cursor(
+        &self,
+        direction: RangeDirection,
+    ) -> Result<ReaderCursor> {
+        self.core()?
+            .read()
+            .open_network_enrichment_v1_state(direction)
+    }
+
     pub fn open_feed_cursor(&self, name: &str, direction: RangeDirection) -> Result<ReaderCursor> {
         self.core()?.read().open_feed_state(name, direction)
     }
@@ -105,6 +122,28 @@ impl Reader {
 
     pub fn lookup_membership_token_v6(&self, address: Ipv6Key) -> Result<Option<MembershipToken>> {
         self.core()?.read().membership_token_v6(address)
+    }
+
+    pub fn lookup_network_enrichment_v1_v4(
+        &self,
+        address: Ipv4Key,
+    ) -> Result<Option<NetworkEnrichmentV1Token>> {
+        Ok(self
+            .core()?
+            .read()
+            .lookup_network_enrichment_v1_v4(address)?
+            .map(network_enrichment_token))
+    }
+
+    pub fn lookup_network_enrichment_v1_v6(
+        &self,
+        address: Ipv6Key,
+    ) -> Result<Option<NetworkEnrichmentV1Token>> {
+        Ok(self
+            .core()?
+            .read()
+            .lookup_network_enrichment_v1_v6(address)?
+            .map(network_enrichment_token))
     }
 
     pub fn membership_word_count(&self, token: MembershipToken) -> Result<u32> {
@@ -283,5 +322,12 @@ impl Reader {
         operation: impl FnOnce(crate::MembershipView<'_>) -> Result<T>,
     ) -> Result<T> {
         operation(self.core()?.read().membership(token)?)
+    }
+}
+
+fn network_enrichment_token(value: crate::NetworkEnrichmentV1View<'_>) -> NetworkEnrichmentV1Token {
+    NetworkEnrichmentV1Token {
+        value: value.value(),
+        membership: value.threat_membership_token(),
     }
 }

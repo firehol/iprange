@@ -18,6 +18,7 @@ pub(crate) struct Context<'a, S> {
     pub(crate) meta: MetaV4,
     claims: Claims,
     memberships: Option<Table>,
+    structures: Option<Table>,
     heap_limit: u64,
     heap_used: u64,
     progress: ValidationProgress,
@@ -35,9 +36,24 @@ impl<'a, S: ValidationSink> Context<'a, S> {
     ) -> Result<Self> {
         let claims = Claims::new(meta.page_count, budget.max_heap_bytes)?;
         let mut heap_used = claims.retained_bytes();
-        let memberships = if meta.value_kind == ValueKind::Membership {
+        let memberships = if matches!(
+            meta.value_kind,
+            ValueKind::Membership | ValueKind::Structured
+        ) {
             let table = Table::new(
                 meta.membership_entry_count,
+                budget.max_heap_bytes.saturating_sub(heap_used),
+            )?;
+            heap_used = heap_used
+                .checked_add(table.retained_bytes())
+                .ok_or(Error::ArithmeticOverflow("validation retained heap"))?;
+            Some(table)
+        } else {
+            None
+        };
+        let structures = if meta.value_kind == ValueKind::Structured {
+            let table = Table::new(
+                meta.structure_entry_count,
                 budget.max_heap_bytes.saturating_sub(heap_used),
             )?;
             heap_used = heap_used
@@ -52,6 +68,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
             meta,
             claims,
             memberships,
+            structures,
             heap_limit: budget.max_heap_bytes,
             heap_used,
             progress: ValidationProgress::new(),
@@ -88,9 +105,18 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         self.progress.mark_untraversable(unbounded)
     }
 
-    pub(crate) fn count_membership_range(&mut self, id: u32) -> CountResult {
+    pub(crate) fn count_membership_owner(&mut self, id: u32) -> CountResult {
         let cancellation = self.cancellation;
         self.memberships
+            .as_mut()
+            .map_or(CountResult::Unavailable, |table| {
+                table.count_range(id, cancellation)
+            })
+    }
+
+    pub(crate) fn count_structure_range(&mut self, id: u32) -> CountResult {
+        let cancellation = self.cancellation;
+        self.structures
             .as_mut()
             .map_or(CountResult::Unavailable, |table| {
                 table.count_range(id, cancellation)
@@ -137,6 +163,52 @@ impl<'a, S: ValidationSink> Context<'a, S> {
             .memberships
             .as_ref()
             .ok_or(Error::Corrupt("direct validation has no membership table"))?
+            .slot(index))
+    }
+
+    pub(crate) fn define_structure(
+        &mut self,
+        id: u32,
+        refcount: u64,
+        membership_id: u32,
+        digest: [u8; 32],
+    ) -> Result<InsertResult> {
+        let cancellation = self.cancellation;
+        self.structures
+            .as_mut()
+            .ok_or(Error::Corrupt(
+                "non-structured validation has no structure table",
+            ))?
+            .define(id, refcount, membership_id, digest, cancellation)
+    }
+
+    pub(crate) fn mark_structure_reverse(&mut self, id: u32, digest: [u8; 32]) -> Result<bool> {
+        let cancellation = self.cancellation;
+        self.structures
+            .as_mut()
+            .ok_or(Error::Corrupt(
+                "non-structured validation has no structure table",
+            ))?
+            .mark_reverse_digest(id, digest, cancellation)
+    }
+
+    pub(crate) fn structure_slots(&self) -> Result<usize> {
+        Ok(self
+            .structures
+            .as_ref()
+            .ok_or(Error::Corrupt(
+                "non-structured validation has no structure table",
+            ))?
+            .len())
+    }
+
+    pub(crate) fn structure_slot(&self, index: usize) -> Result<Option<Slot>> {
+        Ok(self
+            .structures
+            .as_ref()
+            .ok_or(Error::Corrupt(
+                "non-structured validation has no structure table",
+            ))?
             .slot(index))
     }
 

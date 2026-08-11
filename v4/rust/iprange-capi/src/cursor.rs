@@ -3,7 +3,7 @@
 use iprange_livedb::c_abi_support::{ReaderCursor, ReaderCursorItem};
 use iprange_livedb::RangeDirection;
 
-use crate::abi::{DirectRange, MembershipRange, Range, STATUS_OK};
+use crate::abi::{DirectRange, MembershipRange, NetworkEnrichmentV1Range, Range, STATUS_OK};
 use crate::error::{
     call, call_with_output, call_with_outputs, output_slot, required_input, required_output,
     BoundaryError, CallError, ErrorHandle,
@@ -16,6 +16,7 @@ use crate::membership::decode_name;
 pub(crate) enum Kind<'a> {
     Direct,
     Membership,
+    NetworkEnrichmentV1,
     Feed(&'a str),
 }
 
@@ -52,6 +53,24 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_open_membership_cursor(
         output,
         error_output,
         Kind::Membership,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iprange_v4_abi1_reader_open_network_enrichment_v1_cursor(
+    reader: *const ReaderHandle,
+    direction: u32,
+    bounds: *const Range,
+    output: *mut *mut CursorHandle,
+    error_output: *mut *mut ErrorHandle,
+) -> u32 {
+    open_cursor(
+        reader,
+        direction,
+        bounds,
+        output,
+        error_output,
+        Kind::NetworkEnrichmentV1,
     )
 }
 
@@ -114,6 +133,7 @@ pub(crate) fn build(
     let mut cursor = match kind {
         Kind::Direct => parent.open_direct_cursor(direction)?,
         Kind::Membership => parent.open_membership_cursor(direction)?,
+        Kind::NetworkEnrichmentV1 => parent.open_network_enrichment_v1_cursor(direction)?,
         Kind::Feed(name) => parent.open_feed_cursor(name, direction)?,
     };
     if let Some(bounds) = bounds {
@@ -215,6 +235,75 @@ pub unsafe extern "C" fn iprange_v4_abi1_cursor_next_membership(
                     Some(_) => {
                         return Err(BoundaryError::wrong_state(
                             "cursor does not return membership ranges",
+                        )
+                        .into())
+                    }
+                }
+                Ok(())
+            })
+        },
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iprange_v4_abi1_cursor_next_network_enrichment_v1(
+    cursor: *const CursorHandle,
+    present: *mut u8,
+    output: *mut NetworkEnrichmentV1Range,
+    error_output: *mut *mut ErrorHandle,
+) -> u32 {
+    call_with_outputs(
+        error_output,
+        &[
+            output_slot(present, "presence output is null"),
+            output_slot(output, "network enrichment range output is null"),
+        ],
+        || {
+            // SAFETY: all pointers are validated before use.
+            let cursor =
+                unsafe { crate::handle::required_handle_input(cursor, "cursor handle is null")? };
+            let present = unsafe { required_output(present, "presence output is null")? };
+            let output =
+                unsafe { required_output(output, "network enrichment range output is null")? };
+            *present = 0;
+            *output = NetworkEnrichmentV1Range::default();
+            cursor.with_mut(|reader, cursor, borrowed, bounds| {
+                *borrowed = None;
+                match next(reader, cursor, bounds)? {
+                    None => {}
+                    Some(ReaderCursorItem::NetworkEnrichmentV1V4 {
+                        range,
+                        value,
+                        membership,
+                    }) => {
+                        store_network_enrichment_range(
+                            reader,
+                            range_v4(range),
+                            value,
+                            membership,
+                            borrowed,
+                            present,
+                            output,
+                        );
+                    }
+                    Some(ReaderCursorItem::NetworkEnrichmentV1V6 {
+                        range,
+                        value,
+                        membership,
+                    }) => {
+                        store_network_enrichment_range(
+                            reader,
+                            range_v6(range),
+                            value,
+                            membership,
+                            borrowed,
+                            present,
+                            output,
+                        );
+                    }
+                    Some(_) => {
+                        return Err(BoundaryError::wrong_state(
+                            "cursor does not return network enrichment ranges",
                         )
                         .into())
                     }
@@ -421,6 +510,34 @@ fn clip(item: ReaderCursorItem, bounds: Option<CursorBounds>) -> Clip {
             |result| result,
             |_| Clip::Yield(ReaderCursorItem::MembershipV6 { range, membership }),
         ),
+        ReaderCursorItem::NetworkEnrichmentV1V4 {
+            mut range,
+            value,
+            membership,
+        } => clip_v4(&mut range.from, &mut range.to, bounds).map_or_else(
+            |result| result,
+            |_| {
+                Clip::Yield(ReaderCursorItem::NetworkEnrichmentV1V4 {
+                    range,
+                    value,
+                    membership,
+                })
+            },
+        ),
+        ReaderCursorItem::NetworkEnrichmentV1V6 {
+            mut range,
+            value,
+            membership,
+        } => clip_v6(&mut range.from, &mut range.to, bounds).map_or_else(
+            |result| result,
+            |_| {
+                Clip::Yield(ReaderCursorItem::NetworkEnrichmentV1V6 {
+                    range,
+                    value,
+                    membership,
+                })
+            },
+        ),
         ReaderCursorItem::FeedV4(mut range) => clip_v4(&mut range.from, &mut range.to, bounds)
             .map_or_else(
                 |result| result,
@@ -432,6 +549,24 @@ fn clip(item: ReaderCursorItem, bounds: Option<CursorBounds>) -> Clip {
                 |_| Clip::Yield(ReaderCursorItem::FeedV6(range)),
             ),
     }
+}
+
+fn store_network_enrichment_range(
+    reader: &std::sync::Arc<iprange_livedb::c_abi_support::Reader>,
+    range: Range,
+    value: iprange_livedb::NetworkEnrichmentV1,
+    membership: Option<iprange_livedb::c_abi_support::MembershipToken>,
+    borrowed: &mut Option<BorrowedMembershipViewHandle>,
+    present: &mut u8,
+    output: &mut NetworkEnrichmentV1Range,
+) {
+    *borrowed = membership.map(|membership| BorrowedMembershipViewHandle::new(reader, membership));
+    *present = 1;
+    *output = NetworkEnrichmentV1Range {
+        range,
+        value: crate::structured::encode(value),
+        membership: borrowed.as_ref().map_or(std::ptr::null(), |view| view),
+    };
 }
 
 fn clip_v4(

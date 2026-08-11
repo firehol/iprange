@@ -1,4 +1,4 @@
-//! Operation-private aggregation of membership refcount changes.
+//! Operation-private aggregation of dictionary refcount changes.
 
 use crate::contract::{u32_le, PAGE_SIZE};
 use crate::error::{Error, Result};
@@ -87,7 +87,7 @@ pub(crate) fn track_buffered<S: Store>(
             current.change = current
                 .change
                 .checked_add(change)
-                .ok_or_else(|| Error::arithmetic_overflow("membership refcount delta"))?;
+                .ok_or_else(|| Error::arithmetic_overflow("dictionary refcount delta"))?;
             *slot = Some(current);
             return Ok(());
         }
@@ -98,7 +98,7 @@ pub(crate) fn track_buffered<S: Store>(
     }
 
     let oldest =
-        pending.slots[0].ok_or_else(|| Error::corrupt("membership delta pending slot is empty"))?;
+        pending.slots[0].ok_or_else(|| Error::corrupt("refcount delta pending slot is empty"))?;
     track(store, root, oldest.id, oldest.change)?;
     pending.slots[0] = pending.slots[1];
     pending.slots[1] = Some(Delta { id, change });
@@ -126,7 +126,7 @@ fn track<S: Store>(store: &mut S, root: &mut u32, id: u32, change: i64) -> Resul
         let change = current
             .change
             .checked_add(change)
-            .ok_or_else(|| Error::arithmetic_overflow("membership refcount delta"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("dictionary refcount delta"))?;
         let mut retired = RetiredPages::new();
         fixed_tree::mutate_leaf_u64::<DeltaCodec, S, _>(
             store,
@@ -156,7 +156,7 @@ fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Delta>> {
 fn insert<S: Store>(store: &mut S, root: &mut u32, delta: Delta) -> Result<()> {
     let mut retired = RetiredPages::new();
     if !fixed_tree::insert::<DeltaCodec, S>(store, root, &delta.encode(), &mut retired)? {
-        return Err(Error::Corrupt("membership delta key already exists"));
+        return Err(Error::Corrupt("refcount delta key already exists"));
     }
     require_private(retired)
 }
@@ -166,7 +166,7 @@ fn require_private(retired: RetiredPages) -> Result<()> {
         Ok(())
     } else {
         Err(Error::Corrupt(
-            "membership delta tree contains a committed page",
+            "refcount delta tree contains a committed page",
         ))
     }
 }
@@ -199,11 +199,11 @@ impl CursorItem<DeltaCodec> for DeltaItem {
 
 fn decode<S: ByteSource>(cell: S) -> Result<Delta> {
     if cell.len() != RECORD_SIZE {
-        return Err(Error::Corrupt("membership delta record is malformed"));
+        return Err(Error::Corrupt("refcount delta record is malformed"));
     }
     let bytes = cell
         .array(CHANGE_OFFSET)
-        .ok_or_else(|| Error::corrupt("membership delta record is malformed"))?;
+        .ok_or_else(|| Error::corrupt("refcount delta record is malformed"))?;
     Ok(Delta {
         id: u32_le(cell, ID_OFFSET),
         change: i64::from_le_bytes(bytes),

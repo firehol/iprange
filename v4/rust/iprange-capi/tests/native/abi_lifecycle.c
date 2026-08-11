@@ -70,6 +70,7 @@ static int create_direct(const char *path, iprange_v4_abi1_report **created)
               path_from(path),
               IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4,
               IPRANGE_V4_ABI1_VALUE_KIND_DIRECT,
+              IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
               no_cancellation(),

@@ -39,7 +39,7 @@ The main file has these fundamental properties:
 - fixed 4,096-byte pages;
 - two alternating meta pages at page numbers 0 and 1;
 - one inclusive, non-overlapping IPv4 or IPv6 range map;
-- one static range-value kind: `direct` or `membership`;
+- one static range-value kind: `direct`, `membership`, or `structured`;
 - COW publication by one alternate-meta write with CRC tear detection;
 - an optional opaque file-level zlib-compressed payload;
 - a persistent COW free-page bitmap;
@@ -47,9 +47,10 @@ The main file has these fundamental properties:
 - no implicit full validation during open or ordinary access.
 
 Cross-language compatibility is semantic. Go and Rust writers MAY choose
-different valid page splits, COW shapes, membership IDs, inline/blob choices,
-and zlib streams. Readers MUST expose the same ranges, direct values or named
-memberships, feed catalog, and exact decompressed metadata bytes.
+different valid page splits, COW shapes, membership IDs, structure IDs,
+inline/blob choices, and zlib streams. Readers MUST expose the same ranges,
+direct values, named memberships, typed structured values, feed catalog, and
+exact decompressed metadata bytes.
 
 ## 2. Fixed constants and primitive encodings
 
@@ -60,7 +61,7 @@ memberships, feed catalog, and exact decompressed metadata bytes.
 | `META_SIZE` | 256 bytes |
 | `MAX_PAGE_COUNT` | 4,294,967,296 (`2^32`) |
 | `MAX_TREE_LEVEL` | 31 |
-| `MAX_METADATA_UNCOMPRESSED` | 1,048,576 bytes |
+| `MAX_METADATA_UNCOMPRESSED` | 20,971,520 bytes |
 | `BITMAP_LEAF_WORDS` | 500 |
 | `BITMAP_LEAF_BITS` | 32,000 |
 | `BITMAP_FANOUT` | 256 |
@@ -214,16 +215,17 @@ Each meta page is exactly 4,096 bytes. Bytes `[0,256)` have this layout:
 | 8 | 2 | `meta_size` | `256` |
 | 10 | 1 | `page_shift` | `12` |
 | 11 | 1 | `address_family` | `4` or `6` |
-| 12 | 1 | `value_kind` | `1=direct`, `2=membership` |
-| 13 | 3 | reserved | zero |
+| 12 | 1 | `value_kind` | `1=direct`, `2=membership`, `3=structured` |
+| 13 | 1 | `structure_kind` | `0=none`, `1=network_enrichment_v1` |
+| 14 | 2 | reserved | zero |
 | 16 | 16 | `value_tag` | canonical tag, below |
 | 32 | 16 | `database_id` | nonzero opaque 128-bit value |
 | 48 | 8 | `txn_id` | selected committed transaction, nonzero |
 | 56 | 16 | `commit_nonce` | random nonzero identity of this exact commit |
 | 72 | 8 | `page_count` | `2..MAX_PAGE_COUNT` |
 | 80 | 8 | `range_record_count` | current range-record count |
-| 88 | 8 | `active_feed_count` | zero for direct files |
-| 96 | 8 | `feed_index_limit` | membership high-water count |
+| 88 | 8 | `active_feed_count` | zero for direct; catalog entry count otherwise |
+| 96 | 8 | `feed_index_limit` | zero for direct; catalog high-water count otherwise |
 | 104 | 8 | `membership_entry_count` | zero for direct files |
 | 112 | 8 | `membership_id_limit` | zero for direct; otherwise `1..2^32` |
 | 120 | 8 | `metadata_uncompressed_len` | exact decompressed length |
@@ -240,7 +242,12 @@ Each meta page is exactly 4,096 bytes. Bytes `[0,256)` have this layout:
 | 176 | 4 | `free_bitmap_root` | free-page bitmap root or zero |
 | 180 | 4 | `retirement_root` | retirement-tree root or zero |
 | 184 | 16 | `allocator_reserve[4]` | optional meta-owned page numbers |
-| 200 | 52 | reserved | zero |
+| 200 | 8 | `structure_entry_count` | zero outside structured files |
+| 208 | 8 | `structure_id_limit` | zero outside structured files |
+| 216 | 4 | `structure_id_root` | structure dictionary root or zero |
+| 220 | 4 | `structure_hash_root` | structure reverse-index root or zero |
+| 224 | 4 | `structure_used_root` | structure-ID used-bitmap root or zero |
+| 228 | 24 | reserved | zero |
 | 252 | 4 | `meta_crc32c` | CRC-32C of the full meta page |
 
 Bytes `[256,4096)` MUST be zero. To compute `meta_crc32c`, bytes `[252,256)`
@@ -248,9 +255,14 @@ are treated as zero.
 
 There is no major field, minor field, feature-negotiation field, extension
 directory, or compatible-header range. Any wrong fixed value, nonzero reserved
-byte, or unknown value is not v4. After the first v4 release, a future
-incompatible format MUST use a new identity such as `IPRANGE5`; revisions to
-this explicitly unreleased Phase-1 contract do not create compatibility modes.
+byte, or unknown value other than `structure_kind` is not v4. An unknown
+nonzero `structure_kind` is recognizable static v4 identity but is not
+interpretable by that SDK; bootstrap MUST return typed `UnsupportedStructure`
+before traversing any non-meta graph. This narrow enum extension point supports
+additional hardcoded structures without a runtime schema. After the first v4
+release, any other incompatible format change MUST use a new identity such as
+`IPRANGE5`; revisions to this explicitly unreleased Phase-1 contract do not
+create compatibility modes.
 
 ### 4.1 Static identity
 
@@ -258,7 +270,7 @@ These fields are immutable for a database:
 
 - `magic`, `meta_size`, and `page_shift`;
 - `address_family`;
-- `value_kind` and `value_tag`;
+- `value_kind`, `structure_kind`, and `value_tag`;
 - `database_id`.
 
 A meta is **identity-readable** when its complete page is present and its magic,
@@ -266,6 +278,11 @@ fixed constants, reserved bytes, tag encoding, nonzero database ID, and meta
 CRC are valid. If both pages are identity-readable but their static identity
 differs, open MUST reject the file even when one page later fails a dynamic
 bootstrap check. It MUST NOT select one side of the contradiction.
+
+`structure_kind` participates in that comparison as its raw byte. After static
+identity agreement and meta selection, zero/known-kind relations are checked.
+An unknown nonzero selected kind returns `UnsupportedStructure` at that point;
+the SDK does not inspect roots in an attempt to infer its payload.
 
 `database_id` MUST be generated from a cryptographically secure random source
 and MUST NOT be all zero. A new database and a recovery output receive a new
@@ -308,7 +325,7 @@ is encoded as:
 
 For `value_kind == direct`, the SDK reports `DirectSemantic = FirstSeen` or
 `LastSeen` for those exact tags and `Generic` for every other valid tag.
-Membership tags remain opaque and have no direct semantic. The tag bytes remain
+Membership and structured tags remain opaque and have no direct semantic. The tag bytes remain
 part of immutable file identity; no compatibility alias exists for an older
 experimental tag.
 
@@ -362,10 +379,11 @@ status. No API silently upgrades a sole candidate to current.
 
 ### 4.3 Kind-specific meta invariants
 
-For `direct` files, all catalog and membership counts, limits, and roots MUST
-be zero.
+For `direct` files, `structure_kind` is zero and all catalog, membership, and
+structure counts, limits, and roots MUST be zero.
 
-For `membership` files:
+For `membership` files, `structure_kind` and all structure counts, limits, and
+roots are zero. The catalog and membership invariants are:
 
 - `feed_index_limit <= 2^32`;
 - `active_feed_count <= feed_index_limit`;
@@ -376,6 +394,22 @@ For `membership` files:
 - zero membership entries requires zero range records; and
 - `membership_entry_count <= range_record_count` because every live dictionary
   entry has at least one range-record reference.
+
+For `structured` files:
+
+- `structure_kind` is one supported nonzero value;
+- `structure_entry_count <= 2^32-1`;
+- `structure_id_limit` is at least 1 and at most `2^32`;
+- structure ID zero is reserved and has no dictionary entry;
+- zero structure entries requires zero range records;
+- `structure_entry_count <= range_record_count` because every live structure
+  entry has at least one range-record reference;
+- the catalog and membership limits use the same bounds as a membership file;
+- zero active feeds requires zero membership entries, but does not require zero
+  structure entries or ranges;
+- `membership_entry_count <= structure_entry_count`, because every live
+  membership entry is referenced by at least one live structure entry; and
+- the selected structure kind's own count/root and payload rules apply.
 
 Every nonzero allocator-reserve page is in `[2,page_count)`, distinct from the
 other reserve entries, and distinct from every nonzero root in the same meta.
@@ -389,8 +423,12 @@ The following root/count relations are bootstrap invariants:
 - `membership_entry_count == 0` requires both dictionary roots and
   `membership_used_root` zero and `membership_id_limit == 1`; a nonzero count
   requires all three roots nonzero;
+- `structure_entry_count == 0` requires both structure dictionary roots and
+  `structure_used_root` zero and `structure_id_limit == 1`; a nonzero count
+  requires all three roots nonzero;
 - `retired_extent_count == 0` if and only if `retirement_root == 0`; and
-- direct-file zero requirements override every membership relation above.
+- direct- and membership-file zero requirements override every structured
+  relation above.
 
 If `metadata_root` is zero, both metadata lengths MUST be zero. If it is
 nonzero, `metadata_compressed_len` MUST be nonzero and the uncompressed length
@@ -458,6 +496,10 @@ into full validation.
 | 15 | bitmap leaf |
 | 16 | retirement branch |
 | 17 | retirement leaf |
+| 18 | structure-ID directory |
+| 19 | structure-ID record page |
+| 20 | structure-hash branch |
+| 21 | structure-hash leaf |
 
 All other page-type values are invalid v4.
 
@@ -469,9 +511,12 @@ publish new roots. A reachable page MUST have exactly one owning graph path;
 page aliasing between roots or within a graph is invalid unless this
 specification explicitly says otherwise. No such alias is currently defined.
 
-Every ordered-index B+tree page (types 1 through 10 and 16 through 17) uses the
-slotted-page convention in section 7. Root zero is the only empty-tree
+Every ordered-index B+tree page (types 1 through 10, 16 through 17, and 20
+through 21) uses the slotted-page convention in section 7. Root zero is the only empty-tree
 representation; every reachable B+tree leaf and branch is nonempty.
+
+Structure-ID pages 18 and 19 use the direct table in section 9A.1, not the
+slotted-page convention.
 
 ### 5.3 Tree descent invariants
 
@@ -516,8 +561,10 @@ the same value MUST be coalesced.
 
 In a direct file, `value` is an opaque caller-defined `u32`; zero is valid. In
 a membership file, `value` is a nonzero `membership_id` present in the selected
-snapshot's membership dictionary. Value zero means absence and MUST NOT be
-stored as a range record.
+snapshot's membership dictionary. In a structured file, `value` is a nonzero
+`structure_id` present in the selected snapshot's structure dictionary. Value
+zero means absence for membership and structured files and MUST NOT be stored as
+a range record.
 
 ### 6.2 Range branch
 
@@ -565,9 +612,11 @@ fields. Empty reachable pages are invalid.
 
 ## 8. Feed catalog
 
-Only membership files have a feed catalog. It is a one-to-one mapping between
-active names and active `u32` feed indexes. The same generation publishes the
-catalog, used-index bitmap, membership dictionary, range root, and metadata.
+Membership files and structured kinds whose payload can reference membership
+have a feed catalog. It is a one-to-one mapping between active names and active
+`u32` feed indexes. The same generation publishes the catalog, used-index
+bitmap, membership dictionary, structure dictionary when present, range root,
+and metadata.
 
 A feed name is 1 through 255 bytes and MUST:
 
@@ -679,7 +728,7 @@ An ID leaf is slotted. Its record is:
 | 2 | 1 | `storage` (`0=inline`, `1=blob`) |
 | 3 | 1 | reserved zero |
 | 4 | 4 | `membership_id` |
-| 8 | 8 | `range_record_refcount` |
+| 8 | 8 | `owner_refcount` |
 | 16 | 4 | `word_count` |
 | 20 | 4 | `bitmap_len` |
 | 24 | 4 | `blob_root` |
@@ -688,8 +737,11 @@ An ID leaf is slotted. Its record is:
 | 64 | variable | inline bitmap bytes, when inline |
 
 `bitmap_len == word_count * 8`, using checked arithmetic. `word_count` is
-`1..67,108,864`. `range_record_refcount` is nonzero and is the exact number of
-current range records whose value is this ID.
+`1..67,108,864`. `owner_refcount` is nonzero. In a membership file it is the
+exact number of current range records whose value is this ID. In a structured
+file it is the exact number of current live structure entries whose payload
+references this ID. A second range referencing an already-live structure entry
+does not change membership ownership.
 
 For inline storage, `blob_root == 0`, `record_len == 64 + bitmap_len`, and the
 bitmap bytes follow the fixed fields. For blob storage, `record_len == 64`,
@@ -743,9 +795,12 @@ from the new dictionary, reverse index, and used bitmap. Its ID is reusable.
 If every nonzero `u32` ID is live and a new distinct membership is required,
 mutation returns typed `MembershipIdExhausted` before changing the draft.
 
-Mutations MUST maintain refcounts from bounded aggregated deltas. Commit MUST
-NOT rescan the complete range tree or construct a file-sized in-memory count
-map. Explicit validation recomputes all refcounts independently.
+Mutations MUST maintain refcounts from bounded aggregated deltas. Membership
+files derive them from range-record deltas. Structured files update them once
+when a structure entry is created or deleted; structure range-refcount changes
+alone do not touch membership refcounts. Commit MUST NOT rescan the complete
+range tree or construct a file-sized in-memory count map. Explicit validation
+recomputes all refcounts independently from the selected owning graph.
 
 When distinct deltas exceed the bounded heap cache, the operation MUST aggregate
 them in an operation-private page-backed ordered index allocated inside the
@@ -756,6 +811,156 @@ tail during commit/abort cleanup. No transaction, lifecycle, normalization, or
 import operation creates an external delta/sort file. Aggregation checks
 refcount underflow and overflow. The number of distinct IDs or feeds MUST NOT
 become an implicit heap bound.
+
+## 9A. Structured-value dictionary
+
+A structured database selects one immutable hardcoded `structure_kind` for the
+entire file. The current registry is:
+
+| Value | Structure kind | Payload bytes |
+|---:|---|---:|
+| 0 | none; required outside structured files | 0 |
+| 1 | `network_enrichment_v1` | 32 |
+
+There is no runtime schema, field descriptor table, caller-defined payload,
+per-record type tag, or mixed-kind file. A future hardcoded structure receives a
+new nonzero enum value and its own exact payload contract while reusing the
+common dictionary below. An SDK that does not implement the selected nonzero
+kind returns typed `UnsupportedStructure` during meta bootstrap before reading a
+non-meta page.
+
+The common structure manager treats a payload as one fixed-size canonical byte
+string selected by the meta. It owns IDs, hashing, exact interning, refcounts,
+allocation/reuse, COW changes, retirement, validation, recovery, and snapshot
+rebuilding. It MUST NOT interpret structure-specific field offsets. The
+structure-specific codec alone encodes, decodes, and checks those bytes.
+
+### 9A.1 Direct structure-ID table
+
+The authoritative structure-ID index is a sparse radix table. It uses the ID
+itself to select one mapped child pointer at each directory level and one fixed
+record slot at level zero. It performs no key comparison or binary search.
+Directory pages use page type 18 and positive level; record pages use page type
+19 and level zero. Both use `aux == structure_kind`.
+
+A directory page contains 512 consecutive `child_pgno:u32` values at bytes
+`[32,2080)`. Its `item_count` is the exact number of nonzero children. Bytes
+`[2080,4096)` are zero. A nonzero child is a non-meta page below the selected
+`page_count`; zero means that the covered ID span is absent.
+
+For a structure payload of `N` bytes, each record is `48 + N` bytes and one
+record page contains:
+
+```text
+floor((4096 - 32) / (48 + N))
+```
+
+fixed slots beginning at byte 32. Its `item_count` is the exact number of
+nonzero slots. An absent slot is entirely zero. Unused tail bytes after the last
+complete slot are zero. A present slot is:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 2 | `record_len` |
+| 2 | 2 | reserved zero |
+| 4 | 4 | `structure_id` |
+| 8 | 8 | `range_record_refcount` |
+| 16 | 32 | `payload_sha256` |
+| 48 | kind-specific | exact canonical payload |
+
+`record_len == 48 + payload_size(structure_kind)`. The structure ID and
+range-record refcount are nonzero. The refcount is the exact number of current
+range records whose value is this ID. The digest is:
+
+```text
+SHA-256("IPR4STRUCT" || structure_kind:u8 || payload_len:u16le || payload)
+```
+
+The ASCII domain is the ten exact bytes shown without a NUL. Payload length is
+the exact fixed length in the registry. The digest is an interning key, not an
+integrity substitute for page CRC validation.
+
+Let `R` be the number of record slots per page. A level-zero page covers `R`
+consecutive IDs. A level `L > 0` directory child covers
+`R * 512^(L-1)` IDs. The child index and record slot follow directly from the
+unsigned ID and those spans. The root uses the smallest level whose coverage is
+at least `structure_id_limit`; missing high IDs therefore cannot retain a
+collapsible root. A present record's stored `structure_id` MUST equal the ID
+implied by its directory path and record slot.
+
+### 9A.2 Structure reverse index
+
+The structure-hash tree is ordered by:
+
+```text
+(payload_sha256[32], structure_id:u32)
+```
+
+Digest bytes compare unsigned lexicographically, then the ID compares
+numerically. Leaves use page type 21 and fixed 36-byte records. Branches use page
+type 20 and append `child_pgno:u32`, for 40-byte records. Both use
+`aux == structure_kind`.
+
+Interning searches every entry with the same digest and compares the complete
+canonical payload before reusing an ID. A digest collision MUST NOT merge
+unequal payloads. Within one committed generation, equal complete payload bytes
+have exactly one structure ID. Explicit validation rejects a duplicate
+canonical payload under multiple IDs.
+
+### 9A.3 Structure-ID lifetime and membership ownership
+
+The structure-used bitmap has one stored bit per nonzero live structure ID. ID
+zero is implicitly reserved and is skipped regardless of its stored bit.
+`structure_id_limit` is 1 when empty. Otherwise it is one greater than the
+greatest live ID, or `2^32` when `u32::MAX` is live. It shrinks when trailing IDs
+disappear.
+
+Allocation chooses the lowest unused nonzero ID below the limit; if none exists,
+it uses the limit when representable. A zero-refcount structure is absent from
+the ID tree, reverse index, and used bitmap, and its ID becomes reusable. If all
+nonzero `u32` IDs are live, creation of a distinct payload returns typed
+`StructureIdExhausted` before mutation.
+
+A structured range mutation maintains structure refcounts from bounded
+aggregated range deltas using the same private page-backed overflow strategy as
+membership deltas. Creating a new structure entry with a nonzero internal
+membership ID increments that membership's owner refcount exactly once. Deleting
+that structure entry decrements it exactly once. Reusing an existing structure,
+or changing only the number of range records which reference it, does not change
+membership ownership. Structure and membership creation/deletion are one draft
+operation and cannot publish a dangling cross-reference.
+
+### 9A.4 `network_enrichment_v1` payload
+
+The structure-specific codec for kind 1 owns this exact 32-byte layout:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | `asn:u32` |
+| 4 | 4 | `country_id:u32` |
+| 8 | 4 | `state_id:u32` |
+| 12 | 4 | `city_id:u32` |
+| 16 | 4 | `latitude_microdegrees:i32` |
+| 20 | 4 | `longitude_microdegrees:i32` |
+| 24 | 4 | `membership_id:u32` |
+| 28 | 4 | `flags:u32` |
+
+All fields are little-endian. Zero ASN or label ID means absent; the four
+numeric identities are otherwise opaque to the format and need not be dense.
+Bit 0 of `flags` is `HAS_LOCATION`; every other bit MUST be zero. When the bit is
+clear, both coordinate fields MUST be zero. When set, latitude MUST be in
+`[-90,000,000, 90,000,000]` and longitude in
+`[-180,000,000, 180,000,000]`; `(0,0)` remains a valid present location.
+
+Membership ID zero means no threat feeds. A nonzero membership ID MUST identify
+one live canonical membership in the same generation. The all-zero payload is
+canonical absence and maps to structure ID zero without a dictionary entry or
+stored range. No other valid payload maps to zero.
+
+The common manager passes exactly 32 payload bytes to this codec and contains no
+knowledge of these offsets or fields. Textual ASN, country, state, and city
+labels belong in the optional opaque metadata and are never parsed during a
+structured lookup.
 
 ## 10. Generic blob tree
 
@@ -814,7 +1019,7 @@ complete RFC 1950 zlib stream containing RFC 1951 DEFLATE data with `CM=8`,
 DEFLATE, gzip, dictionaries, concatenated streams, and trailing bytes are not
 v4 metadata.
 
-The uncompressed length MUST be at most 1,048,576 bytes. A syntactically valid
+The uncompressed length MUST be at most 20,971,520 bytes. A syntactically valid
 DEFLATE stream can contain an arbitrarily large number of blocks that produce
 little or no output, so the uncompressed limit alone does not bound file growth
 or validation work. The compressed length therefore MUST satisfy:
@@ -879,22 +1084,24 @@ exact bytes, staged Clear returns absence, and otherwise it reads the committed
 base generation. The stable core uses two calls: first report presence and exact
 decompressed length, then fill caller storage. Insufficient storage returns the
 required size and no partial bytes. Native Go/Rust allocation helpers MAY return
-the complete value because the uncompressed size is bounded at 1 MiB. A failed
+the complete value because the uncompressed size is bounded at 20 MiB. A failed
 metadata read never changes a draft.
 
 ## 12. Hierarchical bitmap pages
 
-Page types 14 and 15 implement three bitmap kinds selected by `aux`:
+Page types 14 and 15 implement four bitmap kinds selected by `aux`:
 
 | Value | Kind | Leaf bit meaning |
 |---:|---|---|
 | 1 | free pages | page is safe to overwrite |
 | 2 | feed used | feed index is active |
 | 3 | membership used | membership ID is live |
+| 4 | structure used | structure ID is live |
 
 The governing limits are selected `page_count`, `feed_index_limit`, and
-`membership_id_limit`, respectively. Feed-used bits at or above their limit are
-zero. Membership-used bit zero and bits at or above their limit are zero.
+`membership_id_limit` for kinds 1 through 3, and `structure_id_limit` for kind
+4. Feed-used bits at or above their limit are zero. Membership- and
+structure-used bit zero and bits at or above their limits are zero.
 
 A bitmap root covers an implicit range beginning at bit zero. A level-0 leaf
 covers 32,000 bits. A level-`L` branch covers
@@ -2038,8 +2245,10 @@ attempt.
 
 ### 15.5 Creation and offline transitions
 
-`CreateLive(path, family, value_kind, value_tag, reader_capacity)` accepts no
-writer budget, ranges, feeds, or metadata. It creates only the canonical empty
+`CreateLive(path, family, value_kind, structure_kind, value_tag,
+reader_capacity)` accepts no writer budget, ranges, feeds, or metadata. Direct
+and membership creation require structure kind zero. Structured creation
+requires one supported nonzero kind. It creates only the canonical empty
 transaction-1 pair and returns no writer handle.
 
 Creation ordering is sidecar first:
@@ -2371,6 +2580,55 @@ also deletes it. Interning empty returns ID zero without allocating.
 The range map cannot represent “examined but belongs to no feed”; applications
 needing that provenance store it in the opaque file-level metadata.
 
+### 16.2A Structured values and handles
+
+Public structured mutation MUST NOT accept a caller-supplied structure ID,
+membership ID, payload byte array, field-offset table, or runtime schema. File
+creation accepts one known `StructureKind`; all later typed operations must
+match it. `DatabaseInfo` reports both value and structure kinds.
+
+For `network_enrichment_v1`, the public scalar value contains ASN, country ID,
+state ID, city ID, and an optional signed-microdegree location. It does not
+expose the internal membership ID or flags word. The typed IPv4/IPv6 point lookup
+returns an optional `NetworkEnrichmentV1View` tied to the pinned reader. Scalar
+access copies those fixed fields. `ThreatMembership()` lazily returns either no
+membership or a `MembershipView` over the referenced membership. Merely looking
+up or reading scalar fields MUST NOT descend the membership dictionary, read
+bitmap/blob pages, parse metadata, allocate through the language allocator, or
+perform validation.
+
+A structured transaction exposes the same SDK-owned feed catalog and
+membership builder/reference operations required to describe threat feeds. It
+adds:
+
+```text
+InternNetworkEnrichmentV1(scalar_fields, optional MembershipRef) -> StructureRef
+AssignStructuredRanges(StructureRef, source)
+ClearStructuredRanges(source)
+```
+
+Interning validates and canonically encodes the typed scalar fields, resolves
+the optional transaction-bound membership reference internally, and returns one
+transaction-bound opaque structure reference. An all-absent scalar value with
+empty membership returns the empty structure reference and allocates no
+dictionary entry. Assigning that empty reference has clear semantics.
+
+Range sources are applied exactly in call/record arrival order. A later
+assignment overwrites only its interval; earlier values remain on uncovered
+sides. The range engine performs splitting, exact structure interning/refcounts,
+membership ownership, and adjacent coalescing in private COW state. Stale,
+foreign, committed, aborted, or reopened membership/structure references fail
+before mutation. Commit or abort invalidates them even if equal semantic values
+exist in a later generation.
+
+Typed structured cursors return each canonical range plus its decoded fixed
+scalar value and lazy membership capability. Implementations MAY retain a
+bounded last-ID decode while walking, but MUST NOT materialize all structures or
+memberships. Feed enumeration/name lookup is identical for membership and
+structured files. A named-feed cursor over a structured file resolves each
+range's structure membership lazily and yields only matching coverage; the
+caller never builds a temporary membership-only file.
+
 ### 16.3 High-level exact feed workflow
 
 Each high-level lifecycle operation requires a clean writer and owns one private
@@ -2528,8 +2786,8 @@ merge; advanced direct assignment or high-level direct replacement is explicit.
 
 ### 16.6 Named membership queries and aggregation
 
-Point lookup returns the direct value or lazy membership view from the pinned
-generation. Forward/backward cursors and bounded-range scans yield borrowed
+Point lookup returns the direct value, lazy membership view, or typed structured
+view from the pinned generation. Forward/backward cursors and bounded-range scans yield borrowed
 records or write into caller storage; warmed movement allocates nothing.
 
 The SDK also exposes feed-catalog enumeration and exact name lookup plus an
@@ -2695,6 +2953,8 @@ For a selected generation, validation checks at minimum:
 - catalog name rules, bijection, counts, used bits, limits, and active bits;
 - membership canonicality, hashes, reverse index, used IDs, active feed bits,
   and independently recomputed record refcounts;
+- structure payload canonicality, hashes, reverse index, used IDs,
+  independently recomputed range refcounts, and exact membership ownership;
 - blob and metadata graph length, order, cycles, CRCs, zlib framing, checksum,
   output length, and metadata limits;
 - free/reachable/retired page partition and bitmap summaries; and
@@ -2745,6 +3005,11 @@ MEMBERSHIP_HASH_INVALID
 MEMBERSHIP_REVERSE_INDEX_INVALID
 MEMBERSHIP_REFCOUNT_INVALID
 MEMBERSHIP_ACTIVE_FEED_INVALID
+STRUCTURE_PAYLOAD_INVALID
+STRUCTURE_HASH_INVALID
+STRUCTURE_REVERSE_INDEX_INVALID
+STRUCTURE_REFCOUNT_INVALID
+STRUCTURE_MEMBERSHIP_INVALID
 BLOB_INVALID
 METADATA_ZLIB_INVALID
 METADATA_LENGTH_INVALID
@@ -2757,7 +3022,8 @@ RETIREMENT_LIST_INVALID
 The stable graph/object kinds, shared with recovery unknown envelopes, are
 `FileGeometry`, `Meta`, `RangeTree`, `CatalogNameTree`, `CatalogIndexTree`,
 `MembershipDictionary`, `MembershipReverseIndex`, `MembershipBlob`, `Metadata`,
-`FreeBitmap`, `FeedUsedBitmap`, `MembershipUsedBitmap`, `RetirementTree`, and
+`StructureDictionary`, `StructureReverseIndex`, `FreeBitmap`, `FeedUsedBitmap`,
+`MembershipUsedBitmap`, `StructureUsedBitmap`, `RetirementTree`, and
 `RetirementBlob`. A finding uses the narrowest independently known owner; it
 never invents a logical owner from corrupt bytes.
 
@@ -3005,7 +3271,8 @@ A recovery output:
 - starts at transaction 1;
 - has a new random nonzero commit nonce;
 - writes `born_txn == 1` on every rebuilt non-meta page;
-- preserves the source address family, value kind, and value tag;
+- preserves the source address family, value kind, structure kind, and value
+  tag;
 - preserves every accepted feed's exact `(name,index)` pair and the selected
   meta's valid non-shrinking `feed_index_limit` high-water mark;
 - contains only verified logical state;
@@ -3025,6 +3292,17 @@ accepted ranges rather than requiring damaged copies to agree. A range is
 copyable only when its complete membership and every referenced active catalog
 entry verify.
 
+For structured recovery, the direct structure-ID table is authoritative for payload
+bytes. The structure hash tree, structure used bitmap, structure refcounts,
+membership hash tree, membership used bitmap, and membership owner refcounts are
+derived indexes. Recovery accepts only payloads canonical for the selected
+hardcoded structure kind, rebuilds destination-local structure and membership
+IDs by semantic content, and never copies a source-local ID into a destination
+range or payload. A range is copyable only when its complete structure, every
+referenced membership, and every referenced active feed verify. Damage to one
+structure or membership rejects only ranges which depend on it unless an
+untrusted tree fence makes the affected coverage unknowable.
+
 Globally overlapping readable records are grouped into maximal connected
 components under interval overlap. Every whole record in a conflicting
 component is rejected; recovery never selects a winner or preserves only a
@@ -3037,7 +3315,7 @@ The report keeps physical, logical, and address coverage in separate units. It
 contains checked physical `u64` counters for pages examined, pages accepted,
 pages rejected, and I/O-unreadable pages. It contains checked logical `u64`
 counters, separated by object kind, for range records, catalog entries,
-membership entries, metadata chunks, and retirement records examined,
+membership entries, structure entries, metadata chunks, and retirement records examined,
 accepted, and rejected. Physical pages and logical records MUST never be added
 to address cardinalities.
 
@@ -3088,6 +3366,8 @@ RANGE_OVERLAP
 CATALOG_INVALID
 MEMBERSHIP_MISSING
 MEMBERSHIP_INVALID
+STRUCTURE_MISSING
+STRUCTURE_INVALID
 BLOB_INVALID
 METADATA_INVALID
 ```
@@ -3177,6 +3457,7 @@ It streams a new ordinary v4 file containing only:
 - the reachable logical range map;
 - the feed catalog and used-index state;
 - the live membership dictionary and exact memberships;
+- the live structure dictionary and exact typed payloads when structured;
 - the exact decompressed metadata payload, recompressed as one valid v4 zlib
   stream when metadata is present.
 
@@ -3186,8 +3467,8 @@ roots and counts are zero.
 
 The snapshot preserves source database ID, transaction ID, commit nonce,
 address family, value kind/tag, feed indexes, feed-index limit, logical ranges,
-metadata presence, and exact decompressed metadata bytes. It MAY rebuild
-membership IDs, trees, page layout, and compressed bytes. Every rebuilt page
+structure kind, metadata presence, and exact decompressed metadata bytes. It MAY rebuild
+membership IDs, structure IDs, trees, page layout, and compressed bytes. Every rebuilt page
 uses the preserved source transaction as `born_txn`, and both final meta pages
 are identical.
 
@@ -3785,6 +4066,8 @@ compare:
 - every IPv4/IPv6 range and direct value;
 - feed names and assigned indexes;
 - resolved memberships rather than internal membership IDs;
+- decoded hardcoded structures and lazy threat memberships rather than internal
+  structure IDs;
 - exact decompressed metadata bytes;
 - empty metadata versus absent metadata;
 - exact 129-bit cardinalities, including a full IPv6 space;

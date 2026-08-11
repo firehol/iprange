@@ -76,6 +76,7 @@ pub struct CreateReport {
     pub struct_size: u32,
     pub address_family: u32,
     pub value_kind: u32,
+    pub structure_kind: u32,
     pub value_tag: [u8; 16],
     pub database_id: [u8; 16],
     pub commit_nonce: [u8; 16],
@@ -197,7 +198,7 @@ pub struct ValidationGeneration {
     pub reserved0: [u8; 3],
     pub address_family: u32,
     pub value_kind: u32,
-    pub reserved1: u32,
+    pub structure_kind: u32,
     pub value_tag: [u8; 16],
     pub database_id: [u8; 16],
     pub transaction_id: u64,
@@ -214,8 +215,8 @@ pub struct ValidationProgress {
     pub bounded_possible_span_addresses: Cardinality129,
     pub has_unbounded_unknown: u8,
     pub reserved: [u8; 7],
-    pub reason_counts: [u64; 40],
-    pub object_counts: [u64; 14],
+    pub reason_counts: [u64; 47],
+    pub object_counts: [u64; 17],
 }
 
 impl Default for ValidationProgress {
@@ -227,8 +228,8 @@ impl Default for ValidationProgress {
             bounded_possible_span_addresses: Cardinality129::default(),
             has_unbounded_unknown: 0,
             reserved: [0; 7],
-            reason_counts: [0; 40],
-            object_counts: [0; 14],
+            reason_counts: [0; 47],
+            object_counts: [0; 17],
         }
     }
 }
@@ -302,6 +303,7 @@ pub struct RecoveryFacts {
     pub ranges: LogicalCounts,
     pub catalog_entries: LogicalCounts,
     pub membership_entries: LogicalCounts,
+    pub structure_entries: LogicalCounts,
     pub metadata_chunks: LogicalCounts,
     pub retirement_records: LogicalCounts,
     pub verified_addresses: Cardinality129,

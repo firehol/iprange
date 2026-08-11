@@ -3,7 +3,7 @@
 use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, StructureKind, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
@@ -16,15 +16,18 @@ use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
 use super::range_build::analyze_ranges;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
+use super::structure_index;
+use super::structure_table::StructureIndex;
 use super::tables::{Counts, Tables};
 use super::RecoveryBudget;
 
-pub(crate) struct MembershipAnalysis {
+pub(crate) struct IndirectAnalysis {
     pub(crate) report: RecoveryReport,
     pub(crate) readable_records: u64,
     pub(crate) ordered: bool,
     pub(crate) catalog: Catalog,
     pub(crate) memberships: MembershipIndex,
+    pub(crate) structures: Option<StructureIndex>,
     pub(crate) tables: Tables,
     pub(crate) metadata: Option<Vec<u8>>,
     pub(crate) pages: PageSet,
@@ -37,7 +40,8 @@ pub(crate) fn analyze<S: RecoverySink>(
     budget: &RecoveryBudget,
     cancellation: &CancellationToken,
     sink: &mut S,
-) -> std::result::Result<MembershipAnalysis, super::construction::AnalysisFailure> {
+    expected_kind: ValueKind,
+) -> std::result::Result<IndirectAnalysis, super::construction::AnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(super::construction::analysis_failure(
             cause,
@@ -45,9 +49,11 @@ pub(crate) fn analyze<S: RecoverySink>(
             None,
         ));
     }
-    if meta.value_kind != ValueKind::Membership {
+    if !matches!(expected_kind, ValueKind::Membership | ValueKind::Structured)
+        || meta.value_kind != expected_kind
+    {
         return Err(super::construction::analysis_failure(
-            Error::WrongValueKind("membership recovery requires membership values"),
+            Error::WrongValueKind("indirect recovery value kind does not match its source"),
             RecoveryReport::default(),
             None,
         ));
@@ -76,13 +82,14 @@ pub(crate) fn analyze<S: RecoverySink>(
     );
     let report = reporter.finish();
     match result {
-        Ok((readable_records, ordered, catalog, memberships, tables, metadata)) => {
-            Ok(MembershipAnalysis {
+        Ok((readable_records, ordered, catalog, memberships, structures, tables, metadata)) => {
+            Ok(IndirectAnalysis {
                 report,
                 readable_records,
                 ordered,
                 catalog,
                 memberships,
+                structures,
                 tables,
                 metadata,
                 pages,
@@ -94,7 +101,15 @@ pub(crate) fn analyze<S: RecoverySink>(
     }
 }
 
-type Graphs = (u64, bool, Catalog, MembershipIndex, Tables, Option<Vec<u8>>);
+type Graphs = (
+    u64,
+    bool,
+    Catalog,
+    MembershipIndex,
+    Option<StructureIndex>,
+    Tables,
+    Option<Vec<u8>>,
+);
 
 fn analyze_graphs<S: RecoverySink>(
     mapping: &Mapping,
@@ -105,7 +120,7 @@ fn analyze_graphs<S: RecoverySink>(
     reporter: &mut Reporter<'_, S>,
 ) -> Result<Graphs> {
     let mut tables = prepare_tables(mapping, meta, budget, cancellation, pages)?;
-    let (catalog, memberships) =
+    let (catalog, memberships, structures) =
         recover_tables(mapping, meta, cancellation, pages, reporter, &mut tables)?;
     let ranges = match meta.address_family {
         AddressFamily::Ipv4 => {
@@ -124,7 +139,15 @@ fn analyze_graphs<S: RecoverySink>(
         reporter,
         &tables,
     )?;
-    Ok((ranges.0, ranges.1, catalog, memberships, tables, metadata))
+    Ok((
+        ranges.0,
+        ranges.1,
+        catalog,
+        memberships,
+        structures,
+        tables,
+        metadata,
+    ))
 }
 
 fn prepare_tables(
@@ -137,6 +160,7 @@ fn prepare_tables(
     let counts = Counts {
         catalog: catalog::count(mapping, meta, pages, cancellation)?,
         memberships: membership_index::count(mapping, meta, pages, cancellation)?,
+        structures: count_structures(mapping, meta, pages, cancellation)?,
     };
     pages.reset()?;
     Tables::allocate(counts, pages, budget, required_table_heap_reserve(meta)?)
@@ -149,7 +173,7 @@ fn recover_tables<S: RecoverySink>(
     pages: &mut PageSet,
     reporter: &mut Reporter<'_, S>,
     tables: &mut Tables,
-) -> Result<(Catalog, MembershipIndex)> {
+) -> Result<(Catalog, MembershipIndex, Option<StructureIndex>)> {
     let catalog = catalog::recover(mapping, meta, pages, tables, cancellation, reporter)?;
     let memberships = membership_index::recover(
         mapping,
@@ -160,7 +184,63 @@ fn recover_tables<S: RecoverySink>(
         cancellation,
         reporter,
     )?;
-    Ok((catalog, memberships))
+    let structures = recover_structures(
+        mapping,
+        meta,
+        &memberships,
+        pages,
+        tables,
+        cancellation,
+        reporter,
+    )?;
+    Ok((catalog, memberships, structures))
+}
+
+fn count_structures(
+    mapping: &Mapping,
+    meta: MetaV4,
+    pages: &mut PageSet,
+    cancellation: &CancellationToken,
+) -> Result<u64> {
+    match (meta.value_kind, meta.structure_kind()) {
+        (ValueKind::Membership, Some(StructureKind::None)) => Ok(0),
+        (ValueKind::Structured, Some(StructureKind::NetworkEnrichmentV1)) => {
+            structure_index::count::<crate::structured_value::NetworkEnrichmentV1Codec>(
+                mapping,
+                meta,
+                pages,
+                cancellation,
+            )
+        }
+        (_, _) => Err(Error::UnsupportedStructure(meta.structure_kind_code)),
+    }
+}
+
+fn recover_structures<S: RecoverySink>(
+    mapping: &Mapping,
+    meta: MetaV4,
+    memberships: &MembershipIndex,
+    pages: &mut PageSet,
+    tables: &mut Tables,
+    cancellation: &CancellationToken,
+    reporter: &mut Reporter<'_, S>,
+) -> Result<Option<StructureIndex>> {
+    match (meta.value_kind, meta.structure_kind()) {
+        (ValueKind::Membership, Some(StructureKind::None)) => Ok(None),
+        (ValueKind::Structured, Some(StructureKind::NetworkEnrichmentV1)) => {
+            structure_index::recover::<crate::structured_value::NetworkEnrichmentV1Codec, S>(
+                mapping,
+                meta,
+                memberships,
+                pages,
+                tables,
+                cancellation,
+                reporter,
+            )
+            .map(Some)
+        }
+        (_, _) => Err(Error::UnsupportedStructure(meta.structure_kind_code)),
+    }
 }
 
 fn read_metadata<S: RecoverySink>(

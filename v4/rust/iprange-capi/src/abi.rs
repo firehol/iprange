@@ -58,6 +58,14 @@ pub type MembershipSinkFn = Option<
         failure: *mut CallbackFailure,
     ) -> u32,
 >;
+pub type NetworkEnrichmentV1SinkFn = Option<
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        records: *const NetworkEnrichmentV1Range,
+        count: u64,
+        failure: *mut CallbackFailure,
+    ) -> u32,
+>;
 pub type FeedSinkFn = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
@@ -147,6 +155,37 @@ pub struct MembershipRange {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NetworkEnrichmentV1 {
+    pub asn: u32,
+    pub country_id: u32,
+    pub state_id: u32,
+    pub city_id: u32,
+    pub latitude_microdegrees: i32,
+    pub longitude_microdegrees: i32,
+    pub has_location: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct NetworkEnrichmentV1Range {
+    pub range: Range,
+    pub value: NetworkEnrichmentV1,
+    pub membership: *const BorrowedMembershipViewHandle,
+}
+
+impl Default for NetworkEnrichmentV1Range {
+    fn default() -> Self {
+        Self {
+            range: Range::default(),
+            value: NetworkEnrichmentV1::default(),
+            membership: std::ptr::null(),
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Cancellation {
     pub callback: CancelFn,
@@ -195,7 +234,7 @@ pub struct DatabaseInfo {
     pub address_family: u32,
     pub value_kind: u32,
     pub direct_semantic: u32,
-    pub reserved: u32,
+    pub structure_kind: u32,
     pub value_tag: [u8; 16],
     pub database_id: [u8; 16],
     pub transaction_id: u64,

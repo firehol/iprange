@@ -71,6 +71,7 @@ fn create_membership(path: &Path) {
         path,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"feeds").unwrap(),
         1,
         &CancellationToken::new(),

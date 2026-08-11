@@ -17,10 +17,8 @@ pub(crate) fn read_inline(
     meta: MetaV4,
     locator: Locator,
 ) -> Result<ByteRange<ByteRange<PageView<'_>>>> {
-    let page = mapping.page(locator.leaf_page, meta.page_count)?;
-    if !crate::page_checksum::valid(page) {
-        return Err(Error::RecoveryCandidateChanged);
-    }
+    let page = super::page_read::checked(mapping, locator.leaf_page, meta.page_count)
+        .map_err(|_| Error::RecoveryCandidateChanged)?;
     let header = slotted_page::parse(page, meta.txn_id, codec::ID_LEAF, 0, Some(0))?;
     let cell = slotted_page::record(
         page,

@@ -144,22 +144,6 @@ impl DraftStore<'_> {
         self.remove_current_feed(feed)
     }
 
-    pub(crate) fn membership_reference_matches(
-        &self,
-        membership: MembershipHandle,
-    ) -> Result<bool> {
-        if membership.is_empty() {
-            return Ok(true);
-        }
-        let (id, word_count) = membership.stored();
-        membership_dictionary::reference_matches(
-            self,
-            self.draft.meta.membership_id_root,
-            id,
-            word_count,
-        )
-    }
-
     pub(crate) fn selected_membership_bits(
         &self,
         id: u32,
@@ -180,17 +164,21 @@ impl DraftStore<'_> {
     #[inline(always)]
     pub(super) fn track_membership_refcount(&mut self, id: u32, change: i64) -> Result<()> {
         if self.draft.meta.value_kind == ValueKind::Membership {
-            crate::work::membership_refcount_batch(u64::from(id != 0));
-            let mut root = self.draft.membership_delta_root;
-            let mut pending = self.draft.membership_delta_pending;
-            let result =
-                membership_delta::track_buffered(self, &mut root, &mut pending, id, change);
-            self.draft.membership_delta_root = root;
-            self.draft.membership_delta_pending = pending;
-            result
+            self.track_membership_owner_refcount(id, change)
         } else {
             Ok(())
         }
+    }
+
+    #[inline(always)]
+    pub(super) fn track_membership_owner_refcount(&mut self, id: u32, change: i64) -> Result<()> {
+        crate::work::membership_refcount_batch(u64::from(id != 0));
+        let mut root = self.draft.membership_delta_root;
+        let mut pending = self.draft.membership_delta_pending;
+        let result = membership_delta::track_buffered(self, &mut root, &mut pending, id, change);
+        self.draft.membership_delta_root = root;
+        self.draft.membership_delta_pending = pending;
+        result
     }
 
     pub(super) fn finish_membership_deltas_with_checkpoint<F>(
@@ -200,7 +188,10 @@ impl DraftStore<'_> {
     where
         F: FnMut() -> Result<()>,
     {
-        if self.draft.meta.value_kind != ValueKind::Membership {
+        if !matches!(
+            self.draft.meta.value_kind,
+            ValueKind::Membership | ValueKind::Structured
+        ) {
             return require_empty_delta(
                 self.draft.membership_delta_root,
                 self.draft.membership_delta_pending,
@@ -224,9 +215,14 @@ impl DraftStore<'_> {
         self.draft.membership_delta_root = 0;
         self.draft.membership_delta_pending = membership_delta::Pending::new();
         self.store_membership_state(state);
-        if self.draft.meta.membership_entry_count > self.draft.meta.range_record_count {
+        let owner_count = match self.draft.meta.value_kind {
+            ValueKind::Membership => self.draft.meta.range_record_count,
+            ValueKind::Structured => self.draft.meta.structure_entry_count,
+            ValueKind::Direct => 0,
+        };
+        if self.draft.meta.membership_entry_count > owner_count {
             return Err(Error::Corrupt(
-                "membership dictionary exceeds the range-record count",
+                "membership dictionary exceeds its owner count",
             ));
         }
         require_empty_delta(
@@ -257,7 +253,7 @@ impl DraftStore<'_> {
         if !interned.created {
             return Ok(());
         }
-        self.track_membership_refcount(interned.id, 0)
+        self.track_membership_owner_refcount(interned.id, 0)
     }
 
     fn apply_membership<K: IpKey, F>(
@@ -314,11 +310,19 @@ impl DraftStore<'_> {
 
 impl range_mutation::RangeStore for DraftStore<'_> {
     fn range_record_added(&mut self, value: u32) -> Result<()> {
-        self.track_membership_refcount(value, 1)
+        match self.draft.meta.value_kind {
+            ValueKind::Membership => self.track_membership_refcount(value, 1),
+            ValueKind::Structured => self.track_structure_refcount(value, 1),
+            ValueKind::Direct => Ok(()),
+        }
     }
 
     fn range_record_removed(&mut self, value: u32) -> Result<()> {
-        self.track_membership_refcount(value, -1)
+        match self.draft.meta.value_kind {
+            ValueKind::Membership => self.track_membership_refcount(value, -1),
+            ValueKind::Structured => self.track_structure_refcount(value, -1),
+            ValueKind::Direct => Ok(()),
+        }
     }
 }
 
@@ -327,7 +331,7 @@ fn require_empty_delta(root: u32, pending: membership_delta::Pending) -> Result<
         Ok(())
     } else {
         Err(Error::Corrupt(
-            "direct transaction contains membership refcount state",
+            "transaction contains unexpected membership refcount state",
         ))
     }
 }

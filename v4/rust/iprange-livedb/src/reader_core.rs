@@ -8,7 +8,7 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::bootstrap::{Bootstrap, MetaSelection, OpenMode};
-use crate::contract::{AddressFamily, DirectSemantic, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, DirectSemantic, StructureKind, ValueKind, ValueTag};
 use crate::error::Result;
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
@@ -26,6 +26,7 @@ pub(crate) use live::{LiveReaderClose, LiveReaderCore};
 pub struct DatabaseInfo {
     pub address_family: AddressFamily,
     pub value_kind: ValueKind,
+    pub structure_kind: StructureKind,
     pub value_tag: ValueTag,
     pub database_id: [u8; 16],
     pub transaction_id: u64,
@@ -86,6 +87,9 @@ impl ReaderCore {
         DatabaseInfo {
             address_family: meta.address_family,
             value_kind: meta.value_kind,
+            structure_kind: meta
+                .structure_kind()
+                .expect("bootstrap rejects unsupported structures"),
             value_tag: meta.value_tag,
             database_id: meta.database_id,
             transaction_id: meta.txn_id,

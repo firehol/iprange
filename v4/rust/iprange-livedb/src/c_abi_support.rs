@@ -5,7 +5,9 @@ mod reader;
 mod writer;
 
 pub use membership_query::{MembershipAlgebra, MembershipScope};
-pub use reader::{MembershipToken, Reader, ReaderCursor, ReaderCursorItem};
+pub use reader::{
+    MembershipToken, NetworkEnrichmentV1Token, Reader, ReaderCursor, ReaderCursorItem,
+};
 pub use writer::Writer;
 
 /// Entry point used only by the version-matched SDK worker executable.

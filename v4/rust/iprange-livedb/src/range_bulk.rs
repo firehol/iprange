@@ -225,8 +225,8 @@ impl<K: IpKey> Builder<K> {
         if record.from > record.to {
             return Err(Error::InvalidArgument("range start is after its end"));
         }
-        if self.value_kind == ValueKind::Membership && record.value == 0 {
-            return Err(Error::Corrupt("membership range value is zero"));
+        if self.value_kind != ValueKind::Direct && record.value == 0 {
+            return Err(Error::Corrupt("indirect range value is zero"));
         }
         let Some(previous) = self.previous else {
             return Ok(true);

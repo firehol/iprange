@@ -73,6 +73,7 @@ mod retirement;
 mod slotted_page;
 pub mod snapshot;
 mod source;
+mod structured_value;
 mod used_bitmap;
 pub mod validation;
 mod work;
@@ -88,7 +89,7 @@ pub use commit_resolution::{
     LocalFileRelation,
 };
 pub use contract::{
-    AddressFamily, DirectSemantic, MembershipOperation, ValueKind, ValueTag,
+    AddressFamily, DirectSemantic, MembershipOperation, StructureKind, ValueKind, ValueTag,
     MAX_METADATA_UNCOMPRESSED,
 };
 pub use database::{DatabaseInfo, ImmutableReader};
@@ -117,7 +118,7 @@ pub use live_writer::{
     FinishedWorkflow, FirstSeenRefresh, HistoryProjectionSource, LastSeenRefresh, LiveWriter,
     LocalBasename, MembershipImport, MembershipImportSource, MembershipRef, MembershipTransaction,
     PreparedFeedChange, PreparedHistoryProjection, PreparedWorkflow, ReclaimResult, ReplaceFeed,
-    TransactionBudget, TransactionFeedCursor,
+    StructureRef, StructuredTransaction, TransactionBudget, TransactionFeedCursor,
 };
 pub use membership_query::{
     AlgebraComparisonReport, AlgebraCountReport, AlgebraOutputBudget, AlgebraOutputMode,
@@ -144,6 +145,10 @@ pub use snapshot::{
 pub use source::{
     DirectRangeSourceV4, DirectRangeSourceV6, FeedRangeSourceV4, FeedRangeSourceV6, RangeSource,
     SliceSource,
+};
+pub use structured_value::{
+    NetworkEnrichmentV1, NetworkEnrichmentV1CursorV4, NetworkEnrichmentV1CursorV6,
+    NetworkEnrichmentV1Location, NetworkEnrichmentV1Range, NetworkEnrichmentV1View,
 };
 pub use workflow::{
     AddressRange, FirstSeenRemoval, FirstSeenRemovalSink, LogicalChange, WorkflowKind,

@@ -83,6 +83,46 @@ Paths are explicit tagged slices:
 Feed names and metadata are byte slices under their exact v4 semantic limits.
 No ABI operation treats arbitrary input as a NUL-terminated string.
 
+The fixed typed structure value is:
+
+```c
+typedef struct iprange_v4_abi1_network_enrichment_v1 {
+    uint32_t asn;
+    uint32_t country_id;
+    uint32_t state_id;
+    uint32_t city_id;
+    int32_t latitude_microdegrees;
+    int32_t longitude_microdegrees;
+    uint32_t has_location;
+    uint32_t reserved;
+} iprange_v4_abi1_network_enrichment_v1;
+```
+
+Its offsets are 0, 4, 8, 12, 16, 20, 24, and 28; alignment is 4 and size is
+32. `has_location` is zero or one and `reserved` is zero. This is a typed
+semantic layout, not the on-disk payload: it deliberately exposes neither the
+internal membership ID nor the persisted flags word.
+
+The scan/cursor record is:
+
+```c
+typedef struct iprange_v4_abi1_network_enrichment_v1_range {
+    iprange_v4_abi1_range range;
+    iprange_v4_abi1_network_enrichment_v1 value;
+    const iprange_v4_abi1_borrowed_membership_view *membership;
+} iprange_v4_abi1_network_enrichment_v1_range;
+```
+
+On the supported ABI targets its offsets are 0, 40, and 72; alignment is 8 and
+size is 80. The generated layout manifest is authoritative and native C/C++
+assertions enforce those values.
+
+`iprange_v4_abi1_database_info` uses its field at offset 20 as
+`structure_kind:u32` rather than reserved storage, retaining the layout's size
+and every later offset. Every factual identity/report layout that carries
+`value_kind` also carries the selected `structure_kind`; direct and membership
+results report zero.
+
 ## Status and error ownership
 
 Every fallible function returns one frozen nonzero numeric status on failure and
@@ -114,7 +154,7 @@ guard only when no factual report is returned. The guard is never duplicated.
 
 Stateful and variable-size values are opaque handles. Generation 1 includes
 opaque families for readers, writers, cursors, writer feed references,
-membership views/references/builders, variable operation results, typed errors,
+membership views/references/builders, writer structure references, variable operation results, typed errors,
 cleanup guards, residue inspection, reusable named membership scopes, and
 reusable multi-source membership algebra. Reader feed enumeration/name lookup
 copies `{name,index}` entries and does not require a reader feed-reference
@@ -131,7 +171,7 @@ handle. No declaration exposes a Rust struct or trait object.
   abort, failed whole-draft cleanup, or writer reopen even when the same logical
   feed exists later. Invalidated wrappers still count as writer children until
   destroyed. Writer Close checks for any feed reference, membership reference,
-  or builder first and returns `HandleBusy` without aborting or changing state;
+  structure reference, or builder first and returns `HandleBusy` without aborting or changing state;
   after children are destroyed, pending Close performs its normal abort.
 - Writer, cursor, view, builder, result, cleanup, and residue handles are caller-
   serialized. A fail-fast non-reentrant gate returns `HandleBusy`; it never
@@ -203,6 +243,9 @@ surface in these groups:
 - advanced direct begin/assign/clear and advanced membership begin, feed
   ensure/lookup/enumerate/rename/delete, membership building, and
   Replace/Union/Difference/Intersection/Xor range application;
+- advanced structured begin, typed `NetworkEnrichmentV1` interning through an
+  optional transaction-bound membership reference, structure assignment/clear,
+  and typed scalar/lazy-membership lookup and scan;
 - high-level named-feed create/replace/delete/rename, direct replacement,
   first-seen/last-seen refresh, and name-based multi-feed membership import;
 - repeated bounded range ingestion, `FinishInput` statistics, one metadata stage,
@@ -227,7 +270,7 @@ The update-ipsets SDK surface additionally includes:
 
 The ABI does not expose page numbers, roots, COW paths, free/retirement storage,
 feed bit positions as mutation authority, membership IDs, bitmap ownership,
-dictionary hashes/refcounts, mmap pointers, Rust allocation, or a second
+structure IDs, raw payload bytes, dictionary hashes/refcounts, mmap pointers, Rust allocation, or a second
 binding-specific algebra implementation.
 
 Explicit validation and recovery may internally use the version-matched
@@ -244,6 +287,20 @@ The native SDK distribution includes `iprange-v4-worker` with the platform's
 normal executable suffix. The embedding application installs it beside its own
 executable; the library does not search `PATH` or accept an environment
 override. This helper is an installation requirement, not a public ABI handle.
+
+`create_live` takes `structure_kind:u32` immediately after `value_kind`. The
+scalar enrichment lookup takes reader, IP, `present:u8*`, typed-value output,
+and typed-error output. Its with-membership variant adds one
+`membership_view**` output, initialized to null. Structured scan and cursor use
+the fixed range record above.
+
+`writer_begin_structured` selects the file's already-fixed structure kind; it
+takes no schema. Feed and membership-builder symbols are legal in both advanced
+membership and advanced structured operations. The V1 intern symbol takes the
+typed scalar value plus a nullable operation-bound `membership_ref` and returns
+one owned operation-bound `structure_ref`. Null means no threats. Structured
+assign and clear drain the ordinary coverage source in callback order. No C
+function accepts raw structure bytes or either internal ID.
 
 ## Metadata and variable output
 
@@ -276,6 +333,15 @@ valid only until that callback returns. Membership cursors expose the same
 borrowed-view kind valid only until the next cursor movement or Close. Point
 lookup instead returns an owned persistent `MembershipView`. Neither path
 materializes the complete bitmap or exposes its internal membership ID.
+
+The scalar-only enrichment lookup returns presence plus the fixed 32-byte typed
+value and performs no C allocation. The separate enrichment-with-membership
+lookup may additionally return one owned persistent `MembershipView`; null means
+the structure has no threats. Structured scan/cursor records contain the typed
+value plus a borrowed membership view pointer, null for no threats. The pointer
+has the same callback/next-step lifetime as an ordinary borrowed membership
+view, and obtaining only the scalar value never resolves the membership
+dictionary.
 
 ## Panic, OOM, and pointer safety
 
@@ -312,7 +378,8 @@ listed.
 - status: `OK=0`, `ERROR=1`;
 - address family: `IPV4=4`, `IPV6=6`;
 - path kind: `POSIX_BYTES=1`, `WINDOWS_UTF16=2`;
-- value kind: `DIRECT=1`, `MEMBERSHIP=2`;
+- value kind: `DIRECT=1`, `MEMBERSHIP=2`, `STRUCTURED=3`;
+- structure kind: `NONE=0`, `NETWORK_ENRICHMENT_V1=1`;
 - source outcome: `BATCH=1`, `END=2`, `ERROR=3`;
 - sink outcome: `CONTINUE=1`, `STOP=2`, `ERROR=3`;
 - cursor direction: `FORWARD=1`, `BACKWARD=2`;
@@ -377,7 +444,9 @@ listed.
   `MEMBERSHIP_DICTIONARY=6`, `MEMBERSHIP_REVERSE_INDEX=7`,
   `MEMBERSHIP_BLOB=8`, `METADATA=9`, `FREE_BITMAP=10`,
   `FEED_USED_BITMAP=11`, `MEMBERSHIP_USED_BITMAP=12`,
-  `RETIREMENT_TREE=13`, `RETIREMENT_BLOB=14`;
+  `RETIREMENT_TREE=13`, `RETIREMENT_BLOB=14`,
+  `STRUCTURE_DICTIONARY=15`, `STRUCTURE_REVERSE_INDEX=16`,
+  `STRUCTURE_USED_BITMAP=17`;
 - logical change: `CHANGED=1`, `NO_CHANGE=2`;
 - direct semantic: `NOT_APPLICABLE=0`, `GENERIC=1`, `FIRST_SEEN=2`,
   `LAST_SEEN=3`;
@@ -446,9 +515,17 @@ Validation and recovery share one stable reason-code namespace:
 | 38 | `MEMBERSHIP_MISSING` |
 | 39 | `MEMBERSHIP_INVALID` |
 | 40 | `METADATA_INVALID` |
+| 41 | `STRUCTURE_PAYLOAD_INVALID` |
+| 42 | `STRUCTURE_HASH_INVALID` |
+| 43 | `STRUCTURE_REVERSE_INDEX_INVALID` |
+| 44 | `STRUCTURE_REFCOUNT_INVALID` |
+| 45 | `STRUCTURE_MEMBERSHIP_INVALID` |
+| 46 | `STRUCTURE_MISSING` |
+| 47 | `STRUCTURE_INVALID` |
 
-Values 1-36 are validation findings. Recovery unknown envelopes use the subset
-named by the binary contract plus values 37-40; shared names keep the same value.
+Values 1-36 and 41-45 are validation findings. Recovery unknown envelopes use
+the subset named by the binary contract plus values 37-40 and 46-47; shared
+names keep the same value.
 
 The typed-error code registry is:
 
@@ -520,6 +597,9 @@ The typed-error code registry is:
 | 64 | `CLEANUP_IN_PROGRESS` |
 | 65 | `FAULT_WORKER_UNAVAILABLE` |
 | 66 | `FAULT_WORKER_FAILED` |
+| 67 | `UNSUPPORTED_STRUCTURE` |
+| 68 | `WRONG_STRUCTURE_KIND` |
+| 69 | `STRUCTURE_ID_EXHAUSTED` |
 
 Factual `Committed`, `Published`, `OutcomeUnknown`, invalid validation content,
 and recovery damage are report fields, not error codes. Future ABI-1 additions
@@ -541,6 +621,7 @@ iprange_v4_abi1_membership_view
 iprange_v4_abi1_borrowed_membership_view
 iprange_v4_abi1_membership_builder
 iprange_v4_abi1_membership_ref
+iprange_v4_abi1_structure_ref
 iprange_v4_abi1_cleanup_guard
 iprange_v4_abi1_residue
 iprange_v4_abi1_membership_scope
@@ -557,6 +638,7 @@ iprange_v4_abi1_coverage_sink_fn
 iprange_v4_abi1_direct_sink_fn
 iprange_v4_abi1_first_seen_removal_sink_fn
 iprange_v4_abi1_membership_sink_fn
+iprange_v4_abi1_network_enrichment_v1_sink_fn
 iprange_v4_abi1_feed_sink_fn
 iprange_v4_abi1_validation_finding_sink_fn
 iprange_v4_abi1_recovery_unknown_sink_fn
@@ -666,16 +748,21 @@ iprange_v4_abi1_residue_destroy
 iprange_v4_abi1_reader_database_info
 iprange_v4_abi1_reader_lookup_direct
 iprange_v4_abi1_reader_lookup_membership
+iprange_v4_abi1_reader_lookup_network_enrichment_v1
+iprange_v4_abi1_reader_lookup_network_enrichment_v1_with_membership
 iprange_v4_abi1_reader_enumerate_feeds
 iprange_v4_abi1_reader_lookup_feed
 iprange_v4_abi1_reader_scan_direct
 iprange_v4_abi1_reader_scan_membership
+iprange_v4_abi1_reader_scan_network_enrichment_v1
 iprange_v4_abi1_reader_scan_feed
 iprange_v4_abi1_reader_open_direct_cursor
 iprange_v4_abi1_reader_open_membership_cursor
+iprange_v4_abi1_reader_open_network_enrichment_v1_cursor
 iprange_v4_abi1_reader_open_feed_cursor
 iprange_v4_abi1_cursor_next_direct
 iprange_v4_abi1_cursor_next_membership
+iprange_v4_abi1_cursor_next_network_enrichment_v1
 iprange_v4_abi1_cursor_next_coverage
 iprange_v4_abi1_cursor_close
 iprange_v4_abi1_cursor_destroy
@@ -720,6 +807,7 @@ iprange_v4_abi1_writer_begin_direct
 iprange_v4_abi1_writer_direct_assign_ranges
 iprange_v4_abi1_writer_direct_clear_ranges
 iprange_v4_abi1_writer_begin_membership
+iprange_v4_abi1_writer_begin_structured
 iprange_v4_abi1_writer_feed_ensure
 iprange_v4_abi1_writer_feed_lookup
 iprange_v4_abi1_writer_feed_enumerate
@@ -733,6 +821,10 @@ iprange_v4_abi1_membership_builder_finish
 iprange_v4_abi1_membership_builder_destroy
 iprange_v4_abi1_membership_ref_destroy
 iprange_v4_abi1_writer_membership_apply_ranges
+iprange_v4_abi1_writer_network_enrichment_v1_intern
+iprange_v4_abi1_structure_ref_destroy
+iprange_v4_abi1_writer_structured_assign_ranges
+iprange_v4_abi1_writer_structured_clear_ranges
 ```
 
 ### High-level workflows, transaction termination, and maintenance
@@ -780,7 +872,7 @@ iprange_v4_abi1_remove_housekeeping_artifact
 ```
 
 The exact prototype/layout manifest remains the committed mechanical authority.
-It freezes all 158 functions, 14 opaque handle families, 18 callback types,
+It freezes all 168 functions, 15 opaque handle families, 19 callback types,
 numeric constants, structure layouts, offsets, and function parameter order.
 Tests regenerate and compare both artifacts, inspect the shared-library exports,
 compile the header as C11 and C++17, and execute the native C behavior programs.

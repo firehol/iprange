@@ -77,7 +77,7 @@ pub struct LiveTransitionResult {
 mod freebsd_tests {
     use std::fs;
 
-    use crate::contract::{AddressFamily, ValueKind, ValueTag};
+    use crate::contract::{AddressFamily, StructureKind, ValueKind, ValueTag};
     use crate::error::ErrorCode;
     use crate::live_writer::{CreateResult, CreationState};
     use crate::publication::Housekeeping;
@@ -98,6 +98,7 @@ mod freebsd_tests {
         let create = CreateResult {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
+            structure_kind: StructureKind::None,
             value_tag: ValueTag::FIRST_SEEN,
             database_id: [1; 16],
             commit_nonce: [1; 16],

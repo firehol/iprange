@@ -14,6 +14,8 @@ mod page;
 mod range;
 mod retirement;
 pub(crate) mod source;
+mod structure;
+mod structure_table;
 mod tree;
 mod types;
 
@@ -189,7 +191,7 @@ fn validate_live_selected<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    let meta = source.meta;
+    let meta = *source.meta;
     let file_identity = source.public_identity();
     let mapping = match validation_mapping(&source.file, meta) {
         Ok(mapping) => mapping,
@@ -371,7 +373,8 @@ fn write_bootstrap_findings<S: ValidationSink>(
         BootstrapError::TransactionGap
         | BootstrapError::PhysicalParity
         | BootstrapError::EqualTransactionDisagreement
-        | BootstrapError::CurrentGenerationUnprovable => report_bootstrap_finding(
+        | BootstrapError::CurrentGenerationUnprovable
+        | BootstrapError::UnsupportedStructure(_) => report_bootstrap_finding(
             sink,
             progress,
             ValidationReason::MetaInvalid,
@@ -457,6 +460,7 @@ fn failure_with_guard(
 fn validate_selected<S: ValidationSink>(context: &mut context::Context<'_, S>) -> Result<()> {
     range::validate(context)?;
     catalog::validate(context)?;
+    structure::validate(context)?;
     membership::validate(context)?;
     metadata::validate(context)?;
     let free_root = context.meta.free_bitmap_root;
@@ -470,6 +474,9 @@ fn generation(meta: MetaV4) -> ValidatedGeneration {
     ValidatedGeneration {
         address_family: meta.address_family,
         value_kind: meta.value_kind,
+        structure_kind: meta
+            .structure_kind()
+            .expect("bootstrap rejects unsupported structures"),
         value_tag: meta.value_tag,
         database_id: meta.database_id,
         transaction_id: meta.txn_id,

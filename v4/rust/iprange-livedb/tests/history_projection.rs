@@ -54,7 +54,16 @@ fn budget() -> TransactionBudget {
 }
 
 fn create(path: &Path, family: AddressFamily, kind: ValueKind, tag: ValueTag) {
-    create_live(path, family, kind, tag, 4, &CancellationToken::new()).unwrap();
+    create_live(
+        path,
+        family,
+        kind,
+        iprange_livedb::StructureKind::None,
+        tag,
+        4,
+        &CancellationToken::new(),
+    )
+    .unwrap();
 }
 
 fn commit_workflow(finished: FinishedWorkflow<'_>) {

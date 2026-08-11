@@ -10,7 +10,7 @@ use std::fs::File;
 
 use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, StructureKind, ValueKind, ValueTag, PAGE_SIZE};
 use crate::database_file;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
 use crate::error::{Error, Result};
@@ -24,7 +24,8 @@ use crate::random;
 use crate::workflow::{compare, Comparison};
 
 pub(crate) use crate::draft_store::{
-    FeedMerge, ImportCache, ImportWords, MembershipHandle, TimestampMerge, TranslatedMembership,
+    FeedMerge, ImportCache, ImportWords, MembershipHandle, StructureHandle, TimestampMerge,
+    TranslatedMembership,
 };
 pub(crate) use edit::WriterEdit;
 pub(crate) use publication::{CommitAttempt, PublishOutcome};
@@ -34,6 +35,7 @@ pub(crate) use publication::{CommitAttempt, PublishOutcome};
 pub(crate) struct WriterInfo {
     pub(crate) address_family: AddressFamily,
     pub(crate) value_kind: ValueKind,
+    pub(crate) structure_kind: StructureKind,
     pub(crate) value_tag: ValueTag,
     pub(crate) database_id: [u8; 16],
     pub(crate) transaction_id: u64,
@@ -58,6 +60,9 @@ impl From<MetaV4> for WriterInfo {
         Self {
             address_family: meta.address_family,
             value_kind: meta.value_kind,
+            structure_kind: meta
+                .structure_kind()
+                .expect("bootstrap rejects unsupported structures"),
             value_tag: meta.value_tag,
             database_id: meta.database_id,
             transaction_id: meta.txn_id,
@@ -200,23 +205,6 @@ impl WriterCore {
 
     pub(crate) fn current_feed_cursor(&self, owner: ProcessIdentity) -> Result<FeedCursor<'_>> {
         FeedCursor::new(&self.mapping, &self.current_meta(), Some(owner))
-    }
-
-    pub(crate) fn membership_reference_matches(
-        &mut self,
-        membership: MembershipHandle,
-    ) -> Result<bool> {
-        let draft = self
-            .draft
-            .as_mut()
-            .ok_or(Error::WrongState("membership transaction is not active"))?;
-        DraftStore::new(
-            &mut self.mapping,
-            self.base.meta.page_count,
-            self.budget,
-            draft,
-        )
-        .membership_reference_matches(membership)
     }
 
     pub(crate) fn metadata_json_len(&self) -> Option<u64> {

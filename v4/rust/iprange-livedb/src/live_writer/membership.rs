@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog::FeedCursor;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::range_mutation::AssignmentInput;
 use crate::writer_core::MembershipHandle;
 
 use super::workflow::{check_transaction, require_transaction};
@@ -20,16 +21,16 @@ const INACTIVE: &str = "membership transaction is no longer active";
 pub struct FeedRef {
     database_id: [u8; 16],
     operation_nonce: [u8; 16],
-    entry: FeedEntry,
+    pub(super) entry: FeedEntry,
 }
 
 /// One SDK-owned membership valid only in its creating transaction.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MembershipRef {
-    database_id: [u8; 16],
-    operation_nonce: [u8; 16],
-    handle: MembershipHandle,
-    catalog_epoch: u64,
+    pub(super) database_id: [u8; 16],
+    pub(super) operation_nonce: [u8; 16],
+    pub(super) handle: MembershipHandle,
+    pub(super) catalog_epoch: u64,
 }
 
 impl fmt::Debug for MembershipRef {
@@ -73,6 +74,8 @@ pub(crate) struct MembershipState {
     operation_nonce: [u8; 16],
     membership_epoch: u64,
     cancellation: CancellationToken,
+    pub(super) structured_input_v4: AssignmentInput<Ipv4Key>,
+    pub(super) structured_input_v6: AssignmentInput<Ipv6Key>,
 }
 
 /// Ordered transaction-bound feed enumeration.
@@ -114,6 +117,32 @@ impl LiveWriter {
             operation_nonce,
             membership_epoch: 0,
             cancellation: cancellation.clone(),
+            structured_input_v4: AssignmentInput::new(0),
+            structured_input_v6: AssignmentInput::new(0),
+        })
+    }
+
+    pub(crate) fn begin_structured_state(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<MembershipState> {
+        cancellation.check()?;
+        self.require_healthy()?;
+        if self.core.base_info().value_kind != ValueKind::Structured {
+            return Err(Error::WrongValueKind(
+                "structured transaction requires a structured database",
+            ));
+        }
+        let database_id = self.core.base_info().database_id;
+        let max_heap_bytes = self.core.max_heap_bytes();
+        let operation_nonce = self.core.begin_transaction()?;
+        Ok(MembershipState {
+            database_id,
+            operation_nonce,
+            membership_epoch: 0,
+            cancellation: cancellation.clone(),
+            structured_input_v4: AssignmentInput::new(max_heap_bytes),
+            structured_input_v6: AssignmentInput::new(max_heap_bytes),
         })
     }
 }
@@ -342,6 +371,14 @@ impl MembershipState {
         &self.cancellation
     }
 
+    pub(super) const fn operation_nonce(&self) -> [u8; 16] {
+        self.operation_nonce
+    }
+
+    pub(super) const fn reference_epoch(&self) -> u64 {
+        self.membership_epoch
+    }
+
     fn reference(&self, entry: FeedEntry) -> FeedRef {
         FeedRef {
             database_id: self.database_id,
@@ -350,7 +387,7 @@ impl MembershipState {
         }
     }
 
-    fn membership_reference(&self, handle: MembershipHandle) -> MembershipRef {
+    pub(super) fn membership_reference(&self, handle: MembershipHandle) -> MembershipRef {
         MembershipRef {
             database_id: self.database_id,
             operation_nonce: self.operation_nonce,
@@ -370,7 +407,11 @@ impl MembershipState {
         Ok(())
     }
 
-    fn require_current_feed(&mut self, writer: &mut LiveWriter, feed: FeedRef) -> Result<()> {
+    pub(super) fn require_current_feed(
+        &mut self,
+        writer: &mut LiveWriter,
+        feed: FeedRef,
+    ) -> Result<()> {
         self.require_reference(writer, feed)?;
         if writer.feed_reference_current(feed.entry)? {
             Ok(())
@@ -397,17 +438,20 @@ impl MembershipState {
         Ok(())
     }
 
-    fn require_current_membership(
-        &mut self,
+    pub(super) fn require_current_membership(
+        &self,
         writer: &mut LiveWriter,
         membership: MembershipRef,
     ) -> Result<()> {
-        self.require_membership_reference(writer, membership)?;
-        if writer.membership_reference_current(membership.handle)? {
-            Ok(())
-        } else {
-            Err(Error::StaleReference)
-        }
+        self.require_membership_reference(writer, membership)
+    }
+
+    pub(super) fn invalidate_memberships(&mut self) -> Result<()> {
+        self.membership_epoch = self
+            .membership_epoch
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow("membership reference epoch"))?;
+        Ok(())
     }
 
     fn require_family(
@@ -432,7 +476,7 @@ impl MembershipState {
         require_transaction(writer, self.operation_nonce, INACTIVE)
     }
 
-    fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
+    pub(super) fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
         check_transaction(writer, self.operation_nonce, &self.cancellation, INACTIVE)
     }
 }
@@ -440,10 +484,6 @@ impl MembershipState {
 impl LiveWriter {
     fn feed_reference_current(&mut self, entry: FeedEntry) -> Result<bool> {
         Ok(self.core.lookup_current_feed(&entry.name)? == Some(entry))
-    }
-
-    fn membership_reference_current(&mut self, membership: MembershipHandle) -> Result<bool> {
-        self.core.membership_reference_matches(membership)
     }
 }
 

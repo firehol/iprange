@@ -61,6 +61,7 @@ fn global_algebra_counts_and_publishes_the_full_ipv6_space_exactly() {
             path,
             AddressFamily::Ipv6,
             ValueKind::Membership,
+            iprange_livedb::StructureKind::None,
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,

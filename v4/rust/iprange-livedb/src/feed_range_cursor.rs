@@ -9,6 +9,7 @@ use crate::mapping::Mapping;
 use crate::membership_view;
 use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{CursorState, RangeDirection};
+use crate::structured_value;
 use crate::workflow::AddressRange;
 
 pub(crate) struct ProjectionState<K> {
@@ -115,12 +116,23 @@ impl<K: IpKey> ProjectionState<K> {
                 break;
             };
             let contains = cached_membership(&mut self.membership, range.value, || {
-                membership_view::id_contains_index(
-                    mapping,
-                    &self.meta,
-                    range.value,
-                    self.feed_index,
-                )
+                let membership_id = match self.meta.value_kind {
+                    ValueKind::Membership => range.value,
+                    ValueKind::Structured => {
+                        structured_value::membership_id(mapping, &self.meta, range.value)?
+                    }
+                    ValueKind::Direct => unreachable!("cursor kind checked at construction"),
+                };
+                if membership_id == 0 {
+                    Ok(false)
+                } else {
+                    membership_view::id_contains_index(
+                        mapping,
+                        &self.meta,
+                        membership_id,
+                        self.feed_index,
+                    )
+                }
             })?;
             if contains {
                 return Ok(Some(AddressRange {
@@ -194,9 +206,12 @@ fn merge<K: IpKey>(
 }
 
 fn require_feed(meta: &MetaV4, feed_index: u32) -> Result<()> {
-    if meta.value_kind != ValueKind::Membership {
+    if !matches!(
+        meta.value_kind,
+        ValueKind::Membership | ValueKind::Structured
+    ) {
         return Err(Error::WrongValueKind(
-            "named-feed cursor requires a membership database",
+            "named-feed cursor requires a membership-capable database",
         ));
     }
     if u64::from(feed_index) >= meta.feed_index_limit {

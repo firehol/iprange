@@ -2,7 +2,7 @@
 
 use crate::bitmap_page::{child_index, coverage, leaf_word_index, required_level, LEAF_BITS};
 use crate::error::{Error, Result};
-use crate::fixed_tree::{RetiredPages, Store};
+use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 
 mod mutation;
 mod page;
@@ -15,7 +15,38 @@ pub(crate) use crate::bitmap_page::Kind;
 
 pub(crate) use mutation::{clear, set, take_lowest};
 pub(crate) use search::read_words;
-pub(crate) use shrink::membership as shrink_membership;
+pub(crate) use shrink::{membership as shrink_membership, structure as shrink_structure};
+
+pub(crate) fn allocate_lowest_id<S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    limit: &mut u64,
+    live_count: u64,
+    kind: Kind,
+    exhausted: Error,
+) -> Result<u32> {
+    let namespace = limit
+        .checked_sub(1)
+        .ok_or(Error::Corrupt("ID namespace limit is zero"))?;
+    if live_count > namespace {
+        return Err(Error::Corrupt("ID namespace count exceeds its limit"));
+    }
+    let mut retired = RetiredPages::new();
+    if live_count < namespace {
+        let id = take_lowest(store, root, *limit, kind, &mut retired)?
+            .ok_or(Error::Corrupt("ID used bitmap has no advertised hole"))?;
+        store.retire_pages(retired.as_slice())?;
+        return Ok(id);
+    }
+    if *limit == 1u64 << 32 {
+        return Err(exhausted);
+    }
+    let id = *limit as u32;
+    *limit += 1;
+    mutation::set_dense_append(store, root, *limit, kind, id, &mut retired)?;
+    store.retire_pages(retired.as_slice())?;
+    Ok(id)
+}
 
 fn touch<S: Store>(
     store: &mut S,

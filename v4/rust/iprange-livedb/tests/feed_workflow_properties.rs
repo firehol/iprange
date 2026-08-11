@@ -64,6 +64,7 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),

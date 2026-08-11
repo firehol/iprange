@@ -23,6 +23,7 @@ impl Files {
             &self.0,
             AddressFamily::Ipv4,
             ValueKind::Direct,
+            crate::contract::StructureKind::None,
             ValueTag::new(b"asn").unwrap(),
             2,
             &crate::CancellationToken::new(),

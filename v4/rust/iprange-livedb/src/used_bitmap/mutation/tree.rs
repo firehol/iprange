@@ -17,17 +17,59 @@ use super::{EditPath, Frame};
 pub(super) fn propagate<S: Store>(
     store: &mut S,
     path: &[Frame],
+    depth: usize,
+    child_page: u32,
+    child_base: u64,
+    limit: u64,
+    kind: Kind,
+) -> Result<()> {
+    propagate_inner(
+        store, path, depth, child_page, child_base, limit, kind, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn propagate_known<S: Store>(
+    store: &mut S,
+    path: &[Frame],
+    depth: usize,
+    child_page: u32,
+    child_base: u64,
+    limit: u64,
+    kind: Kind,
+    candidate: bool,
+) -> Result<()> {
+    propagate_inner(
+        store,
+        path,
+        depth,
+        child_page,
+        child_base,
+        limit,
+        kind,
+        Some(candidate),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn propagate_inner<S: Store>(
+    store: &mut S,
+    path: &[Frame],
     mut depth: usize,
     mut child_page: u32,
     mut child_base: u64,
     limit: u64,
     kind: Kind,
+    mut known: Option<bool>,
 ) -> Result<()> {
     while depth > 0 {
         depth -= 1;
         let frame = path[depth];
         let parent_base = parent_base(frame)?;
-        let candidate = subtree_has_candidate(store, child_page, kind, child_base, limit)?;
+        let candidate = match known.take() {
+            Some(candidate) => candidate,
+            None => subtree_has_candidate(store, child_page, kind, child_base, limit)?,
+        };
         let target_txn = store.target_txn();
         store.update_page(frame.page_number, |page| {
             let header = parse(

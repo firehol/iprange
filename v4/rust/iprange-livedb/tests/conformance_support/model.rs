@@ -48,6 +48,13 @@ impl Family {
 pub(crate) enum Kind {
     Direct,
     Membership,
+    Structured,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Structure {
+    NetworkEnrichmentV1,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +64,8 @@ pub(crate) struct Fixture {
     pub(crate) producer: String,
     pub(crate) family: Family,
     pub(crate) kind: Kind,
+    #[serde(default)]
+    pub(crate) structure: Option<Structure>,
     pub(crate) tag: String,
     pub(crate) metadata: MetadataExpectation,
     pub(crate) address_count: String,
@@ -66,6 +75,8 @@ pub(crate) struct Fixture {
     pub(crate) feeds: Vec<FeedExpectation>,
     #[serde(default)]
     pub(crate) membership_ranges: Vec<MembershipExpectation>,
+    #[serde(default)]
+    pub(crate) structured_ranges: Vec<StructuredExpectation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +100,27 @@ pub(crate) struct MembershipExpectation {
     pub(crate) from: String,
     pub(crate) to: String,
     pub(crate) feeds: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StructuredExpectation {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) asn: u32,
+    pub(crate) country_id: u32,
+    pub(crate) state_id: u32,
+    pub(crate) city_id: u32,
+    #[serde(default)]
+    pub(crate) location: Option<LocationExpectation>,
+    pub(crate) feeds: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LocationExpectation {
+    pub(crate) latitude_microdegrees: i32,
+    pub(crate) longitude_microdegrees: i32,
 }
 
 #[derive(Debug, Deserialize)]

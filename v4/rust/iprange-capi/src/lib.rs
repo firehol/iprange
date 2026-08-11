@@ -35,6 +35,7 @@ mod report_extended;
 mod scan;
 mod sink;
 mod source;
+mod structured;
 mod validation_recovery;
 mod workflow;
 mod writer;
@@ -46,7 +47,7 @@ pub use error::*;
 pub use handle::{
     BorrowedMembershipViewHandle, CursorHandle, MembershipAlgebraHandle, MembershipBuilderHandle,
     MembershipRefHandle, MembershipScopeHandle, MembershipViewHandle, ReaderHandle,
-    WriterFeedRefHandle, WriterHandle,
+    StructureRefHandle, WriterFeedRefHandle, WriterHandle,
 };
 pub use obligation::{CleanupGuardHandle, ResidueHandle};
 pub use registry::*;

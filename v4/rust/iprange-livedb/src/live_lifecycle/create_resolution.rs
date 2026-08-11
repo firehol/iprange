@@ -403,6 +403,7 @@ fn expected_spec(supplied: &CreateResult) -> EmptySpec {
     EmptySpec::live(
         supplied.address_family,
         supplied.value_kind,
+        supplied.structure_kind,
         supplied.value_tag,
         supplied.database_id,
         supplied.commit_nonce,
@@ -584,6 +585,7 @@ fn result_with_housekeeping(
     CreateResult {
         address_family: supplied.address_family,
         value_kind: supplied.value_kind,
+        structure_kind: supplied.structure_kind,
         value_tag: supplied.value_tag,
         database_id: supplied.database_id,
         commit_nonce: supplied.commit_nonce,

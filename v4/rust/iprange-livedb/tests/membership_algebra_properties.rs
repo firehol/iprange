@@ -91,6 +91,7 @@ fn randomized_global_algebra_matches_a_scalar_address_model() {
             path,
             AddressFamily::Ipv4,
             ValueKind::Membership,
+            iprange_livedb::StructureKind::None,
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,

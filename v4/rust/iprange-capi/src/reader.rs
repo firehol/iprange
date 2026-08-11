@@ -526,6 +526,7 @@ fn encode_database_info(info: iprange_livedb::DatabaseInfo) -> DatabaseInfo {
         value_kind: match info.value_kind {
             ValueKind::Direct => 1,
             ValueKind::Membership => 2,
+            ValueKind::Structured => 3,
         },
         direct_semantic: match info.direct_semantic() {
             None => registry::DIRECT_SEMANTIC_NOT_APPLICABLE,
@@ -533,7 +534,7 @@ fn encode_database_info(info: iprange_livedb::DatabaseInfo) -> DatabaseInfo {
             Some(DirectSemantic::FirstSeen) => registry::DIRECT_SEMANTIC_FIRST_SEEN,
             Some(DirectSemantic::LastSeen) => registry::DIRECT_SEMANTIC_LAST_SEEN,
         },
-        reserved: 0,
+        structure_kind: info.structure_kind as u8 as u32,
         value_tag: *info.value_tag.as_wire(),
         database_id: info.database_id,
         transaction_id: info.transaction_id,

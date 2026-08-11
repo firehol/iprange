@@ -79,7 +79,10 @@ impl Codec for IndexCodec {
 }
 
 pub(crate) fn validate<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {
-    if context.meta.value_kind != ValueKind::Membership {
+    if !matches!(
+        context.meta.value_kind,
+        ValueKind::Membership | ValueKind::Structured
+    ) {
         return Ok(());
     }
     validate_trees(context)?;

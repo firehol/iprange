@@ -75,7 +75,10 @@ fn copy_logical(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     let spec = reader.output_spec();
-    if spec.value_kind == ValueKind::Membership {
+    if matches!(
+        spec.value_kind,
+        ValueKind::Membership | ValueKind::Structured
+    ) {
         copy_feeds(reader, builder, cancellation)?;
     }
     match (spec.address_family, spec.value_kind) {
@@ -86,6 +89,12 @@ fn copy_logical(
         }
         (AddressFamily::Ipv6, ValueKind::Membership) => {
             copy_membership_v6(reader, builder, cancellation)?
+        }
+        (AddressFamily::Ipv4, ValueKind::Structured) => {
+            copy_structured_v4(reader, builder, cancellation)?
+        }
+        (AddressFamily::Ipv6, ValueKind::Structured) => {
+            copy_structured_v6(reader, builder, cancellation)?
         }
     }
     copy_metadata(reader, builder, budget, cancellation)
@@ -165,6 +174,54 @@ fn copy_membership_v6(
         };
         let words = SnapshotWords::new(reader.membership(range.membership)?, cancellation)?;
         builder.push_membership_v6(range.from, range.to, &words)?;
+    }
+}
+
+fn copy_structured_v4(
+    reader: GenerationReader<'_>,
+    builder: &mut Builder,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let mut cursor = reader.network_enrichment_v1_cursor_v4(RangeDirection::Forward)?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next_range()? else {
+            return Ok(());
+        };
+        let value = range.value.value();
+        match range.value.threat_membership()? {
+            Some(membership) => {
+                let words = SnapshotWords::new(membership, cancellation)?;
+                builder.push_network_enrichment_v1_v4(range.from, range.to, value, Some(&words))?;
+            }
+            None => builder.push_network_enrichment_v1_v4::<SnapshotWords<'_>>(
+                range.from, range.to, value, None,
+            )?,
+        }
+    }
+}
+
+fn copy_structured_v6(
+    reader: GenerationReader<'_>,
+    builder: &mut Builder,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let mut cursor = reader.network_enrichment_v1_cursor_v6(RangeDirection::Forward)?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next_range()? else {
+            return Ok(());
+        };
+        let value = range.value.value();
+        match range.value.threat_membership()? {
+            Some(membership) => {
+                let words = SnapshotWords::new(membership, cancellation)?;
+                builder.push_network_enrichment_v1_v6(range.from, range.to, value, Some(&words))?;
+            }
+            None => builder.push_network_enrichment_v1_v6::<SnapshotWords<'_>>(
+                range.from, range.to, value, None,
+            )?,
+        }
     }
 }
 

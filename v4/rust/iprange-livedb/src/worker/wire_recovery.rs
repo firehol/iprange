@@ -199,6 +199,7 @@ pub(super) fn report(output: &mut Writer<'_>, value: &RecoveryReport) -> Result<
     logical_counts(output, value.ranges)?;
     logical_counts(output, value.catalog_entries)?;
     logical_counts(output, value.membership_entries)?;
+    logical_counts(output, value.structure_entries)?;
     logical_counts(output, value.metadata_chunks)?;
     logical_counts(output, value.retirement_records)?;
     wire::cardinality(output, value.verified_addresses)?;
@@ -214,6 +215,7 @@ pub(super) fn read_report(input: &mut Reader<'_>) -> Result<RecoveryReport> {
         ranges: read_logical_counts(input)?,
         catalog_entries: read_logical_counts(input)?,
         membership_entries: read_logical_counts(input)?,
+        structure_entries: read_logical_counts(input)?,
         metadata_chunks: read_logical_counts(input)?,
         retirement_records: read_logical_counts(input)?,
         verified_addresses: wire::read_cardinality(input)?,

@@ -9,6 +9,7 @@ pub(crate) fn empty_direct_meta(txn_id: u64) -> MetaV4 {
     MetaV4 {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
+        structure_kind_code: crate::contract::StructureKind::None as u8,
         value_tag: ValueTag::new(b"").unwrap(),
         database_id: [1; 16],
         txn_id,
@@ -33,6 +34,11 @@ pub(crate) fn empty_direct_meta(txn_id: u64) -> MetaV4 {
         free_bitmap_root: 0,
         retirement_root: 0,
         allocator_reserve: [0; 4],
+        structure_entry_count: 0,
+        structure_id_limit: 0,
+        structure_id_root: 0,
+        structure_hash_root: 0,
+        structure_used_root: 0,
     }
 }
 
@@ -293,9 +299,11 @@ fn identity_field_matrix_fails_closed() {
     assert_identity_problem(8, 1, MetaProblem::FixedValue);
     assert_identity_problem(10, 11, MetaProblem::FixedValue);
     assert_identity_problem(11, 5, MetaProblem::FixedValue);
-    assert_identity_problem(12, 3, MetaProblem::FixedValue);
-    assert_identity_problem(13, 1, MetaProblem::Reserved);
-    assert_identity_problem(200, 1, MetaProblem::Reserved);
+    assert_identity_problem(12, 4, MetaProblem::FixedValue);
+    assert_identity_problem(13, 1, MetaProblem::KindInvariant);
+    assert_identity_problem(14, 1, MetaProblem::Reserved);
+    assert_identity_problem(200, 1, MetaProblem::KindInvariant);
+    assert_identity_problem(228, 1, MetaProblem::Reserved);
     assert_identity_problem(256, 1, MetaProblem::Reserved);
 
     let mut malformed_tag = image(empty_direct_meta(1), empty_direct_meta(1));

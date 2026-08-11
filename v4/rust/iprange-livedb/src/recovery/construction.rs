@@ -51,9 +51,11 @@ pub(crate) fn require_builder(builder: &Builder, source: MetaV4, kind: ValueKind
     let feed_index_limit = match kind {
         ValueKind::Direct => 0,
         ValueKind::Membership => source.feed_index_limit,
+        ValueKind::Structured => source.feed_index_limit,
     };
     if output.address_family != source.address_family
         || output.value_kind != kind
+        || output.structure_kind() != source.structure_kind()
         || output.value_tag != source.value_tag
         || output.feed_index_limit != feed_index_limit
         || output.txn_id != 1
@@ -61,6 +63,7 @@ pub(crate) fn require_builder(builder: &Builder, source: MetaV4, kind: ValueKind
         return Err(Error::InvalidArgument(match kind {
             ValueKind::Direct => "recovery output does not match its direct source",
             ValueKind::Membership => "recovery output does not match its membership source",
+            ValueKind::Structured => "recovery output does not match its structured source",
         }));
     }
     Ok(())

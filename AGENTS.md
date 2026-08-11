@@ -57,6 +57,11 @@ complexity is not evidence of either.
   separate boundaries. Variants may have narrow entry points, but must share
   the same invariant-owning helpers. Do not split code merely to satisfy a
   metric.
+- Hardcoded structured values use one common mapped manager for IDs, hashing,
+  equality, refcounts, COW lifecycle, validation, recovery, and snapshots. Each
+  `StructureKind` keeps its fields, offsets, canonical checks, and typed
+  translation in an independent codec module; never copy the manager for a new
+  structure.
 - Persistent SDK content is mmap-only. Production code must not transfer main,
   sidecar, snapshot, publication, recovery, or scratch bytes through
   read/write/seek APIs, and a complete database page must never exist in a stack

@@ -28,6 +28,7 @@ impl TestPair {
             &main,
             AddressFamily::Ipv4,
             ValueKind::Direct,
+            iprange_livedb::StructureKind::None,
             ValueTag::new(b"asn").unwrap(),
             1,
             &CancellationToken::new(),

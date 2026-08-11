@@ -2,7 +2,9 @@
 
 use std::fs::File;
 
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_SIZE};
+use crate::contract::{
+    AddressFamily, MetaV4, StructureKind, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_SIZE,
+};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
@@ -21,6 +23,7 @@ mod membership;
 mod ranges;
 mod reference_batch;
 mod setup;
+mod structured;
 pub(crate) mod unordered;
 
 pub(crate) use membership::MembershipWords;
@@ -29,6 +32,7 @@ pub(crate) use membership::MembershipWords;
 pub(crate) struct OutputSpec {
     pub(crate) address_family: AddressFamily,
     pub(crate) value_kind: ValueKind,
+    pub(crate) structure_kind: StructureKind,
     pub(crate) value_tag: ValueTag,
     pub(crate) database_id: [u8; 16],
     pub(crate) transaction_id: u64,
@@ -40,12 +44,14 @@ impl OutputSpec {
     pub(crate) fn fresh(
         address_family: AddressFamily,
         value_kind: ValueKind,
+        structure_kind: StructureKind,
         value_tag: ValueTag,
         feed_index_limit: u64,
     ) -> Result<Self> {
         Ok(Self {
             address_family,
             value_kind,
+            structure_kind,
             value_tag,
             database_id: crate::random::nonzero_128()?,
             transaction_id: 1,
@@ -87,6 +93,7 @@ pub(crate) struct Builder {
     ranges: ranges::Ranges,
     fault_protection: bool,
     membership_references: reference_batch::ReferenceBatch,
+    structure_references: reference_batch::ReferenceBatch,
     metadata_staged: bool,
     failed: bool,
 }
@@ -148,7 +155,17 @@ impl Builder {
             return Err(NewFailure { file, cause });
         }
         let membership_references = match reference_batch::ReferenceBatch::new(
-            spec.value_kind == ValueKind::Membership,
+            matches!(
+                spec.value_kind,
+                ValueKind::Membership | ValueKind::Structured
+            ),
+            heap,
+        ) {
+            Ok(batch) => batch,
+            Err(cause) => return Err(NewFailure { file, cause }),
+        };
+        let structure_references = match reference_batch::ReferenceBatch::new(
+            spec.value_kind == ValueKind::Structured,
             heap,
         ) {
             Ok(batch) => batch,
@@ -171,6 +188,7 @@ impl Builder {
         let meta = crate::database_file::empty_meta(crate::database_file::EmptySpec {
             address_family: spec.address_family,
             value_kind: spec.value_kind,
+            structure_kind: spec.structure_kind,
             value_tag: spec.value_tag,
             database_id: spec.database_id,
             transaction_id: spec.transaction_id,
@@ -184,6 +202,7 @@ impl Builder {
             ranges: ranges::Ranges::new(meta.address_family, meta.txn_id, meta.value_kind),
             fault_protection: crate::worker::fault_protection_active(),
             membership_references,
+            structure_references,
             metadata_staged: false,
             failed: false,
         })
@@ -302,7 +321,14 @@ impl Builder {
     }
 
     fn push_feed_inner(&mut self, name: FeedName, index: u32) -> Result<()> {
-        self.require_mode(ValueKind::Membership, self.meta.address_family)?;
+        if !matches!(
+            self.meta.value_kind,
+            ValueKind::Membership | ValueKind::Structured
+        ) {
+            return Err(Error::WrongValueKind(
+                "immutable feed output requires a membership-capable value kind",
+            ));
+        }
         if u64::from(index) >= self.meta.feed_index_limit {
             return Err(Error::InvalidArgument(
                 "feed index exceeds the preserved limit",
@@ -543,6 +569,7 @@ impl Builder {
 
 fn finish(output: &mut Builder) -> Result<()> {
     output.require_active()?;
+    output.flush_structure_references()?;
     output.flush_membership_references()?;
     let (range_root, range_record_count) = output.ranges.finish(
         &mut output.mapping,

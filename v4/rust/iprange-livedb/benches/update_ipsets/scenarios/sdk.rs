@@ -7,7 +7,7 @@ use iprange_livedb::{
     FinishedHistoryProjection, HistoryProjectionSource, HistoryWindow, LiveReader, LiveWriter,
     MembershipAggregateSink, MembershipAggregationMode, MembershipAlgebra, MembershipAlgebraBudget,
     MembershipCrossCell, MembershipJoinSink, MembershipQueryBudget, PublicationPolicy,
-    PublicationStatus, UncoveredFeed, ValueKind, ValueTag,
+    PublicationStatus, StructureKind, UncoveredFeed, ValueKind, ValueTag,
 };
 
 use crate::measure;
@@ -559,6 +559,7 @@ fn create_membership(database: &TestDatabase) -> Result<(), String> {
         database.main(),
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        StructureKind::None,
         tag(b"membership")?,
         1,
         &CancellationToken::new(),

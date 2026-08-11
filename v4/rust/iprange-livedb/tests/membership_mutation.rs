@@ -61,6 +61,7 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),

@@ -153,6 +153,17 @@ fn smoke_cases() -> Vec<Case> {
         case("immutable-direct-lookup", 4_000, 0),
         case("live-direct-random-lookup", 4_000, 0),
         case("immutable-direct-random-lookup", 4_000, 0),
+        case("structured-build-random", 4_000, 64),
+        case("structured-intern", 4_000, 64),
+        case("structured-assign-random", 4_000, 64),
+        case("structured-commit", 4_000, 64),
+        case("live-structured-scalar-random-lookup", 4_000, 64),
+        case("immutable-structured-scalar-random-lookup", 4_000, 64),
+        case("live-structured-threat-random-lookup", 4_000, 64),
+        case("immutable-structured-threat-random-lookup", 4_000, 64),
+        case("live-structured-scalar-scan", 4_000, 64),
+        case("immutable-structured-scalar-scan", 4_000, 64),
+        case("immutable-separate-enrichment-random-lookup", 4_000, 64),
         case("live-direct-scan", 4_000, 0),
         case("immutable-direct-scan", 4_000, 0),
         case("live-open", 4_000, 1),
@@ -224,6 +235,29 @@ fn scale_cases() -> Vec<Case> {
     cases.push(case("immutable-direct-random-lookup", 1_000_000, 0));
     cases.push(case("live-membership-random-lookup", 1_000_000, 421));
     cases.push(case("immutable-membership-random-lookup", 1_000_000, 421));
+    cases.push(case("structured-build-random", 1_000_000, 421));
+    cases.push(case("structured-intern", 65_536, 421));
+    cases.push(case("structured-assign-random", 1_000_000, 421));
+    cases.push(case("structured-commit", 1_000_000, 421));
+    cases.push(case("live-structured-scalar-random-lookup", 1_000_000, 421));
+    cases.push(case(
+        "immutable-structured-scalar-random-lookup",
+        1_000_000,
+        421,
+    ));
+    cases.push(case("live-structured-threat-random-lookup", 1_000_000, 421));
+    cases.push(case(
+        "immutable-structured-threat-random-lookup",
+        1_000_000,
+        421,
+    ));
+    cases.push(case("live-structured-scalar-scan", 1_000_000, 421));
+    cases.push(case("immutable-structured-scalar-scan", 1_000_000, 421));
+    cases.push(case(
+        "immutable-separate-enrichment-random-lookup",
+        1_000_000,
+        421,
+    ));
     cases.push(case("live-direct-scan", 100_000, 0));
     cases.push(case("immutable-direct-scan", 100_000, 0));
     cases.push(case("live-open", 100_000, 1));
@@ -267,6 +301,10 @@ fn ci_cases() -> Vec<Case> {
         case("live-direct-scan", 100_000, 0),
         case("live-membership-lookup", 100_000, 421),
         case("live-membership-random-lookup", 100_000, 421),
+        case("structured-build-random", 1_000_000, 421),
+        case("live-structured-scalar-random-lookup", 100_000, 421),
+        case("live-structured-threat-random-lookup", 100_000, 421),
+        case("live-structured-scalar-scan", 100_000, 421),
         case("live-feed-scan", 100_000, 421),
         case("membership-cardinalities", 1_000_000, 64),
         case("live-validation", 1_000_000, 0),

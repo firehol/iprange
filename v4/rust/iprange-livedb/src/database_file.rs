@@ -9,7 +9,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
 use crate::bootstrap::{self, Bootstrap, OpenMode};
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, StructureKind, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, Mapping};
 
@@ -17,6 +17,7 @@ use crate::mapping::{ByteSource, Mapping};
 pub(crate) struct EmptySpec {
     pub(crate) address_family: AddressFamily,
     pub(crate) value_kind: ValueKind,
+    pub(crate) structure_kind: StructureKind,
     pub(crate) value_tag: ValueTag,
     pub(crate) database_id: [u8; 16],
     pub(crate) transaction_id: u64,
@@ -28,6 +29,7 @@ impl EmptySpec {
     pub(crate) const fn live(
         address_family: AddressFamily,
         value_kind: ValueKind,
+        structure_kind: StructureKind,
         value_tag: ValueTag,
         database_id: [u8; 16],
         commit_nonce: [u8; 16],
@@ -35,6 +37,7 @@ impl EmptySpec {
         Self {
             address_family,
             value_kind,
+            structure_kind,
             value_tag,
             database_id,
             transaction_id: 1,
@@ -48,6 +51,7 @@ pub(crate) fn empty_meta(spec: EmptySpec) -> MetaV4 {
     MetaV4 {
         address_family: spec.address_family,
         value_kind: spec.value_kind,
+        structure_kind_code: spec.structure_kind as u8,
         value_tag: spec.value_tag,
         database_id: spec.database_id,
         txn_id: spec.transaction_id,
@@ -57,7 +61,10 @@ pub(crate) fn empty_meta(spec: EmptySpec) -> MetaV4 {
         active_feed_count: 0,
         feed_index_limit: spec.feed_index_limit,
         membership_entry_count: 0,
-        membership_id_limit: u64::from(spec.value_kind == ValueKind::Membership),
+        membership_id_limit: u64::from(matches!(
+            spec.value_kind,
+            ValueKind::Membership | ValueKind::Structured
+        )),
         metadata_uncompressed_len: 0,
         metadata_compressed_len: 0,
         retired_extent_count: 0,
@@ -72,6 +79,11 @@ pub(crate) fn empty_meta(spec: EmptySpec) -> MetaV4 {
         free_bitmap_root: 0,
         retirement_root: 0,
         allocator_reserve: [0; 4],
+        structure_entry_count: 0,
+        structure_id_limit: u64::from(spec.value_kind == ValueKind::Structured),
+        structure_id_root: 0,
+        structure_hash_root: 0,
+        structure_used_root: 0,
     }
 }
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, StructureKind, ValueKind, ValueTag};
 use crate::error::{Error, Result};
 use crate::publication::{CleanupArtifacts, CoordinationCleanup, PublicationProblem};
 use crate::validation::{
@@ -235,6 +235,7 @@ pub(super) fn read_finding(control: &Control) -> Result<ValidationFinding> {
 fn write_generation(output: &mut Writer<'_>, value: ValidatedGeneration) -> Result<()> {
     output.byte(value.address_family as u8)?;
     output.byte(value.value_kind as u8)?;
+    output.byte(value.structure_kind as u8)?;
     output.bytes(value.value_tag.as_wire())?;
     output.bytes(&value.database_id)?;
     output.u64(value.transaction_id)?;
@@ -251,19 +252,22 @@ fn read_generation(input: &mut Reader<'_>) -> Result<ValidatedGeneration> {
         .ok_or(Error::Corrupt("worker address family is invalid"))?;
     let value_kind = ValueKind::from_wire(input.byte()?)
         .ok_or(Error::Corrupt("worker value kind is invalid"))?;
+    let structure_kind = StructureKind::from_wire(input.byte()?)
+        .ok_or(Error::Corrupt("worker structure kind is invalid"))?;
     let value_tag =
         ValueTag::from_wire(input.array()?).ok_or(Error::Corrupt("worker value tag is invalid"))?;
     let database_id = input.array()?;
     let transaction_id = input.u64()?;
     let commit_nonce = input.array()?;
     let page_count = input.u64()?;
-    let mut roots = [0; 10];
+    let mut roots = [0; 13];
     for root in &mut roots {
         *root = input.u32()?;
     }
     Ok(ValidatedGeneration {
         address_family,
         value_kind,
+        structure_kind,
         value_tag,
         database_id,
         transaction_id,

@@ -1,6 +1,6 @@
 use iprange_livedb::{
-    create_live, AddressFamily, CancellationToken, FinishedWorkflow, LiveWriter, ValueKind,
-    ValueTag,
+    create_live, AddressFamily, CancellationToken, FinishedWorkflow, LiveWriter, StructureKind,
+    ValueKind, ValueTag,
 };
 
 use crate::measure;
@@ -147,6 +147,7 @@ fn create_direct(label: &str, tag: ValueTag, reader_capacity: u32) -> Result<Tes
         database.main(),
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         tag,
         reader_capacity,
         &CancellationToken::new(),
@@ -165,6 +166,7 @@ fn create_direct_v6(
         database.main(),
         AddressFamily::Ipv6,
         ValueKind::Direct,
+        StructureKind::None,
         tag,
         reader_capacity,
         &CancellationToken::new(),

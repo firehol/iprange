@@ -8,21 +8,24 @@ are not compatibility inputs.
 ## Rust-first foundation
 
 `cases.json` is the language-neutral semantic manifest. The current foundation
-contains four compact immutable snapshots produced through the public Rust live
+contains five compact immutable snapshots produced through the public Rust live
 writer and public snapshot operation:
 
 - `rust/direct-ipv4.iprdb`: arrival-order direct assignments and clearing;
 - `rust/first-seen-ipv6.iprdb`: full IPv6 first-seen coverage and empty metadata;
 - `rust/membership-ipv4.iprdb`: 70 named feeds, index reuse, and memberships
   crossing the 64-bit boundary; and
-- `rust/membership-ipv6.iprdb`: full IPv6 membership and the 1 MiB metadata
-  limit stored compressed.
+- `rust/membership-ipv6.iprdb`: full IPv6 membership and a 1 MiB compressed
+  metadata payload; and
+- `rust/structured-ipv4.iprdb`: typed network enrichment, named threat feeds,
+  arrival-order overwrites, clearing, lazy membership, and exact metadata.
 
 The Rust test actually opens and explicitly validates every listed file. It
-compares every direct range, feed name/index, resolved membership, named-feed
-projection, exact decompressed metadata state and bytes, and exact 129-bit
-cardinality. It also derives temporary wrong-magic, short, and unaligned inputs
-from the valid corpus and proves their rejection. Normal tests never modify the
+compares every direct or structured range, typed enrichment field, feed
+name/index, resolved membership, named-feed projection, exact decompressed
+metadata state and bytes, and exact 129-bit cardinality. It also performs true
+point lookups and derives temporary wrong-magic, short, and unaligned inputs from
+the valid corpus to prove their rejection. Normal tests never modify the
 committed corpus.
 
 Run the read-only proof:

@@ -8,7 +8,7 @@ use iprange_livedb::{CancellationToken, Error};
 
 use crate::abi::{
     CallbackFailure, Cancellation, CoverageSinkFn, DirectSinkFn, FeedSinkFn, MembershipRange,
-    MembershipSinkFn, Range,
+    MembershipSinkFn, NetworkEnrichmentV1Range, NetworkEnrichmentV1SinkFn, Range,
 };
 use crate::callback;
 use crate::cursor::{self, Kind};
@@ -92,6 +92,34 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_scan_membership(
         let cancellation = callback::token(cancellation)?;
         let cursor = cursor::build(reader, direction, bounds, Kind::Membership)?;
         let (count, result) = scan_membership(&cursor, &cancellation, callback_fn, context);
+        *output = Box::into_raw(Box::new(ReportHandle::scan(count, result.is_ok())));
+        result
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iprange_v4_abi1_reader_scan_network_enrichment_v1(
+    reader: *const ReaderHandle,
+    direction: u32,
+    bounds: *const Range,
+    cancellation: Cancellation,
+    callback_fn: NetworkEnrichmentV1SinkFn,
+    context: *mut c_void,
+    report_output: *mut *mut ReportHandle,
+    error_output: *mut *mut ErrorHandle,
+) -> u32 {
+    call_with_output(error_output, report_output, "report output is null", || {
+        // SAFETY: all pointers are validated before use.
+        let reader =
+            unsafe { crate::handle::required_handle_input(reader, "reader handle is null")? };
+        let output = unsafe { required_output(report_output, "report output is null")? };
+        *output = std::ptr::null_mut();
+        let direction = cursor::decode_direction(direction)?;
+        let bounds = unsafe { cursor::decode_bounds(bounds, direction)? };
+        let cancellation = callback::token(cancellation)?;
+        let cursor = cursor::build(reader, direction, bounds, Kind::NetworkEnrichmentV1)?;
+        let (count, result) =
+            scan_network_enrichment_v1(&cursor, &cancellation, callback_fn, context);
         *output = Box::into_raw(Box::new(ReportHandle::scan(count, result.is_ok())));
         result
     })
@@ -353,6 +381,121 @@ fn flush_membership(
         count,
         length,
         sink::membership(callback_fn, context, records),
+    )
+}
+
+fn scan_network_enrichment_v1(
+    cursor_handle: &CursorHandle,
+    cancellation: &CancellationToken,
+    callback_fn: NetworkEnrichmentV1SinkFn,
+    context: *mut c_void,
+) -> (u64, Result<(), CallError>) {
+    let mut views: [MaybeUninit<BorrowedMembershipViewHandle>; BATCH_CAPACITY] =
+        std::array::from_fn(|_| MaybeUninit::uninit());
+    let mut records: [MaybeUninit<NetworkEnrichmentV1Range>; BATCH_CAPACITY] =
+        std::array::from_fn(|_| MaybeUninit::uninit());
+    let mut length = 0usize;
+    let mut count = 0u64;
+    loop {
+        if cancellation.is_cancelled() {
+            return (count, Err(Error::Cancelled.into()));
+        }
+        let step = cursor_handle.with_mut(|reader, cursor, borrowed, bounds| {
+            *borrowed = None;
+            match cursor::next(reader, cursor, bounds)? {
+                Some(ReaderCursorItem::NetworkEnrichmentV1V4 {
+                    range,
+                    value,
+                    membership,
+                }) => {
+                    push_network_enrichment_v1(
+                        reader,
+                        cursor::range_v4(range),
+                        value,
+                        membership,
+                        &mut views,
+                        &mut records,
+                        length,
+                    );
+                    Ok(false)
+                }
+                Some(ReaderCursorItem::NetworkEnrichmentV1V6 {
+                    range,
+                    value,
+                    membership,
+                }) => {
+                    push_network_enrichment_v1(
+                        reader,
+                        cursor::range_v6(range),
+                        value,
+                        membership,
+                        &mut views,
+                        &mut records,
+                        length,
+                    );
+                    Ok(false)
+                }
+                Some(_) => Err(Error::WrongState("not a network enrichment cursor").into()),
+                None => Ok(true),
+            }
+        });
+        let end = match step {
+            Ok(end) => end,
+            Err(error) => return (count, Err(error)),
+        };
+        if end {
+            return flush_network_enrichment_v1(callback_fn, context, &records, length, count);
+        }
+        length += 1;
+        if length == BATCH_CAPACITY {
+            let (next_count, result) =
+                flush_network_enrichment_v1(callback_fn, context, &records, length, count);
+            if result.is_err() {
+                return (next_count, result);
+            }
+            count = next_count;
+            length = 0;
+        }
+    }
+}
+
+fn push_network_enrichment_v1(
+    reader: &std::sync::Arc<iprange_livedb::c_abi_support::Reader>,
+    range: Range,
+    value: iprange_livedb::NetworkEnrichmentV1,
+    membership: Option<iprange_livedb::c_abi_support::MembershipToken>,
+    views: &mut [MaybeUninit<BorrowedMembershipViewHandle>; BATCH_CAPACITY],
+    records: &mut [MaybeUninit<NetworkEnrichmentV1Range>; BATCH_CAPACITY],
+    index: usize,
+) {
+    let membership = membership.map_or(std::ptr::null(), |membership| {
+        views[index].write(BorrowedMembershipViewHandle::new(reader, membership))
+    });
+    records[index].write(NetworkEnrichmentV1Range {
+        range,
+        value: crate::structured::encode(value),
+        membership,
+    });
+}
+
+fn flush_network_enrichment_v1(
+    callback_fn: NetworkEnrichmentV1SinkFn,
+    context: *mut c_void,
+    records: &[MaybeUninit<NetworkEnrichmentV1Range>; BATCH_CAPACITY],
+    length: usize,
+    count: u64,
+) -> (u64, Result<(), CallError>) {
+    if length == 0 {
+        return (count, Ok(()));
+    }
+    // SAFETY: exactly the first `length` records were initialized above.
+    let records = unsafe {
+        std::slice::from_raw_parts(records.as_ptr().cast::<NetworkEnrichmentV1Range>(), length)
+    };
+    finish_batch(
+        count,
+        length,
+        sink::network_enrichment_v1(callback_fn, context, records),
     )
 }
 

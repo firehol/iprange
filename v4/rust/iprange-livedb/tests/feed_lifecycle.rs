@@ -83,6 +83,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         4,
         &CancellationToken::new(),
@@ -228,6 +229,7 @@ fn lifecycle_preconditions_and_precancellation_leave_the_writer_clean() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
@@ -279,6 +281,7 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
@@ -313,7 +316,7 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
     assert!(matches!(
         oversized.set_metadata_json(&invalid_metadata),
         Err(Error::TransactionAborted(cause))
-            if matches!(*cause, Error::InvalidArgument("metadata exceeds 1 MiB"))
+            if matches!(*cause, Error::InvalidArgument("metadata exceeds 20 MiB"))
     ));
     drop(oversized);
     assert!(matches!(
@@ -351,6 +354,7 @@ fn deleting_a_full_ipv6_feed_handles_the_complete_address_space() {
         &files.main,
         AddressFamily::Ipv6,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
@@ -400,6 +404,7 @@ fn direct_database_rejects_named_feed_lifecycle_operations() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"timestamp").unwrap(),
         1,
         &CancellationToken::new(),

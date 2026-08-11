@@ -12,6 +12,7 @@ mod membership;
 mod membership_import;
 mod reclaim;
 mod result;
+mod structured;
 mod workflow;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,7 @@ pub use result::{
     AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
     CommitCleanupArtifacts, LocalBasename,
 };
+pub use structured::{StructureRef, StructuredTransaction};
 pub(crate) use workflow::{FinishedState, PreparedState};
 pub use workflow::{FinishedWorkflow, PreparedFeedChange, PreparedWorkflow};
 
@@ -166,7 +168,7 @@ impl LiveWriter {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
         if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
-            return Err(Error::InvalidArgument("metadata exceeds 1 MiB"));
+            return Err(Error::InvalidArgument("metadata exceeds 20 MiB"));
         }
         self.mutate(|edit| edit.set_metadata(input))
     }

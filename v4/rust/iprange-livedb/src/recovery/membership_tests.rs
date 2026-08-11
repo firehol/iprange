@@ -2,10 +2,12 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::contract::{u16_le, ValueTag, PAGE_SIZE};
+use crate::contract::{u16_le, AddressFamily, ValueTag, PAGE_SIZE};
 use crate::database::ImmutableReader;
+use crate::error::{Error, Result};
 use crate::feed::FeedName;
 use crate::immutable_output::{MembershipWords, OutputBudget, OutputSpec};
+use crate::key::Ipv4Key;
 use crate::mapping::test_support as file_io;
 use crate::mapping::Mapping;
 use crate::membership_tree;
@@ -335,6 +337,7 @@ fn source_builder(path: &Path, feed_index_limit: u64) -> Builder {
         OutputSpec {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Membership,
+            structure_kind: crate::contract::StructureKind::None,
             value_tag: ValueTag::new(b"feeds").unwrap(),
             database_id: [11; 16],
             transaction_id: 7,
@@ -350,6 +353,7 @@ fn output_builder(path: &Path, source: MetaV4) -> Builder {
         OutputSpec {
             address_family: source.address_family,
             value_kind: source.value_kind,
+            structure_kind: crate::contract::StructureKind::None,
             value_tag: source.value_tag,
             database_id: [21; 16],
             transaction_id: 1,

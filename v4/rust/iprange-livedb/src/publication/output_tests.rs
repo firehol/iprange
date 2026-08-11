@@ -181,6 +181,7 @@ fn direct_spec() -> OutputSpec {
     OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::FIRST_SEEN,
         database_id: [3; 16],
         transaction_id: 7,

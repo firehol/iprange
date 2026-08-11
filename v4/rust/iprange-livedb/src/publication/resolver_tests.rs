@@ -657,6 +657,7 @@ fn publish(
     let spec = OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::FIRST_SEEN,
         database_id,
         transaction_id,
@@ -681,6 +682,7 @@ fn publish_replacement(main: &std::path::Path) -> PublicationResult {
     let spec = OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Direct,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::FIRST_SEEN,
         database_id: [41; 16],
         transaction_id: 42,

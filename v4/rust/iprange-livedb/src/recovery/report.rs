@@ -30,6 +30,7 @@ pub struct RecoveryReport {
     pub ranges: RecoveryLogicalCounts,
     pub catalog_entries: RecoveryLogicalCounts,
     pub membership_entries: RecoveryLogicalCounts,
+    pub structure_entries: RecoveryLogicalCounts,
     pub metadata_chunks: RecoveryLogicalCounts,
     pub retirement_records: RecoveryLogicalCounts,
     pub verified_addresses: Cardinality129,
@@ -223,6 +224,29 @@ impl<'a, S: RecoverySink> Reporter<'a, S> {
             &mut self.report.membership_entries.rejected,
             count,
             "recovery membership entries rejected",
+        )
+    }
+
+    pub(crate) fn structure_examined(&mut self) -> Result<()> {
+        increment(
+            &mut self.report.structure_entries.examined,
+            "recovery structure entries examined",
+        )
+    }
+
+    pub(crate) fn structure_accepted(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.structure_entries.accepted,
+            count,
+            "recovery structure entries accepted",
+        )
+    }
+
+    pub(crate) fn structure_rejected(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.structure_entries.rejected,
+            count,
+            "recovery structure entries rejected",
         )
     }
 

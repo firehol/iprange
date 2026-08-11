@@ -35,24 +35,27 @@ builders. Sidecar coordination and filesystem namespace/publication are
 separate persistent concerns with separate owners.
 
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
-directions. The final 2026-08-10 inventory counts tracked implementation files
-under the two library `src/` trees while excluding dedicated test modules. It
-contains 315 files and 90,225 newline-counted source lines; Lizard reports
-81,840 code lines across 4,871 functions. Functions average 13.9 code lines and
-cyclomatic complexity 3.5. The largest is a 191-line recovery-attempt state
-machine. Forty-nine files exceed the directional 500-line target, while the
-largest file has 950 lines and no file reaches 1,000.
+directions. The final 2026-08-11 inventory counts implementation files under
+the two library `src/` trees while excluding dedicated files and directories
+whose names contain `test`. It contains 335 files and 96,226 newline-counted
+source lines; Lizard reports 87,313 code lines across 5,183 functions.
+Functions average 14.0 code lines and cyclomatic complexity 3.5. The largest is
+a 191-line recovery-attempt state machine. Fifty-four files exceed the
+directional 500-line target, while the largest file has 950 lines and no file
+reaches 1,000.
 
-At a 15-line/100-token threshold, exact clone detection finds 11 small shapes
-totaling 237 lines (0.26%). They are frozen C maintenance forms, typed workflow
-wrappers, reader facades, and separate direct/membership recovery policies—not
-duplicate persistent-format operations. These measurements do not prove every
-line is intrinsically required; they make the remaining size and review
-boundary explicit.
+At a 15-line/100-token threshold, exact clone detection finds 11 production
+shapes totaling 254 lines (about 0.29%). They are C adapter forms, typed
+workflow/cursor wrappers, reader facades, codec trait adapters, and distinct
+damaged-input policies—not duplicate persistent-format operations. The audit
+did find copied membership/structured recovery construction and ID-table code;
+that code was consolidated before these final figures. These measurements do
+not prove every line is intrinsically required; they make the remaining size
+and review boundary explicit.
 
 ## Database model
 
-There is one main-file format with two explicit operating modes:
+There is one main-file format with two explicit lifecycle modes:
 
 - A live database uses the main file plus a local `<filename>.readers`
   coordination sidecar. The sidecar is never distributed.
@@ -67,11 +70,24 @@ and a value tag containing up to 15 non-NUL bytes plus its required NUL.
 - `membership` ranges refer to canonical in-file feed combinations. The SDK
   owns feed indexes, bitmap combinations, and membership IDs; callers use feed
   names and generation-bound references.
+- `structured` ranges refer to SDK-owned fixed records selected by one
+  `StructureKind` for the whole file. The current
+  `NetworkEnrichmentV1` record contains ASN, country/state/city IDs, optional
+  signed microdegree coordinates, and a reference to the existing canonical
+  threat-membership dictionary. Callers receive typed values and never submit
+  raw structure or membership IDs.
+
+Structured storage has one common manager for ID allocation, exact interning,
+hash collisions, refcounts, COW mutation, retirement, validation, recovery, and
+snapshot rebuilding. Each hardcoded structure has an independent codec module
+that alone owns its fields, offsets, canonical checks, and typed translation.
+Adding another enum value therefore adds a codec and typed adapter, not another
+storage manager or runtime schema.
 
 The optional file-level metadata is one opaque payload intended to contain a
 JSON object. The engine reads and writes the exact bytes but does not parse or
-normalize JSON. The uncompressed limit is 1 MiB; the committed representation
-is compressed.
+normalize JSON. The uncompressed limit is 20 MiB (20,971,520 bytes); the
+committed representation is compressed.
 
 ## Writer behavior
 
@@ -84,6 +100,8 @@ file.
 The public Rust SDK exposes:
 
 - advanced direct and membership transactions;
+- typed structured transactions, including SDK-owned profile interning,
+  threat-feed composition, arrival-order IPv4/IPv6 assignment, and clearing;
 - named-feed create, replace, rename, and delete workflows;
 - complete direct-map replacement;
 - exact first-seen refresh, where continuously present addresses keep their
@@ -192,14 +210,14 @@ mandatory only after the accepted Rust result is ported independently to Go.
 
 ## C ABI
 
-The committed boundary has 158 generation-1 functions. Its generated public
+The committed boundary has 168 generation-1 functions. Its generated public
 artifacts are:
 
 - [`iprange_v4.h`](iprange-capi/include/iprange_v4.h)
 - [`iprange_v4_abi1_manifest.json`](iprange-capi/include/iprange_v4_abi1_manifest.json)
 
 The Rust tests regenerate and compare both artifacts, inspect exact shared
-library exports, compile all layouts as C11 and C++17, and run seven native C
+library exports, compile all layouts as C11 and C++17, and run eight native C
 behavior programs.
 
 ## Measured publisher workloads
@@ -268,6 +286,43 @@ queries. The scan cases enumerate one million records through bounded cursors.
 | Random membership point lookup, 421 feeds | 0.307 s | 0.234 s |
 | Direct ordered scan | 0.00673 s | 0.00627 s |
 | Named-feed ordered scan, 421 feeds | 0.00808 s | 0.00795 s |
+
+The structured-value A/B used one pinned i9-12900K performance core, one warm-up,
+and five isolated samples. Point cases contain one million real ranges and run
+ten million deterministically shuffled queries; scans enumerate one million
+ranges. Timed reader paths allocate nothing.
+
+| Structured operation | Work | Median | Rate |
+|---|---:|---:|---:|
+| Live scalar lookup | 10,000,000 queries | 4.517 s | 2.214 M/s |
+| Immutable scalar lookup | 10,000,000 queries | 3.396 s | 2.945 M/s |
+| Live scalar + selected threat check | 10,000,000 queries | 5.477 s | 1.826 M/s |
+| Immutable scalar + selected threat check | 10,000,000 queries | 4.412 s | 2.267 M/s |
+| Live typed scan | 1,000,000 ranges | 0.0490 s | 20.408 M/s |
+| Immutable typed scan | 1,000,000 ranges | 0.0471 s | 21.246 M/s |
+| Random structured construction | 1,000,000 ranges | 0.925 s | 1.081 M/s |
+| Profile interning | 65,536 profiles | 0.0848 s | 0.773 M/s |
+| Random assignment after interning | 1,000,000 ranges | 0.818 s | 1.223 M/s |
+| Commit of an already-built draft | 1,000,000 ranges | 0.0358 s | 27.964 M/s |
+
+The equivalent immutable design using separate ASN, Geo, and threat files took
+9.409 s for the same ten million combined answers (1.063 M/s). One structured
+file is therefore 2.77 times faster in this controlled shape. The compact
+immutable structured file is 23,457,792 bytes; the live file is 39,534,592
+bytes. Construction uses 865 bounded setup allocations and 3,420,976 bytes at
+100,000 and one million ranges; the allocation count is constant, and timed
+interning/assignment/read paths allocate nothing. Commit uses four allocations
+totaling 48 bytes.
+
+The original fixed-tree structure index produced 1.852 M immutable scalar
+lookups/s. Replacing only that index with the retained direct ID table produced
+2.945 M/s. In the final profile, required range-tree descent accounts for
+43.73% of samples; direct structure location is 1.35%, typed decode is 4.38%,
+and error-drop glue is 1.05%. Necessary-work tests prove one range lookup, no
+membership lookup for scalar-only access, one lazy membership lookup when
+requested, no metadata work, and no implicit validation. This does not prove a
+mathematical hardware maximum; it means the audit found no actionable
+structure-manager work left in the measured hot path.
 
 Explicit whole-file validation is separate from open and normal access. One
 million direct ranges validate in 0.0103 s, one million membership ranges with

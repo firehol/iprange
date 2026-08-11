@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::live_writer::StructureRef;
 use crate::live_writer::{
     finish_import_state, DirectState, ExactDirectState, ExactFeedState, FinishedState,
     MembershipImportStateSource, MembershipState, PreparedState,
@@ -13,7 +14,7 @@ use crate::workflow::{AddressRange, WorkflowKind, WorkflowReport};
 use crate::{
     AbortResult, AddressFamily, CancellationToken, CommitResult, DirectSemantic, FeedName, FeedRef,
     FirstSeenRemovalSink, HistoryProjectionReport, HistoryWindow, LiveWriter, MembershipOperation,
-    MembershipRef, ReclaimResult, TransactionBudget,
+    MembershipRef, NetworkEnrichmentV1, ReclaimResult, TransactionBudget,
 };
 
 use super::Reader;
@@ -33,6 +34,7 @@ enum Operation {
     Metadata(PreparedState),
     Direct(DirectState),
     Membership(MembershipState),
+    Structured(MembershipState),
     ExactFeed(ExactFeedState),
     ExactDirect {
         state: ExactDirectState,
@@ -80,10 +82,13 @@ impl Writer {
         &mut self,
         mut sink: impl FnMut(FeedRef) -> Result<bool>,
     ) -> Result<u64> {
-        let Operation::Membership(state) = &mut self.operation else {
-            return Err(Error::WrongState(
-                "advanced membership operation is not active",
-            ));
+        let state = match &mut self.operation {
+            Operation::Membership(state) | Operation::Structured(state) => state,
+            _ => {
+                return Err(Error::WrongState(
+                    "advanced membership or structured operation is not active",
+                ))
+            }
         };
         let cancellation = state.cancellation().clone();
         let mut cursor = state.feed_cursor(&mut self.inner)?;
@@ -118,7 +123,9 @@ impl Writer {
                 Ok(changed)
             }
             Operation::Direct(state) => state.set_metadata_json(&mut self.inner, input),
-            Operation::Membership(state) => state.set_metadata_json(&mut self.inner, input),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.set_metadata_json(&mut self.inner, input)
+            }
             Operation::Prepared(state) | Operation::Metadata(state) => {
                 state.set_metadata_json(&mut self.inner, input)
             }
@@ -136,7 +143,9 @@ impl Writer {
                 Ok(changed)
             }
             Operation::Direct(state) => state.clear_metadata_json(&mut self.inner),
-            Operation::Membership(state) => state.clear_metadata_json(&mut self.inner),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.clear_metadata_json(&mut self.inner)
+            }
             Operation::Prepared(state) | Operation::Metadata(state) => {
                 state.clear_metadata_json(&mut self.inner)
             }
@@ -184,29 +193,41 @@ impl Writer {
         Ok(())
     }
 
+    pub fn begin_structured(&mut self, cancellation: &CancellationToken) -> Result<()> {
+        self.require_clean()?;
+        self.operation = Operation::Structured(self.inner.begin_structured_state(cancellation)?);
+        Ok(())
+    }
+
     pub fn feed_ensure(&mut self, name: FeedName) -> Result<FeedRef> {
         match &mut self.operation {
-            Operation::Membership(state) => state.ensure_feed(&mut self.inner, name),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.ensure_feed(&mut self.inner, name)
+            }
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
 
     pub fn feed_lookup(&mut self, name: FeedName) -> Result<Option<FeedRef>> {
         match &mut self.operation {
-            Operation::Membership(state) => state.lookup_feed(&mut self.inner, name),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.lookup_feed(&mut self.inner, name)
+            }
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
 
     pub fn feed_rename(&mut self, feed: FeedRef, name: FeedName) -> Result<FeedRef> {
         match &mut self.operation {
-            Operation::Membership(state) => state.rename_feed(&mut self.inner, feed, name),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.rename_feed(&mut self.inner, feed, name)
+            }
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
@@ -214,17 +235,20 @@ impl Writer {
     pub fn feed_delete(&mut self, feed: FeedRef) -> Result<()> {
         match &mut self.operation {
             Operation::Membership(state) => state.delete_feed(&mut self.inner, feed),
+            Operation::Structured(state) => state.delete_structured_feed(&mut self.inner, feed),
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
 
     pub fn empty_membership(&mut self) -> Result<MembershipRef> {
         match &mut self.operation {
-            Operation::Membership(state) => state.empty_membership(&mut self.inner),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.empty_membership(&mut self.inner)
+            }
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
@@ -235,9 +259,11 @@ impl Writer {
         feed: FeedRef,
     ) -> Result<MembershipRef> {
         match &mut self.operation {
-            Operation::Membership(state) => state.add_feed(&mut self.inner, membership, feed),
+            Operation::Membership(state) | Operation::Structured(state) => {
+                state.add_feed(&mut self.inner, membership, feed)
+            }
             _ => Err(Error::WrongState(
-                "advanced membership operation is not active",
+                "advanced membership or structured operation is not active",
             )),
         }
     }
@@ -272,6 +298,71 @@ impl Writer {
             }
             _ => Err(Error::WrongState(
                 "advanced membership operation is not active",
+            )),
+        }
+    }
+
+    pub fn network_enrichment_v1_intern(
+        &mut self,
+        value: NetworkEnrichmentV1,
+        membership: Option<MembershipRef>,
+    ) -> Result<StructureRef> {
+        match &mut self.operation {
+            Operation::Structured(state) => {
+                state.intern_network_enrichment_v1(&mut self.inner, value, membership)
+            }
+            _ => Err(Error::WrongState(
+                "advanced structured operation is not active",
+            )),
+        }
+    }
+
+    pub fn structured_assign_v4(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        structure: StructureRef,
+    ) -> Result<bool> {
+        match &mut self.operation {
+            Operation::Structured(state) => {
+                state.assign_structure_v4(&mut self.inner, from, to, structure)
+            }
+            _ => Err(Error::WrongState(
+                "advanced structured operation is not active",
+            )),
+        }
+    }
+
+    pub fn structured_assign_v6(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        structure: StructureRef,
+    ) -> Result<bool> {
+        match &mut self.operation {
+            Operation::Structured(state) => {
+                state.assign_structure_v6(&mut self.inner, from, to, structure)
+            }
+            _ => Err(Error::WrongState(
+                "advanced structured operation is not active",
+            )),
+        }
+    }
+
+    pub fn structured_clear_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
+        match &mut self.operation {
+            Operation::Structured(state) => state.clear_structure_v4(&mut self.inner, from, to),
+            _ => Err(Error::WrongState(
+                "advanced structured operation is not active",
+            )),
+        }
+    }
+
+    pub fn structured_clear_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
+        match &mut self.operation {
+            Operation::Structured(state) => state.clear_structure_v6(&mut self.inner, from, to),
+            _ => Err(Error::WrongState(
+                "advanced structured operation is not active",
             )),
         }
     }
@@ -583,7 +674,7 @@ impl Writer {
         let cancellation = match &operation {
             Operation::Metadata(state) | Operation::Prepared(state) => state.cancellation(),
             Operation::Direct(state) => state.cancellation(),
-            Operation::Membership(state) => state.cancellation(),
+            Operation::Membership(state) | Operation::Structured(state) => state.cancellation(),
             _ => {
                 self.operation = operation;
                 return Err(Error::WrongState("no committable transaction is pending"));

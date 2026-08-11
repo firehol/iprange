@@ -9,7 +9,7 @@ use std::{ffi::c_void, mem::size_of};
 #[cfg(not(target_os = "freebsd"))]
 use iprange_livedb::{
     create_live, AddressFamily, AddressRange, CancellationToken, Cardinality129, FeedName,
-    FinishedWorkflow, ImmutableReader, Ipv4Key, LiveWriter,
+    FinishedWorkflow, ImmutableReader, Ipv4Key, LiveWriter, StructureKind,
     TransactionBudget as CoreTransactionBudget, ValueKind, ValueTag,
 };
 
@@ -78,6 +78,7 @@ fn create_membership(path: &FsPath, feeds: &[(&str, &[(u32, u32)])]) {
         path,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        StructureKind::None,
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,

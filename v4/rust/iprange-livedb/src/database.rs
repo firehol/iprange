@@ -14,6 +14,9 @@ use crate::reader_core::ReaderCore;
 use crate::source::{
     DirectRangeSourceV4, DirectRangeSourceV6, FeedRangeSourceV4, FeedRangeSourceV6,
 };
+use crate::structured_value::{
+    NetworkEnrichmentV1CursorV4, NetworkEnrichmentV1CursorV6, NetworkEnrichmentV1View,
+};
 
 pub use crate::reader_core::DatabaseInfo;
 
@@ -120,6 +123,38 @@ impl ImmutableReader {
     /// Look up one address in an IPv6 membership database.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
         self.core.read().lookup_membership_v6(address)
+    }
+
+    /// Look up one address in an IPv4 `network_enrichment_v1` database.
+    pub fn lookup_network_enrichment_v1_v4(
+        &self,
+        address: Ipv4Key,
+    ) -> Result<Option<NetworkEnrichmentV1View<'_>>> {
+        self.core.read().lookup_network_enrichment_v1_v4(address)
+    }
+
+    /// Look up one address in an IPv6 `network_enrichment_v1` database.
+    pub fn lookup_network_enrichment_v1_v6(
+        &self,
+        address: Ipv6Key,
+    ) -> Result<Option<NetworkEnrichmentV1View<'_>>> {
+        self.core.read().lookup_network_enrichment_v1_v6(address)
+    }
+
+    /// Open an ordered cursor over typed IPv4 enrichment ranges.
+    pub fn network_enrichment_v1_cursor_v4(
+        &self,
+        direction: RangeDirection,
+    ) -> Result<NetworkEnrichmentV1CursorV4<'_>> {
+        self.core.read().network_enrichment_v1_cursor_v4(direction)
+    }
+
+    /// Open an ordered cursor over typed IPv6 enrichment ranges.
+    pub fn network_enrichment_v1_cursor_v6(
+        &self,
+        direction: RangeDirection,
+    ) -> Result<NetworkEnrichmentV1CursorV6<'_>> {
+        self.core.read().network_enrichment_v1_cursor_v6(direction)
     }
 
     /// Open a format-facing query capability over this pinned membership generation.

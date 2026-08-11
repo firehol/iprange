@@ -684,6 +684,7 @@ fn encode_create(result: &CreateResult) -> CreateReport {
         struct_size: size_of::<CreateReport>() as u32,
         address_family: facts::address_family(result.address_family),
         value_kind: facts::value_kind(result.value_kind),
+        structure_kind: facts::structure_kind(result.structure_kind),
         value_tag: *result.value_tag.as_wire(),
         database_id: result.database_id,
         commit_nonce: result.commit_nonce,

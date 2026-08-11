@@ -109,6 +109,7 @@ mod linux {
         MetaV4 {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
+            structure_kind_code: crate::contract::StructureKind::None as u8,
             value_tag: ValueTag::FIRST_SEEN,
             database_id: [0x11; 16],
             txn_id: 9,
@@ -133,6 +134,11 @@ mod linux {
             free_bitmap_root: 0,
             retirement_root: 0,
             allocator_reserve: [0; 4],
+            structure_entry_count: 0,
+            structure_id_limit: 0,
+            structure_id_root: 0,
+            structure_hash_root: 0,
+            structure_used_root: 0,
         }
     }
 }

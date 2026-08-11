@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, StructureKind, ValueKind, ValueTag};
 use crate::database_file::EmptySpec;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
@@ -28,6 +28,7 @@ pub enum CreationState {
 pub struct CreateResult {
     pub address_family: AddressFamily,
     pub value_kind: ValueKind,
+    pub structure_kind: StructureKind,
     pub value_tag: ValueTag,
     pub database_id: [u8; 16],
     pub commit_nonce: [u8; 16],
@@ -48,6 +49,7 @@ pub struct CreateResult {
 struct Attempt {
     address_family: AddressFamily,
     value_kind: ValueKind,
+    structure_kind: StructureKind,
     value_tag: ValueTag,
     database_id: [u8; 16],
     commit_nonce: [u8; 16],
@@ -62,6 +64,7 @@ pub(crate) fn create_live(
     path: impl AsRef<Path>,
     address_family: AddressFamily,
     value_kind: ValueKind,
+    structure_kind: StructureKind,
     value_tag: ValueTag,
     reader_capacity: u32,
     cancellation: &CancellationToken,
@@ -70,7 +73,15 @@ pub(crate) fn create_live(
     let path = path.as_ref();
     cancellation.check()?;
     validate_destination(path, reader_capacity)?;
-    let mut attempt = Attempt::new(path, address_family, value_kind, value_tag, reader_capacity)?;
+    validate_kinds(value_kind, structure_kind)?;
+    let mut attempt = Attempt::new(
+        path,
+        address_family,
+        value_kind,
+        structure_kind,
+        value_tag,
+        reader_capacity,
+    )?;
     attempt.directory_identity = match crate::live_namespace::parent_identity(path) {
         Ok(identity) => Some(identity),
         Err(cause) => return Ok(attempt.not_created(cause)),
@@ -112,6 +123,7 @@ pub(crate) fn create_live(
     let spec = EmptySpec::live(
         address_family,
         value_kind,
+        structure_kind,
         value_tag,
         attempt.database_id,
         attempt.commit_nonce,
@@ -139,12 +151,14 @@ impl Attempt {
         path: &Path,
         address_family: AddressFamily,
         value_kind: ValueKind,
+        structure_kind: StructureKind,
         value_tag: ValueTag,
         reader_capacity: u32,
     ) -> Result<Self> {
         Ok(Self {
             address_family,
             value_kind,
+            structure_kind,
             value_tag,
             database_id: random::nonzero_128()?,
             commit_nonce: random::nonzero_128()?,
@@ -267,6 +281,7 @@ impl Attempt {
         CreateResult {
             address_family: self.address_family,
             value_kind: self.value_kind,
+            structure_kind: self.structure_kind,
             value_tag: self.value_tag,
             database_id: self.database_id,
             commit_nonce: self.commit_nonce,
@@ -293,6 +308,19 @@ fn validate_destination(path: &Path, reader_capacity: u32) -> Result<()> {
     }
     require_absent(path)?;
     require_absent(&crate::path::canonical_sidecar(path)?)
+}
+
+fn validate_kinds(value_kind: ValueKind, structure_kind: StructureKind) -> Result<()> {
+    let valid = match value_kind {
+        ValueKind::Direct | ValueKind::Membership => structure_kind == StructureKind::None,
+        ValueKind::Structured => structure_kind != StructureKind::None,
+    };
+    if !valid {
+        return Err(Error::WrongStructureKind(
+            "value kind and structure kind do not form a valid database",
+        ));
+    }
+    Ok(())
 }
 
 fn prepare_sidecar(path: &Path, sidecar: &Sidecar, cancellation: &CancellationToken) -> Result<()> {

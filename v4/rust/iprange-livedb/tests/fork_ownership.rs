@@ -70,6 +70,7 @@ fn inherited_live_handles_are_rejected_child() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        iprange_livedb::StructureKind::None,
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),

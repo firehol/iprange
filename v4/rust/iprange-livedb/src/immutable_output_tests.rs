@@ -209,6 +209,7 @@ fn membership_output_streams_sparse_words_and_rebuilds_derived_state() {
     let spec = OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Membership,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::new(b"feeds").unwrap(),
         database_id: [8; 16],
         transaction_id: 19,
@@ -559,6 +560,7 @@ fn direct_spec(address_family: AddressFamily) -> OutputSpec {
     OutputSpec {
         address_family,
         value_kind: ValueKind::Direct,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::FIRST_SEEN,
         database_id: [3; 16],
         transaction_id: 7,
@@ -571,6 +573,7 @@ fn membership_spec(feed_index_limit: u64) -> OutputSpec {
     OutputSpec {
         address_family: AddressFamily::Ipv4,
         value_kind: ValueKind::Membership,
+        structure_kind: crate::contract::StructureKind::None,
         value_tag: ValueTag::new(b"feeds").unwrap(),
         database_id: [5; 16],
         transaction_id: 11,

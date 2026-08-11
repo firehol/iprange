@@ -57,4 +57,8 @@ pub(crate) mod page_type {
     pub(crate) const USED_BITMAP_LEAF: u8 = 15;
     pub(crate) const RETIREMENT_BRANCH: u8 = 16;
     pub(crate) const RETIREMENT_LEAF: u8 = 17;
+    pub(crate) const STRUCTURE_ID_BRANCH: u8 = 18;
+    pub(crate) const STRUCTURE_ID_LEAF: u8 = 19;
+    pub(crate) const STRUCTURE_HASH_BRANCH: u8 = 20;
+    pub(crate) const STRUCTURE_HASH_LEAF: u8 = 21;
 }

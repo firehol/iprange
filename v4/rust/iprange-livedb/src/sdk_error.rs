@@ -74,6 +74,11 @@ pub enum ErrorCode {
     MembershipIdExhausted = 62,
     ReaderCapacityExhausted = 63,
     CleanupInProgress = 64,
+    FaultWorkerUnavailable = 65,
+    FaultWorkerFailed = 66,
+    UnsupportedStructure = 67,
+    WrongStructureKind = 68,
+    StructureIdExhausted = 69,
 }
 
 impl ErrorCode {
@@ -143,6 +148,11 @@ impl ErrorCode {
             62 => Self::MembershipIdExhausted,
             63 => Self::ReaderCapacityExhausted,
             64 => Self::CleanupInProgress,
+            65 => Self::FaultWorkerUnavailable,
+            66 => Self::FaultWorkerFailed,
+            67 => Self::UnsupportedStructure,
+            68 => Self::WrongStructureKind,
+            69 => Self::StructureIdExhausted,
             _ => return None,
         })
     }
@@ -163,6 +173,8 @@ pub enum Error {
     WrongAddressFamily(&'static str),
     WrongValueKind(&'static str),
     WrongValueTag(&'static str),
+    UnsupportedStructure(u8),
+    WrongStructureKind(&'static str),
     LiveCoordinationUnsupported,
     Unsupported(&'static str),
     DurabilityUnsupported(&'static str),
@@ -173,6 +185,7 @@ pub enum Error {
     PageSpaceExhausted,
     FeedIndexExhausted,
     MembershipIdExhausted,
+    StructureIdExhausted,
     BudgetExceeded(&'static str),
     WorkLimitTooSmall {
         required_pages: u64,
@@ -238,6 +251,8 @@ impl Error {
             Self::WrongAddressFamily(_) => ErrorCode::WrongAddressFamily,
             Self::WrongValueKind(_) => ErrorCode::WrongValueKind,
             Self::WrongValueTag(_) => ErrorCode::WrongValueTag,
+            Self::UnsupportedStructure(_) => ErrorCode::UnsupportedStructure,
+            Self::WrongStructureKind(_) => ErrorCode::WrongStructureKind,
             Self::LiveCoordinationUnsupported => ErrorCode::LiveCoordinationUnsupported,
             Self::Unsupported(_) => ErrorCode::OsUnsupported,
             Self::DurabilityUnsupported(_) => ErrorCode::DurabilityUnsupported,
@@ -248,6 +263,7 @@ impl Error {
             Self::PageSpaceExhausted => ErrorCode::PageSpaceExhausted,
             Self::FeedIndexExhausted => ErrorCode::FeedIndexExhausted,
             Self::MembershipIdExhausted => ErrorCode::MembershipIdExhausted,
+            Self::StructureIdExhausted => ErrorCode::StructureIdExhausted,
             Self::BudgetExceeded(_) => ErrorCode::InsufficientResourceBudget,
             Self::WorkLimitTooSmall { .. } => ErrorCode::WorkLimitTooSmall,
             Self::BufferTooSmall { .. } => ErrorCode::BufferTooSmall,
@@ -320,6 +336,12 @@ impl fmt::Display for Error {
             }
             Self::WrongValueKind(detail) => write!(output, "wrong value kind: {detail}"),
             Self::WrongValueTag(detail) => write!(output, "wrong value tag: {detail}"),
+            Self::UnsupportedStructure(kind) => {
+                write!(output, "unsupported v4 structure kind: {kind}")
+            }
+            Self::WrongStructureKind(detail) => {
+                write!(output, "wrong structure kind: {detail}")
+            }
             Self::LiveCoordinationUnsupported => {
                 output.write_str("live coordination is unsupported on this platform")
             }
@@ -334,6 +356,7 @@ impl fmt::Display for Error {
             Self::PageSpaceExhausted => output.write_str("v4 page-number space is exhausted"),
             Self::FeedIndexExhausted => output.write_str("feed-index space is exhausted"),
             Self::MembershipIdExhausted => output.write_str("membership-ID space is exhausted"),
+            Self::StructureIdExhausted => output.write_str("structure-ID space is exhausted"),
             Self::BudgetExceeded(detail) => write!(output, "resource budget exceeded: {detail}"),
             Self::WorkLimitTooSmall { required_pages } => {
                 write!(
@@ -415,6 +438,8 @@ impl std::error::Error for Error {
             | Self::WrongAddressFamily(_)
             | Self::WrongValueKind(_)
             | Self::WrongValueTag(_)
+            | Self::UnsupportedStructure(_)
+            | Self::WrongStructureKind(_)
             | Self::LiveCoordinationUnsupported
             | Self::Unsupported(_)
             | Self::DurabilityUnsupported(_)
@@ -424,6 +449,7 @@ impl std::error::Error for Error {
             | Self::PageSpaceExhausted
             | Self::FeedIndexExhausted
             | Self::MembershipIdExhausted
+            | Self::StructureIdExhausted
             | Self::BudgetExceeded(_)
             | Self::WorkLimitTooSmall { .. }
             | Self::BufferTooSmall { .. }
@@ -454,7 +480,10 @@ impl From<io::Error> for Error {
 
 impl From<FormatError> for Error {
     fn from(error: FormatError) -> Self {
-        Self::Format(error)
+        match error {
+            FormatError::UnsupportedStructure(kind) => Self::UnsupportedStructure(kind),
+            other => Self::Format(other),
+        }
     }
 }
 
@@ -537,6 +566,11 @@ mod tests {
             ErrorCode::MembershipIdExhausted,
             ErrorCode::ReaderCapacityExhausted,
             ErrorCode::CleanupInProgress,
+            ErrorCode::FaultWorkerUnavailable,
+            ErrorCode::FaultWorkerFailed,
+            ErrorCode::UnsupportedStructure,
+            ErrorCode::WrongStructureKind,
+            ErrorCode::StructureIdExhausted,
         ];
         for (index, code) in codes.into_iter().enumerate() {
             assert_eq!(code as u32, index as u32 + 1);

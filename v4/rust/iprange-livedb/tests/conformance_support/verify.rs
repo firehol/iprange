@@ -9,10 +9,14 @@ use iprange_livedb::validation::{
 };
 use iprange_livedb::{
     AddressFamily, CancellationToken, Cardinality129, ErrorCode, ImmutableReader, Ipv4Key, Ipv6Key,
-    MetaSelection, RangeDirection, ValueKind, ValueTag,
+    MembershipView, MetaSelection, NetworkEnrichmentV1, NetworkEnrichmentV1Location,
+    RangeDirection, StructureKind, ValueKind, ValueTag,
 };
 
-use super::{Corpus, Family, Fixture, InvalidCase, InvalidMutation, Kind, MetadataExpectation};
+use super::{
+    Corpus, Family, Fixture, InvalidCase, InvalidMutation, Kind, MetadataExpectation, Structure,
+    StructuredExpectation,
+};
 
 pub(crate) fn corpus(root: &Path, corpus: &Corpus) {
     assert_eq!(
@@ -21,8 +25,8 @@ pub(crate) fn corpus(root: &Path, corpus: &Corpus) {
             .iter()
             .filter(|fixture| fixture.producer == "rust")
             .count(),
-        4,
-        "the Rust-first corpus must retain its four foundation fixtures"
+        5,
+        "the Rust-first corpus must retain its five foundation fixtures"
     );
     assert_eq!(corpus.invalid_cases.len(), 3);
     assert_fixture_inventory(root, corpus);
@@ -49,6 +53,7 @@ pub(crate) fn fixture_at(path: &Path, fixture: &Fixture) {
     let info = reader.info();
     assert_eq!(info.address_family, address_family(fixture.family));
     assert_eq!(info.value_kind, value_kind(fixture.kind));
+    assert_eq!(info.structure_kind, structure_kind(fixture));
     assert_eq!(
         info.value_tag,
         ValueTag::new(fixture.tag.as_bytes()).expect("manifest value tag is valid")
@@ -65,6 +70,7 @@ pub(crate) fn fixture_at(path: &Path, fixture: &Fixture) {
     match fixture.kind {
         Kind::Direct => assert_direct(&reader, fixture),
         Kind::Membership => assert_membership(&reader, fixture),
+        Kind::Structured => assert_structured(&reader, fixture),
     }
 }
 
@@ -140,6 +146,7 @@ fn assert_valid(path: &Path) {
 fn assert_direct(reader: &ImmutableReader, fixture: &Fixture) {
     assert!(fixture.feeds.is_empty());
     assert!(fixture.membership_ranges.is_empty());
+    assert!(fixture.structured_ranges.is_empty());
     let expected: Vec<_> = fixture
         .direct_ranges
         .iter()
@@ -200,6 +207,7 @@ fn assert_canonical_direct(family: Family, ranges: &[(u128, u128, u32)]) {
 
 fn assert_membership(reader: &ImmutableReader, fixture: &Fixture) {
     assert!(fixture.direct_ranges.is_empty());
+    assert!(fixture.structured_ranges.is_empty());
     let expected_catalog: Vec<_> = fixture
         .feeds
         .iter()
@@ -233,6 +241,212 @@ fn assert_membership(reader: &ImmutableReader, fixture: &Fixture) {
     for address in membership_probes(fixture.family, &ranges) {
         assert_membership_at(reader, fixture, address, expected_at(&ranges, address));
     }
+}
+
+type StructuredRange = (u128, u128, NetworkEnrichmentV1, Vec<String>);
+
+fn assert_structured(reader: &ImmutableReader, fixture: &Fixture) {
+    assert!(fixture.direct_ranges.is_empty());
+    assert!(fixture.membership_ranges.is_empty());
+    assert_eq!(fixture.structure, Some(Structure::NetworkEnrichmentV1));
+
+    let expected_catalog: Vec<_> = fixture
+        .feeds
+        .iter()
+        .map(|feed| (feed.name.clone(), feed.index))
+        .collect();
+    let mut actual_catalog = Vec::new();
+    let mut feeds = reader.feed_cursor().unwrap();
+    while let Some(feed) = feeds.next_feed().unwrap() {
+        actual_catalog.push((feed.name.as_str().to_owned(), feed.index));
+    }
+    assert_eq!(actual_catalog, expected_catalog);
+    assert_eq!(
+        reader.info().active_feed_count,
+        expected_catalog.len() as u64
+    );
+
+    let expected = parsed_structures(fixture);
+    assert_canonical_structures(fixture.family, &expected);
+    assert_eq!(reader.info().range_record_count, expected.len() as u64);
+    assert_eq!(
+        structured_cardinality(fixture.family, &expected),
+        fixture.address_count
+    );
+
+    match fixture.family {
+        Family::Ipv4 => {
+            let mut cursor = reader
+                .network_enrichment_v1_cursor_v4(RangeDirection::Forward)
+                .unwrap();
+            for (from, to, value, expected_feeds) in &expected {
+                let actual = cursor.next_range().unwrap().unwrap();
+                assert_eq!(u128::from(actual.from.0), *from);
+                assert_eq!(u128::from(actual.to.0), *to);
+                assert_eq!(actual.value.value(), *value);
+                assert_structure_membership(
+                    actual.value.threat_membership().unwrap(),
+                    fixture,
+                    expected_feeds,
+                );
+            }
+            assert!(cursor.next_range().unwrap().is_none());
+        }
+        Family::Ipv6 => {
+            let mut cursor = reader
+                .network_enrichment_v1_cursor_v6(RangeDirection::Forward)
+                .unwrap();
+            for (from, to, value, expected_feeds) in &expected {
+                let actual = cursor.next_range().unwrap().unwrap();
+                assert_eq!(actual.from.to_u128(), *from);
+                assert_eq!(actual.to.to_u128(), *to);
+                assert_eq!(actual.value.value(), *value);
+                assert_structure_membership(
+                    actual.value.threat_membership().unwrap(),
+                    fixture,
+                    expected_feeds,
+                );
+            }
+            assert!(cursor.next_range().unwrap().is_none());
+        }
+    }
+
+    for address in structured_probes(fixture.family, &expected) {
+        let expected_at = expected
+            .iter()
+            .find(|(from, to, _, _)| *from <= address && address <= *to);
+        match (fixture.family, expected_at) {
+            (Family::Ipv4, Some((_, _, value, feeds))) => {
+                let actual = reader
+                    .lookup_network_enrichment_v1_v4(Ipv4Key(address as u32))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(actual.value(), *value);
+                assert_structure_membership(actual.threat_membership().unwrap(), fixture, feeds);
+            }
+            (Family::Ipv6, Some((_, _, value, feeds))) => {
+                let actual = reader
+                    .lookup_network_enrichment_v1_v6(Ipv6Key::from_u128(address))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(actual.value(), *value);
+                assert_structure_membership(actual.threat_membership().unwrap(), fixture, feeds);
+            }
+            (Family::Ipv4, None) => assert!(reader
+                .lookup_network_enrichment_v1_v4(Ipv4Key(address as u32))
+                .unwrap()
+                .is_none()),
+            (Family::Ipv6, None) => assert!(reader
+                .lookup_network_enrichment_v1_v6(Ipv6Key::from_u128(address))
+                .unwrap()
+                .is_none()),
+        }
+    }
+
+    for (name, _) in &expected_catalog {
+        assert_eq!(
+            feed_projection(reader, fixture.family, name),
+            expected_structured_projection(fixture, name)
+        );
+    }
+}
+
+fn parsed_structures(fixture: &Fixture) -> Vec<StructuredRange> {
+    fixture
+        .structured_ranges
+        .iter()
+        .map(|range| {
+            (
+                fixture.family.parse(&range.from),
+                fixture.family.parse(&range.to),
+                expected_structure(range),
+                range.feeds.clone(),
+            )
+        })
+        .collect()
+}
+
+fn expected_structure(range: &StructuredExpectation) -> NetworkEnrichmentV1 {
+    NetworkEnrichmentV1 {
+        asn: range.asn,
+        country_id: range.country_id,
+        state_id: range.state_id,
+        city_id: range.city_id,
+        location: range.location.map(|location| NetworkEnrichmentV1Location {
+            latitude_microdegrees: location.latitude_microdegrees,
+            longitude_microdegrees: location.longitude_microdegrees,
+        }),
+    }
+}
+
+fn assert_canonical_structures(family: Family, ranges: &[StructuredRange]) {
+    let mut previous: Option<(u128, &NetworkEnrichmentV1, &[String])> = None;
+    for (from, to, value, feeds) in ranges {
+        assert!(*from <= *to && *to <= family.maximum());
+        if let Some((previous_to, previous_value, previous_feeds)) = previous {
+            assert!(previous_to < *from, "structured manifest ranges overlap");
+            assert!(
+                previous_to.checked_add(1) != Some(*from)
+                    || previous_value != value
+                    || previous_feeds != feeds,
+                "structured manifest contains an uncoalesced range"
+            );
+        }
+        previous = Some((*to, value, feeds));
+    }
+}
+
+fn assert_structure_membership(
+    actual: Option<MembershipView<'_>>,
+    fixture: &Fixture,
+    expected: &[String],
+) {
+    if expected.is_empty() {
+        assert!(actual.is_none());
+        return;
+    }
+    let actual = actual.expect("structured membership is missing");
+    for feed in &fixture.feeds {
+        assert_eq!(
+            actual.contains_index(feed.index).unwrap(),
+            expected.contains(&feed.name)
+        );
+    }
+}
+
+fn structured_probes(family: Family, ranges: &[StructuredRange]) -> Vec<u128> {
+    let mut probes = vec![family.minimum(), family.maximum()];
+    for (from, to, _, _) in ranges {
+        probes.extend([*from, *to]);
+        if *from != family.minimum() {
+            probes.push(from - 1);
+        }
+        if *to != family.maximum() {
+            probes.push(to + 1);
+        }
+    }
+    probes.sort_unstable();
+    probes.dedup();
+    probes
+}
+
+fn expected_structured_projection(fixture: &Fixture, name: &str) -> Vec<(u128, u128)> {
+    let mut output: Vec<(u128, u128)> = Vec::new();
+    for range in &fixture.structured_ranges {
+        if !range.feeds.iter().any(|feed| feed == name) {
+            continue;
+        }
+        let from = fixture.family.parse(&range.from);
+        let to = fixture.family.parse(&range.to);
+        if let Some(previous) = output.last_mut() {
+            if previous.1.checked_add(1) == Some(from) {
+                previous.1 = to;
+                continue;
+            }
+        }
+        output.push((from, to));
+    }
+    output
 }
 
 type MembershipRange = (u128, u128, Vec<String>);
@@ -382,6 +596,10 @@ fn membership_cardinality(family: Family, ranges: &[MembershipRange]) -> String 
     sum_cardinality(family, ranges.iter().map(|(from, to, _)| (*from, *to)))
 }
 
+fn structured_cardinality(family: Family, ranges: &[StructuredRange]) -> String {
+    sum_cardinality(family, ranges.iter().map(|(from, to, _, _)| (*from, *to)))
+}
+
 fn sum_cardinality(family: Family, ranges: impl Iterator<Item = (u128, u128)>) -> String {
     let mut total = Cardinality129::ZERO;
     for (from, to) in ranges {
@@ -454,6 +672,17 @@ fn value_kind(kind: Kind) -> ValueKind {
     match kind {
         Kind::Direct => ValueKind::Direct,
         Kind::Membership => ValueKind::Membership,
+        Kind::Structured => ValueKind::Structured,
+    }
+}
+
+fn structure_kind(fixture: &Fixture) -> StructureKind {
+    match (fixture.kind, fixture.structure) {
+        (Kind::Direct | Kind::Membership, None) => StructureKind::None,
+        (Kind::Structured, Some(Structure::NetworkEnrichmentV1)) => {
+            StructureKind::NetworkEnrichmentV1
+        }
+        _ => panic!("fixture value and structure kinds disagree"),
     }
 }
 

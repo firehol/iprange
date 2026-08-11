@@ -2,7 +2,7 @@
 
 use std::fs::File;
 
-use crate::contract::{ValueKind, MAX_PAGE_COUNT};
+use crate::contract::{StructureKind, ValueKind, MAX_PAGE_COUNT};
 use crate::error::{Error, Result};
 
 use super::{OutputBudget, OutputSpec};
@@ -23,6 +23,15 @@ fn require_identity(spec: OutputSpec) -> Result<()> {
     if spec.database_id == [0; 16] || spec.commit_nonce == [0; 16] || spec.transaction_id == 0 {
         return Err(Error::InvalidArgument(
             "immutable output identity is invalid",
+        ));
+    }
+    let kinds_match = match spec.value_kind {
+        ValueKind::Direct | ValueKind::Membership => spec.structure_kind == StructureKind::None,
+        ValueKind::Structured => spec.structure_kind != StructureKind::None,
+    };
+    if !kinds_match {
+        return Err(Error::WrongStructureKind(
+            "immutable output value and structure kinds do not match",
         ));
     }
     Ok(())

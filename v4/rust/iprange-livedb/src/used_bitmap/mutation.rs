@@ -14,7 +14,7 @@ use super::{
 
 mod tree;
 
-use tree::{grow_root, new_subtree, propagate, remove_empty_path};
+use tree::{grow_root, new_subtree, propagate, propagate_known, remove_empty_path};
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -67,6 +67,14 @@ struct BranchStep {
     child_base: u64,
 }
 
+#[derive(Clone, Copy)]
+struct SetSpec {
+    limit: u64,
+    kind: Kind,
+    bit: u32,
+    candidate_hint: Option<bool>,
+}
+
 pub(crate) fn take_lowest<S: Store>(
     store: &mut S,
     root: &mut u32,
@@ -89,7 +97,41 @@ pub(crate) fn set<S: Store>(
     bit: u32,
     retired: &mut RetiredPages,
 ) -> Result<()> {
+    set_inner(store, root, limit, kind, bit, retired, None)
+}
+
+pub(super) fn set_dense_append<S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    limit: u64,
+    kind: Kind,
+    bit: u32,
+    retired: &mut RetiredPages,
+) -> Result<()> {
+    if u64::from(bit) + 1 != limit {
+        return Err(Error::Corrupt(
+            "dense bitmap append does not extend its limit",
+        ));
+    }
+    set_inner(store, root, limit, kind, bit, retired, Some(false))
+}
+
+fn set_inner<S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    limit: u64,
+    kind: Kind,
+    bit: u32,
+    retired: &mut RetiredPages,
+    candidate_hint: Option<bool>,
+) -> Result<()> {
     require_bit(limit, kind, bit)?;
+    let spec = SetSpec {
+        limit,
+        kind,
+        bit,
+        candidate_hint,
+    };
     let level = required_level(limit)?;
     if *root == 0 {
         *root = new_subtree(store, kind, level, 0, limit, bit)?;
@@ -103,12 +145,12 @@ pub(crate) fn set<S: Store>(
         let step = branch_step(store, &cursor, bit)?;
         path.push(frame(&cursor, &step))?;
         if step.child == 0 {
-            insert_missing(store, &cursor, &path, step, limit, kind, bit)?;
+            insert_missing(store, &cursor, &path, step, spec)?;
             return Ok(());
         }
         cursor = touch_child(store, &cursor, step, limit, kind, retired)?;
     }
-    set_leaf(store, &cursor, &path, limit, kind, bit)
+    set_leaf(store, &cursor, &path, spec)
 }
 
 pub(crate) fn clear<S: Store>(
@@ -218,59 +260,92 @@ fn insert_missing<S: Store>(
     cursor: &Cursor,
     path: &EditPath,
     step: BranchStep,
-    limit: u64,
-    kind: Kind,
-    bit: u32,
+    spec: SetSpec,
 ) -> Result<()> {
     let child = new_subtree(
         store,
-        kind,
+        spec.kind,
         cursor.header.level - 1,
         step.child_base,
-        limit,
-        bit,
+        spec.limit,
+        spec.bit,
     )?;
-    let candidate = subtree_has_candidate(store, child, kind, step.child_base, limit)?;
+    let candidate = match spec.candidate_hint {
+        Some(candidate) => candidate,
+        None => subtree_has_candidate(store, child, spec.kind, step.child_base, spec.limit)?,
+    };
     store.update_page(cursor.page_number, |page| {
         set_branch_child(page, &cursor.header, step.index, child, candidate)
     })?;
-    propagate(
-        store,
-        &path.frames,
-        path.depth - 1,
-        cursor.page_number,
-        cursor.base,
-        limit,
-        kind,
-    )
+    match spec.candidate_hint {
+        Some(candidate) => propagate_known(
+            store,
+            &path.frames,
+            path.depth - 1,
+            cursor.page_number,
+            cursor.base,
+            spec.limit,
+            spec.kind,
+            candidate,
+        ),
+        None => propagate(
+            store,
+            &path.frames,
+            path.depth - 1,
+            cursor.page_number,
+            cursor.base,
+            spec.limit,
+            spec.kind,
+        ),
+    }
 }
 
 fn set_leaf<S: Store>(
     store: &mut S,
     cursor: &Cursor,
     path: &EditPath,
-    limit: u64,
-    kind: Kind,
-    bit: u32,
+    spec: SetSpec,
 ) -> Result<()> {
-    let word_index = leaf_word_index(bit);
-    store.update_page(cursor.page_number, |page| {
+    let word_index = leaf_word_index(spec.bit);
+    let word_candidate = store.update_page(cursor.page_number, |page| {
         let word = leaf_word(page.view(), word_index)?;
-        let mask = 1u64 << (u64::from(bit) % 64);
+        let mask = 1u64 << (u64::from(spec.bit) % 64);
         if word & mask != 0 {
             return Err(Error::Corrupt("used bitmap bit is already set"));
         }
-        set_leaf_word(page, word_index, word | mask)?;
-        stamp_leaf(page, cursor.header.item_count + usize::from(word == 0))
+        let next = word | mask;
+        set_leaf_word(page, word_index, next)?;
+        stamp_leaf(page, cursor.header.item_count + usize::from(word == 0))?;
+        Ok(word_has_candidate(
+            next,
+            word_index,
+            cursor.base,
+            spec.limit,
+            spec.kind,
+        ))
     })?;
-    propagate(
+    let candidate = match spec.candidate_hint {
+        Some(candidate) => candidate,
+        None => {
+            word_candidate
+                || subtree_has_candidate(
+                    store,
+                    cursor.page_number,
+                    spec.kind,
+                    cursor.base,
+                    spec.limit,
+                )?
+        }
+    };
+    propagate_known(
         store,
         &path.frames,
         path.depth,
         cursor.page_number,
         cursor.base,
-        limit,
-        kind,
+        spec.limit,
+        spec.kind,
+        candidate,
     )
 }
 
@@ -298,7 +373,7 @@ fn clear_leaf<S: Store>(
         return Ok(true);
     }
     store.update_page(cursor.page_number, |page| stamp_leaf(page, count))?;
-    propagate(
+    propagate_known(
         store,
         &path.frames,
         path.depth,
@@ -306,6 +381,26 @@ fn clear_leaf<S: Store>(
         cursor.base,
         limit,
         kind,
+        true,
     )?;
     Ok(false)
+}
+
+fn word_has_candidate(word: u64, index: usize, base: u64, limit: u64, kind: Kind) -> bool {
+    let word_base = base + index as u64 * 64;
+    let first = word_base.max(kind.first_candidate());
+    let end = word_base.saturating_add(64).min(limit);
+    if first >= end {
+        return false;
+    }
+    let start_bit = (first - word_base) as u32;
+    let end_bit = (end - word_base) as u32;
+    let lower = u64::MAX << start_bit;
+    let upper = if end_bit == 64 {
+        u64::MAX
+    } else {
+        (1u64 << end_bit) - 1
+    };
+    let eligible = lower & upper;
+    word & eligible != eligible
 }

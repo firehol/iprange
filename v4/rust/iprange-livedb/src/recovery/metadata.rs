@@ -175,22 +175,18 @@ fn load_chunk<'m, S: RecoverySink>(
     chain: &Chain,
     reporter: &mut Reporter<'_, S>,
 ) -> Result<Option<metadata::ParsedPage<PageView<'m>>>> {
-    let page = match mapping.page(chain.page_number, meta.page_count) {
+    let page = match super::page_read::checked(mapping, chain.page_number, meta.page_count) {
         Ok(page) => page,
-        Err(_) => {
-            reject_page(reporter, chain.page_number, ValidationReason::IoError, true)?;
+        Err(problem) => {
+            reject_page(
+                reporter,
+                chain.page_number,
+                problem.reason,
+                problem.io_unreadable,
+            )?;
             return Ok(None);
         }
     };
-    if !crate::page_checksum::valid(page) {
-        reject_page(
-            reporter,
-            chain.page_number,
-            ValidationReason::PageCrcMismatch,
-            false,
-        )?;
-        return Ok(None);
-    }
     let parsed = match metadata::parse_page(
         page,
         chain.page_number,

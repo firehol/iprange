@@ -73,6 +73,7 @@ fn open_import_processing_allocates_no_heap() {
             &files.main,
             AddressFamily::Ipv4,
             ValueKind::Membership,
+            crate::contract::StructureKind::None,
             ValueTag::new(b"membership").unwrap(),
             4,
             &crate::CancellationToken::new(),

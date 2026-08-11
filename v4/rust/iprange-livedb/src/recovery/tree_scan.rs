@@ -9,7 +9,7 @@ use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
 
-use super::page_set::PageSet;
+use super::page_set::{PageClaim, PageSet};
 
 pub(crate) use crate::slotted_page::CellLayout;
 
@@ -195,39 +195,15 @@ fn claim_page<E: TreeEvents>(
     depth: usize,
     events: &mut E,
 ) -> Result<bool> {
-    if depth >= path.len() {
-        events.unknown(
-            ValidationReason::TreeLevelInvalid,
-            context.object,
-            Some(page_number),
-        )?;
-        return Ok(false);
-    }
-    if page_number < 2 || u64::from(page_number) >= context.meta.page_count {
-        events.unknown(
-            ValidationReason::PageOutOfBounds,
-            context.object,
-            Some(page_number),
-        )?;
-        return Ok(false);
-    }
-    if !context.pages.insert(page_number)? {
-        events.unknown(
-            repeated_reason(&path[..depth], page_number),
-            context.object,
-            Some(page_number),
-        )?;
-        return Ok(false);
-    }
-    path[depth] = page_number;
-    Ok(true)
-}
-
-fn repeated_reason(path: &[u32], page: u32) -> ValidationReason {
-    if path.contains(&page) {
-        ValidationReason::TreeCycle
-    } else {
-        ValidationReason::PageAlias
+    match context
+        .pages
+        .claim(page_number, context.meta.page_count, path, depth)?
+    {
+        PageClaim::Claimed => Ok(true),
+        PageClaim::Rejected(reason) => {
+            events.unknown(reason, context.object, Some(page_number))?;
+            Ok(false)
+        }
     }
 }
 
@@ -286,29 +262,20 @@ fn load_page<'m, E: TreeEvents>(
     page_number: u32,
     events: &mut E,
 ) -> Result<Option<PageView<'m>>> {
-    let page = match context.mapping.page(page_number, context.meta.page_count) {
-        Ok(page) => page,
-        Err(_) => {
-            reject_page(
-                events,
-                context.object,
-                page_number,
-                ValidationReason::IoError,
-                true,
-            )?;
-            return Ok(None);
-        }
-    };
-    if !crate::page_checksum::valid(page) {
-        reject_page(
-            events,
-            context.object,
-            page_number,
-            ValidationReason::PageCrcMismatch,
-            false,
-        )?;
-        return Ok(None);
-    }
+    let page =
+        match super::page_read::checked(context.mapping, page_number, context.meta.page_count) {
+            Ok(page) => page,
+            Err(problem) => {
+                reject_page(
+                    events,
+                    context.object,
+                    page_number,
+                    problem.reason,
+                    problem.io_unreadable,
+                )?;
+                return Ok(None);
+            }
+        };
     Ok(Some(page))
 }
 

@@ -94,6 +94,7 @@ impl MembershipView<'_> {
                 output,
             ),
         }?;
+        crate::work::membership_word_read(output.len() as u64);
         if start as usize + output.len() == self.record.word_count as usize
             && output.last() == Some(&0)
         {

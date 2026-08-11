@@ -20,6 +20,8 @@ mod membership;
 mod read;
 #[path = "scenarios/sdk.rs"]
 mod sdk;
+#[path = "scenarios/structured.rs"]
+mod structured;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ScenarioResult {
@@ -112,6 +114,27 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "immutable-direct-random-lookup" => read::immutable_direct_random_lookup(size),
         "live-direct-scan" => read::live_direct_scan(size),
         "immutable-direct-scan" => read::immutable_direct_scan(size),
+        "structured-build-random" => structured::build_random(size, auxiliary),
+        "structured-intern" => structured::intern_profiles(size, auxiliary),
+        "structured-assign-random" => structured::assign_random(size, auxiliary),
+        "structured-commit" => structured::commit(size, auxiliary),
+        "live-structured-scalar-random-lookup" => {
+            structured::live_scalar_random_lookup(size, auxiliary)
+        }
+        "immutable-structured-scalar-random-lookup" => {
+            structured::immutable_scalar_random_lookup(size, auxiliary)
+        }
+        "live-structured-threat-random-lookup" => {
+            structured::live_threat_random_lookup(size, auxiliary)
+        }
+        "immutable-structured-threat-random-lookup" => {
+            structured::immutable_threat_random_lookup(size, auxiliary)
+        }
+        "live-structured-scalar-scan" => structured::live_scalar_scan(size, auxiliary),
+        "immutable-structured-scalar-scan" => structured::immutable_scalar_scan(size, auxiliary),
+        "immutable-separate-enrichment-random-lookup" => {
+            structured::immutable_separate_random_lookup(size, auxiliary)
+        }
         "live-open" => read::live_open(size, auxiliary),
         "snapshot" => read::snapshot(size),
         "live-validation" => read::live_validation(size),
@@ -318,7 +341,7 @@ pub(crate) fn immutable_result(
     })
 }
 
-fn validate_output(path: &Path, live: bool) -> Result<(), String> {
+pub(crate) fn validate_output(path: &Path, live: bool) -> Result<(), String> {
     let mode = if live {
         ValidationMode::LiveCurrent
     } else {

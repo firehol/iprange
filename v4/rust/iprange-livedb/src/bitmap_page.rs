@@ -26,12 +26,13 @@ pub(crate) enum Kind {
     Free = 1,
     Feed = 2,
     Membership = 3,
+    Structure = 4,
 }
 
 impl Kind {
     pub(crate) const fn first_candidate(self) -> u64 {
         match self {
-            Self::Membership => 1,
+            Self::Membership | Self::Structure => 1,
             Self::Free | Self::Feed => 0,
         }
     }

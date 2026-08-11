@@ -8,7 +8,7 @@ use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
 
-use super::page_set::PageSet;
+use super::page_set::{PageClaim, PageSet};
 use super::report::{emit_page_unknown, RecoverySink, Reporter};
 use super::tree_scan::CellLayout;
 
@@ -120,46 +120,27 @@ where
         path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
         depth: usize,
     ) -> Result<bool> {
-        if depth >= path.len() {
-            emit(
-                self.reporter,
-                ValidationReason::TreeLevelInvalid,
-                Some(page_number),
-            )?;
-            return Ok(false);
+        match self
+            .pages
+            .claim(page_number, self.meta.page_count, path, depth)?
+        {
+            PageClaim::Claimed => Ok(true),
+            PageClaim::Rejected(reason) => {
+                emit(self.reporter, reason, Some(page_number))?;
+                Ok(false)
+            }
         }
-        if !page_in_bounds(page_number, self.meta.page_count) {
-            emit(
-                self.reporter,
-                ValidationReason::PageOutOfBounds,
-                Some(page_number),
-            )?;
-            return Ok(false);
-        }
-        if !self.pages.insert(page_number)? {
-            emit(
-                self.reporter,
-                repeated_reason(&path[..depth], page_number),
-                Some(page_number),
-            )?;
-            return Ok(false);
-        }
-        path[depth] = page_number;
-        Ok(true)
     }
 
     fn load(&mut self, page_number: u32) -> Result<Option<PageView<'m>>> {
-        let page = match self.mapping.page(page_number, self.meta.page_count) {
+        let page = match super::page_read::checked(self.mapping, page_number, self.meta.page_count)
+        {
             Ok(page) => page,
-            Err(_) => {
-                self.reject(page_number, ValidationReason::IoError, true)?;
+            Err(problem) => {
+                self.reject(page_number, problem.reason, problem.io_unreadable)?;
                 return Ok(None);
             }
         };
-        if !crate::page_checksum::valid(page) {
-            self.reject(page_number, ValidationReason::PageCrcMismatch, false)?;
-            return Ok(None);
-        }
         Ok(Some(page))
     }
 
@@ -296,18 +277,6 @@ where
     }
 }
 
-fn page_in_bounds(page: u32, page_count: u64) -> bool {
-    page >= 2 && u64::from(page) < page_count
-}
-
-fn repeated_reason(path: &[u32], page: u32) -> ValidationReason {
-    if path.contains(&page) {
-        ValidationReason::TreeCycle
-    } else {
-        ValidationReason::PageAlias
-    }
-}
-
 fn leaf_geometry<P: ByteSource>(
     page: P,
     meta: MetaV4,
@@ -319,6 +288,10 @@ fn leaf_geometry<P: ByteSource>(
         return None;
     }
     blob_tree::leaf_geometry(page, expected_level, expected_start, length).ok()
+}
+
+fn page_in_bounds(page: u32, page_count: u64) -> bool {
+    page >= 2 && u64::from(page) < page_count
 }
 
 fn leaf_identity_valid<P: ByteSource>(page: P, meta: MetaV4) -> bool {

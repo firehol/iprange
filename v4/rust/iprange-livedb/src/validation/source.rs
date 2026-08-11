@@ -26,7 +26,7 @@ pub(super) struct LiveSource {
     identity: Identity,
     sidecar: live_sidecar::Sidecar,
     slot: u32,
-    pub(super) meta: MetaV4,
+    pub(super) meta: Box<MetaV4>,
     gate_locked: bool,
     registration: RegistrationState,
     lifetime_locked: bool,
@@ -225,7 +225,7 @@ impl LiveBootstrapSource {
 }
 
 enum LiveRegistration {
-    Selected(MetaV4, u32),
+    Selected(Box<MetaV4>, u32),
     Bootstrap(BootstrapError),
 }
 
@@ -240,7 +240,7 @@ enum LiveOpenStageFailure {
 }
 
 struct ClaimedRegistration {
-    meta: MetaV4,
+    meta: Box<MetaV4>,
     slot: u32,
     cause: Error,
 }
@@ -368,7 +368,7 @@ fn selected_source(
     identity: Identity,
     sidecar: live_sidecar::Sidecar,
     slot: u32,
-    meta: MetaV4,
+    meta: Box<MetaV4>,
 ) -> LiveSource {
     LiveSource {
         file,
@@ -478,6 +478,7 @@ fn register_live(
     let slot = sidecar
         .claim_reader_cancellable(bootstrap.meta.txn_id, cancellation)
         .map_err(RegistrationFailure::Unclaimed)?;
+    let meta = Box::new(bootstrap.meta);
     let verified = cancellation
         .check()
         .and_then(|()| crate::live_namespace::verify_path(path, identity))
@@ -485,14 +486,10 @@ fn register_live(
         .and_then(|()| sidecar.verify_header());
     if let Err(cause) = verified {
         return Err(RegistrationFailure::Claimed(Box::new(
-            ClaimedRegistration {
-                meta: bootstrap.meta,
-                slot,
-                cause,
-            },
+            ClaimedRegistration { meta, slot, cause },
         )));
     }
-    Ok(LiveRegistration::Selected(bootstrap.meta, slot))
+    Ok(LiveRegistration::Selected(meta, slot))
 }
 
 fn register_bootstrap(

@@ -3,7 +3,7 @@ use std::mem::size_of;
 
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, DirectRange, FinishedWorkflow, Ipv4Key,
-    LiveWriter, ValueKind, ValueTag,
+    LiveWriter, StructureKind, ValueKind, ValueTag,
 };
 
 use crate::abi::{ByteSlice, CallbackFailure, Cancellation};
@@ -247,6 +247,7 @@ fn create_direct(path: &std::path::Path) {
         path,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         ValueTag::new(b"asn").unwrap(),
         1,
         &cancellation,

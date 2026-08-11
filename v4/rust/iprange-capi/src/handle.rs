@@ -27,6 +27,7 @@ pub(crate) const ERROR_KIND: u32 = 11;
 pub(crate) const REPORT_KIND: u32 = 12;
 pub(crate) const MEMBERSHIP_SCOPE_KIND: u32 = 13;
 pub(crate) const MEMBERSHIP_ALGEBRA_KIND: u32 = 14;
+pub(crate) const STRUCTURE_REF_KIND: u32 = 15;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -339,6 +340,56 @@ pub struct MembershipRefHandle {
     pub(crate) value: iprange_livedb::MembershipRef,
 }
 
+/// Opaque completed operation-bound structure reference.
+#[repr(C)]
+pub struct StructureRefHandle {
+    header: Header,
+    busy: AtomicBool,
+    parent: NonNull<WriterHandle>,
+    pub(crate) value: iprange_livedb::StructureRef,
+}
+
+unsafe impl Send for StructureRefHandle {}
+unsafe impl Sync for StructureRefHandle {}
+
+impl std::fmt::Debug for StructureRefHandle {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("StructureRefHandle { .. }")
+    }
+}
+
+impl StructureRefHandle {
+    pub(crate) fn new(parent: &WriterHandle, value: iprange_livedb::StructureRef) -> Self {
+        parent.add_child();
+        Self {
+            header: Header::new(STRUCTURE_REF_KIND),
+            busy: AtomicBool::new(false),
+            parent: NonNull::from(parent),
+            value,
+        }
+    }
+
+    pub(crate) fn enter(&self) -> Result<Gate<'_>, BoundaryError> {
+        self.header.require(STRUCTURE_REF_KIND)?;
+        Gate::enter(&self.busy)
+    }
+
+    pub(crate) fn require_parent(&self, parent: &WriterHandle) -> Result<(), BoundaryError> {
+        self.header.require(STRUCTURE_REF_KIND)?;
+        if !std::ptr::eq(self.parent.as_ptr().cast_const(), parent) {
+            return Err(BoundaryError::wrong_state(
+                "structure reference belongs to another writer",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn parent(&self) -> &WriterHandle {
+        // SAFETY: the parent cannot be destroyed while this child count is active.
+        unsafe { self.parent.as_ref() }
+    }
+}
+
 unsafe impl Send for MembershipRefHandle {}
 unsafe impl Sync for MembershipRefHandle {}
 
@@ -459,6 +510,10 @@ unsafe impl OpaqueHandle for MembershipBuilderHandle {
 
 unsafe impl OpaqueHandle for MembershipRefHandle {
     const KIND: u32 = MEMBERSHIP_REF_KIND;
+}
+
+unsafe impl OpaqueHandle for StructureRefHandle {
+    const KIND: u32 = STRUCTURE_REF_KIND;
 }
 
 unsafe impl OpaqueHandle for MembershipScopeHandle {

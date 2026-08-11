@@ -13,7 +13,7 @@ use crate::page_io::PageEdit;
 pub(crate) const PAGE_TYPE: u8 = page_type::METADATA;
 pub(crate) const DATA_OFFSET: usize = 48;
 pub(crate) const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
-pub(crate) const MAX_PAGES: usize = 260;
+pub(crate) const MAX_PAGES: usize = 5_182;
 // Covers the pinned miniz backend's fixed workspace; allocation tests enforce it.
 pub(crate) const DEFLATE_HEAP_OVERHEAD: u64 = 512 * 1024;
 
@@ -29,7 +29,7 @@ pub(crate) fn compressed_bound(uncompressed_len: usize) -> usize {
 
 pub(crate) fn compress(input: &[u8], max_heap_bytes: u64) -> Result<Vec<u8>> {
     if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
-        return Err(Error::InvalidArgument("metadata exceeds 1 MiB"));
+        return Err(Error::InvalidArgument("metadata exceeds 20 MiB"));
     }
     let bound = compressed_bound(input.len());
     if bound as u64 > max_heap_bytes {

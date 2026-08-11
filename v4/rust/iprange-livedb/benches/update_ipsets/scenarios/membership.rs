@@ -1,7 +1,7 @@
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, FeedName, FinishedWorkflow, ImmutableReader,
     Ipv4Key, LiveReader, LiveWriter, MembershipImportSource, MembershipOperation, RangeDirection,
-    ValueKind, ValueTag,
+    StructureKind, ValueKind, ValueTag,
 };
 
 use crate::measure;
@@ -338,6 +338,7 @@ pub(super) fn populated(label: &str, ranges: usize, feeds: usize) -> Result<Test
         database.main(),
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        StructureKind::None,
         ValueTag::new(b"membership").ok_or_else(|| "invalid benchmark value tag".to_owned())?,
         1,
         &CancellationToken::new(),
@@ -441,6 +442,7 @@ fn create_membership_file(database: &TestDatabase) -> Result<(), String> {
         database.main(),
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        StructureKind::None,
         ValueTag::new(b"membership").ok_or_else(|| "invalid benchmark value tag".to_owned())?,
         1,
         &CancellationToken::new(),

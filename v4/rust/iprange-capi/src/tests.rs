@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
-use iprange_livedb::{create_live, AddressFamily, CancellationToken, ValueKind, ValueTag};
+use iprange_livedb::{
+    create_live, AddressFamily, CancellationToken, StructureKind, ValueKind, ValueTag,
+};
 
 #[cfg(target_os = "freebsd")]
 use crate::abi::ByteSlice;
@@ -197,6 +199,7 @@ fn exported_direct_workflow_round_trips_through_c_shapes() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
@@ -327,6 +330,7 @@ fn live_creation_is_rejected_before_c_artifacts() {
             files.abi_path(),
             4,
             1,
+            0,
             ByteSlice {
                 pointer: tag.as_ptr(),
                 length: tag.len() as u64,
@@ -355,6 +359,7 @@ fn reader_close_failure_keeps_the_c_handle_retryable() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         ValueTag::new(b"asn").unwrap(),
         1,
         &CancellationToken::new(),
@@ -420,7 +425,7 @@ fn committed_header_matches_the_rust_boundary() {
         header
             .match_indices("IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL\n")
             .count(),
-        158
+        168
     );
     assert_eq!(
         header
@@ -431,7 +436,7 @@ fn committed_header_matches_the_rust_boundary() {
                     .is_some_and(|(_, value)| value.parse::<u32>().is_ok())
             })
             .count(),
-        313
+        331
     );
 }
 
@@ -490,6 +495,7 @@ fn callbacks_cannot_reenter_the_same_writer() {
         &files.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),

@@ -155,14 +155,14 @@ fn validate_leaf<K: IpKey, S: ValidationSink>(
     cells: LayoutInspection<PageView<'_>>,
     state: &mut RangeState<K>,
 ) -> Result<Option<K>> {
-    if context.meta.value_kind == ValueKind::Membership {
-        validate_leaf_cells::<K, S, true>(context, page_number, cells, state)
-    } else {
-        validate_leaf_cells::<K, S, false>(context, page_number, cells, state)
+    match context.meta.value_kind {
+        ValueKind::Direct => validate_leaf_cells::<K, S, 0>(context, page_number, cells, state),
+        ValueKind::Membership => validate_leaf_cells::<K, S, 1>(context, page_number, cells, state),
+        ValueKind::Structured => validate_leaf_cells::<K, S, 2>(context, page_number, cells, state),
     }
 }
 
-fn validate_leaf_cells<K: IpKey, S: ValidationSink, const MEMBERSHIP: bool>(
+fn validate_leaf_cells<K: IpKey, S: ValidationSink, const KIND: u8>(
     context: &mut Context<'_, S>,
     page_number: u32,
     cells: LayoutInspection<PageView<'_>>,
@@ -170,7 +170,7 @@ fn validate_leaf_cells<K: IpKey, S: ValidationSink, const MEMBERSHIP: bool>(
 ) -> Result<Option<K>> {
     let mut order = LeafOrder::default();
     for cell in cells.cells() {
-        validate_leaf_cell::<K, S, _, MEMBERSHIP>(context, page_number, cell, &mut order, state)?;
+        validate_leaf_cell::<K, S, _, KIND>(context, page_number, cell, &mut order, state)?;
     }
     Ok(order.first)
 }
@@ -199,7 +199,7 @@ impl<K: IpKey> LeafOrder<K> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const MEMBERSHIP: bool>(
+fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const KIND: u8>(
     context: &mut Context<'_, S>,
     page_number: u32,
     cell: ByteRange<P>,
@@ -218,7 +218,7 @@ fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const MEMBERSH
         state.previous = None;
         return Ok(());
     }
-    if MEMBERSHIP {
+    if KIND == 1 {
         if current.value == 0 {
             emit_range_finding(
                 context,
@@ -226,7 +226,7 @@ fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const MEMBERSH
                 ValidationReason::MembershipBitmapInvalid,
             )?;
         } else {
-            match context.count_membership_range(current.value) {
+            match context.count_membership_owner(current.value) {
                 CountResult::Full => emit_range_finding(
                     context,
                     page_number,
@@ -236,6 +236,25 @@ fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource, const MEMBERSH
                 CountResult::Unavailable => {
                     return Err(Error::Corrupt(
                         "membership validation has no membership table",
+                    ));
+                }
+                CountResult::Inserted | CountResult::Existing => {}
+            }
+        }
+    } else if KIND == 2 {
+        if current.value == 0 {
+            emit_range_finding(context, page_number, ValidationReason::StructureMissing)?;
+        } else {
+            match context.count_structure_range(current.value) {
+                CountResult::Full => emit_range_finding(
+                    context,
+                    page_number,
+                    ValidationReason::StructureRefcountInvalid,
+                )?,
+                CountResult::Cancelled => return Err(Error::Cancelled),
+                CountResult::Unavailable => {
+                    return Err(Error::Corrupt(
+                        "structured validation has no structure table",
                     ));
                 }
                 CountResult::Inserted | CountResult::Existing => {}

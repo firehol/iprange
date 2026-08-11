@@ -164,7 +164,7 @@ CARGO_TARGET_DIR=/tmp/iprange-v4-asan \
 For a C ABI change, additionally prove:
 
 - generated header and manifest equal the committed files;
-- all 158 frozen symbols are exported exactly;
+- all 168 frozen symbols are exported exactly;
 - the header compiles as C11 and C++17;
 - all native C behavior programs pass;
 - numeric constants, layouts, callbacks, ownership, and error contracts did not
@@ -208,9 +208,18 @@ representative subset against the committed baseline. Its roughly 2x limits
 plus absolute noise allowance detect disasters; they do not establish local
 optimality. Component floors classify mapped access, page search/build,
 checksum, digest, and durability costs but are not full-operation targets.
-The SOW-0022 result contains 79 local cases and 14 CI cases; when a case is
-added or its identity changes, update the accepted baseline, README evidence,
-and both runners together.
+The current matrix contains 90 local cases and 18 CI cases; when a case is added
+or its identity changes, update the accepted baseline, README evidence, and both
+runners together.
+
+For a structured-value change, separately measure profile interning, random
+range assignment, commit-only work, live and immutable scalar lookup, lazy
+selected-feed lookup, ordered scan, and equivalent separate ASN/Geo/threat
+files. Use one million real ranges and ten million true-random point queries for
+the reader comparison. Verify timed lookups allocate nothing, scalar lookup does
+no membership work, and the common structure manager contains no codec-specific
+field offsets. Exact-clone review must reject copied ID, hash, refcount, COW,
+validation, recovery, or snapshot machinery between structure kinds.
 
 Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and

@@ -36,6 +36,9 @@ pub(crate) struct Snapshot {
     pub(crate) catalog_interns: u64,
     pub(crate) membership_lookups: u64,
     pub(crate) membership_interns: u64,
+    pub(crate) structure_lookups: u64,
+    pub(crate) structure_interns: u64,
+    pub(crate) structure_decodes: u64,
     pub(crate) mapping_growths: u64,
     pub(crate) mapping_remaps: u64,
     pub(crate) mapping_flushes: u64,
@@ -111,6 +114,9 @@ event!(catalog_lookup, catalog_lookups);
 event!(catalog_intern, catalog_interns);
 event!(membership_lookup, membership_lookups);
 event!(membership_intern, membership_interns);
+event!(structure_lookup, structure_lookups);
+event!(structure_intern, structure_interns);
+event!(structure_decode, structure_decodes);
 event!(mapping_growth, mapping_growths);
 event!(mapping_remap, mapping_remaps);
 event!(mapping_flush, mapping_flushes);

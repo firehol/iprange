@@ -4,11 +4,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
     create_live, snapshot_to, AddressFamily, AddressRange, CancellationToken, FeedName,
-    FinishedWorkflow, Ipv4Key, Ipv6Key, LiveWriter, MembershipOperation, SnapshotBudget,
-    SnapshotPublicationPolicy, SnapshotSourceMode, TransactionBudget, ValueKind, ValueTag,
+    FinishedWorkflow, Ipv4Key, Ipv6Key, LiveWriter, MembershipOperation, NetworkEnrichmentV1,
+    NetworkEnrichmentV1Location, SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode,
+    StructureKind, TransactionBudget, ValueKind, ValueTag,
 };
 
-use super::{verify, Corpus, Family, Fixture, Kind};
+use super::{verify, Corpus, Family, Fixture, Kind, Structure};
 
 pub(crate) fn rust_fixtures(root: &Path, corpus: &Corpus) {
     let scratch = Scratch::new();
@@ -43,6 +44,7 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         &live,
         address_family(fixture.family),
         value_kind(fixture.kind),
+        structure_kind(fixture),
         ValueTag::new(fixture.tag.as_bytes()).expect("manifest value tag is valid"),
         4,
         &CancellationToken::new(),
@@ -55,6 +57,7 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         "rust/first-seen-ipv6.iprdb" => first_seen_ipv6(&mut writer, fixture),
         "rust/membership-ipv4.iprdb" => membership_ipv4(&mut writer),
         "rust/membership-ipv6.iprdb" => membership_ipv6(&mut writer, fixture),
+        "rust/structured-ipv4.iprdb" => structured_ipv4(&mut writer, fixture),
         other => panic!("no Rust fixture generator for {other}"),
     }
     writer.close().unwrap();
@@ -67,6 +70,60 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         &CancellationToken::new(),
     )
     .unwrap();
+}
+
+fn structured_ipv4(writer: &mut LiveWriter, fixture: &Fixture) {
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_structured_transaction(&cancellation).unwrap();
+    let botnet = transaction
+        .ensure_feed(FeedName::new("botnet").unwrap())
+        .unwrap();
+    let scanner = transaction
+        .ensure_feed(FeedName::new("scanner").unwrap())
+        .unwrap();
+    let empty = transaction.empty_membership().unwrap();
+    let botnet_membership = transaction.add_feed(empty, botnet).unwrap();
+    let scanner_membership = transaction.add_feed(empty, scanner).unwrap();
+    let broad = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64512,
+                country_id: 1,
+                state_id: 2,
+                city_id: 3,
+                location: Some(NetworkEnrichmentV1Location {
+                    latitude_microdegrees: 37_983_810,
+                    longitude_microdegrees: 23_727_539,
+                }),
+            },
+            Some(botnet_membership),
+        )
+        .unwrap();
+    let narrow = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64513,
+                country_id: 4,
+                state_id: 5,
+                city_id: 6,
+                location: None,
+            },
+            Some(scanner_membership),
+        )
+        .unwrap();
+    transaction
+        .assign_v4(key4("10.1.0.0"), key4("10.1.0.255"), broad)
+        .unwrap();
+    transaction
+        .assign_v4(key4("10.1.0.64"), key4("10.1.0.127"), narrow)
+        .unwrap();
+    transaction
+        .clear_v4(key4("10.1.0.100"), key4("10.1.0.109"))
+        .unwrap();
+    transaction
+        .set_metadata_json(&fixture.metadata.bytes().unwrap())
+        .unwrap();
+    transaction.commit().unwrap();
 }
 
 fn direct_ipv4(writer: &mut LiveWriter, fixture: &Fixture) {
@@ -263,6 +320,17 @@ fn value_kind(kind: Kind) -> ValueKind {
     match kind {
         Kind::Direct => ValueKind::Direct,
         Kind::Membership => ValueKind::Membership,
+        Kind::Structured => ValueKind::Structured,
+    }
+}
+
+fn structure_kind(fixture: &Fixture) -> StructureKind {
+    match (fixture.kind, fixture.structure) {
+        (Kind::Direct | Kind::Membership, None) => StructureKind::None,
+        (Kind::Structured, Some(Structure::NetworkEnrichmentV1)) => {
+            StructureKind::NetworkEnrichmentV1
+        }
+        _ => panic!("fixture value and structure kinds disagree"),
     }
 }
 

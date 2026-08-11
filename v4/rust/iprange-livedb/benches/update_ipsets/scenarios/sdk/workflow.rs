@@ -5,7 +5,7 @@ use iprange_livedb::{
     CancellationToken, DirectJoinBudget, DirectJoinSource, FeedSelection,
     FinishedHistoryProjection, FinishedWorkflow, HistoryProjectionSource, ImmutableReader,
     LiveReader, LiveWriter, MembershipAggregationMode, MembershipAlgebra, PublicationPolicy,
-    RangeDirection, ValueKind, ValueTag, WorkflowReport,
+    RangeDirection, StructureKind, ValueKind, ValueTag, WorkflowReport,
 };
 
 use crate::measure;
@@ -421,6 +421,7 @@ fn create_live_file(path: &Path, kind: ValueKind, tag: ValueTag) -> Result<(), S
         path,
         AddressFamily::Ipv4,
         kind,
+        StructureKind::None,
         tag,
         1,
         &CancellationToken::new(),

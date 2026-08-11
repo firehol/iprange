@@ -4,7 +4,7 @@ use std::mem::size_of;
 #[cfg(not(target_os = "freebsd"))]
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, DirectRange, FinishedWorkflow, LiveReader,
-    LiveWriter, ValueKind, ValueTag,
+    LiveWriter, StructureKind, ValueKind, ValueTag,
 };
 use iprange_livedb::{AddressRange, ImmutableReader, Ipv4Key, RangeDirection};
 
@@ -129,6 +129,7 @@ fn c_history_projection_prepares_exact_windows_for_normal_commit() {
         &destination_path,
         AddressFamily::Ipv4,
         ValueKind::Membership,
+        StructureKind::None,
         ValueTag::new(b"history").unwrap(),
         1,
         &CancellationToken::new(),
@@ -265,6 +266,7 @@ fn create_last_seen(path: &std::path::Path) {
         path,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        StructureKind::None,
         ValueTag::LAST_SEEN,
         1,
         &cancellation,

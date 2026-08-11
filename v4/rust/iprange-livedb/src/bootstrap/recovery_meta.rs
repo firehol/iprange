@@ -4,7 +4,7 @@ use crate::mapping::ByteSource;
 use super::{
     identity_readable, validate_commit_identity, validate_declared_page_count, validate_direct,
     validate_membership, validate_metadata, validate_range_count, validate_retirement_count,
-    validate_roots, MetaProblem,
+    validate_roots, validate_structured, MetaProblem,
 };
 
 #[derive(Clone, Copy)]
@@ -31,6 +31,7 @@ fn recovery_valid(meta: MetaV4) -> Result<MetaV4, MetaProblem> {
     match meta.value_kind {
         crate::contract::ValueKind::Direct => validate_direct(&meta)?,
         crate::contract::ValueKind::Membership => validate_membership(&meta)?,
+        crate::contract::ValueKind::Structured => validate_structured(&meta)?,
     }
     Ok(meta)
 }

@@ -18,6 +18,8 @@ mod metadata_ops;
 mod range_merge;
 #[path = "draft_store/storage.rs"]
 mod storage;
+#[path = "draft_store/structured.rs"]
+mod structured_ops;
 #[path = "draft_store/timestamp_refresh.rs"]
 mod timestamp_refresh;
 #[path = "draft_store/workflow.rs"]
@@ -45,6 +47,7 @@ pub(crate) use history::{HistoryMerge, HistoryPlan};
 pub(crate) use import_cache::{ImportCache, ImportWords};
 pub(crate) use import_merge::{ImportMerge, TranslatedMembership};
 pub(crate) use membership_ops::MembershipHandle;
+pub(crate) use structured_ops::StructureHandle;
 pub(crate) use timestamp_refresh::TimestampMerge;
 
 #[derive(Debug)]
@@ -62,6 +65,8 @@ pub(crate) struct Draft {
     base_range_tree_retired: bool,
     membership_delta_root: u32,
     membership_delta_pending: Pending,
+    structure_delta_root: u32,
+    structure_delta_pending: Pending,
     workflow_range_root: u32,
     workflow_range_count: u64,
     workflow: WorkflowState,
@@ -93,10 +98,12 @@ impl Draft {
             growth_pages: 0,
             changed: false,
             metadata_staged: false,
-            range_tree_private: false,
+            range_tree_private: base.range_root == 0,
             base_range_tree_retired: false,
             membership_delta_root: 0,
             membership_delta_pending: Pending::new(),
+            structure_delta_root: 0,
+            structure_delta_pending: Pending::new(),
             workflow_range_root: 0,
             workflow_range_count: 0,
             workflow: WorkflowState::None,
@@ -305,6 +312,8 @@ impl<'a> DraftStore<'a> {
         if !self.draft.changed {
             return Ok(());
         }
+        checkpoint()?;
+        self.finish_structure_deltas_with_checkpoint(checkpoint)?;
         checkpoint()?;
         self.finish_membership_deltas_with_checkpoint(checkpoint)?;
         checkpoint()?;

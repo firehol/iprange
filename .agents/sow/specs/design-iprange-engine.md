@@ -76,9 +76,9 @@ the oracle.
 
 The implementation has two authority levels over one COW format:
 
-- The **public SDK level** exposes logical operations only. Its advanced direct
-  and membership transactions support callers that need exact low-level logical
-  control; its typed workflows provide named-feed lifecycle, direct-map and
+- The **public SDK level** exposes logical operations only. Its advanced direct,
+  membership, and structured transactions support callers that need exact
+  low-level logical control; its typed workflows provide named-feed lifecycle, direct-map and
   timestamp refresh, immutable construction, history projection, queries,
   provider joins, algebra, snapshot, validation, and recovery. Membership
   callers use SDK-issued feed and membership references. They never control
@@ -117,6 +117,16 @@ The dependency direction is enforced by a source gate. Test-only necessary-work
 accounting pins deterministic tree, page, range, mapping, and durability costs;
 it must compile out of release binaries. Representative release profiles must
 show that every retained dominant hot-path cost maps to required format work.
+
+Structured values preserve the same authority boundary. One common internal
+manager owns opaque fixed-size payload IDs, hashing, exact interning, refcounts,
+allocation/reuse, COW storage, retirement, validation, recovery, and snapshots.
+It contains no knowledge of ASN, geography, coordinates, or any other payload
+field. Each supported `StructureKind` has one cohesive codec module which alone
+defines that kind's exact payload size, field offsets, little-endian
+encoding/decoding, canonical rules, and typed public translation. Adding a
+hardcoded structure reuses the manager; it does not copy the manager, add a
+runtime schema, or put per-record type tags in the file.
 
 ### One v4 format, two operating modes
 
@@ -166,7 +176,8 @@ formats.
 Every database has immutable static identity:
 
 - IPv4 or IPv6 address family;
-- `direct` or `membership` value kind;
+- `direct`, `membership`, or `structured` value kind;
+- one structure kind, which is `none` outside a structured database;
 - a 16-byte value tag;
 - a nonzero random 128-bit database ID.
 
@@ -175,18 +186,37 @@ Every stored interval has a fixed `value: u32`:
 - In a direct database, the value is caller-defined and opaque. Zero is valid.
 - In a membership database, the value is an internal `membership_id` for a
   canonical in-file feed bitmap. ID zero means absence and is not stored.
+- In a structured database, the value is an internal `structure_id` for one
+  canonical fixed payload of the file's immutable structure kind. ID zero means
+  absence and is not stored.
 
-Membership databases contain their own structured feed catalog. The engine
+Membership databases and structured kinds that reference memberships contain
+their own structured feed catalog. The engine
 owns feed indexes; callers use names or snapshot/transaction-bound handles and
 never assign bare bits. Application annotations belong in the optional opaque
 file-level JSON payload, not in the structural catalog.
+
+The first supported structure is `NetworkEnrichmentV1`. Its exact 32-byte
+numeric payload contains ASN, country ID, state ID, city ID, signed latitude and
+longitude microdegrees, an internal membership ID, and flags. Text labels and
+ASN names remain caller-defined data in the optional opaque metadata. The
+membership ID references the same canonical membership dictionary used by a
+membership database; it is not a fixed-width inline threat bitmap. Equal
+complete structured payloads intern to one structure ID.
+
+Readers return a typed structured view. Scalar fields require one range lookup
+and one structure lookup. Threat membership remains lazy: the membership
+dictionary is touched only when the caller asks the view for threat bits. A
+writer accepts typed semantic fields and transaction-bound membership
+references, never raw structure or membership IDs.
 
 The exact direct tags `first_seen` and `last_seen` select specialized
 full-snapshot refreshes. First-seen preserves continuously present addresses,
 timestamps new addresses, and removes absent addresses. Last-seen timestamps
 current addresses, retains recently absent addresses above a caller cutoff, and
 removes older absent addresses. Every other direct tag remains generic and
-opaque; ASN and geography data do not require new physical value kinds.
+opaque. Combined ASN, geography, coordinates, and threat intelligence use the
+structured value kind rather than overloading a caller-managed direct value.
 
 ## Processing model
 
@@ -200,6 +230,12 @@ Generic direct assignments are applied exactly in arrival order, within and
 across input batches. A later assignment overwrites only its own inclusive
 interval; earlier values survive on uncovered sides. Implementations may batch
 or reorder only work proven not to change that per-address result.
+
+Structured assignments have the same arrival-order rule, but assign an
+SDK-issued typed structure reference. The SDK canonicalizes and interns the
+payload before the range map stores its internal ID. Adjacent ranges coalesce
+when their complete canonical payloads are equal, independent of which call
+created them.
 
 High-level feed/direct/timestamp ingestion normalizes unordered input directly
 into operation-private COW state in the destination. It never requires the
@@ -386,7 +422,8 @@ byte-identical:
 
 - both implementations must open current Phase-1 v4 files produced by the other;
 - both expose identical ranges, direct values, feed names and indexes,
-  memberships, cardinalities, and exact decompressed JSON bytes;
+  memberships, structured semantic values, cardinalities, and exact
+  decompressed JSON bytes;
 - both reject the same invalid bootstrap and structural cases through the
   appropriate explicit API;
 - both implement equivalent transaction, recovery, and unsigned snapshot
@@ -397,8 +434,8 @@ byte-identical:
 - mixed Go/Rust subprocesses must coordinate on the same live database in both
   directions, including OS-held reader/writer locks, pinned transaction IDs,
   sidecar/database identity, and reclamation;
-- mutable tree shape, membership IDs, page placement, and zlib byte streams may
-  differ when the observable committed state is the same.
+- mutable tree shape, membership IDs, structure IDs, page placement, and zlib
+  byte streams may differ when the observable committed state is the same.
 
 The Rust-provided C ABI is generation 1 under the
 `iprange_v4_abi1_` symbol prefix. Its generated header and frozen manifest are
@@ -467,8 +504,10 @@ operations prove semantic and performance parity.
 
 - Parsing, validating, normalizing, or merging the opaque JSON payload.
 - Caller-assigned feed bits or feed-index aliases.
-- Public membership IDs, bitmap words, page numbers, roots, allocator state, or
-  other physical storage controls.
+- Runtime schemas, caller-defined structure payloads, mixed structure kinds in
+  one file, or per-record structure tags.
+- Public membership IDs, structure IDs, writable bitmap words, page numbers,
+  roots, allocator state, or other physical storage controls.
 - Implicit full validation during open, lookup, scan, or mutation.
 - Recovering data by guessing from checksum-failed or unreachable pages.
 - Shipping live coordination state.

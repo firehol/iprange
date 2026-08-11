@@ -343,6 +343,7 @@ int main(int argc, char **argv)
               path_from(argv[1]),
               IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4,
               IPRANGE_V4_ABI1_VALUE_KIND_DIRECT,
+              IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               2,
               no_cancellation(),

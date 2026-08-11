@@ -6,7 +6,8 @@ mod model;
 pub(crate) mod verify;
 
 pub(crate) use model::{
-    Corpus, Family, Fixture, InvalidCase, InvalidMutation, Kind, MetadataExpectation,
+    Corpus, Family, Fixture, InvalidCase, InvalidMutation, Kind, MetadataExpectation, Structure,
+    StructuredExpectation,
 };
 
 pub(crate) fn corpus_root() -> PathBuf {
@@ -19,6 +20,6 @@ pub(crate) fn load_corpus(root: &Path) -> Corpus {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
     let corpus: Corpus = serde_json::from_slice(&bytes)
         .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-    assert_eq!(corpus.schema, 1, "unsupported conformance schema");
+    assert_eq!(corpus.schema, 2, "unsupported conformance schema");
     corpus
 }

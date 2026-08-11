@@ -50,17 +50,13 @@ impl ReferenceBatch {
         if entries == 0 {
             return Ok(Self::default());
         }
-        let slots = heap.filled(
-            entries * 2,
-            Slot::default(),
-            "immutable membership reference batch",
-        )?;
+        let slots = heap.filled(entries * 2, Slot::default(), "immutable reference batch")?;
         Ok(Self { slots, entries: 0 })
     }
 
     pub(super) fn add(&mut self, id: u32) -> Result<Add> {
         if id == 0 {
-            return Err(Error::Corrupt("membership reference ID is zero"));
+            return Err(Error::Corrupt("dictionary reference ID is zero"));
         }
         if self.slots.is_empty() {
             return Ok(Add::Direct);
@@ -73,7 +69,7 @@ impl ReferenceBatch {
                 slot.count = slot
                     .count
                     .checked_add(1)
-                    .ok_or(Error::ArithmeticOverflow("membership reference count"))?;
+                    .ok_or(Error::ArithmeticOverflow("dictionary reference count"))?;
                 return Ok(Add::Added);
             }
             if slot.id == 0 {

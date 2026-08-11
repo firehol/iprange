@@ -58,6 +58,10 @@
       "signature": "typedef uint32_t (*iprange_v4_abi1_membership_sink_fn)(void *context, const struct iprange_v4_abi1_membership_range *records, uint64_t count, struct iprange_v4_abi1_callback_failure *failure);"
     },
     {
+      "name": "iprange_v4_abi1_network_enrichment_v1_sink_fn",
+      "signature": "typedef uint32_t (*iprange_v4_abi1_network_enrichment_v1_sink_fn)(void *context, const struct iprange_v4_abi1_network_enrichment_v1_range *records, uint64_t count, struct iprange_v4_abi1_callback_failure *failure);"
+    },
+    {
       "name": "iprange_v4_abi1_recovery_unknown_sink_fn",
       "signature": "typedef uint32_t (*iprange_v4_abi1_recovery_unknown_sink_fn)(void *context, const struct iprange_v4_abi1_recovery_unknown *records, uint64_t count, struct iprange_v4_abi1_callback_failure *failure);"
     },
@@ -221,7 +225,7 @@
           "rule": "owned_when_nonnull"
         }
       ],
-      "prototype": "uint32_t iprange_v4_abi1_create_live(struct iprange_v4_abi1_path destination, uint32_t address_family, uint32_t value_kind, struct iprange_v4_abi1_byte_slice value_tag, uint32_t reader_capacity, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_report **report_output, iprange_v4_abi1_error **error_output);"
+      "prototype": "uint32_t iprange_v4_abi1_create_live(struct iprange_v4_abi1_path destination, uint32_t address_family, uint32_t value_kind, uint32_t structure_kind, struct iprange_v4_abi1_byte_slice value_tag, uint32_t reader_capacity, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_report **report_output, iprange_v4_abi1_error **error_output);"
     },
     {
       "name": "iprange_v4_abi1_cursor_close",
@@ -302,6 +306,22 @@
         }
       ],
       "prototype": "uint32_t iprange_v4_abi1_cursor_next_membership(const iprange_v4_abi1_cursor *cursor, uint8_t *present, struct iprange_v4_abi1_membership_range *output, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_cursor_next_network_enrichment_v1",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_cursor",
+          "parameter": "cursor",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_cursor_next_network_enrichment_v1(const iprange_v4_abi1_cursor *cursor, uint8_t *present, struct iprange_v4_abi1_network_enrichment_v1_range *output, iprange_v4_abi1_error **error_output);"
     },
     {
       "name": "iprange_v4_abi1_error_cause",
@@ -1119,6 +1139,43 @@
       "prototype": "uint32_t iprange_v4_abi1_reader_lookup_membership(const iprange_v4_abi1_reader *reader, struct iprange_v4_abi1_ip address, iprange_v4_abi1_membership_view **output, iprange_v4_abi1_error **error_output);"
     },
     {
+      "name": "iprange_v4_abi1_reader_lookup_network_enrichment_v1",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_reader",
+          "parameter": "reader",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_reader_lookup_network_enrichment_v1(const iprange_v4_abi1_reader *reader, struct iprange_v4_abi1_ip address, uint8_t *present, struct iprange_v4_abi1_network_enrichment_v1 *value, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_reader_lookup_network_enrichment_v1_with_membership",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_reader",
+          "parameter": "reader",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_membership_view",
+          "parameter": "membership",
+          "rule": "owned_when_nonnull"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_reader_lookup_network_enrichment_v1_with_membership(const iprange_v4_abi1_reader *reader, struct iprange_v4_abi1_ip address, uint8_t *present, struct iprange_v4_abi1_network_enrichment_v1 *value, iprange_v4_abi1_membership_view **membership, iprange_v4_abi1_error **error_output);"
+    },
+    {
       "name": "iprange_v4_abi1_reader_matching_feeds",
       "ownership": [
         {
@@ -1251,6 +1308,27 @@
       "prototype": "uint32_t iprange_v4_abi1_reader_open_membership_cursor(const iprange_v4_abi1_reader *reader, uint32_t direction, const struct iprange_v4_abi1_range *bounds, iprange_v4_abi1_cursor **output, iprange_v4_abi1_error **error_output);"
     },
     {
+      "name": "iprange_v4_abi1_reader_open_network_enrichment_v1_cursor",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_reader",
+          "parameter": "reader",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_cursor",
+          "parameter": "output",
+          "rule": "owned_when_nonnull"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_reader_open_network_enrichment_v1_cursor(const iprange_v4_abi1_reader *reader, uint32_t direction, const struct iprange_v4_abi1_range *bounds, iprange_v4_abi1_cursor **output, iprange_v4_abi1_error **error_output);"
+    },
+    {
       "name": "iprange_v4_abi1_reader_scan_direct",
       "ownership": [
         {
@@ -1312,6 +1390,27 @@
         }
       ],
       "prototype": "uint32_t iprange_v4_abi1_reader_scan_membership(const iprange_v4_abi1_reader *reader, uint32_t direction, const struct iprange_v4_abi1_range *bounds, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_membership_sink_fn callback_fn, void *context, iprange_v4_abi1_report **report_output, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_reader_scan_network_enrichment_v1",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_reader",
+          "parameter": "reader",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_report",
+          "parameter": "report_output",
+          "rule": "owned_when_nonnull"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_reader_scan_network_enrichment_v1(const iprange_v4_abi1_reader *reader, uint32_t direction, const struct iprange_v4_abi1_range *bounds, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_network_enrichment_v1_sink_fn callback_fn, void *context, iprange_v4_abi1_report **report_output, iprange_v4_abi1_error **error_output);"
     },
     {
       "name": "iprange_v4_abi1_recover_immutable",
@@ -2121,6 +2220,22 @@
       "prototype": "uint32_t iprange_v4_abi1_snapshot_to(struct iprange_v4_abi1_path source, uint32_t source_mode, struct iprange_v4_abi1_path destination, uint32_t destination_policy, const struct iprange_v4_abi1_snapshot_budget *budget, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_report **report_output, iprange_v4_abi1_error **error_output);"
     },
     {
+      "name": "iprange_v4_abi1_structure_ref_destroy",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_structure_ref",
+          "parameter": "structure",
+          "rule": "destroy_on_success"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_structure_ref_destroy(iprange_v4_abi1_structure_ref *structure, iprange_v4_abi1_error **error_output);"
+    },
+    {
       "name": "iprange_v4_abi1_validate",
       "ownership": [
         {
@@ -2331,6 +2446,22 @@
         }
       ],
       "prototype": "uint32_t iprange_v4_abi1_writer_begin_replace_feed(const iprange_v4_abi1_writer *writer, const uint8_t *name_pointer, uint64_t name_length, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_writer_begin_structured",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_writer",
+          "parameter": "writer",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_writer_begin_structured(const iprange_v4_abi1_writer *writer, struct iprange_v4_abi1_cancellation cancellation, iprange_v4_abi1_error **error_output);"
     },
     {
       "name": "iprange_v4_abi1_writer_clear_metadata_json",
@@ -2708,6 +2839,32 @@
       "prototype": "uint32_t iprange_v4_abi1_writer_metadata_read(const iprange_v4_abi1_writer *writer, struct iprange_v4_abi1_mutable_byte_slice output, uint64_t *required, iprange_v4_abi1_error **error_output);"
     },
     {
+      "name": "iprange_v4_abi1_writer_network_enrichment_v1_intern",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_writer",
+          "parameter": "writer",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_membership_ref",
+          "parameter": "membership",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_structure_ref",
+          "parameter": "output",
+          "rule": "owned_when_nonnull"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_writer_network_enrichment_v1_intern(const iprange_v4_abi1_writer *writer, struct iprange_v4_abi1_network_enrichment_v1 value, const iprange_v4_abi1_membership_ref *membership, iprange_v4_abi1_structure_ref **output, iprange_v4_abi1_error **error_output);"
+    },
+    {
       "name": "iprange_v4_abi1_writer_project_history",
       "ownership": [
         {
@@ -2785,6 +2942,43 @@
         }
       ],
       "prototype": "uint32_t iprange_v4_abi1_writer_set_metadata_json(const iprange_v4_abi1_writer *writer, const uint8_t *input_pointer, uint64_t input_length, struct iprange_v4_abi1_cancellation cancellation, uint8_t *changed, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_writer_structured_assign_ranges",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_writer",
+          "parameter": "writer",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_structure_ref",
+          "parameter": "structure",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_writer_structured_assign_ranges(const iprange_v4_abi1_writer *writer, const iprange_v4_abi1_structure_ref *structure, iprange_v4_abi1_coverage_source_fn callback, void *context, iprange_v4_abi1_error **error_output);"
+    },
+    {
+      "name": "iprange_v4_abi1_writer_structured_clear_ranges",
+      "ownership": [
+        {
+          "handle_type": "iprange_v4_abi1_writer",
+          "parameter": "writer",
+          "rule": "borrowed"
+        },
+        {
+          "handle_type": "iprange_v4_abi1_error",
+          "parameter": "error_output",
+          "rule": "owned_when_nonnull"
+        }
+      ],
+      "prototype": "uint32_t iprange_v4_abi1_writer_structured_clear_ranges(const iprange_v4_abi1_writer *writer, iprange_v4_abi1_coverage_source_fn callback, void *context, iprange_v4_abi1_error **error_output);"
     }
   ],
   "numeric_registry": [
@@ -3101,6 +3295,14 @@
       "value": 34
     },
     {
+      "name": "IPRANGE_V4_ABI1_ERROR_CODE_FAULT_WORKER_FAILED",
+      "value": 66
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_ERROR_CODE_FAULT_WORKER_UNAVAILABLE",
+      "value": 65
+    },
+    {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_FEED_INDEX_EXHAUSTED",
       "value": 61
     },
@@ -3261,6 +3463,10 @@
       "value": 30
     },
     {
+      "name": "IPRANGE_V4_ABI1_ERROR_CODE_STRUCTURE_ID_EXHAUSTED",
+      "value": 69
+    },
+    {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_TRANSACTION_ABORTED",
       "value": 22
     },
@@ -3275,6 +3481,10 @@
     {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_UNRESOLVABLE",
       "value": 38
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_ERROR_CODE_UNSUPPORTED_STRUCTURE",
+      "value": 67
     },
     {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_WORK_LIMIT_TOO_SMALL",
@@ -3295,6 +3505,10 @@
     {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_WRONG_STATE",
       "value": 11
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_ERROR_CODE_WRONG_STRUCTURE_KIND",
+      "value": 68
     },
     {
       "name": "IPRANGE_V4_ABI1_ERROR_CODE_WRONG_VALUE_KIND",
@@ -3557,6 +3771,18 @@
       "value": 13
     },
     {
+      "name": "IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_DICTIONARY",
+      "value": 15
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_REVERSE_INDEX",
+      "value": 16
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_USED_BITMAP",
+      "value": 17
+    },
+    {
       "name": "IPRANGE_V4_ABI1_OPEN_MODE_IMMUTABLE",
       "value": 1
     },
@@ -3731,6 +3957,34 @@
     {
       "name": "IPRANGE_V4_ABI1_REASON_ROOT_COUNT_INVALID",
       "value": 5
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_HASH_INVALID",
+      "value": 42
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_INVALID",
+      "value": 47
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_MEMBERSHIP_INVALID",
+      "value": 45
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_MISSING",
+      "value": 46
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_PAYLOAD_INVALID",
+      "value": 41
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_REFCOUNT_INVALID",
+      "value": 44
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_REASON_STRUCTURE_REVERSE_INDEX_INVALID",
+      "value": 43
     },
     {
       "name": "IPRANGE_V4_ABI1_REASON_TREE_CYCLE",
@@ -3965,6 +4219,14 @@
       "value": 0
     },
     {
+      "name": "IPRANGE_V4_ABI1_STRUCTURE_KIND_NETWORK_ENRICHMENT_V1",
+      "value": 1
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE",
+      "value": 0
+    },
+    {
       "name": "IPRANGE_V4_ABI1_UNCOVERED_SIDE_LEFT",
       "value": 1
     },
@@ -3991,6 +4253,10 @@
     {
       "name": "IPRANGE_V4_ABI1_VALUE_KIND_MEMBERSHIP",
       "value": 2
+    },
+    {
+      "name": "IPRANGE_V4_ABI1_VALUE_KIND_STRUCTURED",
+      "value": 3
     },
     {
       "name": "IPRANGE_V4_ABI1_WINDOWS_HOUSEKEEPING_CANDIDATE_ENVELOPE",
@@ -4054,6 +4320,7 @@
     "iprange_v4_abi1_reader",
     "iprange_v4_abi1_report",
     "iprange_v4_abi1_residue",
+    "iprange_v4_abi1_structure_ref",
     "iprange_v4_abi1_writer",
     "iprange_v4_abi1_writer_feed_ref"
   ],
@@ -4740,60 +5007,64 @@
           "offset": 12
         },
         {
-          "name": "value_tag",
+          "name": "structure_kind",
           "offset": 16
         },
         {
+          "name": "value_tag",
+          "offset": 20
+        },
+        {
           "name": "database_id",
-          "offset": 32
+          "offset": 36
         },
         {
           "name": "commit_nonce",
-          "offset": 48
+          "offset": 52
         },
         {
           "name": "sidecar_id",
-          "offset": 64
+          "offset": 68
         },
         {
           "name": "directory_identity",
-          "offset": 80
+          "offset": 84
         },
         {
           "name": "main_basename",
-          "offset": 128
+          "offset": 132
         },
         {
           "name": "main_identity",
-          "offset": 648
+          "offset": 652
         },
         {
           "name": "sidecar_identity",
-          "offset": 696
+          "offset": 700
         },
         {
           "name": "reader_capacity",
-          "offset": 744
-        },
-        {
-          "name": "state",
           "offset": 748
         },
         {
-          "name": "residue_possible",
+          "name": "state",
           "offset": 752
         },
         {
+          "name": "residue_possible",
+          "offset": 756
+        },
+        {
           "name": "reserved",
-          "offset": 753
+          "offset": 757
         },
         {
           "name": "housekeeping",
-          "offset": 756
+          "offset": 760
         }
       ],
       "name": "iprange_v4_abi1_create_report",
-      "size": 760
+      "size": 764
     },
     {
       "alignment": 4,
@@ -4842,7 +5113,7 @@
           "offset": 16
         },
         {
-          "name": "reserved",
+          "name": "structure_kind",
           "offset": 20
         },
         {
@@ -6008,6 +6279,64 @@
       "size": 16
     },
     {
+      "alignment": 4,
+      "fields": [
+        {
+          "name": "asn",
+          "offset": 0
+        },
+        {
+          "name": "country_id",
+          "offset": 4
+        },
+        {
+          "name": "state_id",
+          "offset": 8
+        },
+        {
+          "name": "city_id",
+          "offset": 12
+        },
+        {
+          "name": "latitude_microdegrees",
+          "offset": 16
+        },
+        {
+          "name": "longitude_microdegrees",
+          "offset": 20
+        },
+        {
+          "name": "has_location",
+          "offset": 24
+        },
+        {
+          "name": "reserved",
+          "offset": 28
+        }
+      ],
+      "name": "iprange_v4_abi1_network_enrichment_v1",
+      "size": 32
+    },
+    {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "range",
+          "offset": 0
+        },
+        {
+          "name": "value",
+          "offset": 40
+        },
+        {
+          "name": "membership",
+          "offset": 72
+        }
+      ],
+      "name": "iprange_v4_abi1_network_enrichment_v1_range",
+      "size": 80
+    },
+    {
       "alignment": 8,
       "fields": [
         {
@@ -6458,7 +6787,7 @@
         }
       ],
       "name": "iprange_v4_abi1_recovery_candidates_report",
-      "size": 536
+      "size": 616
     },
     {
       "alignment": 8,
@@ -6484,40 +6813,44 @@
           "offset": 80
         },
         {
-          "name": "metadata_chunks",
+          "name": "structure_entries",
           "offset": 104
         },
         {
-          "name": "retirement_records",
+          "name": "metadata_chunks",
           "offset": 128
         },
         {
-          "name": "verified_addresses",
+          "name": "retirement_records",
           "offset": 152
         },
         {
-          "name": "rejected_addresses",
+          "name": "verified_addresses",
           "offset": 176
         },
         {
-          "name": "bounded_possible_span_addresses",
+          "name": "rejected_addresses",
           "offset": 200
         },
         {
-          "name": "has_unbounded_unknown",
+          "name": "bounded_possible_span_addresses",
           "offset": 224
         },
         {
+          "name": "has_unbounded_unknown",
+          "offset": 248
+        },
+        {
           "name": "reserved",
-          "offset": 225
+          "offset": 249
         },
         {
           "name": "unknown_envelopes",
-          "offset": 232
+          "offset": 256
         }
       ],
       "name": "iprange_v4_abi1_recovery_facts",
-      "size": 240
+      "size": 264
     },
     {
       "alignment": 8,
@@ -6536,31 +6869,31 @@
         },
         {
           "name": "scratch_present",
-          "offset": 248
-        },
-        {
-          "name": "reserved",
-          "offset": 249
-        },
-        {
-          "name": "scratch_attempt_id",
-          "offset": 256
-        },
-        {
-          "name": "scratch_directory_identity",
           "offset": 272
         },
         {
+          "name": "reserved",
+          "offset": 273
+        },
+        {
+          "name": "scratch_attempt_id",
+          "offset": 280
+        },
+        {
+          "name": "scratch_directory_identity",
+          "offset": 296
+        },
+        {
           "name": "scratch_creation_security",
-          "offset": 312
+          "offset": 336
         },
         {
           "name": "publication",
-          "offset": 352
+          "offset": 376
         }
       ],
       "name": "iprange_v4_abi1_recovery_report",
-      "size": 1400
+      "size": 1424
     },
     {
       "alignment": 8,
@@ -6966,7 +7299,7 @@
           "offset": 8
         },
         {
-          "name": "reserved1",
+          "name": "structure_kind",
           "offset": 12
         },
         {
@@ -7026,11 +7359,11 @@
         },
         {
           "name": "object_counts",
-          "offset": 376
+          "offset": 432
         }
       ],
       "name": "iprange_v4_abi1_validation_progress",
-      "size": 488
+      "size": 568
     },
     {
       "alignment": 8,
@@ -7065,7 +7398,7 @@
         }
       ],
       "name": "iprange_v4_abi1_validation_report",
-      "size": 624
+      "size": 704
     }
   ]
 }

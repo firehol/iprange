@@ -11,12 +11,14 @@ pub(crate) const CATALOG_RECORD_SIZE: u64 = 264;
 pub(crate) const CATALOG_NAME_SLOT_SIZE: u64 = 24;
 pub(crate) const CATALOG_INDEX_SLOT_SIZE: u64 = 16;
 pub(crate) const MEMBERSHIP_RECORD_SIZE: u64 = 56;
-pub(crate) const MEMBERSHIP_ID_SLOT_SIZE: u64 = 16;
+pub(crate) const STRUCTURE_RECORD_SIZE: u64 = 48;
+pub(crate) const ID_SLOT_SIZE: u64 = 16;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Counts {
     pub(crate) catalog: u64,
     pub(crate) memberships: u64,
+    pub(crate) structures: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +35,8 @@ pub(crate) struct Layout {
     pub(crate) catalog_indexes: Region,
     pub(crate) membership_records: Region,
     pub(crate) membership_ids: Region,
+    pub(crate) structure_records: Region,
+    pub(crate) structure_ids: Region,
     bytes: u64,
 }
 
@@ -157,18 +161,23 @@ impl Layout {
     fn new(counts: Counts) -> Result<Self> {
         let catalog_slots = hash_slots(counts.catalog)?;
         let membership_slots = hash_slots(counts.memberships)?;
+        let structure_slots = hash_slots(counts.structures)?;
         let mut next = 0;
         let catalog_records = region(&mut next, counts.catalog, CATALOG_RECORD_SIZE)?;
         let catalog_names = region(&mut next, catalog_slots, CATALOG_NAME_SLOT_SIZE)?;
         let catalog_indexes = region(&mut next, catalog_slots, CATALOG_INDEX_SLOT_SIZE)?;
         let membership_records = region(&mut next, counts.memberships, MEMBERSHIP_RECORD_SIZE)?;
-        let membership_ids = region(&mut next, membership_slots, MEMBERSHIP_ID_SLOT_SIZE)?;
+        let membership_ids = region(&mut next, membership_slots, ID_SLOT_SIZE)?;
+        let structure_records = region(&mut next, counts.structures, STRUCTURE_RECORD_SIZE)?;
+        let structure_ids = region(&mut next, structure_slots, ID_SLOT_SIZE)?;
         Ok(Self {
             catalog_records,
             catalog_names,
             catalog_indexes,
             membership_records,
             membership_ids,
+            structure_records,
+            structure_ids,
             bytes: next,
         })
     }

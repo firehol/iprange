@@ -86,6 +86,8 @@ empty_database_pattern='fn (empty_meta|write_empty_main)\b|^[[:space:]]*MetaV4[[
 copied_tree_leaf_pattern='\b(LeafBuf|MAX_COPIED_LEAF|copy_leaf)\b'
 membership_delta_delete_pattern='\btake_first\b|fixed_tree::(delete|delete_existing)\b|LeafU64Mutation::Delete'
 sdk_physical_pattern='crate::(mapping|bootstrap|database_file|draft_store|retirement|range_tree|fixed_tree|slotted_page|page_header|page_io|free_bitmap|membership_dictionary|membership_tree|range_mutation)\b|\b(mapping|bootstrap|database_file|draft_store|retirement|range_tree|fixed_tree|slotted_page|page_header|page_io|free_bitmap|membership_dictionary|membership_tree|range_mutation)::|\b(Mapping|MetaV4|Bootstrap|PageBudget|DraftStore|CursorState|ProjectionState)\b'
+structured_adapter_physical_pattern='structured_value::(codec|manager|table)\b|\bstructure_(id_root|hash_root|used_root|entry_count|id_limit)\b|page_type::STRUCTURE_(ID|HASH)'
+structured_manager_field_pattern='\b(asn|country_id|state_id|city_id|latitude_microdegrees|longitude_microdegrees)\b'
 
 assert_detects 'reader-adapter' "$reader_bridge_pattern" 'use crate::mapping::Mapping;'
 assert_detects 'physical reader-adapter' "$reader_adapter_physical_pattern" 'use crate::database_file;'
@@ -111,6 +113,10 @@ assert_detects 'per-record membership-delta deletion' \
     "$membership_delta_delete_pattern" 'fixed_tree::delete_existing(store, root, key, retired)'
 assert_detects 'public SDK physical access' "$sdk_physical_pattern" \
     'use crate::range_mutation;'
+assert_detects 'structured adapter physical access' \
+    "$structured_adapter_physical_pattern" 'use crate::structured_value::table;'
+assert_detects 'structure-specific field in common manager' \
+    "$structured_manager_field_pattern" 'let asn = 64512;'
 
 bridge="$source_root/c_abi_support.rs"
 import_workflow="$source_root/live_writer/membership_import.rs"
@@ -160,6 +166,20 @@ sdk_adapters=(
     "$source_root/history.rs"
     "$source_root/live_writer/history_projection.rs"
     "$source_root/membership_query.rs"
+)
+structured_adapters=(
+    "$source_root/database.rs"
+    "$source_root/live_reader.rs"
+    "$source_root/live_writer/structured.rs"
+    "$source_root/immutable_output/structured.rs"
+    "$source_root/c_abi_support/reader.rs"
+    "$source_root/c_abi_support/writer.rs"
+    "$capi_root/structured.rs"
+)
+structured_manager=(
+    "$source_root/structured_value/codec.rs"
+    "$source_root/structured_value/manager.rs"
+    "$source_root/structured_value/table.rs"
 )
 while IFS= read -r source; do
     sdk_adapters+=("$source")
@@ -237,6 +257,12 @@ run scan 'Membership deltas are consumed through repeated search/delete operatio
 run scan 'A public SDK workflow owns physical database operations:' \
     "$sdk_physical_pattern" \
     "${sdk_adapters[@]}" || status=1
+run scan 'A structured-value adapter bypasses the common physical manager:' \
+    "$structured_adapter_physical_pattern" \
+    "${structured_adapters[@]}" || status=1
+run scan 'The common structure manager contains NetworkEnrichmentV1 fields:' \
+    "$structured_manager_field_pattern" \
+    "${structured_manager[@]}" || status=1
 
 ((status == 0)) || fail 'Rust v4 ownership boundaries were bypassed'
 

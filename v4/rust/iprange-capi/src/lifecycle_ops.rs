@@ -1,8 +1,8 @@
 //! Creation, live-transition, and commit-resolution exports.
 
 use iprange_livedb::{
-    AddressFamily, CommitResolutionMode, LiveResetPolicy, LiveTransitionResolutionMode, ValueKind,
-    ValueTag,
+    AddressFamily, CommitResolutionMode, LiveResetPolicy, LiveTransitionResolutionMode,
+    StructureKind, ValueKind, ValueTag,
 };
 
 use crate::abi::{ByteSlice, Cancellation, Path};
@@ -18,6 +18,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
     destination: Path,
     address_family: u32,
     value_kind: u32,
+    structure_kind: u32,
     value_tag: ByteSlice,
     reader_capacity: u32,
     cancellation: Cancellation,
@@ -30,6 +31,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
         *output = std::ptr::null_mut();
         let address_family = decode_family(address_family)?;
         let value_kind = decode_value_kind(value_kind)?;
+        let structure_kind = decode_structure_kind(structure_kind)?;
         let value_tag = unsafe { decode_value_tag(value_tag)? };
         let cancellation = callback::token(cancellation)?;
         let destination = unsafe { path::decode(destination)? };
@@ -37,6 +39,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
             destination,
             address_family,
             value_kind,
+            structure_kind,
             value_tag,
             reader_capacity,
             &cancellation,
@@ -266,6 +269,13 @@ fn decode_value_kind(value: u32) -> Result<ValueKind, BoundaryError> {
         .ok()
         .and_then(ValueKind::from_wire)
         .ok_or_else(|| BoundaryError::invalid_enum("unknown value kind"))
+}
+
+fn decode_structure_kind(value: u32) -> Result<StructureKind, BoundaryError> {
+    u8::try_from(value)
+        .ok()
+        .and_then(StructureKind::from_wire)
+        .ok_or_else(|| BoundaryError::invalid_enum("unknown structure kind"))
 }
 
 pub(crate) unsafe fn decode_value_tag(value: ByteSlice) -> Result<ValueTag, BoundaryError> {

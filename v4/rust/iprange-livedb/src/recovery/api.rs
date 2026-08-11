@@ -92,6 +92,7 @@ mod platform {
     use crate::recovery::direct_build;
     use crate::recovery::membership_build;
     use crate::recovery::source_guard::{problem, Source, SourceMode};
+    use crate::recovery::structured_build;
     use crate::recovery::terminal;
     use crate::recovery::{RecoveryReport, ScratchCleanup};
 
@@ -266,6 +267,8 @@ mod platform {
         OutputSpec::fresh(
             meta.address_family,
             meta.value_kind,
+            meta.structure_kind()
+                .ok_or(Error::UnsupportedStructure(meta.structure_kind_code))?,
             meta.value_tag,
             meta.feed_index_limit,
         )
@@ -286,6 +289,10 @@ mod platform {
             }
             ValueKind::Membership => {
                 membership_build::construct(mapping, meta, builder, budget, cancellation, sink)
+                    .map_err(Box::new)
+            }
+            ValueKind::Structured => {
+                structured_build::construct(mapping, meta, builder, budget, cancellation, sink)
                     .map_err(Box::new)
             }
         }

@@ -33,6 +33,7 @@ typedef struct iprange_v4_abi1_membership_view iprange_v4_abi1_membership_view;
 typedef struct iprange_v4_abi1_borrowed_membership_view iprange_v4_abi1_borrowed_membership_view;
 typedef struct iprange_v4_abi1_membership_builder iprange_v4_abi1_membership_builder;
 typedef struct iprange_v4_abi1_membership_ref iprange_v4_abi1_membership_ref;
+typedef struct iprange_v4_abi1_structure_ref iprange_v4_abi1_structure_ref;
 typedef struct iprange_v4_abi1_cleanup_guard iprange_v4_abi1_cleanup_guard;
 typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 typedef struct iprange_v4_abi1_membership_scope iprange_v4_abi1_membership_scope;
@@ -83,6 +84,7 @@ exclude = [
     "BorrowedMembershipViewHandle",
     "MembershipBuilderHandle",
     "MembershipRefHandle",
+    "StructureRefHandle",
     "MembershipScopeHandle",
     "MembershipAlgebraHandle",
     "ErrorHandle",
@@ -138,9 +140,13 @@ remove_underscores = false
 "MembershipBuilderHandle" = "membership_builder"
 "MembershipRange" = "membership_range"
 "MembershipRefHandle" = "membership_ref"
+"StructureRefHandle" = "structure_ref"
 "MembershipScopeHandle" = "membership_scope"
 "MembershipAlgebraHandle" = "membership_algebra"
 "MembershipSinkFn" = "membership_sink_fn"
+"NetworkEnrichmentV1" = "network_enrichment_v1"
+"NetworkEnrichmentV1Range" = "network_enrichment_v1_range"
+"NetworkEnrichmentV1SinkFn" = "network_enrichment_v1_sink_fn"
 "MembershipViewHandle" = "membership_view"
 "MutableByteSlice" = "mutable_byte_slice"
 "OptionalBytes16" = "optional_bytes16"

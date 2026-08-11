@@ -24,6 +24,7 @@ impl ValidationKind for Kind {
             Kind::Free => ValidationObject::FreeBitmap,
             Kind::Feed => ValidationObject::FeedUsedBitmap,
             Kind::Membership => ValidationObject::MembershipUsedBitmap,
+            Kind::Structure => ValidationObject::StructureUsedBitmap,
         }
     }
 }
@@ -193,7 +194,7 @@ impl LeafTotals {
             .ok_or(Error::ArithmeticOverflow("validation bitmap bit count"))?;
         match kind {
             Kind::Free => mark_free_bits(context, word_base, valid)?,
-            Kind::Feed | Kind::Membership => {
+            Kind::Feed | Kind::Membership | Kind::Structure => {
                 self.has_candidate |= (!valid) & valid_mask != 0;
             }
         }
@@ -301,7 +302,7 @@ impl BranchTotals {
     ) -> Result<()> {
         let expected = match kind {
             Kind::Free => result.has_one,
-            Kind::Feed | Kind::Membership => result.has_candidate,
+            Kind::Feed | Kind::Membership | Kind::Structure => result.has_candidate,
         };
         if bitmap_page::summary_bit(page, index)? != expected {
             context.emit(

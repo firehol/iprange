@@ -13,6 +13,9 @@ use crate::metadata;
 use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::range_tree;
+use crate::structured_value::{
+    self, NetworkEnrichmentV1CursorV4, NetworkEnrichmentV1CursorV6, NetworkEnrichmentV1View,
+};
 
 use super::{MembershipRangeCursor, MembershipToken, ReaderCursor, ReaderCursorItem};
 
@@ -41,6 +44,10 @@ impl<'a> GenerationReader<'a> {
         OutputSpec {
             address_family: self.meta.address_family,
             value_kind: self.meta.value_kind,
+            structure_kind: self
+                .meta
+                .structure_kind()
+                .expect("bootstrap rejects unsupported structures"),
             value_tag: self.meta.value_tag,
             database_id: self.meta.database_id,
             transaction_id: self.meta.txn_id,
@@ -135,6 +142,34 @@ impl<'a> GenerationReader<'a> {
         membership_view::lookup_v6(self.mapping, &self.meta, address, self.owner_identity)
     }
 
+    pub(crate) fn lookup_network_enrichment_v1_v4(
+        self,
+        address: Ipv4Key,
+    ) -> Result<Option<NetworkEnrichmentV1View<'a>>> {
+        structured_value::lookup_v4(self.mapping, &self.meta, address, self.owner_identity)
+    }
+
+    pub(crate) fn lookup_network_enrichment_v1_v6(
+        self,
+        address: Ipv6Key,
+    ) -> Result<Option<NetworkEnrichmentV1View<'a>>> {
+        structured_value::lookup_v6(self.mapping, &self.meta, address, self.owner_identity)
+    }
+
+    pub(crate) fn network_enrichment_v1_cursor_v4(
+        self,
+        direction: RangeDirection,
+    ) -> Result<NetworkEnrichmentV1CursorV4<'a>> {
+        NetworkEnrichmentV1CursorV4::new(self.mapping, &self.meta, direction, self.owner_identity)
+    }
+
+    pub(crate) fn network_enrichment_v1_cursor_v6(
+        self,
+        direction: RangeDirection,
+    ) -> Result<NetworkEnrichmentV1CursorV6<'a>> {
+        NetworkEnrichmentV1CursorV6::new(self.mapping, &self.meta, direction, self.owner_identity)
+    }
+
     pub(crate) fn membership_ranges<K: IpKey>(self) -> Result<MembershipRangeCursor<'a, K>> {
         self.require_membership_family(K::FAMILY)?;
         MembershipRangeCursor::new(self.mapping, &self.meta, self.owner_identity)
@@ -166,6 +201,18 @@ impl<'a> GenerationReader<'a> {
 
     pub(crate) fn open_membership_state(self, direction: RangeDirection) -> Result<ReaderCursor> {
         ReaderCursor::membership(self.mapping, &self.meta, direction, self.owner_identity)
+    }
+
+    pub(crate) fn open_network_enrichment_v1_state(
+        self,
+        direction: RangeDirection,
+    ) -> Result<ReaderCursor> {
+        ReaderCursor::network_enrichment_v1(
+            self.mapping,
+            &self.meta,
+            direction,
+            self.owner_identity,
+        )
     }
 
     pub(crate) fn open_feed_state(

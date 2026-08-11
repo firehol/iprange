@@ -14,6 +14,7 @@ const NATIVE_SOURCES: &[&str] = &[
     include_str!("native/abi_lifecycle.c"),
     include_str!("native/abi_maintenance.c"),
     include_str!("native/abi_membership.c"),
+    include_str!("native/abi_structured.c"),
     include_str!("native/abi_workflows.c"),
     include_str!("native/abi_sdk.c"),
 ];
@@ -78,6 +79,19 @@ fn native_c_membership_surface_uses_the_real_shared_library() {
     assert!(
         output.status.success(),
         "native C membership behavior failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn native_c_structured_surface_uses_the_real_shared_library() {
+    let files = TestFiles::new();
+    let executable = compile_c_fixture(&files, "abi_structured.c", &[]);
+    let output = run_fixture(&executable, [&files.main]);
+    assert!(
+        output.status.success(),
+        "native C structured behavior failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -272,7 +286,7 @@ fn shared_library_exports_exactly_the_frozen_symbols() {
         .map(|function| function["name"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 158);
+    assert_eq!(actual.len(), 168);
 }
 
 #[test]
@@ -288,7 +302,7 @@ fn native_c_fixtures_reference_every_frozen_function() {
         })
         .collect::<Vec<_>>();
     assert!(missing.is_empty(), "native C fixture gaps: {missing:?}");
-    assert_eq!(functions.len(), 158);
+    assert_eq!(functions.len(), 168);
 }
 
 fn shared_library() -> PathBuf {

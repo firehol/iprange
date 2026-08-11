@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
+use crate::validation::ValidationReason;
 
 #[cfg(any(unix, windows))]
 use super::scratch::{residue_error, Scratch, ScratchFile, ScratchSlot, HEADER_SIZE};
@@ -52,6 +53,11 @@ pub(crate) struct PageSet {
 pub(crate) struct PageSetFailure {
     pub(crate) cause: Error,
     pub(crate) cleanup: Option<ScratchCleanup>,
+}
+
+pub(crate) enum PageClaim {
+    Claimed,
+    Rejected(ValidationReason),
 }
 
 impl PageSet {
@@ -141,6 +147,31 @@ impl PageSet {
                 _ => index = (index + 1) & mask,
             }
         }
+    }
+
+    pub(crate) fn claim(
+        &mut self,
+        page: u32,
+        page_count: u64,
+        path: &mut [u32],
+        depth: usize,
+    ) -> Result<PageClaim> {
+        if depth >= path.len() {
+            return Ok(PageClaim::Rejected(ValidationReason::TreeLevelInvalid));
+        }
+        if page < 2 || u64::from(page) >= page_count {
+            return Ok(PageClaim::Rejected(ValidationReason::PageOutOfBounds));
+        }
+        if !self.insert(page)? {
+            let reason = if path[..depth].contains(&page) {
+                ValidationReason::TreeCycle
+            } else {
+                ValidationReason::PageAlias
+            };
+            return Ok(PageClaim::Rejected(reason));
+        }
+        path[depth] = page;
+        Ok(PageClaim::Claimed)
     }
 
     pub(crate) fn retained_bytes(&self) -> u64 {

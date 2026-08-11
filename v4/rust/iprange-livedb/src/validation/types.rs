@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cardinality::Cardinality129;
-use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, StructureKind, ValueKind, ValueTag};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::publication::{CleanupArtifacts, CleanupState, CoordinationCleanup};
@@ -105,10 +105,17 @@ pub enum ValidationReason {
     MembershipMissing,
     MembershipInvalid,
     MetadataInvalid,
+    StructurePayloadInvalid,
+    StructureHashInvalid,
+    StructureReverseIndexInvalid,
+    StructureRefcountInvalid,
+    StructureMembershipInvalid,
+    StructureMissing,
+    StructureInvalid,
 }
 
 impl ValidationReason {
-    pub const COUNT: usize = 40;
+    pub const COUNT: usize = 47;
 
     #[inline]
     pub(crate) const fn index(self) -> usize {
@@ -157,6 +164,13 @@ impl ValidationReason {
             37 => Self::MembershipMissing,
             38 => Self::MembershipInvalid,
             39 => Self::MetadataInvalid,
+            40 => Self::StructurePayloadInvalid,
+            41 => Self::StructureHashInvalid,
+            42 => Self::StructureReverseIndexInvalid,
+            43 => Self::StructureRefcountInvalid,
+            44 => Self::StructureMembershipInvalid,
+            45 => Self::StructureMissing,
+            46 => Self::StructureInvalid,
             _ => return None,
         })
     }
@@ -180,10 +194,13 @@ pub enum ValidationObject {
     MembershipUsedBitmap,
     RetirementTree,
     RetirementBlob,
+    StructureDictionary,
+    StructureReverseIndex,
+    StructureUsedBitmap,
 }
 
 impl ValidationObject {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 17;
 
     #[inline]
     pub(crate) const fn index(self) -> usize {
@@ -206,6 +223,9 @@ impl ValidationObject {
             11 => Self::MembershipUsedBitmap,
             12 => Self::RetirementTree,
             13 => Self::RetirementBlob,
+            14 => Self::StructureDictionary,
+            15 => Self::StructureReverseIndex,
+            16 => Self::StructureUsedBitmap,
             _ => return None,
         })
     }
@@ -270,12 +290,13 @@ pub struct LocalFileIdentity {
 pub struct ValidatedGeneration {
     pub address_family: AddressFamily,
     pub value_kind: ValueKind,
+    pub structure_kind: StructureKind,
     pub value_tag: ValueTag,
     pub database_id: [u8; 16],
     pub transaction_id: u64,
     pub commit_nonce: [u8; 16],
     pub page_count: u64,
-    pub roots: [u32; 10],
+    pub roots: [u32; 13],
 }
 
 /// Counters available from both completed and interrupted validation.

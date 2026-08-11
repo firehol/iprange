@@ -30,6 +30,7 @@ fn empty_meta(address_family: AddressFamily, value_kind: ValueKind, value_tag: V
     MetaV4 {
         address_family,
         value_kind,
+        structure_kind_code: crate::contract::StructureKind::None as u8,
         value_tag,
         database_id: [1; 16],
         txn_id: 1,
@@ -54,6 +55,11 @@ fn empty_meta(address_family: AddressFamily, value_kind: ValueKind, value_tag: V
         free_bitmap_root: 0,
         retirement_root: 0,
         allocator_reserve: [0; 4],
+        structure_entry_count: 0,
+        structure_id_limit: 0,
+        structure_id_root: 0,
+        structure_hash_root: 0,
+        structure_used_root: 0,
     }
 }
 

@@ -59,7 +59,16 @@ fn query_budget() -> MembershipQueryBudget {
 }
 
 fn create(path: &Path, family: AddressFamily, kind: ValueKind, tag: ValueTag) {
-    create_live(path, family, kind, tag, 1, &CancellationToken::new()).unwrap();
+    create_live(
+        path,
+        family,
+        kind,
+        iprange_livedb::StructureKind::None,
+        tag,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
 }
 
 fn commit(finished: FinishedWorkflow<'_>) {

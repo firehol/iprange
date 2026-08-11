@@ -417,6 +417,7 @@ fn complete_output(directory: &Path, _seed: [u8; 16]) -> Complete {
         OutputSpec {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
+            structure_kind: crate::contract::StructureKind::None,
             value_tag: ValueTag::FIRST_SEEN,
             database_id: [11; 16],
             transaction_id: 12,

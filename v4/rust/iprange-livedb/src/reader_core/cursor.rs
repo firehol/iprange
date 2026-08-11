@@ -9,6 +9,7 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{Cursor, CursorState, DirectRange, RangeDirection};
+use crate::structured_value::{self, NetworkEnrichmentV1};
 use crate::workflow::AddressRange;
 
 /// Opaque membership identity retained only inside an SDK-owned handle.
@@ -16,7 +17,7 @@ use crate::workflow::AddressRange;
 pub struct MembershipToken(u32);
 
 impl MembershipToken {
-    pub(super) const fn new(id: u32) -> Self {
+    pub(crate) const fn new(id: u32) -> Self {
         Self(id)
     }
 
@@ -32,6 +33,8 @@ impl MembershipToken {
 /// Borrow-free reader cursor state retained by a C child handle.
 pub struct ReaderCursor {
     inner: ReaderCursorInner,
+    meta: MetaV4,
+    owner_identity: Option<ProcessIdentity>,
 }
 
 enum ReaderCursorInner {
@@ -39,6 +42,8 @@ enum ReaderCursorInner {
     DirectV6(CursorState<Ipv6Key>),
     MembershipV4(CursorState<Ipv4Key>),
     MembershipV6(CursorState<Ipv6Key>),
+    NetworkEnrichmentV1V4(CursorState<Ipv4Key>),
+    NetworkEnrichmentV1V6(CursorState<Ipv6Key>),
     FeedV4(ProjectionState<Ipv4Key>),
     FeedV6(ProjectionState<Ipv6Key>),
 }
@@ -55,6 +60,16 @@ pub enum ReaderCursorItem {
     MembershipV6 {
         range: AddressRange<Ipv6Key>,
         membership: MembershipToken,
+    },
+    NetworkEnrichmentV1V4 {
+        range: AddressRange<Ipv4Key>,
+        value: NetworkEnrichmentV1,
+        membership: Option<MembershipToken>,
+    },
+    NetworkEnrichmentV1V6 {
+        range: AddressRange<Ipv6Key>,
+        value: NetworkEnrichmentV1,
+        membership: Option<MembershipToken>,
     },
     FeedV4(AddressRange<Ipv4Key>),
     FeedV6(AddressRange<Ipv6Key>),
@@ -92,7 +107,11 @@ impl ReaderCursor {
                 owner_identity,
             )?),
         };
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            meta: *meta,
+            owner_identity,
+        })
     }
 
     pub(super) fn membership(
@@ -120,7 +139,39 @@ impl ReaderCursor {
                 owner_identity,
             )?),
         };
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            meta: *meta,
+            owner_identity,
+        })
+    }
+
+    pub(super) fn network_enrichment_v1(
+        mapping: &Mapping,
+        meta: &MetaV4,
+        direction: RangeDirection,
+        owner_identity: Option<ProcessIdentity>,
+    ) -> Result<Self> {
+        structured_value::require_kind(meta, meta.address_family)?;
+        let inner = match meta.address_family {
+            AddressFamily::Ipv4 => ReaderCursorInner::NetworkEnrichmentV1V4(CursorState::new(
+                mapping,
+                meta,
+                direction,
+                owner_identity,
+            )?),
+            AddressFamily::Ipv6 => ReaderCursorInner::NetworkEnrichmentV1V6(CursorState::new(
+                mapping,
+                meta,
+                direction,
+                owner_identity,
+            )?),
+        };
+        Ok(Self {
+            inner,
+            meta: *meta,
+            owner_identity,
+        })
     }
 
     pub(super) fn feed(
@@ -146,10 +197,16 @@ impl ReaderCursor {
                 owner_identity,
             )?),
         };
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            meta: *meta,
+            owner_identity,
+        })
     }
 
     pub(super) fn next(&mut self, mapping: &Mapping) -> Result<Option<ReaderCursorItem>> {
+        let meta = self.meta;
+        let owner_identity = self.owner_identity;
         Ok(match &mut self.inner {
             ReaderCursorInner::DirectV4(cursor) => {
                 cursor.next(mapping)?.map(ReaderCursorItem::DirectV4)
@@ -179,6 +236,34 @@ impl ReaderCursor {
                         membership: MembershipToken::new(range.value),
                     })
             }
+            ReaderCursorInner::NetworkEnrichmentV1V4(cursor) => {
+                let Some(range) = cursor.next(mapping)? else {
+                    return Ok(None);
+                };
+                let view = structured_value::by_id(mapping, &meta, range.value, owner_identity)?;
+                Some(ReaderCursorItem::NetworkEnrichmentV1V4 {
+                    range: AddressRange {
+                        from: range.from,
+                        to: range.to,
+                    },
+                    value: view.value(),
+                    membership: view.threat_membership_token(),
+                })
+            }
+            ReaderCursorInner::NetworkEnrichmentV1V6(cursor) => {
+                let Some(range) = cursor.next(mapping)? else {
+                    return Ok(None);
+                };
+                let view = structured_value::by_id(mapping, &meta, range.value, owner_identity)?;
+                Some(ReaderCursorItem::NetworkEnrichmentV1V6 {
+                    range: AddressRange {
+                        from: range.from,
+                        to: range.to,
+                    },
+                    value: view.value(),
+                    membership: view.threat_membership_token(),
+                })
+            }
             ReaderCursorInner::FeedV4(cursor) => cursor
                 .next_with(mapping, &mut || Ok(()))?
                 .map(ReaderCursorItem::FeedV4),
@@ -190,9 +275,9 @@ impl ReaderCursor {
 
     pub(super) fn seek_v4(&mut self, mapping: &Mapping, target: Ipv4Key) -> Result<()> {
         match &mut self.inner {
-            ReaderCursorInner::DirectV4(cursor) | ReaderCursorInner::MembershipV4(cursor) => {
-                cursor.seek(mapping, target)
-            }
+            ReaderCursorInner::DirectV4(cursor)
+            | ReaderCursorInner::MembershipV4(cursor)
+            | ReaderCursorInner::NetworkEnrichmentV1V4(cursor) => cursor.seek(mapping, target),
             ReaderCursorInner::FeedV4(cursor) => cursor.seek(mapping, target),
             _ => Err(Error::WrongAddressFamily(
                 "cursor address family does not match the bound",
@@ -202,9 +287,9 @@ impl ReaderCursor {
 
     pub(super) fn seek_v6(&mut self, mapping: &Mapping, target: Ipv6Key) -> Result<()> {
         match &mut self.inner {
-            ReaderCursorInner::DirectV6(cursor) | ReaderCursorInner::MembershipV6(cursor) => {
-                cursor.seek(mapping, target)
-            }
+            ReaderCursorInner::DirectV6(cursor)
+            | ReaderCursorInner::MembershipV6(cursor)
+            | ReaderCursorInner::NetworkEnrichmentV1V6(cursor) => cursor.seek(mapping, target),
             ReaderCursorInner::FeedV6(cursor) => cursor.seek(mapping, target),
             _ => Err(Error::WrongAddressFamily(
                 "cursor address family does not match the bound",

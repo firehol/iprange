@@ -72,6 +72,7 @@ fn randomized_point_and_pair_queries_match_a_scalar_model() {
             &file.0,
             AddressFamily::Ipv4,
             ValueKind::Membership,
+            iprange_livedb::StructureKind::None,
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,

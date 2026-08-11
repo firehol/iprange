@@ -35,6 +35,7 @@ typedef struct iprange_v4_abi1_membership_view iprange_v4_abi1_membership_view;
 typedef struct iprange_v4_abi1_borrowed_membership_view iprange_v4_abi1_borrowed_membership_view;
 typedef struct iprange_v4_abi1_membership_builder iprange_v4_abi1_membership_builder;
 typedef struct iprange_v4_abi1_membership_ref iprange_v4_abi1_membership_ref;
+typedef struct iprange_v4_abi1_structure_ref iprange_v4_abi1_structure_ref;
 typedef struct iprange_v4_abi1_cleanup_guard iprange_v4_abi1_cleanup_guard;
 typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
 typedef struct iprange_v4_abi1_membership_scope iprange_v4_abi1_membership_scope;
@@ -85,6 +86,12 @@ typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_alg
 #define IPRANGE_V4_ABI1_VALUE_KIND_DIRECT 1
 
 #define IPRANGE_V4_ABI1_VALUE_KIND_MEMBERSHIP 2
+
+#define IPRANGE_V4_ABI1_VALUE_KIND_STRUCTURED 3
+
+#define IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE 0
+
+#define IPRANGE_V4_ABI1_STRUCTURE_KIND_NETWORK_ENRICHMENT_V1 1
 
 #define IPRANGE_V4_ABI1_SOURCE_OUTCOME_BATCH 1
 
@@ -388,6 +395,12 @@ typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_alg
 
 #define IPRANGE_V4_ABI1_OBJECT_KIND_RETIREMENT_BLOB 14
 
+#define IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_DICTIONARY 15
+
+#define IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_REVERSE_INDEX 16
+
+#define IPRANGE_V4_ABI1_OBJECT_KIND_STRUCTURE_USED_BITMAP 17
+
 #define IPRANGE_V4_ABI1_LOGICAL_CHANGE_CHANGED 1
 
 #define IPRANGE_V4_ABI1_LOGICAL_CHANGE_NO_CHANGE 2
@@ -566,6 +579,20 @@ typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_alg
 
 #define IPRANGE_V4_ABI1_REASON_METADATA_INVALID 40
 
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_PAYLOAD_INVALID 41
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_HASH_INVALID 42
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_REVERSE_INDEX_INVALID 43
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_REFCOUNT_INVALID 44
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_MEMBERSHIP_INVALID 45
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_MISSING 46
+
+#define IPRANGE_V4_ABI1_REASON_STRUCTURE_INVALID 47
+
 #define IPRANGE_V4_ABI1_ERROR_CODE_INVALID_ARGUMENT 1
 
 #define IPRANGE_V4_ABI1_ERROR_CODE_NULL_POINTER 2
@@ -693,6 +720,16 @@ typedef struct iprange_v4_abi1_membership_algebra iprange_v4_abi1_membership_alg
 #define IPRANGE_V4_ABI1_ERROR_CODE_READER_CAPACITY_EXHAUSTED 63
 
 #define IPRANGE_V4_ABI1_ERROR_CODE_CLEANUP_IN_PROGRESS 64
+
+#define IPRANGE_V4_ABI1_ERROR_CODE_FAULT_WORKER_UNAVAILABLE 65
+
+#define IPRANGE_V4_ABI1_ERROR_CODE_FAULT_WORKER_FAILED 66
+
+#define IPRANGE_V4_ABI1_ERROR_CODE_UNSUPPORTED_STRUCTURE 67
+
+#define IPRANGE_V4_ABI1_ERROR_CODE_WRONG_STRUCTURE_KIND 68
+
+#define IPRANGE_V4_ABI1_ERROR_CODE_STRUCTURE_ID_EXHAUSTED 69
 
 typedef struct iprange_v4_abi1_membership_algebra_budget {
     uint32_t abi_version;
@@ -837,6 +874,23 @@ typedef struct iprange_v4_abi1_membership_range {
     struct iprange_v4_abi1_range range;
     const iprange_v4_abi1_borrowed_membership_view *membership;
 } iprange_v4_abi1_membership_range;
+
+typedef struct iprange_v4_abi1_network_enrichment_v1 {
+    uint32_t asn;
+    uint32_t country_id;
+    uint32_t state_id;
+    uint32_t city_id;
+    int32_t latitude_microdegrees;
+    int32_t longitude_microdegrees;
+    uint32_t has_location;
+    uint32_t reserved;
+} iprange_v4_abi1_network_enrichment_v1;
+
+typedef struct iprange_v4_abi1_network_enrichment_v1_range {
+    struct iprange_v4_abi1_range range;
+    struct iprange_v4_abi1_network_enrichment_v1 value;
+    const iprange_v4_abi1_borrowed_membership_view *membership;
+} iprange_v4_abi1_network_enrichment_v1_range;
 
 typedef struct iprange_v4_abi1_mutable_byte_slice {
     uint8_t *pointer;
@@ -1185,7 +1239,7 @@ typedef struct iprange_v4_abi1_database_info {
     uint32_t address_family;
     uint32_t value_kind;
     uint32_t direct_semantic;
-    uint32_t reserved;
+    uint32_t structure_kind;
     uint8_t value_tag[16];
     uint8_t database_id[16];
     uint64_t transaction_id;
@@ -1324,6 +1378,7 @@ typedef struct iprange_v4_abi1_create_report {
     uint32_t struct_size;
     uint32_t address_family;
     uint32_t value_kind;
+    uint32_t structure_kind;
     uint8_t value_tag[16];
     uint8_t database_id[16];
     uint8_t commit_nonce[16];
@@ -1425,7 +1480,7 @@ typedef struct iprange_v4_abi1_validation_generation {
     uint8_t reserved0[3];
     uint32_t address_family;
     uint32_t value_kind;
-    uint32_t reserved1;
+    uint32_t structure_kind;
     uint8_t value_tag[16];
     uint8_t database_id[16];
     uint64_t transaction_id;
@@ -1440,8 +1495,8 @@ typedef struct iprange_v4_abi1_validation_progress {
     struct iprange_v4_abi1_cardinality129 bounded_possible_span_addresses;
     uint8_t has_unbounded_unknown;
     uint8_t reserved[7];
-    uint64_t reason_counts[40];
-    uint64_t object_counts[14];
+    uint64_t reason_counts[47];
+    uint64_t object_counts[17];
 } iprange_v4_abi1_validation_progress;
 
 typedef struct iprange_v4_abi1_validation_report {
@@ -1473,6 +1528,7 @@ typedef struct iprange_v4_abi1_recovery_facts {
     struct iprange_v4_abi1_logical_counts ranges;
     struct iprange_v4_abi1_logical_counts catalog_entries;
     struct iprange_v4_abi1_logical_counts membership_entries;
+    struct iprange_v4_abi1_logical_counts structure_entries;
     struct iprange_v4_abi1_logical_counts metadata_chunks;
     struct iprange_v4_abi1_logical_counts retirement_records;
     struct iprange_v4_abi1_cardinality129 verified_addresses;
@@ -1540,6 +1596,11 @@ typedef uint32_t (*iprange_v4_abi1_membership_sink_fn)(void *context,
                                                        const struct iprange_v4_abi1_membership_range *records,
                                                        uint64_t count,
                                                        struct iprange_v4_abi1_callback_failure *failure);
+
+typedef uint32_t (*iprange_v4_abi1_network_enrichment_v1_sink_fn)(void *context,
+                                                                  const struct iprange_v4_abi1_network_enrichment_v1_range *records,
+                                                                  uint64_t count,
+                                                                  struct iprange_v4_abi1_callback_failure *failure);
 
 typedef uint32_t (*iprange_v4_abi1_coverage_sink_fn)(void *context,
                                                      const struct iprange_v4_abi1_range *records,
@@ -1705,6 +1766,13 @@ uint32_t iprange_v4_abi1_reader_open_membership_cursor(const iprange_v4_abi1_rea
                                                        iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_open_network_enrichment_v1_cursor(const iprange_v4_abi1_reader *reader,
+                                                                  uint32_t direction,
+                                                                  const struct iprange_v4_abi1_range *bounds,
+                                                                  iprange_v4_abi1_cursor **output,
+                                                                  iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_reader_open_feed_cursor(const iprange_v4_abi1_reader *reader,
                                                  const uint8_t *name_pointer,
                                                  uint64_t name_length,
@@ -1724,6 +1792,12 @@ uint32_t iprange_v4_abi1_cursor_next_membership(const iprange_v4_abi1_cursor *cu
                                                 uint8_t *present,
                                                 struct iprange_v4_abi1_membership_range *output,
                                                 iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_cursor_next_network_enrichment_v1(const iprange_v4_abi1_cursor *cursor,
+                                                           uint8_t *present,
+                                                           struct iprange_v4_abi1_network_enrichment_v1_range *output,
+                                                           iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_cursor_next_coverage(const iprange_v4_abi1_cursor *cursor,
@@ -1840,6 +1914,7 @@ IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_create_live(struct iprange_v4_abi1_path destination,
                                      uint32_t address_family,
                                      uint32_t value_kind,
+                                     uint32_t structure_kind,
                                      struct iprange_v4_abi1_byte_slice value_tag,
                                      uint32_t reader_capacity,
                                      struct iprange_v4_abi1_cancellation cancellation,
@@ -2447,6 +2522,16 @@ uint32_t iprange_v4_abi1_reader_scan_membership(const iprange_v4_abi1_reader *re
                                                 iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_scan_network_enrichment_v1(const iprange_v4_abi1_reader *reader,
+                                                           uint32_t direction,
+                                                           const struct iprange_v4_abi1_range *bounds,
+                                                           struct iprange_v4_abi1_cancellation cancellation,
+                                                           iprange_v4_abi1_network_enrichment_v1_sink_fn callback_fn,
+                                                           void *context,
+                                                           iprange_v4_abi1_report **report_output,
+                                                           iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_reader_scan_feed(const iprange_v4_abi1_reader *reader,
                                           const uint8_t *name_pointer,
                                           uint64_t name_length,
@@ -2457,6 +2542,50 @@ uint32_t iprange_v4_abi1_reader_scan_feed(const iprange_v4_abi1_reader *reader,
                                           void *context,
                                           iprange_v4_abi1_report **report_output,
                                           iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_lookup_network_enrichment_v1(const iprange_v4_abi1_reader *reader,
+                                                             struct iprange_v4_abi1_ip address,
+                                                             uint8_t *present,
+                                                             struct iprange_v4_abi1_network_enrichment_v1 *value,
+                                                             iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_reader_lookup_network_enrichment_v1_with_membership(const iprange_v4_abi1_reader *reader,
+                                                                             struct iprange_v4_abi1_ip address,
+                                                                             uint8_t *present,
+                                                                             struct iprange_v4_abi1_network_enrichment_v1 *value,
+                                                                             iprange_v4_abi1_membership_view **membership,
+                                                                             iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_begin_structured(const iprange_v4_abi1_writer *writer,
+                                                 struct iprange_v4_abi1_cancellation cancellation,
+                                                 iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_network_enrichment_v1_intern(const iprange_v4_abi1_writer *writer,
+                                                             struct iprange_v4_abi1_network_enrichment_v1 value,
+                                                             const iprange_v4_abi1_membership_ref *membership,
+                                                             iprange_v4_abi1_structure_ref **output,
+                                                             iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_structure_ref_destroy(iprange_v4_abi1_structure_ref *structure,
+                                               iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_structured_assign_ranges(const iprange_v4_abi1_writer *writer,
+                                                         const iprange_v4_abi1_structure_ref *structure,
+                                                         iprange_v4_abi1_coverage_source_fn callback,
+                                                         void *context,
+                                                         iprange_v4_abi1_error **error_output);
+
+IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
+uint32_t iprange_v4_abi1_writer_structured_clear_ranges(const iprange_v4_abi1_writer *writer,
+                                                        iprange_v4_abi1_coverage_source_fn callback,
+                                                        void *context,
+                                                        iprange_v4_abi1_error **error_output);
 
 IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL
 uint32_t iprange_v4_abi1_validate(struct iprange_v4_abi1_path source,

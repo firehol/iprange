@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "fixtures": [
     {
       "file": "rust/direct-ipv4.iprdb",
@@ -168,6 +168,69 @@
           "from": "2001:db8::1:0",
           "to": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
           "feeds": ["global"]
+        }
+      ]
+    },
+    {
+      "file": "rust/structured-ipv4.iprdb",
+      "producer": "rust",
+      "family": "ipv4",
+      "kind": "structured",
+      "structure": "network-enrichment-v1",
+      "tag": "enrichment",
+      "metadata": {
+        "state": "text",
+        "value": "{\"asn_names\":{\"64512\":\"example-a\",\"64513\":\"example-b\"},\"countries\":{\"1\":\"GR\",\"4\":\"US\"}}"
+      },
+      "address_count": "246",
+      "feeds": [
+        { "name": "botnet", "index": 0 },
+        { "name": "scanner", "index": 1 }
+      ],
+      "structured_ranges": [
+        {
+          "from": "10.1.0.0",
+          "to": "10.1.0.63",
+          "asn": 64512,
+          "country_id": 1,
+          "state_id": 2,
+          "city_id": 3,
+          "location": {
+            "latitude_microdegrees": 37983810,
+            "longitude_microdegrees": 23727539
+          },
+          "feeds": ["botnet"]
+        },
+        {
+          "from": "10.1.0.64",
+          "to": "10.1.0.99",
+          "asn": 64513,
+          "country_id": 4,
+          "state_id": 5,
+          "city_id": 6,
+          "feeds": ["scanner"]
+        },
+        {
+          "from": "10.1.0.110",
+          "to": "10.1.0.127",
+          "asn": 64513,
+          "country_id": 4,
+          "state_id": 5,
+          "city_id": 6,
+          "feeds": ["scanner"]
+        },
+        {
+          "from": "10.1.0.128",
+          "to": "10.1.0.255",
+          "asn": 64512,
+          "country_id": 1,
+          "state_id": 2,
+          "city_id": 3,
+          "location": {
+            "latitude_microdegrees": 37983810,
+            "longitude_microdegrees": 23727539
+          },
+          "feeds": ["botnet"]
         }
       ]
     }

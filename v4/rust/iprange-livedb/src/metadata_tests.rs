@@ -154,7 +154,7 @@ fn compression_uses_real_deflate_and_bounded_stored_fallback() {
     let repeated = vec![b'a'; MAX_METADATA_UNCOMPRESSED as usize];
     let repeated_budget = compressed_bound(repeated.len()) as u64 + DEFLATE_HEAP_OVERHEAD;
     let compressed = compress(&repeated, repeated_budget).unwrap();
-    assert!(compressed.len() < 2_000);
+    assert!(compressed.len() < repeated.len() / 100);
 
     let random = pseudo_random(MAX_METADATA_UNCOMPRESSED as usize);
     let bound = compressed_bound(random.len());

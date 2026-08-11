@@ -138,6 +138,7 @@ fn build(
     let spec = match OutputSpec::fresh(
         algebra.state().family(),
         ValueKind::Membership,
+        crate::StructureKind::None,
         value_tag,
         prepared.output_feed_count as u64,
     ) {

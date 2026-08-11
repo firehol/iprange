@@ -157,6 +157,23 @@ impl Table {
         Ok(true)
     }
 
+    pub(crate) fn mark_reverse_digest(
+        &mut self,
+        id: u32,
+        digest: [u8; 32],
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        let Some(index) = self.find(id, cancellation)? else {
+            return Ok(false);
+        };
+        let slot = &mut self.slots[index];
+        if !slot.defined || slot.digest != digest || slot.reverse_seen {
+            return Ok(false);
+        }
+        slot.reverse_seen = true;
+        Ok(true)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.slots.len()
     }

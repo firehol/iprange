@@ -259,6 +259,7 @@ fn write_normalized<K: FeedKey>(
     let mut meta = crate::database_file::empty_meta(crate::database_file::EmptySpec {
         address_family: K::FAMILY,
         value_kind: ValueKind::Membership,
+        structure_kind: crate::StructureKind::None,
         value_tag: spec.value_tag,
         database_id: spec.database_id,
         transaction_id: spec.transaction_id,
@@ -332,5 +333,11 @@ impl MembershipWords for OneFeed {
 }
 
 fn output_spec(family: AddressFamily, value_tag: ValueTag) -> Result<OutputSpec> {
-    OutputSpec::fresh(family, ValueKind::Membership, value_tag, 1)
+    OutputSpec::fresh(
+        family,
+        ValueKind::Membership,
+        crate::StructureKind::None,
+        value_tag,
+        1,
+    )
 }

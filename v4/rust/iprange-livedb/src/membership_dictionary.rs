@@ -141,21 +141,6 @@ pub(crate) fn apply_delta<S: RetiringStore>(
     finish_record_removal(store, state, &record)
 }
 
-pub(crate) fn reference_matches<S: Store>(
-    store: &S,
-    id_root: u32,
-    id: u32,
-    word_count: u32,
-) -> Result<bool> {
-    if id == 0 {
-        return Ok(word_count == 0);
-    }
-    let Some(found) = find_record(store, id_root, id)? else {
-        return Ok(false);
-    };
-    Ok(found.record.word_count == word_count)
-}
-
 pub(crate) fn contains_indexes<S: Store>(
     store: &S,
     id_root: u32,
@@ -348,32 +333,14 @@ fn hash_words<S: Store, W: Words<S>>(store: &S, words: &W) -> Result<[u8; 32]> {
 }
 
 fn allocate_id<S: RetiringStore>(store: &mut S, state: &mut State) -> Result<u32> {
-    let mut retired = RetiredPages::new();
-    if let Some(id) = used_bitmap::take_lowest(
+    used_bitmap::allocate_lowest_id(
         store,
         &mut state.used_root,
-        state.id_limit,
+        &mut state.id_limit,
+        state.entry_count,
         Kind::Membership,
-        &mut retired,
-    )? {
-        store.retire_pages(retired.as_slice())?;
-        return Ok(id);
-    }
-    if state.id_limit == 1u64 << 32 {
-        return Err(Error::MembershipIdExhausted);
-    }
-    let id = state.id_limit as u32;
-    state.id_limit += 1;
-    used_bitmap::set(
-        store,
-        &mut state.used_root,
-        state.id_limit,
-        Kind::Membership,
-        id,
-        &mut retired,
-    )?;
-    store.retire_pages(retired.as_slice())?;
-    Ok(id)
+        Error::MembershipIdExhausted,
+    )
 }
 
 fn mutate_insert<C: crate::fixed_tree::Codec, S: RetiringStore>(

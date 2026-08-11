@@ -60,6 +60,7 @@ pub enum BootstrapError {
     EqualTransactionDisagreement,
     CurrentGenerationUnprovable,
     ImmutableLengthMismatch,
+    UnsupportedStructure(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +215,11 @@ fn finish_open(
     physical_bytes: u64,
     mode: OpenMode,
 ) -> Result<Bootstrap, BootstrapError> {
+    if meta.structure_kind().is_none() {
+        return Err(BootstrapError::UnsupportedStructure(
+            meta.structure_kind_code,
+        ));
+    }
     if mode != OpenMode::ImmutableReader && selection != MetaSelection::ProvenCurrent {
         return Err(BootstrapError::CurrentGenerationUnprovable);
     }
@@ -274,6 +280,7 @@ fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<Me
     match meta.value_kind {
         ValueKind::Direct => validate_direct(&meta)?,
         ValueKind::Membership => validate_membership(&meta)?,
+        ValueKind::Structured => validate_structured(&meta)?,
     }
     Ok(meta)
 }
@@ -402,28 +409,93 @@ fn validate_allocator_reserve(meta: &MetaV4) -> Result<(), MetaProblem> {
 }
 
 fn validate_direct(meta: &MetaV4) -> Result<(), MetaProblem> {
-    let fields = (
-        meta.active_feed_count,
-        meta.feed_index_limit,
-        meta.membership_entry_count,
-        meta.membership_id_limit,
-        meta.catalog_name_root,
-        meta.catalog_index_root,
-        meta.feed_used_root,
-        meta.membership_id_root,
-        meta.membership_hash_root,
-        meta.membership_used_root,
-    );
-    if fields != (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) {
+    if meta.structure_kind_code != 0
+        || meta.active_feed_count != 0
+        || meta.feed_index_limit != 0
+        || meta.membership_entry_count != 0
+        || meta.membership_id_limit != 0
+        || meta.catalog_name_root != 0
+        || meta.catalog_index_root != 0
+        || meta.feed_used_root != 0
+        || meta.membership_id_root != 0
+        || meta.membership_hash_root != 0
+        || meta.membership_used_root != 0
+        || meta.structure_entry_count != 0
+        || meta.structure_id_limit != 0
+        || meta.structure_id_root != 0
+        || meta.structure_hash_root != 0
+        || meta.structure_used_root != 0
+    {
         return Err(MetaProblem::KindInvariant);
     }
     Ok(())
 }
 
 fn validate_membership(meta: &MetaV4) -> Result<(), MetaProblem> {
+    validate_no_structures(meta)?;
     validate_membership_counts(meta)?;
     validate_catalog_roots(meta)?;
     validate_membership_roots(meta)
+}
+
+fn validate_no_structures(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if meta.structure_kind_code != 0
+        || meta.structure_entry_count != 0
+        || meta.structure_id_limit != 0
+        || meta.structure_id_root != 0
+        || meta.structure_hash_root != 0
+        || meta.structure_used_root != 0
+    {
+        return Err(MetaProblem::KindInvariant);
+    }
+    Ok(())
+}
+
+fn validate_structured(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if meta.structure_kind_code == 0 {
+        return Err(MetaProblem::KindInvariant);
+    }
+    validate_structured_counts(meta)?;
+    validate_catalog_roots(meta)?;
+    validate_membership_roots(meta)?;
+    validate_structure_roots(meta)
+}
+
+fn validate_structured_counts(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if meta.feed_index_limit > MAX_PAGE_COUNT
+        || meta.active_feed_count > meta.feed_index_limit
+        || meta.membership_entry_count > u64::from(u32::MAX)
+        || !(1..=MAX_PAGE_COUNT).contains(&meta.membership_id_limit)
+        || meta.membership_entry_count >= meta.membership_id_limit
+        || meta.structure_entry_count > u64::from(u32::MAX)
+        || !(1..=MAX_PAGE_COUNT).contains(&meta.structure_id_limit)
+        || meta.structure_entry_count >= meta.structure_id_limit
+        || meta.structure_entry_count > meta.range_record_count
+        || meta.membership_entry_count > meta.structure_entry_count
+        || (meta.active_feed_count == 0 && meta.membership_entry_count != 0)
+        || (meta.structure_entry_count == 0 && meta.range_record_count != 0)
+    {
+        return Err(MetaProblem::CountInvariant);
+    }
+    Ok(())
+}
+
+fn validate_structure_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if meta.structure_entry_count == 0 {
+        if meta.structure_id_root != 0
+            || meta.structure_hash_root != 0
+            || meta.structure_used_root != 0
+            || meta.structure_id_limit != 1
+        {
+            return Err(MetaProblem::KindInvariant);
+        }
+    } else if meta.structure_id_root == 0
+        || meta.structure_hash_root == 0
+        || meta.structure_used_root == 0
+    {
+        return Err(MetaProblem::KindInvariant);
+    }
+    Ok(())
 }
 
 fn validate_membership_counts(meta: &MetaV4) -> Result<(), MetaProblem> {

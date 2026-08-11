@@ -41,6 +41,7 @@ fn failed_live_release_returns_one_retryable_cleanup_guard() {
         &file.main,
         AddressFamily::Ipv4,
         ValueKind::Direct,
+        crate::contract::StructureKind::None,
         ValueTag::FIRST_SEEN,
         1,
         &cancellation,

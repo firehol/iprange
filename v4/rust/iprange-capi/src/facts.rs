@@ -5,7 +5,7 @@ use std::mem::size_of;
 use iprange_livedb::publication;
 use iprange_livedb::recovery;
 use iprange_livedb::validation;
-use iprange_livedb::{AddressFamily, Cardinality129 as CoreCardinality, ValueKind};
+use iprange_livedb::{AddressFamily, Cardinality129 as CoreCardinality, StructureKind, ValueKind};
 
 use crate::abi::{Cardinality129, CleanupArtifact, LocalBasename, LocalIdentity};
 use crate::abi_extra::{
@@ -222,11 +222,11 @@ pub(crate) fn publication(value: &publication::PublicationResult) -> Publication
 }
 
 pub(crate) fn validation_progress(value: &validation::ValidationProgress) -> ValidationProgress {
-    let mut reason_counts = [0; 40];
+    let mut reason_counts = [0; 47];
     for (index, reason) in VALIDATION_REASONS.iter().copied().enumerate() {
         reason_counts[index] = value.findings_for(reason);
     }
-    let mut object_counts = [0; 14];
+    let mut object_counts = [0; 17];
     for (index, object) in VALIDATION_OBJECTS.iter().copied().enumerate() {
         object_counts[index] = value.examined_for(object);
     }
@@ -250,7 +250,7 @@ pub(crate) fn validation_generation(
         reserved0: [0; 3],
         address_family: value.map_or(0, |value| address_family(value.address_family)),
         value_kind: value.map_or(0, |value| value_kind(value.value_kind)),
-        reserved1: 0,
+        structure_kind: value.map_or(0, |value| structure_kind(value.structure_kind)),
         value_tag: value.map_or([0; 16], |value| *value.value_tag.as_wire()),
         database_id: value.map_or([0; 16], |value| value.database_id),
         transaction_id: value.map_or(0, |value| value.transaction_id),
@@ -290,6 +290,7 @@ pub(crate) fn recovery_facts(value: &recovery::RecoveryReport) -> RecoveryFacts 
         ranges: logical_counts(value.ranges),
         catalog_entries: logical_counts(value.catalog_entries),
         membership_entries: logical_counts(value.membership_entries),
+        structure_entries: logical_counts(value.structure_entries),
         metadata_chunks: logical_counts(value.metadata_chunks),
         retirement_records: logical_counts(value.retirement_records),
         verified_addresses: cardinality(value.verified_addresses),
@@ -349,6 +350,10 @@ pub(crate) const fn address_family(value: AddressFamily) -> u32 {
 }
 
 pub(crate) const fn value_kind(value: ValueKind) -> u32 {
+    value as u8 as u32
+}
+
+pub(crate) const fn structure_kind(value: StructureKind) -> u32 {
     value as u8 as u32
 }
 
@@ -499,7 +504,7 @@ fn object(value: validation::ValidationObject) -> u32 {
     value as u8 as u32 + 1
 }
 
-const VALIDATION_REASONS: [validation::ValidationReason; 40] = [
+const VALIDATION_REASONS: [validation::ValidationReason; 47] = [
     validation::ValidationReason::MetaUnavailable,
     validation::ValidationReason::MetaInvalid,
     validation::ValidationReason::MetaStaticMismatch,
@@ -540,9 +545,16 @@ const VALIDATION_REASONS: [validation::ValidationReason; 40] = [
     validation::ValidationReason::MembershipMissing,
     validation::ValidationReason::MembershipInvalid,
     validation::ValidationReason::MetadataInvalid,
+    validation::ValidationReason::StructurePayloadInvalid,
+    validation::ValidationReason::StructureHashInvalid,
+    validation::ValidationReason::StructureReverseIndexInvalid,
+    validation::ValidationReason::StructureRefcountInvalid,
+    validation::ValidationReason::StructureMembershipInvalid,
+    validation::ValidationReason::StructureMissing,
+    validation::ValidationReason::StructureInvalid,
 ];
 
-const VALIDATION_OBJECTS: [validation::ValidationObject; 14] = [
+const VALIDATION_OBJECTS: [validation::ValidationObject; 17] = [
     validation::ValidationObject::FileGeometry,
     validation::ValidationObject::Meta,
     validation::ValidationObject::RangeTree,
@@ -557,4 +569,7 @@ const VALIDATION_OBJECTS: [validation::ValidationObject; 14] = [
     validation::ValidationObject::MembershipUsedBitmap,
     validation::ValidationObject::RetirementTree,
     validation::ValidationObject::RetirementBlob,
+    validation::ValidationObject::StructureDictionary,
+    validation::ValidationObject::StructureReverseIndex,
+    validation::ValidationObject::StructureUsedBitmap,
 ];

@@ -58,6 +58,7 @@ fn create(path: &Path, kind: ValueKind, tag: ValueTag) {
         path,
         AddressFamily::Ipv4,
         kind,
+        iprange_livedb::StructureKind::None,
         tag,
         4,
         &CancellationToken::new(),
