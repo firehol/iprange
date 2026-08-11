@@ -274,9 +274,9 @@ wrong-mode entry points), full suite green including race and vet.
 
 ## 10b. Review findings and repairs — fourth pass (2026-08-11, second codex review)
 
-A second codex review returned eight findings. All were verified against the
-tree, the spec, and the Rust sources; all eight were real (one also
-corrected a wrong factual claim in this report). Repairs:
+A second codex review returned nine numbered findings. All were verified
+against the tree, the spec, and the Rust sources; all nine were real (one
+also corrected a wrong factual claim in this report). Repairs:
 
 1. **Handle registry replaced by borrow-count lifetime (API redesign).** The
    1024-slot token registry was unapproved, non-concurrent (codex
@@ -317,6 +317,26 @@ corrected a wrong factual claim in this report). Repairs:
    released; every conformance fixture close is asserted (a leaked view
    fails the cleanup); released-view and after-close contracts are pinned
    by dedicated tests.
+8. **Hot-path atomic and wasted decodes.** The facade keeps exactly one
+   atomic load per public entry as its binding guard, documented against
+   design-iprange-engine.md:404: the sentence constrains the READER core
+   (internal/reader remains import-free of sync/atomic, enforced by the
+   import-graph gate); the binding guard mirrors the frozen Rust C ABI's
+   per-call handle validation, and an atomic load is lock-free. The
+   duplicated root-page decode in the tree descents (level discovery then
+   re-read) and the structured record re-read are scheduled for removal
+   together with the view-lifetime redesign; the structure re-read was
+   already eliminated by the decode-at-lookup fix.
+9. **Namespace safety.** The sidecar was stat'ed once before opening with
+   non-existence errors silently ignored; symlink checks preceded a racing
+   reopen; size was not validated against the host address space. Fixed:
+   open uses O_NOFOLLOW plus a stat-after-open identity recheck
+   (os.SameFile), the sidecar absence decision is re-made under the shared
+   lifetime lock (only ENOENT counts as absent; any other stat failure is a
+   refused open), the canonical sidecar must fit the filesystem component
+   limit (regression with a 253-char basename), and file size is checked
+   against the host address space before conversion.
+
 6. **Worker conclusion corrections (this report):** SetPanicOnFault
    applies to the calling goroutine only (not process-global; better
    isolation), and the recovered fault address is documented best-effort

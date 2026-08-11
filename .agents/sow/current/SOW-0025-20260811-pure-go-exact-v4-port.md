@@ -4,9 +4,9 @@
 
 Status: in-progress
 
-Sub-state: ready for implementer handoff. The accepted Rust engine, current
-specifications, and Rust-produced conformance corpus define the target. No Go
-production implementation change has started under this SOW.
+Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
+corpus cross-open) and under review; view-lifetime API redesign pending the
+user's design decision; no tracked deletion applied yet.
 
 ## Requirements
 
@@ -678,10 +678,13 @@ Use these sections in this order:
     `9441f85` (independent-review repairs: blob-branch txn threading,
     slotted-page bounds, metadata allocation bound, catalog reserved bytes,
     synthetic two-leaf blob regression database), `1df90fa` (milestone
-    report), `4eec44e` (third-pass repairs), `(pending)` (fourth-pass
-  repairs: borrow-count lifetime replacing the handle registry, view API
-  completion, absence-vs-corruption, concurrency race tests, worker and
-  report fact corrections, check-import-graph.sh gate)
+    report), `4eec44e` (third-pass repairs), `03a910f` (fourth-pass
+  repairs: borrow-count lifetime, view API, absence-vs-corruption,
+  concurrency race tests, worker and report fact corrections,
+  check-import-graph.sh gate), `1e1ac4b` (fifth-pass repairs: meta tail
+  zero invariant, mandatory aux checks, exact zlib stream verification,
+  namespace safety under the lifetime lock, structure payload decode at
+  lookup, public error typing, adversarial regression suite)
     registry, ID removal, callback-error passthrough, conformance
     enumeration, multi-level range-tree test, corrected worker conclusion).
     No tracked file deleted (Decision 1 = C).
@@ -704,8 +707,9 @@ Use these sections in this order:
 
 Acceptance criteria evidence:
 
-- Pending implementation. Planning evidence establishes the exact starting gap
-  and target authority but does not claim a Go SDK exists.
+- Milestone 1 evidence: milestone report `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`
+  (fixture cross-open, malformed rejection, zero-allocation measurements,
+  four review passes with repairs). Milestone 2 not started.
 
 Tests or equivalent validation:
 
