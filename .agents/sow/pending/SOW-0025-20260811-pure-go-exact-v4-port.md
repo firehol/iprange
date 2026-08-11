@@ -613,15 +613,22 @@ Use these sections in this order:
     size projection explicitly labeled estimate-only, not a target.
   - The report moved from an undocumented `.agents/sow/milestones/` directory
     to `.agents/sow/pending/pure-go-v4-port-milestone-0-report.md`, the best
-    interpretation of the review's "wrong SOW path" finding (the alternative
-    reading, a wrong file path in the text, could not be reproduced).
+    interpretation of the review's "wrong SOW path" finding. The reviewer
+    later retracted that finding ("the original path was correct; moving the
+    report was unnecessary, although harmless"). The report stays at the new
+    location; both the SOW and this log reference the new path.
   - `.reasonix/` is harness session state, untracked by design; it is not repo
     content and was not committed.
 - Files changed: `.agents/sow/pending/pure-go-v4-port-milestone-0-report.md`
-  (moved and corrected, 459 lines), this execution-log entry. Still zero
+  (moved and corrected, 496 lines), this execution-log entry. Still zero
   production/test edits in `v4/go/`.
-- Commits: `579c1a3` (initial Milestone 0 report + log), plus this correction
-  commit; both local, no remote push.
+- Commits: `579c1a3` (initial Milestone 0 report + log), `04032d6` (verified
+  corrections, report moved to `pending/`, SOW correction log entry),
+  `b91301d` (removal of the superseded old report path). All local, no remote
+  push.
+- Milestone 1 begins with moving SOW-0025 to `.agents/sow/current/` with
+  `Status: in-progress`; it remains `open` in `pending/` while implementation
+  has not started.
 - Commands and results: `wc -l` design spec 519; `grep` evidence for error
   code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;

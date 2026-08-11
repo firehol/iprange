@@ -22,11 +22,11 @@ Owns: SOW-0025 (`.agents/sow/pending/SOW-0025-20260811-pure-go-exact-v4-port.md`
   initially kept and is corrected here to delete: it implements a
   PID/process-start stale-slot recovery model that the current format spec
   explicitly excludes.
-- Projected pure-Go production size: roughly 32–44k newline-counted lines
-  (~37k midpoint) — an estimation prior only, NOT a target; about 40–53% of
-  the accepted Rust implementation (82,516 production lines in
-  `iprange-livedb` alone). The directional 5k target will be exceeded about
-  7x; reported honestly below.
+- Projected pure-Go production size: a rough estimation prior of ~32–44k
+  newline-counted lines (~37k midpoint), budgeting only. It is NOT a target
+  and the actual size is unknown until implementation: `iprange-livedb` alone
+  is 82,516 production lines, and every area must justify its real size from
+  implemented, measured code at its milestone close.
 - Two decisions are requested from the user at the end of this report: the
   exact deletion set (100 tracked files) and the fault-worker native-boundary
   policy.
@@ -350,8 +350,10 @@ Proposed tracked deletions: **100 files** = 45 production + 55 test files.
   These are transfer candidates: content is re-verified against literal
   vectors and the current contract in Milestone 1 *before* it is used; paths
   may move into the new package layout.
-- Untracked cleanup (no approval needed, listed for completeness):
-  `v4/go/exactv4.test` (15.8 MB), empty `v4/go/exactv4/`.
+- Untracked cleanup (listed for approval together with the deletion set —
+  repository rules require explicit consent before deleting any file,
+  tracked or not): `v4/go/exactv4.test` (15.8 MB compiled test binary),
+  empty directory `v4/go/exactv4/`.
 
 Transfer content is never discarded: it moves into the new layout only after
 verification. Deletion here removes obsolete tracked paths, not evidence.
@@ -434,11 +436,11 @@ Rust reference (production, excludes tests): `iprange-livedb` 82,516 lines
 | top-level remaining (format, meta, mapping, bootstrap, error, contract, ranges, slotted, blobs, checksum…) | ~20,000 | 9,000–12,000 | codecs dominate |
 | **Total** | **≈ 82,500** | **≈ 32,000–44,000** | midpoint ≈ 37k |
 
-- The directional 5,000-line target will be exceeded roughly 7x. This matches
-  the accepted Rust outcome (Rust exceeded it ~16x and documented that
-  honestly). The Go port's real target: ~40–53% of Rust's production size,
+- The directional 5,000-line guide exists to force lean design; Rust itself
+  exceeded it ~16x and documented that honestly. Whether the Go peer exceeds
+  it is unknown until implementation. Engineering constraints that DO apply:
   files under ~500 lines preferred, no file over ~700, one owner per
-  persistent concern, and no dead/duplicate authority.
+  persistent concern, and no dead code or duplicate authority.
 - Tests: Rust carries ~17k test lines in `src` + 34 integration files; the Go
   test suite is projected at 15–25k lines including literal vectors, property
   models, crash/fault tests, and the mixed-process matrix.
@@ -450,12 +452,13 @@ and forbids adding a new native boundary without a user design decision. Both
 are presented now so Milestone 1 can start without a mid-work stop.
 
 **Decision 1 — deletion set.** Approve deleting the exact 100 tracked files
-listed in §7 (45 production + 55 test), keeping `go.mod`/`go.sum` and the 9
-kept source files (5 transfer production + 4 transfer tests), whose content is
-re-verified in Milestone 1 before reuse. Timing note: approved deletion never
-precedes the replacement — it executes atomically with the compiling, tested
-Milestone 1 commit (immutable reader cross-opening all Rust fixtures +
-transfer verification).
+listed in §7 (45 production + 55 test), plus the 2 untracked leftovers
+(`v4/go/exactv4.test`, empty `v4/go/exactv4/`), keeping `go.mod`/`go.sum` and
+the 9 kept source files (5 transfer production + 4 transfer tests), whose
+content is re-verified in Milestone 1 before reuse. Timing note: approved
+deletion never precedes the replacement — it executes atomically with the
+compiling, tested Milestone 1 commit (immutable reader cross-opening all Rust
+fixtures + transfer verification).
 - A. Approve the set now, with the atomic-with-M1-timing rule above.
 - B. Approve with exceptions (name them).
 - C. Decide after Milestone 1 evidence (recommended — matches the SOW's
@@ -493,4 +496,7 @@ owner, immutable reader cross-opening all five Rust fixtures, malformed
 bootstrap rejection, zero-allocation lookup evidence, worker feasibility
 report) are fully specified. Tracked deletions and the fault-worker boundary
 decision remain pending user decisions: no tracked file is deleted and no new
-native boundary is added before those decisions.
+native boundary is added before those decisions. The first act of Milestone 1
+implementation is moving SOW-0025 to `.agents/sow/current/` with
+`Status: in-progress` (per the AGENTS.md status/directory rule); it stays in
+`pending/` with `Status: open` until implementation begins.
