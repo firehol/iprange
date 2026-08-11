@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: open
+Status: in-progress
 
 Sub-state: ready for implementer handoff. The accepted Rust engine, current
 specifications, and Rust-produced conformance corpus define the target. No Go
