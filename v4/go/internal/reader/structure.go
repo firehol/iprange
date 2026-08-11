@@ -105,7 +105,10 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 			return NetworkEnrichmentV1View{}, err
 		}
 		if child == 0 {
-			return NetworkEnrichmentV1View{}, nil
+			// A stored range value naming an absent structure record is
+			// corruption (mirroring structured_value/view.rs: absent
+			// structure ID).
+			return NetworkEnrichmentV1View{}, corrupt("range names an absent structure ID")
 		}
 		cur = child
 		level--

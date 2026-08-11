@@ -72,7 +72,7 @@ func buildMultiLevelDatabase(t *testing.T) string {
 		format.PutU32(page[24:28], 4)
 		for i := 0; i < n; i++ {
 			format.PutU16(page[32+2*i:34+2*i], uint16(upper+12*i))
-			from := uint32(first + i)
+			from := uint32(first + i + 1)
 			format.PutU32(page[upper+12*i:upper+12*i+4], from*1000)
 			format.PutU32(page[upper+12*i+4:upper+12*i+8], from*1000+999)
 			format.PutU32(page[upper+12*i+8:upper+12*i+12], (from%9)+1)
@@ -82,7 +82,11 @@ func buildMultiLevelDatabase(t *testing.T) string {
 	leaf(4, perLeaf, perLeaf)
 	leaf(5, 2*perLeaf, perLeaf)
 	leaf(6, 3*perLeaf, 30)
-
+	// Branch first keys must match the first record of each child.
+	format.PutU32(b[4064:4068], 1000)
+	format.PutU32(b[4064+8:4068+8], 290000+1000)
+	format.PutU32(b[4064+16:4068+16], 580000+1000)
+	format.PutU32(b[4064+24:4068+24], 870000+1000)
 	format.PutU32(file[0][252:256], format.MetaCRC32C(file[0]))
 	format.PutU32(file[1][252:256], format.MetaCRC32C(file[1]))
 	tmp := filepath.Join(t.TempDir(), "multilevel.iprdb")
@@ -111,11 +115,13 @@ func TestMultiLevelRangeTree(t *testing.T) {
 		value uint32
 		found bool
 	}{
-		{0, 1, true}, {999, 1, true}, {499, 1, true},
-		{289999, 2, true}, {290000, 3, true}, {290500, 3, true},
-		{579999, 4, true}, {580000, 5, true}, {580999, 5, true},
-		{869999, 6, true}, {870000, 7, true}, {899999, 9, true},
-		{899981, 9, true}, {900000, 0, false},
+		// Addresses below the first branch key are absent (not corruption).
+		{0, 0, false}, {999, 0, false},
+		{1000, 2, true}, {1999, 2, true},
+		{290000, 3, true}, {290999, 3, true}, {291000, 4, true},
+		{579999, 4, true}, {580000, 5, true},
+		{869999, 6, true}, {870000, 7, true},
+		{899999, 9, true}, {900000, 1, true}, {901000, 0, false},
 	}
 	for _, p := range probes {
 		v, found, err := r.LookupDirect4(p.addr)
@@ -134,8 +140,8 @@ func TestMultiLevelRangeTree(t *testing.T) {
 			t.Errorf("not ascending at %d", count)
 		}
 		prev = v.From
-		wantFrom := uint32(count) * 1000
-		if v.From != wantFrom || v.To != wantFrom+999 || v.Value != uint32((count%9)+1) {
+		wantFrom := uint32(count+1) * 1000
+		if v.From != wantFrom || v.To != wantFrom+999 || v.Value != uint32(((count+1)%9)+1) {
 			t.Errorf("record %d = %d-%d=%d", count, v.From, v.To, v.Value)
 		}
 		count++

@@ -48,6 +48,9 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 			if err != nil {
 				return FeedEntry{}, false, err
 			}
+			if child == 0 {
+				return FeedEntry{}, false, nil // no entry qualifies: absent
+			}
 			cur, level = child, level-1
 		case format.PageTypeCatalogNameLeaf:
 			entry, found, err := nameLeafLookup(sl, name)
@@ -134,7 +137,7 @@ func nameBranchChild(sl format.SlottedPage, target string, pageCount uint64) (ui
 		}
 	}
 	if best < 0 {
-		return 0, corrupt("name branch has no qualifying child")
+		return 0, nil // no entry qualifies: the name is absent
 	}
 	rec, err := probe(best)
 	if err != nil || !format.PageNumberValid(rec.Child, pageCount) {

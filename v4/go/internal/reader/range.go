@@ -66,6 +66,9 @@ func (r *ImmutableReader) lookupRange4(root uint32, addr uint32) (uint32, bool, 
 			if err != nil {
 				return 0, false, err
 			}
+			if child == 0 {
+				return 0, false, nil // no branch key qualifies: absent
+			}
 			cur, level = child, level-1
 		case format.PageTypeRangeLeaf:
 			rec, found, err := rangeLeafLookup4(sl, addr)
@@ -109,6 +112,9 @@ func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint
 			child, err := rangeBranchChild6(sl, addrHi, addrLo, r.meta.PageCount)
 			if err != nil {
 				return 0, false, err
+			}
+			if child == 0 {
+				return 0, false, nil // no branch key qualifies: absent
 			}
 			cur, level = child, level-1
 		case format.PageTypeRangeLeaf:
@@ -165,7 +171,7 @@ func rangeBranchChild4(sl format.SlottedPage, addr uint32, pageCount uint64) (ui
 		}
 	}
 	if best < 0 {
-		return 0, corrupt("range branch has no qualifying child")
+		return 0, nil // no entry qualifies: the target is absent
 	}
 	_, child, err := probe(best)
 	if err != nil || !format.PageNumberValid(child, pageCount) {
@@ -200,7 +206,7 @@ func rangeBranchChild6(sl format.SlottedPage, addrHi, addrLo uint64, pageCount u
 		}
 	}
 	if best < 0 {
-		return 0, corrupt("range branch has no qualifying child")
+		return 0, nil // no entry qualifies: the target is absent
 	}
 	_, _, child, err := probe(best)
 	if err != nil || !format.PageNumberValid(child, pageCount) {

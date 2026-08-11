@@ -44,8 +44,8 @@ func buildBlobDatabase(t *testing.T) string {
 	putU64(meta1, 80, 1)
 	putU64(meta0, 88, 1) // active_feed_count
 	putU64(meta1, 88, 1)
-	putU64(meta0, 96, 1) // feed_index_limit
-	putU64(meta1, 96, 1)
+	putU64(meta0, 96, 64) // feed_index_limit: bits up to 63 observable
+	putU64(meta1, 96, 64)
 	putU64(meta0, 104, 1) // membership_entry_count
 	putU64(meta1, 104, 1)
 	putU64(meta0, 112, 2) // membership_id_limit

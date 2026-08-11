@@ -589,11 +589,13 @@ Use these sections in this order:
   file, v3 zero), structured/threat/conformance references (zero) — each class
   is re-searched as a gate in later milestones; the old tree has one read and
   one write boundary internally, but that authority design is the rejected
-  one, so the new tree mechanically enforces owner boundaries with a
-  check-go-architecture.sh.
+  one, so the new tree mechanically enforces owner boundaries with
+  `v4/go/check-import-graph.sh` (import boundary gates, run in the same gate
+  set as the Rust `check-source-graph.sh`).
 - No deviation from the approved SOW plan. Decisions requested from the user:
-  (1) approve the 98-file deletion set; (2) choose the fault-worker boundary
-  policy. Both are recorded in the milestone report with evidence and
+  (1) approve the 100-tracked-file + 2-untracked-leftover deletion set;
+  (2) worker boundary: superseded — pure Go via SetPanicOnFault is proven
+  feasible on linux/amd64, no new boundary needed (milestone-1 report §11). Both are recorded in the milestone report with evidence and
   recommendations.
 
 ### 2026-08-11 - Milestone 0 corrected after external review (read-only)
@@ -676,7 +678,10 @@ Use these sections in this order:
     `9441f85` (independent-review repairs: blob-branch txn threading,
     slotted-page bounds, metadata allocation bound, catalog reserved bytes,
     synthetic two-leaf blob regression database), `1df90fa` (milestone
-    report), `3bbbf4e` (third-pass repairs: wrong-mode pre-checks, handle
+    report), `4eec44e` (third-pass repairs), `(pending)` (fourth-pass
+  repairs: borrow-count lifetime replacing the handle registry, view API
+  completion, absence-vs-corruption, concurrency race tests, worker and
+  report fact corrections, check-import-graph.sh gate)
     registry, ID removal, callback-error passthrough, conformance
     enumeration, multi-level range-tree test, corrected worker conclusion).
     No tracked file deleted (Decision 1 = C).

@@ -104,6 +104,15 @@ func mustOpen(t *testing.T, rel string) *ImmutableReader {
 	return db
 }
 
+// mustClose asserts that Close succeeds; a leaked view would make it report
+// ErrorHandleBusy and fail the cleanup.
+func mustClose(t *testing.T, db *ImmutableReader) {
+	t.Helper()
+	if err := db.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+}
+
 func parseV4(s string) IPv4 {
 	var a, b, c, d uint32
 	if _, err := fmt.Sscanf(s, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
@@ -225,7 +234,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.File, func(t *testing.T) {
 			db := mustOpen(t, tc.File)
-			defer db.Close()
+			t.Cleanup(func() { mustClose(t, db) })
 			info := db.Info()
 
 			wantFamily := uint8(4)
@@ -474,6 +483,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
+						view.Release() // the first view is superseded
 						view = v2
 					}
 				} else {
@@ -488,6 +498,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership v6 mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
+						view.Release() // the first view is superseded
 						view = v2
 					}
 				}
@@ -573,6 +584,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("structured %s lacks threat feed %s", sr.From, feed)
 						}
 					}
+					threat.Release()
 				}
 			}
 		})
@@ -819,6 +831,38 @@ func TestHandleLifetime(t *testing.T) {
 	// Double close.
 	if fe := errorAsCode(r.Close()); fe != ErrorHandleClosed {
 		t.Fatalf("double close code %v want %d", fe, ErrorHandleClosed)
+	}
+}
+
+// TestOperationsAfterClose pins the reader-after-close contract: every
+// public operation on a successfully closed reader reports the typed
+// ErrorHandleClosed instead of crashing (the Rust borrow checker encodes
+// this statically; the C ABI checks its handle registry).
+func TestOperationsAfterClose(t *testing.T) {
+	db := mustOpen(t, "rust/direct-ipv4.iprdb")
+	if err := db.Close(); err != nil {
+		t.Fatal("close:", err)
+	}
+	if _, _, err := db.LookupDirectV4(IPv4(0x0a00000a)); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("direct after close: %v", err)
+	}
+	if _, _, err := db.LookupMembershipV4(IPv4(0x0a000000)); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("membership after close: %v", err)
+	}
+	if _, _, err := db.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000)); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("structured after close: %v", err)
+	}
+	if _, _, err := db.LookupFeed("feed-000"); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("feed after close: %v", err)
+	}
+	if err := db.DirectRangesV4(func(DirectRangeV4) error { return nil }); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("scan after close: %v", err)
+	}
+	if _, _, err := db.MetadataJSON(); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("metadata after close: %v", err)
+	}
+	if _, err := db.Cardinality(); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("cardinality after close: %v", err)
 	}
 }
 

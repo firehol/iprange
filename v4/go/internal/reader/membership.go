@@ -34,16 +34,43 @@ func (v MembershipView) Word(i uint32) (uint64, bool, error) {
 	if i >= v.wordCount {
 		return 0, false, nil
 	}
-	b, err := v.wordBytes(i)
-	if err != nil {
+	dst := [1]uint64{}
+	if err := v.readWordsInner(i, dst[:]); err != nil {
 		return 0, false, err
 	}
-	return format.U64(b), true, nil
+	return dst[0], true, nil
 }
 
-// ContainsIndex reports whether feed_index is set in the bitmap. A set bit
-// beyond word_count or at an unknown index is absent by definition.
+// ReadWords fills output with the sequential bitmap words starting at start
+// and returns the copied count. start above word_count is InvalidArgument;
+// reads that end exactly at the canonical end verify the trailing word is
+// nonzero (mirroring the Rust reader).
+func (v MembershipView) ReadWords(start uint32, output []uint64) (int, error) {
+	if start > v.wordCount {
+		return 0, &format.Error{Code: format.CodeInvalidArgument, Detail: "membership word start exceeds its length"}
+	}
+	remaining := v.wordCount - start
+	count := int(remaining)
+	if len(output) < count {
+		count = len(output)
+	}
+	if count == 0 {
+		return 0, nil
+	}
+	if err := v.readWordsInner(start, output[:count]); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// ContainsIndex reports whether feed_index is set in the bitmap. An index at
+// or beyond the generation's feed index limit is InvalidArgument (the index
+// is not an observable feed of this generation); otherwise a set bit beyond
+// word_count is absent by definition.
 func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
+	if uint64(feedIndex) >= v.r.meta.FeedIndexLimit {
+		return false, &format.Error{Code: format.CodeInvalidArgument, Detail: "feed index exceeds this catalog generation"}
+	}
 	word := feedIndex / 64
 	if word >= v.wordCount {
 		return false, nil
@@ -53,6 +80,22 @@ func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 		return false, err
 	}
 	return format.U64(b)&(uint64(1)<<(feedIndex%64)) != 0, nil
+}
+
+// readWordsInner copies words [start, start+len(output)) through the same
+// mapped path as Word, then applies the trailing-word canonical check.
+func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
+	for i := range output {
+		b, err := v.wordBytes(start + uint32(i))
+		if err != nil {
+			return err
+		}
+		output[i] = format.U64(b)
+	}
+	if uint64(start)+uint64(len(output)) == uint64(v.wordCount) && output[len(output)-1] == 0 {
+		return corrupt("membership bitmap has a trailing zero word")
+	}
+	return nil
 }
 
 // wordBytes returns the 8 mapped bytes of word i, re-validated at call time.
@@ -166,11 +209,20 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 			if err != nil {
 				return MembershipView{}, err
 			}
+			if child == 0 {
+				// An absent branch key means the ID tree has no record for
+				// this id; a stored range value naming it is corruption
+				// (mirroring membership_view.rs).
+				return MembershipView{}, corrupt("range names an absent membership ID")
+			}
 			cur, level = child, level-1
 		case format.PageTypeMembershipIDLeaf:
 			slot, leaf, found, err := membershipLeafFind(sl, id)
-			if err != nil || !found {
+			if err != nil {
 				return MembershipView{}, err
+			}
+			if !found {
+				return MembershipView{}, corrupt("range names an absent membership ID")
 			}
 			v := MembershipView{
 				r:          r,
@@ -229,7 +281,7 @@ func membershipBranchChild(sl format.SlottedPage, id uint32, pageCount uint64) (
 		}
 	}
 	if best < 0 {
-		return 0, corrupt("membership branch has no qualifying child")
+		return 0, nil // no entry qualifies: absent from the ID tree
 	}
 	rec, err := probe(best)
 	if err != nil || !format.PageNumberValid(rec.Child, pageCount) {

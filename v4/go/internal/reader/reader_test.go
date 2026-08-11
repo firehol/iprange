@@ -36,6 +36,21 @@ func openFixture(t *testing.T, name string) *ImmutableReader {
 	return r
 }
 
+// isFormatError reports whether err carries the given format error code.
+func isFormatError(err error, code format.ErrorCode) bool {
+	for err != nil {
+		if fe, ok := err.(*format.Error); ok {
+			return fe.Code == code
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}
+
 func copyFixture(t *testing.T, name, destName string) string {
 	t.Helper()
 	raw, err := os.ReadFile(fixture(t, name))
@@ -330,7 +345,7 @@ func TestMembershipViewWords(t *testing.T) {
 			t.Errorf("expected feed %d in 10.0.0.0 membership", idx)
 		}
 	}
-	for _, idx := range []uint32{1, 2, 62, 65, 70} {
+	for _, idx := range []uint32{1, 2, 62, 65} {
 		has, err := view.ContainsIndex(idx)
 		if err != nil {
 			t.Fatal(err)
@@ -338,6 +353,10 @@ func TestMembershipViewWords(t *testing.T) {
 		if has {
 			t.Errorf("unexpected feed %d in 10.0.0.0 membership", idx)
 		}
+	}
+	// An index at or beyond the generation's feed limit is InvalidArgument.
+	if _, err := view.ContainsIndex(70); err == nil || !isFormatError(err, format.CodeInvalidArgument) {
+		t.Fatalf("out-of-limit feed: %v", err)
 	}
 	w0, ok, err := view.Word(0)
 	if err != nil || !ok {

@@ -14,27 +14,31 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
   root.
 - The Go reader **opens and semantically verifies all five committed
   Rust-produced fixtures** (direct-v4, full-IPv6 first-seen, membership-v4
-  with 70 feeds, membership-v6 with a 1 MiB blob-backed bitmap and 1 MiB
-  repeated-byte metadata, structured-v4 with threat memberships) and rejects
-  all three invalid mutations (wrong-magic, short, unaligned) with the exact
-  `format-invalid` code required by the corpus.
+  with 70 feeds, membership-v6, structured-v4 with threat memberships) and
+  rejects all three invalid mutations (wrong-magic, short, unaligned) with
+  the exact `format-invalid` code required by the corpus. Multi-level range
+  trees and multi-leaf blob bitmaps are not present in the committed corpus
+  and are exercised by synthetic databases built in Go tests.
 - Warm point lookups, membership word reads, feed lookup, direct scans, and
   cardinality allocate **zero Go heap bytes** (measured; the only public
   exception is the returned feed-name string copy).
 - Cross-compilation passes for darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/arm64+386. Windows is an explicit honest
   stub (open refuses with `os-unsupported`) until the platform milestone.
-- **Pure-Go worker feasibility: disproven for POSIX with empirical evidence**
-  (Go's runtime turns a file-mapping SIGBUS into a fatal
-  `unexpected fault address` crash; `os/signal` never delivers it and no pure
-  Go API exposes `si_addr` or a custom handler/chaining surface). The Windows
-  vectored-exception path is pure-Go feasible. Per Decision 2 (recorded
-  Milestone 0: wait for evidence), the fallback is a minimal project-owned
-  assembly sigaction shim; the user decision is requested at the end of this
-  report.
-- Commit: `913f4e6` ("Milestone 1: mmap-only Go immutable reader with corpus
-  cross-open"). No tracked file was deleted (Decision 1 = decide after
-  evidence; the old Go tree remains green and untouched).
+- **Pure-Go worker feasibility: PROVEN on linux/amd64 with empirical
+  evidence** — `runtime/debug.SetPanicOnFault` converts a file-mapping SIGBUS
+  into a recoverable panic whose fault address (via `runtime.Error.Addr`)
+  is exact for the probed platform; the earlier "disproven" conclusion was
+  wrong and is superseded (section 11). Remaining proofs (go-routine scoping,
+  best-effort addresses, macOS/FreeBSD/Windows, unrelated-fault re-raise)
+  belong to the worker milestone; no assembly shim and no native boundary is
+  needed.
+- Commits: `913f4e6` (reader + tests), `9441f85` (independent-review
+  repairs), `1df90fa` (milestone report), `4eec44e` (third-pass repairs,
+  superseded worker conclusion), `(pending)` (fourth-pass repairs: lifetime
+  redesign, view semantics, absence vs corruption, concurrency tests, report
+  facts). No tracked file was deleted (Decision 1 = decide after evidence;
+  the old Go tree remains green and untouched).
 
 ## 2. Commands and factual results
 
@@ -268,6 +272,64 @@ Review verdict on the third-pass repairs: same-failure searches re-run
 (no other slotted access paths, no other handle-holding surfaces, no other
 wrong-mode entry points), full suite green including race and vet.
 
+## 10b. Review findings and repairs — fourth pass (2026-08-11, second codex review)
+
+A second codex review returned eight findings. All were verified against the
+tree, the spec, and the Rust sources; all eight were real (one also
+corrected a wrong factual claim in this report). Repairs:
+
+1. **Handle registry replaced by borrow-count lifetime (API redesign).** The
+   1024-slot token registry was unapproved, non-concurrent (codex
+   reproduced 19 data races in register/alive/release), and had a free-slot
+   exhaustion defect in its bit-scan. The spec requires concurrent lookups
+   and scans without a per-call mutex, atomic, or active counter
+   (design-iprange-engine.md §401) and requires Close → HandleBusy while
+   children exist (binary-format-v4.md §2537). The registry is deleted. Views
+   now carry a pointer to the reader's shared lifetime state; the data
+   path (internal/reader) remains completely synchronization-free, and the
+   facade's only shared state is an atomic close flag (one load per public
+   entry) and an atomic live-view count (one add/sub at view
+   creation/release) — the same guard layer the frozen Rust C ABI applies
+   around the sync-free engine (iprange-capi view-handle registry). Close
+   never unmaps while a view exists; every operation after a successful
+   close returns ErrorHandleClosed instead of crashing (regression:
+   TestOperationsAfterClose). Token reuse invalidation is impossible (no
+   tokens). A concurrent lookups/scans/view-create-release test runs under
+   -race on all five fixtures with zero reported races.
+2. **Membership view API completed to the mandatory contract
+   (binary-format-v4.md §2537):** caller-buffer `ReadWords(start, dst)`
+   added (start above length → InvalidArgument); `WordCount` now performs
+   the lifetime check; `ContainsIndex` returns InvalidArgument for indexes
+   at/beyond the generation's feed-index limit (mirroring
+   membership_view.rs, including check order); trailing-zero-word
+   corruption check on reads reaching the canonical end (mirrors Rust).
+3. **Missing referenced values are corruption.** A range value naming a
+   membership ID absent from the ID tree, or a structure ID absent from the
+   structure radix, now returns the typed corrupt error (mirroring
+   membership_view.rs / structured_value/view.rs: "range names an absent
+   membership ID / structure ID"); previously a zero view was returned.
+4. **Absence below the first branch key.** Range (v4+v6) and catalog name
+   lookups with no qualifying branch entry now return absent instead of
+   corruption (binary-format-v4.md §589: "If no key qualifies, the target
+   is absent"); the synthetic multi-level database now probes addresses
+   below the first branch key.
+5. **Test hygiene:** superseded membership views and threat views are
+   released; every conformance fixture close is asserted (a leaked view
+   fails the cleanup); released-view and after-close contracts are pinned
+   by dedicated tests.
+6. **Worker conclusion corrections (this report):** SetPanicOnFault
+   applies to the calling goroutine only (not process-global; better
+   isolation), and the recovered fault address is documented best-effort
+   and platform-dependent — both recorded with the remaining platform
+   proofs. The empirical linux/amd64 probe stands.
+7. **Report facts:** nonexistent commit `3bbbf4e` corrected to `4eec44e`;
+   the SOW's reference to a nonexistent `check-go-architecture.sh` now
+   names the real `v4/go/check-import-graph.sh` gate (created in this
+   pass, passes); the summary's superseded blob/worker claims corrected.
+
+Verdict after the fourth pass: full suite (incl. race) green, vet clean,
+gofmt clean, import-graph gate green, cross-compilation matrix green.
+
 ## 11. Pure-Go fault-worker feasibility — corrected conclusion (2026-08-11)
 
 This section supersedes the earlier provisional conclusion in the second
@@ -311,8 +373,14 @@ Findings:
   process that previous handler is the Go runtime's own, so the re-raise
   lands on the same fatal path Go processes always had); no mislabeling:
   only in-region addresses produce the owned-fault exit.
-- One worker per process only (SetPanicOnFault is process-global) — the
-  same model as Rust's per-process signal installation.
+- SetPanicOnFault applies only to the calling goroutine (per the official
+  Go documentation), which is *better* isolation than Rust's process-wide
+  sigaction: one dedicated worker goroutine arms the flag and regular
+  process goroutines never see fault panics. The recovered fault address is
+  documented as best-effort and platform-dependent, so the worker must
+  validate the address (nonzero, inside an armed region) before claiming and
+  must be proven on the remaining platforms (macOS, FreeBSD, Windows) in the
+  worker milestone.
 - Remaining proof (platform milestone): macOS and FreeBSD (same code path,
   needs real-systems verification), Windows via
   `AddVectoredExceptionHandler` + `syscall.NewCallback` (pure Go, already
