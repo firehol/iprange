@@ -672,8 +672,11 @@ Use these sections in this order:
     exception path is pure-Go feasible. Fallback = minimal project-owned
     assembly sigaction shim; per recorded Decision 2 the user decides with
     this evidence.
-  - Commits: `0de8793` (SOW move), `913f4e6` (reader + tests). No tracked
-    file deleted (Decision 1 = C).
+  - Commits: `0de8793` (SOW move), `913f4e6` (reader + tests),
+    `9441f85` (independent-review repairs: blob-branch txn threading,
+    slotted-page bounds, metadata allocation bound, catalog reserved bytes,
+    synthetic two-leaf blob regression database). No tracked file deleted
+    (Decision 1 = C).
   - Full report: `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`.
     Baseline gates re-run: `go test ./...` (incl. race), `go vet`, `gofmt`,
     cross-compilation matrix — all green; SOW audit clean.
