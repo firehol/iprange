@@ -1,9 +1,9 @@
 # iprange v4 Rust SDK
 
 This workspace contains the Rust implementation of the exact unsigned Phase-1
-v4 database and its Rust-provided C ABI. It is unreleased and has not yet passed
-the user's final acceptance gate. The post-acceptance Go port is outside this
-milestone.
+v4 database and its Rust-provided C ABI. It remains unreleased, but its proven
+result has been accepted as the reference for the authorized pure-Go port under
+pending SOW-0025.
 
 Only the current v4 contract is supported. There is no v3 compatibility,
 importer, exporter, or alternate v4 layout. Snapshot signing is separate

@@ -47,8 +47,8 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 
 ## Cross-language gate
 
-This SOW is deliberately Rust-first. After the user accepts the Rust SDK and
-the Go port exists:
+The corpus is currently Rust-first. The accepted Rust result authorized the
+pure-Go port under pending SOW-0025. When that Go implementation exists:
 
 - Go adds independently produced files to this same manifest;
 - both readers must open and semantically verify both producer sets;

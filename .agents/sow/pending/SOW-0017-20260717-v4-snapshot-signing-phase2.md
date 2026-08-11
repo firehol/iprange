@@ -4,9 +4,10 @@
 
 Status: open
 
-Sub-state: intentionally blocked until SOW-0016 delivers a reliable, measured
-unsigned SDK. No signing design or implementation work is authorized before that
-evidence exists.
+Sub-state: intentionally blocked until the pure-Go port and the bidirectional
+Go/Rust Phase-1 proof tracked by SOW-0025 are complete and accepted. The Rust and
+Rust-provided C surfaces are proven; no signing design or implementation work is
+authorized while the pure-Go peer is missing.
 
 ## Requirements
 
@@ -28,7 +29,8 @@ the engine to receive raw private-key bytes.
 
 Facts:
 
-- SOW-0016 owns the unsigned core SDK and exact experimental Phase-1 v4 bytes.
+- The Rust unsigned SDK and Rust-provided C ABI are complete and measured.
+- SOW-0025 owns the pure-Go peer and final bidirectional Phase-1 proof.
 - No v4 format has been released, so Phase 2 may revise those bytes before the
   first release without a compatibility obligation.
 - Earlier decisions selected an embedded Ed25519ph signature, explicit
@@ -56,8 +58,9 @@ Unknowns:
 
 ### Acceptance Criteria
 
-- SOW-0016 has completed with cross-language conformance, resource bounds,
-  durability evidence, real-use SDK evidence, and representative benchmarks.
+- The pure-Go port and final bidirectional Go/Rust Phase-1 conformance complete
+  with resource bounds, durability evidence, real-use SDK evidence, and
+  representative benchmarks.
 - Phase-2 design starts from those measurements and records every new wire/API,
   security, durability, and performance decision before implementation.
 - Go, Rust, and the Rust-provided C ABI expose equivalent signing and verification
@@ -84,7 +87,8 @@ Sources checked:
 
 Current state:
 
-- No final v4 SDK, signing API, or signing implementation exists.
+- The Rust and Rust-provided C Phase-1 SDK surfaces exist; the pure-Go peer,
+  final bidirectional proof, signing API, and signing implementation do not.
 - A prior draft mixed signing into the core format and acceptance gate before core
   reliability or performance had been demonstrated. Decision 45 removes that
   dependency and makes this SOW the sole tracker for signing.
@@ -101,7 +105,8 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: blocked; SOW-0016 reliability and performance evidence does not yet exist
+Status: blocked; the pure-Go peer and final bidirectional Phase-1 evidence do not
+yet exist
 
 Problem / root-cause model:
 
@@ -111,7 +116,9 @@ Problem / root-cause model:
 
 Evidence reviewed:
 
-- Binding decision 45 in SOW-0016.
+- Binding decision 45 in completed SOW-0016.
+- Completed Rust proof in SOWs 0020-0024 and the pending Go-port boundary in
+  SOW-0025.
 - The prior signature wire/API draft and final-authority audit findings recorded
   in SOW-0016.
 - Official Go and Rust Ed25519ph interfaces and the open-source reference below.
@@ -124,7 +131,7 @@ Affected contracts and surfaces:
 
 Existing patterns to reuse:
 
-- SOW-0016's proven unsigned snapshot, explicit validation, immutable-open,
+- The proven Rust unsigned snapshot, explicit validation, immutable-open,
   temporary publication, structured outcome, and abandoned-artifact APIs.
 - Provider abstractions that bind signing capability to a matching public key.
 
@@ -142,7 +149,8 @@ Sensitive data handling plan:
 
 Implementation plan:
 
-1. Reopen this gate only after SOW-0016 completion evidence is available.
+1. Reopen this gate only after SOW-0025 completes the pure-Go peer and final
+   bidirectional Phase-1 evidence.
 2. Benchmark representative unsigned snapshots and model signing/verification I/O.
 3. Present unresolved wire, provider, trust, and rollout decisions to the user.
 4. Update the exact v4 specification before adding crypto code or dependencies.
@@ -169,7 +177,7 @@ Artifact impact plan:
   if bytes change, replace the conformance corpus and reject the old identity.
 - End-user/operator docs: document publisher and verifier operation when shipped.
 - End-user/operator skills: assess after public workflows exist.
-- SOW lifecycle: remain pending/open until SOW-0016 completes; never execute both
+- SOW lifecycle: remain pending/open until SOW-0025 completes; never execute both
   SOWs as one batch.
 
 Open-source reference evidence:
@@ -181,7 +189,7 @@ Open-source reference evidence:
 
 Open decisions:
 
-- Intentionally unresolved until the SOW-0016 evidence gate is satisfied: exact
+- Intentionally unresolved until the SOW-0025 evidence gate is satisfied: exact
   signature wire layout, language-specific provider types, signer invocation
   contract, key-ID policy, trust rotation, replay integration, and performance
   budget.
