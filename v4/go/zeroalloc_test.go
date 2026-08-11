@@ -72,9 +72,11 @@ func TestZeroAllocationLookups(t *testing.T) {
 		}},
 		{"membership-v4", func() error {
 			for _, ip := range probe {
-				if _, _, err := member.LookupMembershipV4(ip); err != nil {
+				view, _, err := member.LookupMembershipV4(ip)
+				if err != nil {
 					return err
 				}
+				view.Release()
 			}
 			return nil
 		}},
@@ -91,6 +93,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			defer view.Release()
 			for _, idx := range []uint32{0, 5, 63, 64, 69, 1, 2} {
 				if _, err := view.ContainsIndex(idx); err != nil {
 					return err
@@ -103,6 +106,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			defer view.Release()
 			for i := uint32(0); i < view.WordCount() && i < 4; i++ {
 				if _, _, err := view.Word(i); err != nil {
 					return err
@@ -112,9 +116,11 @@ func TestZeroAllocationLookups(t *testing.T) {
 		}},
 		{"structured-v4", func() error {
 			for _, ip := range probe {
-				if _, _, err := structured.LookupNetworkEnrichmentV1V4(ip); err != nil {
+				view, _, err := structured.LookupNetworkEnrichmentV1V4(ip)
+				if err != nil {
 					return err
 				}
+				view.Release()
 			}
 			return nil
 		}},

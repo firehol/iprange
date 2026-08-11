@@ -206,50 +206,132 @@ selection matrix, error table 1-69, and the zero-allocation claims for
 lookups/scans were checked against the normative spec and Rust sources with
 no remaining actionable finding in the milestone scope.
 
-## 10. Pure-Go fault-worker feasibility — evidence and stop point
+## 10. Review findings and repairs — third pass (2026-08-11)
 
-Per Decision 2 (recorded Milestone 0), feasibility evidence was collected
-before any boundary decision. Empirical probe (`/tmp/wprobe`, not committed):
-a file-backed mapping is truncated under the worker and page 1 is touched
-while `signal.Notify(SIGBUS)` is registered. Result:
+A second external reviewer (codex) returned ten claims. Every claim was
+verified against the current tree, the spec, and the Rust sources before any
+action; five were real, two were already fixed, two were test/report gaps,
+and one (SetPanicOnFault) was a correct refutation of this report's worker
+conclusion (section 11).
 
-- The Go runtime turns the mapping fault into
-  `unexpected fault address ... fatal error: fault` and terminates the
-  process (exit code 2). The registered `os/signal` handler NEVER runs for
-  file-mapping SIGBUS.
-- No pure-Go API exposes `si_addr`/siginfo: `os/signal` drops it,
-  `golang.org/x/sys/unix@v0.35.0` exposes no `sigaction`/`Sigaction_t`
-  surface at all (verified in the module cache), and the runtime's own
-  handler cannot be chained to without runtime internals (prohibited).
-- Consequences for the exact contract: (1) owned faults cannot be claimed,
-   recorded, and exited with the fixed `OWNED_FAULT_EXIT=197`; (2) unrelated
-  SIGBUS crashes would terminate the worker with a Go-style fatal trace, and
-  the parent could not distinguish them from source unreadability — exactly
-  the mislabeling the contract forbids; (3) prior-disposition chaining is
-  impossible.
+Real issues found, fixed, and regression-tested in this pass:
 
-Conclusion: **the exact POSIX fault-worker contract is not satisfiable in
-pure Go.** The fallback is a minimal project-owned assembly sigaction shim
-(SA_SIGINFO|SA_ONSTACK, si_addr checking against armed regions in the mapped
-control state, raw `exit(197)` on owned faults, chaining to the saved previous
-disposition otherwise) — a new native boundary (not cgo, no runtime
-linkname), matching how `v4/rust/.../worker/posix.rs` implements the same
-contract (SA_SIGINFO @53, si_addr @183, chaining @257, exit 197 @control.rs:16).
+1. **Missing wrong-mode pre-checks.** The public queries performed no value
+   kind / address family validation, so a direct lookup on a membership file
+   returned the raw internal membership ID, a membership lookup on a
+   structured file returned page-derived data, and a v6 query on a v4 file
+   surfaced mid-page decode corruption errors instead of the typed error.
+   Rust performs these checks before touching any page
+   (`reader_core/generation.rs:257-276` require_direct /
+   require_membership_family, `membership_view.rs` require_kind,
+   `structured_value/view.rs:155-170` require_kind, `feed_catalog.rs:214`
+   require_membership). The Go facade now mirrors each rule exactly: wrong
+   kind → WrongValueKind (13) except network enrichment → WrongStructureKind
+   (67); wrong family → WrongAddressFamily (12); feed access requires kind
+   Membership or Structured. A 19-probe wrong-mode matrix pins all cases on
+   the committed fixtures (conformance tests).
+2. **Child-handle safety.** `Close` unmapped the file while public views
+   still held page descriptors, and any later view operation could fault.
+   The Rust contract (close with live children → ErrorHandleBusy; operations
+   on a dropped borrow are impossible) has no Go runtime analog, so the
+   public reader now owns a fixed 1024-slot handle registry (no heap state):
+   every view lookup registers a handle, view operations verify liveness
+   (ErrorHandleClosed after release or close), `Close` returns
+   ErrorHandleBusy while views are alive, and `Release` is idempotent. A
+   threat view derived from a structured view is an independent handle,
+   exactly like Rust borrow semantics. Zero-allocation is preserved: the
+   registry is a bitset in the reader value.
+3. **Public membership-ID exposure.** `MembershipView.ID()` returned the
+   internal membership ID, contrary to the agreed API ("never exposes
+   membership IDs"). Removed from the public surface.
+4. **Callback-error corruption.** `publicError` converted any non-format
+   error into FormatInvalid, so an error returned by a scan callback was
+   re-reported as database corruption. Non-format errors now pass through
+   unchanged.
+5. **Conformance gaps.** The IPv6 midpoint of direct and membership ranges
+   was computed but discarded (now asserted); the "undeclared feeds must be
+   absent" note was a comment (now asserted for every declared but unlisted
+   feed of every membership range); exact range enumeration (count, every
+   record, ascending order, total cardinality) is now compared against
+   `cases.json`; declared-feed count is checked against the meta; and the
+   corpus's single-level range trees are supplemented by a synthetic
+   900-record / four-leaf / level-1-branch IPv4 database exercised through
+   the public path (multi-level blob coverage had already been added in the
+   second pass; the claim in that pass that the committed v6 fixture
+   exercises blob trees was corrected).
 
-Windows is different: `AddVectoredExceptionHandler` with a
-`syscall.NewCallback` handler is pure Go (no cgo, no assembly); the vectored
-model's `EXCEPTION_CONTINUE_SEARCH` return provides exact chaining and
-`EXCEPTION_RECORD.ExceptionAddress` provides the fault address. Still to be
-proven on real Windows in the platform milestone.
+Already fixed before this pass (stale claims): the slotted-page bounds
+panic and the blob branch txn-zero bug were both repaired in the second
+pass with regression tests; codex reviewed the pre-repair tree.
 
-**User decision requested (Decision 2, evidence now in hand):**
-- A. approve a minimal project-owned assembly sigaction shim for POSIX
-  (documented, reviewed, no other boundary);
-- B. pure-Go only — implementation stops at the worker milestone;
-- C. adjust/qualify the contract instead (requires a spec change + user
-  design decision; not recommended).
+Review verdict on the third-pass repairs: same-failure searches re-run
+(no other slotted access paths, no other handle-holding surfaces, no other
+wrong-mode entry points), full suite green including race and vet.
 
-## 11. Deviations and open items
+## 11. Pure-Go fault-worker feasibility — corrected conclusion (2026-08-11)
+
+This section supersedes the earlier provisional conclusion in the second
+pass. The second pass's evidence was correct but incomplete: it established
+that `os/signal.Notify` never receives mapping SIGBUS and that no pure-Go
+API exposes `si_addr`, and concluded that pure Go cannot satisfy the
+contract. The third-pass reviewer pointed out that
+`runtime/debug.SetPanicOnFault` exists precisely for mapped-file faults and
+exposes the fault address. Verified empirically on Linux/amd64 with a
+standalone probe (`/tmp/panic_fault`, not committed):
+
+```
+mapping base=0x7f108aa90000 size=65536
+RECOVERED type=runtime.errorAddressString addr=0x7f108aa91000 in-region=(true)
+recovered ok, setpanicoff
+```
+
+Findings:
+
+- `debug.SetPanicOnFault(true)` converts synchronous mapping faults into
+  recoverable panics on the faulting goroutine; the recovered value is the
+  unexported `runtime.errorAddressString`, whose `Addr()` (via reflection)
+  is the exact faulting address — for this probe, the truncated page's line
+  address inside the armed mapping. In-region claiming is therefore
+  possible in pure Go.
+- The worker design then mirrors the Rust worker exactly:
+  arm (SetPanicOnFault) → operation → recover → if the address is inside
+  the armed owned region and the control state is armed: record
+  generation/role/relative offset and `unix.Exit(197)`; otherwise
+  `debug.SetPanicOnFault(false)` and re-raise to reproduce the pre-worker
+  crash behavior. The Rust claim condition (`posix.rs:173-196`:
+  kernel_bus_code check, armed/generation/role/len checks, in-region
+  si_addr, handling CAS) maps to: the region check covers in-region; a
+  readable mapping can only fault with SIGBUS on reads (no writes, PROT
+  READ), so an in-region fault is de-facto SIGBUS and the missing si_code
+  discrimination is not observable; the CAS maps to the worker loop's
+  armed/record-exit discipline.
+- Observable contract preserved: owned faults exit with the fixed code 197
+  with a fault record; unrelated faults re-raise and die like before (in
+  Rust they chain into the previous handler — for a worker inside a Go
+  process that previous handler is the Go runtime's own, so the re-raise
+  lands on the same fatal path Go processes always had); no mislabeling:
+  only in-region addresses produce the owned-fault exit.
+- One worker per process only (SetPanicOnFault is process-global) — the
+  same model as Rust's per-process signal installation.
+- Remaining proof (platform milestone): macOS and FreeBSD (same code path,
+  needs real-systems verification), Windows via
+  `AddVectoredExceptionHandler` + `syscall.NewCallback` (pure Go, already
+  feasible by API surface; needs verification), runtime-internal faults
+  during an armed operation (both designs crash; observable difference
+  only in the message).
+
+**Conclusion (supersedes): the POSIX fault-worker is implementable in pure
+Go via SetPanicOnFault; no assembly shim or other native boundary is
+needed.** The earlier A/B/C option set is revised accordingly:
+- A. (recommended) proceed with the pure-Go SetPanicOnFault worker design
+  in the worker milestone; assembly remains available as fallback if the
+  platform proofs fail;
+- B. assembly shim anyway, for exact si_code/signal semantics (not needed
+  per the equivalence analysis; deviates from the smallest-implementation
+  direction);
+- C. pure-Go-only with stop-at-worker (moot now: pure Go is feasible).
+
+## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
   evidence). The old Go tree is untouched and green.
@@ -263,7 +345,7 @@ proven on real Windows in the platform milestone.
 - Metadata bytes and feed names are caller-visible values; their heap copies
   are the contract's "bounded encoded records", not pages.
 
-## 12. Milestone 1 close-out
+## 13. Milestone 1 close-out
 
 Acceptance criteria evidence: portable codecs (literal vectors), mapping
 owner (geometry/lifetime/lock), public immutable reader, all five Rust

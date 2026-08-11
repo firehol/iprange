@@ -675,14 +675,21 @@ Use these sections in this order:
   - Commits: `0de8793` (SOW move), `913f4e6` (reader + tests),
     `9441f85` (independent-review repairs: blob-branch txn threading,
     slotted-page bounds, metadata allocation bound, catalog reserved bytes,
-    synthetic two-leaf blob regression database). No tracked file deleted
-    (Decision 1 = C).
+    synthetic two-leaf blob regression database), `1df90fa` (milestone
+    report), `3bbbf4e` (third-pass repairs: wrong-mode pre-checks, handle
+    registry, ID removal, callback-error passthrough, conformance
+    enumeration, multi-level range-tree test, corrected worker conclusion).
+    No tracked file deleted (Decision 1 = C).
   - Full report: `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`.
     Baseline gates re-run: `go test ./...` (incl. race), `go vet`, `gofmt`,
     cross-compilation matrix — all green; SOW audit clean.
-- Both pending decisions now have their evidence: deletion set (98+2 files,
-  re-approvable at any time) and the worker boundary (feasibility report
-  above). Milestone 2 is safe to start after the user's answers.
+- Both pending decisions now have their evidence: deletion set (100 tracked
+  files + 2 untracked leftovers, re-approvable at any time) and the worker
+  boundary — superseded: the third-pass evidence proves pure Go via
+  `runtime/debug.SetPanicOnFault` (empirical recover with exact fault
+  address), so no assembly shim is needed; the worker milestone proceeds
+  pure-Go (see milestone-1 report section 11). Milestone 2 is safe to start
+  after the user's answer to the deletion decision.
 - Commands and results: `wc -l` design spec 519; `grep` evidence for error
   code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;

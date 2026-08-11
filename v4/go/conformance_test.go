@@ -295,8 +295,6 @@ func TestConformanceRustFixtures(t *testing.T) {
 			for _, want := range tc.DirectRanges {
 				fromHi, fromLo, from4 := addressBytes(want.From, tc.Family)
 				toHi, toLo, to4 := addressBytes(want.To, tc.Family)
-				_ = fromHi
-				_ = toHi
 				mid4 := from4 + 1
 				midHi, midLo := fromHi, fromLo
 				midLo++
@@ -326,6 +324,13 @@ func TestConformanceRustFixtures(t *testing.T) {
 						}
 					}
 				} else {
+					if fromHi != toHi || fromLo+1 != toLo {
+						// Midpoint probe of the v6 range.
+						c, ok3, err := db.LookupDirectV6(IPv6{Hi: midHi, Lo: midLo})
+						if err != nil || !ok3 || c != want.Value {
+							t.Errorf("direct v6 %s mid: got %d %v %v want %d", want.From, c, ok3, err, want.Value)
+						}
+					}
 					v, ok, err := db.LookupDirectV6(IPv6{Hi: fromHi, Lo: fromLo})
 					if err != nil || !ok || v != want.Value {
 						t.Errorf("direct v6 %s: got %d %v %v", want.From, v, ok, err)
@@ -334,24 +339,106 @@ func TestConformanceRustFixtures(t *testing.T) {
 					if !ok || v != want.Value {
 						t.Errorf("direct v6 %s: got %d %v", want.To, v, ok)
 					}
-					_ = midHi
-					_ = midLo
 				}
 			}
 
-			// Feeds.
-			for _, feed := range tc.Feeds {
-				entry, ok, err := db.LookupFeed(feed.Name)
-				if err != nil || !ok {
-					t.Errorf("feed %s: %v %v", feed.Name, ok, err)
-					continue
+			// Exact range enumeration: the public scan must yield exactly the
+			// canonical ranges, in ascending order, with no extra records and
+			// a total equal to the declared address count. Only direct
+			// fixtures have direct ranges.
+			if tc.Kind != "direct" {
+				goto membershipCheck
+			}
+			if tc.Family == "ipv4" {
+				var scanned []DirectRangeV4
+				err := db.DirectRangesV4(func(r DirectRangeV4) error {
+					scanned = append(scanned, r)
+					return nil
+				})
+				if err != nil {
+					t.Fatal("scan v4:", err)
 				}
-				if entry.Index != feed.Index {
-					t.Errorf("feed %s index %d want %d", feed.Name, entry.Index, feed.Index)
+				if len(scanned) != len(tc.DirectRanges) {
+					t.Errorf("scan count %d want %d", len(scanned), len(tc.DirectRanges))
+				}
+				var total uint64
+				for i, r := range scanned {
+					if i < len(tc.DirectRanges) {
+						want := tc.DirectRanges[i]
+						_, _, wf := addressBytes(want.From, "ipv4")
+						_, _, wt := addressBytes(want.To, "ipv4")
+						if r.From != wf || r.To != wt || r.Value != uint32(want.Value) {
+							t.Errorf("scan[%d] = %x-%x=%d want %x-%x=%d", i, r.From, r.To, r.Value, wf, wt, want.Value)
+						}
+					}
+					if i > 0 && scanned[i-1].From >= r.From {
+						t.Errorf("scan not strictly ascending at %d", i)
+					}
+					total += uint64(r.To) - uint64(r.From) + 1
+				}
+				if tc.AddressCount != "" && fmt.Sprint(total) != tc.AddressCount {
+					t.Errorf("scan total %d want %s", total, tc.AddressCount)
+				}
+			} else {
+				var scanned []DirectRangeV6
+				err := db.DirectRangesV6(func(r DirectRangeV6) error {
+					scanned = append(scanned, r)
+					return nil
+				})
+				if err != nil {
+					t.Fatal("scan v6:", err)
+				}
+				if len(scanned) != len(tc.DirectRanges) {
+					t.Errorf("scan v6 count %d want %d", len(scanned), len(tc.DirectRanges))
+				}
+				for i, r := range scanned {
+					if i < len(tc.DirectRanges) {
+						want := tc.DirectRanges[i]
+						fh, fl, _ := addressBytes(want.From, "ipv6")
+						th, tl, _ := addressBytes(want.To, "ipv6")
+						if r.FromHi != fh || r.FromLo != fl || r.ToHi != th || r.ToLo != tl || r.Value != uint32(want.Value) {
+							t.Errorf("scan v6[%d] mismatch", i)
+						}
+					}
+					if i > 0 {
+						prev, cur := scanned[i-1], r
+						if prev.FromHi > cur.FromHi || (prev.FromHi == cur.FromHi && prev.FromLo >= cur.FromLo) {
+							t.Errorf("scan v6 not strictly ascending at %d", i)
+						}
+					}
+				}
+			}
+
+			// Feed catalog checks only apply to membership-capable files.
+			if len(tc.Feeds) > 0 {
+				// Every declared feed resolves to its exact index, the declared
+				// count matches the meta, and undeclared names are absent.
+				if info.ActiveFeedCount != uint64(len(tc.Feeds)) {
+					t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
+				}
+				for _, feed := range tc.Feeds {
+					entry, ok, err := db.LookupFeed(feed.Name)
+					if err != nil || !ok {
+						t.Errorf("feed %s: %v %v", feed.Name, ok, err)
+						continue
+					}
+					if entry.Index != feed.Index {
+						t.Errorf("feed %s index %d want %d", feed.Name, entry.Index, feed.Index)
+					}
+				}
+				for _, absent := range []string{"feed-999", "zz-not-declared"} {
+					en, ok, err := db.LookupFeed(absent)
+					if err != nil || ok {
+						t.Errorf("undeclared feed %q: %v %v", absent, ok, err)
+					}
+					if ok && en.Index != 0 {
+						t.Errorf("undeclared feed resolved to %d", en.Index)
+					}
 				}
 			}
 
 			// Membership ranges.
+		membershipCheck:
 			feedIndexOf := func(name string) uint32 {
 				for _, f := range tc.Feeds {
 					if f.Name == name {
@@ -378,7 +465,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 					continue
 				}
 				// Midpoint probe as well.
-				midHi, midLo, mid4 := fh, fl, from4
+				mid4 := from4
 				if tc.Family == "ipv4" {
 					mid4 = from4 + (addressBytes4To(mr.To)-from4)/2
 					if mid4 != from4 {
@@ -390,23 +477,48 @@ func TestConformanceRustFixtures(t *testing.T) {
 						view = v2
 					}
 				} else {
-					_ = midHi
-					_ = midLo
-					_ = th
-					_ = tl
+					midLo := fl + 1
+					midHi := fh
+					if midLo == 0 {
+						midHi++
+					}
+					if fh != th || fl+1 != tl {
+						v2, ok2, err2 := db.LookupMembershipV6(IPv6{Hi: midHi, Lo: midLo})
+						if err2 != nil || !ok2 {
+							t.Errorf("membership v6 mid %s: %v %v", mr.From, ok2, err2)
+							continue
+						}
+						view = v2
+					}
 				}
+				// Every listed feed must be present.
 				for _, feed := range mr.Feeds {
-					idx := feedIndexOf(feed)
-					has, err := view.ContainsIndex(idx)
+					has, err := view.ContainsIndex(feedIndexOf(feed))
 					if err != nil {
 						t.Fatal("contains:", err)
 					}
 					if !has {
-						t.Errorf("membership %s lacks feed %s (%d)", mr.From, feed, idx)
+						t.Errorf("membership %s lacks feed %s", mr.From, feed)
 					}
 				}
-				// A feed that is not in this range's list must be absent if
-				// it is declared in the manifest.
+				defer view.Release()
+				// A declared feed that is not listed for this range must be
+				// absent from this range's bitmap.
+				listed := map[uint32]bool{}
+				for _, feed := range mr.Feeds {
+					listed[feedIndexOf(feed)] = true
+				}
+				for _, f := range tc.Feeds {
+					if !listed[f.Index] {
+						has, err := view.ContainsIndex(f.Index)
+						if err != nil {
+							t.Fatal("contains:", err)
+						}
+						if has {
+							t.Errorf("membership %s contains undeclared feed %s (%d)", mr.From, f.Name, f.Index)
+						}
+					}
+				}
 			}
 
 			// Structured ranges.
@@ -425,6 +537,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("structured %s: %v %v", sr.From, ok, err)
 					continue
 				}
+				defer view.Release()
 				val, err := view.Value()
 				if err != nil {
 					t.Fatal("structure value:", err)
@@ -552,4 +665,210 @@ func errorAs(err error, target **Error) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// TestWrongAPIModeProbes pins the Rust-exact pre-checks: every public query
+// validates value kind and address family before touching any page
+// (reader_core/generation.rs require_direct / require_membership_family,
+// membership_view.rs require_kind, structured_value/view.rs require_kind,
+// feed_catalog.rs require_membership). Nothing below may return data or a
+// format error: wrong kind yields WrongValueKind or WrongStructureKind and
+// wrong family yields WrongAddressFamily, even on healthy files.
+func TestWrongAPIModeProbes(t *testing.T) {
+	type probe struct {
+		file      string
+		name      string
+		run       func(db *ImmutableReader) error
+		wantCode  ErrorCode
+		pointless bool
+	}
+	ip4 := IPv4(0x0a000000) // 10.0.0.0
+	ip6 := IPv6{Hi: 0, Lo: 0}
+	fe := &Error{}
+	possible := func(db *ImmutableReader, want ErrorCode, run func() error) error {
+		err := run()
+		if err == nil {
+			return fmt.Errorf("expected code %d, got nil (probably returned data or absent-false)", want)
+		}
+		if !errorAs(err, &fe) {
+			return fmt.Errorf("expected typed code %d, got %v", want, err)
+		}
+		if fe.Code != want {
+			return fmt.Errorf("expected code %d, got %d (%s)", want, fe.Code, fe.Detail)
+		}
+		return nil
+	}
+	probes := []probe{
+		// direct-ipv4.iprdb: kind Direct, family IPv4.
+		{"direct-ipv4.iprdb", "direct-v4-ok", func(db *ImmutableReader) error {
+			_, _, err := db.LookupDirectV4(ip4)
+			return err
+		}, 0, true},
+		{"direct-ipv4.iprdb", "direct-v6-on-v4", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupDirectV6(ip6); return e })
+		}, ErrorWrongAddressFamily, false},
+		{"direct-ipv4.iprdb", "membership-on-direct", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		}, ErrorWrongValueKind, false},
+		{"direct-ipv4.iprdb", "feed-on-direct", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupFeed("feed-000"); return e })
+		}, ErrorWrongValueKind, false},
+		{"direct-ipv4.iprdb", "scan-v6-on-v4", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { return db.DirectRangesV6(func(DirectRangeV6) error { return nil }) })
+		}, ErrorWrongAddressFamily, false},
+		{"direct-ipv4.iprdb", "enrichment-on-direct", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := db.LookupNetworkEnrichmentV1V4(ip4); return e })
+		}, ErrorWrongStructureKind, false},
+		// first-seen-ipv6.iprdb: kind Direct, family IPv6.
+		{"first-seen-ipv6.iprdb", "direct-v4-on-v6", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupDirectV4(ip4); return e })
+		}, ErrorWrongAddressFamily, false},
+		{"first-seen-ipv6.iprdb", "direct-v6-ok", func(db *ImmutableReader) error {
+			_, _, err := db.LookupDirectV6(ip6)
+			return err
+		}, 0, true},
+		// membership-ipv4.iprdb: kind Membership, family IPv4.
+		{"membership-ipv4.iprdb", "direct-on-membership", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupDirectV4(ip4); return e })
+		}, ErrorWrongValueKind, false},
+		{"membership-ipv4.iprdb", "membership-ok", func(db *ImmutableReader) error {
+			view, found, err := db.LookupMembershipV4(ip4)
+			if err != nil || !found {
+				return fmt.Errorf("expected bitmap, got %v %v", found, err)
+			}
+			view.Release()
+			return nil
+		}, 0, true},
+		{"membership-ipv4.iprdb", "membership-v6-on-v4", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupMembershipV6(ip6); return e })
+		}, ErrorWrongAddressFamily, false},
+		{"membership-ipv4.iprdb", "feed-ok", func(db *ImmutableReader) error {
+			_, _, err := db.LookupFeed("feed-000")
+			return err
+		}, 0, true},
+		{"membership-ipv4.iprdb", "enrichment-on-membership", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := db.LookupNetworkEnrichmentV1V4(ip4); return e })
+		}, ErrorWrongStructureKind, false},
+		// membership-ipv6.iprdb: kind Membership, family IPv6.
+		{"membership-ipv6.iprdb", "membership-v4-on-v6", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		}, ErrorWrongAddressFamily, false},
+		// structured-ipv4.iprdb: kind Structured + NetworkEnrichmentV1, family IPv4.
+		{"structured-ipv4.iprdb", "membership-on-structured", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		}, ErrorWrongValueKind, false},
+		{"structured-ipv4.iprdb", "enrichment-ok", func(db *ImmutableReader) error {
+			view, found, err := db.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000)) // 10.1.0.0
+			if err != nil || !found {
+				return fmt.Errorf("expected view, got %v %v", found, err)
+			}
+			view.Release()
+			return nil
+		}, 0, true},
+		{"structured-ipv4.iprdb", "feed-on-structured", func(db *ImmutableReader) error {
+			_, _, err := db.LookupFeed("botnet")
+			return err
+		}, 0, true},
+		{"structured-ipv4.iprdb", "enrichment-v6-on-structured-v4", func(db *ImmutableReader) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupNetworkEnrichmentV1V6(ip6); return e })
+		}, ErrorWrongAddressFamily, false},
+	}
+	for _, p := range probes {
+		t.Run(p.file+"/"+p.name, func(t *testing.T) {
+			db, err := OpenImmutable(fixturePath("rust/" + p.file))
+			if err != nil {
+				t.Fatal("open:", err)
+			}
+			defer db.Close()
+			err = p.run(db)
+			if p.pointless {
+				if err != nil {
+					t.Fatal("expected nil:", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("probe failed:", err)
+			}
+		})
+	}
+}
+
+// TestHandleLifetime pins the handle contract: views are children of the
+// reader; a reader with a live view returns ErrorHandleBusy on Close, and a
+// released view reports ErrorHandleClosed on every operation.
+func TestHandleLifetime(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	view, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	if err := r.Close(); err == nil {
+		t.Fatal("close with live view must report ErrorHandleBusy")
+	} else if fe := errorAsCode(err); fe != ErrorHandleBusy {
+		t.Fatalf("code %v want %d", err, ErrorHandleBusy)
+	}
+	// The view still works while the reader is open.
+	if _, err := view.ContainsIndex(0); err != nil {
+		t.Fatal("view after busy close:", err)
+	}
+	view.Release()
+	if err := r.Close(); err != nil {
+		t.Fatal("close after release:", err)
+	}
+	// Double close.
+	if fe := errorAsCode(r.Close()); fe != ErrorHandleClosed {
+		t.Fatalf("double close code %v want %d", fe, ErrorHandleClosed)
+	}
+}
+
+// errorAsCode extracts the public error code, or 0 for other errors/nil.
+func errorAsCode(err error) ErrorCode {
+	var fe *Error
+	if err != nil && errorAs(err, &fe) {
+		return fe.Code
+	}
+	return 0
+}
+
+// TestReleasedViewRejectsOperations pins ErrorHandleClosed on every view
+// operation after release. A threat view derived from a structured view is
+// an independent handle (like the Rust borrow contract: dropping the parent
+// does not invalidate the child); it must be released on its own.
+func TestReleasedViewRejectsOperations(t *testing.T) {
+	r := mustOpen(t, "rust/structured-ipv4.iprdb")
+	view, found, err := r.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	// Registered threat view.
+	threat, err := view.ThreatMembership()
+	if err != nil {
+		t.Fatal("threat:", err)
+	}
+	// Releasing the parent does not invalidate the independently registered
+	// threat handle; the parent's own operations report HandleClosed.
+	view.Release()
+	if _, err := view.Value(); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("value after release: %v", err)
+	}
+	if _, err := threat.ContainsIndex(0); err != nil {
+		t.Fatalf("threat after parent release must stay alive: %v", err)
+	}
+	threat.Release()
+	if _, err := threat.ContainsIndex(0); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("threat after its own release: %v", err)
+	}
+}
+
+// TestScanCallbackErrorPassthrough pins that a caller error from a scan
+// callback is returned unchanged, never reinterpreted as database
+// corruption.
+func TestScanCallbackErrorPassthrough(t *testing.T) {
+	r := mustOpen(t, "rust/direct-ipv4.iprdb")
+	sentinel := fmt.Errorf("caller-stopped: %d", 42)
+	err := r.DirectRangesV4(func(DirectRangeV4) error { return sentinel })
+	if err != sentinel {
+		t.Fatalf("callback error rewritten: %v", err)
+	}
 }
