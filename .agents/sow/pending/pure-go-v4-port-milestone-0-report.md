@@ -487,6 +487,17 @@ proceed?
   because you explicitly authorize it, but deviates from the SOW's
   evidence-first wording).
 
+### Recorded decisions (2026-08-11)
+
+- Decision 1 (deletion set): **C** - decide after Milestone 1 evidence. No
+  tracked file and no untracked leftover is deleted before that decision;
+  deletion, when approved, executes atomically with the compiling, tested
+  Milestone 1 replacement.
+- Decision 2 (fault-worker boundary): **A** - wait for the Milestone 1
+  feasibility evidence, then decide. No new native boundary is added before
+  that decision.
+- Both are recorded in SOW-0025 "Open decisions - Resolved decisions".
+
 ## 11. Milestone 1 readiness
 
 Safe to start. Milestone 0 produced zero production edits; baseline gates

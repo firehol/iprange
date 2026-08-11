@@ -440,6 +440,19 @@ Open decisions:
   cgo, use the Rust worker, reach into Go runtime internals, or weaken fault
   ownership/chaining.
 
+Resolved decisions (2026-08-11, Milestone 0 closure):
+
+- Deletion set (Decision 1): user chose C - decide after Milestone 1 evidence.
+  The exact proposed set (100 tracked files + 2 untracked leftovers) is
+  recorded in `.agents/sow/pending/pure-go-v4-port-milestone-0-report.md`
+  section 7. No tracked file is deleted and no untracked leftover is removed
+  before that decision; deletion, when approved, executes atomically with the
+  compiling, tested Milestone 1 replacement.
+- Fault-worker native boundary (Decision 2): user chose A - wait for the
+  Milestone 1 feasibility evidence, then decide. No new native boundary
+  (assembly shim, cgo, runtime internals, Rust worker) may be added before
+  that decision.
+
 ## Implications And Decisions
 
 1. **Long-term-best: semantic peer, not incremental compatibility.**
