@@ -583,6 +583,50 @@ Use these sections in this order:
   policy. Both are recorded in the milestone report with evidence and
   recommendations.
 
+### 2026-08-11 - Milestone 0 corrected after external review (read-only)
+
+- An external review of the milestone report found material errors. Every
+  finding was verified against the sources before any change; all verified
+  findings were corrected, one claim was not reproducible, and the two
+  original recommendations were withdrawn as unsafe:
+  - `process_identity.go` moved from transfer to delete: it implements a
+    PID/process-start stale-slot recovery model (`process_identity.go:15`,
+    `sidecar.go:394-396`) that the current spec explicitly excludes
+    (`binary-format-v4.md:2130-2138`). Its test was moved to the deletion set
+    too. Deletion set is now 100 tracked files (45 production + 55 test).
+  - Error-code mapping corrected: names match Rust 1-64 in every position
+    except code 46 (Go `ErrorLiveCoordinationDomainMismatchRequiresReset` vs
+    Rust `LiveCoordinationMalformedRequiresReset`, `sdk_error.rs:58`); the
+    report no longer claims an exact match and transfer requires resolving
+    code 46 plus adding 65-69.
+  - Prohibited-I/O classification corrected: content-transfer calls are
+    `ReadAt`/`WriteAt`/`unix.Pread` in 3 files (`os_linux.go:503,565`,
+    `page_source_linux.go:27`, `page_source_other.go:26`); `Truncate`/`Sync`
+    are required lifecycle/durability syscalls and are not prohibited.
+  - Decision recommendations changed to evidence-first for both decisions
+    (deletion executes atomically with the compiling, tested Milestone 1
+    replacement; fault-worker boundary is decided after the Milestone 1
+    feasibility evidence, per the SOW's own stop-for-decision wording).
+  - Design-spec line count corrected (519, not 530); exported-symbol report
+    corrected to measured values (199 top-level exported declarations; 43 of
+    50 files export nothing) and no longer labeled a "public SDK surface";
+    size projection explicitly labeled estimate-only, not a target.
+  - The report moved from an undocumented `.agents/sow/milestones/` directory
+    to `.agents/sow/pending/pure-go-v4-port-milestone-0-report.md`, the best
+    interpretation of the review's "wrong SOW path" finding (the alternative
+    reading, a wrong file path in the text, could not be reproduced).
+  - `.reasonix/` is harness session state, untracked by design; it is not repo
+    content and was not committed.
+- Files changed: `.agents/sow/pending/pure-go-v4-port-milestone-0-report.md`
+  (moved and corrected, 459 lines), this execution-log entry. Still zero
+  production/test edits in `v4/go/`.
+- Commits: `579c1a3` (initial Milestone 0 report + log), plus this correction
+  commit; both local, no remote push.
+- Commands and results: `wc -l` design spec 519; `grep` evidence for error
+  code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
+  layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;
+  I/O call sites listed above; baseline gates unchanged (already green).
+
 ## Validation
 
 Acceptance criteria evidence:
