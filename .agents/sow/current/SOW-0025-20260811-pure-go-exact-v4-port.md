@@ -642,6 +642,44 @@ Use these sections in this order:
 - Milestone 1 begins with moving SOW-0025 to `.agents/sow/current/` with
   `Status: in-progress`; it remains `open` in `pending/` while implementation
   has not started.
+
+### 2026-08-11 - Milestone 1 completed (implementation checkpoint)
+
+- Moved SOW-0025 to `.agents/sow/current/` with `Status: in-progress`
+  (commit `0de8793`) and implemented the milestone:
+  - New production packages: `internal/format` (wire codecs, meta identity
+    and kind invariants, page/slotted, range, catalog, membership,
+    structured, blob, metadata chunks, 129-bit cardinality, single 1-69
+    error-code table with code 46 per the current Rust contract), `internal/
+    mapping` (the only mapping owner; POSIX + honest Windows stub),
+    `internal/reader` (the only healthy-generation reader core), and the
+    public facade `reader_public.go` at the module root. ~3,720 new
+    production lines, ~1,700 test lines.
+  - Conformance: all five committed Rust fixtures open and verify with exact
+    `cases.json` semantics (metadata states, full-IPv6 cardinality strings,
+    boundary probes, 70 feed names, word-level bitmaps incl. blob-backed and
+    1 MiB metadata, structured values + threat memberships); all three
+    invalid mutations rejected with code 32.
+  - Zero-allocation evidence: direct v4/v6, membership (inline + blob),
+    structured, feed (internal), scans, cardinality = 0 allocs; public feed
+    lookup = exactly the returned string copy. Recorded in both root and
+    reader zero-allocation tests.
+  - Portability: cross-compiles for darwin/freebsd/windows/linux-arm; Windows
+    open refuses with os-unsupported stub; runtime proof on Linux amd64.
+  - Worker feasibility: pure Go disproven for POSIX with an empirical probe
+    (runtime-fatal `unexpected fault address`, os/signal never delivers
+    mapping SIGBUS, no si_addr/sigaction surface in x/sys); Windows vectored
+    exception path is pure-Go feasible. Fallback = minimal project-owned
+    assembly sigaction shim; per recorded Decision 2 the user decides with
+    this evidence.
+  - Commits: `0de8793` (SOW move), `913f4e6` (reader + tests). No tracked
+    file deleted (Decision 1 = C).
+  - Full report: `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`.
+    Baseline gates re-run: `go test ./...` (incl. race), `go vet`, `gofmt`,
+    cross-compilation matrix — all green; SOW audit clean.
+- Both pending decisions now have their evidence: deletion set (98+2 files,
+  re-approvable at any time) and the worker boundary (feasibility report
+  above). Milestone 2 is safe to start after the user's answers.
 - Commands and results: `wc -l` design spec 519; `grep` evidence for error
   code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;
