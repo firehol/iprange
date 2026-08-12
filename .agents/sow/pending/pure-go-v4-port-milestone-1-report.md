@@ -72,7 +72,7 @@ Production LOC measured at HEAD (recomputed after every repair pass;
 inside v4/go: internal/format + internal/mapping + internal/reader plus
 doc.go, errors.go, reader_public.go, types.go): 4,781 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,647 raw lines. The earlier
+tree): 4,648 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
