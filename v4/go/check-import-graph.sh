@@ -163,9 +163,9 @@ strip_comments() {
 content_violations() {
 	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
 		# The in-memory inflater's tolerated calls are blanked as exact
-		# call nodes (c.r.Read(...) / c.r.ReadByte()), never as whole
+		# call nodes (c.r.Read(p) / c.r.ReadByte()), never as whole
 		# lines, so a forbidden transfer on the same line stays visible.
-		strip_comments < "$f" | sed -E 's/c\.r\.Read(Byte)?\([^)]*\)/ /g' | sed "s@^@$f:@"
+		strip_comments < "$f" | sed -E 's/c\.r\.Read(Byte)?\([^()]*\)/ /g' | sed "s@^@$f:@"
 	done
 }
 
@@ -176,7 +176,7 @@ violations=$(content_violations)
 # (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
 # The set covers the read/write/seek language API families including the
 # x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|MethodByName|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|MethodByName|Method|NewDecoder|Decode|Encode|WriteString|WriteRune|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
@@ -190,7 +190,7 @@ fi
 
 # Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
 # behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib)"'; then
+if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart)"'; then
 	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
@@ -224,7 +224,8 @@ if [ "$self_test" -eq 1 ]; then
 		rm -rf gatemut_readall gatemut_alias gatemut_methodval gatemut_seek \
 			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile \
 			gatemut_fscan gatemut_copyn gatemut_reflect gatemut_rawsys \
-			gatemut_cfr gatemut_exline gatemut_winint
+			gatemut_cfr gatemut_exline gatemut_winint gatemut_decoder \
+			gatemut_writestr gatemut_nested gatemut_refmeth
 		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
 			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
 			gatemut_aliased_bufio.go
@@ -441,7 +442,7 @@ package mapping
 
 import "golang.org/x/sys/unix"
 
-func copyRange(a, b int, n uint64) (int64, error) {
+func copyRange(a, b int, n uint64) (int, error) {
 	return unix.CopyFileRange(a, nil, b, nil, n, 0)
 }
 MUTEOF
@@ -454,10 +455,11 @@ package gatemut_exline
 import "os"
 
 var f *os.File
+var c = struct{ r *os.File }{f}
 
 func use() {
 	var b [1]byte
-	_ = f.Read(b[:]); _ = c.r.Read(b[:]) // tolerated call on the same line must not hide the file read
+	_, _ = f.Read(b[:]); _, _ = c.r.Read(b[:]) // tolerated call on the same line must not hide the file read
 }
 MUTEOF
 	run_mut "forbidden transfer sharing a line with a tolerated call"
@@ -474,11 +476,69 @@ var _ = mapping.Mapping{}
 MUTEOF
 	run_mut "windows-only package importing internal/mapping"
 
+	mkdir -p gatemut_decoder
+	cat > gatemut_decoder/mut.go <<'MUTEOF'
+package gatemut_decoder
+
+import (
+	"encoding/json"
+	"os"
+)
+
+var f *os.File
+
+func use() { var x any; _ = json.NewDecoder(f).Decode(&x) }
+MUTEOF
+	run_mut "encoding/json decoder over a file"
+
+	mkdir -p gatemut_writestr
+	cat > gatemut_writestr/mut.go <<'MUTEOF'
+package gatemut_writestr
+
+import "os"
+
+var f *os.File
+
+func use() { _, _ = f.WriteString("payload") }
+MUTEOF
+	run_mut "os.File.WriteString"
+
+	mkdir -p gatemut_nested
+	cat > gatemut_nested/mut.go <<'MUTEOF'
+package gatemut_nested
+
+import "os"
+
+var f *os.File
+var c = struct{ r *os.File }{f}
+
+func use() {
+	var b [1]byte
+	_ = c.r.Read(f.Read(b[:])) // textual probe: nested transfer must stay visible, not be blanked
+}
+MUTEOF
+	run_mut "forbidden transfer nested inside the tolerated call node"
+
+	mkdir -p gatemut_refmeth
+	cat > gatemut_refmeth/mut.go <<'MUTEOF'
+package gatemut_refmeth
+
+import (
+	"os"
+	"reflect"
+)
+
+var f *os.File
+
+func use() { _ = reflect.ValueOf(f).Method(2).Call(nil) }
+MUTEOF
+	run_mut "reflection Method(i).Call"
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 18 mutation forms rejected)"
+	echo "import-graph self-test passed (all 22 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
