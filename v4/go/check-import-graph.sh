@@ -163,11 +163,13 @@ strip_comments() {
 content_violations() {
 	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
 		# The in-memory inflater's tolerated calls are blanked as exact
-		# call nodes (c.r.Read(p) / c.r.ReadByte()), never as whole
-		# lines, so a forbidden transfer on the same line stays visible.
+		# call nodes (c.r.Read(p) / c.r.ReadByte(), and the two
+		# io.ReadFull(zr, out[...]) inflater reads), never as whole
+		# lines or paren-crossing spans, so a forbidden transfer on the
+		# same line or nested inside an argument stays visible.
 		strip_comments < "$f" | sed -E \
 			-e 's/c\.r\.Read(Byte)?\([^()]*\)/ /g' \
-			-e 's/io\.ReadFull\(zr, [^;]*\)/ /g' \
+			-e 's/io\.ReadFull\(zr, out\[[^]]*\]\)/ /g' \
 			| sed "s@^@$f:@"
 	done
 }
@@ -179,7 +181,7 @@ violations=$(content_violations)
 # (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
 # The set covers the read/write/seek language API families including the
 # x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|ReadFull|ReadAtLeast|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|Print|Printf|Println|Scan|Scanln|Scanf|MethodByName|Method|NewDecoder|Decode|Encode|WriteString|WriteRune|NewWriter|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|ReadFull|ReadAtLeast|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|Print|Printf|Println|Scan|Scanln|Scanf|MethodByName|Method|Call|CallSlice|NewDecoder|Decode|Encode|WriteString|WriteRune|NewWriter|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
@@ -193,7 +195,7 @@ fi
 
 # Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
 # behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart|log|text/template|html/template|os/exec|net/http)"'; then
+if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart|mime/quotedprintable|log|text/template|text/tabwriter|html/template|os/exec|net/http|debug/buildinfo|debug/elf|debug/macho|debug/pe|debug/plan9obj|go/parser|go/scanner|text/scanner)"'; then
 	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
@@ -229,7 +231,8 @@ if [ "$self_test" -eq 1 ]; then
 			gatemut_fscan gatemut_copyn gatemut_reflect gatemut_rawsys \
 			gatemut_cfr gatemut_exline gatemut_winint gatemut_decoder \
 			gatemut_writestr gatemut_nested gatemut_refmeth gatemut_readfull \
-			gatemut_readleast gatemut_logw gatemut_flatew
+			gatemut_readleast gatemut_logw gatemut_flatew \
+			gatemut_rfshadow gatemut_zrfile
 		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
 			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
 			gatemut_aliased_bufio.go
@@ -600,11 +603,50 @@ func use() { w, _ := flate.NewWriter(f, 6); w.Close() }
 MUTEOF
 	run_mut "flate.NewWriter over a file"
 
+	mkdir -p gatemut_rfshadow
+	cat > gatemut_rfshadow/mut.go <<'MUTEOF'
+package gatemut_rfshadow
+
+import (
+	"io"
+	"os"
+)
+
+var f *os.File
+var zr *os.File // in-memory-looking receiver name
+
+func mv(n int, e error) []byte { var b [8]byte; _ = n; _ = e; return b[:] }
+
+func use() {
+	var b [8]byte
+	_, _ = io.ReadFull(zr, mv(f.Read(b[:]))) // nested transfer must stay visible
+}
+MUTEOF
+	run_mut "transfer nested inside the io.ReadFull exemption node"
+
+	mkdir -p gatemut_zrfile
+	cat > gatemut_zrfile/mut.go <<'MUTEOF'
+package gatemut_zrfile
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func use(f *os.File) {
+	var b [8]byte
+	zr := flate.NewReader(f) // file-backed inflater: must not be exempted
+	_, _ = io.ReadFull(zr, b[:])
+}
+MUTEOF
+	run_mut "io.ReadFull over a file-backed flate reader"
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 26 mutation forms rejected)"
+	echo "import-graph self-test passed (all 28 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
