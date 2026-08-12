@@ -1095,6 +1095,163 @@ func rangeProbe() error {
 MUTEOF
 	add_mut internal/reader/gatemut_chanrange.go
 	run_mut "single-variable channel range element"
+	# --- 54: parenthesized producer call behind the exemption -----------
+	# (getFile)() looks like a plain call to the parser; the producer taint
+	# must survive the paren wrapper.
+	cat > internal/reader/gatemut_parensel.go <<'MUTEOF'
+package reader
+
+import "os"
+
+func getFile() *os.File { f, _ := os.Open("/dev/null"); return f }
+MUTEOF
+	add_mut internal/reader/gatemut_parensel.go
+	cp internal/reader/metadata.go "$self_tree/meta54.orig"
+	INS='zr = (getFile)()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta54.new" && mv "$self_tree/meta54.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (getFile)()' internal/reader/metadata.go; then
+		run_mut "parenthesized producer call behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 54 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta54.orig" internal/reader/metadata.go
+
+	# --- 55: parenthesized inline FuncLit behind the exemption -----------
+	# Wrapping a closure in parens must not hide its file-returning body.
+	cat > internal/reader/gatemut_parenlit.go <<'MUTEOF'
+package reader
+MUTEOF
+	add_mut internal/reader/gatemut_parenlit.go
+	cp internal/reader/metadata.go "$self_tree/meta55.orig"
+	INS='zr = (func() *os.File { f, _ := os.Open("/dev/null"); return f })()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta55.new" && mv "$self_tree/meta55.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (func() *os.File' internal/reader/metadata.go; then
+		run_mut "parenthesized FuncLit file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 55 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta55.orig" internal/reader/metadata.go
+
+	# --- 56: interface-typed closure returning a file --------------------
+	# A closure whose result type is io.ReadCloser still returns a file
+	# from its body; the body walk must keep the taint.
+	cat > internal/reader/gatemut_ifacelit.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+MUTEOF
+	add_mut internal/reader/gatemut_ifacelit.go
+	cp internal/reader/metadata.go "$self_tree/meta56.orig"
+	INS='zr = func() io.ReadCloser { f, _ := os.Open("/dev/null"); return f }()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta56.new" && mv "$self_tree/meta56.new" internal/reader/metadata.go
+	if grep -Fq 'zr = func() io.ReadCloser' internal/reader/metadata.go; then
+		run_mut "interface-typed FuncLit file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 56 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta56.orig" internal/reader/metadata.go
+
+	# --- 57: alias-typed function variable producing a file --------------
+	# type fileFn = func() *os.File; var getFat fileFn must resolve as a
+	# file producer when the alias is a type-only package declaration.
+	cat > internal/reader/gatemut_aliasfn.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn = func() *os.File
+
+var getFat fileFn
+
+func init() {
+	getFat = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasfn.go
+	cp internal/reader/metadata.go "$self_tree/meta57.orig"
+	INS='zr = getFat()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta57.new" && mv "$self_tree/meta57.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getFat()' internal/reader/metadata.go; then
+		run_mut "alias-typed function variable producing a file"
+	else
+		echo "self-test ERROR: form 57 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta57.orig" internal/reader/metadata.go
+
+	# --- 58: type-switch bound file behind the exemption -----------------
+	# A file hidden in an any-typed package var and recovered through a
+	# type-switch case must keep the taint at the exempted inflater.
+	cat > internal/reader/gatemut_typeswitch.go <<'MUTEOF'
+package reader
+
+import "os"
+
+var anyFile2 any
+
+func init() {
+	w, _, _ := os.Pipe()
+	anyFile2 = w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_typeswitch.go
+	cp internal/reader/metadata.go "$self_tree/meta58.orig"
+	INS='switch zv := anyFile2.(type) { case *os.File: zr = zv }'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta58.new" && mv "$self_tree/meta58.new" internal/reader/metadata.go
+	if grep -Fq 'case *os.File: zr = zv' internal/reader/metadata.go; then
+		run_mut "type-switch bound file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 58 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta58.orig" internal/reader/metadata.go
+
+	# --- 59: benign parenthesized call must pass (no false positive) -----
+	# Identical shape to form 54 but the callee returns int: the scanner
+	# must not flag the shadow when nothing file-typed is involved.
+	cat > internal/reader/gatemut_benignpar.go <<'MUTEOF'
+package reader
+
+func getInt() int { return 1 }
+MUTEOF
+	add_mut internal/reader/gatemut_benignpar.go
+	cp internal/reader/metadata.go "$self_tree/meta59.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = (getInt)()"; next } print }' internal/reader/metadata.go > "$self_tree/meta59.new" && mv "$self_tree/meta59.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (getInt)()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign parenthesized call passes the gate"
+		else
+			echo "self-test MISS: benign parenthesized call failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 59 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta59.orig" internal/reader/metadata.go
+
 
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
@@ -1148,7 +1305,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 51 mutation forms rejected)"
+	echo "import-graph self-test passed (all 56 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
