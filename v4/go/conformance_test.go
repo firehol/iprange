@@ -657,7 +657,11 @@ func TestConformanceRustFixtures(t *testing.T) {
 				fh, fl, _ := addressBytes(first.From, tc.Family)
 				th, tl, _ := addressBytes(last.To, tc.Family)
 				if tc.Family == "ipv4" {
-					if fh > 0 && probeMembership(0, 0) {
+					_, _, f4 := addressBytes(first.From, "ipv4")
+					if f4 > 0 && probeMembership(0, uint64(f4-1)) {
+						t.Errorf("membership from-1 (0x%x): want absent", f4-1)
+					}
+					if f4 > 0 && probeMembership(0, 0) {
 						t.Errorf("membership 0.0.0.0: want absent")
 					}
 					if th < 0xffffffff && probeMembership(0, 0xffffffff) {
@@ -753,7 +757,11 @@ func TestConformanceRustFixtures(t *testing.T) {
 				fh, fl, _ := addressBytes(first.From, tc.Family)
 				th, tl, _ := addressBytes(last.To, tc.Family)
 				if tc.Family == "ipv4" {
-					if fh > 0 && probeStructured(0, 0) {
+					_, _, f4 := addressBytes(first.From, "ipv4")
+					if f4 > 0 && probeStructured(0, uint64(f4-1)) {
+						t.Errorf("structured from-1 (0x%x): want absent", f4-1)
+					}
+					if f4 > 0 && probeStructured(0, 0) {
 						t.Errorf("structured 0.0.0.0: want absent")
 					}
 					if th < 0xffffffff && probeStructured(0, 0xffffffff) {

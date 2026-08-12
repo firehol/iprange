@@ -711,6 +711,7 @@ Use these sections in this order:
 
 ### 2026-08-11 - gap analysis and repair pass (six-agent)
 
+- `94723aa` records the fifth-pass repairs in this log and the M1 report.
 - `9a835e4` adds `.agents/sow/pending/pure-go-m1-gap-analysis.md`: six
   concurrent read-only subagents, each with a disjoint brief (codecs, reader
   semantics, architecture, public API/errors, test evidence,
