@@ -75,16 +75,21 @@ var bannedSelectors = map[string]bool{
 	"ReadFrom": true, "ReadFull": true, "ReadLine": true, "ReadRune": true,
 	"ReadString": true, "Readv": true, "Scan": true, "Scanf": true,
 	"Scanln": true, "Seek": true, "Sendfile": true, "Splice": true,
-	"Syscall": true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
+	"StartProcess": true,
+	"Syscall":      true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
 	"Write": true, "WriteAt": true, "WriteByte": true, "WriteFile": true,
 	"WriteRune": true, "WriteString": true, "WriteTo": true, "Writev": true,
 }
 
-// fileProducers are stdlib functions that return *os.File; a value bound
-// from one is file-tainted.
-var fileProducers = map[string]bool{
-	"os.Create": true, "os.CreateTemp": true, "os.NewFile": true,
-	"os.Open": true, "os.OpenFile": true,
+// fileProducers are stdlib functions that return *os.File; the value lists
+// the result positions that are files (error results are never files).
+var fileProducers = map[string][]int{
+	"os.Create":     {0},
+	"os.CreateTemp": {0},
+	"os.NewFile":    {0},
+	"os.Open":       {0},
+	"os.OpenFile":   {0},
+	"os.Pipe":       {0, 1},
 }
 
 // approvedFileMethods are the only methods allowed on a file-tainted
@@ -102,6 +107,7 @@ type pkgInfo struct {
 	structs map[string]map[string]string
 	funcs   map[string][]string
 	methods map[string][]string // structName.method -> result type texts
+	aliases map[string]string   // type-alias name -> underlying type text
 }
 
 func main() {
@@ -166,7 +172,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -197,6 +203,12 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 		for _, spec := range gd.Specs {
 			ts, ok := spec.(*ast.TypeSpec)
 			if !ok {
+				continue
+			}
+			if ts.Assign.IsValid() {
+				// type X = T: record the alias so file-taint checks
+				// resolve it instead of being blind to the name.
+				info.aliases[ts.Name.Name] = exprText(ts.Type)
 				continue
 			}
 			st, ok := ts.Type.(*ast.StructType)
@@ -370,9 +382,23 @@ const (
 	kindContainer
 )
 
+// resolveTypeText expands type aliases (bare or pointer-qualified) so a
+// `type zr = *os.File` alias is seen as a file type by the taint checks.
+func resolveTypeText(text string, info pkgInfo) string {
+	for i := 0; i < 8; i++ {
+		stripped := strings.TrimPrefix(text, "*")
+		if a, ok := info.aliases[stripped]; ok {
+			text = strings.Repeat("*", len(text)-len(stripped)) + a
+			continue
+		}
+		break
+	}
+	return text
+}
+
 // classifyType maps a declared type expression to file/container taint.
 func classifyType(t ast.Expr, info pkgInfo) kind {
-	text := exprText(t)
+	text := resolveTypeText(exprText(t), info)
 	if text == "*os.File" {
 		return kindFile
 	}
@@ -399,13 +425,23 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 	case *ast.UnaryExpr:
 		return classify(v.X, st, info, imports)
 	case *ast.CallExpr:
-		if _, ok := producerCall(v, st, info, imports); ok {
+		if _, _, ok := producerCall(v, st, info, imports); ok {
 			return kindFile
 		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
 		if strings.Contains(text, "*os.File") {
 			return kindContainer
+		}
+		// A struct built with a file element (ProcAttr{Files: []*os.File{...}})
+		// is a file container even when the composite type name says nothing.
+		for _, el := range v.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok {
+				el = kv.Value
+			}
+			if isFileOrContainer(el, st, info, imports) {
+				return kindContainer
+			}
 		}
 		if id, ok := v.Type.(*ast.Ident); ok {
 			if _, isStruct := info.structs[id.Name]; isStruct {
@@ -434,41 +470,57 @@ func applyKind(st *taints, name string, k kind) {
 
 // producerCall reports whether e is a call producing *os.File: a stdlib
 // producer, or a same-package function whose result type is *os.File.
-func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) (*ast.CallExpr, bool) {
+// producerCall returns a call whose results include *os.File plus the
+// result positions that are files. Same-package functions and methods are
+// matched by their collected result type texts.
+func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) (*ast.CallExpr, []int, bool) {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if ok {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 		if pkg, ok := sel.X.(*ast.Ident); ok {
 			// Resolve the package by local alias so an aliased
 			// `import fsp "os"` cannot dodge the producer taint.
 			path := imports[pkg.Name]
-			if path == "os" && fileProducers["os."+sel.Sel.Name] {
-				return call, true
+			if path == "os" {
+				if pos, found := fileProducers["os."+sel.Sel.Name]; found {
+					return call, pos, true
+				}
 			}
-			if fileProducers[pkg.Name+"."+sel.Sel.Name] {
-				return call, true
+			if pos, found := fileProducers[pkg.Name+"."+sel.Sel.Name]; found {
+				return call, pos, true
 			}
 		}
 		// Same-package method returning *os.File (e.g. an accessor).
 		if structName, found := resolveStruct(sel.X, st, info); found {
-			for _, r := range info.methods[structName+"."+sel.Sel.Name] {
-				if r == "*os.File" {
-					return call, true
-				}
+			if pos := positionsOf("*os.File", info.methods[structName+"."+sel.Sel.Name]); pos != nil {
+				return call, pos, true
 			}
 		}
 	}
 	if id, ok := call.Fun.(*ast.Ident); ok {
-		for _, r := range info.funcs[id.Name] {
-			if r == "*os.File" {
-				return call, true
-			}
+		if pos := positionsOf("*os.File", info.funcs[id.Name]); pos != nil {
+			return call, pos, true
+		}
+		// A single-argument conversion through a type alias of *os.File
+		// (type zr = *os.File; zr(f)) keeps the file taint.
+		if len(call.Args) == 1 && resolveTypeText(id.Name, info) == "*os.File" {
+			return call, []int{0}, true
 		}
 	}
-	return nil, false
+	return nil, nil, false
+}
+
+// positionsOf returns the result positions whose type text is want, or nil.
+func positionsOf(want string, results []string) []int {
+	var pos []int
+	for i, r := range results {
+		if r == want {
+			pos = append(pos, i)
+		}
+	}
+	return pos
 }
 
 // isFileExpr reports whether expr names a *os.File value: a tainted
@@ -485,7 +537,7 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 		}
 		return info.structs[structName][v.Sel.Name] == "*os.File"
 	case *ast.CallExpr:
-		_, ok := producerCall(v, st, info, imports)
+		_, _, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.StarExpr:
 		return isFileExpr(v.X, st, info, imports)
@@ -536,7 +588,7 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 			}
 		}
 	case *ast.CallExpr:
-		_, ok := producerCall(v, st, info, imports)
+		_, _, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.UnaryExpr:
 		return isFileOrContainer(v.X, st, info, imports)
@@ -586,7 +638,7 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 		return
 	}
 	for _, field := range fields.List {
-		t := exprText(field.Type)
+		t := resolveTypeText(exprText(field.Type), info)
 		for _, name := range field.Names {
 			switch {
 			case t == "*os.File":
@@ -611,6 +663,12 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 	for _, s := range list {
 		switch v := s.(type) {
 		case *ast.AssignStmt:
+			if len(v.Rhs) == 1 && len(v.Lhs) > 1 {
+				for i, lhs := range v.Lhs {
+					applyLHSMulti(lhs, v.Rhs[0], i, st, info, imports)
+				}
+				break
+			}
 			for i, lhs := range v.Lhs {
 				if i >= len(v.Rhs) {
 					break
@@ -711,6 +769,31 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	}
 	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
+	if c, ok := classifyStruct(rhs, info); ok {
+		st.struc[id.Name] = c
+	}
+}
+
+// applyLHSMulti handles `a, b := producer()` where one RHS call yields
+// several results: only the result positions declared as *os.File become
+// file-tainted (an error result must not).
+func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, imports map[string]string) {
+	id, ok := lhs.(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return
+	}
+	if _, pos, isProducer := producerCall(rhs, st, info, imports); isProducer {
+		for _, p := range pos {
+			if p == index {
+				st.file[id.Name] = true
+				return
+			}
+		}
+		return // non-file result positions (error results) get no taint
+	}
+	if cls := classify(rhs, st, info, imports); cls != kindNone {
+		applyKind(st, id.Name, cls)
+	}
 	if c, ok := classifyStruct(rhs, info); ok {
 		st.struc[id.Name] = c
 	}

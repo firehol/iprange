@@ -835,7 +835,7 @@ MUTEOF
 	add_mut internal/mapping/gatemut_hidden.go
 	run_mut "gatemut_-named file carrying a transfer"
 
-	# --- 41: aliased os import must not dodge the producer taint --------
+	# --- 40: aliased os import must not dodge the producer taint --------
 	cat > internal/mapping/gatemut_osalias.go <<'MUTEOF'
 package mapping
 
@@ -856,7 +856,88 @@ MUTEOF
 	add_mut internal/mapping/gatemut_osalias.go
 	run_mut "aliased os import dodging the producer taint"
 
-	# --- 40: an innocent gatemut_-named file must survive and pass -------
+	# --- 41: accessor-method *os.File return must keep the taint ----------
+	cat > internal/mapping/gatemut_accessor.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type reviewHolder struct{ f *os.File }
+
+func (h *reviewHolder) file() *os.File { return h.f }
+
+func accessorProbe() error {
+	h := &reviewHolder{}
+	return h.file().Chdir() // unapproved file method: reachable only through the accessor taint
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_accessor.go
+	run_mut "accessor-method *os.File return"
+
+	# --- 42: type-alias conversion of *os.File must keep the taint --------
+	cat > internal/mapping/gatemut_aliasconv.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type zrAlias = *os.File
+
+func aliasConv(f *os.File) error {
+	zr := zrAlias(f)
+	return zr.Chdir() // alias conversion must not untaint the file
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_aliasconv.go
+	run_mut "type-alias conversion of *os.File"
+
+	# --- 43: type-alias parameter of *os.File must be tainted -------------
+	cat > internal/mapping/gatemut_aliasparam.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type zrAlias = *os.File
+
+func aliasParam(zr zrAlias) error {
+	return zr.Chdir() // aliased parameter type must still be file-tainted
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_aliasparam.go
+	run_mut "type-alias parameter of *os.File"
+
+	# --- 44: file-carrying struct built before the call -------------------
+	cat > internal/mapping/gatemut_procattr.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+func leakStart() {
+	f, _ := os.Open("/etc/hosts")
+	pa := &os.ProcAttr{Files: []*os.File{f}}
+	_, _ = os.StartProcess("/bin/cat", []string{"cat", "/dev/null"}, pa)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_procattr.go
+	run_mut "os.StartProcess with a separately built ProcAttr"
+
+	# --- 45: os.Pipe file pair must be tainted ----------------------------
+	cat > internal/mapping/gatemut_ospipe.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+func pipeProbe() error {
+	_, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	return w.Chdir() // pipe file: reachable only through the os.Pipe producer taint
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_ospipe.go
+	run_mut "os.Pipe producer taint"
+
+	# --- 46: an innocent gatemut_-named file must survive and pass -------
 	cat > internal/mapping/gatemut_innocent.go <<'MUTEOF'
 package mapping
 
@@ -879,7 +960,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 41 mutation forms rejected)"
+	echo "import-graph self-test passed (all 45 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
