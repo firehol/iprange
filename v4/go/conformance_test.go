@@ -1202,6 +1202,12 @@ func TestViewCopiesSharePin(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatalf("close after pins: %v", err)
 	}
+	// The mapping is released now; a stale view copy must still report
+	// WrongState through the closed pin instead of touching the released
+	// bitmap bytes.
+	if _, _, err := v1.Word(0); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("stale view after reader close: %v", err)
+	}
 }
 
 // TestScanCallbackErrorPassthrough pins that a caller error from a scan
