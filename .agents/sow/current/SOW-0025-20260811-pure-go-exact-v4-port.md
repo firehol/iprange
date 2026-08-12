@@ -4,20 +4,22 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 REOPENED after a final-review process regression.
-The portable mmap-only immutable reader and its mechanical gates remain the
-current implementation checkpoint, but an independent adversarial review of
-HEAD 29e1dde invalidated the round-6 PASS. All three reopened findings were
-fixed at HEAD 73bba50: writable canonical ValueTag variables (now private wires
-behind accessor functions), the unapproved ImmutableInfo name (renamed to the
-approved DatabaseInfo surface), and the report's contradictory allocation,
-worker-decision, and view behavior statements (corrected; the metadata
-allocation figure re-measured at HEAD 2d2197a). The code fixes are regression-pinned; the
-record fixes are verified against the tree. Milestone 2 must not start until a
-new independent final review passes.
-Repository counts at reopening: production 4,797 raw lines / tests 4,676 raw
-lines. The approved later scope remains unchanged: Milestone 2 is the writer;
-sidecars, live coordination, and publication remain Milestone 4.
+Sub-state: milestone 1 CLOSED. The portable mmap-only immutable reader with
+corpus cross-open is the current implementation checkpoint. The reopened
+findings were fixed at HEAD 73bba50 (writable canonical ValueTag variables
+became private wires behind accessor functions; ImmutableInfo was renamed to
+the approved DatabaseInfo surface; the report's contradictory allocation,
+worker-decision, and view behavior statements were corrected), the metadata
+allocation figure was re-measured at HEAD 2d2197a, and the record gaps found
+by final-review rounds 7-9 were fixed at a64a495, 12b2e7f, 1af6135, and
+253f9d5. The closing full-scope final review (sol round 10) PASSed at HEAD
+253f9d5 with zero P0-P2-P3 findings.
+Repository counts at close: production 4,807 raw lines / tests 4,685 raw
+lines (counts at reopening: 4,797 / 4,676). Milestone 2 (writer) may start,
+scoped exactly to the approved milestone plan (one physical writer,
+allocation/retirement/commit, direct/membership/structured construction,
+Go-produced corpus, Rust cross-open); sidecars, live coordination, and
+publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -88,8 +90,10 @@ sidecars, live coordination, and publication remain Milestone 4.
 - sol round 9: FAIL at HEAD 1af6135 with one P2 - the round-8 entry had
   omitted the P3 and its repair, the "follows below" reference dangled,
   and the regression resolution claimed a closing result that did not yet
-  exist. This entry records the complete round-8 result; the closing
-  re-review (round 10) result will be appended below.
+  exist. This entry records the complete round-8 result.
+- sol round 10: PASS at HEAD 253f9d5, zero P0-P2-P3, full-scope zero-trust
+  re-review (records, pin lifetime, mapping/locking, format/API, resources,
+  regression proof, gates). Milestone 1 is accepted at this revision.
 
 ## Requirements
 
@@ -1374,9 +1378,8 @@ the workflow must identify the mutable tag authority, API-name deviation, and
 three stale report claims even though every mechanical gate passes. Resolution:
 the product fixes landed at HEAD 73bba50 (immutable tag accessors, DatabaseInfo
 rename, corrected report statements) with the metadata figure re-measured at
-2d2197a; the round-7 through round-9 re-review results are recorded in the
-Gate execution record, and the closing re-review result is appended there
-when it completes.
+2d2197a; the round-7 through round-10 re-review results are recorded in the
+Gate execution record, with the closing round-10 PASS at HEAD 253f9d5.
 
 Append regression entries here only after this SOW was completed or closed and
 later testing or use found broken behavior. Use a dated
