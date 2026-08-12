@@ -7,13 +7,14 @@ Status: in-progress
 Sub-state: milestone 1 REOPENED after a final-review process regression.
 The portable mmap-only immutable reader and its mechanical gates remain the
 current implementation checkpoint, but an independent adversarial review of
-HEAD 29e1dde invalidated the round-6 PASS. Blocking work remains: exported
-writable canonical ValueTag variables can change DirectSemantic process-wide
-and race with readers; the public ImmutableInfo name deviates from the
-approved/normative DatabaseInfo surface without a recorded decision; and the
-milestone report retained contradictory allocation, worker-decision, and view
-behavior statements. Milestone 2 must not start until these findings are fixed,
-regression-pinned where applicable, and a new independent final review passes.
+HEAD 29e1dde invalidated the round-6 PASS. All three reopened findings were
+fixed at HEAD 73bba50: writable canonical ValueTag variables (now private wires
+behind accessor functions), the unapproved ImmutableInfo name (renamed to the
+approved DatabaseInfo surface), and the report's contradictory allocation,
+worker-decision, and view behavior statements (corrected; the metadata
+allocation figure re-measured). The code fixes are regression-pinned; the
+record fixes are verified against the tree. Milestone 2 must not start until a
+new independent final review passes.
 Repository counts at reopening: production 4,797 raw lines / tests 4,676 raw
 lines. The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
@@ -586,10 +587,10 @@ The user adopted the external re-review's decisions after the reopening:
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
-- Counts at the time are recorded in the close-out entry (production 4,797
-  raw / tests 4,676 raw at milestone-1 close after the meta-precedence
-  parity fix, the sole-meta kind regression test, the final-review
-  regression guards, and the public tag/metadata-limit API completion).
+- Counts at reopening are recorded in the Status entry above (production 4,797
+  raw / tests 4,676 raw), taken after the meta-precedence parity fix, the
+  sole-meta kind regression test, the final-review regression guards, and
+  the public tag/metadata-limit API completion.
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 

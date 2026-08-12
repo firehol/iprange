@@ -186,8 +186,9 @@ tree): 4,683 raw lines. The earlier
 | cardinality scan | 0 |
 
 Metadata decompression allocates the returned payload plus a measured
-0-88 bytes/run of scanner overhead on the 1 MiB fixture (the bytes/value
-contract itself is unchanged: caller value bounded by the 20 MiB limit).
+8 allocations/run and ~40-50 KiB/run of decompressor overhead (re-measured
+at HEAD on the 1 MiB fixture and a small fixture; the bytes/value contract
+itself is unchanged: caller value bounded by the 20 MiB limit).
 
 ## 7. Malformed/corruption evidence
 
