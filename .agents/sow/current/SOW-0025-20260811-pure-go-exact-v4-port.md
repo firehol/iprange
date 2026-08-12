@@ -15,7 +15,7 @@ decode, the contradictory closure records corrected, and Mapping.File
 removed with the content-I/O source gate extended to io.ReadAll/io.Copy.
 Regression pins: plausible-corruption decode acceptance, record-geometry
 rejection at lookup, and the vector codec. Repository counts: production
-4,767 raw lines / tests 4,761 raw lines. Milestone 2 must not start until a
+4,767 raw lines / tests 4,767 raw lines. Milestone 2 must not start until a
 new independent final review passes. The approved later scope remains
 unchanged: Milestone 2 is the writer; sidecars, live coordination, and
 publication remain Milestone 4.
