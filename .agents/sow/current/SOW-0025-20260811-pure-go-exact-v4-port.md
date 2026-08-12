@@ -812,6 +812,67 @@ Use these sections in this order:
   authority conflict (unknown nonzero structure_kind on direct/membership:
   spec text 67 vs Rust 32).
 
+### 2026-08-12 - external audit pass (verified, all six findings real)
+
+- An externally run audit of the round-3 tree reported six correctness and
+  coordination failures plus performance waste. Every claim was verified
+  against code, the spec, and the Rust reference before any change; all six
+  correctness findings reproduced and were fixed with regression tests:
+  1. View copies could double-release one borrow: two copies of one public
+     view each decremented the reader's child count, so a later Close could
+     succeed while a live child existed (use of the closed mapping). The
+     released flag moved from the view value into a shared viewGuard with an
+     atomic CAS; copies of a view now share one borrow, second Release is a
+     no-op, and every copy reports HandleClosed after release. Public
+     lookups that return a view now pin exactly one small guard allocation
+     (the copy-safety cost; mapped traversal stays zero-alloc).
+  2. Immutable sidecar handling: a present canonical `.readers` sidecar
+     returned LiveCoordinationUnsupported (44) instead of the Rust WrongMode
+     class (11), and a dangling `.readers` symlink was accepted as absent.
+     Uses os.Lstat (symlink-aware, mirroring fs::symlink_metadata) and code
+     11; pinned by TestSidecarPresence.
+  3. Immutable lifetime lock was non-blocking F_OFD_SETLK; Rust blocks
+     (F_OFD_SETLKW) while a writer holds the exclusive lock. Both Linux and
+     macOS now use the blocking form (darwin F_OFD_SETLKW = 91).
+  4. Path identity was verified only before the lock; Rust rechecks after
+     locking and after mapping. mapping.OpenImmutable now re-verifies
+     identity and re-runs the namespace check at all three points.
+  5. validateStructuredMeta omitted structure_entry_count <
+     structure_id_limit (Rust CountInvariant); both metas with
+     entry_count == id_limit opened. Added the check; pinned by
+     TestStructureEntryCountBound.
+  6. Catalog name-branch keys were not grammar-validated (Rust decode_entry
+     validates leaf and branch names through one decoder). DecodeCatalogName
+     Branch now rejects invalid names; pinned by TestCatalogBranchNameGrammar.
+- Performance waste, all fixed:
+  - metadata stream validation re-inflated the payload O(log n) times (the
+    1 MiB fixture twelve times); replaced with one single-pass inflation
+    whose consumed-byte position (flate reads byte-at-a-time from a
+    bytes.Reader) proves the exact stream end. ~1.4x measured on the
+    micro-benchmark and far fewer allocations; trailing-byte, truncation,
+    and Adler checks preserved (TestMetadataTrailingBytesRejected passes).
+  - ReadWords decoded the whole record or walked the blob tree once per
+    word; now one record decode (inline) or one blob walk (blob) per batch.
+  - range/catalog/membership/structured descents pre-read the root page and
+    re-decoded every page header inside OpenSlotted; the root pre-read is
+    gone (first iteration captures the level) and OpenSlottedHeader reuses
+    the already-decoded header (page.go).
+  - check-import-graph.sh comment stripper treated `//` inside string
+    literals as a comment (a real call after a string containing `//` could
+    bypass the gate); the stripper is now a quote-aware awk state machine,
+    and in-memory decompression reads (consumedReader) are the documented
+    exemption.
+- Verified non-findings, recorded with evidence: the per-call atomic load in
+  the public facade is parity with the frozen C ABI, which gates every call
+  (iprange-capi handle.rs Gate::enter); the design-spec sentence constrains
+  the reader core, which remains import-free of sync/atomic (mechanically
+  enforced). The atomic-load dispute stays a documented interpretation, not
+  a change, unless the user decides otherwise.
+- Gates at HEAD: go test ./... (5 packages, incl. -race), go vet, gofmt,
+  import-graph (with quote-aware stripper), 9-target cross-compile matrix —
+  all green; zero-alloc suite updated for the one-guard-per-view contract;
+  report counts and this record updated in the same commit.
+
 ## Validation
 
 Acceptance criteria evidence:

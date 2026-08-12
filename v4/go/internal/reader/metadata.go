@@ -88,15 +88,24 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 		return nil, false, corrupt("metadata zlib header check mismatch")
 	}
 	payload := compressed[2 : len(compressed)-4]
-	streamLen, ok := deflateStreamLen(payload, meta.MetadataUncompressed)
-	if !ok || streamLen != len(payload) {
-		return nil, false, corrupt("metadata stream trailing bytes")
-	}
-	zr := flate.NewReader(bytes.NewReader(payload))
+	// One single inflation validates the whole stream: Go's flate consumes
+	// input through ReadByte when the source implements io.ByteReader (a
+	// bytes.Reader does), so the byte position after the final block is the
+	// exact stream end. A consumed position short of the payload is trailing
+	// garbage or a concatenated stream, an error is a malformed stream, and
+	// the output cap keeps work bounded at declared+1 (metadata.rs step
+	// bounds output the same way). The previous binary-search stream-length
+	// probe inflated the payload O(log n) times (twelve times for the 1 MiB
+	// fixture); this is one pass.
+	cr := &consumedReader{r: bytes.NewReader(payload)}
+	zr := flate.NewReader(cr)
 	out, err := io.ReadAll(io.LimitReader(zr, int64(meta.MetadataUncompressed)+1))
 	zr.Close()
 	if err != nil {
 		return nil, false, corrupt("metadata deflate stream: %v", err)
+	}
+	if cr.n != int64(len(payload)) {
+		return nil, false, corrupt("metadata stream trailing bytes")
 	}
 	if uint64(len(out)) != meta.MetadataUncompressed {
 		return nil, false, corrupt("metadata decompressed %d declared %d", len(out), meta.MetadataUncompressed)
@@ -107,35 +116,25 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	return out, true, nil
 }
 
-// deflateStreamLen returns the exact byte length of the one DEFLATE stream
-// in b, or ok=false when b does not contain a complete stream starting at
-// byte zero. Inflation succeeds exactly when the window contains the whole
-// final block, so the smallest fully-inflatable prefix is the stream end.
-// Each probe's output is capped at declared (the committed uncompressed
-// length): a stream that would produce more than the declared output is
-// invalid, and the cap keeps probe work bounded (metadata.rs step bounds
-// output at declared+1).
-func deflateStreamLen(b []byte, declared uint64) (int, bool) {
-	if len(b) == 0 {
-		return 0, false
+// consumedReader tracks exactly how many input bytes the inflater consumed.
+// bytes.Reader implements io.ByteReader, so Go's flate reads input
+// byte-by-byte and stops at the final block: consumed == len(payload) proves
+// one complete stream with no trailing bytes.
+type consumedReader struct {
+	r *bytes.Reader
+	n int64
+}
+
+func (c *consumedReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *consumedReader) ReadByte() (byte, error) {
+	b, err := c.r.ReadByte()
+	if err == nil {
+		c.n++
 	}
-	inflates := func(n int) bool {
-		r := flate.NewReader(bytes.NewReader(b[:n]))
-		written, err := io.Copy(io.Discard, io.LimitReader(r, int64(declared)+1))
-		r.Close()
-		return err == nil && uint64(written) <= declared
-	}
-	lo, hi := 1, len(b)
-	if !inflates(hi) {
-		return 0, false
-	}
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if inflates(mid) {
-			hi = mid
-		} else {
-			lo = mid + 1
-		}
-	}
-	return lo, true
+	return b, err
 }

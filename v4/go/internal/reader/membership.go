@@ -85,17 +85,63 @@ func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 // readWordsInner copies words [start, start+len(output)) through the same
 // mapped path as Word, then applies the trailing-word canonical check.
 func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
-	for i := range output {
-		b, err := v.wordBytes(start + uint32(i))
-		if err != nil {
-			return err
+	if len(output) == 0 {
+		return nil
+	}
+	byteOff := uint64(start) * 8
+	byteLen := uint64(len(output)) * 8
+	var data []byte
+	var err error
+	switch v.storage {
+	case format.MembershipStorageInline:
+		// One record decode for the whole batch: reopen the record page,
+		// re-validate the record identity once, then slice the inline
+		// bitmap directly (the per-word path decodes the record once per
+		// word).
+		var leaf format.MembershipIDLeaf
+		leaf, err = v.leaf()
+		if err == nil {
+			if leaf.Storage != format.MembershipStorageInline || leaf.MembershipID != v.id {
+				return corrupt("membership record changed")
+			}
+			if leaf.WordCount != v.wordCount {
+				return corrupt("membership word count changed")
+			}
+			data = leaf.Inline[byteOff : byteOff+byteLen]
 		}
-		output[i] = format.U64(b)
+	case format.MembershipStorageBlob:
+		// One blob-tree walk for the whole span (the walk already verifies
+		// the full chain and leaf geometry).
+		data, err = v.r.blobRead(v.blobRoot, format.BlobKindMembership, uint64(v.wordCount)*8, byteOff, byteLen)
+	}
+	if err != nil {
+		return err
+	}
+	for i := range output {
+		output[i] = format.U64(data[i*8:])
 	}
 	if uint64(start)+uint64(len(output)) == uint64(v.wordCount) && output[len(output)-1] == 0 {
 		return corrupt("membership bitmap has a trailing zero word")
 	}
 	return nil
+}
+
+// leaf re-opens the record page and re-decodes this view's membership
+// record.
+func (v MembershipView) leaf() (format.MembershipIDLeaf, error) {
+	page, err := v.r.page(v.recordPage)
+	if err != nil {
+		return format.MembershipIDLeaf{}, err
+	}
+	sl, err := format.OpenSlotted(page, v.r.meta.TxnID, format.PageTypeMembershipIDLeaf, 0, format.SlotItemsPerPage)
+	if err != nil {
+		return format.MembershipIDLeaf{}, err
+	}
+	rec, err := sl.Record(int(v.recordOff))
+	if err != nil {
+		return format.MembershipIDLeaf{}, err
+	}
+	return format.DecodeMembershipIDLeaf(rec)
 }
 
 // wordBytes returns the 8 mapped bytes of word i, re-validated at call time.
@@ -180,10 +226,8 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 		return MembershipView{}, corrupt("membership dictionary empty")
 	}
 	cur := root
-	level, err := r.membershipLevel(cur)
-	if err != nil {
-		return MembershipView{}, err
-	}
+	level := uint16(0)
+	first := true
 	for {
 		page, err := r.page(cur)
 		if err != nil {
@@ -193,10 +237,13 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 		if err != nil {
 			return MembershipView{}, err
 		}
-		if h.Level != level {
+		if first {
+			level = h.Level // the root's own level starts the descent
+			first = false
+		} else if h.Level != level {
 			return MembershipView{}, corrupt("membership level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, 0, format.SlotItemsPerPage)
+		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
 		if err != nil {
 			return MembershipView{}, err
 		}
@@ -239,21 +286,6 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 			return MembershipView{}, corrupt("unexpected membership page type %d", h.PageType)
 		}
 	}
-}
-
-func (r *ImmutableReader) membershipLevel(pgno uint32) (uint16, error) {
-	page, err := r.page(pgno)
-	if err != nil {
-		return 0, err
-	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
-	if err != nil {
-		return 0, err
-	}
-	if h.Level > format.MaxTreeLevel {
-		return 0, corrupt("membership level %d over max", h.Level)
-	}
-	return h.Level, nil
 }
 
 // membershipBranchChild finds the greatest branch entry with first_id <= id.

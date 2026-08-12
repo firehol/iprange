@@ -38,7 +38,10 @@ type Mapping struct {
 // Geometry refusals carry CodeFormatInvalid; operating-system failures carry
 // CodeIO. The optional check runs after the shared lifetime lock is held and
 // before any byte of the file is mapped, so namespace decisions observe one
-// consistent locking state.
+// consistent locking state. Path identity is verified before the lock, after
+// the lock, and after mapping, mirroring Rust open_immutable: a replacement
+// race must never open an old unlinked inode while the path names a new
+// database.
 func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
 	// Stat the final name, then reopen with O_NOFOLLOW and verify the file
@@ -62,15 +65,25 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		}
 	}()
 
+	verifyIdentity := func() error {
+		st, err := f.Stat()
+		if err != nil {
+			return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+		}
+		if !st.Mode().IsRegular() {
+			return &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
+		}
+		if !os.SameFile(before, st) {
+			return &format.Error{Code: format.CodeFormatInvalid, Detail: "file replaced between stat and open"}
+		}
+		return nil
+	}
+	if err := verifyIdentity(); err != nil {
+		return nil, err
+	}
 	st, err := f.Stat()
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
-	}
-	if !st.Mode().IsRegular() {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
-	}
-	if !os.SameFile(before, st) {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file replaced between stat and open"}
 	}
 	size := uint64(st.Size())
 	if size < 2*format.PageSize {
@@ -86,6 +99,9 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if err := lockLifetimeShared(int(f.Fd())); err != nil {
 		return nil, err
 	}
+	if err := verifyIdentity(); err != nil {
+		return nil, err
+	}
 	if check != nil {
 		if err := check(clean); err != nil {
 			return nil, err
@@ -94,6 +110,19 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
+	}
+	// The path may have been replaced while the lock was taken or the
+	// mapping was created; recheck identity and the namespace contract on
+	// the mapped file before publishing the Mapping.
+	if err := verifyIdentity(); err != nil {
+		unix.Munmap(data)
+		return nil, err
+	}
+	if check != nil {
+		if err := check(clean); err != nil {
+			unix.Munmap(data)
+			return nil, err
+		}
 	}
 	m := &Mapping{file: f, data: data, size: size}
 	cleanup = false

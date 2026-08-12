@@ -17,14 +17,17 @@ import (
 // against the Apple header value and verified by the platform milestone.
 const (
 	fOfdSetLK          = 90
+	fOfdSetLKW         = 91
 	lifetimeLockOffset = 1 << 44
 	lifetimeLockLen    = 1
 )
 
 // lockLifetimeShared takes the shared OFD byte-range lifetime lock on fd.
+// The lock is blocking (F_OFD_SETLKW), mirroring Rust live_lock: an
+// immutable open waits for a writer holding the exclusive lock.
 func lockLifetimeShared(fd int) error {
 	fl := unix.Flock_t{Type: unix.F_RDLCK, Whence: unix.SEEK_SET, Start: lifetimeLockOffset, Len: lifetimeLockLen}
-	if err := unix.FcntlFlock(uintptr(fd), fOfdSetLK, &fl); err != nil {
+	if err := unix.FcntlFlock(uintptr(fd), fOfdSetLKW, &fl); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "lifetime lock: " + err.Error()}
 	}
 	return nil

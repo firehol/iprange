@@ -51,10 +51,11 @@ func TestZeroAllocationLookups(t *testing.T) {
 	view.ContainsIndex(0)
 
 	checks := []struct {
-		name string
-		fn   func() error
+		name  string
+		views int // live views created per fn() run; each pins exactly one guard alloc
+		fn    func() error
 	}{
-		{"direct-v4", func() error {
+		{"direct-v4", 0, func() error {
 			for _, ip := range probe {
 				if _, _, err := direct.LookupDirectV4(ip); err != nil {
 					return err
@@ -62,7 +63,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"direct-v6", func() error {
+		{"direct-v6", 0, func() error {
 			for _, ip := range probe64 {
 				if _, _, err := v6.LookupDirectV6(IPv6{Hi: ip.hi, Lo: ip.lo}); err != nil {
 					return err
@@ -70,7 +71,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-v4", func() error {
+		{"membership-v4", 12, func() error {
 			for _, ip := range probe {
 				view, _, err := member.LookupMembershipV4(ip)
 				if err != nil {
@@ -80,7 +81,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-v6-inline", func() error {
+		{"membership-v6-inline", 4, func() error {
 			for _, ip := range probe64 {
 				view, _, err := member6.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo})
 				if err != nil {
@@ -90,7 +91,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-contains", func() error {
+		{"membership-contains", 1, func() error {
 			view, _, err := member.LookupMembershipV4(IPv4(0x0a000000))
 			if err != nil {
 				return err
@@ -103,7 +104,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-word", func() error {
+		{"membership-word", 1, func() error {
 			view, _, err := member6.LookupMembershipV6(IPv6{Hi: 0, Lo: 0})
 			if err != nil {
 				return err
@@ -116,7 +117,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"structured-v4", func() error {
+		{"structured-v4", 12, func() error {
 			for _, ip := range probe {
 				view, _, err := structured.LookupNetworkEnrichmentV1V4(ip)
 				if err != nil {
@@ -126,7 +127,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"feed-lookup", func() error {
+		{"feed-lookup", 0, func() error {
 			// The only heap allocation in the public feed lookup is the
 			// returned Go string copy of the name (the internal mapped path
 			// allocates nothing and is pinned by the reader package's own
@@ -138,11 +139,11 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"direct-scan", func() error {
+		{"direct-scan", 0, func() error {
 			// Full ascending scan of the direct fixture.
 			return direct.DirectRangesV4(func(DirectRangeV4) error { return nil })
 		}},
-		{"direct-cardinality", func() error {
+		{"direct-cardinality", 0, func() error {
 			_, err := direct.Cardinality()
 			return err
 		}},
@@ -155,15 +156,24 @@ func TestZeroAllocationLookups(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
-			switch check.name {
-			case "feed-lookup":
+			switch {
+			case check.name == "feed-lookup":
 				// The public facade allocates exactly one heap object per
-				// lookup: the returned name string copy (70 copies for the
-				// 70-lookup run). The internal mapped path allocates nothing
-				// and is pinned by the reader package's own zero-allocation
-				// test.
-				if allocs > 70 {
+				// lookup: the returned name string copy. The internal mapped
+				// path allocates nothing and is pinned by the reader
+				// package's own zero-allocation test.
+				if allocs/70 > 1 {
 					t.Errorf("%s allocated %f heap bytes per run (want exactly one copy per lookup)", check.name, allocs)
+				}
+			case check.views > 0:
+				// Lookups that return a live view allocate exactly one small
+				// view guard per created view: Go values are copyable, and a
+				// shared guard is what makes copies of one view safe (a
+				// released flag inside the value would let two copies
+				// double-release one borrow and defeat the HandleBusy
+				// contract). The mapped traversal itself allocates nothing.
+				if allocs/float64(check.views) > 1 {
+					t.Errorf("%s allocated %f heap bytes per run (want exactly one guard per view)", check.name, allocs)
 				}
 			default:
 				if allocs != 0 {

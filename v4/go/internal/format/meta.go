@@ -350,6 +350,9 @@ func validateStructuredMeta(m *Meta) error {
 	if m.StructureIDLimit < 1 || m.StructureIDLimit > MaxPageCount {
 		return &errMeta{reason: "structure id limit out of range", code: ErrFormat}
 	}
+	if m.StructureEntryCount >= m.StructureIDLimit {
+		return &errMeta{reason: "structure entries at or above id limit", code: ErrFormat}
+	}
 	if m.MembershipEntryCount > m.StructureEntryCount {
 		return &errMeta{reason: "membership entries above structure entries", code: ErrFormat}
 	}

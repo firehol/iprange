@@ -94,7 +94,11 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 		if err != nil {
 			return NetworkEnrichmentV1View{}, false, err
 		}
-		child, err := structureDirectoryChild(page, r.meta, level, id)
+		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		if err != nil {
+			return NetworkEnrichmentV1View{}, false, err
+		}
+		child, err := structureDirectoryChild(page, h, r.meta, level, id)
 		if err != nil {
 			return NetworkEnrichmentV1View{}, false, err
 		}
@@ -107,7 +111,11 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	rec, found, err := structureRecordAt(page, r.meta, id)
+	h, err := format.DecodePageHeader(page, r.meta.TxnID)
+	if err != nil {
+		return NetworkEnrichmentV1View{}, false, err
+	}
+	rec, found, err := structureRecordAt(page, h, r.meta, id)
 	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
@@ -122,11 +130,7 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 // index derives directly from the ID and the level span: a directory at
 // level L covers R*512^(L-1) IDs per child (table.rs child_index divides
 // by coverage(level-1)).
-func structureDirectoryChild(page []byte, meta format.Meta, level uint32, id uint32) (uint32, error) {
-	h, err := format.DecodePageHeader(page, meta.TxnID)
-	if err != nil {
-		return 0, err
-	}
+func structureDirectoryChild(page []byte, h format.PageHeader, meta format.Meta, level uint32, id uint32) (uint32, error) {
 	if h.PageType != format.PageTypeStructureIDDirectory || h.Aux != uint32(meta.StructureKind) || uint32(h.Level) != level {
 		return 0, corrupt("structure directory page")
 	}
@@ -161,11 +165,7 @@ type structureRecord struct {
 // structureRecordAt decodes the record at the implied slot for id. An
 // all-zero slot cell is a clean miss; any stored id other than the slot's
 // is corruption (table.rs read_record).
-func structureRecordAt(page []byte, meta format.Meta, id uint32) (structureRecord, bool, error) {
-	h, err := format.DecodePageHeader(page, meta.TxnID)
-	if err != nil {
-		return structureRecord{}, false, err
-	}
+func structureRecordAt(page []byte, h format.PageHeader, meta format.Meta, id uint32) (structureRecord, bool, error) {
 	if h.PageType != format.PageTypeStructureIDRecord || h.Aux != uint32(meta.StructureKind) || h.Level != 0 {
 		return structureRecord{}, false, corrupt("structure record page")
 	}

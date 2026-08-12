@@ -114,6 +114,14 @@ func OpenSlotted(page []byte, selectedTxn uint64, expectedType PageType, auxExpe
 	if err != nil {
 		return SlottedPage{}, err
 	}
+	return OpenSlottedHeader(page, h, expectedType, auxExpected, itemLimit)
+}
+
+// OpenSlottedHeader views a slotted page whose header the caller already
+// decoded and validated. The reader hot paths decode each page header once
+// and pass it here; re-decoding it inside OpenSlotted would be a second full
+// header parse per visited page.
+func OpenSlottedHeader(page []byte, h PageHeader, expectedType PageType, auxExpected uint32, itemLimit uint16) (SlottedPage, error) {
 	if h.PageType != expectedType {
 		return SlottedPage{}, headerErr("page type %d expected %d", h.PageType, expectedType)
 	}

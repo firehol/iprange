@@ -19,9 +19,12 @@ const (
 )
 
 // lockLifetimeShared takes the shared OFD byte-range lifetime lock on fd.
+// The lock is blocking (F_OFD_SETLKW), mirroring Rust live_lock lock()
+// with wait=true: an immutable open waits for a writer holding the
+// exclusive lock instead of failing immediately.
 func lockLifetimeShared(fd int) error {
 	fl := unix.Flock_t{Type: unix.F_RDLCK, Whence: unix.SEEK_SET, Start: lifetimeLockOffset, Len: lifetimeLockLen}
-	if err := unix.FcntlFlock(uintptr(fd), unix.F_OFD_SETLK, &fl); err != nil {
+	if err := unix.FcntlFlock(uintptr(fd), unix.F_OFD_SETLKW, &fl); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "lifetime lock: " + err.Error()}
 	}
 	return nil

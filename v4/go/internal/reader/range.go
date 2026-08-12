@@ -37,10 +37,8 @@ func (r *ImmutableReader) LookupDirect6(addrHi, addrLo uint64) (uint32, bool, er
 
 func (r *ImmutableReader) lookupRange4(root uint32, addr uint32) (uint32, bool, error) {
 	cur := root
-	level, err := r.rangeLevel(cur)
-	if err != nil {
-		return 0, false, err
-	}
+	level := uint16(0)
+	first := true
 	for {
 		page, err := r.page(cur)
 		if err != nil {
@@ -50,10 +48,13 @@ func (r *ImmutableReader) lookupRange4(root uint32, addr uint32) (uint32, bool, 
 		if err != nil {
 			return 0, false, err
 		}
-		if h.Level != level {
+		if first {
+			level = h.Level // the root's own level starts the descent
+			first = false
+		} else if h.Level != level {
 			return 0, false, corrupt("range level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+		sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 		if err != nil {
 			return 0, false, err
 		}
@@ -84,10 +85,8 @@ func (r *ImmutableReader) lookupRange4(root uint32, addr uint32) (uint32, bool, 
 
 func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint32, bool, error) {
 	cur := root
-	level, err := r.rangeLevel(cur)
-	if err != nil {
-		return 0, false, err
-	}
+	level := uint16(0)
+	first := true
 	for {
 		page, err := r.page(cur)
 		if err != nil {
@@ -97,10 +96,13 @@ func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint
 		if err != nil {
 			return 0, false, err
 		}
-		if h.Level != level {
+		if first {
+			level = h.Level // the root's own level starts the descent
+			first = false
+		} else if h.Level != level {
 			return 0, false, corrupt("range level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+		sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 		if err != nil {
 			return 0, false, err
 		}
@@ -127,22 +129,6 @@ func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint
 			return 0, false, corrupt("unexpected range page type %d", h.PageType)
 		}
 	}
-}
-
-// rangeLevel reads the root page's level, bounding the descent depth.
-func (r *ImmutableReader) rangeLevel(pgno uint32) (uint16, error) {
-	page, err := r.page(pgno)
-	if err != nil {
-		return 0, err
-	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
-	if err != nil {
-		return 0, err
-	}
-	if h.Level > format.MaxTreeLevel {
-		return 0, corrupt("range level %d over max", h.Level)
-	}
-	return h.Level, nil
 }
 
 // rangeBranchChild4 finds the greatest branch entry with first_from <= addr

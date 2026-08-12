@@ -355,34 +355,45 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 	return FeedEntry{Index: entry.FeedIndex, Name: string(entry.Name)}, true, nil
 }
 
+// viewGuard is the shared release state of one logical view borrow. Go
+// values are freely copyable, so the released flag cannot live in the view
+// value: every copy of one view shares this guard, and Release marks the
+// single borrow released exactly once. Without the guard, releasing two
+// copies of one view decremented the reader's child count twice, letting a
+// later Close succeed while a live child still existed.
+type viewGuard struct {
+	sh   *shared
+	done atomic.Bool
+}
+
 // MembershipView exposes one canonical membership bitmap. The view borrows
 // the reader and keeps its mapping alive: Release returns the borrow (the
 // reader then reports ErrorHandleClosed on the released value, and a reader
-// with unreleased views reports ErrorHandleBusy on Close). The released
-// state belongs to the view value: like the Rust borrow, a view must not be
-// copied and used past its Release, and Release must not race the view's
-// own operations. The zero MembershipView (absent membership) is inert.
+// with unreleased views reports ErrorHandleBusy on Close). Copies of a view
+// share the same borrow: releasing either copy (or both) releases the one
+// borrow, and the released state is visible to every copy. Using a released
+// view reports ErrorHandleClosed. The zero MembershipView (absent
+// membership) is inert.
 type MembershipView struct {
-	reader   *ImmutableReader
-	released bool
-	inner    reader.MembershipView
+	guard *viewGuard
+	inner reader.MembershipView
 }
 
 func (v *MembershipView) check() error {
-	if v.reader == nil || v.released {
+	if v.guard == nil || v.guard.done.Load() {
 		return &Error{Code: ErrorHandleClosed, Detail: "view released or reader closed"}
 	}
 	return nil
 }
 
-// Release returns the view to its reader. Idempotent; pointer receiver so
-// the released state lands on the caller's variable.
+// Release returns the view to its reader. Idempotent per logical borrow,
+// even when the same view was copied: the shared guard makes the second
+// release a no-op.
 func (v *MembershipView) Release() {
-	if v.reader == nil || v.released {
+	if v.guard == nil || !v.guard.done.CompareAndSwap(false, true) {
 		return
 	}
-	v.released = true
-	v.reader.sh.views.Add(-1)
+	v.guard.sh.views.Add(-1)
 }
 
 // WordCount returns the canonical bitmap word count.
@@ -455,7 +466,7 @@ func (r *ImmutableReader) LookupMembershipV4(ip IPv4) (MembershipView, bool, err
 		return MembershipView{}, false, nil
 	}
 	r.holdView()
-	return MembershipView{reader: r, inner: view}, true, nil
+	return MembershipView{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
 }
 
 // LookupMembershipV6 returns the membership bitmap covering ip. The view
@@ -475,7 +486,7 @@ func (r *ImmutableReader) LookupMembershipV6(ip IPv6) (MembershipView, bool, err
 		return MembershipView{}, false, nil
 	}
 	r.holdView()
-	return MembershipView{reader: r, inner: view}, true, nil
+	return MembershipView{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
 }
 
 // NetworkEnrichmentV1 is one decoded network_enrichment_v1 payload.
@@ -493,26 +504,24 @@ type NetworkEnrichmentV1 struct {
 // MembershipView it borrows the reader: Release it when done. The zero view
 // (absent entry) is inert.
 type NetworkEnrichmentV1View struct {
-	reader   *ImmutableReader
-	released bool
-	inner    reader.NetworkEnrichmentV1View
+	guard *viewGuard
+	inner reader.NetworkEnrichmentV1View
 }
 
 func (v *NetworkEnrichmentV1View) check() error {
-	if v.reader == nil || v.released {
+	if v.guard == nil || v.guard.done.Load() {
 		return &Error{Code: ErrorHandleClosed, Detail: "view released or reader closed"}
 	}
 	return nil
 }
 
-// Release returns the view to its reader. Idempotent; pointer receiver so
-// the released state lands on the caller's variable.
+// Release returns the view to its reader. Idempotent per logical borrow,
+// even when the same view was copied (see MembershipView.Release).
 func (v *NetworkEnrichmentV1View) Release() {
-	if v.reader == nil || v.released {
+	if v.guard == nil || !v.guard.done.CompareAndSwap(false, true) {
 		return
 	}
-	v.released = true
-	v.reader.sh.views.Add(-1)
+	v.guard.sh.views.Add(-1)
 }
 
 // Value decodes the structured payload.
@@ -549,8 +558,8 @@ func (v *NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
 	if err != nil {
 		return MembershipView{}, publicError(err)
 	}
-	v.reader.holdView()
-	return MembershipView{reader: v.reader, inner: view}, nil
+	v.guard.sh.views.Add(1)
+	return MembershipView{guard: &viewGuard{sh: v.guard.sh}, inner: view}, nil
 }
 
 // LookupNetworkEnrichmentV1V4 returns the structured value covering ip. The
@@ -570,7 +579,7 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmen
 		return NetworkEnrichmentV1View{}, false, nil
 	}
 	r.holdView()
-	return NetworkEnrichmentV1View{reader: r, inner: view}, true, nil
+	return NetworkEnrichmentV1View{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
 }
 
 // LookupNetworkEnrichmentV1V6 returns the structured value covering ip. The
@@ -590,7 +599,7 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmen
 		return NetworkEnrichmentV1View{}, false, nil
 	}
 	r.holdView()
-	return NetworkEnrichmentV1View{reader: r, inner: view}, true, nil
+	return NetworkEnrichmentV1View{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
 }
 
 // MetadataJSON returns the exact decompressed opaque metadata bytes. present

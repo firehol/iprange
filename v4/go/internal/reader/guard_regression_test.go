@@ -2,6 +2,7 @@ package reader
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -223,5 +224,99 @@ func TestBlobGapRejectedCorruption(t *testing.T) {
 	}
 	if _, _, err := view.Word(512); err == nil || !isFormatError(err, format.CodeFormatInvalid) {
 		t.Fatalf("blob gap read accepted or wrong error: %v", err)
+	}
+}
+
+// TestSidecarPresence pins the immutable sidecar contract (Rust
+// require_sidecar_absent): a present canonical .readers sidecar — including
+// a dangling symlink — refuses the immutable open with the WrongState class
+// (code 11, Rust WrongMode), never a silent acceptance.
+func TestSidecarPresence(t *testing.T) {
+	t.Run("regular-file", func(t *testing.T) {
+		dir := t.TempDir()
+		raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := filepath.Join(dir, "db.iprdb")
+		if err := os.WriteFile(db, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(db+".readers", []byte("sidecar"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenImmutable(db); mustCode(err) != format.CodeWrongState {
+			t.Fatalf("sidecar present: code %v want 11", err)
+		}
+	})
+	t.Run("dangling-symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := filepath.Join(dir, "db.iprdb")
+		if err := os.WriteFile(db, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(dir, "missing"), db+".readers"); err != nil {
+			t.Skip("symlinks unsupported:", err)
+		}
+		if _, err := OpenImmutable(db); mustCode(err) != format.CodeWrongState {
+			t.Fatalf("dangling sidecar symlink: code %v want 11", err)
+		}
+	})
+}
+
+// catalogNameBranchPage builds one canonical catalog name branch page with a
+// single record for the given first name (record_len 13, child page 5).
+func catalogNameBranchPage(t *testing.T, name byte) []byte {
+	t.Helper()
+	const upper = 4096 - 13
+	p := make([]byte, format.PageSize)
+	header(p, format.PageTypeCatalogNameBranch, 0, 1, 1, 32+2, upper)
+	format.PutU16(p[32:34], upper)
+	format.PutU16(p[upper:upper+2], 13) // record_len
+	format.PutU16(p[upper+2:upper+4], 0)
+	format.PutU32(p[upper+4:upper+8], 5) // child
+	p[upper+8] = 1                       // name_len
+	p[upper+12] = name
+	return p
+}
+
+// TestCatalogBranchNameGrammar pins the feed_catalog rule that branch keys
+// obey the same lowercase feed-name grammar as leaf names (Rust decode_entry
+// validates both): an invalid branch key is corruption, never a routing key.
+func TestCatalogBranchNameGrammar(t *testing.T) {
+	sl, err := format.OpenSlotted(catalogNameBranchPage(t, 'a'), 2, format.PageTypeCatalogNameBranch, 0, format.SlotItemsPerPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := nameBranchChild(sl, "a", 16)
+	if err != nil || child != 5 {
+		t.Fatalf("valid branch key: child=%d err=%v", child, err)
+	}
+	sl, err = format.OpenSlotted(catalogNameBranchPage(t, 'F'), 2, format.PageTypeCatalogNameBranch, 0, format.SlotItemsPerPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The codec rejects the record with its header-format error, which the
+	// public boundary surfaces as FormatInvalid (code 32).
+	if _, err := nameBranchChild(sl, "feed-000", 16); err == nil {
+		t.Fatalf("uppercase branch key accepted")
+	}
+}
+
+// TestStructureEntryCountBound pins validate_structured_counts: a meta whose
+// structure_entry_count is at or above structure_id_limit is not
+// bootstrap-valid (Rust CountInvariant).
+func TestStructureEntryCountBound(t *testing.T) {
+	path := copyFixture(t, "structured-ipv4.iprdb", "struct-count.iprdb")
+	patchMeta(t, path, func(page []byte) {
+		limit := format.U64(page[208:216]) // structure_id_limit
+		format.PutU64(page[200:208], limit)
+	})
+	if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+		t.Fatalf("code %v want 32", err)
 	}
 }

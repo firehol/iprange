@@ -1115,3 +1115,42 @@ func TestScanCallbackErrorPassthrough(t *testing.T) {
 		t.Fatalf("callback error rewritten: %v", err)
 	}
 }
+
+// TestViewCopySharesOneBorrow pins the copy-safety contract of public views:
+// Go values are copyable, so copies of one view must share a single borrow.
+// Releasing both copies (before or after each other) returns the borrow
+// exactly once: a fresh live view must still prevent Close (HandleBusy), and
+// operations on the released copies report HandleClosed — never a use of the
+// closed mapping.
+func TestViewCopySharesOneBorrow(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	v1, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	v2 := v1 // copy shares the same borrow
+	v1.Release()
+	v2.Release() // no-op: the borrow was already returned
+
+	// Any copy of the released view is inert.
+	if _, _, err := v2.Word(0); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("released copy word: %v", err)
+	}
+	if _, _, err := v1.Word(0); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("released original word: %v", err)
+	}
+
+	// A new live view still blocks Close: the double release above must not
+	// have left the reader believing no views exist.
+	v3, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
+	if err != nil || !found {
+		t.Fatalf("second lookup: %v %v", found, err)
+	}
+	if err := r.Close(); errorAsCode(err) != ErrorHandleBusy {
+		t.Fatalf("close with live view: %v", err)
+	}
+	v3.Release()
+	if err := r.Close(); err != nil {
+		t.Fatalf("close after release: %v", err)
+	}
+}

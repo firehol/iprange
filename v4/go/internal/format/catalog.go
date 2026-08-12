@@ -100,6 +100,9 @@ func DecodeCatalogNameBranch(b []byte) (CatalogNameBranchRecord, error) {
 	if int(recordLen) != nameRecordFixed+nameLen {
 		return CatalogNameBranchRecord{}, headerErr("catalog branch name mismatch")
 	}
+	if !FeedNameValid(b[12 : 12+nameLen]) {
+		return CatalogNameBranchRecord{}, headerErr("invalid catalog branch name")
+	}
 	return CatalogNameBranchRecord{Child: child, FirstName: b[12 : 12+nameLen]}, nil
 }
 

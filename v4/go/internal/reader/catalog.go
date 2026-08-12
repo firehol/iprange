@@ -19,10 +19,8 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 		return FeedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 	}
 	cur := r.meta.CatalogNameRoot
-	level, err := r.catalogLevel(cur)
-	if err != nil {
-		return FeedEntry{}, false, err
-	}
+	level := uint16(0)
+	first := true
 	for {
 		page, err := r.page(cur)
 		if err != nil {
@@ -32,10 +30,13 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
-		if h.Level != level {
+		if first {
+			level = h.Level // the root's own level starts the descent
+			first = false
+		} else if h.Level != level {
 			return FeedEntry{}, false, corrupt("catalog level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, 0, format.SlotItemsPerPage)
+		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
@@ -68,21 +69,6 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 type FeedEntry struct {
 	FeedIndex uint32
 	Name      []byte
-}
-
-func (r *ImmutableReader) catalogLevel(pgno uint32) (uint16, error) {
-	page, err := r.page(pgno)
-	if err != nil {
-		return 0, err
-	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
-	if err != nil {
-		return 0, err
-	}
-	if h.Level > format.MaxTreeLevel {
-		return 0, corrupt("catalog level %d over max", h.Level)
-	}
-	return h.Level, nil
 }
 
 // cmpName compares one mapped name slice with the caller string without

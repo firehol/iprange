@@ -59,12 +59,16 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 // sidecarAbsentUnderLock runs after the shared lifetime lock is held and
 // refuses the immutable open when the canonical external sidecar exists.
 // Absence is the only accepted answer: an unreadable sidecar path is a
-// refused open, not a silently ignored error.
+// refused open, not a silently ignored error. The check is symlink-aware
+// (os.Lstat), mirroring Rust's fs::symlink_metadata: a dangling .readers
+// symlink still exists as a namespace entry and therefore refuses the open.
+// A present sidecar is the WrongState class (Rust WrongMode maps to code
+// 11), not a coordination error.
 func sidecarAbsentUnderLock(clean string) error {
-	_, err := os.Stat(sidecarPath(clean))
+	_, err := os.Lstat(sidecarPath(clean))
 	switch {
 	case err == nil:
-		return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "external sidecar present; immutable open of a live database is refused"}
+		return &format.Error{Code: format.CodeWrongState, Detail: "external sidecar present; immutable open of a live database is refused"}
 	case os.IsNotExist(err):
 		return nil
 	default:

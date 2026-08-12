@@ -591,6 +591,26 @@ verification verdicts:
   the deletion set, and the worker boundary remain the pending user
   decisions.
 
+
+## 11e. External audit pass (2026-08-12)
+
+An external audit reported six correctness/coordination failures and
+performance waste; all claims were verified against code, spec, and the
+Rust reference, all six reproduced, and all fixed with regression tests
+(view-copy borrow double-release; sidecar Lstat + WrongState class;
+blocking F_OFD_SETLKW lifetime lock; three-point path identity recheck;
+structure_entry_count < structure_id_limit; catalog branch-key grammar).
+Performance: single-inflation metadata validation (~1.4x on the
+micro-benchmark), batched ReadWords (one decode/walk per batch), single
+page-header decode per visited page (OpenSlottedHeader) with the root
+pre-read removed, and a quote-aware gate stripper. The per-call atomic in
+the public facade was verified as parity with the frozen C ABI
+(handle.rs Gate::enter gates every C call) and remains the documented
+interpretation of design-iprange-engine.md:401, which constrains the
+sync-free reader core. Production LOC and test LOC grew with the new
+regression tests; the public zero-alloc contract now documents exactly one
+guard allocation per created view (copy-safety), zero elsewhere.
+
 ## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
