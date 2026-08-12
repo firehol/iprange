@@ -1,8 +1,11 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
-Date: 2026-08-11 (updated 2026-08-12 after review rounds 2-3). Status:
-implementation checkpoint complete; three decisions still pending
-(evidence-first, per the recorded Milestone 0 closure and round-2 mapping).
+Date: 2026-08-11 (updated 2026-08-12 after review rounds 2-3, the external
+audit, and the hot-path contract implementation). Status: implementation
+checkpoint complete; the four decisions 1A-4A are resolved and implemented
+(deletion executed, worker boundary scheduled, WrongState closed class,
+pinned hot-path facade); the six-reviewer re-verification of the rebuilt
+facade is the remaining milestone-1 gate.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -63,8 +66,8 @@ and all view operations at 0)
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,639
-raw lines, including blanks; new-tree tests: 4,308 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,874
+raw lines, including blanks; new-tree tests: 4,397 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -732,6 +735,43 @@ decision 4): caller-owned pinned lookup handles with token-style views
 registration outside it) vs keeping the guard facade with a SOW/spec
 amendment.
 
+## 11j. Decisions 1A-4A implementation (2026-08-12)
+
+All four decisions were recorded in the SOW and implemented:
+
+- **Deletion (1A).** The verified scalar types were relocated in-line into
+  `v4/go/types.go` (address/value families, IPv4/IPv6, ValueTag,
+  Cardinality129 — byte-identical semantics, `TestPublicSemanticFoundation`
+  unchanged and green); `v4/go/types.go` no longer imports the obsolete
+  package. The obsolete tree was then removed in the final milestone-1
+  implementation commit: 105 tracked files (47 production + 58 test — the
+  previously recorded "100" count was stale) plus the untracked
+  `v4/go/exactv4.test` binary and the empty `v4/go/exactv4/` directory.
+  `.reasonix/` untouched; git history preserves the deleted sources; the
+  import-graph gate no longer exempts the package.
+- **Worker boundary (2A).** Recorded: a minimal project-owned assembly
+  sigaction shim (SA_SIGINFO, kernel-bus check, si_addr interval,
+  previous-disposition chaining, raw exit(197)), validation/recovery
+  workers only, proven natively per POSIX platform in the worker milestone.
+  No Go runtime code, cgo, or unwinding inside the handler.
+- **Closed class (3A).** Closed readers and closed pins report WrongState
+  (11); second Close reports WrongState; numeric code 9 stays reserved;
+  `MembershipView.WordCount` is now `(uint32, error)`; per-view Release no
+  longer exists; the HandleBusy contract moved to pins.
+- **Hot-path facade (4A).** `ImmutableReader.Pin` registers one lifetime
+  child outside the workload; one pin may be shared across concurrent
+  immutable lookups. Lookups, scans, view operations, and the caller-buffer
+  feed lookup (`LookupFeedInto`, BufferTooSmall + required size) are
+  zero-allocation and zero-atomic: measured at 0.000000 heap bytes/run for
+  pinned membership lookup+Word, feed-into-buffer, direct lookup, and
+  pinned enrichment lookup+Value; atomics exist only at Pin/Close
+  boundaries. Views are lightweight values valid while the pin is open.
+- **Structure-kind authority conflict.** Resolved and pinned: direct and
+  membership files reject ANY nonzero structure kind as the KindInvariant
+  class (FormatInvalid); only a structured file with an unknown nonzero
+  kind reports UnsupportedStructure (binary-format-v4.md:430 override;
+  Rust bootstrap.rs validate_direct/validate_no_structures/finish_open).
+
 ## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
@@ -766,19 +806,15 @@ the round-4 mapping P2 follow-up (deleted-mid-open NameNotFound parity)
 and the report-record corrections. The round-4 external audit and its
 three follow-up rounds ended with all six reviewers PASS at HEAD 2a03554.
 The milestone was then REOPENED by an external re-review of the public
-hot-path contract (sections 11e correction and 11i): the round-4 facade
-does not meet SOW-0025:175 / design-iprange-engine.md:373/:404 (one guard
-allocation per view lookup, one string allocation per feed lookup, and a
-per-call atomic load), the metadata staging waste was fixed, and the
-facade API shape is pending decision 4. Milestone 1 does not close before
-the hot-path contract is met. The
-same-failure searches (content-transfer, page arrays, stale constants,
-PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
-tree: none present. Next milestone is safe to start once the three pending
-decisions are answered: (1) deletion set (100 tracked files + 2 untracked
-leftovers, atomic with the Milestone 2 writer commit), (2) worker boundary
-(assembly sigaction shim vs spec change vs drop), (3) closed-state error
-class (HandleClosed vs WrongState, Release idempotency, released-view
-WordCount silent-0); the recorded authority conflict (unknown nonzero
-structure_kind on direct/membership) is decided with the conformance
-milestone.
+hot-path contract (sections 11e correction, 11i) and closed again
+structurally by decisions 1A-4A (section 11j): the facade is rebuilt on
+caller-owned pins with zero allocations and zero atomics in every hot
+path, the closed class is WrongState, WordCount is error-capable, the
+structure-kind conflict is resolved, metadata staging waste is fixed, and
+the obsolete tree is deleted. The six-reviewer re-verification of the
+rebuilt facade is the remaining gate. The same-failure searches
+(content-transfer, page arrays, stale constants, PID-slot model,
+unsigned-subtraction-under-`||`) were re-run over the new tree: none
+present. Milestone 2 (writer) starts only after the re-verification
+passes; the worker boundary decision is implemented in the worker
+milestone per 2A.

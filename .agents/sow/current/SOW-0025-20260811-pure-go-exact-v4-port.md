@@ -4,18 +4,17 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
-corpus cross-open); the six-agent review gate passed the round-4 external
-audit and its three follow-up rounds (all reviewers PASS at 2a03554, report
-sections 11c-11h) but was REOPENED by the subsequent hot-path contract re-
-review: the public facade allocates one guard per view lookup and one string
-per feed lookup and performs a per-call atomic load, so SOW-0025:175 and
-design-iprange-engine.md:373/:404 are not met (report sections 11e
-correction and 11i); the facade API shape is pending decision 4. The
-deletion set (decision 1), the worker boundary (decision 2), and the
-closed-state error class (decision 3, with the WordCount/Release
-corrections) remain pending user decisions; metadata staging waste fixed;
-no tracked deletion applied yet.
+Sub-state: milestone 1 implemented (portable mmap-only immutable reader
+with corpus cross-open); four decisions 1A-4A resolved and implemented
+(pinned hot-path facade with zero allocations/atomics in lookups, scans,
+view operations, and feed lookups; WrongState closed class with
+error-capable WordCount; structure-kind conflict resolved; obsolete
+internal/exactv4 tree deleted in the final implementation commit - 105
+tracked files plus the untracked exactv4.test binary and empty directory;
+worker boundary recorded for the worker milestone); repository counts at
+HEAD: production 4,874 raw lines / tests 4,397 raw lines; the
+six-reviewer re-verification of the rebuilt facade is the remaining
+milestone-1 gate.
 
 ## Requirements
 
@@ -461,6 +460,71 @@ Resolved decisions (2026-08-11, Milestone 0 closure):
   Milestone 1 feasibility evidence, then decide. No new native boundary
   (assembly shim, cgo, runtime internals, Rust worker) may be added before
   that decision.
+
+## Resolved Decisions (2026-08-12, hot-path re-review)
+
+The user adopted the external re-review's decisions after the reopening:
+
+- Decision 1 (deletion set) = A with correction: the obsolete Go tree
+  (internal/exactv4: 100 tracked files + untracked exactv4.test + empty
+  directory) is removed in the FINAL Milestone 1 commit, not the first
+  Milestone 2 writer commit. Before removal the verified scalar types must
+  be relocated out of internal/exactv4 (v4/go/types.go is the only new-tree
+  importer). .reasonix/ is preserved. Git history already preserves the
+  deleted sources.
+- Decision 2 (worker boundary) = A: a minimal project-owned assembly
+  sigaction shim preserving the exact fault-isolation contract
+  (binary-format-v4.md:3084); it affects validation/recovery workers only,
+  uses no Go runtime code, cgo, or unwinding inside the handler, and is
+  proven natively on each supported POSIX platform in the worker milestone.
+- Decision 3 (closed-state class) = A with corrections: closed readers and
+  pinned handles report WrongState (11); numeric code 9 stays reserved (no
+  table renumbering); WordCount becomes error-capable "(uint32, error)";
+  under decision 4 per-view Release disappears and second-close errors
+  apply to the reader and the pinned handle.
+- Decision 4 (hot-path API shape) = A: caller-owned pinned reader handles.
+  Pin once outside the workload; one pin may be shared across concurrent
+  immutable lookups. Lookups, scans, view operations, and cursor steps are
+  zero-allocation and zero-atomic. Views are lightweight values valid while
+  their pin remains open; reader Close returns HandleBusy while pins exist;
+  Pin close must not race its operations; insufficient feed-name buffers
+  report BufferTooSmall plus the required size.
+- Structure-kind authority conflict resolved: direct/membership + nonzero
+  structure kind -> FormatInvalid (32); structured + unknown nonzero
+  structure kind -> UnsupportedStructure (67); follows the mode-specific
+  override at binary-format-v4.md:430 and current Rust bootstrap behavior
+  (validate_direct/validate_no_structures -> KindInvariant; finish_open ->
+  UnsupportedStructure for unknown codes on an otherwise valid structured
+  meta).
+
+### 2026-08-12 - decisions 1A-4A implemented (hot-path contract)
+
+- Deletion (1A): scalars relocated in-line into v4/go/types.go (no more
+  internal/exactv4 import); the obsolete tree was then removed in the final
+  milestone-1 implementation commit - 105 tracked files (47 production +
+  58 test; the recorded "100" was stale) + untracked v4/go/exactv4.test and
+  the empty v4/go/exactv4/ directory; .reasonix/ untouched; import-graph
+  gate updated; git history preserves the sources.
+- Worker boundary (2A): recorded for the worker milestone - minimal
+  project-owned assembly sigaction shim, no Go runtime code/cgo/unwinding
+  in the handler, proven natively per POSIX platform.
+- Closed class (3A): closed readers/pins -> WrongState (11), second Close
+  -> WrongState, code 9 reserved, WordCount -> (uint32, error), per-view
+  Release removed (views are pin-valid values).
+- Hot-path facade (4A): ImmutableReader.Pin / Pin.Close (one lifetime
+  registration outside the workload; HandleBusy while pins exist);
+  pin-level membership and enrichment lookups, reader-level direct
+  lookups/scans/cardinality, and LookupFeedInto (caller buffer,
+  BufferTooSmall + required size) are zero-allocation and zero-atomic
+  (plain-state closed checks under the documented no-race-Close contract).
+  Measured 0.000000 heap bytes/run for every hot path; atomics only at
+  Pin/Close.
+- Structure-kind rule: direct/membership + nonzero structure kind ->
+  FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
+  pinned by reader and format tests (fails on the pre-fix tree).
+- Counts at HEAD (this commit): production 4,874 raw / tests 4,397 raw.
+  Gates: go test ./... (5 packages) incl -race, vet, gofmt, import graph,
+  SOW audit - all green.
 
 ## Implications And Decisions
 

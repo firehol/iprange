@@ -72,7 +72,7 @@ check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/ipr
 # The module root (public facade) imports internal/format + internal/reader,
 # plus the legacy internal/exactv4 scalar aliases (types.go/errors.go) that
 # are the transfer point until the approved deletion set lands.
-check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\|exactv4\)"
+check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
 
 # The reader core is the synchronization-free zone: no sync, sync/atomic, or
 # unsafe anywhere in its import closure.
