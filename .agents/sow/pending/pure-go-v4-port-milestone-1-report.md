@@ -53,14 +53,14 @@ go vet ./internal/format ./internal/reader .          clean
 gofmt -l .                                           clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
 conformance test: 5/5 fixtures pass, 3/3 invalid mutations pass
-zero-allocation: 16 checks (6 internal + 10 public), all 0 allocs
+zero-allocation: 18 checks (8 internal + 10 public), all 0 allocs
 (feed-lookup: 1 documented string copy per lookup)
 ```
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,492
-raw lines, including blanks; new-tree tests: 3,794 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,500
+raw lines, including blanks; new-tree tests: 3,922 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -550,6 +550,45 @@ Gates after the pass: `go test ./...` (5 packages), `go test -race`,
 `go vet`, `gofmt -l`, `check-import-graph.sh`, and the 9-target
 cross-compile matrix (darwin/amd64+arm64, freebsd/amd64+arm64,
 windows/amd64+arm64+386, linux/386+arm64) — all green.
+
+
+## 11d. Round-3 verification pass (2026-08-12)
+
+All six reviewers re-reviewed the round-2 tree; this pass records the
+findings that landed between the round-2 record and HEAD, and the final
+verification verdicts:
+
+- `a5d7cf8` — import-graph gate: comment stripping for the content-transfer
+  ban, later extended (`78cebc4`) to stateful whole-file stripping so
+  multi-line `/* */` comments cannot false-positive (verified in both
+  directions on planted files).
+- `9203c28` — regression pins for the round-2 fixes: `TestSoleMetaGeometry`
+  (sole-meta selection when one meta's page_count exceeds the physical
+  length) and the membership-kind1/kind2 classification subtests; both
+  provably fail on the pre-fix code.
+- `e0a1687` — blob path zero-allocation: `blobRead`'s escaping
+  expected-level pointer became a value pair; the internal zero-alloc suite
+  now measures blob word and scan at 0 allocs.
+- `a348c42` — conformance absence probes made real: the IPv4 family-min
+  condition compared the always-zero IPv6 high word (dead code), and
+  from-1 probes were missing; both are now live for membership and
+  structured loops. The SOW log gained the missing `94723aa` line.
+- `3b4f3d5` — P0 fix found by the round-3 codecs review: the round-2
+  "checked arithmetic" coverage rewrite underflowed when a request offset
+  fell past the selected leaf's end (`end-off` wrapped), turning a
+  corrupt-file rejection into a silent out-of-leaf word read or a slice
+  panic. The explicit `off > end` guard restores corruption semantics;
+  `TestBlobGapRejectedCorruption` fails on the pre-fix code in both modes
+  and passes now. Reviewer-1 re-ran both original crash reproductions
+  against HEAD: both return typed code 32.
+- Final round-3 verdicts: codecs PASS (0/0/0), bootstrap/ranges PASS
+  (0/0/0), membership/structured/metadata PASS (0/0/0), mapping/lifetimes
+  PASS after the gate fix (0/0/0), public API/errors/zero-alloc PASS
+  (0 fixable outside the recorded closed-state decision), conformance/
+  reports PASS after the round-3 record and count corrections (0/0/0).
+  The closed-state error-class choice (HandleClosed vs WrongState),
+  the deletion set, and the worker boundary remain the pending user
+  decisions.
 
 ## 12. Deviations and open items
 

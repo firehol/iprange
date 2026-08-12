@@ -5,10 +5,12 @@
 Status: in-progress
 
 Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
-corpus cross-open) with the round-2 six-agent review repairs landed;
-borrow-count view lifetime implemented; the closed-state error-class choice
-(HandleClosed vs WrongState), the deletion set, and the worker boundary remain
-pending user decisions; no tracked deletion applied yet.
+corpus cross-open); six-agent review rounds 1-3 complete with all P0-P2
+findings fixed and regression-pinned (see execution log and milestone report
+sections 11c-11d); borrow-count view lifetime implemented; the closed-state
+error-class choice (HandleClosed vs WrongState), the deletion set, and the
+worker boundary remain pending user decisions; no tracked deletion applied
+yet.
 
 ## Requirements
 
@@ -772,6 +774,43 @@ Use these sections in this order:
     overhead 0-88 bytes) and this SOW log repaired.
 - Commits: see the round-2 fix commit. Gates green after the pass; the six
   reviewers re-review the repaired tree before Milestone 1 closes.
+
+### 2026-08-12 - six-agent review round 3 (final verification)
+
+- All six reviewers re-reviewed the round-2 tree at HEAD with their same
+  disjoint briefs. Verdicts: codecs PASS, bootstrap/ranges PASS,
+  membership/structured/metadata PASS, public API/errors/zero-alloc PASS
+  (fixable issues outside the recorded closed-state decision: none),
+  mapping/lifetimes PASS after the gate fix, conformance/reports PASS after
+  this record.
+- Commits and fixes between the round-2 record and HEAD `3b4f3d5`:
+  - `a5d7cf8` + `78cebc4` — import-graph gate comment stripping (line and
+    stateful multi-line block), verified both directions.
+  - `9203c28` — regression pins: `TestSoleMetaGeometry`,
+    membership-kind1/kind2 subtests (both fail on the pre-fix code).
+  - `e0a1687` — blob path zero-allocation: value-pair expected-level state;
+    internal zero-alloc suite now measures blob word/scan at 0.
+  - `a348c42` — real family-min and from-1 conformance absence probes;
+    explicit `94723aa` log line.
+  - `3b4f3d5` — P0 fix: blob coverage check underflowed when the request
+    fell past the selected leaf's end (`end-off` wrapped), allowing a
+    silent out-of-leaf word read or a slice panic on crafted files; the
+    explicit `off > end` guard restores corruption semantics and
+    `TestBlobGapRejectedCorruption` pins it (fails pre-fix in both modes).
+- Report counts corrected at HEAD: production 4,500 raw lines (tests
+  excluded), tests 3,922 raw, zero-allocation checks 18 (8 internal + 10
+  public). Milestone report sections 11c-11d record both passes; the
+  reviewers' final verdicts are all PASS with no P0-P2 remaining.
+- Gates at HEAD: `go test ./...` (5 packages, incl. -race),
+  `go vet`, `gofmt -l`, `check-import-graph.sh`, 9-target cross-compile
+  matrix — all green; SOW audit clean.
+- Pending user decisions unchanged: (1) deletion set — 100 tracked files +
+  2 untracked leftovers, atomic with the Milestone 2 writer commit;
+  (2) worker boundary — assembly sigaction shim vs spec change vs drop;
+  (3) closed-state error class — HandleClosed (9) vs WrongState (11),
+  Release idempotency, WordCount released-view silent-0; plus the recorded
+  authority conflict (unknown nonzero structure_kind on direct/membership:
+  spec text 67 vs Rust 32).
 
 ## Validation
 
