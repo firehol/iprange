@@ -1854,8 +1854,9 @@ execution record; the closing result is appended there when it completes.
   field types in isFileExpr/isContainerExpr; SelectStmt traversal.
 - Self-test forms 47 and 48 pin the two proven classes by shadowing the
   exact inflater exemption in metadata.go with a struct-field stored
-  file and a channel-transported file; a benign same-shaped control
-  (int field) passes. Durable rejection set: forty-seven mutation
+  file and a channel-transported file; form 49 pins the benign
+  same-shaped control (int field) that must pass, proving the taint is
+  not a false positive. Durable rejection set: forty-seven mutation
   forms; the interplay between the exemption guard and the file taint
   is now mutation-tested.
 - Gates at HEAD c4b1b52: go test ./... incl -race, go vet, gofmt,

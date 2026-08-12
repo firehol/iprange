@@ -986,6 +986,35 @@ MUTEOF
 	run_mut "channel-transported file shadowing the inflater exemption"
 	cp "$self_tree/meta48.orig" internal/reader/metadata.go
 
+	# --- 49: benign same-shaped control must pass (no false positive) ----
+	# Identical in shape to form 47 but with an int field: the scanner
+	# must not flag the shadow when the field holds no file.
+	cat > internal/reader/gatemut_benign.go <<'MUTEOF'
+package reader
+
+type gb8 struct{ r int }
+
+var gb8v gb8
+
+func init() { gb8v.r = 1 }
+MUTEOF
+	add_mut internal/reader/gatemut_benign.go
+	cp internal/reader/metadata.go "$self_tree/meta49.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = gb8v.r"; next } print }' internal/reader/metadata.go > "$self_tree/meta49.new" && mv "$self_tree/meta49.new" internal/reader/metadata.go
+	if grep -q "^$(printf '\t')zr = gb8v.r" internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign same-shaped control passes the gate"
+		else
+			echo "self-test MISS: benign same-shaped control failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 49 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta49.orig" internal/reader/metadata.go
+
 	# --- 46: an innocent gatemut_-named file must survive and pass -------
 	cat > internal/mapping/gatemut_innocent.go <<'MUTEOF'
 package mapping
