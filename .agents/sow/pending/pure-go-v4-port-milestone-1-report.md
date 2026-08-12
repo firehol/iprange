@@ -813,7 +813,10 @@ caller-owned pins with zero allocations and zero atomics in every hot
 path, the closed class is WrongState, WordCount is error-capable, the
 structure-kind conflict is resolved, metadata staging waste is fixed, and
 the obsolete tree is deleted. The six-reviewer re-verification of the
-rebuilt facade is the remaining gate. The same-failure searches
+rebuilt facade re-reviewed every brief at HEAD 2fdcce4: all six PASS
+with no P0-P2 findings (the single P2 found in the round — Pin value
+copies — was closed as a formal decision-4A pointer contract and pinned
+by TestPinPointerAliasSharesClose). The same-failure searches
 (content-transfer, page arrays, stale constants, PID-slot model,
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
 present. Milestone 2 (writer) starts only after the re-verification

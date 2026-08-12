@@ -11,10 +11,12 @@ view operations, and feed lookups; WrongState closed class with
 error-capable WordCount; structure-kind conflict resolved; obsolete
 internal/exactv4 tree deleted in the final implementation commit - 105
 tracked files plus the untracked exactv4.test binary and empty directory;
-worker boundary recorded for the worker milestone); repository counts at
-HEAD: production 4,874 raw lines / tests 4,397 raw lines; the
-six-reviewer re-verification of the rebuilt facade is the remaining
-milestone-1 gate.
+worker boundary recorded for the worker milestone); after the decisions,
+the six-reviewer re-verification of the rebuilt facade is complete: all
+six reviewers PASS at HEAD 2fdcce4 with no P0-P2 findings (execution log
+below, report sections 11j-13); repository counts: production 4,874 raw
+lines / tests 4,397 raw lines; Milestone 1 is ready to close once the
+final validation record is written; Milestone 2 (writer) may start.
 
 ## Requirements
 
@@ -535,6 +537,39 @@ The user adopted the external re-review's decisions after the reopening:
 - Counts at HEAD (this commit): production 4,874 raw / tests 4,397 raw.
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
+
+### 2026-08-12 - six-reviewer re-verification after decisions 1A-4A
+
+- All six reviewers re-reviewed the rebuilt tree at their disjoint briefs
+  after the decisions implementation. Findings during the round and their
+  closures:
+  - Pin value-copy P2 (mapping reviewer): a dereference copy of a Pin
+    could double-decrement the pin count. Closed as a formal decision-4A
+    amendment: Pin is a pointer type; aliasing the pointer shares the
+    single close state; value copies are unsupported like C opaque
+    handles, with typed-error-only consequences; pinned by
+    TestPinPointerAliasSharesClose (fails on a double-decrement).
+  - Record-drift findings (conformance/reports reviewer): report sections
+    2 and 12 still described the pre-deletion 5-package tree and the
+    view-guard zero-alloc contract; the SOW current-state entries said "5
+    packages". All fixed at 2fdcce4; dated historical entries keep their
+    then-accurate wording.
+  - Non-blocking maintenance note (codec reviewer): Cardinality129
+    arithmetic exists in two in-sync copies (internal/format and public
+    types.go), each vector-pinned; future edits must keep them in sync.
+- Final verdicts at HEAD 2fdcce4: codecs PASS; bootstrap/meta/direct
+  ranges PASS (kind matrix verified pre-fix-failing); membership/blob/
+  structured/metadata PASS (metadata rewrite verified incl. empty-present
+  and incomplete-final-block probes); mapping/lifetimes/platform PASS
+  (pin contract amendment verified); public API/errors/zero-alloc PASS
+  (12 public + 8 internal checks at exactly 0 allocs, zero atomics in hot
+  paths, WrongState class, LookupFeedInto BufferTooSmall semantics);
+  conformance/tests/reports PASS (counts 4,874/4,397 verified with the
+  documented method; deletion of 105 files verified exactly; records
+  internally consistent).
+- Gates at HEAD 2fdcce4: go test ./... (4 packages) incl -race, go vet,
+  gofmt, import graph, 9-target cross-compile matrix, SOW audit - all
+  green. Milestone 1 (immutable reader) review gate: CLOSED.
 
 ## Implications And Decisions
 
