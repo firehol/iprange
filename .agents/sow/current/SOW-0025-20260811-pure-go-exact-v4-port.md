@@ -56,7 +56,17 @@ Scan/Scanln/Scanf/NewWriter; the five writer packages join the import
 ban; the two in-memory inflater io.ReadFull(zr, ...) nodes are exempted
 exactly; the method-value and CopyFileRange forms compile, and the
 nested-node probe stays an intentional textual tripwire), and the
-self-test now durably rejects twenty-six mutation forms. The records
+self-test now durably rejects twenty-six mutation forms. The re-review
+of that fix found the io.ReadFull exemption itself paren-crossing (a
+nested transfer could still be swallowed; a file-backed flate reader
+named zr was exempted by name), the reflection Call invocation
+unguarded (FieldByName("Read").Call), and the reader-constructor
+packages (debug/elf and the debug/* family, go/parser, go/scanner,
+text/scanner, text/tabwriter, mime/quotedprintable) unlocked; all fixed
+at HEAD 149a200 (the io.ReadFull exemption is shape-bounded to the two
+real nodes io.ReadFull(zr, out[...]), Call/CallSlice join the
+selectors, the constructor packages join the import ban), and the
+self-test now durably rejects twenty-eight mutation forms. The records
 were completed in the same pass; decision 5A remains the single open
 user decision and blocks milestone close. Repository counts: production 4,772 raw lines /
 tests 4,832 raw lines. Milestone 2 must not start until a new
@@ -256,6 +266,25 @@ sidecars, live coordination, and publication remain Milestone 4.
   exists to embed before the first closing paren); the self-test now
   durably rejects all twenty-six mutation forms. Decision 5A remains
   open for user ratification and is the only remaining P2 class.
+- Iterative pass (round-13 fixes, fourth sweep): five narrow reviewers
+  PASS at HEAD 35a4182 (Peirce, Gauss, Faraday, Kant, Bernoulli);
+  Ampere found the gate still open in three classes - P1: the new
+  io.ReadFull blanking was paren-crossing and name-keyed (a transfer
+  nested inside the tolerated node's arguments was swallowed again; a
+  file-backed `zr := flate.NewReader(f)` was exempted by the variable
+  name alone); P2: the reflection invocation primitive `.Call` was
+  unguarded (reflect.ValueOf(f).FieldByName("Read").Call(nil) slipped);
+  P2: the reader-constructor packages (debug/elf/macho/pe/plan9obj,
+  go/parser, go/scanner, text/scanner) and writer families
+  (text/tabwriter, mime/quotedprintable) consumed a file unseen.
+  Fixed at HEAD 149a200: the io.ReadFull exemption is shape-bounded to
+  the two real in-memory nodes (io.ReadFull(zr, out[...])) so neither a
+  nested transfer nor a zr-named file reader is hidden; Call/CallSlice
+  join the selector set; the constructor packages join the import ban;
+  two new mutation forms pin the shadow and the zr-name collision. The
+  self-test now durably rejects all twenty-eight mutation forms.
+  Decision 5A remains open for user ratification and is the only
+  remaining P2 class.
 
 ## Requirements
 

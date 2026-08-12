@@ -39,7 +39,11 @@ twenty-two mutation forms. The re-review of that fix closed the
 io.ReadFull/io.ReadAtLeast file-consumption gap, the log/template/
 exec/http writer families, and the non-compiling self-test forms, and
 the self-test now durably rejects twenty-six mutation forms
-(bf33f2a). Decision 5A remains open for user ratification. Milestone
+(bf33f2a). The fourth re-review closed the paren-crossing io.ReadFull
+exemption shadow, the zr-name collision, the reflection Call
+invocation, and the reader-constructor packages; the self-test now
+durably rejects twenty-eight mutation forms (149a200). Decision 5A
+remains open for user ratification. Milestone
 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
@@ -95,7 +99,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 26/26 mutation forms rejected
+GOOS/GOARCH pairs): 28/28 mutation forms rejected
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -134,15 +138,17 @@ tree): 4,832 raw lines. The earlier
   GOOS/GOARCH pairs so a build-tagged package cannot import internal
   packages unseen; the Windows mapping stub no longer carries or exposes
   a raw `*os.File` (Mapping.File removed on every platform); `--self-test`
-  durably rejects twenty-six mutation forms (direct call, alias, method
-  value, Seek, new directory, unix.Readv in the mapping owner, bufio
-  wrapper, dot import, windows-only package, single-line and aliased
-  bufio escapes, fmt.Fscan, io.CopyN, reflection-invoked Read, raw
-  SYS_READ, CopyFileRange, tolerated-call line sharing, windows-only
+  durably rejects twenty-eight mutation forms (direct call, alias,
+  method value, Seek, new directory, unix.Readv in the mapping owner,
+  bufio wrapper, dot import, windows-only package, single-line and
+  aliased bufio escapes, fmt.Fscan, io.CopyN, reflection-invoked Read,
+  raw SYS_READ, CopyFileRange, tolerated-call line sharing, windows-only
   internal import, json decoder over a file, os.File.WriteString,
   transfer nested inside the tolerated node, reflection Method(i),
   io.ReadFull over a file, io.ReadAtLeast over a file, log writing to
-  a file, flate.NewWriter over a file).
+  a file, flate.NewWriter over a file, transfer nested inside the
+  io.ReadFull exemption node, io.ReadFull over a file-backed flate
+  reader).
 - view-lifetime guard (round-12): public views retain the immutable
   `*pinState` captured at creation, so reassigning the Pin variable that
   created a view cannot retarget its close guard to another reader; the
@@ -953,13 +959,18 @@ blanking shadow still open; fixed at HEAD f9c88b2 with the
 reader-consumer import bans, the WriteString/WriteRune/NewDecoder/
 Decode/Encode/Method selectors, paren-free-only tolerated-node
 blanking, compiling self-test mutations, and four new mutation forms -
-the durable self-test now rejects twenty-six mutation forms:
+the durable self-test now rejects twenty-eight mutation forms:
 io.ReadFull/io.ReadAtLeast over a file join the selector set, the five
 writer packages (log, text/template, html/template, os/exec, net/http)
 and flate.NewWriter are covered, the two in-memory
-io.ReadFull(zr, ...) inflater calls are exempted as exact nodes, the
-method-value and CopyFileRange forms compile, and the nested-node
-probe is documented as an intentional textual tripwire.
+io.ReadFull(zr, out[...]) inflater calls are exempted as shape-bounded
+exact nodes (a nested transfer or a zr-named file reader stays
+visible), Call/CallSlice close the reflection invocation family, the
+reader-constructor packages (debug/*, go/parser, go/scanner,
+text/scanner) and writer families (text/tabwriter,
+mime/quotedprintable) join the import ban, the method-value and
+CopyFileRange forms compile, and the nested-node probe is documented
+as an intentional textual tripwire.
 Decision 5A remains the single open item and awaits user ratification.
 Milestone 1 is reopened
 and Milestone 2 is blocked pending the independent re-review and the
