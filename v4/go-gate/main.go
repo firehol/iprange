@@ -315,17 +315,18 @@ func exprText(e ast.Expr) string {
 
 // taints is the per-scope syntactic *os.File state.
 type taints struct {
-	file       map[string]bool    // identifiers holding *os.File
-	container  map[string]bool    // identifiers holding []*os.File or a struct with file fields
-	struc      map[string]string  // identifiers holding a same-package struct value: name -> type name
-	chanFile   map[string]bool    // identifiers holding chan *os.File (make, declared, or send-marked)
-	fieldTaint map[string]kind    // expr.field = file/container from an assignment of a tainted value
-	funcFile   map[string]bool    // identifiers holding func() *os.File (closures and declared func types)
-	retFile    map[token.Pos]bool // closure/function nodes whose body returns a file-tainted value
+	file         map[string]bool    // identifiers holding *os.File
+	container    map[string]bool    // identifiers holding []*os.File or a struct with file fields
+	struc        map[string]string  // identifiers holding a same-package struct value: name -> type name
+	chanFile     map[string]bool    // identifiers holding chan *os.File (make, declared, or send-marked)
+	chanFuncFile map[string]bool    // identifiers holding chan of func() *os.File
+	fieldTaint   map[string]kind    // expr.field = file/container from an assignment of a tainted value
+	funcFile     map[string]bool    // identifiers holding func() *os.File (closures and declared func types)
+	retFile      map[token.Pos]bool // closure/function nodes whose body returns a file-tainted value
 }
 
 func newTaints() *taints {
-	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, fieldTaint: map[string]kind{}, funcFile: map[string]bool{}, retFile: map[token.Pos]bool{}}
+	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, chanFuncFile: map[string]bool{}, fieldTaint: map[string]kind{}, funcFile: map[string]bool{}, retFile: map[token.Pos]bool{}}
 }
 
 func cloneTaints(t *taints) *taints {
@@ -341,6 +342,9 @@ func cloneTaints(t *taints) *taints {
 	}
 	for k, v := range t.chanFile {
 		c.chanFile[k] = v
+	}
+	for k, v := range t.chanFuncFile {
+		c.chanFuncFile[k] = v
 	}
 	for k, v := range t.fieldTaint {
 		c.fieldTaint[k] = v
@@ -467,6 +471,8 @@ const (
 	kindFile
 	kindContainer
 	kindChanFile
+	kindChanFuncFile
+	kindFuncFile
 )
 
 // callResultsFuncFile reports whether e is a same-package call whose
@@ -534,6 +540,35 @@ func chanElemFileDepth(text string, info pkgInfo, depth int) bool {
 				return true
 			}
 			return chanElemFileDepth(el, info, depth+1)
+		}
+	}
+	return false
+}
+
+// funcTextFile reports whether a resolved type text is a func type
+// returning *os.File in any position.
+func funcTextFile(text string) bool {
+	return strings.HasPrefix(text, "func(") && strings.Contains(text, "*os.File")
+}
+
+// chanElemFuncFile reports whether a type text is a channel whose
+// element is a func type producing *os.File (chan F with
+// F = func() *os.File), directly or through nested channels.
+func chanElemFuncFile(text string, info pkgInfo) bool {
+	return chanElemFuncFileDepth(text, info, 0)
+}
+
+func chanElemFuncFileDepth(text string, info pkgInfo, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	for _, p := range []string{"chan<- ", "<-chan ", "chan "} {
+		if strings.HasPrefix(text, p) {
+			el := resolveTypeText(strings.TrimSpace(strings.TrimPrefix(text, p)), info)
+			if funcTextFile(el) {
+				return true
+			}
+			return chanElemFuncFileDepth(el, info, depth+1)
 		}
 	}
 	return false
@@ -610,6 +645,12 @@ func classifyType(t ast.Expr, info pkgInfo) kind {
 	if chanElemFile(text, info) {
 		return kindChanFile
 	}
+	if chanElemFuncFile(text, info) {
+		return kindChanFuncFile
+	}
+	if funcTextFile(text) {
+		return kindFuncFile
+	}
 	if strings.Contains(text, "*os.File") {
 		return kindContainer
 	}
@@ -629,12 +670,23 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if st.chanFile[v.Name] {
 			return kindFile
 		}
+		if st.chanFuncFile[v.Name] {
+			return kindChanFuncFile
+		}
 		if st.funcFile[v.Name] {
-			return kindFile
+			return kindFuncFile
+		}
+	case *ast.FuncLit:
+		if funcTypeResultsFile(v.Type, info) || st.retFile[v.Pos()] {
+			return kindFuncFile
 		}
 	case *ast.TypeAssertExpr:
-		if resolveTypeText(exprText(v.Type), info) == "*os.File" {
+		rt := resolveTypeText(exprText(v.Type), info)
+		if rt == "*os.File" {
 			return kindFile
+		}
+		if funcTextFile(rt) {
+			return kindFuncFile
 		}
 		return classify(v.X, st, info, imports)
 	case *ast.IndexExpr:
@@ -648,15 +700,29 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 	case *ast.ParenExpr:
 		return classify(v.X, st, info, imports)
 	case *ast.UnaryExpr:
+		if v.Op == token.ARROW {
+			// <-ch: a receive from a chan of funcs yields a func.
+			if classify(v.X, st, info, imports) == kindChanFuncFile {
+				return kindFuncFile
+			}
+		}
 		return classify(v.X, st, info, imports)
 	case *ast.CallExpr:
 		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "make" && len(v.Args) == 1 {
-			if ct, ok := v.Args[0].(*ast.ChanType); ok && chanElemFile(exprText(ct), info) {
-				return kindChanFile
+			if ct, ok := v.Args[0].(*ast.ChanType); ok {
+				if chanElemFile(exprText(ct), info) {
+					return kindChanFile
+				}
+				if chanElemFuncFile(exprText(ct), info) {
+					return kindChanFuncFile
+				}
 			}
 		}
 		if _, _, ok := producerCall(v, st, info, imports); ok {
 			return kindFile
+		}
+		if callResultsFuncFile(v, st, info) {
+			return kindFuncFile
 		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
@@ -685,6 +751,16 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if isContainerExpr(v, st, info) {
 			return kindContainer
 		}
+		// hb.fn where the struct field type is func() *os.File.
+		if id, ok := v.X.(*ast.Ident); ok {
+			if structName, ok2 := resolveStruct(id, st, info); ok2 {
+				if ft, ok3 := info.structs[structName][v.Sel.Name]; ok3 {
+					if funcTextFile(resolveTypeText(ft, info)) {
+						return kindFuncFile
+					}
+				}
+			}
+		}
 	}
 	return kindNone
 }
@@ -697,6 +773,10 @@ func applyKind(st *taints, name string, k kind) {
 		st.container[name] = true
 	case kindChanFile:
 		st.chanFile[name] = true
+	case kindChanFuncFile:
+		st.chanFuncFile[name] = true
+	case kindFuncFile:
+		st.funcFile[name] = true
 	}
 }
 
@@ -730,6 +810,12 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			if pos := positionsOf("*os.File", info.methods[structName+"."+sel.Sel.Name]); pos != nil {
 				return call, pos, true
 			}
+			// hb.fn() where the struct field type is func() *os.File.
+			if ft, okf := info.structs[structName][sel.Sel.Name]; okf {
+				if funcTextFile(resolveTypeText(ft, info)) {
+					return call, []int{0}, true
+				}
+			}
 		}
 	}
 	if id, ok := fun.(*ast.Ident); ok {
@@ -750,6 +836,13 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		// whose value is a func returning *os.File; invoking it yields
 		// a file at result position zero.
 		if callResultsFuncFile(inner, st, info) {
+			return call, []int{0}, true
+		}
+	}
+	if ta, ok := fun.(*ast.TypeAssertExpr); ok {
+		// (getFn().(func() *os.File))(): the asserted value is a func
+		// producing a file; invoking it yields the file.
+		if funcTextFile(resolveTypeText(exprText(ta.Type), info)) {
 			return call, []int{0}, true
 		}
 	}
@@ -792,6 +885,12 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 	case *ast.SelectorExpr:
 		if st.fieldTaint[exprText(v.X)+"."+v.Sel.Name] == kindFile {
 			return true
+		}
+		// os.Stdin/Stdout/Stderr are process-wide *os.File singletons.
+		if id, ok := v.X.(*ast.Ident); ok && imports[id.Name] == "os" {
+			if v.Sel.Name == "Stdin" || v.Sel.Name == "Stdout" || v.Sel.Name == "Stderr" {
+				return true
+			}
 		}
 		structName, ok := resolveStruct(v.X, st, info)
 		if !ok {
@@ -931,6 +1030,8 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 				st.file[name.Name] = true
 			case funcTypeResultsFile(field.Type, info):
 				st.funcFile[name.Name] = true
+			case chanElemFuncFile(t, info):
+				st.chanFuncFile[name.Name] = true
 			case chanElemFile(t, info):
 				st.chanFile[name.Name] = true
 			case strings.Contains(t, "*os.File"):
@@ -1043,12 +1144,16 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 						st.file[k.Name] = true
 					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFile[id.Name] {
 						st.file[k.Name] = true
+					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFuncFile[id.Name] {
+						st.funcFile[k.Name] = true
 					}
 				}
 			} else if v.Key != nil {
 				if k, ok := v.Key.(*ast.Ident); ok && k.Name != "_" {
 					if id, ok := v.X.(*ast.Ident); ok && st.chanFile[id.Name] {
 						st.file[k.Name] = true
+					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFuncFile[id.Name] {
+						st.funcFile[k.Name] = true
 					}
 				}
 			}
@@ -1056,8 +1161,13 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 		case *ast.SendStmt:
 			// `ch <- f` with a file value: mark the channel as carrying
 			// files so a later receive (or loop) taints the value.
-			if id, ok := v.Chan.(*ast.Ident); ok && isFileOrContainer(v.Value, st, info, imports) {
-				st.chanFile[id.Name] = true
+			if id, ok := v.Chan.(*ast.Ident); ok {
+				if isFileOrContainer(v.Value, st, info, imports) {
+					st.chanFile[id.Name] = true
+				}
+				if classify(v.Value, st, info, imports) == kindFuncFile {
+					st.chanFuncFile[id.Name] = true
+				}
 			}
 		case *ast.SwitchStmt:
 			if v.Init != nil {
