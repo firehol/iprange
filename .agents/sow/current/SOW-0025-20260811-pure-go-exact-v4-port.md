@@ -135,8 +135,9 @@ stress-testing the round-4 fixes during the round-5 gate re-review,
 the defined-func-type family and its method/nested-callee variants
 were closed (self-test forms 60-67), the round-5 struct-field/
 chan-of-func/asserted-func/os-std-handle family (forms 68-72), and
-the round-6 nested-field/named-helper/chan-pass family (forms 73-77);
-the durable rejection set is now seventy mutation forms. The records
+the round-6 nested-field/named-helper/chan-pass family and the
+named-method extension (forms 73-81); the durable rejection set is
+now seventy-three mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -414,9 +415,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   helpers, type-switch bound func cases (forms 60-63), and the
   method-receiver/nested-callee double-call family (forms 64-67),
   the struct-field-func/chan-of-func/asserted-func/os-std-handle
-  family (forms 68-72), and the nested-field/named-helper/chan-pass
-  family (forms 73-77); the self-test now durably rejects seventy
-  mutation forms. The
+  family (forms 68-72), the nested-field/named-helper/chan-pass
+  family (forms 73-77), and the named-method extension (forms
+  78-81); the self-test now durably rejects seventy-three mutation
+  forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1541,7 +1543,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 70-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 73-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1976,7 +1978,13 @@ execution record; the closing result is appended there when it completes.
   (retFuncs) before any runFile, and callResultsChanFuncFile.
   Forms 73-77 pin the three classes plus the benign named io.Reader
   helper control.
-- Gates at HEAD f876148: go test ./... incl -race, go vet, gofmt,
-  import graph with the 70-form self-test, nine cross-compiles, SOW
-  audit - all green. Counts: production 4,772 raw lines / tests 4,832
-  raw lines (gate scanner lives outside the module).
+- The named-producer pre-scan was extended to methods with a
+  fixpoint (HEAD 5a4f8dc): mb.named() returning os.Pipe or
+  os.Stdout through io.ReadCloser, and deep() -> mid() chains,
+  are now producers (retMethods + prescanFileProducers). Forms
+  78-81 pin the three classes plus the benign method control;
+  form 77 was reworked to a compiling bytes.Reader wrapper shape.
+- Gates at HEAD 79d66c3: go test ./... incl -race, go vet, gofmt,
+  import graph with the 73-form self-test, nine cross-compiles,
+  SOW audit - all green. Counts: production 4,772 raw lines / tests
+  4,832 raw lines (gate scanner lives outside the module).
