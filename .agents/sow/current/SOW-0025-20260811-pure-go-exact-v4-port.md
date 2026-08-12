@@ -18,8 +18,8 @@ copies share one private close state, DirectSemantic registry 1/2/3,
 structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
-repaired. Repository counts at close: production 4,803 raw lines / tests
-4,489 raw lines. Milestone 2 (writer) may start.
+repaired. Repository counts at close: production 4,781 raw lines / tests
+4,565 raw lines. Milestone 2 (writer) may start.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -234,7 +234,7 @@ Sources checked:
 - Completed SOWs 0019-0024 for the mmap-only correction, final authority/hot-path
   audit, update-ipsets workflows, performance proof, structured values, and
   randomized structured correctness.
-- `v4/conformance/README.md`, `v4/conformance/cases.json`, and all five current
+- `v4/conformance/README.md`, `v4/conformance/cases.json`, and all six current
   Rust-produced fixtures.
 - Complete current Go production/test inventory, `v4/go/go.mod`, public files,
   current format constants, storage/page sources, OS code, and test references.
@@ -552,8 +552,9 @@ The user adopted the external re-review's decisions after the reopening:
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
-- Counts at the time are recorded in the close-out entry (production 4,803
-  raw / tests 4,489 raw at milestone-1 close).
+- Counts at the time are recorded in the close-out entry (production 4,781
+  raw / tests 4,565 raw at milestone-1 close after the meta-precedence
+  parity fix and the sole-meta kind regression test).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 
@@ -796,7 +797,7 @@ Use these sections in this order:
     `internal/reader` (the only healthy-generation reader core), and the
     public facade `reader_public.go` at the module root. ~3,720 new
     production lines, ~1,700 test lines.
-  - Conformance: all five committed Rust fixtures open and verify with exact
+  - Conformance: all six committed Rust fixtures open and verify with exact
     `cases.json` semantics (metadata states, full-IPv6 cardinality strings,
     boundary probes, 70 feed names, word-level bitmaps incl. blob-backed and
     1 MiB metadata, structured values + threat memberships); all three

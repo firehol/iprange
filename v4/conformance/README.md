@@ -8,17 +8,20 @@ are not compatibility inputs.
 ## Rust-first foundation
 
 `cases.json` is the language-neutral semantic manifest. The current foundation
-contains five compact immutable snapshots produced through the public Rust live
+contains six compact immutable snapshots produced through the public Rust live
 writer and public snapshot operation:
 
 - `rust/direct-ipv4.iprdb`: arrival-order direct assignments and clearing;
 - `rust/first-seen-ipv6.iprdb`: full IPv6 first-seen coverage and empty metadata;
 - `rust/membership-ipv4.iprdb`: 70 named feeds, index reuse, and memberships
-  crossing the 64-bit boundary; and
+  crossing the 64-bit boundary;
 - `rust/membership-ipv6.iprdb`: full IPv6 membership and a 1 MiB compressed
-  metadata payload; and
+  metadata payload;
 - `rust/structured-ipv4.iprdb`: typed network enrichment, named threat feeds,
-  arrival-order overwrites, clearing, lazy membership, and exact metadata.
+  arrival-order overwrites, clearing, lazy membership, and exact metadata; and
+- `rust/structured-ipv4-nothreat.iprdb`: structured values without threat
+  feeds (membership id zero), pinning the canonical absence result in both
+  readers.
 
 The Rust test actually opens and explicitly validates every listed file. It
 compares every direct or structured range, typed enrichment field, feed

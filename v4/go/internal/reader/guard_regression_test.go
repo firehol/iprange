@@ -123,6 +123,26 @@ func TestMetaKindClassification(t *testing.T) {
 	// Structured file with an unknown kind AND a transaction gap between
 	// the metas: pair selection fails first -> FormatInvalid, exactly like
 	// Rust (select_candidates/select_pair precede finish_open).
+
+	// Structured file with an unknown kind where meta 0 alone is
+	// bootstrap-valid: meta 1 fails the same count validation and is
+	// excluded from selection, so the open falls back to the sole valid
+	// meta and only then reports the typed UnsupportedStructure (the
+	// post-selection finish_open classification, never a candidate
+	// validation failure).
+	t.Run("structured-kind2-sole-meta0", func(t *testing.T) {
+		path := copyFixture(t, "structured-ipv4.iprdb", "structured-kind2-sole-meta0.iprdb")
+		patchMetaEach(t, path, func(pg int, page []byte) {
+			page[13] = 2
+			if pg == 1 {
+				limit := format.U64(page[208:216])
+				format.PutU64(page[200:208], limit) // entry_count >= id_limit
+			}
+		})
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeUnsupportedStructure {
+			t.Fatalf("code %v want 67", err)
+		}
+	})
 	t.Run("structured-kind2-txn-gap", func(t *testing.T) {
 		path := copyFixture(t, "structured-ipv4.iprdb", "structured-kind2-gap.iprdb")
 		patchMetaEach(t, path, func(pg int, page []byte) {
