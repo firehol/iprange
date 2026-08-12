@@ -1266,7 +1266,8 @@ specs, fixed, and pinned by pre-fix-failing tests:
 6. Final-review regression guards: compile-time alias assertions pin the
    public ErrorCode and Cardinality129 as the internal/format types, and a
    negative source guard forbids the reintroduction of the obsolete
-   retention symbol; all three guards fail on the pre-fix tree.
+   retention symbol in any non-test production source; all three guards
+   fail on the pre-fix tree.
 
 Gates re-run at HEAD: go test ./... (4 packages), -race, vet, gofmt,
 import graph, 9 cross-compiles, SOW audit, Rust conformance (6 fixtures),

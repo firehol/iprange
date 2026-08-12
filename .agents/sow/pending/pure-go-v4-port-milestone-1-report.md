@@ -5,7 +5,9 @@ audit, and the hot-path contract implementation). Status: implementation
 checkpoint complete; the four decisions 1A-4A are resolved and implemented
 (deletion executed, worker boundary scheduled, WrongState closed class,
 pinned hot-path facade); the six-reviewer re-verification of the rebuilt
-facade is the remaining milestone-1 gate.
+facade completed with all six reviewers PASS at HEAD e02dee9 (rounds
+after the external audit, the hot-path rebuild, and the final-review
+regression guards); the final full-scope review is the remaining gate.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 

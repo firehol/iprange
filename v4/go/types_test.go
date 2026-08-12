@@ -23,11 +23,12 @@ var (
 	_ format.Cardinality129 = CardinalityZero()
 )
 
-// TestNoObsoleteRetentionAPI pins binary-format-v4.md:311: only first_seen
-// and last_seen value tags exist and there is no compatibility alias. The
-// deleted RetentionTag symbol must never return in any production source;
-// Go cannot express symbol absence in reflection, so this guard scans the
-// module's non-test Go sources for the forbidden identifier.
+// TestNoObsoleteRetentionAPI pins binary-format-v4.md:311: the format
+// defines no predefined "retention" tag (only first_seen and last_seen are
+// special semantic tags, and there is no compatibility alias). The deleted
+// RetentionTag symbol must never return in production sources; Go cannot
+// express symbol absence in reflection, so this guard scans the module's
+// non-test Go sources for the forbidden identifier.
 func TestNoObsoleteRetentionAPI(t *testing.T) {
 	needle := "Retention" + "Tag"
 	lower := strings.ToLower(needle)
