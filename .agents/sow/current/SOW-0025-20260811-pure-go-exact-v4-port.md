@@ -79,10 +79,17 @@ sidecars, live coordination, and publication remain Milestone 4.
   comments/messages corrected), and the report LOC counts were refreshed
   for that commit's own delta in 12b2e7f (P1 found by the narrow records
   reviewer; production 4,812 / tests 4,685 verified).
-- sol round 8: FAIL at HEAD 12b2e7f with one P2 - this gate record omitted
-  round 7 and its repairs, and the repair note above contradicted the
-  Status. The trail is completed in this entry; the closing re-review
-  follows below.
+- sol round 8: FAIL at HEAD 12b2e7f with one P2 (this gate record omitted
+  round 7 and its repairs; the repair note above contradicted the Status)
+  and one P3 (duplicate package documentation: go doc rendered both
+  doc.go and types.go package comments). Fixed in 1af6135: the trail was
+  completed, types.go became a file-level comment, and the report LOC
+  counts were refreshed (production 4,807 / tests 4,685).
+- sol round 9: FAIL at HEAD 1af6135 with one P2 - the round-8 entry had
+  omitted the P3 and its repair, the "follows below" reference dangled,
+  and the regression resolution claimed a closing result that did not yet
+  exist. This entry records the complete round-8 result; the closing
+  re-review (round 10) result will be appended below.
 
 ## Requirements
 
@@ -1367,7 +1374,9 @@ the workflow must identify the mutable tag authority, API-name deviation, and
 three stale report claims even though every mechanical gate passes. Resolution:
 the product fixes landed at HEAD 73bba50 (immutable tag accessors, DatabaseInfo
 rename, corrected report statements) with the metadata figure re-measured at
-2d2197a; the final re-review result is recorded in the Gate execution record.
+2d2197a; the round-7 through round-9 re-review results are recorded in the
+Gate execution record, and the closing re-review result is appended there
+when it completes.
 
 Append regression entries here only after this SOW was completed or closed and
 later testing or use found broken behavior. Use a dated
