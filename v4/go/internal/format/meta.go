@@ -267,13 +267,13 @@ func (m *Meta) ValidateKindInvariants() error {
 }
 
 // validateDirectMeta: catalog, membership, and structure state are all
-// required to be zero; no dictionary relationship checks apply.
+// required to be zero; no dictionary relationship checks apply. Any nonzero
+// structure kind is the KindInvariant class (bootstrap.rs validate_direct),
+// including unknown codes: a direct file with a structure kind is format
+// invalid, never the typed unsupported error.
 func validateDirectMeta(m *Meta) error {
 	if m.StructureKind != 0 {
-		if m.StructureKind == StructureKindNetworkEnrichmentV1 {
-			return &errMeta{reason: "direct file with registered structure kind", code: ErrFormat}
-		}
-		return ErrUnsupportedStructureKind
+		return &errMeta{reason: "direct file with structure kind", code: ErrFormat}
 	}
 	if m.StructureEntryCount != 0 || m.StructureIDLimit != 0 ||
 		m.StructureIDRoot != 0 || m.StructureHashRoot != 0 || m.StructureUsedRoot != 0 {
@@ -289,11 +289,10 @@ func validateDirectMeta(m *Meta) error {
 }
 
 func validateMembershipMeta(m *Meta) error {
+	// Any nonzero structure kind is the KindInvariant class
+	// (bootstrap.rs validate_no_structures), including unknown codes.
 	if m.StructureKind != 0 {
-		if m.StructureKind == StructureKindNetworkEnrichmentV1 {
-			return &errMeta{reason: "membership file with registered structure kind", code: ErrFormat}
-		}
-		return ErrUnsupportedStructureKind
+		return &errMeta{reason: "membership file with structure kind", code: ErrFormat}
 	}
 	if m.StructureEntryCount != 0 || m.StructureIDLimit != 0 ||
 		m.StructureIDRoot != 0 || m.StructureHashRoot != 0 || m.StructureUsedRoot != 0 {

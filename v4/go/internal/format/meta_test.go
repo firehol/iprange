@@ -129,11 +129,29 @@ func TestMetaKindInvariants(t *testing.T) {
 	if err := m.ValidateKindInvariants(); err == nil {
 		t.Fatal("direct with membership limit accepted")
 	}
-	// Direct with unsupported structure kind.
+	// Direct with any nonzero structure kind is the KindInvariant class.
+	for _, kind := range []byte{1, 2} {
+		m = valid()
+		m.StructureKind = kind
+		if err := m.ValidateKindInvariants(); err == nil || UnsupportedKind(err) {
+			t.Fatalf("direct kind %d: want plain format error, got %v", kind, err)
+		}
+	}
+	// Structured with an unknown nonzero structure kind is the typed
+	// unsupported error.
 	m = valid()
+	m.ValueKind = ValueKindStructured
 	m.StructureKind = 2
+	m.StructureEntryCount = 1
+	m.StructureIDLimit = 1
+	m.StructureIDRoot = 2
+	m.StructureHashRoot = 3
+	m.StructureUsedRoot = 4
+	if m.PageCount < 6 {
+		m.PageCount = 6
+	}
 	if err := m.ValidateKindInvariants(); err == nil || !UnsupportedKind(err) {
-		t.Fatalf("unsupported kind error expected, got %v", err)
+		t.Fatalf("structured unknown kind: unsupported kind error expected, got %v", err)
 	}
 	// Root out of range.
 	m = valid()

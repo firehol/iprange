@@ -215,12 +215,15 @@ func TestBootstrapSelectionMatrix(t *testing.T) {
 			t.Fatalf("code %v want 32", err)
 		}
 	})
-	// Unsupported structure kind after identity agreement.
-	t.Run("unsupported-structure", func(t *testing.T) {
+	// Direct file with an unknown nonzero structure kind is the
+	// KindInvariant class (bootstrap.rs validate_direct), not the typed
+	// unsupported error: only a structured file with an unknown nonzero
+	// kind reports UnsupportedStructure.
+	t.Run("direct-unknown-structure-kind", func(t *testing.T) {
 		path := copyFixture(t, "direct-ipv4.iprdb", "struct2.iprdb")
 		patchMeta(t, path, func(page []byte) { page[13] = 2 })
-		if _, err := OpenImmutable(path); mustCode(err) != format.CodeUnsupportedStructure {
-			t.Fatalf("code %v want 67", err)
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+			t.Fatalf("code %v want 32", err)
 		}
 	})
 	// Transaction gap: page 1 txn jumps by five.

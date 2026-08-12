@@ -53,10 +53,12 @@ func TestCatalogFeedIndexLimit(t *testing.T) {
 	}
 }
 
-// TestMetaKindClassification pins the bootstrap error classes: a registered
-// but invalid kind combination is FormatInvalid, only an unknown kind is the
-// typed UnsupportedStructure (spec section 4.1/4.3; bootstrap.rs
-// KindInvariant).
+// TestMetaKindClassification pins the bootstrap error classes: direct and
+// membership files reject ANY nonzero structure kind as the KindInvariant
+// class - FormatInvalid (bootstrap.rs validate_direct/validate_no_structures)
+// - while a structured file with an unknown nonzero kind is the typed
+// UnsupportedStructure (finish_open) and a structured file with kind 0 is
+// FormatInvalid.
 func TestMetaKindClassification(t *testing.T) {
 	// Direct file with the registered structured kind (1): invalid
 	// combination -> FormatInvalid (32).
@@ -93,12 +95,14 @@ func TestMetaKindClassification(t *testing.T) {
 			t.Fatalf("code %v want 32", err)
 		}
 	})
-	// Membership file with an unknown kind (2): typed UnsupportedStructure.
+	// Membership file with an unknown kind (2): the KindInvariant class
+	// (bootstrap.rs validate_no_structures) -> FormatInvalid; only a
+	// structured file with an unknown kind reports UnsupportedStructure.
 	t.Run("membership-kind2", func(t *testing.T) {
 		path := copyFixture(t, "membership-ipv4.iprdb", "membership-kind2.iprdb")
 		patchMeta(t, path, func(page []byte) { page[13] = 2 })
-		if _, err := OpenImmutable(path); mustCode(err) != format.CodeUnsupportedStructure {
-			t.Fatalf("code %v want 67", err)
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+			t.Fatalf("code %v want 32", err)
 		}
 	})
 }

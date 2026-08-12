@@ -122,9 +122,6 @@ func (r *ImmutableReader) bootstrap() error {
 	if ok0 && ok1 && !sameIdentity(m0, m1) {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "conflicting meta identity"}
 	}
-	if ok0 && ok1 && isUnsupportedKind(m0.StructureKind) {
-		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
-	}
 	physical := r.m.Size()
 	e0 := validateMeta(m0, ok0, physical)
 	e1 := validateMeta(m1, ok1, physical)
@@ -195,10 +192,6 @@ func sameIdentity(a, b format.Meta) bool {
 		a.StructureKind == b.StructureKind &&
 		a.ValueTag == b.ValueTag &&
 		a.DatabaseID == b.DatabaseID
-}
-
-func isUnsupportedKind(kind uint8) bool {
-	return kind != 0 && kind != format.StructureKindNetworkEnrichmentV1
 }
 
 func validateMeta(m format.Meta, ok bool, physical uint64) error {
