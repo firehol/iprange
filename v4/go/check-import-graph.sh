@@ -1,5 +1,6 @@
 #!/bin/sh
-# check-import-graph.sh — enforce the v4 Go import boundaries.
+# check-import-graph.sh — enforce the v4 Go import boundaries and the
+# mmap-only content-transfer ban.
 #
 # Mirrors v4/rust/check-source-graph.sh for the Go peer:
 #   - internal/format is the wire-codec owner: stdlib only.
@@ -14,15 +15,43 @@
 #     approved deletion set; no legacy transfer point remains.
 #
 # In addition to import boundaries, production sources are mechanically
-# banned from content-transfer I/O (Read/Write/ReadAt/WriteAt/Pread/Pwrite/
-# ReadFile/WriteFile) so the mmap-only contract cannot regress with a future
-# commit, and the stdlib syscall package is banned everywhere (x/sys is the
-# mapping owner's syscall surface).
+# banned from content-transfer I/O so the mmap-only contract cannot regress:
+#   - selector ban: any .Read/.Write/.Seek-family selector (direct calls,
+#     method values, function aliases, wrappers) anywhere in a production
+#     source file, including build-tagged files on every platform and files
+#     in packages added later (discovery is a whole-tree find, not a fixed
+#     directory list);
+#   - dot-import ban: a dot import hides the package qualifier from the
+#     selector scan;
+#   - buffered-IO import ban: bufio wraps *os.File reads behind methods the
+#     selector scan does not enumerate (Peek, NewReader, ...), and the
+#     SDK has no legitimate bufio use (metadata decompression uses flate
+#     over an in-memory reader, which is exempt);
+#   - stdlib syscall is banned everywhere (x/sys is the mapping owner's
+#     syscall surface), and the reader core carries no
+#     sync/sync/atomic/unsafe.
 #
-# Usage: ./check-import-graph.sh   (run from the v4/go directory)
+# In-memory decompression readers are exempt: the metadata inflater's
+# consumedReader reads a heap buffer, not SDK artifact content — the one
+# production .Read() call the tree allows.
+#
+# The gate is a mechanical tripwire, not a proof: it catches the transfer
+# forms listed above. Runtime tracing of an actual open/lookup session
+# (openat -> OFD lock -> mmap -> munmap -> unlock/close with no
+# read/pread/readv/lseek on the database descriptor) is recorded in the
+# milestone report as the runtime half of the mmap-only evidence.
+#
+# Usage: ./check-import-graph.sh [--self-test]   (run from the v4/go
+# directory). --self-test creates temporary mutation packages, asserts the
+# gate rejects every one, removes them, and exits nonzero on any miss.
 
 set -eu
 cd "$(dirname "$0")"
+
+self_test=0
+if [ "${1:-}" = "--self-test" ]; then
+	self_test=1
+fi
 
 fail=0
 
@@ -84,18 +113,11 @@ for pkg in "github.com/firehol/iprange/v4/go/internal/format" \
 	fi
 done
 
-# Content-transfer I/O ban in production sources: persistent artifact bytes
-# must never move through read/write/seek APIs (mmap-only contract). Test-only
-# fixture builders are exempt. Comments (line and multi-line block, and //
-# inside string literals) are stripped by a stateful awk before matching.
-# In-memory decompression readers are exempt: the metadata inflater's
-# consumedReader reads a heap buffer, not SDK artifact content — the one
-# production .Read() call the tree allows.
+# strip_comments removes line and multi-line block comments while keeping
+# string literals intact (a "//" inside a double-quoted string or a raw
+# backtick string is data, not a comment), so a real content-transfer call
+# after a string containing "//" is still detected.
 strip_comments() {
-	# awk state machine: strips /* */ and // comments but keeps string
-	# literals intact (a "//" inside a double-quoted string or a raw
-	# backtick string is data, not a comment), so a real content-transfer
-	# call after a string containing "//" is still detected.
 	awk '
 	function strip_line(line,   out, i, n, c) {
 		out = ""
@@ -132,25 +154,41 @@ strip_comments() {
 	'
 }
 
-# content_violations prints every production source line that still mentions
-# a content-transfer selector after comment stripping. The strip runs on
-# whole files first: grep-then-strip would lose the block-comment state
-# across lines. The directory discovery comes from `go list` (all packages,
-# including any added later), so a new production package cannot escape the
-# scan. The word-boundary match catches direct calls, method values
-# (m := f.Read), function aliases (rd := io.ReadAll), and Seek, not only
-# parenthesized calls.
+# content_violations prints every production source line, after comment
+# stripping, that either mentions a content-transfer selector, uses a dot
+# import, or imports bufio/io/ioutil. Discovery is a whole-tree find over
+# every .go file (excluding _test.go), so build-tagged files for other
+# platforms and packages added later are scanned regardless of the active
+# GOOS/GOARCH.
 content_violations() {
-	for dir in $(go list -f '{{.Dir}}' ./... | sort -u); do
-		for f in "$dir"/*.go; do
-			[ -f "$f" ] || continue
-			case "$f" in *_test.go) continue ;; esac
-			strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read('
-		done
+	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
+		strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read\(Byte\)\?('
 	done
 }
-if [ -n "$(content_violations | grep -E '\.(Read|Write|Seek|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile|ReadAll|Copy)\b')" ]; then
+
+violations=$(content_violations)
+
+# Content-transfer selector ban: word boundary after each name catches
+# direct calls (f.Read(x)), method values (m := f.Read), function aliases
+# (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
+# The set covers the read/write/seek language API families including the
+# x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine)\b'; then
 	echo "content-transfer I/O violation in production sources"
+	fail=1
+fi
+
+# Dot-import ban: an unqualified call (ReadFile(path)) would hide its
+# package qualifier from the selector scan.
+if printf '%s\n' "$violations" | grep -E '^[^:]*:[[:space:]]*(import[[:space:]]*)?\.'; then
+	echo "dot-import violation in production sources"
+	fail=1
+fi
+
+# Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
+# behind methods not enumerated above; the SDK has no legitimate use.
+if printf '%s\n' "$violations" | grep -E '^[^:]*:[[:space:]]*"(bufio|io/ioutil)"'; then
+	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
 
@@ -167,6 +205,149 @@ for pkg in $(go list ./... | grep -v '^github.com/firehol/iprange/v4/go$' \
 		;;
 	esac
 done
+
+if [ "$self_test" -eq 1 ]; then
+	# Durable mutation self-test: every transfer form below must make the
+	# gate fail. Each mutation is created, checked, and removed on its own
+	# so a miss points at exactly one form.
+	cleanup() {
+		rm -rf gatemut_readall gatemut_alias gatemut_methodval gatemut_seek \
+			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile
+		rm -f internal/mapping/gatemut_readv.go
+	}
+	trap cleanup EXIT INT TERM
+
+	mutfail=0
+
+	run_mut() {
+		name=$1
+		if ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test MISS: mutation $name did not fail the gate"
+			mutfail=1
+		fi
+		cleanup
+	}
+
+	mkdir -p gatemut_readall
+	cat > gatemut_readall/mut.go <<'MUTEOF'
+package gatemut_readall
+
+import (
+	"io"
+	"os"
+)
+
+var file *os.File
+
+func use() { _, _ = io.ReadAll(file) }
+MUTEOF
+	run_mut "direct io.ReadAll call"
+
+	mkdir -p gatemut_alias
+	cat > gatemut_alias/mut.go <<'MUTEOF'
+package gatemut_alias
+
+import (
+	"io"
+	"os"
+)
+
+var file *os.File
+
+var rd = io.ReadAll
+
+func use() { _, _ = rd(file) }
+MUTEOF
+	run_mut "io.ReadAll function alias"
+
+	mkdir -p gatemut_methodval
+	cat > gatemut_methodval/mut.go <<'MUTEOF'
+package gatemut_methodval
+
+import "os"
+
+var file *os.File
+
+var m = file.Read
+
+func use() { var b []byte; _ = m(b) }
+MUTEOF
+	run_mut "os.File.Read method value"
+
+	mkdir -p gatemut_seek
+	cat > gatemut_seek/mut.go <<'MUTEOF'
+package gatemut_seek
+
+import "os"
+
+var file *os.File
+
+func use() { _, _ = file.Seek(0, 0) }
+MUTEOF
+	run_mut "os.File.Seek call"
+
+	mkdir -p gatemut_newdir
+	cat > gatemut_newdir/mut.go <<'MUTEOF'
+package gatemut_newdir
+
+import "os"
+
+func read(p string) ([]byte, error) { return os.ReadFile(p) }
+MUTEOF
+	run_mut "os.ReadFile in a new package directory"
+
+	cat > internal/mapping/gatemut_readv.go <<'MUTEOF'
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func readv(fd int, b [][]byte) (int, error) { return unix.Readv(fd, b) }
+MUTEOF
+	run_mut "unix.Readv descriptor read in the mapping owner"
+
+	mkdir -p gatemut_bufio
+	cat > gatemut_bufio/mut.go <<'MUTEOF'
+package gatemut_bufio
+
+import (
+	"bufio"
+	"os"
+)
+
+var file *os.File
+
+func use() (byte, error) { return bufio.NewReader(file).ReadByte() }
+MUTEOF
+	run_mut "bufio.NewReader(file).ReadByte"
+
+	mkdir -p gatemut_dotimport
+	cat > gatemut_dotimport/mut.go <<'MUTEOF'
+package gatemut_dotimport
+
+import . "os"
+
+func read(p string) ([]byte, error) { return ReadFile(p) }
+MUTEOF
+	run_mut "dot-imported os.ReadFile"
+
+	mkdir -p gatemut_winfile
+	cat > gatemut_winfile/mut.go <<'MUTEOF'
+//go:build windows
+
+package gatemut_winfile
+
+import "os"
+
+func read(p string) ([]byte, error) { return os.ReadFile(p) }
+MUTEOF
+	run_mut "windows-only package with os.ReadFile"
+
+	if [ "$mutfail" -ne 0 ]; then
+		echo "import-graph self-test FAILED"
+		exit 1
+	fi
+	echo "import-graph self-test passed (all 9 mutation forms rejected)"
+fi
 
 if [ "$fail" -ne 0 ]; then
 	echo "import-graph check FAILED"

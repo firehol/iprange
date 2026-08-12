@@ -5,7 +5,11 @@
 //
 // Persistent content is never transferred through read/write/seek language
 // APIs. Page views alias the mapping and are valid only for the lifetime of
-// the Mapping; no view may escape the operation that owns it.
+// the Mapping. Retained slices (membership leaves) may survive the lookup
+// operation that produced them, but only while a live pin guards the
+// mapping: the reader cannot close while pins exist, and every public view
+// checks its pin before touching the bytes, so a retained slice never
+// outlives the mapping it aliases.
 //
 // Windows gets its own file in milestone 1; this POSIX implementation
 // covers Linux and macOS (OFD lifetime lock). FreeBSD has no proven OFD
