@@ -19,7 +19,7 @@ structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
 repaired. Repository counts at close: production 4,781 raw lines / tests
-4,565 raw lines. Milestone 2 (writer) may start.
+4,648 raw lines. Milestone 2 (writer) may start.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -553,8 +553,9 @@ The user adopted the external re-review's decisions after the reopening:
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
 - Counts at the time are recorded in the close-out entry (production 4,781
-  raw / tests 4,565 raw at milestone-1 close after the meta-precedence
-  parity fix and the sole-meta kind regression test).
+  raw / tests 4,648 raw at milestone-1 close after the meta-precedence
+  parity fix, the sole-meta kind regression test, and the final-review
+  regression guards).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 
@@ -1234,15 +1235,16 @@ An external full-scope review found five real P0/P1 contract defects after
 the six-reviewer pass declared PASS. All were verified against code and
 specs, fixed, and pinned by pre-fix-failing tests:
 
-1. Obsolete retention semantics restored: `RetentionTag()` and its
+1. Obsolete retention semantics had been reintroduced: `RetentionTag()` and its
    "retention" test survived the deletion (binary-format-v4.md:311 forbids
    the compatibility alias; milestone-0 report classified them for
    deletion). Removed from v4/go/types.go and types_test.go.
 2. Pin value copies double-decremented the reader pin count: `p2 := *p1`
    carried its own closed flag. Every Pin now references one shared
    private pinState; value copies and pointer aliases close the same
-   logical pin. Pinned by TestPinValueCopySharesClose and
-   TestPinValueCopyKeepsReaderBusy (both fail on the pre-fix code).
+   logical pin. Pinned by TestPinValueCopySharesClose,
+   TestPinValueCopyKeepsReaderBusy, and
+   TestPinValueCopyCannotReleaseSecondPin (all fail on the pre-fix code).
 3. DirectSemantic registry drift: public Go values were 0/1/2 while the
    Rust engine-defined registry is Generic=1, FirstSeen=2, LastSeen=3.
    Go now exports 1/2/3; TestPublicSemanticFoundation pins them.
@@ -1261,6 +1263,10 @@ specs, fixed, and pinned by pre-fix-failing tests:
    constants; Cardinality129 = format.Cardinality129 plus wrappers).
    Uint64/Uint128 moved into the format authority to preserve the public
    method set.
+6. Final-review regression guards: compile-time alias assertions pin the
+   public ErrorCode and Cardinality129 as the internal/format types, and a
+   negative source guard forbids the reintroduction of the obsolete
+   retention symbol; all three guards fail on the pre-fix tree.
 
 Gates re-run at HEAD: go test ./... (4 packages), -race, vet, gofmt,
 import graph, 9 cross-compiles, SOW audit, Rust conformance (6 fixtures),

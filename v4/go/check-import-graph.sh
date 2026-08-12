@@ -10,8 +10,8 @@
 #     paths carry no per-call synchronization (design-iprange-engine.md).
 #   - the module root (public facade) imports only stdlib + internal/format
 #     + internal/reader. Nothing else may import internal/*.
-#   - internal/exactv4 is the legacy tree awaiting the approved deletion and
-#     is intentionally unconstrained; it is removed with the deletion set.
+#   - the obsolete milestone-0 internal/exactv4 tree was deleted with the
+#     approved deletion set; no legacy transfer point remains.
 #
 # In addition to import boundaries, production sources are mechanically
 # banned from content-transfer I/O (Read/Write/ReadAt/WriteAt/Pread/Pwrite/
@@ -69,9 +69,9 @@ check() {
 check "github.com/firehol/iprange/v4/go/internal/format" "github.com/firehol/iprange/v4/go/internal/format\$"
 check "github.com/firehol/iprange/v4/go/internal/mapping" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\)"
 check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\)"
-# The module root (public facade) imports internal/format + internal/reader,
-# plus the legacy internal/exactv4 scalar aliases (types.go/errors.go) that
-# are the transfer point until the approved deletion set lands.
+# The module root (public facade) imports internal/format + internal/reader
+# only; the legacy internal/exactv4 scalar aliases were deleted with the
+# approved set.
 check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
 
 # The reader core is the synchronization-free zone: no sync, sync/atomic, or

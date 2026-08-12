@@ -1278,3 +1278,38 @@ func TestPinValueCopyKeepsReaderBusy(t *testing.T) {
 		t.Fatalf("reader close after both copies observed close: %v", err)
 	}
 }
+
+// TestPinValueCopyCannotReleaseSecondPin pins the exact audit scenario: two
+// independent pins exist, then one value copy of the first pin is made and
+// both the first pin and its copy are closed. The reader must remain
+// HandleBusy because the second independent pin is still live. Before the
+// shared pinState fix, every Close decremented the reader's pin count even
+// for value copies, so these two closes drained the count and closed the
+// reader under the live second pin.
+func TestPinValueCopyCannotReleaseSecondPin(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	p1, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin 1:", err)
+	}
+	p2, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin 2:", err)
+	}
+	p1c := *p1 // value copy of the first logical pin
+	if err := p1.Close(); err != nil {
+		t.Fatal("close pin 1:", err)
+	}
+	if fe := errorAsCode(p1c.Close()); fe != ErrorWrongState {
+		t.Fatalf("close of pin-1 copy must report WrongState, got %v", fe)
+	}
+	if fe := errorAsCode(r.Close()); fe != ErrorHandleBusy {
+		t.Fatalf("reader close with live pin 2 must report HandleBusy, got %v", fe)
+	}
+	if err := p2.Close(); err != nil {
+		t.Fatal("close pin 2:", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("reader close after all pins released: %v", err)
+	}
+}

@@ -9,7 +9,7 @@ import (
 // returned string copy).
 
 // openBlobFixture builds and opens the synthetic blob-backed membership
-// database (the only committed blob coverage; the five conformance fixtures
+// database (the only committed blob coverage; the six conformance fixtures
 // store every bitmap inline).
 func openBlobFixture(t *testing.T) *ImmutableReader {
 	t.Helper()

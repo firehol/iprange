@@ -1,9 +1,57 @@
 package iprangedb
 
 import (
+	"fmt"
+	"io/fs"
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
+
+// Compile-time single-authority guards: the public deduplicated types are
+// aliases of the internal/format authorities, so a second public
+// implementation of either registry cannot compile. These declarations
+// fail on any tree that redefines the public ErrorCode or Cardinality129
+// as independent types (the assignment is only legal for identical,
+// alias-linked types).
+var (
+	_ format.ErrorCode      = ErrorCode(0)
+	_ format.Cardinality129 = CardinalityZero()
+)
+
+// TestNoObsoleteRetentionAPI pins binary-format-v4.md:311: only first_seen
+// and last_seen value tags exist and there is no compatibility alias. The
+// deleted RetentionTag symbol must never return in any production source;
+// Go cannot express symbol absence in reflection, so this guard scans the
+// module's non-test Go sources for the forbidden identifier.
+func TestNoObsoleteRetentionAPI(t *testing.T) {
+	needle := "Retention" + "Tag"
+	lower := strings.ToLower(needle)
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		src := string(raw)
+		if strings.Contains(src, needle) || strings.Contains(src, lower) {
+			return fmt.Errorf("%s reintroduces the obsolete %s symbol", path, needle)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPublicSemanticFoundation(t *testing.T) {
 	if AddressFamilyIPv4 != 4 || AddressFamilyIPv6 != 6 {
