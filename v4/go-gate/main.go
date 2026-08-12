@@ -220,6 +220,13 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 			}
 			st, ok := ts.Type.(*ast.StructType)
 			if !ok {
+				// A defined func type (type F func() *os.File) is still a
+				// file producer whenever a value of that type is called;
+				// register it like an alias so funcTypeResultsFile and
+				// resolveTypeText expand it.
+				if ft, ok := ts.Type.(*ast.FuncType); ok {
+					info.aliases[ts.Name.Name] = exprText(ft)
+				}
 				continue
 			}
 			fields := map[string]string{}
@@ -461,6 +468,37 @@ const (
 	kindContainer
 	kindChanFile
 )
+
+// callResultsFuncFile reports whether e is a same-package call whose
+// every declared result position is a func type producing *os.File
+// (through alias and defined-func-type expansion), so a value returned
+// through a helper keeps its file-producer taint.
+func callResultsFuncFile(e ast.Expr, info pkgInfo) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fun := unwrapParen(call.Fun)
+	var results []string
+	switch f := fun.(type) {
+	case *ast.Ident:
+		results = info.funcs[f.Name]
+	case *ast.SelectorExpr:
+		if recv, ok := f.X.(*ast.Ident); ok {
+			results = info.methods[recv.Name+"."+f.Sel.Name]
+		}
+	}
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		rt := resolveTypeText(r, info)
+		if !strings.HasPrefix(rt, "func(") || !strings.Contains(rt, "*os.File") {
+			return false
+		}
+	}
+	return true
+}
 
 // unwrapParen strips parentheses around an expression so call and
 // selector matching sees (getFile)() and ((f).Read)(p) the same way.
@@ -1033,8 +1071,12 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 					// zv as *os.File inside the clause.
 					if bound != "" {
 						for _, ce := range cs.List {
-							if resolveTypeText(exprText(ce), info) == "*os.File" {
+							ct := resolveTypeText(exprText(ce), info)
+							switch {
+							case ct == "*os.File":
 								st.file[bound] = true
+							case strings.HasPrefix(ct, "func(") && strings.Contains(ct, "*os.File"):
+								st.funcFile[bound] = true
 							}
 						}
 					}
@@ -1112,7 +1154,7 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	}
 	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
-	if funcTypeResultsFile(rhs, info) {
+	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, info) {
 		st.funcFile[id.Name] = true
 	}
 	if fl, ok := rhs.(*ast.FuncLit); ok && st.retFile[fl.Pos()] {
