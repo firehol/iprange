@@ -86,10 +86,13 @@ done
 
 # Content-transfer I/O ban in production sources: persistent artifact bytes
 # must never move through read/write/seek APIs (mmap-only contract). Test-only
-# fixture builders are exempt.
-if grep -RnE '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(' \
+# fixture builders are exempt. Comments are stripped before matching so a
+# doc comment that names an API does not trip the gate.
+if [ -n "$(grep -RnE '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(' \
 		internal/format internal/mapping internal/reader *.go 2>/dev/null \
-		| grep -v '_test.go' ; then
+		| grep -v '_test.go' \
+		| sed -e 's@//.*@@' -e 's@/\*.*\*/@@' \
+		| grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(')" ]; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
