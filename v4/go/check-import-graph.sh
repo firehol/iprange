@@ -13,6 +13,12 @@
 #   - internal/exactv4 is the legacy tree awaiting the approved deletion and
 #     is intentionally unconstrained; it is removed with the deletion set.
 #
+# In addition to import boundaries, production sources are mechanically
+# banned from content-transfer I/O (Read/Write/ReadAt/WriteAt/Pread/Pwrite/
+# ReadFile/WriteFile) so the mmap-only contract cannot regress with a future
+# commit, and the stdlib syscall package is banned everywhere (x/sys is the
+# mapping owner's syscall surface).
+#
 # Usage: ./check-import-graph.sh   (run from the v4/go directory)
 
 set -eu
@@ -33,6 +39,10 @@ check() {
 	if [ -n "$content" ]; then
 		for imp in $content; do
 			case "$imp" in
+			"syscall")
+				echo "boundary violation: $pkg imports stdlib syscall (use golang.org/x/sys in mapping only)"
+				fail=1
+				;;
 			"github.com/firehol/iprange/v4/go"*)
 				if ! printf '%s\n' "$imp" | grep -q "^$allowed_prefix"; then
 					echo "boundary violation: $pkg imports $imp"
@@ -73,6 +83,16 @@ for pkg in "github.com/firehol/iprange/v4/go/internal/format" \
 		fail=1
 	fi
 done
+
+# Content-transfer I/O ban in production sources: persistent artifact bytes
+# must never move through read/write/seek APIs (mmap-only contract). Test-only
+# fixture builders are exempt.
+if grep -RnE '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(' \
+		internal/format internal/mapping internal/reader *.go 2>/dev/null \
+		| grep -v '_test.go' ; then
+	echo "content-transfer I/O violation in production sources"
+	fail=1
+fi
 
 # Only the reader may hold the mapping, and only the reader core may be
 # consumed by the facade.

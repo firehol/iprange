@@ -46,8 +46,11 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV14(addr uint32) (NetworkEnrich
 		return NetworkEnrichmentV1View{}, false, err
 	}
 	view, found, err := r.lookupStructureID(value)
-	if err != nil || !found {
+	if err != nil {
 		return NetworkEnrichmentV1View{}, false, err
+	}
+	if !found {
+		return NetworkEnrichmentV1View{}, false, corrupt("range names an absent structure ID")
 	}
 	return view, true, nil
 }
@@ -60,8 +63,11 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV16(addrHi, addrLo uint64) (Net
 		return NetworkEnrichmentV1View{}, false, err
 	}
 	view, found, err := r.lookupStructureID(value)
-	if err != nil || !found {
+	if err != nil {
 		return NetworkEnrichmentV1View{}, false, err
+	}
+	if !found {
+		return NetworkEnrichmentV1View{}, false, corrupt("range names an absent structure ID")
 	}
 	return view, true, nil
 }

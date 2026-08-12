@@ -24,10 +24,11 @@ const (
 	MetaSelectionSoleMeta1
 )
 
-// ImmutableReader is the opened immutable database. It is not safe for
-// concurrent use by multiple goroutines; callers that share a database must
-// guard it (or open one per worker). The underlying file is shared-locked for
-// the reader lifetime.
+// ImmutableReader is the opened immutable database. Its state (mapping,
+// committed meta, selection) is write-once at open and every access re-derives
+// checked views, so lookups and independent scans are safe for concurrent use
+// by multiple goroutines without a per-call lock (design-iprange-engine.md);
+// Close must never race reader work.
 type ImmutableReader struct {
 	m         *mapping.Mapping
 	meta      format.Meta
@@ -120,8 +121,9 @@ func (r *ImmutableReader) bootstrap() error {
 	if ok0 && ok1 && isUnsupportedKind(m0.StructureKind) {
 		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
 	}
-	e0 := validateMeta(m0, ok0)
-	e1 := validateMeta(m1, ok1)
+	physical := r.m.Size()
+	e0 := validateMeta(m0, ok0, physical)
+	e1 := validateMeta(m1, ok1, physical)
 	valid0 := ok0 && e0 == nil
 	valid1 := ok1 && e1 == nil
 	if err := r.selectBetween(p0, p1, m0, m1, valid0, valid1, e0, e1); err != nil {
@@ -195,7 +197,7 @@ func isUnsupportedKind(kind uint8) bool {
 	return kind != 0 && kind != format.StructureKindNetworkEnrichmentV1
 }
 
-func validateMeta(m format.Meta, ok bool) error {
+func validateMeta(m format.Meta, ok bool, physical uint64) error {
 	if !ok {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta not identity-readable"}
 	}
@@ -204,6 +206,9 @@ func validateMeta(m format.Meta, ok bool) error {
 			return &format.Error{Code: format.CodeUnsupportedStructure, Detail: err.Error()}
 		}
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
+	}
+	if m.PageCount*format.PageSize > physical {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta page count exceeds physical size"}
 	}
 	return nil
 }

@@ -385,17 +385,20 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 			if h.Lower != uint16(48+int(leaf.DataLen)) || h.Upper != format.PageSize {
 				return nil, corrupt("blob leaf layout malformed")
 			}
-			if leaf.LogicalOffset != expectedStart || leaf.LogicalOffset%8 != 0 {
-				return nil, corrupt("blob leaf start mismatch")
+			if leaf.LogicalOffset != expectedStart || leaf.LogicalOffset%8 != 0 ||
+				leaf.DataLen%8 != 0 {
+				return nil, corrupt("blob leaf start or length not 8-byte aligned")
 			}
-			end := leaf.LogicalOffset + uint64(leaf.DataLen)
-			if end > totalBytes {
+			// Checked extent arithmetic: the leaf must lie inside the
+			// declared blob and cover the requested span exactly.
+			if leaf.LogicalOffset > totalBytes || uint64(leaf.DataLen) > totalBytes-leaf.LogicalOffset {
 				return nil, corrupt("blob leaf exceeds declared length")
 			}
+			end := leaf.LogicalOffset + uint64(leaf.DataLen)
 			if end < totalBytes && leaf.DataLen != format.MaxBlobLeafDataLen {
 				return nil, corrupt("blob nonfinal leaf not full")
 			}
-			if off < leaf.LogicalOffset || off+length > end {
+			if off < leaf.LogicalOffset || length > end-off {
 				return nil, corrupt("blob leaf does not cover the requested bytes")
 			}
 			base := off - leaf.LogicalOffset
@@ -444,7 +447,14 @@ func blobBranchChild(sl format.SlottedPage, off uint64, pageCount uint64) (uint3
 		if err != nil {
 			return format.BlobBranchRecord{}, err
 		}
-		return format.DecodeBlobBranch(b)
+		rec, err := format.DecodeBlobBranch(b)
+		if err != nil {
+			return format.BlobBranchRecord{}, err
+		}
+		if !format.PageNumberValid(rec.Child, pageCount) {
+			return format.BlobBranchRecord{}, corrupt("blob branch child out of range")
+		}
+		return rec, nil
 	}
 	lo, hi := 0, int(sl.Header.ItemCount)
 	best := -1

@@ -64,10 +64,10 @@ const (
 	ErrorForkedHandle
 	ErrorPanic
 	ErrorOSUnsupported
-	ErrorTransactionIDExhausted
+	ErrorTransactionIdExhausted
 	ErrorArithmeticOverflow
 	ErrorFeedIndexExhausted
-	ErrorMembershipIDExhausted
+	ErrorMembershipIdExhausted
 	ErrorReaderCapacityExhausted
 	ErrorCleanupInProgress
 )

@@ -69,17 +69,17 @@ const (
 	CodeForkedHandle
 	CodePanic
 	CodeOSUnsupported
-	CodeTransactionIDExhausted
+	CodeTransactionIdExhausted
 	CodeArithmeticOverflow
 	CodeFeedIndexExhausted
-	CodeMembershipIDExhausted
+	CodeMembershipIdExhausted
 	CodeReaderCapacityExhausted
 	CodeCleanupInProgress
 	CodeFaultWorkerUnavailable
 	CodeFaultWorkerFailed
 	CodeUnsupportedStructure
 	CodeWrongStructureKind
-	CodeStructureIDExhausted
+	CodeStructureIdExhausted
 )
 
 // Error is one typed SDK failure carried by internal packages. The public

@@ -26,7 +26,7 @@ const (
 	ErrorFaultWorkerFailed
 	ErrorUnsupportedStructure
 	ErrorWrongStructureKind
-	ErrorStructureIDExhausted
+	ErrorStructureIdExhausted
 )
 
 // StructureKind selects the immutable hardcoded structure of a structured
@@ -617,9 +617,7 @@ func publicError(err error) error {
 	}
 	var ferr *format.Error
 	if errors.As(err, &ferr) {
-		if e, ok := err.(*format.Error); ok {
-			return &Error{Code: ErrorCode(e.Code), Detail: e.Detail}
-		}
+		return &Error{Code: ErrorCode(ferr.Code), Detail: ferr.Detail}
 	}
 	// Internal header/decode validation failures (fixedsize header errors
 	// and similar) are structural corruption at the public boundary.

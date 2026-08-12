@@ -80,11 +80,13 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-v6-blob", func() error {
+		{"membership-v6-inline", func() error {
 			for _, ip := range probe64 {
-				if _, _, err := member6.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo}); err != nil {
+				view, _, err := member6.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo})
+				if err != nil {
 					return err
 				}
+				view.Release()
 			}
 			return nil
 		}},

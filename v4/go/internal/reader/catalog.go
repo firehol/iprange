@@ -53,7 +53,7 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 			}
 			cur, level = child, level-1
 		case format.PageTypeCatalogNameLeaf:
-			entry, found, err := nameLeafLookup(sl, name)
+			entry, found, err := nameLeafLookup(sl, name, r.meta.FeedIndexLimit)
 			if err != nil || !found {
 				return FeedEntry{}, false, err
 			}
@@ -146,14 +146,23 @@ func nameBranchChild(sl format.SlottedPage, target string, pageCount uint64) (ui
 	return rec.Child, nil
 }
 
-// nameLeafLookup finds the exact name in one name leaf.
-func nameLeafLookup(sl format.SlottedPage, target string) (FeedEntry, bool, error) {
+// nameLeafLookup finds the exact name in one name leaf. Every probed record
+// is validated against feedIndexLimit: a record whose index is at or above
+// the committed limit is corruption (feed_catalog.rs decode_leaf).
+func nameLeafLookup(sl format.SlottedPage, target string, feedIndexLimit uint64) (FeedEntry, bool, error) {
 	probe := func(i int) (format.CatalogNameRecord, error) {
 		b, err := sl.Record(i)
 		if err != nil {
 			return format.CatalogNameRecord{}, err
 		}
-		return format.DecodeCatalogNameRecord(b)
+		rec, err := format.DecodeCatalogNameRecord(b)
+		if err != nil {
+			return format.CatalogNameRecord{}, err
+		}
+		if uint64(rec.FeedIndex) >= feedIndexLimit {
+			return format.CatalogNameRecord{}, corrupt("catalog feed index %d beyond limit %d", rec.FeedIndex, feedIndexLimit)
+		}
+		return rec, nil
 	}
 	lo, hi := 0, int(sl.Header.ItemCount)
 	for lo < hi {

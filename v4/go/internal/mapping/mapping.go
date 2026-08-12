@@ -8,9 +8,10 @@
 // the Mapping; no view may escape the operation that owns it.
 //
 // Windows gets its own file in milestone 1; this POSIX implementation
-// covers Linux and macOS (OFD lifetime lock). FreeBSD and other unix
-// platforms mirror the Rust platform table and refuse opens until the
-// platform milestone implements live coordination there.
+// covers Linux and macOS (OFD lifetime lock). FreeBSD has no proven OFD
+// byte-range primitive, so live coordination is unsupported there, but
+// immutable readers keep the canonical whole-file shared flock lifetime lock
+// (binary-format-v4.md platform table; Rust live_lock.rs freebsd_file_lock).
 //
 //go:build !windows
 
@@ -109,6 +110,9 @@ func (m *Mapping) File() *os.File { return m.file }
 // returned slice aliases the mapping and must not escape the calling
 // operation.
 func (m *Mapping) View(off, length uint64) ([]byte, error) {
+	if m.data == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
 	if off > m.size || length > m.size-off {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "view out of mapped extent"}
 	}
@@ -121,8 +125,14 @@ func (m *Mapping) Page(pgno uint32) ([]byte, error) {
 	return m.View(off, format.PageSize)
 }
 
-// Close releases the mapping and the shared lifetime lock.
+// Close releases the mapping and the shared lifetime lock. Close is
+// idempotent: a second Close returns nil, and every later View/Page access
+// reports the typed wrong-state error instead of touching the released
+// mapping.
 func (m *Mapping) Close() error {
+	if m.file == nil {
+		return nil // already closed
+	}
 	var first error
 	if err := unix.Munmap(m.data); err != nil && first == nil {
 		first = &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
@@ -134,5 +144,6 @@ func (m *Mapping) Close() error {
 	if err := m.file.Close(); err != nil && first == nil {
 		first = &format.Error{Code: format.CodeIO, Detail: "close: " + err.Error()}
 	}
+	m.file = nil
 	return first
 }

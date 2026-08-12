@@ -735,6 +735,46 @@ func TestConformanceRustFixtures(t *testing.T) {
 					threat.Release()
 				}
 			}
+
+			// Absence at the family edges and inside inter-range gaps of
+			// the structured ranges: found=false with nil error, never a
+			// stale view and never corruption (Rust verifier probes the
+			// same positions).
+			if len(tc.StructuredRanges) > 0 {
+				probeStructured := func(hi, lo uint64) bool {
+					if tc.Family == "ipv4" {
+						_, ok, err := db.LookupNetworkEnrichmentV1V4(IPv4(uint32(lo)))
+						return err != nil || ok
+					}
+					_, ok, err := db.LookupNetworkEnrichmentV1V6(IPv6{Hi: hi, Lo: lo})
+					return err != nil || ok
+				}
+				first, last := tc.StructuredRanges[0], tc.StructuredRanges[len(tc.StructuredRanges)-1]
+				fh, fl, _ := addressBytes(first.From, tc.Family)
+				th, tl, _ := addressBytes(last.To, tc.Family)
+				if tc.Family == "ipv4" {
+					if fh > 0 && probeStructured(0, 0) {
+						t.Errorf("structured 0.0.0.0: want absent")
+					}
+					if th < 0xffffffff && probeStructured(0, 0xffffffff) {
+						t.Errorf("structured 255.255.255.255: want absent")
+					}
+					for i := 1; i < len(tc.StructuredRanges); i++ {
+						_, _, prevTo := addressBytes(tc.StructuredRanges[i-1].To, "ipv4")
+						_, _, curFrom := addressBytes(tc.StructuredRanges[i].From, "ipv4")
+						if curFrom > prevTo+1 && probeStructured(0, uint64(prevTo+1)) {
+							t.Errorf("structured gap after %s: want absent", tc.StructuredRanges[i-1].To)
+						}
+					}
+				} else {
+					if (fh != 0 || fl != 0) && probeStructured(0, 0) {
+						t.Errorf("structured :: : want absent")
+					}
+					if (th != ^uint64(0) || tl != ^uint64(0)) && probeStructured(^uint64(0), ^uint64(0)) {
+						t.Errorf("structured ffff:…: want absent")
+					}
+				}
+			}
 		})
 	}
 }
@@ -1011,6 +1051,9 @@ func TestOperationsAfterClose(t *testing.T) {
 	}
 	if _, err := db.Cardinality(); errorAsCode(err) != ErrorHandleClosed {
 		t.Fatalf("cardinality after close: %v", err)
+	}
+	if _, err := db.Info(); errorAsCode(err) != ErrorHandleClosed {
+		t.Fatalf("info after close: %v", err)
 	}
 }
 

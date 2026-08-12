@@ -59,9 +59,10 @@ zero-allocation: 16 checks (6 internal + 10 public), all 0 allocs
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go | wc -l`): 6,160 raw lines, including blanks; new-tree
-tests: ~2,850 lines. The ~3,720/~1,700 figures printed in earlier passes
-were stale snapshots and are superseded.
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,492
+raw lines, including blanks; new-tree tests: 3,794 raw lines. The earlier
+6,160 figure mixed production and test files and is superseded, as are the
+~3,720/~1,700 snapshots from the first passes.
 
 ## 3. Structure and owners
 
@@ -140,10 +141,10 @@ were stale snapshots and are superseded.
 
 | Operation | Allocations |
 |---|---|
-| direct lookup v4 (11 probes) | 0 |
+| direct lookup v4 (12 probes) | 0 |
 | direct lookup v6 (4 probes) | 0 |
 | membership lookup v4 (incl. view) | 0 |
-| membership lookup v6 (blob bitmap) | 0 |
+| membership lookup v6 (inline bitmap) | 0 |
 | ContainsIndex / Word (inline + blob) | 0 |
 | structured lookup v4 | 0 |
 | feed lookup (internal) | 0 |
@@ -151,8 +152,9 @@ were stale snapshots and are superseded.
 | full direct scan v4 | 0 |
 | cardinality scan | 0 |
 
-Metadata decompression allocates only the returned payload (a caller value,
-bounded by the 20 MiB limit), matching the contract.
+Metadata decompression allocates the returned payload plus a measured
+0-88 bytes/run of scanner overhead on the 1 MiB fixture (the bytes/value
+contract itself is unchanged: caller value bounded by the 20 MiB limit).
 
 ## 7. Malformed/corruption evidence
 
@@ -176,8 +178,10 @@ bounded by the 20 MiB limit), matching the contract.
   milestone. macOS/FreeBSD mapping shares the POSIX owner; runtime proof
   requires authorized native hosts (Milestone 4 per plan). Big-endian codec
   proof (s390x) is still required by later milestones.
-- FreeBSD live coordination (error 44 before path access) is a later
-  milestone; the immutable reader itself is platform-neutral (mmap + flock).
+- FreeBSD live coordination remains a later milestone; immutable opens on
+  FreeBSD use the canonical whole-file shared flock lifetime lock (restored
+  in the round-2 fix pass), Linux/macOS use the OFD byte-range lock, and the
+  Windows stub refuses with a typed error.
 
 ## 9. Review findings and repairs (2026-08-11, second pass)
 
@@ -310,10 +314,11 @@ also corrected a wrong factual claim in this report). Repairs:
    membership_view.rs, including check order); trailing-zero-word
    corruption check on reads reaching the canonical end (mirrors Rust).
 3. **Missing referenced values are corruption.** A range value naming a
-   membership ID absent from the ID tree, or a structure ID absent from the
-   structure radix, now returns the typed corrupt error (mirroring
-   membership_view.rs / structured_value/view.rs: "range names an absent
-   membership ID / structure ID"); previously a zero view was returned.
+   membership ID absent from the ID tree now returns the typed corrupt error
+   (mirroring membership_view.rs). The structure twin was claimed repaired
+   here but was still a silent clean miss at HEAD; the round-2 review caught
+   it and the fix pass landed it (structure.go now returns "range names an
+   absent structure ID", pinned by TestMultiLevelStructureTree).
 4. **Absence below the first branch key.** Range (v4+v6) and catalog name
    lookups with no qualifying branch entry now return absent instead of
    corruption (binary-format-v4.md §589: "If no key qualifies, the target
@@ -469,8 +474,9 @@ All were repaired in this pass, each with a committed regression test:
   counts); absence probes at family edges and inter-range gaps for
   direct/membership ranges; word-exact bitmap verification through
   ReadWords per range; feed-limit InvalidArgument probes.
-- M7 reports: LOC recomputed at HEAD (6,160 raw production lines, tests
-  ~2,850), 18 probes and 16 zero-allocation checks replace the stale 19/11,
+- M7 reports: LOC recomputed honestly at HEAD (test files excluded; then
+  4,255 raw production lines), 18 probes and 16 zero-allocation checks
+  replace the stale 19/11,
   SOW worker sentence aligned with the corrected section 11.
 - M8 gate: check-import-graph.sh dropped each package's first import
   (mapping->format was silently unchecked); it now checks every import,
@@ -487,6 +493,63 @@ All were repaired in this pass, each with a committed regression test:
 
 Gates at commit: go test ./... (5 packages ok), -race, vet, gofmt clean,
 check-import-graph.sh passed, cross-builds darwin/freebsd/windows/linux-386.
+
+
+## 11c. Round-2 six-agent review and fix pass (2026-08-12)
+
+Per the mandatory iterative review gate, six concurrent reviewers with
+disjoint briefs (codecs / bootstrap+ranges / membership+structured+metadata /
+mapping+lifetimes+platform / public API+errors+zero-alloc /
+conformance+reports) reviewed the tree from an independent HEAD. Verdicts:
+4 FAIL + 1 FAIL on paperwork + 1 PASS-with-2-P1 (both P1s are the already
+recorded closed-state error-class user decision, precisely characterized).
+No P0. Findings and fixes, each with a committed regression test:
+
+- Catalog records with `feed_index >= feed_index_limit` were served instead
+  of rejected as corruption (load-bearing Rust rule absent on the Go read
+  path). Fixed in `nameLeafLookup`; pinned by `TestCatalogFeedIndexLimit`.
+- Kind classification was wrong for registered-but-invalid combinations:
+  structured kind 0 and direct/membership kind 1 reported
+  UnsupportedStructure (67) where the spec/Rust classify FormatInvalid (32);
+  only unknown kinds keep 67. Fixed in `meta.go`; pinned by
+  `TestMetaKindClassification`.
+- Dangling structure references (range names an absent structure ID) were a
+  silent clean miss; the membership twin was already corruption. Fixed in
+  `structure.go`; pinned by `TestMultiLevelStructureTree` (four ids now
+  assert code 32).
+- FreeBSD refused every open; the spec and Rust support immutable reading on
+  FreeBSD with a whole-file flock lifetime lock. Implemented in
+  `mapping_lifetime_freebsd.go` (LOCK_SH/LOCK_UN); live refusal remains for
+  the coordination path.
+- `Mapping.View`/`Page` after Close panicked on the nil slice; `Close` was
+  not idempotent. Now typed WrongState + idempotent Close; pinned by
+  `TestViewAfterClose`.
+- Metadata: zlib FCHECK (RFC 1950 check bits) was never validated (probe:
+  0x78 0x9b accepted); `deflateStreamLen` inflated each probe unboundedly
+  (CPU amplification on a crafted stream). Fixed; pinned by
+  `TestMetadataFCheckRejected`.
+- Blob walk: leaf `data_len % 8` now explicit, extent arithmetic checked for
+  overflow, and every probed branch entry's child page is validated (not
+  only the selected one); pinned by `TestBlobBranchProbedChildValidation`.
+- `publicError` lost the typed code through a wrapped `*format.Error`;
+  rebuilt from the `errors.As` match. Error-code names 59/62/69 aligned to
+  the Rust `Id` spelling.
+- Gate: `check-import-graph.sh` now bans content-transfer I/O in production
+  sources and the stdlib `syscall` package (the mmap-only contract has a
+  mechanical guard).
+- Evidence/hygiene: structured conformance absence probes (from-1/to+1/
+  family min-max) added to the fixture loop; Info()-after-close pinned; the
+  public zero-alloc suite releases its v6 view; literal byte vectors added
+  for v6 range, membership leaf/branch, structure record, enrichment
+  payload, and blob-branch codecs; report LOC/labels corrected (production
+  4,492 raw / tests 3,794 raw; v6 bitmap is inline in the committed fixture);
+  this report's false repaired-claim and the SOW log's stale worker and
+  planning-era validation text repaired.
+
+Gates after the pass: `go test ./...` (5 packages), `go test -race`,
+`go vet`, `gofmt -l`, `check-import-graph.sh`, and the 9-target
+cross-compile matrix (darwin/amd64+arm64, freebsd/amd64+arm64,
+windows/amd64+arm64+386, linux/386+arm64) — all green.
 
 ## 12. Deviations and open items
 

@@ -249,10 +249,18 @@ func (m *Meta) ValidateKindInvariants() error {
 	case ValueKindMembership:
 		return validateMembershipMeta(m)
 	case ValueKindStructured:
-		if m.StructureKind != StructureKindNetworkEnrichmentV1 {
+		switch m.StructureKind {
+		case StructureKindNetworkEnrichmentV1:
+			return validateStructuredMeta(m)
+		case 0:
+			// A structured file requires one supported nonzero structure
+			// kind; zero is a known wire value and an invalid combination
+			// (bootstrap.rs validate_structured -> KindInvariant).
+			return &errMeta{reason: "structured file with zero structure kind", code: ErrFormat}
+		default:
+			// Only an unknown nonzero kind is the typed unsupported error.
 			return ErrUnsupportedStructureKind
 		}
-		return validateStructuredMeta(m)
 	default:
 		return &errMeta{reason: "invalid value kind", code: ErrNotV4}
 	}
@@ -262,6 +270,9 @@ func (m *Meta) ValidateKindInvariants() error {
 // required to be zero; no dictionary relationship checks apply.
 func validateDirectMeta(m *Meta) error {
 	if m.StructureKind != 0 {
+		if m.StructureKind == StructureKindNetworkEnrichmentV1 {
+			return &errMeta{reason: "direct file with registered structure kind", code: ErrFormat}
+		}
 		return ErrUnsupportedStructureKind
 	}
 	if m.StructureEntryCount != 0 || m.StructureIDLimit != 0 ||
@@ -279,6 +290,9 @@ func validateDirectMeta(m *Meta) error {
 
 func validateMembershipMeta(m *Meta) error {
 	if m.StructureKind != 0 {
+		if m.StructureKind == StructureKindNetworkEnrichmentV1 {
+			return &errMeta{reason: "membership file with registered structure kind", code: ErrFormat}
+		}
 		return ErrUnsupportedStructureKind
 	}
 	if m.StructureEntryCount != 0 || m.StructureIDLimit != 0 ||

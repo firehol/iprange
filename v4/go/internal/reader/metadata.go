@@ -83,8 +83,12 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	if compressed[0]&0x0f != 8 || compressed[0]>>4 > 7 || compressed[1]>>5&1 != 0 {
 		return nil, false, corrupt("metadata zlib header flags")
 	}
+	// RFC 1950: the header check bits must satisfy (CMF*256+FLG) % 31 == 0.
+	if (uint16(compressed[0])<<8|uint16(compressed[1]))%31 != 0 {
+		return nil, false, corrupt("metadata zlib header check mismatch")
+	}
 	payload := compressed[2 : len(compressed)-4]
-	streamLen, ok := deflateStreamLen(payload)
+	streamLen, ok := deflateStreamLen(payload, meta.MetadataUncompressed)
 	if !ok || streamLen != len(payload) {
 		return nil, false, corrupt("metadata stream trailing bytes")
 	}
@@ -107,15 +111,19 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 // in b, or ok=false when b does not contain a complete stream starting at
 // byte zero. Inflation succeeds exactly when the window contains the whole
 // final block, so the smallest fully-inflatable prefix is the stream end.
-func deflateStreamLen(b []byte) (int, bool) {
+// Each probe's output is capped at declared (the committed uncompressed
+// length): a stream that would produce more than the declared output is
+// invalid, and the cap keeps probe work bounded (metadata.rs step bounds
+// output at declared+1).
+func deflateStreamLen(b []byte, declared uint64) (int, bool) {
 	if len(b) == 0 {
 		return 0, false
 	}
 	inflates := func(n int) bool {
 		r := flate.NewReader(bytes.NewReader(b[:n]))
-		_, err := io.Copy(io.Discard, r)
+		written, err := io.Copy(io.Discard, io.LimitReader(r, int64(declared)+1))
 		r.Close()
-		return err == nil
+		return err == nil && uint64(written) <= declared
 	}
 	lo, hi := 1, len(b)
 	if !inflates(hi) {

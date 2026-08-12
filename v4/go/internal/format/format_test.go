@@ -179,14 +179,14 @@ func TestErrorCodeTable(t *testing.T) {
 		66: CodeFaultWorkerFailed,
 		67: CodeUnsupportedStructure,
 		68: CodeWrongStructureKind,
-		69: CodeStructureIDExhausted,
+		69: CodeStructureIdExhausted,
 	}
 	for want, got := range checks {
 		if got != want {
 			t.Errorf("code %d = %d", want, got)
 		}
 	}
-	if CodeStructureIDExhausted != 69 {
-		t.Fatalf("table ends at %d", CodeStructureIDExhausted)
+	if CodeStructureIdExhausted != 69 {
+		t.Fatalf("table ends at %d", CodeStructureIdExhausted)
 	}
 }

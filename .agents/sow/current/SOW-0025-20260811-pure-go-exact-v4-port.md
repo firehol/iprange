@@ -5,8 +5,10 @@
 Status: in-progress
 
 Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
-corpus cross-open) and under review; view-lifetime API redesign pending the
-user's design decision; no tracked deletion applied yet.
+corpus cross-open) with the round-2 six-agent review repairs landed;
+borrow-count view lifetime implemented; the closed-state error-class choice
+(HandleClosed vs WrongState), the deletion set, and the worker boundary remain
+pending user decisions; no tracked deletion applied yet.
 
 ## Requirements
 
@@ -594,9 +596,11 @@ Use these sections in this order:
   set as the Rust `check-source-graph.sh`).
 - No deviation from the approved SOW plan. Decisions requested from the user:
   (1) approve the 100-tracked-file + 2-untracked-leftover deletion set;
-  (2) worker boundary: superseded — pure Go via SetPanicOnFault is proven
-  feasible on linux/amd64, no new boundary needed (milestone-1 report §11). Both are recorded in the milestone report with evidence and
-  recommendations.
+  (2) worker boundary: reopened by the milestone-1 evidence — SetPanicOnFault
+  proves only a panic-based subset, not the spec-exact SA_SIGINFO contract
+  (milestone-1 report §11); the user chooses between a minimal project-owned
+  assembly sigaction shim and a spec change. Both are recorded in the
+  milestone report with evidence and recommendations.
 
 ### 2026-08-11 - Milestone 0 corrected after external review (read-only)
 
@@ -681,21 +685,21 @@ Use these sections in this order:
     report), `4eec44e` (third-pass repairs), `03a910f` (fourth-pass
   repairs: borrow-count lifetime, view API, absence-vs-corruption,
   concurrency race tests, worker and report fact corrections,
-  check-import-graph.sh gate), `1e1ac4b` (fifth-pass repairs: meta tail
+  check-import-graph.sh gate, view-API ID removal, callback-error
+  passthrough, conformance enumeration, multi-level range-tree test,
+  corrected worker conclusion), `1e1ac4b` (fifth-pass repairs: meta tail
   zero invariant, mandatory aux checks, exact zlib stream verification,
   namespace safety under the lifetime lock, structure payload decode at
-  lookup, public error typing, adversarial regression suite)
-    registry, ID removal, callback-error passthrough, conformance
-    enumeration, multi-level range-tree test, corrected worker conclusion).
-    No tracked file deleted (Decision 1 = C).
+  lookup, public error typing, adversarial regression suite). No tracked
+  file deleted (Decision 1 = C).
   - Full report: `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`.
     Baseline gates re-run: `go test ./...` (incl. race), `go vet`, `gofmt`,
     cross-compilation matrix — all green; SOW audit clean.
 - Both pending decisions now have their evidence: deletion set (100 tracked
   files + 2 untracked leftovers, re-approvable at any time) and the worker
-  boundary — superseded: the third-pass evidence proves pure Go via
-  `runtime/debug.SetPanicOnFault` (empirical recover with exact fault
-  address); the worker milestone therefore needs either a minimal
+  boundary — the third-pass evidence demonstrates only a panic-based fault
+  subset via `runtime/debug.SetPanicOnFault` (empirical recover with exact
+  fault address); the spec-exact worker contract needs either a minimal
   project-owned assembly sigaction shim (spec-exact) or an explicit
   spec change — user decision pending (see milestone-1 report section 11).
   Milestone 2 is safe to start after the user's answers to the deletion and
@@ -705,20 +709,92 @@ Use these sections in this order:
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;
   I/O call sites listed above; baseline gates unchanged (already green).
 
+### 2026-08-11 - gap analysis and repair pass (six-agent)
+
+- `9a835e4` adds `.agents/sow/pending/pure-go-m1-gap-analysis.md`: six
+  concurrent read-only subagents, each with a disjoint brief (codecs, reader
+  semantics, architecture, public API/errors, test evidence,
+  worker/mapping/report facts) at HEAD `94723aa`. Result: one BLOCKER (B1,
+  structure radix divisor one level too deep) and ten MAJOR findings,
+  plus three MINOR and one refuted claim.
+- `58c4d8f` repairs every verified finding with a regression test: B1 span
+  fix, blob-walk record/geometry validation, slotted exactness, OFD lifetime
+  lock, API binding guards, absence/word-exact conformance evidence,
+  honest LOC, import-graph gate strengthening (every import checked +
+  sync/sync-atomic/unsafe ban), and bootstrap minima. No tracked file
+  deleted.
+- `bb7f485` corrects the SOW worker-feasibility sentences and the report's
+  stale claims to match the corrected section 11.
+- Gates re-run green at `bb7f485`: `go test ./...` (5 packages, incl.
+  -race), `go vet`, `gofmt -l`, `check-import-graph.sh`, 9-target
+  cross-compile matrix.
+
+### 2026-08-12 - mandatory six-agent review round 2 and fix pass
+
+- Per the mandatory iterative review gate (one review round per milestone
+  before it can close), six new concurrent reviewers with disjoint briefs
+  (codecs / bootstrap+ranges / membership+structured+metadata / mapping+
+  lifetimes+platform / public API+errors+zero-alloc / conformance+reports)
+  reviewed HEAD `bb7f485`. Verdicts: 4 FAIL (codecs 1 P1 + 4 P2; bootstrap
+  1 P1 + 1 P2; membership 1 P1 + 3 P2; mapping 1 P1 + 3 P2), 1 FAIL on
+  paperwork (reports 5 P1 + 5 P2), 1 PASS-with-2-P1 that are the already
+  recorded closed-state error-class user decision. No P0.
+- Fixed in this pass (all regression-pinned):
+  - catalog `feed_index >= feed_index_limit` now corruption
+    (`internal/reader/catalog.go`, `guard_regression_test.go`).
+  - kind-classification: registered-but-invalid combinations (structured
+    kind 0, direct/membership kind 1) report FormatInvalid (32); only
+    unknown kinds report UnsupportedStructure (67)
+    (`internal/format/meta.go`).
+  - dangling structure reference now the typed corrupt error (structure
+    range names an absent structure ID), matching the membership twin
+    (`internal/reader/structure.go`).
+  - FreeBSD immutable opens now use the canonical whole-file shared flock
+    lifetime lock instead of refusing every open (`mapping_lifetime_freebsd.go`).
+  - `Mapping.View`/`Page` after Close report the typed wrong-state error;
+    `Mapping.Close` is idempotent (`internal/mapping/mapping.go`).
+  - metadata zlib FCHECK validated; `deflateStreamLen` probes bounded at
+    the declared length (CPU-amplification fix) (`internal/reader/metadata.go`).
+  - blob leaf `%8` alignment explicit; checked blob extent arithmetic;
+    blob branch validates every probed entry's child page
+    (`internal/reader/membership.go`).
+  - `publicError` preserves the typed code through wraps; error-code names
+    59/62/69 aligned to the Rust `Id` spelling.
+  - `check-import-graph.sh` now bans content-transfer I/O in production
+    sources and the stdlib `syscall` package.
+  - test hygiene: public zero-alloc suite releases its v6 view; structured
+    conformance absence probes added; Info()-after-close pinned; literal
+    byte vectors added for the v6 range, membership leaf/branch, structure
+    record, enrichment payload, and blob-branch codecs.
+  - report facts corrected (honest production LOC 4,492 raw / tests 3,794
+    raw, zero-alloc table labels, OFD lock wording, metadata allocation
+    overhead 0-88 bytes) and this SOW log repaired.
+- Commits: see the round-2 fix commit. Gates green after the pass; the six
+  reviewers re-review the repaired tree before Milestone 1 closes.
+
 ## Validation
 
 Acceptance criteria evidence:
 
-- Milestone 1 evidence: milestone report `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`
-  (fixture cross-open, malformed rejection, zero-allocation measurements,
-  four review passes with repairs). Milestone 2 not started.
+- Milestone 1 evidence: milestone report
+  `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md` (fixture
+  cross-open with exact cases.json semantics, malformed rejection, literal
+  codec vectors, zero-allocation measurements, five review passes plus the
+  round-2 six-agent review, all repairs regression-pinned). Milestone 2 not
+  started.
 
 Tests or equivalent validation:
 
-- `go test ./...`: current old-Go baseline passes.
-- `go vet ./...`: current old-Go baseline passes.
-- `gofmt -l .`: no current Go formatting difference.
-- `.agents/sow/audit.sh`: must pass for this planning artifact before commit.
+- `go test ./...` (5 packages) — green at the last commit.
+- `go test -race ./internal/format ./internal/reader ./internal/mapping .` — green.
+- `go vet ./...` — clean; `gofmt -l .` — empty.
+- `./check-import-graph.sh` — passes; it now also bans content-transfer I/O
+  in production sources and the stdlib `syscall` package.
+- Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
+  windows/amd64+arm64+386, linux/386+arm64 — all build.
+- Conformance: 5/5 Rust fixtures cross-open with exact semantics; 3/3 invalid
+  mutations rejected with code 32; structured absence probes added.
+- `.agents/sow/audit.sh` — clean.
 
 Real-use evidence:
 
@@ -728,51 +804,55 @@ Real-use evidence:
 
 Reviewer findings:
 
-- No external review was requested for SOW preparation. The user will evaluate
-  the independently run implementer's checkpoint evidence.
+- Six-agent adversarial review (round 2, 2026-08-12): 4 FAIL verdicts and 1
+  PASS-with-pending-decision; every actionable P1/P2 finding was repaired in
+  the round-2 fix pass with a regression test; the two P1s on the closed-state
+  error class are the pending user decision. The reviewers re-review the
+  repaired tree before Milestone 1 closes.
 
 Same-failure scan:
 
-- Current Go searches found positional content transfer, complete page arrays,
-  stale wire constants, missing structured values, missing current conformance
-  use, and absent public SDK surfaces. The implementation must search and remove
-  each class completely, not fix only cited examples.
+- Round-2 searches re-ran the full classes: content-transfer I/O (now also a
+  mechanical gate), complete page arrays, stale wire constants, missing
+  record-limit validation (catalog feed index), kind-classification error
+  classes, blob/probe validation gaps, metadata stream validation, report and
+  SOW factual drift. Each class is fixed completely, not only the cited
+  examples.
 
 Sensitive data gate:
 
-- This SOW contains repository-relative paths, public upstream identity, generic
-  platform names, code metrics, and synthetic/public benchmark descriptions only.
-  It contains no raw secret, credential, operational host alias, personal or
-  customer/community data, private endpoint, or proprietary incident detail.
+- This SOW contains repository-relative paths, public upstream identity,
+  generic platform names, code metrics, and synthetic/public benchmark
+  descriptions only. It contains no raw secret, credential, operational host
+  alias, personal or customer/community data, private endpoint, or proprietary
+  incident detail.
 
 Artifact maintenance gate:
 
-- AGENTS.md: reviewed; no planning-time change is needed. Closure changes are
-  specified above after the Go workflow is proven.
+- AGENTS.md: reviewed; no change needed at this milestone.
 - Runtime project skills: Rust skill reviewed; a Go skill is deliberately not
   invented before implementation evidence exists.
-- Specs: reviewed completely; no format or behavior change is authorized or made.
-- End-user/operator docs: updated the Rust/conformance phase-status text for the
-  authorized Go port. Go README/package docs remain required during
+- Specs: reviewed completely; no format or behavior change was made.
+- End-user/operator docs: Go README/package docs remain required during
   implementation.
 - End-user/operator skills: none exist and no public workflow changed.
-- SOW lifecycle: this file remains `open` under `pending/`; SOW-0017 remains the
-  separate Phase-2 item.
+- SOW lifecycle: this file is `in-progress` under `current/`; SOW-0017 remains
+  the separate Phase-2 item.
 
 Specs update:
 
-- None for planning: the SOW ports the current normative contract unchanged.
+- None for Milestone 1: the Go reader implements the current normative
+  contract unchanged.
 
 Project skills update:
 
-- None for planning: create the Go runtime skill only from proven commands and
-  hazards during this SOW.
+- None for Milestone 1: create the Go runtime skill only from proven commands
+  and hazards later in this SOW.
 
 End-user/operator docs update:
 
-- `v4/rust/README.md` and `v4/conformance/README.md` now identify SOW-0025 as the
-  authorized pending Go port. Implementation must add the Go SDK documentation
-  before closure.
+- The round-2 repairs are recorded in the milestone report and this SOW log;
+  the Go SDK documentation itself is an implementation deliverable.
 
 End-user/operator skills update:
 
@@ -780,17 +860,20 @@ End-user/operator skills update:
 
 Lessons:
 
-- Passing tests around private fragments do not establish a usable SDK or current
-  wire compatibility.
-- A semantic port needs an explicit parity matrix and cross-language execution;
-  source similarity is neither required nor sufficient.
+- Passing tests around private fragments do not establish a usable SDK or
+  current wire compatibility.
+- A semantic port needs an explicit parity matrix and cross-language
+  execution; source similarity is neither required nor sufficient.
 - The most dangerous way to port this engine is to preserve the obsolete Go
   storage architecture because it already looks substantial.
+- Single-reviewer passes converge; only adversarial multi-agent passes with
+  disjoint briefs found the catalog-limit, kind-class, dangling-reference,
+  FreeBSD, and paperwork defects.
 
 Follow-up mapping:
 
 - Snapshot signing remains tracked by pending SOW-0017.
-- No other deferred item is created by this planning artifact.
+- No other deferred item is created by this milestone.
 
 ## Outcome
 

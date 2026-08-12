@@ -139,16 +139,23 @@ func TestMultiLevelStructureTree(t *testing.T) {
 	cases := []struct {
 		addr  uint32
 		found bool
+		err   format.ErrorCode
 	}{
-		{0x0a090001, true},  // 10.9.0.1 -> id 25600: the level-2 child-1 path
-		{0x0a0900ff, true},  // last address of the record
-		{0x0a090101, false}, // 10.9.1.1 -> id 25601: empty slot cell
-		{0x0a090201, false}, // 10.9.2.1 -> id 0: absent by contract
-		{0x0a090301, false}, // 10.9.3.1 -> id 5: empty level-1 directory child
-		{0x0a090401, false}, // 10.9.4.1 -> id 1: empty level-1 directory child
+		{0x0a090001, true, 0},                         // 10.9.0.1 -> id 25600: the level-2 child-1 path
+		{0x0a0900ff, true, 0},                         // last address of the record
+		{0x0a090101, false, format.CodeFormatInvalid}, // id 25601: empty slot cell -> dangling reference
+		{0x0a090201, false, format.CodeFormatInvalid}, // id 0 -> dangling reference
+		{0x0a090301, false, format.CodeFormatInvalid}, // id 5: empty level-1 directory child
+		{0x0a090401, false, format.CodeFormatInvalid}, // id 1: empty level-1 directory child
 	}
 	for _, tc := range cases {
 		view, found, err := db.LookupNetworkEnrichmentV14(tc.addr)
+		if tc.err != 0 {
+			if mustCode(err) != tc.err {
+				t.Fatalf("addr %x: err code %v want %v", tc.addr, mustCode(err), tc.err)
+			}
+			continue
+		}
 		if err != nil {
 			t.Fatalf("addr %x: %v", tc.addr, err)
 		}

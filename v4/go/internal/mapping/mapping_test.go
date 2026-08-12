@@ -105,3 +105,41 @@ func TestOpenRefusesForeignFile(t *testing.T) {
 		t.Fatal("symlink accepted")
 	}
 }
+
+// TestViewAfterClose pins the owner-level refusal: any view access after
+// Close reports the typed wrong-state error instead of panicking on the
+// released mapping (the Windows stub already refuses; the POSIX owner must
+// match).
+func TestViewAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "closed.iprdb")
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "conformance", "rust", "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.View(0, format.PageSize); err != nil {
+		t.Fatalf("view before close: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal("close:", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal("double close:", err)
+	}
+	if _, err := m.View(0, format.PageSize); err == nil {
+		t.Fatal("view after close accepted")
+	} else if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeWrongState {
+		t.Fatalf("view after close code %v want WrongState", err)
+	}
+	if _, err := m.Page(2); err == nil {
+		t.Fatal("page after close accepted")
+	}
+}
