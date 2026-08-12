@@ -1643,6 +1643,163 @@ MUTEOF
 		mutfail=1
 	fi
 
+	# --- 73: nested struct-field func value ---------------------------------
+	# nh.inner.fn() where inner is a struct field whose own field type is
+	# func() *os.File: the field chain must resolve to the innermost
+	# struct before the producer check.
+	cat > internal/reader/gatemut_nestedfn.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnC func() *os.File
+
+type nestI struct{ fn fileFnC }
+
+type nestH struct{ inner nestI }
+
+var nh nestH
+
+func init() {
+	nh.inner.fn = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_nestedfn.go
+	cp internal/reader/metadata.go "$self_tree/meta73.orig"
+	INS='zr = nh.inner.fn()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta73.new" && mv "$self_tree/meta73.new" internal/reader/metadata.go
+	if grep -Fq 'zr = nh.inner.fn()' internal/reader/metadata.go; then
+		run_mut "nested struct-field func value"
+	else
+		echo "self-test ERROR: form 73 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta73.orig" internal/reader/metadata.go
+
+	# --- 74: named interface-typed helper returning a tainted file ---------
+	# A declared func with an io.ReadCloser result whose body returns a
+	# pipe must be a producer at its call site.
+	cat > internal/reader/gatemut_namedfn.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func getNamed() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_namedfn.go
+	cp internal/reader/metadata.go "$self_tree/meta74.orig"
+	INS='zr = getNamed()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta74.new" && mv "$self_tree/meta74.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getNamed()' internal/reader/metadata.go; then
+		run_mut "named interface-typed helper returning a tainted file"
+	else
+		echo "self-test ERROR: form 74 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta74.orig" internal/reader/metadata.go
+
+	# --- 75: named helper returning os.Stdout -------------------------------
+	# The same named-helper producer rule must see the os.Stdout singleton.
+	cat > internal/reader/gatemut_namedstd.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func getStd() io.ReadCloser { return os.Stdout }
+MUTEOF
+	add_mut internal/reader/gatemut_namedstd.go
+	cp internal/reader/metadata.go "$self_tree/meta75.orig"
+	INS='zr = getStd()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta75.new" && mv "$self_tree/meta75.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getStd()' internal/reader/metadata.go; then
+		run_mut "named helper returning os.Stdout"
+	else
+		echo "self-test ERROR: form 75 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta75.orig" internal/reader/metadata.go
+
+	# --- 76: chan of func through a same-package helper --------------------
+	# A helper returning the chan itself must keep the chan-of-func taint.
+	cat > internal/reader/gatemut_chanpass.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnD func() *os.File
+
+var fnCh3 = make(chan fileFnD)
+
+func init() {
+	fnCh3 <- func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+
+func passFn(ch chan fileFnD) chan fileFnD { return ch }
+MUTEOF
+	add_mut internal/reader/gatemut_chanpass.go
+	cp internal/reader/metadata.go "$self_tree/meta76.orig"
+	INS='got := <-passFn(fnCh3)
+	zr = got()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta76.new" && mv "$self_tree/meta76.new" internal/reader/metadata.go
+	if grep -Fq 'zr = got()' internal/reader/metadata.go; then
+		run_mut "chan of func through a same-package helper"
+	else
+		echo "self-test ERROR: form 76 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta76.orig" internal/reader/metadata.go
+
+	# --- 77: benign named interface-typed helper must pass -----------------
+	# Identical shape to form 74 but the body returns a bytes.Reader:
+	# no *os.File anywhere, the gate must stay silent.
+	cat > internal/reader/gatemut_benignnamed.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+func getBR3() io.Reader { return bytes.NewReader(nil) }
+MUTEOF
+	add_mut internal/reader/gatemut_benignnamed.go
+	cp internal/reader/metadata.go "$self_tree/meta77.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = getBR3()"; next } print }' internal/reader/metadata.go > "$self_tree/meta77.new" && mv "$self_tree/meta77.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getBR3()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign named interface-typed helper passes the gate"
+		else
+			echo "self-test MISS: benign named interface-typed helper failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 77 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta77.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1695,7 +1852,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 66 mutation forms rejected)"
+	echo "import-graph self-test passed (all 70 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
