@@ -174,11 +174,17 @@ func TestVectorsNetworkEnrichmentV1(t *testing.T) {
 			t.Fatalf("encode byte %d: %x want %x", i, out[i], b[i])
 		}
 	}
-	// A nonzero location without the flag is invalid.
+	// A nonzero location without the location flag is plausible corruption:
+	// the decode reads the fields as-is and the caller's presence bit stays
+	// clear (Rust decode_mapped parity; normal lookups never Validate).
 	bad := mustHex(t, "413b0000"+"00000000"+"00000000"+"00000000"+
 		"40420f00"+"807be1ff"+"09000000"+"00000000")
-	if _, err := DecodeNetworkEnrichmentV1(bad); err == nil {
-		t.Fatal("unflagged location accepted")
+	v, err = DecodeNetworkEnrichmentV1(bad)
+	if err != nil {
+		t.Fatalf("plausible corruption rejected: %v", err)
+	}
+	if v.LatitudeMicrodegrees != 1_000_000 || v.LongitudeMicrodegrees != -2_000_000 || v.Flags != 0 {
+		t.Fatalf("decoded %+v", v)
 	}
 }
 

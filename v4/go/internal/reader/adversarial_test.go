@@ -110,18 +110,38 @@ func TestMetadataTrailingBytesRejected(t *testing.T) {
 	}
 }
 
-// auditStructuredPayloadDecodedAtLookup: a malformed structure payload is
-// corruption at lookup time, not at Value() time (Rust parity:
-// structured_value/view.rs decodes during the lookup).
-func TestStructuredMalformedPayloadRejectedAtLookup(t *testing.T) {
+// auditStructuredPayloadDecodedAtLookup: the payload is decoded at lookup
+// time, not at Value() time (Rust parity: structured_value/view.rs decodes
+// during the lookup), and normal lookup performs no implicit semantic
+// validation (binary-format-v4.md: normal operations never invoke Validate):
+// flags-bit corruption is plausible corruption that decodes as-is, while
+// record-geometry corruption is still rejected at lookup as a memory-safety
+// violation.
+func TestStructuredPlausibleCorruptionAcceptedAtLookup(t *testing.T) {
+	// Baseline value from the pristine fixture for the same range.
+	base, err := OpenImmutable(fixture(t, "structured-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseView, found, err := base.LookupNetworkEnrichmentV14(0x0a010000) // 10.1.0.0
+	base.Close()
+	if err != nil || !found {
+		t.Fatalf("baseline lookup: found=%v err=%v", found, err)
+	}
+	want, err := baseView.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	path := copyFixture(t, "structured-ipv4.iprdb", "struct-bad.iprdb")
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	// Find the structure-ID record page (type 19) and corrupt the flags
-	// field of slot 0's payload (record base 32, payload at +48, flags +28).
+	// Find the structure-ID record page (type 19) and set an unknown flag
+	// bit 0x10 in slot 0's payload (record base 32, payload at +48, flags
+	// +28). The location bit (0x1) is preserved.
 	target := int64(-1)
 	for p := 2; p < int(fixtureSize(t, path))/format.PageSize; p++ {
 		page := mustRead(t, file, p, 0, format.PageSize)
@@ -146,9 +166,58 @@ func TestStructuredMalformedPayloadRejectedAtLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
+	view, found, err := r.LookupNetworkEnrichmentV14(0x0a010000) // 10.1.0.0 → structure id 1
+	if err != nil || !found {
+		t.Fatalf("plausible corruption rejected at lookup: found=%v err=%v", found, err)
+	}
+	val, err := view.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unknown flag bits are ignored (Rust decode_mapped parity); the
+	// location bit is unchanged, and the scalar fields decode as-is.
+	if val.ASN != want.ASN || val.CountryID != want.CountryID ||
+		val.Flags&format.NetworkEnrichmentV1HasLocation == 0 {
+		t.Fatalf("decoded %+v want asn=%d country=%d flags-location-set", val, want.ASN, want.CountryID)
+	}
+}
+
+// auditStructuredRecordGeometryRejectedAtLookup: a corrupt record length
+// field is a memory-safety violation and is rejected when the payload is
+// decoded at lookup time.
+func TestStructuredRecordGeometryRejectedAtLookup(t *testing.T) {
+	path := copyFixture(t, "structured-ipv4.iprdb", "struct-bad-geom.iprdb")
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	target := int64(-1)
+	for p := 2; p < int(fixtureSize(t, path))/format.PageSize; p++ {
+		page := mustRead(t, file, p, 0, format.PageSize)
+		if string(page[0:4]) != string(format.PageMagic[:]) || page[4] != byte(format.PageTypeStructureIDRecord) {
+			continue
+		}
+		if format.U32(page[24:28]) != 1 { // kind NetworkEnrichmentV1
+			continue
+		}
+		target = int64(p*format.PageSize + 32 + 1*format.StructureRecordSize) // RecordLen field
+		break
+	}
+	if target < 0 {
+		t.Fatal("structure record page not found")
+	}
+	if _, err := file.WriteAt([]byte{0, 0}, target); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
 	_, found, err := r.LookupNetworkEnrichmentV14(0x0a010000) // 10.1.0.0 → structure id 1
 	if err == nil || found {
-		t.Fatalf("malformed payload: found=%v err=%v", found, err)
+		t.Fatalf("record-geometry corruption accepted: found=%v err=%v", found, err)
 	}
 }
 

@@ -5,13 +5,14 @@ import (
 )
 
 // Structured-value lookup (binary-format-v4.md section 9A). The
-// NetworkEnrichmentV1View is a decoded-value handle: the payload is
-// validated and decoded during the lookup, the scalar value is retained in
-// the lightweight view, and membership word reads re-derive checked mapped
-// views at call time (like MembershipView).
+// NetworkEnrichmentV1View is a decoded-value handle: the payload is decoded
+// during the lookup without implicit semantic validation (normal operations
+// never invoke Validate), the scalar value is retained in the lightweight
+// view, and membership word reads consume the checked membership bitmap
+// retained at the membership lookup (like MembershipView).
 
 // NetworkEnrichmentV1View exposes one network_enrichment_v1 structure entry.
-// The payload is validated and decoded during the lookup, mirroring
+// The payload is decoded during the lookup, mirroring
 // structured_value/view.rs (decode_mapped inside the lookup).
 type NetworkEnrichmentV1View struct {
 	r     *ImmutableReader

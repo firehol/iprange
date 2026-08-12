@@ -26,12 +26,19 @@ const (
 	StructureRecordSlots = (PageSize - 32) / (48 + NetworkEnrichmentV1PayloadSize)
 )
 
-// DecodeNetworkEnrichmentV1 validates and decodes one exact 32-byte payload.
+// DecodeNetworkEnrichmentV1 decodes one exact 32-byte payload with the same
+// semantics as the Rust hot path (structured_value/network_enrichment_v1.rs
+// decode_mapped): fields are read as-is and no semantic validation runs.
+// Normal open, lookup, and scan never invoke Validate (binary-format-v4.md
+// normal-operation rule), so plausible corruption can produce an incorrect
+// value when the caller skips validation; the length check below is the
+// mandatory memory-safety bound, and flag bits other than the location bit
+// are ignored exactly like the Rust decoder ignores them.
 func DecodeNetworkEnrichmentV1(b []byte) (NetworkEnrichmentV1, error) {
 	if len(b) < NetworkEnrichmentV1PayloadSize {
 		return NetworkEnrichmentV1{}, headerErr("short structure payload %d", len(b))
 	}
-	v := NetworkEnrichmentV1{
+	return NetworkEnrichmentV1{
 		ASN:                   U32(b[0:4]),
 		CountryID:             U32(b[4:8]),
 		StateID:               U32(b[8:12]),
@@ -40,23 +47,7 @@ func DecodeNetworkEnrichmentV1(b []byte) (NetworkEnrichmentV1, error) {
 		LongitudeMicrodegrees: int32(U32(b[20:24])),
 		MembershipID:          U32(b[24:28]),
 		Flags:                 U32(b[28:32]),
-	}
-	if v.Flags&^NetworkEnrichmentV1HasLocation != 0 {
-		return NetworkEnrichmentV1{}, headerErr("structure flags %x", v.Flags)
-	}
-	if v.Flags&NetworkEnrichmentV1HasLocation == 0 {
-		if v.LatitudeMicrodegrees != 0 || v.LongitudeMicrodegrees != 0 {
-			return NetworkEnrichmentV1{}, headerErr("location without flag")
-		}
-	} else {
-		if v.LatitudeMicrodegrees < -90_000_000 || v.LatitudeMicrodegrees > 90_000_000 {
-			return NetworkEnrichmentV1{}, headerErr("latitude %d", v.LatitudeMicrodegrees)
-		}
-		if v.LongitudeMicrodegrees < -180_000_000 || v.LongitudeMicrodegrees > 180_000_000 {
-			return NetworkEnrichmentV1{}, headerErr("longitude %d", v.LongitudeMicrodegrees)
-		}
-	}
-	return v, nil
+	}, nil
 }
 
 // EncodeNetworkEnrichmentV1 writes the exact 32-byte canonical payload.

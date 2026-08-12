@@ -153,9 +153,6 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 // Size returns the mapped committed byte length.
 func (m *Mapping) Size() uint64 { return m.size }
 
-// File returns the underlying read-only file handle.
-func (m *Mapping) File() *os.File { return m.file }
-
 // View returns a checked view of [off, off+length) inside the mapping. The
 // returned slice aliases the mapping and must not escape the calling
 // operation.

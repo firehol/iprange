@@ -557,15 +557,30 @@ func (p *Pin) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
 	return MembershipView{p: p, inner: view}, true, nil
 }
 
-// NetworkEnrichmentV1 is one decoded network_enrichment_v1 payload.
-type NetworkEnrichmentV1 struct {
-	ASN                   uint32
-	CountryID             uint32
-	StateID               uint32
-	CityID                uint32
+// NetworkEnrichmentV1Location is the optional WGS84 location of one
+// network-enrichment result, in millionths of a degree (Rust
+// NetworkEnrichmentV1Location).
+type NetworkEnrichmentV1Location struct {
 	LatitudeMicrodegrees  int32
 	LongitudeMicrodegrees int32
-	HasLocation           bool
+}
+
+// NetworkEnrichmentV1 is one decoded network_enrichment_v1 payload.
+//
+// The approved parity matrix writes Location *NetworkEnrichmentV1Location;
+// with decision 4A's zero-allocation lookup contract a pointer inside a
+// by-value result cannot reference stable storage without a per-call
+// allocation, so the Rust Option<NetworkEnrichmentV1Location> is mirrored
+// as the value Location plus the presence flag HasLocation (resolved
+// decision 5A, SOW decision log). Names and fields match the matrix and
+// the Rust authority.
+type NetworkEnrichmentV1 struct {
+	ASN         uint32
+	CountryID   uint32
+	StateID     uint32
+	CityID      uint32
+	Location    NetworkEnrichmentV1Location
+	HasLocation bool
 }
 
 // NetworkEnrichmentV1View is a lightweight value exposing one structured
@@ -593,13 +608,15 @@ func (v NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
 		return NetworkEnrichmentV1{}, publicError(err)
 	}
 	return NetworkEnrichmentV1{
-		ASN:                   payload.ASN,
-		CountryID:             payload.CountryID,
-		StateID:               payload.StateID,
-		CityID:                payload.CityID,
-		LatitudeMicrodegrees:  payload.LatitudeMicrodegrees,
-		LongitudeMicrodegrees: payload.LongitudeMicrodegrees,
-		HasLocation:           payload.Flags&format.NetworkEnrichmentV1HasLocation != 0,
+		ASN:       payload.ASN,
+		CountryID: payload.CountryID,
+		StateID:   payload.StateID,
+		CityID:    payload.CityID,
+		Location: NetworkEnrichmentV1Location{
+			LatitudeMicrodegrees:  payload.LatitudeMicrodegrees,
+			LongitudeMicrodegrees: payload.LongitudeMicrodegrees,
+		},
+		HasLocation: payload.Flags&format.NetworkEnrichmentV1HasLocation != 0,
 	}, nil
 }
 

@@ -1,8 +1,9 @@
 // Package reader implements the immutable reader core: one owner of healthy
 // selected-generation access over the file-backed mapping. It performs no
 // content I/O, holds no complete page in heap memory, and exposes only
-// bounded scalar values and logical handles that re-derive checked mapped
-// views on demand.
+// bounded scalar values and checked handles whose records are validated and
+// decoded during the owning lookup (membership and structure), with mapped
+// reads performed on demand inside the operation.
 package reader
 
 import (
@@ -26,12 +27,13 @@ const (
 
 // ImmutableReader is the opened immutable database. Its state (mapping,
 // committed meta, selection) is write-once at open; direct lookups read
-// mapped bytes, membership word reads re-derive checked mapped views at call
-// time, and structured lookups validate and decode during lookup with the
-// scalar retained in a lightweight view. Lookups and independent scans are
-// therefore safe for concurrent use by multiple goroutines without a
-// per-call lock (design-iprange-engine.md); Close must never race reader
-// work.
+// mapped bytes, membership records are validated and decoded during lookup
+// with word reads slicing the retained checked bitmap, and structured
+// lookups decode during lookup with the scalar retained in a lightweight
+// view (no implicit semantic validation, per the normal-operation rule).
+// Lookups and independent scans are therefore safe for concurrent use by
+// multiple goroutines without a per-call lock (design-iprange-engine.md);
+// Close must never race reader work.
 type ImmutableReader struct {
 	m         *mapping.Mapping
 	meta      format.Meta

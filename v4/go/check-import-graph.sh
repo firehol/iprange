@@ -143,7 +143,7 @@ content_violations() {
 		strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read('
 	done
 }
-if [ -n "$(content_violations | grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(')" ]; then
+if [ -n "$(content_violations | grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile|ReadAll|Copy)\(')" ]; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi

@@ -73,9 +73,9 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,807 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,767 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,685 raw lines. The earlier
+tree): 4,761 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -107,14 +107,17 @@ tree): 4,685 raw lines. The earlier
 - `internal/reader`: the only owner of healthy selected-generation reads;
   bootstrap selection (4.2), exact-size immutable check, range/catalog/
   membership/structure/metadata cores; no complete page ever exists in Go
-  heap. Membership bitmap words are checked from mapped data on access;
-  structured payloads are validated and decoded during lookup, then the scalar
-  value is retained in the lightweight view while threat membership remains
-  lazily resolved.
+  heap. Membership dictionary records are validated and decoded during the
+  owning lookup and word reads slice the retained checked bitmap; structured
+  payloads are decoded during lookup with no implicit semantic validation
+  (normal operations never invoke Validate), then the scalar value is
+  retained in the lightweight view while threat membership remains lazily
+  resolved.
 - Root facade `reader_public.go`: `OpenImmutable`, `Info`, `DirectSemantic`,
   `LookupDirectV4/V6`, `DirectRangesV4/V6`, `Cardinality`,
   `LookupFeed`, `LookupMembershipV4/V6` + `MembershipView`
-  (`Word`/`ContainsIndex`), `LookupNetworkEnrichmentV1V4/V6` + view
+  (`Word`/`ContainsIndex`), `LookupNetworkEnrichmentV1V4/V6` +
+  `NetworkEnrichmentV1`/`NetworkEnrichmentV1Location` + view
   (`Value`/`ThreatMembership`), `MetadataJSON`, `Close`, plus the public
   `StructureKind`, `ValueKindStructured`, `MetaSelection`, `DirectSemantic`
   types and error codes 65–69. Cursors and queries remain Milestone 3 scope
@@ -636,8 +639,10 @@ blocking F_OFD_SETLKW lifetime lock; three-point path identity recheck;
 structure_entry_count < structure_id_limit; catalog branch-key grammar).
 Performance: single-inflation metadata validation (~1.4x on the
 micro-benchmark), batched ReadWords (one decode/walk per batch), single
-page-header decode per visited page (OpenSlottedHeader) with the root
-pre-read removed, and a quote-aware gate stripper. Production LOC and test
+page-header decode per visited page (OpenSlottedHeader at every slotted
+call site) with the root pre-read removed, inline membership word reads
+served from the lookup-time record decode (no per-word record re-decode),
+and a quote-aware gate stripper. Production LOC and test
 LOC grew with the new regression tests; the public zero-alloc contract
 documents exactly one guard allocation per created view (copy-safety).
 

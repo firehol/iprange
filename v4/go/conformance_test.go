@@ -745,9 +745,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("structured %s: location %v want %v", sr.From, val.HasLocation, wantLoc)
 				}
 				if wantLoc {
-					if val.LatitudeMicrodegrees != sr.Location.Lat || val.LongitudeMicrodegrees != sr.Location.Long {
+					if val.Location.LatitudeMicrodegrees != sr.Location.Lat ||
+						val.Location.LongitudeMicrodegrees != sr.Location.Long {
 						t.Errorf("structured %s: location %d,%d want %d,%d", sr.From,
-							val.LatitudeMicrodegrees, val.LongitudeMicrodegrees,
+							val.Location.LatitudeMicrodegrees, val.Location.LongitudeMicrodegrees,
 							sr.Location.Lat, sr.Location.Long)
 					}
 				}

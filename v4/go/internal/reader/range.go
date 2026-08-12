@@ -306,7 +306,7 @@ func (r *ImmutableReader) walkRange4(pgno uint32, visit func(RangeVisit4) error)
 	if err != nil {
 		return err
 	}
-	sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 	if err != nil {
 		return err
 	}
@@ -353,7 +353,7 @@ func (r *ImmutableReader) walkRangeDescend4(pgno uint32, expectedLevel uint16, v
 	if h.Level != expectedLevel {
 		return corrupt("range level %d expected %d", h.Level, expectedLevel)
 	}
-	sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 	if err != nil {
 		return err
 	}
@@ -423,7 +423,7 @@ func (r *ImmutableReader) walkRange6(pgno uint32, visit func(RangeVisit6) error)
 	if err != nil {
 		return err
 	}
-	sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 	if err != nil {
 		return err
 	}
@@ -468,7 +468,7 @@ func (r *ImmutableReader) walkRangeDescend6(pgno uint32, expectedLevel uint16, v
 	if h.Level != expectedLevel {
 		return corrupt("range level %d expected %d", h.Level, expectedLevel)
 	}
-	sl, err := format.OpenSlotted(page, r.meta.TxnID, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
+	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
 	if err != nil {
 		return err
 	}

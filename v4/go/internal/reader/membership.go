@@ -6,20 +6,21 @@ import (
 
 // Membership dictionary access (binary-format-v4.md section 9).
 //
-// MembershipView is a logical handle, not a page view: every word read
-// re-derives a checked mapped view at call time, so the handle is valid for
-// the lifetime of the reader and allocates no heap bytes.
+// MembershipView is a checked handle: the dictionary record is validated and
+// decoded once during the lookup (mirroring membership_tree.rs, which selects
+// the checked Record at lookup time), and word reads slice the retained
+// inline bitmap or walk the blob tree with one decode per covering leaf. The
+// handle is valid for the lifetime of the reader and allocates no heap bytes.
 
 // MembershipView exposes one canonical membership bitmap.
 type MembershipView struct {
-	r          *ImmutableReader
-	id         uint32
-	wordCount  uint32
-	bitmapLen  uint32
-	storage    format.MembershipStorage
-	recordPage uint32 // leaf page holding the record (inline)
-	recordOff  uint16 // record offset within that page (inline)
-	blobRoot   uint32 // blob tree root (blob storage)
+	r         *ImmutableReader
+	id        uint32
+	wordCount uint32
+	bitmapLen uint32
+	storage   format.MembershipStorage
+	blobRoot  uint32                  // blob tree root (blob storage)
+	leaf      format.MembershipIDLeaf // inline record, checked at lookup
 }
 
 // ID returns the internal membership ID.
@@ -94,23 +95,15 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 	var err error
 	switch v.storage {
 	case format.MembershipStorageInline:
-		// One record decode for the whole batch: reopen the record page,
-		// re-validate the record identity once, then slice the inline
-		// bitmap directly (the per-word path decodes the record once per
-		// word).
-		var leaf format.MembershipIDLeaf
-		leaf, err = v.leaf()
-		if err == nil {
-			if leaf.Storage != format.MembershipStorageInline || leaf.MembershipID != v.id {
-				return corrupt("membership record changed")
-			}
-			if leaf.WordCount != v.wordCount {
-				return corrupt("membership word count changed")
-			}
-			data = leaf.Inline[byteOff : byteOff+byteLen]
-			for i := range output {
-				output[i] = format.U64(data[i*8:])
-			}
+		// The record was validated and decoded at lookup; slice the
+		// retained checked bitmap directly (bounds are re-checked so the
+		// caller cannot construct an out-of-range view).
+		if byteOff+byteLen > uint64(v.bitmapLen) {
+			return corrupt("inline bitmap offset out of range")
+		}
+		data = v.leaf.Inline[byteOff : byteOff+byteLen]
+		for i := range output {
+			output[i] = format.U64(data[i*8:])
 		}
 	case format.MembershipStorageBlob:
 		// One blob-tree descent per covering leaf, mirroring blob_tree.rs
@@ -150,25 +143,8 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 	return nil
 }
 
-// leaf re-opens the record page and re-decodes this view's membership
-// record.
-func (v MembershipView) leaf() (format.MembershipIDLeaf, error) {
-	page, err := v.r.page(v.recordPage)
-	if err != nil {
-		return format.MembershipIDLeaf{}, err
-	}
-	sl, err := format.OpenSlotted(page, v.r.meta.TxnID, format.PageTypeMembershipIDLeaf, 0, format.SlotItemsPerPage)
-	if err != nil {
-		return format.MembershipIDLeaf{}, err
-	}
-	rec, err := sl.Record(int(v.recordOff))
-	if err != nil {
-		return format.MembershipIDLeaf{}, err
-	}
-	return format.DecodeMembershipIDLeaf(rec)
-}
-
-// wordBytes returns the 8 mapped bytes of word i, re-validated at call time.
+// wordBytes returns the 8 mapped bytes of word i, bounds-checked against
+// the checked view retained from the lookup-time record decode.
 func (v MembershipView) wordBytes(i uint32) ([]byte, error) {
 	byteOff := uint64(i) * 8
 	switch v.storage {
@@ -181,35 +157,13 @@ func (v MembershipView) wordBytes(i uint32) ([]byte, error) {
 	}
 }
 
-// inlineBytes re-opens the record page, re-decodes the record, and returns
-// the 8 mapped bytes at byteOff inside the inline bitmap.
+// inlineBytes returns the 8 mapped bytes at byteOff inside the inline bitmap
+// retained from the lookup-time record decode.
 func (v MembershipView) inlineBytes(byteOff uint64) ([]byte, error) {
 	if byteOff+8 > uint64(v.bitmapLen) {
 		return nil, corrupt("inline bitmap offset out of range")
 	}
-	page, err := v.r.page(v.recordPage)
-	if err != nil {
-		return nil, err
-	}
-	sl, err := format.OpenSlotted(page, v.r.meta.TxnID, format.PageTypeMembershipIDLeaf, 0, format.SlotItemsPerPage)
-	if err != nil {
-		return nil, err
-	}
-	rec, err := sl.Record(int(v.recordOff))
-	if err != nil {
-		return nil, err
-	}
-	leaf, err := format.DecodeMembershipIDLeaf(rec)
-	if err != nil {
-		return nil, err
-	}
-	if leaf.Storage != format.MembershipStorageInline || leaf.MembershipID != v.id {
-		return nil, corrupt("membership record changed")
-	}
-	if leaf.WordCount != v.wordCount {
-		return nil, corrupt("membership word count changed")
-	}
-	return leaf.Inline[byteOff : byteOff+8], nil
+	return v.leaf.Inline[byteOff : byteOff+8], nil
 }
 
 // LookupMembership4 returns the membership bitmap covering addr, or false
@@ -288,24 +242,22 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 			}
 			cur, level = child, level-1
 		case format.PageTypeMembershipIDLeaf:
-			slot, leaf, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
+			_, leaf, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
 			if err != nil {
 				return MembershipView{}, err
 			}
 			if !found {
 				return MembershipView{}, corrupt("range names an absent membership ID")
 			}
-			v := MembershipView{
-				r:          r,
-				id:         leaf.MembershipID,
-				wordCount:  leaf.WordCount,
-				bitmapLen:  leaf.BitmapLen,
-				storage:    leaf.Storage,
-				recordPage: cur,
-				recordOff:  slot,
-				blobRoot:   leaf.BlobRoot,
-			}
-			return v, nil
+			return MembershipView{
+				r:         r,
+				id:        leaf.MembershipID,
+				wordCount: leaf.WordCount,
+				bitmapLen: leaf.BitmapLen,
+				storage:   leaf.Storage,
+				blobRoot:  leaf.BlobRoot,
+				leaf:      leaf,
+			}, nil
 		default:
 			return MembershipView{}, corrupt("unexpected membership page type %d", h.PageType)
 		}
@@ -492,7 +444,7 @@ func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, 
 		if haveExpected && h.Level != expected {
 			return nil, 0, corrupt("blob branch expected level %d got %d", expected, h.Level)
 		}
-		sl, err := format.OpenSlotted(page, r.meta.TxnID, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
+		sl, err := format.OpenSlottedHeader(page, h, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
 		if err != nil {
 			return nil, 0, err
 		}
