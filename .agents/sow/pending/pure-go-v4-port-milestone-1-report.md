@@ -83,7 +83,7 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,767 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,766 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
 tree): 4,832 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
@@ -91,6 +91,17 @@ tree): 4,832 raw lines. The earlier
 
 ### Close-out fixes (external audit round, 2026-08-12)
 
+- mmap-only gate hardened (round-12): the content-transfer scan now
+  discovers every package through `go list -f {{.Dir}}` and matches
+  word-boundary selectors, so direct calls, method values, function
+  aliases, and Seek are all rejected; the Windows mapping stub no longer
+  carries or exposes a raw `*os.File` (Mapping.File removed on every
+  platform).
+- view-lifetime guard (round-12): public views retain the immutable
+  `*pinState` captured at creation, so reassigning the Pin variable that
+  created a view cannot retarget its close guard to another reader; the
+  cross-reader reassignment regression test pins WrongState instead of a
+  use-after-unmap crash.
 - Obsolete `RetentionTag` removed (no compatibility alias, spec
   binary-format-v4.md:311; milestone-0 report had classified it for
   deletion).
