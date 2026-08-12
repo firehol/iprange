@@ -19,7 +19,7 @@ structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
 repaired. Repository counts at close: production 4,781 raw lines / tests
-4,648 raw lines. Milestone 2 (writer) may start.
+4,647 raw lines. Milestone 2 (writer) may start.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -553,7 +553,7 @@ The user adopted the external re-review's decisions after the reopening:
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
 - Counts at the time are recorded in the close-out entry (production 4,781
-  raw / tests 4,648 raw at milestone-1 close after the meta-precedence
+  raw / tests 4,647 raw at milestone-1 close after the meta-precedence
   parity fix, the sole-meta kind regression test, and the final-review
   regression guards).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
