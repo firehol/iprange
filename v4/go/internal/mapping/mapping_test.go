@@ -273,3 +273,59 @@ func TestOpenImmutableRefusesPathReplacedDuringOpen(t *testing.T) {
 		t.Fatal("open did not refuse the replaced path")
 	}
 }
+
+// TestOpenImmutableRefusesPathUnlinkedDuringOpen pins the deleted-mid-open
+// error class: when the directory entry disappears while the open is in
+// flight, the open must refuse with NameNotFound (18), mirroring Rust
+// verify_path_inner's .ok_or(Error::NameNotFound).
+func TestOpenImmutableRefusesPathUnlinkedDuringOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unlinked.iprdb")
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "conformance", "rust", "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	check := func(clean string) error {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+		return nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		m, err := OpenImmutable(path, check)
+		if m != nil {
+			m.Close()
+		}
+		result <- err
+	}()
+
+	<-entered
+	if err := os.Remove(path); err != nil {
+		t.Fatal("remove path:", err)
+	}
+	close(release)
+
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("open accepted a path removed while the open was in flight")
+		}
+		fe, ok := err.(*format.Error)
+		if !ok || fe.Code != format.CodeNameNotFound {
+			t.Fatalf("unlinked-during-open error %v, want NameNotFound (18)", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("open did not refuse the unlinked path")
+	}
+}

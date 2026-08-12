@@ -63,8 +63,8 @@ and all view operations at 0)
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,634
-raw lines, including blanks; new-tree tests: 4,252 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,639
+raw lines, including blanks; new-tree tests: 4,308 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -640,7 +640,7 @@ at the lifetime offset blocks the open until released; fails pre-fix on a
 non-blocking lock) and `TestOpenImmutableRefusesPathReplacedDuringOpen`
 (fails on the pre-fix tree, passes after the path-vs-inode correction).
 
-Counts at HEAD: production 4,592 raw lines / tests 4,196 raw lines.
+Counts at HEAD 4950366: production 4,592 raw lines / tests 4,196 raw lines.
 
 ## 11g. Round-4 membership follow-up (2026-08-12)
 
@@ -662,6 +662,23 @@ code 32) and passes at HEAD; `Word` per-word reads and the
 zero-allocation blob subtests stay green.
 
 Counts at HEAD: production 4,634 raw lines / tests 4,252 raw lines.
+
+## 11h. Round-4 mapping P2 follow-up (2026-08-12)
+
+The mapping/lifetime reviewer's re-verification found one remaining P2:
+when the path is unlinked (not replaced) mid-open, the post-lock
+`os.Lstat` failure mapped to `CodeIO` (31), while Rust
+`verify_path_inner` refuses with `NameNotFound` (18). Fixed at
+`v4/go/internal/mapping/mapping.go` by mapping `os.IsNotExist` to
+`CodeNameNotFound` before the IO fallback; regression test
+`TestOpenImmutableRefusesPathUnlinkedDuringOpen` (unlink inside the check
+callback, expect code 18) added. The conformance/reports reviewer's P2 was
+pure record lag: the round-3 "counts corrected at HEAD" sentence in the
+SOW external-audit entry is now explicitly annotated as superseded by the
+round-4 follow-up entries, section 13 now lists section 11e in the review
+history, and each historical "Counts at HEAD" line carries its commit.
+
+Counts at HEAD: production 4,639 raw lines / tests 4,308 raw lines.
 
 ## 12. Deviations and open items
 
@@ -688,10 +705,13 @@ Review history: sections 9/10/10b record the independent second-fourth
 passes; section 11c records the round-2 six-agent review and its repairs;
 section 11d records the round-3 verification pass (including the blob-gap
 underflow P0 and its regression test) and the six final PASS verdicts;
+section 11e records the external audit pass and its repairs;
 section 11f records the round-4 mapping follow-up (path identity recheck
 correction, darwin EINTR parity, and the two requested regression tests);
 section 11g records the round-4 membership follow-up (per-leaf batched
-blob reads, failing pre-fix on the two-leaf fixture). The
+blob reads, failing pre-fix on the two-leaf fixture); section 11h records
+the round-4 mapping P2 follow-up (deleted-mid-open NameNotFound parity)
+and the report-record corrections. The
 same-failure searches (content-transfer, page arrays, stale constants,
 PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
 tree: none present. Next milestone is safe to start once the three pending

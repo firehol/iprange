@@ -84,6 +84,11 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		// the fd was opened.
 		now, err := os.Lstat(clean)
 		if err != nil {
+			// An unlinked path is NameNotFound, mirroring Rust
+			// verify_path_inner; any other stat failure stays IO.
+			if os.IsNotExist(err) {
+				return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while opening"}
+			}
 			return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
 		}
 		if !now.Mode().IsRegular() {

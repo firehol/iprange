@@ -799,7 +799,8 @@ Use these sections in this order:
     `TestBlobGapRejectedCorruption` pins it (fails pre-fix in both modes).
 - Report counts corrected at HEAD: production 4,500 raw lines (tests
   excluded), tests 3,922 raw, zero-allocation checks 18 (8 internal + 10
-  public). Milestone report sections 11c-11d record both passes; the
+  public). (Superseded: the round-4 follow-up entries below carry the
+  verified counts at each later HEAD.) Milestone report sections 11c-11d record both passes; the
   reviewers' final verdicts are all PASS with no P0-P2 remaining.
 - Gates at HEAD: `go test ./...` (5 packages, incl. -race),
   `go vet`, `gofmt -l`, `check-import-graph.sh`, 9-target cross-compile
@@ -896,8 +897,8 @@ Use these sections in this order:
 - The darwin lifetime lock now retries EINTR in the wait loop, matching the
   linux peer and the Rust live_lock platform module (one loop for
   linux+apple), at v4/go/internal/mapping/mapping_lifetime_darwin.go.
-- Counts at HEAD refreshed: production 4,592 raw lines / tests 4,196 raw
-  lines (report sections 2 and 11f). Gates at HEAD: go test ./... (5
+- Counts at HEAD refreshed (4950366): production 4,592 raw lines / tests
+  4,196 raw lines (report sections 2 and 11f). Gates at HEAD: go test ./... (5
   packages, -race, mapping -count=3), go vet, gofmt, import-graph, five
   cross-compiles (darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64,
   linux/386) — all green.
@@ -921,8 +922,25 @@ Use these sections in this order:
 - TestBlobReadWordsAcrossLeafBoundary (blob_test.go) fails on the pre-fix
   tree with the exact reported error and passes at HEAD; blob per-word
   reads and all 8 internal zero-alloc subtests remain green.
-- Counts at HEAD: production 4,634 raw lines / tests 4,252 raw lines
-  (report sections 2, 11f, 11g). Gates at HEAD: go test ./... incl -race,
+- Counts at HEAD (ac6bef1): production 4,634 raw lines / tests 4,252 raw
+  lines (report sections 2, 11f, 11g).
+
+### 2026-08-12 - external audit round-4 follow-up 3 (mapping P2 + records)
+
+- The mapping/lifetime reviewer's re-verification found one remaining P2:
+  an unlinked (not replaced) path mid-open mapped the Lstat failure to
+  CodeIO (31), while Rust verify_path_inner refuses with NameNotFound (18).
+  Fixed at v4/go/internal/mapping/mapping.go (os.IsNotExist ->
+  CodeNameNotFound before the IO fallback); pinned by
+  TestOpenImmutableRefusesPathUnlinkedDuringOpen.
+- The conformance/reports reviewer's P2 was record lag only: the round-3
+  "counts corrected at HEAD" sentence in the external-audit entry is now
+  explicitly annotated as superseded by the round-4 follow-up entries;
+  report section 13 now lists section 11e; every historical "Counts at
+  HEAD" line carries its commit.
+- Counts at HEAD (this commit): production 4,639 raw lines / tests 4,308
+  raw lines. Gates: go test ./... incl -race (mapping -count=3), go vet,
+  gofmt, import graph — all green. Gates at HEAD: go test ./... incl -race,
   go vet, gofmt, import graph — all green.
 
 ## Validation
