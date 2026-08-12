@@ -387,6 +387,10 @@ Skills must be updated during retrospection when:
 
 Runtime input project skills:
 
+- `.agents/skills/project-final-review/SKILL.md` - load for any final,
+  full-scope, acceptance, readiness, release, milestone-close, or post-fix
+  re-review. It requires an independent adversarial audit of authority, public
+  contracts, implementation, tests, records, and gates before PASS.
 - `.agents/skills/project-v4-rust/SKILL.md` - load for changes, reviews,
   benchmarks, portability claims, conformance work, or C-ABI work under
   `v4/rust/` or `v4/conformance/`. It records the frozen Rust-first boundary and

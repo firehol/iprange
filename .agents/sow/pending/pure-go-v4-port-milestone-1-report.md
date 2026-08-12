@@ -1,17 +1,15 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
-Date: 2026-08-11 (updated 2026-08-12 after review rounds 2-3, the external
-audit, and the hot-path contract implementation). Status: implementation
-checkpoint complete; the four decisions 1A-4A are resolved and implemented
-(deletion executed, worker boundary scheduled, WrongState closed class,
-pinned hot-path facade); the six-reviewer re-verification of the rebuilt
-facade completed with all six reviewers PASS at HEAD e02dee9 (rounds
-after the external audit, the hot-path rebuild, and the final-review
-regression guards); the final full-scope review completed with PASS at
-HEAD 78373e5 after an external-audit reopening (close-out records
-corrected, Milestone 2 scope bounded to the approved plan, public
-ValueTag/metadata-limit API completed, allocation documentation made
-exact; no P0-P2 findings).
+Date: 2026-08-11 (updated 2026-08-12 after review rounds, external audits, and
+the hot-path contract implementation). Status: Milestone 1 REOPENED. The
+round-6 PASS at HEAD 29e1dde was invalidated by an independent adversarial
+review: exported writable canonical ValueTag variables control
+DirectSemantic, the public ImmutableInfo name deviates from the approved and
+normative DatabaseInfo surface without a recorded decision, and this report
+retained stale allocation, worker-decision, and view-behavior statements.
+Mechanical gates remain green but do not establish closure. Milestone 2 must
+not start until the implementation findings are fixed and a new independent
+final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -109,7 +107,10 @@ tree): 4,676 raw lines. The earlier
 - `internal/reader`: the only owner of healthy selected-generation reads;
   bootstrap selection (4.2), exact-size immutable check, range/catalog/
   membership/structure/metadata cores; no complete page ever exists in Go
-  heap; views are re-derived and re-validated on every access.
+  heap. Membership bitmap words are checked from mapped data on access;
+  structured payloads are validated and decoded during lookup, then the scalar
+  value is retained in the lightweight view while threat membership remains
+  lazily resolved.
 - Root facade `reader_public.go`: `OpenImmutable`, `Info`, `DirectSemantic`,
   `LookupDirectV4/V6`, `DirectRangesV4/V6`, `Cardinality`,
   `LookupFeed`, `LookupMembershipV4/V6` + `MembershipView`
@@ -175,10 +176,10 @@ tree): 4,676 raw lines. The earlier
 |---|---|
 | direct lookup v4 (12 probes) | 0 |
 | direct lookup v6 (4 probes) | 0 |
-| membership lookup v4 (incl. view) | 1 per view (guard; documented copy-safety cost) |
-| membership lookup v6 (inline bitmap) | 1 per view (guard) |
+| membership lookup v4 (incl. view) | 0 |
+| membership lookup v6 (inline bitmap) | 0 |
 | ContainsIndex / Word / ReadWords (inline + blob, incl. synthetic blob DB) | 0 |
-| structured lookup v4 | 1 per view (guard) |
+| structured lookup v4 | 0 |
 | feed lookup (internal) | 0 |
 | feed lookup (public) | 1 (returned name string copy; documented) |
 | full direct scan v4 | 0 |
@@ -462,14 +463,12 @@ forbids — exposes no siginfo/si_code, is goroutine-scoped, and its
 address is documented best-effort. The linux/amd64 probe remains evidence
 for a panic-based subset, not for the contract.
 
-Options for the worker milestone (user decision pending; the gap analysis
-recommends A):
-- A. minimal project-owned assembly sigaction shim (SA_SIGINFO, kernel-bus
+Worker milestone decision 2A is resolved: use a minimal project-owned assembly
+sigaction shim (SA_SIGINFO, kernel-bus
   check, si_addr interval, previous-disposition chaining, raw exit(197))
-  — spec-exact, mirrors the Rust worker posix.rs;
-- B. propose a spec change to panic-based semantics (weakens crash
-  isolation; needs explicit approval);
-- C. drop the fault worker (sacrifices bounded crash isolation).
+that is spec-exact and mirrors the Rust worker posix.rs. The rejected
+alternatives were a spec change to panic-based semantics or dropping the fault
+worker.
 
 ## 11b. Gap-analysis repair pass (2026-08-11, commit 58c4d8f)
 
@@ -618,9 +617,9 @@ verification verdicts:
   PASS after the gate fix (0/0/0), public API/errors/zero-alloc PASS
   (0 fixable outside the recorded closed-state decision), conformance/
   reports PASS after the round-3 record and count corrections (0/0/0).
-  The closed-state error-class choice (HandleClosed vs WrongState),
-  the deletion set, and the worker boundary remain the pending user
-  decisions.
+  At this historical checkpoint the closed-state error-class choice
+  (HandleClosed vs WrongState), deletion set, and worker boundary remained
+  pending; they were subsequently resolved as decisions 3A, 1A, and 2A.
 
 
 ## 11e. External audit pass (2026-08-12)
@@ -650,8 +649,9 @@ criteria are SOW-0025:175 ("warm successful point lookups and cursor steps
 allocate zero Go heap bytes") and design-iprange-engine.md:373/:404; the
 round-4 zero-alloc suite documents one guard allocation per view and one
 string copy per feed lookup, so those criteria are NOT met by the round-4
-public facade. This is the open hot-path API decision (section 11i and the
-pending decisions list), not a resolved interpretation.
+  public facade. At this historical checkpoint this was the open hot-path API
+  decision (section 11i); it was subsequently resolved as decision 4A, not by
+  reinterpreting the round-4 facade as compliant.
 
 ## 11f. Round-4 reviewer follow-up (2026-08-12)
 
@@ -846,6 +846,7 @@ TestPinValueCopyCannotReleaseSecondPin tests pin the behavior on the
 pre-fix tree). The same-failure searches
 (content-transfer, page arrays, stale constants, PID-slot model,
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
-present. Milestone 2 (writer) starts only after the re-verification
-passes; the worker boundary decision is implemented in the worker
-milestone per 2A.
+present. This close-out verdict was later invalidated by the adversarial review
+recorded in the report header and active SOW. Milestone 2 remains blocked until
+the reopened findings are fixed and a new final review passes; the worker
+boundary decision remains scheduled for its later milestone per 2A.

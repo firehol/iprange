@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Final Review"
+  short_description: "Adversarial final acceptance review workflow"
+  default_prompt: "Use $project-final-review to perform an independent final acceptance review of this work."

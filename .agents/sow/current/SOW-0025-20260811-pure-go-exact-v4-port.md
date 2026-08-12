@@ -4,25 +4,19 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 CLOSED (portable mmap-only immutable reader
-with corpus cross-open). Four decisions 1A-4A resolved and implemented
-(pinned hot-path facade with zero allocations/atomics in lookups, scans,
-view operations, and feed lookups; WrongState closed class with
-error-capable WordCount; structure-kind conflict resolved; obsolete
-internal/exactv4 tree deleted - 105 tracked files plus the untracked
-exactv4.test binary and empty directory; worker boundary recorded for the
-worker milestone). The milestone closed after the six-reviewer iterative
-pass (all six reviewers PASS, execution log below) and the external audit
-close-out round (2026-08-12): obsolete RetentionTag removed, Pin value
-copies share one private close state, DirectSemantic registry 1/2/3,
-structured no-threat absence result (MembershipView, bool, error) pinned
-by the new no-threat corpus fixture, error codes and Cardinality129
-centralized to the single internal/format authorities, closure records
-repaired. Repository counts at close: production 4,797 raw lines / tests
-4,676 raw lines. Milestone 2 (writer) may start, scoped exactly to the
-approved milestone plan (one physical writer, allocation/retirement/commit,
-direct/membership/structured construction, Go-produced corpus, Rust
-cross-open); sidecars, live coordination, and publication remain Milestone 4.
+Sub-state: milestone 1 REOPENED after a final-review process regression.
+The portable mmap-only immutable reader and its mechanical gates remain the
+current implementation checkpoint, but an independent adversarial review of
+HEAD 29e1dde invalidated the round-6 PASS. Blocking work remains: exported
+writable canonical ValueTag variables can change DirectSemantic process-wide
+and race with readers; the public ImmutableInfo name deviates from the
+approved/normative DatabaseInfo surface without a recorded decision; and the
+milestone report retained contradictory allocation, worker-decision, and view
+behavior statements. Milestone 2 must not start until these findings are fixed,
+regression-pinned where applicable, and a new independent final review passes.
+Repository counts at reopening: production 4,797 raw lines / tests 4,676 raw
+lines. The approved later scope remains unchanged: Milestone 2 is the writer;
+sidecars, live coordination, and publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -63,8 +57,16 @@ cross-open); sidecars, live coordination, and publication remain Milestone 4.
   decision-log 105-file count, qualified package comment).
 - sol round 5: PASS, no P0-P2-P3 at HEAD 78373e5 (record gap: the
   reopening itself was not yet recorded);
-- sol round 6: PASS, no P0-P2-P3 at HEAD 29e1dde, confirming the reopened
-  records. Milestone 1 gate closed after the reopening.
+- sol round 6: reported PASS at HEAD 29e1dde, confirming the previously named
+  checks and records. An independent adversarial re-review then invalidated
+  that verdict: it found the mutable exported semantic-tag authority, the
+  unapproved DatabaseInfo/ImmutableInfo API deviation, and stale contradictory
+  milestone-report claims. Milestone 1 is reopened; Milestone 2 is blocked.
+- Review-process repair: added the generic runtime skill
+  `.agents/skills/project-final-review/SKILL.md`. It requires zero-trust
+  authority reconstruction, open-world public-contract and record audits,
+  mechanical gates only after semantic review, and a final disproof pass before
+  PASS. The implementation findings remain separate work.
 
 ## Requirements
 
@@ -864,15 +866,16 @@ Use these sections in this order:
   - Full report: `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md`.
     Baseline gates re-run: `go test ./...` (incl. race), `go vet`, `gofmt`,
     cross-compilation matrix — all green; SOW audit clean.
-- Both pending decisions now have their evidence: deletion set (100 tracked
-  files + 2 untracked leftovers, re-approvable at any time) and the worker
+- At this historical checkpoint, both then-pending decisions had their evidence:
+  the deletion set (then counted as 100 tracked files + 2 untracked leftovers;
+  later corrected to 105 tracked files) and the worker
   boundary — the third-pass evidence demonstrates only a panic-based fault
   subset via `runtime/debug.SetPanicOnFault` (empirical recover with exact
   fault address); the spec-exact worker contract needs either a minimal
   project-owned assembly sigaction shim (spec-exact) or an explicit
-  spec change — user decision pending (see milestone-1 report section 11).
-  Milestone 2 is safe to start after the user's answers to the deletion and
-  worker decisions.
+  spec change. Both decisions were subsequently resolved as 1A and 2A. The
+  contemporaneous statement that Milestone 2 would be safe after those answers
+  is superseded by the later Milestone 1 reopenings.
 - Commands and results: `wc -l` design spec 519; `grep` evidence for error
   code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;
@@ -1068,10 +1071,12 @@ Use these sections in this order:
   decompression reads into one exact output allocation with a one-byte
   overflow probe; truncation/trailing/Adler checks unchanged, pinned by the
   existing tests.
-- OPEN (pending decision 4): the public facade API shape that closes the
+- HISTORICAL OPEN ITEM (subsequently resolved as decision 4A): the public facade
+  API shape that closes the
   gap — caller-owned pinned lookup handles with token-style views and zero
   allocations/atomics inside the hot loop (long-term-best, recommended) vs
-  keeping the guard facade with a SOW/spec amendment. Also pending: the
+  keeping the guard facade with a SOW/spec amendment. Also unresolved at that
+  checkpoint: the
   facade moves to the WrongState closed class, WordCount becomes
   error-capable, and Release/second-close semantics are decided explicitly
   (decision 3 corrections from the re-review). Reopened milestone 1 does
@@ -1207,15 +1212,17 @@ Sensitive data gate:
 
 Artifact maintenance gate:
 
-- AGENTS.md: reviewed; no change needed at this milestone.
-- Runtime project skills: Rust skill reviewed; a Go skill is deliberately not
-  invented before implementation evidence exists.
+- AGENTS.md: updated to register the generic final-review runtime skill.
+- Runtime project skills: added `project-final-review` after repeated false PASS
+  verdicts exposed a reusable review-process failure; the Rust skill remains
+  unchanged. A Go implementation skill is still not invented here.
 - Specs: reviewed completely; no format or behavior change was made.
-- End-user/operator docs: Go README/package docs remain required during
-  implementation.
+- End-user/operator docs: unaffected; the milestone report is corrected as a
+  project record, not published product documentation.
 - End-user/operator skills: none exist and no public workflow changed.
-- SOW lifecycle: this file is `in-progress` under `current/`; SOW-0017 remains
-  the separate Phase-2 item.
+- SOW lifecycle: this file remains `in-progress` under `current/`; Milestone 1
+  is reopened and Milestone 2 is blocked; SOW-0017 remains the separate Phase-2
+  item.
 
 Specs update:
 
@@ -1313,7 +1320,36 @@ internal checks at exactly 0).
 
 ## Regression Log
 
-None yet.
+### 2026-08-12 - final-review process regression
+
+The session's round-6 final review reported PASS at HEAD 29e1dde after verifying
+the supplied defect list and all mechanical gates. A fresh independent review
+then found material issues outside that checklist:
+
+- exported writable canonical ValueTag variables drive DirectSemantic and can
+  be reassigned process-wide or raced with readers;
+- Go exposes ImmutableInfo while the approved parity matrix, normative spec,
+  and Rust authority use DatabaseInfo, with no recorded deviation;
+- the milestone report retained stale statements about view allocations, the
+  worker decision, and structured-view revalidation.
+
+Root cause: the final review behaved as a closed checklist verifier, inherited
+the prior repair narrative, sampled corrected record summaries, and allowed
+green automation to end the review before an open-world public-contract and
+record audit. The external review's claim that Milestone 2 lacked a
+Pre-Implementation Gate was not reproduced: this SOW already has a ready gate.
+
+Process repair: created and registered the generic `project-final-review`
+runtime skill. Future final reviews start from zero trust, reconstruct authority
+and complete scope, audit public interfaces and full records before running
+gates, verify regression evidence and same-failure classes, and perform a
+separate disproof pass before PASS. The skill is intentionally generic so the
+same failure mode is prevented across all project work.
+
+Validation for the process repair uses HEAD 29e1dde as the historical benchmark:
+the workflow must identify the mutable tag authority, API-name deviation, and
+three stale report claims even though every mechanical gate passes. Product
+fixes and their final re-review remain pending in this SOW.
 
 Append regression entries here only after this SOW was completed or closed and
 later testing or use found broken behavior. Use a dated
