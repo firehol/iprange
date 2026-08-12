@@ -109,8 +109,15 @@ exact in-memory inflater nodes only when their receiver/arguments are
 not file-tainted. The self-test now copies the module into a private
 temporary directory: it never touches the reviewed tree, reserves no
 file name, proves an innocent `gatemut_`-named file is not deleted, and
-durably rejects forty-one mutation forms including all nine independent
-reproducers of the sixth review; the startup sweep is gone. The records
+durably rejects forty mutation forms including all nine independent
+reproducers of the sixth review; the startup sweep is gone. HEAD
+81ca524 then pinned the aliased-os producer form as the forty-first;
+HEAD 6b05801 tainted `*os.File` results returned by same-package
+accessor methods. The seventh-sweep hardening (HEAD e2dc7e0) closed
+the type-alias conversion and parameter classes, separately built
+`os.ProcAttr{Files}` containers, and the `os.Pipe` producer class,
+renumbered the self-test forms, and raised the durable rejection set to
+forty-five mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -368,11 +375,16 @@ sidecars, live coordination, and publication remain Milestone 4.
   was not recorded and round-12 wording said decision 5A was "fixed".
   Fixed at HEAD c42325a: the line-oriented text scan is replaced by the
   AST, type-light scanner (v4/go-gate) described in Status; the
-  self-test copies the module to a private temp directory (forty-one
-  mutation forms rejected, including all nine independent reproducers
-  and an aliased-os producer-taint form; the reviewed tree is never
-  modified, no file name is reserved, and an innocent gatemut_-named
-  file is proven to survive); the startup sweep is removed; the records
+  self-test copies the module to a private temp directory (forty
+  mutation forms rejected, including all nine independent reproducers;
+  the reviewed tree is never modified, no file name is reserved, and an
+  innocent gatemut_-named file is proven to survive); the startup sweep
+  is removed. HEAD 81ca524 pinned the aliased-os producer-taint form as
+  the forty-first; HEAD 6b05801 tainted *os.File results of
+  same-package accessor methods; the seventh sweep (HEAD e2dc7e0)
+  closed the alias conversion/parameter, ProcAttr-container, and
+  os.Pipe classes, and the self-test now durably rejects forty-five
+  mutation forms. The records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
   class.
@@ -1496,7 +1508,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 41-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 45-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1773,10 +1785,42 @@ execution record; the closing result is appended there when it completes.
   *bytes.Reader field, and the two exact io.ReadFull(zr, out[...int(meta.
   MetadataUncompressed)]) shapes with a non-file zr).
 - The self-test now runs in a private temp copy of the module (cp -a
-  into mktemp): forty-one mutation forms rejected, including the nine
+  into mktemp): forty mutation forms rejected, including the nine
   independent reproducers of the sixth review; an innocent
   gatemut_-named file is proven to survive; the reviewed tree is never
-  modified; the startup sweep is removed.
-- Gates: go test ./... incl -race, go vet, gofmt, import graph with the
-  41-form self-test, ten cross-compiles, SOW audit - all green.
-  Counts at HEAD: production 4,772 raw lines / tests 4,832 raw lines.
+  modified; the startup sweep is removed. HEAD 81ca524 then pinned the
+  aliased-os producer form as the forty-first; HEAD 6b05801 tainted
+  *os.File results returned by same-package accessor methods.
+- Gates at those HEADs: go test ./... incl -race, go vet, gofmt,
+  import graph with the 41-form self-test, cross-compiles, SOW audit -
+  all green. Counts: production 4,772 raw lines / tests 4,832 raw
+  lines.
+
+### 2026-08-13 - seventh-sweep gate hardening (alias/container/pipe classes)
+
+- The narrow re-review of the sixth-sweep records found two P2 items:
+  the accessor-method taint (HEAD 6b05801) had no mutation pin and no
+  record entry, and the records cited HEAD c42325a for the 41-form
+  count although that commit pinned forty forms (the aliased-os form
+  arrived with HEAD 81ca524).
+- Ampere additionally proved two untainted file-escape classes in the
+  scanner: a separately built `&os.ProcAttr{Files: []*os.File{f}}`
+  lost the container taint (both as a composite literal and as a
+  field assignment), and a type alias `type zrAlias = *os.File`
+  defeated the exemption predicate and the taint resolution.
+- Fixed (HEAD e2dc7e0): file producers now carry result positions
+  (`os.Pipe` = both results; error results never tainted); type
+  aliases are collected and resolved in classifyType, signatures, and
+  producer conversions; composite literals propagate container taint
+  from any file/container element; `os.StartProcess` joins the banned
+  selectors (closing the field-assign variant); `os.Pipe` joins the
+  producers; multi-result assignment taints only the file positions.
+- The self-test forms were renumbered and extended: 40 aliased-os,
+  41 accessor-method, 42 alias-conversion, 43 alias-parameter,
+  44 separately built ProcAttr, 45 os.Pipe producer, 46 innocent
+  gatemut_-named survival (positive). Durable rejection set: forty-five
+  mutation forms.
+- Gates at HEAD e2dc7e0: go test ./... incl -race, go vet, gofmt,
+  import graph with the 45-form self-test, nine cross-compiles, SOW
+  audit - all green. Counts: production 4,772 raw lines / tests 4,832
+  raw lines (gate scanner lives outside the module).

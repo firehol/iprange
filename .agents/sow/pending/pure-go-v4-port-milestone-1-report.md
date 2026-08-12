@@ -1,6 +1,6 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
-Date: 2026-08-11 (updated 2026-08-12 after review rounds, external audits, and
+Date: 2026-08-11 (updated 2026-08-13 after review rounds, external audits, and
 the hot-path contract implementation). Status: Milestone 1 REOPENED pending
 re-review. The round-10 PASS at HEAD 253f9d5 and closure commit at HEAD
 1c71299 were invalidated by a fresh independent audit with five P2 findings:
@@ -62,10 +62,15 @@ selector families, constrains *os.File use to the mapping-lifecycle
 methods and same-package/module-internal/x-sys consumers, and exempts
 the three exact in-memory inflater nodes only with file-taint
 verification; the self-test now copies the module to a private temp
-directory and durably rejects forty-one mutation forms including all nine
+directory and durably rejects forty mutation forms including all nine
 independent reproducers of the sixth review, the startup sweep is
-removed, and the records were corrected in the same pass (details in
-the close-out narrative). Decision 5A remains open
+removed, and the records were corrected in the same pass. HEAD 81ca524
+then pinned the aliased-os producer form (forty-first), HEAD 6b05801
+tainted *os.File results of same-package accessor methods, and the
+seventh sweep (HEAD e2dc7e0) closed the type-alias conversion/
+parameter, separately built ProcAttr-container, and os.Pipe producer
+classes; the self-test now durably rejects forty-five mutation forms
+(details in the close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
@@ -1030,10 +1035,14 @@ values only into the mapping-lifecycle methods
 same-package/module-internal/x-sys consumers, and exempts the three
 exact in-memory inflater nodes only when their receiver/arguments are
 not file-tainted. The self-test now runs in a private temp copy (cp -a
-into mktemp): forty-one mutation forms are rejected, including all nine
+into mktemp): forty mutation forms are rejected, including all nine
 independent reproducers of this review; an innocent gatemut_-named file
 is proven to survive; the reviewed tree is never modified; and the
-startup sweep is removed. Decision 5A remains the single open item and
+startup sweep is removed. HEAD 81ca524 pinned the aliased-os producer
+form (forty-first), HEAD 6b05801 tainted *os.File results of
+same-package accessor methods, and the seventh sweep closed the
+alias/ProcAttr/os.Pipe classes; the self-test now durably rejects
+forty-five mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
