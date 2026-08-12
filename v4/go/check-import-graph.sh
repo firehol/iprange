@@ -1382,6 +1382,134 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta63.orig" internal/reader/metadata.go
 
+	# --- 64: method returning a defined func type (single hop) ----------
+	# rf := zb.mk(); zr = rf(): the receiver at the call site is the var
+	# name, the method table is keyed by the struct name; the producer
+	# taint must survive the method boundary.
+	cat > internal/reader/gatemut_methfn.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn6 func() *os.File
+
+type zbox struct{}
+
+var zb zbox
+
+func (z *zbox) mk() fileFn6 { return func() *os.File { f, _ := os.Open("/dev/null"); return f } }
+MUTEOF
+	add_mut internal/reader/gatemut_methfn.go
+	cp internal/reader/metadata.go "$self_tree/meta64.orig"
+	INS='rf := zb.mk()
+	zr = rf()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta64.new" && mv "$self_tree/meta64.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rf()' internal/reader/metadata.go; then
+		run_mut "method returning a defined func type"
+	else
+		echo "self-test ERROR: form 64 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta64.orig" internal/reader/metadata.go
+
+	# --- 65: method func-valued double call ---------------------------------
+	# zr = zb.mk()(): the callee is itself a call whose value is a func
+	# returning *os.File; the outer call yields the file.
+	cat > internal/reader/gatemut_methdbl.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn7 func() *os.File
+
+type ybox struct{}
+
+var yb ybox
+
+func (y *ybox) mk2() fileFn7 { return func() *os.File { f, _ := os.Open("/dev/null"); return f } }
+MUTEOF
+	add_mut internal/reader/gatemut_methdbl.go
+	cp internal/reader/metadata.go "$self_tree/meta65.orig"
+	INS='zr = yb.mk2()()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta65.new" && mv "$self_tree/meta65.new" internal/reader/metadata.go
+	if grep -Fq 'zr = yb.mk2()()' internal/reader/metadata.go; then
+		run_mut "method func-valued double call"
+	else
+		echo "self-test ERROR: form 65 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta65.orig" internal/reader/metadata.go
+
+	# --- 66: same-package helper func-valued double call --------------------
+	# zr = useDef2(getDef3)(): a helper returns a func() *os.File and the
+	# outer call invokes it directly.
+	cat > internal/reader/gatemut_funcdbl.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn8 func() *os.File
+
+func useDef4(g fileFn8) fileFn8 { return g }
+
+var getDef4 fileFn8
+
+func init() {
+	getDef4 = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_funcdbl.go
+	cp internal/reader/metadata.go "$self_tree/meta66.orig"
+	INS='zr = useDef4(getDef4)()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta66.new" && mv "$self_tree/meta66.new" internal/reader/metadata.go
+	if grep -Fq 'zr = useDef4(getDef4)()' internal/reader/metadata.go; then
+		run_mut "same-package helper func-valued double call"
+	else
+		echo "self-test ERROR: form 66 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta66.orig" internal/reader/metadata.go
+
+	# --- 67: benign method func-valued double call must pass ------------
+	# Identical shape to form 65 but the func returns int: the gate must
+	# not flag the double call when no *os.File is involved.
+	cat > internal/reader/gatemut_benignmeth.go <<'MUTEOF'
+package reader
+
+type intFn2 func() int
+
+type qbox struct{}
+
+var qb qbox
+
+func (q *qbox) mk3() intFn2 { return func() int { return 1 } }
+MUTEOF
+	add_mut internal/reader/gatemut_benignmeth.go
+	cp internal/reader/metadata.go "$self_tree/meta67.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = qb.mk3()()"; next } print }' internal/reader/metadata.go > "$self_tree/meta67.new" && mv "$self_tree/meta67.new" internal/reader/metadata.go
+	if grep -Fq 'zr = qb.mk3()()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign method double call passes the gate"
+		else
+			echo "self-test MISS: benign method double call failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 67 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta67.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1434,7 +1562,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 59 mutation forms rejected)"
+	echo "import-graph self-test passed (all 62 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
