@@ -142,8 +142,15 @@ func main() {
 	for _, dir := range sortedKeys(byDir) {
 		list := byDir[dir]
 		info, srcs, fses, parsed := parseDir(list)
+		// Package-level declarations are visible to every file of the
+		// package, so the scanner shares one package taint across the
+		// directory before running any file.
+		shared := newTaints()
 		for _, f := range list {
-			if err := runFile(f, parsed[f], fses[f], srcs[f], info); err != nil {
+			collectPkgTaints(parsed[f], shared, info)
+		}
+		for _, f := range list {
+			if err := runFile(f, parsed[f], fses[f], srcs[f], info, shared); err != nil {
 				fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
 				fail = true
 			}
@@ -271,19 +278,29 @@ func exprText(e ast.Expr) string {
 		return "[]" + exprText(t.Elt)
 	case *ast.SelectorExpr:
 		return exprText(t.X) + "." + t.Sel.Name
+	case *ast.ChanType:
+		switch t.Dir {
+		case ast.SEND:
+			return "chan<- " + exprText(t.Value)
+		case ast.RECV:
+			return "<-chan " + exprText(t.Value)
+		}
+		return "chan " + exprText(t.Value)
 	}
 	return ""
 }
 
 // taints is the per-scope syntactic *os.File state.
 type taints struct {
-	file      map[string]bool   // identifiers holding *os.File
-	container map[string]bool   // identifiers holding []*os.File or a struct with file fields
-	struc     map[string]string // identifiers holding a same-package struct value: name -> type name
+	file       map[string]bool   // identifiers holding *os.File
+	container  map[string]bool   // identifiers holding []*os.File or a struct with file fields
+	struc      map[string]string // identifiers holding a same-package struct value: name -> type name
+	chanFile   map[string]bool   // identifiers holding chan *os.File (make, declared, or send-marked)
+	fieldTaint map[string]kind   // expr.field = file/container from an assignment of a tainted value
 }
 
 func newTaints() *taints {
-	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}}
+	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, fieldTaint: map[string]kind{}}
 }
 
 func cloneTaints(t *taints) *taints {
@@ -297,11 +314,67 @@ func cloneTaints(t *taints) *taints {
 	for k, v := range t.struc {
 		c.struc[k] = v
 	}
+	for k, v := range t.chanFile {
+		c.chanFile[k] = v
+	}
+	for k, v := range t.fieldTaint {
+		c.fieldTaint[k] = v
+	}
 	return c
 }
 
+// collectPkgTaints registers package-level var declarations (type-only
+// struct instances, chan *os.File vars, and producer-bound values) into a
+// shared package taint so every file of the package sees them.
+func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
+	imports := map[string]string{}
+	for _, imp := range f.Imports {
+		pathText := strings.Trim(imp.Path.Value, `"`)
+		name := pathText
+		if imp.Name != nil && imp.Name.Name != "." && imp.Name.Name != "_" {
+			name = imp.Name.Name
+		}
+		imports[pathText] = pathText
+		imports[name] = pathText
+	}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		if gd.Tok != token.VAR && gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			var cls kind
+			if vs.Type != nil {
+				cls = classifyType(vs.Type, info)
+			}
+			for i, name := range vs.Names {
+				if len(vs.Values) > i {
+					cls = classify(vs.Values[i], pkg, info, imports)
+					if c, ok := classifyStruct(vs.Values[i], info); ok {
+						pkg.struc[name.Name] = c
+					}
+				} else if vs.Type != nil {
+					// type-only package var: register struct instances so
+					// field reads in any file resolve the taint.
+					if base, ok := structBase(vs.Type, info); ok {
+						pkg.struc[name.Name] = base
+					}
+				}
+				applyKind(pkg, name.Name, cls)
+			}
+		}
+	}
+}
+
 // runFile applies the rules to one production file.
-func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkgInfo) error {
+func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkgInfo, shared *taints) error {
 	reporter := &reporter{path: path}
 	imports := map[string]string{}
 	for _, imp := range f.Imports {
@@ -323,32 +396,7 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 		}
 	}
 
-	pkg := newTaints()
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-		if gd.Tok != token.VAR && gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			var cls kind
-			if vs.Type != nil {
-				cls = classifyType(vs.Type, info)
-			}
-			for i, name := range vs.Names {
-				if len(vs.Values) > i {
-					cls = classify(vs.Values[i], pkg, info, imports)
-				}
-				applyKind(pkg, name.Name, cls)
-			}
-		}
-	}
+	pkg := cloneTaints(shared)
 
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
@@ -380,7 +428,19 @@ const (
 	kindNone kind = iota
 	kindFile
 	kindContainer
+	kindChanFile
 )
+
+// chanElemFile reports whether a type text is a channel whose element
+// type resolves to *os.File (chan, chan<-, or <-chan forms).
+func chanElemFile(text string, info pkgInfo) bool {
+	for _, p := range []string{"chan<- ", "<-chan ", "chan "} {
+		if strings.HasPrefix(text, p) {
+			return resolveTypeText(strings.TrimSpace(strings.TrimPrefix(text, p)), info) == "*os.File"
+		}
+	}
+	return false
+}
 
 // resolveTypeText expands type aliases (bare or pointer-qualified) so a
 // `type zr = *os.File` alias is seen as a file type by the taint checks.
@@ -396,11 +456,25 @@ func resolveTypeText(text string, info pkgInfo) string {
 	return text
 }
 
+// structBase returns the same-package struct type name behind a declared
+// type expression (T, *T), resolving type aliases.
+func structBase(t ast.Expr, info pkgInfo) (string, bool) {
+	text := resolveTypeText(exprText(t), info)
+	base := strings.TrimPrefix(text, "*")
+	if _, isStruct := info.structs[base]; isStruct {
+		return base, true
+	}
+	return "", false
+}
+
 // classifyType maps a declared type expression to file/container taint.
 func classifyType(t ast.Expr, info pkgInfo) kind {
 	text := resolveTypeText(exprText(t), info)
 	if text == "*os.File" {
 		return kindFile
+	}
+	if chanElemFile(text, info) {
+		return kindChanFile
 	}
 	if strings.Contains(text, "*os.File") {
 		return kindContainer
@@ -418,6 +492,15 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if st.container[v.Name] {
 			return kindContainer
 		}
+		if st.chanFile[v.Name] {
+			return kindFile
+		}
+	case *ast.IndexExpr:
+		// An element read from a file container is itself a file.
+		if isContainerExpr(v.X, st, info) {
+			return kindFile
+		}
+		return classify(v.X, st, info, imports)
 	case *ast.StarExpr:
 		return classify(v.X, st, info, imports)
 	case *ast.ParenExpr:
@@ -425,6 +508,11 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 	case *ast.UnaryExpr:
 		return classify(v.X, st, info, imports)
 	case *ast.CallExpr:
+		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "make" && len(v.Args) == 1 {
+			if ct, ok := v.Args[0].(*ast.ChanType); ok && chanElemFile(exprText(ct), info) {
+				return kindChanFile
+			}
+		}
 		if _, _, ok := producerCall(v, st, info, imports); ok {
 			return kindFile
 		}
@@ -465,6 +553,8 @@ func applyKind(st *taints, name string, k kind) {
 		st.file[name] = true
 	case kindContainer:
 		st.container[name] = true
+	case kindChanFile:
+		st.chanFile[name] = true
 	}
 }
 
@@ -531,11 +621,14 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 	case *ast.Ident:
 		return st.file[v.Name]
 	case *ast.SelectorExpr:
+		if st.fieldTaint[exprText(v.X)+"."+v.Sel.Name] == kindFile {
+			return true
+		}
 		structName, ok := resolveStruct(v.X, st, info)
 		if !ok {
 			return false
 		}
-		return info.structs[structName][v.Sel.Name] == "*os.File"
+		return resolveTypeText(info.structs[structName][v.Sel.Name], info) == "*os.File"
 	case *ast.CallExpr:
 		_, _, ok := producerCall(v, st, info, imports)
 		return ok
@@ -552,11 +645,14 @@ func isContainerExpr(e ast.Expr, st *taints, info pkgInfo) bool {
 	case *ast.Ident:
 		return st.container[v.Name]
 	case *ast.SelectorExpr:
+		if st.fieldTaint[exprText(v.X)+"."+v.Sel.Name] == kindContainer {
+			return true
+		}
 		structName, ok := resolveStruct(v.X, st, info)
 		if !ok {
 			return false
 		}
-		return strings.Contains(info.structs[structName][v.Sel.Name], "*os.File")
+		return strings.Contains(resolveTypeText(info.structs[structName][v.Sel.Name], info), "*os.File")
 	case *ast.CompositeLit:
 		return strings.Contains(exprText(v.Type), "*os.File")
 	case *ast.StarExpr:
@@ -594,6 +690,8 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 		return isFileOrContainer(v.X, st, info, imports)
 	case *ast.ParenExpr:
 		return isFileOrContainer(v.X, st, info, imports)
+	case *ast.IndexExpr:
+		return isContainerExpr(v.X, st, info) || isFileOrContainer(v.X, st, info, imports)
 	}
 	return false
 }
@@ -608,6 +706,13 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		return name, ok
 	case *ast.CallExpr:
 		if id, ok := v.Fun.(*ast.Ident); ok {
+			if id.Name == "new" && len(v.Args) == 1 {
+				if aid, ok := v.Args[0].(*ast.Ident); ok {
+					if _, isStruct := info.structs[aid.Name]; isStruct {
+						return aid.Name, true
+					}
+				}
+			}
 			for _, r := range info.funcs[id.Name] {
 				n := strings.TrimPrefix(r, "*")
 				if _, isStruct := info.structs[n]; isStruct {
@@ -643,6 +748,8 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 			switch {
 			case t == "*os.File":
 				st.file[name.Name] = true
+			case chanElemFile(t, info):
+				st.chanFile[name.Name] = true
 			case strings.Contains(t, "*os.File"):
 				st.container[name.Name] = true
 			}
@@ -689,6 +796,12 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 								if c, ok := classifyStruct(vs.Values[i], info); ok {
 									st.struc[name.Name] = c
 								}
+							} else if vs.Type != nil {
+								// type-only `var t T`: register the struct
+								// instance so t.field file reads resolve.
+								if base, ok := structBase(vs.Type, info); ok {
+									st.struc[name.Name] = base
+								}
 							}
 							applyKind(st, name.Name, cls)
 						}
@@ -713,21 +826,41 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			}
 			prepassStmts(v.Body.List, st, info, imports)
 		case *ast.RangeStmt:
-			// Ranging over a container yields *os.File elements in the
-			// Value position (keys are indexes or map keys, never the
-			// file itself).
+			// Ranging over a container or file channel yields *os.File
+			// elements in the Value position (keys are indexes or map
+			// keys, never the file itself).
 			if v.Value != nil {
-				if k, ok := v.Value.(*ast.Ident); ok && isContainerExpr(v.X, st, info) {
-					st.file[k.Name] = true
+				if k, ok := v.Value.(*ast.Ident); ok {
+					if isContainerExpr(v.X, st, info) {
+						st.file[k.Name] = true
+					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFile[id.Name] {
+						st.file[k.Name] = true
+					}
 				}
 			}
 			prepassStmts(v.Body.List, st, info, imports)
+		case *ast.SendStmt:
+			// `ch <- f` with a file value: mark the channel as carrying
+			// files so a later receive (or loop) taints the value.
+			if id, ok := v.Chan.(*ast.Ident); ok && isFileOrContainer(v.Value, st, info, imports) {
+				st.chanFile[id.Name] = true
+			}
 		case *ast.SwitchStmt:
 			if v.Init != nil {
 				prepassStmts([]ast.Stmt{v.Init}, st, info, imports)
 			}
 			for _, cc := range v.Body.List {
 				if cs, ok := cc.(*ast.CaseClause); ok {
+					prepassStmts(cs.Body, st, info, imports)
+				}
+			}
+		case *ast.SelectStmt:
+			// select cases: receive/send assignments plus clause bodies.
+			for _, cc := range v.Body.List {
+				if cs, ok := cc.(*ast.CommClause); ok {
+					if cs.Comm != nil {
+						prepassStmts([]ast.Stmt{cs.Comm}, st, info, imports)
+					}
 					prepassStmts(cs.Body, st, info, imports)
 				}
 			}
@@ -751,6 +884,13 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 		return classifyStruct(v.X, info)
 	case *ast.CallExpr:
 		if id, ok := v.Fun.(*ast.Ident); ok {
+			if id.Name == "new" && len(v.Args) == 1 {
+				if aid, ok := v.Args[0].(*ast.Ident); ok {
+					if _, isStruct := info.structs[aid.Name]; isStruct {
+						return aid.Name, true
+					}
+				}
+			}
 			for _, r := range info.funcs[id.Name] {
 				n := strings.TrimPrefix(r, "*")
 				if _, isStruct := info.structs[n]; isStruct {
@@ -762,7 +902,23 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 	return "", false
 }
 
+// applyLHSField records file/container taint behind a struct-field write
+// (t.r = w or t.r, _ = producer()), so a later read of t.r stays tainted
+// even when the field's declared type is not *os.File (any, io.Reader).
+func applyLHSField(lhs ast.Expr, cls kind, st *taints) {
+	sel, ok := lhs.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	if cls == kindFile || cls == kindContainer {
+		st.fieldTaint[exprText(sel.X)+"."+sel.Sel.Name] = cls
+	}
+}
+
 func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]string) {
+	if _, ok := lhs.(*ast.SelectorExpr); ok {
+		applyLHSField(lhs, classify(rhs, st, info, imports), st)
+	}
 	id, ok := lhs.(*ast.Ident)
 	if !ok || id.Name == "_" {
 		return
@@ -778,24 +934,29 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 // several results: only the result positions declared as *os.File become
 // file-tainted (an error result must not).
 func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, imports map[string]string) {
-	id, ok := lhs.(*ast.Ident)
-	if !ok || id.Name == "_" {
-		return
-	}
 	if _, pos, isProducer := producerCall(rhs, st, info, imports); isProducer {
 		for _, p := range pos {
 			if p == index {
-				st.file[id.Name] = true
+				applyLHSField(lhs, kindFile, st)
+				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+					st.file[id.Name] = true
+				}
 				return
 			}
 		}
 		return // non-file result positions (error results) get no taint
 	}
-	if cls := classify(rhs, st, info, imports); cls != kindNone {
-		applyKind(st, id.Name, cls)
+	cls := classify(rhs, st, info, imports)
+	if cls != kindNone {
+		applyLHSField(lhs, cls, st)
+		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+			applyKind(st, id.Name, cls)
+		}
 	}
 	if c, ok := classifyStruct(rhs, info); ok {
-		st.struc[id.Name] = c
+		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+			st.struc[id.Name] = c
+		}
 	}
 }
 

@@ -937,6 +937,55 @@ MUTEOF
 	add_mut internal/mapping/gatemut_ospipe.go
 	run_mut "os.Pipe producer taint"
 
+	# --- 47: struct-field stored file behind the inflater exemption ------
+	# A file parked in a struct field (declared or alias-typed) must stay
+	# tainted when it shadows the exempted in-memory inflater reader.
+	cat > internal/reader/gatemut_fieldbox.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type gatemutBox struct{ r *os.File }
+
+var gatemutBoxVal gatemutBox
+
+func init() { gatemutBoxVal.r, _, _ = os.Pipe() }
+MUTEOF
+	add_mut internal/reader/gatemut_fieldbox.go
+	cp internal/reader/metadata.go "$self_tree/meta47.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = gatemutBoxVal.r"; next } print }' internal/reader/metadata.go > "$self_tree/meta47.new" && mv "$self_tree/meta47.new" internal/reader/metadata.go
+	if ! grep -q "^$(printf '\t')zr = gatemutBoxVal.r" internal/reader/metadata.go; then
+		echo "self-test ERROR: form 47 insert did not take"
+		mutfail=1
+	fi
+	run_mut "struct-field stored file shadowing the inflater exemption"
+	cp "$self_tree/meta47.orig" internal/reader/metadata.go
+
+	# --- 48: channel-transported file behind the inflater exemption ------
+	# A file sent through a chan *os.File must stay tainted when a receive
+	# shadows the exempted in-memory inflater reader.
+	cat > internal/reader/gatemut_chanbox.go <<'MUTEOF'
+package reader
+
+import "os"
+
+var gatemutCh = make(chan *os.File)
+
+func init() {
+	r, _, _ := os.Pipe()
+	gatemutCh <- r
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanbox.go
+	cp internal/reader/metadata.go "$self_tree/meta48.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = <-gatemutCh"; next } print }' internal/reader/metadata.go > "$self_tree/meta48.new" && mv "$self_tree/meta48.new" internal/reader/metadata.go
+	if ! grep -q "^$(printf '\t')zr = <-gatemutCh" internal/reader/metadata.go; then
+		echo "self-test ERROR: form 48 insert did not take"
+		mutfail=1
+	fi
+	run_mut "channel-transported file shadowing the inflater exemption"
+	cp "$self_tree/meta48.orig" internal/reader/metadata.go
+
 	# --- 46: an innocent gatemut_-named file must survive and pass -------
 	cat > internal/mapping/gatemut_innocent.go <<'MUTEOF'
 package mapping
@@ -960,7 +1009,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 45 mutation forms rejected)"
+	echo "import-graph self-test passed (all 47 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
