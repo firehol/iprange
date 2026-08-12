@@ -1,12 +1,7 @@
-// Package iprangedb implements the exact unsigned Phase-1 iprange v4
-// database reader: a portable, mmap-only immutable reader with
-// zero-allocation hot paths that cross-opens the shared v4 conformance
-// corpus (feed lookup returns one copied string and metadata decode
-// allocates its buffers; see reader_public.go).
-//
 // The scalar types in this file are the relocated, verified public
 // foundation (previously aliased from the obsolete milestone-0 tree):
 // numeric addresses, the value-tag, and the exact 129-bit cardinality.
+
 package iprangedb
 
 import (

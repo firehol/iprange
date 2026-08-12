@@ -67,7 +67,22 @@ sidecars, live coordination, and publication remain Milestone 4.
   `.agents/skills/project-final-review/SKILL.md`. It requires zero-trust
   authority reconstruction, open-world public-contract and record audits,
   mechanical gates only after semantic review, and a final disproof pass before
-  PASS. The implementation findings remain separate work.
+  PASS.
+- sol round 7: FAIL at HEAD 2d2197a with four P2 record/truth defects: the
+  milestone report and SOW still presented the reopened findings as
+  unresolved, the import-graph gate still exempted the deleted
+  internal/exactv4 package, the reader documented a re-derive-every-access
+  claim contradicted by cached structured values, and the zero-allocation
+  evidence misstated the pin/reader measurement grain and iteration counts.
+  All fixed in a64a495 (gate exemption removed; report header, section 5,
+  section 6 and close-out corrected; reader.go comment qualified; zero-alloc
+  comments/messages corrected), and the report LOC counts were refreshed
+  for that commit's own delta in 12b2e7f (P1 found by the narrow records
+  reviewer; production 4,812 / tests 4,685 verified).
+- sol round 8: FAIL at HEAD 12b2e7f with one P2 - this gate record omitted
+  round 7 and its repairs, and the repair note above contradicted the
+  Status. The trail is completed in this entry; the closing re-review
+  follows below.
 
 ## Requirements
 
