@@ -1253,6 +1253,135 @@ MUTEOF
 	cp "$self_tree/meta59.orig" internal/reader/metadata.go
 
 
+	# --- 60: defined func type variable producing a file -----------------
+	# type F func() *os.File (a defined type, not a type alias) must
+	# resolve as a file producer for package vars and parameters.
+	cat > internal/reader/gatemut_deffn.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn3 func() *os.File
+
+var getDef2 fileFn3
+
+func init() {
+	getDef2 = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_deffn.go
+	cp internal/reader/metadata.go "$self_tree/meta60.orig"
+	INS='zr = getDef2()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta60.new" && mv "$self_tree/meta60.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getDef2()' internal/reader/metadata.go; then
+		run_mut "defined func type variable producing a file"
+	else
+		echo "self-test ERROR: form 60 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta60.orig" internal/reader/metadata.go
+
+	# --- 61: func-valued return through a same-package helper ------------
+	# A helper returning a func() *os.File (which itself may come from a
+	# defined func type) must keep the producer taint across the call.
+	cat > internal/reader/gatemut_funcret.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn5 func() *os.File
+
+func useDef2(g fileFn5) fileFn5 { return g }
+
+var getDef3 fileFn5
+
+func init() {
+	getDef3 = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_funcret.go
+	cp internal/reader/metadata.go "$self_tree/meta61.orig"
+	INS='g := useDef2(getDef3)
+	h := g()
+	zr = h'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta61.new" && mv "$self_tree/meta61.new" internal/reader/metadata.go
+	if grep -Fq 'zr = h' internal/reader/metadata.go; then
+		run_mut "func-valued return through a same-package helper"
+	else
+		echo "self-test ERROR: form 61 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta61.orig" internal/reader/metadata.go
+
+	# --- 62: type-switch bound defined-func-type case --------------------
+	# switch v := x.(type) { case fileFn4: zr = v() } binds v to a
+	# file-producing func type; the bound name must enter funcFile so the
+	# call result stays tainted.
+	cat > internal/reader/gatemut_tsfunc.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFn4 func() *os.File
+
+var anyFn any
+
+func init() {
+	anyFn = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_tsfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta62.orig"
+	INS='switch v := anyFn.(type) { case fileFn4: zr = v() }'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta62.new" && mv "$self_tree/meta62.new" internal/reader/metadata.go
+	if grep -Fq 'zr = v()' internal/reader/metadata.go; then
+		run_mut "type-switch bound defined-func-type case"
+	else
+		echo "self-test ERROR: form 62 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta62.orig" internal/reader/metadata.go
+
+	# --- 63: benign defined func type returning a reader must pass -------
+	# Identical registration shape to form 60 but the func returns
+	# *bytes.Reader: no *os.File anywhere, the gate must stay silent.
+	cat > internal/reader/gatemut_benignfn.go <<'MUTEOF'
+package reader
+
+import "bytes"
+
+type brFn func() *bytes.Reader
+
+var getBR brFn
+
+func init() { getBR = func() *bytes.Reader { return bytes.NewReader(nil) } }
+MUTEOF
+	add_mut internal/reader/gatemut_benignfn.go
+	cp internal/reader/metadata.go "$self_tree/meta63.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = getBR()"; next } print }' internal/reader/metadata.go > "$self_tree/meta63.new" && mv "$self_tree/meta63.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getBR()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign defined func type passes the gate"
+		else
+			echo "self-test MISS: benign defined func type failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 63 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta63.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1305,7 +1434,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 56 mutation forms rejected)"
+	echo "import-graph self-test passed (all 59 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
