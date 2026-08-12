@@ -5,12 +5,14 @@
 Status: in-progress
 
 Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
-corpus cross-open); six-agent review rounds 1-3 complete with all P0-P2
-findings fixed and regression-pinned (see execution log and milestone report
-sections 11c-11d); borrow-count view lifetime implemented; the closed-state
-error-class choice (HandleClosed vs WrongState), the deletion set, and the
-worker boundary remain pending user decisions; no tracked deletion applied
-yet.
+corpus cross-open); the six-agent review gate is CLOSED - the external-audit
+round-4 pass and its three follow-up rounds (mapping identity recheck,
+per-leaf batched blob reads, NameNotFound mid-open) are all regression-pinned
+and all six reviewers PASS at HEAD 2a03554 with no P0-P2 findings (execution
+log below; report sections 11c-11h); borrow-count view lifetime implemented;
+the closed-state error-class choice (HandleClosed vs WrongState), the
+deletion set, and the worker boundary remain pending user decisions; no
+tracked deletion applied yet.
 
 ## Requirements
 

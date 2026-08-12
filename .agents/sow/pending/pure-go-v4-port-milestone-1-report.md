@@ -711,7 +711,10 @@ correction, darwin EINTR parity, and the two requested regression tests);
 section 11g records the round-4 membership follow-up (per-leaf batched
 blob reads, failing pre-fix on the two-leaf fixture); section 11h records
 the round-4 mapping P2 follow-up (deleted-mid-open NameNotFound parity)
-and the report-record corrections. The
+and the report-record corrections. The round-4 external audit and its
+three follow-up rounds end with all six reviewers PASS at HEAD 2a03554,
+no P0-P2 findings remaining; Milestone 1 satisfies its acceptance
+criteria and the review gate. The
 same-failure searches (content-transfer, page arrays, stale constants,
 PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
 tree: none present. Next milestone is safe to start once the three pending
