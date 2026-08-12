@@ -104,12 +104,20 @@ func mustOpen(t *testing.T, rel string) *ImmutableReader {
 	return db
 }
 
-// mustClose asserts that Close succeeds; a leaked view would make it report
+// mustClose asserts that Close succeeds; a leaked pin would make it report
 // ErrorHandleBusy and fail the cleanup.
 func mustClose(t *testing.T, db *ImmutableReader) {
 	t.Helper()
 	if err := db.Close(); err != nil {
 		t.Errorf("close: %v", err)
+	}
+}
+
+// mustClosePin asserts that a pin closes exactly once.
+func mustClosePin(t *testing.T, pin *Pin) {
+	t.Helper()
+	if err := pin.Close(); err != nil {
+		t.Errorf("pin close: %v", err)
 	}
 }
 
@@ -235,6 +243,11 @@ func TestConformanceRustFixtures(t *testing.T) {
 		t.Run(tc.File, func(t *testing.T) {
 			db := mustOpen(t, tc.File)
 			t.Cleanup(func() { mustClose(t, db) })
+			pin, err := db.Pin()
+			if err != nil {
+				t.Fatal("pin:", err)
+			}
+			t.Cleanup(func() { mustClosePin(t, pin) })
 			info, err := db.Info()
 			if err != nil {
 				t.Fatal(err)
@@ -542,9 +555,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 				var ok bool
 				var err error
 				if tc.Family == "ipv4" {
-					view, ok, err = db.LookupMembershipV4(IPv4(from4))
+					view, ok, err = pin.LookupMembershipV4(IPv4(from4))
 				} else {
-					view, ok, err = db.LookupMembershipV6(IPv6{Hi: fh, Lo: fl})
+					view, ok, err = pin.LookupMembershipV6(IPv6{Hi: fh, Lo: fl})
 				}
 				if err != nil || !ok {
 					t.Errorf("membership %s: %v %v", mr.From, ok, err)
@@ -555,12 +568,11 @@ func TestConformanceRustFixtures(t *testing.T) {
 				if tc.Family == "ipv4" {
 					mid4 = from4 + (addressBytes4To(mr.To)-from4)/2
 					if mid4 != from4 {
-						v2, ok2, err2 := db.LookupMembershipV4(IPv4(mid4))
+						v2, ok2, err2 := pin.LookupMembershipV4(IPv4(mid4))
 						if err2 != nil || !ok2 {
 							t.Errorf("membership mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
-						view.Release() // the first view is superseded
 						view = v2
 					}
 				} else {
@@ -570,12 +582,11 @@ func TestConformanceRustFixtures(t *testing.T) {
 						midHi++
 					}
 					if fh != th || fl+1 != tl {
-						v2, ok2, err2 := db.LookupMembershipV6(IPv6{Hi: midHi, Lo: midLo})
+						v2, ok2, err2 := pin.LookupMembershipV6(IPv6{Hi: midHi, Lo: midLo})
 						if err2 != nil || !ok2 {
 							t.Errorf("membership v6 mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
-						view.Release() // the first view is superseded
 						view = v2
 					}
 				}
@@ -589,7 +600,6 @@ func TestConformanceRustFixtures(t *testing.T) {
 						t.Errorf("membership %s lacks feed %s", mr.From, feed)
 					}
 				}
-				defer view.Release()
 				// A declared feed that is not listed for this range must be
 				// absent from this range's bitmap.
 				listed := map[uint32]bool{}
@@ -617,8 +627,12 @@ func TestConformanceRustFixtures(t *testing.T) {
 					}
 				}
 				wantWords := int(maxBit/64 + 1)
-				if int(view.WordCount()) != wantWords {
-					t.Errorf("membership %s word count %d want %d", mr.From, view.WordCount(), wantWords)
+				gotWords, err := view.WordCount()
+				if err != nil {
+					t.Fatal("word count:", err)
+				}
+				if int(gotWords) != wantWords {
+					t.Errorf("membership %s word count %d want %d", mr.From, gotWords, wantWords)
 				}
 				words := make([]uint64, wantWords)
 				n, err := view.ReadWords(0, words)
@@ -647,10 +661,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 			if len(tc.MembershipRanges) > 0 {
 				probeMembership := func(hi, lo uint64) bool {
 					if tc.Family == "ipv4" {
-						_, ok, err := db.LookupMembershipV4(IPv4(uint32(lo)))
+						_, ok, err := pin.LookupMembershipV4(IPv4(uint32(lo)))
 						return err != nil || ok
 					}
-					_, ok, err := db.LookupMembershipV6(IPv6{Hi: hi, Lo: lo})
+					_, ok, err := pin.LookupMembershipV6(IPv6{Hi: hi, Lo: lo})
 					return err != nil || ok
 				}
 				first, last := tc.MembershipRanges[0], tc.MembershipRanges[len(tc.MembershipRanges)-1]
@@ -692,15 +706,14 @@ func TestConformanceRustFixtures(t *testing.T) {
 				var ok bool
 				var err error
 				if tc.Family == "ipv4" {
-					view, ok, err = db.LookupNetworkEnrichmentV1V4(IPv4(from4))
+					view, ok, err = pin.LookupNetworkEnrichmentV1V4(IPv4(from4))
 				} else {
-					view, ok, err = db.LookupNetworkEnrichmentV1V6(IPv6{Hi: fh, Lo: fl})
+					view, ok, err = pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: fh, Lo: fl})
 				}
 				if err != nil || !ok {
 					t.Errorf("structured %s: %v %v", sr.From, ok, err)
 					continue
 				}
-				defer view.Release()
 				val, err := view.Value()
 				if err != nil {
 					t.Fatal("structure value:", err)
@@ -736,7 +749,6 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("structured %s lacks threat feed %s", sr.From, feed)
 						}
 					}
-					threat.Release()
 				}
 			}
 
@@ -747,10 +759,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 			if len(tc.StructuredRanges) > 0 {
 				probeStructured := func(hi, lo uint64) bool {
 					if tc.Family == "ipv4" {
-						_, ok, err := db.LookupNetworkEnrichmentV1V4(IPv4(uint32(lo)))
+						_, ok, err := pin.LookupNetworkEnrichmentV1V4(IPv4(uint32(lo)))
 						return err != nil || ok
 					}
-					_, ok, err := db.LookupNetworkEnrichmentV1V6(IPv6{Hi: hi, Lo: lo})
+					_, ok, err := pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: hi, Lo: lo})
 					return err != nil || ok
 				}
 				first, last := tc.StructuredRanges[0], tc.StructuredRanges[len(tc.StructuredRanges)-1]
@@ -886,7 +898,7 @@ func TestWrongAPIModeProbes(t *testing.T) {
 	type probe struct {
 		file      string
 		name      string
-		run       func(db *ImmutableReader) error
+		run       func(db *ImmutableReader, pin *Pin) error
 		wantCode  ErrorCode
 		pointless bool
 	}
@@ -908,77 +920,75 @@ func TestWrongAPIModeProbes(t *testing.T) {
 	}
 	probes := []probe{
 		// direct-ipv4.iprdb: kind Direct, family IPv4.
-		{"direct-ipv4.iprdb", "direct-v4-ok", func(db *ImmutableReader) error {
+		{"direct-ipv4.iprdb", "direct-v4-ok", func(db *ImmutableReader, pin *Pin) error {
 			_, _, err := db.LookupDirectV4(ip4)
 			return err
 		}, 0, true},
-		{"direct-ipv4.iprdb", "direct-v6-on-v4", func(db *ImmutableReader) error {
+		{"direct-ipv4.iprdb", "direct-v6-on-v4", func(db *ImmutableReader, pin *Pin) error {
 			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupDirectV6(ip6); return e })
 		}, ErrorWrongAddressFamily, false},
-		{"direct-ipv4.iprdb", "membership-on-direct", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		{"direct-ipv4.iprdb", "membership-on-direct", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := pin.LookupMembershipV4(ip4); return e })
 		}, ErrorWrongValueKind, false},
-		{"direct-ipv4.iprdb", "feed-on-direct", func(db *ImmutableReader) error {
+		{"direct-ipv4.iprdb", "feed-on-direct", func(db *ImmutableReader, pin *Pin) error {
 			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupFeed("feed-000"); return e })
 		}, ErrorWrongValueKind, false},
-		{"direct-ipv4.iprdb", "scan-v6-on-v4", func(db *ImmutableReader) error {
+		{"direct-ipv4.iprdb", "scan-v6-on-v4", func(db *ImmutableReader, pin *Pin) error {
 			return possible(db, ErrorWrongAddressFamily, func() error { return db.DirectRangesV6(func(DirectRangeV6) error { return nil }) })
 		}, ErrorWrongAddressFamily, false},
-		{"direct-ipv4.iprdb", "enrichment-on-direct", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := db.LookupNetworkEnrichmentV1V4(ip4); return e })
+		{"direct-ipv4.iprdb", "enrichment-on-direct", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := pin.LookupNetworkEnrichmentV1V4(ip4); return e })
 		}, ErrorWrongStructureKind, false},
 		// first-seen-ipv6.iprdb: kind Direct, family IPv6.
-		{"first-seen-ipv6.iprdb", "direct-v4-on-v6", func(db *ImmutableReader) error {
+		{"first-seen-ipv6.iprdb", "direct-v4-on-v6", func(db *ImmutableReader, pin *Pin) error {
 			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupDirectV4(ip4); return e })
 		}, ErrorWrongAddressFamily, false},
-		{"first-seen-ipv6.iprdb", "direct-v6-ok", func(db *ImmutableReader) error {
+		{"first-seen-ipv6.iprdb", "direct-v6-ok", func(db *ImmutableReader, pin *Pin) error {
 			_, _, err := db.LookupDirectV6(ip6)
 			return err
 		}, 0, true},
 		// membership-ipv4.iprdb: kind Membership, family IPv4.
-		{"membership-ipv4.iprdb", "direct-on-membership", func(db *ImmutableReader) error {
+		{"membership-ipv4.iprdb", "direct-on-membership", func(db *ImmutableReader, pin *Pin) error {
 			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupDirectV4(ip4); return e })
 		}, ErrorWrongValueKind, false},
-		{"membership-ipv4.iprdb", "membership-ok", func(db *ImmutableReader) error {
-			view, found, err := db.LookupMembershipV4(ip4)
+		{"membership-ipv4.iprdb", "membership-ok", func(db *ImmutableReader, pin *Pin) error {
+			_, found, err := pin.LookupMembershipV4(ip4)
 			if err != nil || !found {
 				return fmt.Errorf("expected bitmap, got %v %v", found, err)
 			}
-			view.Release()
 			return nil
 		}, 0, true},
-		{"membership-ipv4.iprdb", "membership-v6-on-v4", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupMembershipV6(ip6); return e })
+		{"membership-ipv4.iprdb", "membership-v6-on-v4", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := pin.LookupMembershipV6(ip6); return e })
 		}, ErrorWrongAddressFamily, false},
-		{"membership-ipv4.iprdb", "feed-ok", func(db *ImmutableReader) error {
+		{"membership-ipv4.iprdb", "feed-ok", func(db *ImmutableReader, pin *Pin) error {
 			_, _, err := db.LookupFeed("feed-000")
 			return err
 		}, 0, true},
-		{"membership-ipv4.iprdb", "enrichment-on-membership", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := db.LookupNetworkEnrichmentV1V4(ip4); return e })
+		{"membership-ipv4.iprdb", "enrichment-on-membership", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongStructureKind, func() error { _, _, e := pin.LookupNetworkEnrichmentV1V4(ip4); return e })
 		}, ErrorWrongStructureKind, false},
 		// membership-ipv6.iprdb: kind Membership, family IPv6.
-		{"membership-ipv6.iprdb", "membership-v4-on-v6", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		{"membership-ipv6.iprdb", "membership-v4-on-v6", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := pin.LookupMembershipV4(ip4); return e })
 		}, ErrorWrongAddressFamily, false},
 		// structured-ipv4.iprdb: kind Structured + NetworkEnrichmentV1, family IPv4.
-		{"structured-ipv4.iprdb", "membership-on-structured", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongValueKind, func() error { _, _, e := db.LookupMembershipV4(ip4); return e })
+		{"structured-ipv4.iprdb", "membership-on-structured", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongValueKind, func() error { _, _, e := pin.LookupMembershipV4(ip4); return e })
 		}, ErrorWrongValueKind, false},
-		{"structured-ipv4.iprdb", "enrichment-ok", func(db *ImmutableReader) error {
-			view, found, err := db.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000)) // 10.1.0.0
+		{"structured-ipv4.iprdb", "enrichment-ok", func(db *ImmutableReader, pin *Pin) error {
+			_, found, err := pin.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000)) // 10.1.0.0
 			if err != nil || !found {
 				return fmt.Errorf("expected view, got %v %v", found, err)
 			}
-			view.Release()
 			return nil
 		}, 0, true},
-		{"structured-ipv4.iprdb", "feed-on-structured", func(db *ImmutableReader) error {
+		{"structured-ipv4.iprdb", "feed-on-structured", func(db *ImmutableReader, pin *Pin) error {
 			_, _, err := db.LookupFeed("botnet")
 			return err
 		}, 0, true},
-		{"structured-ipv4.iprdb", "enrichment-v6-on-structured-v4", func(db *ImmutableReader) error {
-			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := db.LookupNetworkEnrichmentV1V6(ip6); return e })
+		{"structured-ipv4.iprdb", "enrichment-v6-on-structured-v4", func(db *ImmutableReader, pin *Pin) error {
+			return possible(db, ErrorWrongAddressFamily, func() error { _, _, e := pin.LookupNetworkEnrichmentV1V6(ip6); return e })
 		}, ErrorWrongAddressFamily, false},
 	}
 	for _, p := range probes {
@@ -988,7 +998,12 @@ func TestWrongAPIModeProbes(t *testing.T) {
 				t.Fatal("open:", err)
 			}
 			defer db.Close()
-			err = p.run(db)
+			pin, err := db.Pin()
+			if err != nil {
+				t.Fatal("pin:", err)
+			}
+			defer pin.Close()
+			err = p.run(db, pin)
 			if p.pointless {
 				if err != nil {
 					t.Fatal("expected nil:", err)
@@ -1002,66 +1017,78 @@ func TestWrongAPIModeProbes(t *testing.T) {
 	}
 }
 
-// TestHandleLifetime pins the handle contract: views are children of the
-// reader; a reader with a live view returns ErrorHandleBusy on Close, and a
-// released view reports ErrorHandleClosed on every operation.
+// TestHandleLifetime pins the pin contract: a reader with a live pin
+// returns ErrorHandleBusy on Close; after the pin is closed the reader
+// closes cleanly; a second Close reports WrongState; view operations
+// through a closed pin report WrongState.
 func TestHandleLifetime(t *testing.T) {
 	r := mustOpen(t, "rust/membership-ipv4.iprdb")
-	view, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
+	pin, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	view, found, err := pin.LookupMembershipV4(IPv4(0x0a000000))
 	if err != nil || !found {
 		t.Fatalf("lookup: %v %v", found, err)
 	}
 	if err := r.Close(); err == nil {
-		t.Fatal("close with live view must report ErrorHandleBusy")
+		t.Fatal("close with live pin must report ErrorHandleBusy")
 	} else if fe := errorAsCode(err); fe != ErrorHandleBusy {
 		t.Fatalf("code %v want %d", err, ErrorHandleBusy)
 	}
-	// The view still works while the reader is open.
+	// The view still works while the pin is open.
 	if _, err := view.ContainsIndex(0); err != nil {
 		t.Fatal("view after busy close:", err)
 	}
-	view.Release()
+	if err := pin.Close(); err != nil {
+		t.Fatal("pin close:", err)
+	}
+	// A second pin close reports WrongState.
+	if fe := errorAsCode(pin.Close()); fe != ErrorWrongState {
+		t.Fatalf("second pin close code %v want %d", fe, ErrorWrongState)
+	}
+	// View operations through the closed pin report WrongState.
+	if _, _, err := view.Word(0); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("view after pin close: %v", err)
+	}
 	if err := r.Close(); err != nil {
-		t.Fatal("close after release:", err)
+		t.Fatal("close after pin:", err)
 	}
 	// Double close.
-	if fe := errorAsCode(r.Close()); fe != ErrorHandleClosed {
-		t.Fatalf("double close code %v want %d", fe, ErrorHandleClosed)
+	if fe := errorAsCode(r.Close()); fe != ErrorWrongState {
+		t.Fatalf("double close code %v want %d", fe, ErrorWrongState)
 	}
 }
 
 // TestOperationsAfterClose pins the reader-after-close contract: every
-// public operation on a successfully closed reader reports the typed
-// ErrorHandleClosed instead of crashing (the Rust borrow checker encodes
-// this statically; the C ABI checks its handle registry).
+// reader-level operation on a closed reader reports WrongState, Pin reports
+// WrongState, and pin-level lookups on a pin of a closed reader are
+// impossible because Pin refuses first.
 func TestOperationsAfterClose(t *testing.T) {
 	db := mustOpen(t, "rust/direct-ipv4.iprdb")
 	if err := db.Close(); err != nil {
 		t.Fatal("close:", err)
 	}
-	if _, _, err := db.LookupDirectV4(IPv4(0x0a00000a)); errorAsCode(err) != ErrorHandleClosed {
+	if _, _, err := db.LookupDirectV4(IPv4(0x0a00000a)); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("direct after close: %v", err)
 	}
-	if _, _, err := db.LookupMembershipV4(IPv4(0x0a000000)); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("membership after close: %v", err)
-	}
-	if _, _, err := db.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000)); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("structured after close: %v", err)
-	}
-	if _, _, err := db.LookupFeed("feed-000"); errorAsCode(err) != ErrorHandleClosed {
+	if _, _, err := db.LookupFeed("feed-000"); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("feed after close: %v", err)
 	}
-	if err := db.DirectRangesV4(func(DirectRangeV4) error { return nil }); errorAsCode(err) != ErrorHandleClosed {
+	if err := db.DirectRangesV4(func(DirectRangeV4) error { return nil }); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("scan after close: %v", err)
 	}
-	if _, _, err := db.MetadataJSON(); errorAsCode(err) != ErrorHandleClosed {
+	if _, _, err := db.MetadataJSON(); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("metadata after close: %v", err)
 	}
-	if _, err := db.Cardinality(); errorAsCode(err) != ErrorHandleClosed {
+	if _, err := db.Cardinality(); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("cardinality after close: %v", err)
 	}
-	if _, err := db.Info(); errorAsCode(err) != ErrorHandleClosed {
+	if _, err := db.Info(); errorAsCode(err) != ErrorWrongState {
 		t.Fatalf("info after close: %v", err)
+	}
+	if _, err := db.Pin(); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("pin after close: %v", err)
 	}
 }
 
@@ -1074,33 +1101,79 @@ func errorAsCode(err error) ErrorCode {
 	return 0
 }
 
-// TestReleasedViewRejectsOperations pins ErrorHandleClosed on every view
-// operation after release. A threat view derived from a structured view is
-// an independent handle (like the Rust borrow contract: dropping the parent
-// does not invalidate the child); it must be released on its own.
-func TestReleasedViewRejectsOperations(t *testing.T) {
+// TestClosedPinViewRejectsOperations pins WrongState on every view operation
+// after its pin is closed. A threat view derived from a structured view
+// shares the same pin and stays valid while the pin is open.
+func TestClosedPinViewRejectsOperations(t *testing.T) {
 	r := mustOpen(t, "rust/structured-ipv4.iprdb")
-	view, found, err := r.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
+	pin, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	view, found, err := pin.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
 	if err != nil || !found {
 		t.Fatalf("lookup: %v %v", found, err)
 	}
-	// Registered threat view.
 	threat, err := view.ThreatMembership()
 	if err != nil {
 		t.Fatal("threat:", err)
 	}
-	// Releasing the parent does not invalidate the independently registered
-	// threat handle; the parent's own operations report HandleClosed.
-	view.Release()
-	if _, err := view.Value(); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("value after release: %v", err)
-	}
 	if _, err := threat.ContainsIndex(0); err != nil {
-		t.Fatalf("threat after parent release must stay alive: %v", err)
+		t.Fatalf("threat through live pin: %v", err)
 	}
-	threat.Release()
-	if _, err := threat.ContainsIndex(0); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("threat after its own release: %v", err)
+	if err := pin.Close(); err != nil {
+		t.Fatal("pin close:", err)
+	}
+	if _, err := view.Value(); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("value after pin close: %v", err)
+	}
+	if _, err := threat.ContainsIndex(0); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("threat after pin close: %v", err)
+	}
+}
+
+// TestViewCopiesSharePin pins the copy semantics of views: Go values are
+// copyable, and every copy of one view shares the same pin, so copies never
+// double-release anything (there is no per-view release). A fresh live view
+// still prevents Close through its pin (HandleBusy), and closing the pin
+// invalidates every copy with WrongState.
+func TestViewCopiesSharePin(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	pin, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	v1, found, err := pin.LookupMembershipV4(IPv4(0x0a000000))
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	v2 := v1 // copy shares the same pin
+	if _, _, err := v2.Word(0); err != nil {
+		t.Fatalf("copy word: %v", err)
+	}
+	// A second pin still blocks Close; the copied views changed nothing.
+	pin2, err := r.Pin()
+	if err != nil {
+		t.Fatal("second pin:", err)
+	}
+	if err := r.Close(); errorAsCode(err) != ErrorHandleBusy {
+		t.Fatalf("close with live pins: %v", err)
+	}
+	if err := pin2.Close(); err != nil {
+		t.Fatal("pin2 close:", err)
+	}
+	if err := pin.Close(); err != nil {
+		t.Fatal("pin close:", err)
+	}
+	// Every copy of the view reports WrongState after the pin is closed.
+	if _, _, err := v1.Word(0); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("original after pin close: %v", err)
+	}
+	if _, _, err := v2.Word(0); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("copy after pin close: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close after pins: %v", err)
 	}
 }
 
@@ -1113,44 +1186,5 @@ func TestScanCallbackErrorPassthrough(t *testing.T) {
 	err := r.DirectRangesV4(func(DirectRangeV4) error { return sentinel })
 	if err != sentinel {
 		t.Fatalf("callback error rewritten: %v", err)
-	}
-}
-
-// TestViewCopySharesOneBorrow pins the copy-safety contract of public views:
-// Go values are copyable, so copies of one view must share a single borrow.
-// Releasing both copies (before or after each other) returns the borrow
-// exactly once: a fresh live view must still prevent Close (HandleBusy), and
-// operations on the released copies report HandleClosed — never a use of the
-// closed mapping.
-func TestViewCopySharesOneBorrow(t *testing.T) {
-	r := mustOpen(t, "rust/membership-ipv4.iprdb")
-	v1, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
-	if err != nil || !found {
-		t.Fatalf("lookup: %v %v", found, err)
-	}
-	v2 := v1 // copy shares the same borrow
-	v1.Release()
-	v2.Release() // no-op: the borrow was already returned
-
-	// Any copy of the released view is inert.
-	if _, _, err := v2.Word(0); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("released copy word: %v", err)
-	}
-	if _, _, err := v1.Word(0); errorAsCode(err) != ErrorHandleClosed {
-		t.Fatalf("released original word: %v", err)
-	}
-
-	// A new live view still blocks Close: the double release above must not
-	// have left the reader believing no views exist.
-	v3, found, err := r.LookupMembershipV4(IPv4(0x0a000000))
-	if err != nil || !found {
-		t.Fatalf("second lookup: %v %v", found, err)
-	}
-	if err := r.Close(); errorAsCode(err) != ErrorHandleBusy {
-		t.Fatalf("close with live view: %v", err)
-	}
-	v3.Release()
-	if err := r.Close(); err != nil {
-		t.Fatalf("close after release: %v", err)
 	}
 }

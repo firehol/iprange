@@ -6,12 +6,22 @@ import (
 )
 
 // Warm successful point lookups and cursor steps must allocate zero Go heap
-// bytes (acceptance criterion). Every operation below is warmed before the
-// measured run; AllocsPerRun must report exactly zero.
+// bytes (acceptance criterion; decision 4A). Every operation below runs
+// through a pin created outside the measured loop, is warmed before the
+// measured run, and AllocsPerRun must report exactly zero.
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join("..", "conformance", "rust", name)
+}
+
+func openPublic(t *testing.T, name string) *ImmutableReader {
+	t.Helper()
+	db, err := OpenImmutable(fixture(t, name))
+	if err != nil {
+		t.Fatal("open:", err)
+	}
+	return db
 }
 
 func TestZeroAllocationLookups(t *testing.T) {
@@ -26,6 +36,26 @@ func TestZeroAllocationLookups(t *testing.T) {
 	structured := openPublic(t, "structured-ipv4.iprdb")
 	defer structured.Close()
 
+	pins := map[string]*Pin{}
+	for name, db := range map[string]*ImmutableReader{
+		"member":     member,
+		"member6":    member6,
+		"structured": structured,
+	} {
+		pin, err := db.Pin()
+		if err != nil {
+			t.Fatal("pin:", err)
+		}
+		pins[name] = pin
+		defer pin.Close()
+	}
+	memberPin := pins["member"]
+	member6Pin := pins["member6"]
+	structuredPin := pins["structured"]
+
+	// IPv64 pairs exercise the full 2^128 span on the v6 fixtures.
+	type IPv64 struct{ hi, lo uint64 }
+
 	probe := []IPv4{
 		IPv4(0x0a00000a), IPv4(0x0a00000e), IPv4(0x0a00000f), IPv4(0x0a000011),
 		IPv4(0x0a000012), IPv4(0x0a000015), IPv4(0x0a00001c), IPv4(0x0a00001f),
@@ -38,24 +68,27 @@ func TestZeroAllocationLookups(t *testing.T) {
 	// Warm.
 	for _, ip := range probe {
 		direct.LookupDirectV4(ip)
-		member.LookupMembershipV4(ip)
-		structured.LookupNetworkEnrichmentV1V4(ip)
+		memberPin.LookupMembershipV4(ip)
+		structuredPin.LookupNetworkEnrichmentV1V4(ip)
 	}
 	for _, ip := range probe64 {
 		v6.LookupDirectV6(IPv6{Hi: ip.hi, Lo: ip.lo})
-		member6.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo})
+		member6Pin.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo})
 	}
-	direct.LookupFeed("feed-000")
-	member.LookupFeed("feed-000")
-	view, _, _ := member.LookupMembershipV4(IPv4(0x0a000000))
+	memberPin.LookupFeedInto("feed-000", make([]byte, 16))
+	view, _, _ := memberPin.LookupMembershipV4(IPv4(0x0a000000))
 	view.ContainsIndex(0)
+	words := make([]uint64, 8)
+	view.ReadWords(0, words)
+
+	// One feed-name buffer reused across the measured loop.
+	feedBuf := make([]byte, 16)
 
 	checks := []struct {
-		name  string
-		views int // live views created per fn() run; each pins exactly one guard alloc
-		fn    func() error
+		name string
+		fn   func() error
 	}{
-		{"direct-v4", 0, func() error {
+		{"direct-v4", func() error {
 			for _, ip := range probe {
 				if _, _, err := direct.LookupDirectV4(ip); err != nil {
 					return err
@@ -63,7 +96,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"direct-v6", 0, func() error {
+		{"direct-v6", func() error {
 			for _, ip := range probe64 {
 				if _, _, err := v6.LookupDirectV6(IPv6{Hi: ip.hi, Lo: ip.lo}); err != nil {
 					return err
@@ -71,32 +104,34 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-v4", 12, func() error {
+		{"direct-scan", func() error {
+			return direct.DirectRangesV4(func(DirectRangeV4) error { return nil })
+		}},
+		{"direct-cardinality", func() error {
+			_, err := direct.Cardinality()
+			return err
+		}},
+		{"membership-v4", func() error {
 			for _, ip := range probe {
-				view, _, err := member.LookupMembershipV4(ip)
-				if err != nil {
+				if _, _, err := memberPin.LookupMembershipV4(ip); err != nil {
 					return err
 				}
-				view.Release()
 			}
 			return nil
 		}},
-		{"membership-v6-inline", 4, func() error {
+		{"membership-v6-inline", func() error {
 			for _, ip := range probe64 {
-				view, _, err := member6.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo})
-				if err != nil {
+				if _, _, err := member6Pin.LookupMembershipV6(IPv6{Hi: ip.hi, Lo: ip.lo}); err != nil {
 					return err
 				}
-				view.Release()
 			}
 			return nil
 		}},
-		{"membership-contains", 1, func() error {
-			view, _, err := member.LookupMembershipV4(IPv4(0x0a000000))
+		{"membership-contains", func() error {
+			view, _, err := memberPin.LookupMembershipV4(IPv4(0x0a000000))
 			if err != nil {
 				return err
 			}
-			defer view.Release()
 			for _, idx := range []uint32{0, 5, 63, 64, 69, 1, 2} {
 				if _, err := view.ContainsIndex(idx); err != nil {
 					return err
@@ -104,96 +139,71 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
-		{"membership-word", 1, func() error {
-			view, _, err := member6.LookupMembershipV6(IPv6{Hi: 0, Lo: 0})
+		{"membership-word", func() error {
+			view, _, err := member6Pin.LookupMembershipV6(IPv6{Hi: 0, Lo: 0})
 			if err != nil {
 				return err
 			}
-			defer view.Release()
-			for i := uint32(0); i < view.WordCount() && i < 4; i++ {
+			for i := uint32(0); i < 4; i++ {
 				if _, _, err := view.Word(i); err != nil {
 					return err
 				}
 			}
 			return nil
 		}},
-		{"structured-v4", 12, func() error {
+		{"membership-readwords", func() error {
+			view, _, err := memberPin.LookupMembershipV4(IPv4(0x0a000000))
+			if err != nil {
+				return err
+			}
+			_, err = view.ReadWords(0, words)
+			return err
+		}},
+		{"structured-v4", func() error {
 			for _, ip := range probe {
-				view, _, err := structured.LookupNetworkEnrichmentV1V4(ip)
+				view, found, err := structuredPin.LookupNetworkEnrichmentV1V4(ip)
 				if err != nil {
 					return err
 				}
-				view.Release()
-			}
-			return nil
-		}},
-		{"feed-lookup", 0, func() error {
-			// The only heap allocation in the public feed lookup is the
-			// returned Go string copy of the name (the internal mapped path
-			// allocates nothing and is pinned by the reader package's own
-			// zero-allocation test).
-			for i := 0; i < 70; i++ {
-				if _, _, err := member.LookupFeed("feed-000"); err != nil {
+				if !found {
+					continue
+				}
+				if _, err := view.Value(); err != nil {
 					return err
 				}
 			}
 			return nil
 		}},
-		{"direct-scan", 0, func() error {
-			// Full ascending scan of the direct fixture.
-			return direct.DirectRangesV4(func(DirectRangeV4) error { return nil })
-		}},
-		{"direct-cardinality", 0, func() error {
-			_, err := direct.Cardinality()
+		{"structured-threat", func() error {
+			view, _, err := structuredPin.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
+			if err != nil {
+				return err
+			}
+			threat, err := view.ThreatMembership()
+			if err != nil {
+				return err
+			}
+			_, err = threat.ContainsIndex(0)
 			return err
+		}},
+		{"feed-lookup-into", func() error {
+			if _, _, err := memberPin.LookupFeedInto("feed-000", feedBuf); err != nil {
+				return err
+			}
+			return nil
 		}},
 	}
 	for _, check := range checks {
 		check := check
 		t.Run(check.name, func(t *testing.T) {
-			allocs := testing.AllocsPerRun(200, func() {
+			allocs := testing.AllocsPerRun(400, func() {
 				if err := check.fn(); err != nil {
 					t.Fatal(err)
 				}
 			})
-			switch {
-			case check.name == "feed-lookup":
-				// The public facade allocates exactly one heap object per
-				// lookup: the returned name string copy. The internal mapped
-				// path allocates nothing and is pinned by the reader
-				// package's own zero-allocation test.
-				if allocs/70 > 1 {
-					t.Errorf("%s allocated %f heap bytes per run (want exactly one copy per lookup)", check.name, allocs)
-				}
-			case check.views > 0:
-				// Lookups that return a live view allocate exactly one small
-				// view guard per created view: Go values are copyable, and a
-				// shared guard is what makes copies of one view safe (a
-				// released flag inside the value would let two copies
-				// double-release one borrow and defeat the HandleBusy
-				// contract). The mapped traversal itself allocates nothing.
-				if allocs/float64(check.views) > 1 {
-					t.Errorf("%s allocated %f heap bytes per run (want exactly one guard per view)", check.name, allocs)
-				}
-			default:
-				if allocs != 0 {
-					t.Errorf("%s allocated %f heap bytes per run", check.name, allocs)
-				}
+			if allocs != 0 {
+				t.Errorf("%s allocated %f heap bytes per run (contract: exactly zero)", check.name, allocs)
 			}
 		})
 	}
-}
-
-func openPublic(t *testing.T, name string) *ImmutableReader {
-	t.Helper()
-	db, err := OpenImmutable(fixture(t, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return db
-}
-
-// IPv64 mirrors the v6 probe addresses without depending on the public type.
-type IPv64 struct {
-	hi, lo uint64
 }

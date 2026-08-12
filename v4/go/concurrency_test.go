@@ -30,7 +30,7 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 			const rounds = 500
 			ops := []struct {
 				name string
-				fn   func() error
+				fn   func(p *Pin) error
 			}{}
 			directV4 := info.ValueKind == ValueKindDirect && info.Family == AddressFamilyIPv4
 			directV6 := info.ValueKind == ValueKindDirect && info.Family == AddressFamilyIPv6
@@ -40,15 +40,15 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 				ops = append(ops,
 					struct {
 						name string
-						fn   func() error
-					}{"direct-v4", func() error {
+						fn   func(p *Pin) error
+					}{"direct-v4", func(p *Pin) error {
 						_, _, err := db.LookupDirectV4(IPv4(0x0a00000a))
 						return err
 					}},
 					struct {
 						name string
-						fn   func() error
-					}{"direct-scan", func() error {
+						fn   func(p *Pin) error
+					}{"direct-scan", func(p *Pin) error {
 						return db.DirectRangesV4(func(DirectRangeV4) error { return nil })
 					}},
 				)
@@ -56,8 +56,8 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 			if directV6 {
 				ops = append(ops, struct {
 					name string
-					fn   func() error
-				}{"direct-v6", func() error {
+					fn   func(p *Pin) error
+				}{"direct-v6", func(p *Pin) error {
 					_, _, err := db.LookupDirectV6(IPv6{Hi: 1, Lo: 2})
 					return err
 				}})
@@ -65,14 +65,16 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 			if member && info.Family == AddressFamilyIPv4 {
 				ops = append(ops, struct {
 					name string
-					fn   func() error
-				}{"membership-v4", func() error {
-					view, found, err := db.LookupMembershipV4(IPv4(0x0a000000))
+					fn   func(p *Pin) error
+				}{"membership-v4", func(p *Pin) error {
+					view, found, err := p.LookupMembershipV4(IPv4(0x0a000000))
 					if err != nil {
 						return err
 					}
 					if found {
-						view.Release()
+						if _, err := view.ContainsIndex(0); err != nil {
+							return err
+						}
 					}
 					return nil
 				}})
@@ -80,14 +82,16 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 			if member && info.Family == AddressFamilyIPv6 {
 				ops = append(ops, struct {
 					name string
-					fn   func() error
-				}{"membership-v6", func() error {
-					view, found, err := db.LookupMembershipV6(IPv6{Hi: 0, Lo: 0})
+					fn   func(p *Pin) error
+				}{"membership-v6", func(p *Pin) error {
+					view, found, err := p.LookupMembershipV6(IPv6{Hi: 0, Lo: 0})
 					if err != nil {
 						return err
 					}
 					if found {
-						view.Release()
+						if _, err := view.ContainsIndex(0); err != nil {
+							return err
+						}
 					}
 					return nil
 				}})
@@ -95,14 +99,16 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 			if structured {
 				ops = append(ops, struct {
 					name string
-					fn   func() error
-				}{"structured-v4", func() error {
-					view, found, err := db.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
+					fn   func(p *Pin) error
+				}{"structured-v4", func(p *Pin) error {
+					view, found, err := p.LookupNetworkEnrichmentV1V4(IPv4(0x0a010000))
 					if err != nil {
 						return err
 					}
 					if found {
-						view.Release()
+						if _, err := view.Value(); err != nil {
+							return err
+						}
 					}
 					return nil
 				}})
@@ -116,9 +122,17 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 				wg.Add(1)
 				go func(w int) {
 					defer wg.Done()
+					// One pin per goroutine, outside the hot loop
+					// (decision 4A): lookups inside take no atomics.
+					pin, err := db.Pin()
+					if err != nil {
+						errs <- err
+						return
+					}
+					defer pin.Close()
 					op := ops[w%len(ops)]
 					for i := 0; i < rounds; i++ {
-						if err := op.fn(); err != nil {
+						if err := op.fn(pin); err != nil {
 							errs <- err
 							return
 						}
@@ -139,19 +153,27 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 	}
 }
 
-// TestConcurrentViewCreateRelease hammers view registration while lookups
-// run; any per-view shared mutable state would show up as a race here.
-func TestConcurrentViewCreateRelease(t *testing.T) {
+// TestConcurrentPinnedLookups hammers pinned lookups and view operations
+// from per-goroutine pins; any per-call shared mutable state would show up
+// as a race here (design-iprange-engine.md: lookups run without a per-call
+// mutex, atomic, or active counter).
+func TestConcurrentPinnedLookups(t *testing.T) {
 	db := mustOpen(t, "rust/membership-ipv4.iprdb")
 	const workers = 8
 	const rounds = 1000
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
+			pin, err := db.Pin()
+			if err != nil {
+				t.Error("pin:", err)
+				return
+			}
+			defer pin.Close()
 			for i := 0; i < rounds; i++ {
-				view, found, err := db.LookupMembershipV4(IPv4(uint32(0x0a000000 + i%256)))
+				view, found, err := pin.LookupMembershipV4(IPv4(uint32(0x0a000000 + i%256)))
 				if err != nil {
 					t.Error("lookup:", err)
 					return
@@ -161,12 +183,10 @@ func TestConcurrentViewCreateRelease(t *testing.T) {
 				}
 				if _, err := view.ContainsIndex(uint32(i % 70)); err != nil {
 					t.Error("contains:", err)
-					view.Release()
 					return
 				}
-				view.Release()
 			}
-		}()
+		}(w)
 	}
 	wg.Wait()
 	if err := db.Close(); err != nil {

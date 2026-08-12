@@ -8,19 +8,16 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
-// This file is the milestone-1 public immutable reader facade. It reuses the
-// verified scalar aliases (IPv4, IPv6, Cardinality129, ValueTag, ErrorCode)
-// from the existing public package and adds the structured value kind, the
-// missing error codes 65-69, and the reader surface. The old scalar files are
-// deleted only when the reset lands (approved by the user after milestone-1
-// evidence); until then the aliases are the transfer point.
+// This file is the milestone-1 public immutable reader facade: a pinned
+// reader surface whose lookups, scans, and view operations are zero-
+// allocation and zero-atomic inside the hot loop (SOW-0025:175;
+// design-iprange-engine.md: warm lookups allocate nothing and run without a
+// per-call mutex, atomic, or active counter). Lifetime state lives at pin
+// boundaries (Pin/Close), never in lookups.
 
-// ValueKindStructured is the meta value-kind value for structured files.
-const ValueKindStructured = ValueKind(3)
-
-// Error codes 65-69 complete the exact 1-69 table. Codes 1-64 live in the
-// existing errors.go; the milestone-0 review established that code 46's Go
-// name is obsolete (the wire value is authoritative and unchanged).
+// Error codes 65-69 complete the exact 1-69 table. Codes 1-64 live in
+// errors.go; code 46's Go name is obsolete (the wire value is authoritative
+// and unchanged).
 const (
 	ErrorFaultWorkerUnavailable ErrorCode = 65 + iota
 	ErrorFaultWorkerFailed
@@ -38,8 +35,7 @@ const (
 	StructureKindNetworkEnrichmentV1 StructureKind = 1
 )
 
-// DirectSemantic is the engine-defined semantic of one direct database,
-// derived from its exact value tag.
+// DirectSemantic classifies the direct value tag.
 type DirectSemantic uint8
 
 const (
@@ -95,26 +91,25 @@ var (
 	lastSeenTag  = [16]byte{0x6c, 0x61, 0x73, 0x74, 0x5f, 0x73, 0x65, 0x65, 0x6e}
 )
 
-// shared is the reader-wide lifetime state. Lookups and scans on an open
-// reader are concurrent-safe and synchronize nothing in their traversal
-// (design-iprange-engine.md: concurrent lookups and independent scans without
-// a per-call mutex, atomic, or active counter). The only shared state is the
-// close flag and the public child-view count, and they are only ever touched
-// at view boundaries and Close — the same guard layer the frozen Rust C ABI
-// imposes around the sync-free engine (iprange-capi reader view handles).
-// Callers must not race Close with reader work (spec:401).
+// shared is the reader-wide lifetime state. Lookups and scans synchronize
+// nothing: they read the plain closedState mirror, which is written only by
+// Close, and the documented contract is that Close must not race reader work
+// (design-iprange-engine.md; binary-format-v4.md). Atomically visible state
+// exists only at pin boundaries and Close.
 type shared struct {
-	closed atomic.Bool
-	views  atomic.Int64 // live public views derived from this reader
+	closed      atomic.Bool // closed transitions only inside Close/Pin
+	closedState bool        // plain mirror for zero-atomic lookups
+	pins        atomic.Int64
 }
 
 // ImmutableReader is one opened immutable v4 database.
 //
-// Concurrent lookups and scans are safe. Close must not race reader work:
-// call Close only after all concurrent operations joined. A reader with live
-// views cannot close: Close returns ErrorHandleBusy until every view is
-// released (binary-format-v4.md: handles are children of the reader). Any
-// operation on a closed reader reports ErrorHandleClosed instead of crashing.
+// Reader-level operations (Info, direct lookups and scans, cardinality,
+// feed lookup, metadata) are zero-allocation and take no atomics; they
+// report WrongState when the reader is closed. Callers must not race Close
+// with reader work. A reader with live pins cannot close: Close returns
+// ErrorHandleBusy until every pin is closed. A second Close reports
+// ErrorWrongState.
 type ImmutableReader struct {
 	inner *reader.ImmutableReader
 	sh    *shared
@@ -130,39 +125,19 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	return &ImmutableReader{inner: inner, sh: &shared{}}, nil
 }
 
-// ensureOpen guards every public entry point: after a successful Close the
-// mapping is gone, and any later operation must report a typed HandleClosed
-// error (the Rust borrow checker encodes this statically; the C ABI checks
-// its handle registry per call — this single atomic load is the Go analog).
-func (r *ImmutableReader) ensureOpen() error {
-	if r.sh.closed.Load() {
-		return &Error{Code: ErrorHandleClosed, Detail: "reader closed"}
+// checkOpen is the plain closed-state read used by every reader-level
+// operation: zero atomics per call, valid because Close must not race
+// reader work (the same contract as the Rust SDK).
+func (r *ImmutableReader) checkOpen() error {
+	if r.sh.closedState {
+		return &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
 	return nil
 }
 
-// Close releases the mapping and shared lifetime lock. It returns
-// ErrorHandleBusy while public views derived from this reader are still
-// alive (release them first), ErrorHandleClosed after a successful close,
-// and never unmaps while any view could still touch the mapping.
-func (r *ImmutableReader) Close() error {
-	if r.sh.closed.Swap(true) {
-		return &Error{Code: ErrorHandleClosed, Detail: "reader already closed"}
-	}
-	if r.sh.views.Load() > 0 {
-		r.sh.closed.Store(false)
-		return &Error{Code: ErrorHandleBusy, Detail: "live views still held"}
-	}
-	if err := r.inner.Close(); err != nil {
-		r.sh.closed.Store(false)
-		return publicError(err)
-	}
-	return nil
-}
-
-// Info returns the public identity of the selected generation.
+// Info returns the selected generation's logical identity.
 func (r *ImmutableReader) Info() (ImmutableInfo, error) {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return ImmutableInfo{}, err
 	}
 	meta := r.inner.Meta()
@@ -237,9 +212,69 @@ func (r *ImmutableReader) requireMembershipCapable() error {
 	return nil
 }
 
+// Close releases the mapping. A reader with live pins reports HandleBusy
+// without closing; a second Close reports WrongState. Close must not race
+// reader work.
+func (r *ImmutableReader) Close() error {
+	r.sh.closedState = true
+	if !r.sh.closed.CompareAndSwap(false, true) {
+		return &Error{Code: ErrorWrongState, Detail: "reader already closed"}
+	}
+	if r.sh.pins.Load() != 0 {
+		r.sh.closed.Store(false)
+		r.sh.closedState = false
+		return &Error{Code: ErrorHandleBusy, Detail: "reader has live pins"}
+	}
+	return r.inner.Close()
+}
+
+// Pin registers one caller-owned lifetime pin. Pin once outside the
+// workload: one pin may be shared across concurrent immutable lookups, and
+// lookups through the pin allocate nothing and take no atomics. The reader
+// cannot close while any pin exists (Close reports HandleBusy). Pin.Close
+// must not race lookups using the pin.
+func (r *ImmutableReader) Pin() (*Pin, error) {
+	if r.sh.closed.Load() {
+		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
+	}
+	r.sh.pins.Add(1)
+	// A Close that raced this Pin either saw the added pin (HandleBusy) or
+	// closed first; the second check makes the loser return WrongState
+	// instead of pinning a closed reader.
+	if r.sh.closed.Load() {
+		r.sh.pins.Add(-1)
+		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
+	}
+	return &Pin{r: r}, nil
+}
+
+// Pin is one caller-owned lifetime registration. It is not copied: create
+// one Pin per goroutine or workload section and close it exactly once.
+type Pin struct {
+	r      *ImmutableReader
+	closed bool // plain state; Pin.Close must not race pin operations
+}
+
+// Close returns the pin to its reader. A second Close reports WrongState.
+func (p *Pin) Close() error {
+	if p.closed {
+		return &Error{Code: ErrorWrongState, Detail: "pin already closed"}
+	}
+	p.closed = true
+	p.r.sh.pins.Add(-1)
+	return nil
+}
+
+func (p *Pin) checkOpen() error {
+	if p.closed {
+		return &Error{Code: ErrorWrongState, Detail: "pin closed"}
+	}
+	return nil
+}
+
 // LookupDirectV4 returns the direct value covering ip, or false when absent.
 func (r *ImmutableReader) LookupDirectV4(ip IPv4) (uint32, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return 0, false, err
 	}
 	if err := r.requireDirect(4); err != nil {
@@ -254,7 +289,7 @@ func (r *ImmutableReader) LookupDirectV4(ip IPv4) (uint32, bool, error) {
 
 // LookupDirectV6 returns the direct value covering ip, or false when absent.
 func (r *ImmutableReader) LookupDirectV6(ip IPv6) (uint32, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return 0, false, err
 	}
 	if err := r.requireDirect(6); err != nil {
@@ -281,7 +316,7 @@ type DirectRangeV6 struct {
 // DirectRangesV4 visits every committed IPv4 range record in ascending order.
 // Errors returned by yield stop the scan and pass through unchanged.
 func (r *ImmutableReader) DirectRangesV4(yield func(DirectRangeV4) error) error {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return err
 	}
 	if err := r.requireDirect(4); err != nil {
@@ -298,7 +333,7 @@ func (r *ImmutableReader) DirectRangesV4(yield func(DirectRangeV4) error) error 
 // DirectRangesV6 visits every committed IPv6 range record in ascending order.
 // Errors returned by yield stop the scan and pass through unchanged.
 func (r *ImmutableReader) DirectRangesV6(yield func(DirectRangeV6) error) error {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return err
 	}
 	if err := r.requireDirect(6); err != nil {
@@ -315,7 +350,7 @@ func (r *ImmutableReader) DirectRangesV6(yield func(DirectRangeV6) error) error 
 // Cardinality returns the exact inclusive address count of the selected
 // generation.
 func (r *ImmutableReader) Cardinality() (Cardinality129, error) {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return Cardinality129{}, err
 	}
 	value, err := r.inner.Cardinality()
@@ -325,15 +360,17 @@ func (r *ImmutableReader) Cardinality() (Cardinality129, error) {
 	return NewCardinality129(value.Bit128(), value.Hi(), value.Lo())
 }
 
-// FeedEntry is one catalog entry.
+// FeedEntry is one catalog entry. The name is a copied entry
+// (binary-format-v4.md: exact name lookup as copied {name,index}); the
+// zero-allocation feed lookup is Pin.LookupFeedInto.
 type FeedEntry struct {
 	Index uint32
 	Name  string
 }
 
-// LookupFeed returns the catalog entry for one exact feed name.
+// LookupFeed returns the copied catalog entry for one exact feed name.
 func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+	if err := r.checkOpen(); err != nil {
 		return FeedEntry{}, false, err
 	}
 	// The name is validated before the kind check, mirroring
@@ -355,57 +392,82 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 	return FeedEntry{Index: entry.FeedIndex, Name: string(entry.Name)}, true, nil
 }
 
-// viewGuard is the shared release state of one logical view borrow. Go
-// values are freely copyable, so the released flag cannot live in the view
-// value: every copy of one view shares this guard, and Release marks the
-// single borrow released exactly once. Without the guard, releasing two
-// copies of one view decremented the reader's child count twice, letting a
-// later Close succeed while a live child still existed.
-type viewGuard struct {
-	sh   *shared
-	done atomic.Bool
+// FeedInfo is the zero-allocation feed lookup result: the name bytes are
+// written into the caller's buffer, and NameLen reports the canonical name
+// length (also the required buffer size when BufferTooSmall is returned).
+type FeedInfo struct {
+	Index   uint32
+	NameLen int
 }
 
-// MembershipView exposes one canonical membership bitmap. The view borrows
-// the reader and keeps its mapping alive: Release returns the borrow (the
-// reader then reports ErrorHandleClosed on the released value, and a reader
-// with unreleased views reports ErrorHandleBusy on Close). Copies of a view
-// share the same borrow: releasing either copy (or both) releases the one
-// borrow, and the released state is visible to every copy. Using a released
-// view reports ErrorHandleClosed. The zero MembershipView (absent
-// membership) is inert.
+// LookupFeedInto writes the catalog entry name for one exact feed into dst.
+// It performs no heap allocation. A dst shorter than the canonical name
+// reports BufferTooSmall with the required size in FeedInfo.NameLen.
+func (p *Pin) LookupFeedInto(name string, dst []byte) (FeedInfo, bool, error) {
+	if err := p.checkOpen(); err != nil {
+		return FeedInfo{}, false, err
+	}
+	if !format.FeedNameValidString(name) {
+		return FeedInfo{}, false, &Error{Code: ErrorNameInvalid, Detail: "invalid feed name"}
+	}
+	if err := p.r.requireMembershipCapable(); err != nil {
+		return FeedInfo{}, false, err
+	}
+	entry, found, err := p.r.inner.LookupFeed(name)
+	if err != nil {
+		return FeedInfo{}, false, publicError(err)
+	}
+	if !found {
+		return FeedInfo{}, false, nil
+	}
+	info := FeedInfo{Index: entry.FeedIndex, NameLen: len(entry.Name)}
+	if len(dst) < len(entry.Name) {
+		return info, false, &Error{Code: ErrorBufferTooSmall, Detail: "feed name buffer too small"}
+	}
+	copy(dst, entry.Name)
+	return info, true, nil
+}
+
+// MetadataJSON returns the exact decompressed opaque metadata bytes. present
+// is false when metadata is absent; empty bytes with present true are the
+// distinct empty state.
+func (r *ImmutableReader) MetadataJSON() ([]byte, bool, error) {
+	if err := r.checkOpen(); err != nil {
+		return nil, false, err
+	}
+	bytes, present, err := r.inner.ReadMetadataJSON()
+	if err != nil {
+		return nil, false, publicError(err)
+	}
+	return bytes, present, nil
+}
+
+// MembershipView exposes one canonical membership bitmap as a lightweight
+// value. The view is valid while its pin remains open; no per-view release
+// exists (decision 4A). A view derived from a closed pin reports WrongState.
+// The zero MembershipView is inert and reports WrongState.
 type MembershipView struct {
-	guard *viewGuard
+	p     *Pin
 	inner reader.MembershipView
 }
 
-func (v *MembershipView) check() error {
-	if v.guard == nil || v.guard.done.Load() {
-		return &Error{Code: ErrorHandleClosed, Detail: "view released or reader closed"}
+func (v MembershipView) check() error {
+	if v.p == nil || v.p.closed {
+		return &Error{Code: ErrorWrongState, Detail: "membership view without a live pin"}
 	}
 	return nil
 }
 
-// Release returns the view to its reader. Idempotent per logical borrow,
-// even when the same view was copied: the shared guard makes the second
-// release a no-op.
-func (v *MembershipView) Release() {
-	if v.guard == nil || !v.guard.done.CompareAndSwap(false, true) {
-		return
-	}
-	v.guard.sh.views.Add(-1)
-}
-
 // WordCount returns the canonical bitmap word count.
-func (v *MembershipView) WordCount() uint32 {
+func (v MembershipView) WordCount() (uint32, error) {
 	if err := v.check(); err != nil {
-		return 0
+		return 0, err
 	}
-	return v.inner.WordCount()
+	return v.inner.WordCount(), nil
 }
 
 // Word returns word i of the bitmap, or false when out of range.
-func (v *MembershipView) Word(i uint32) (uint64, bool, error) {
+func (v MembershipView) Word(i uint32) (uint64, bool, error) {
 	if err := v.check(); err != nil {
 		return 0, false, err
 	}
@@ -420,7 +482,7 @@ func (v *MembershipView) Word(i uint32) (uint64, bool, error) {
 // returns the copied count; start above the canonical length is
 // InvalidArgument. The bitmap is never materialized: the output is the
 // caller's buffer (binary-format-v4.md: caller-buffer batched word reads).
-func (v *MembershipView) ReadWords(start uint32, output []uint64) (int, error) {
+func (v MembershipView) ReadWords(start uint32, output []uint64) (int, error) {
 	if err := v.check(); err != nil {
 		return 0, err
 	}
@@ -433,7 +495,7 @@ func (v *MembershipView) ReadWords(start uint32, output []uint64) (int, error) {
 
 // ContainsIndex reports whether the feed at feedIndex is a member. An index
 // at or beyond this generation's feed index limit is InvalidArgument.
-func (v *MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
+func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 	if err := v.check(); err != nil {
 		return false, err
 	}
@@ -444,49 +506,44 @@ func (v *MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 	return has, nil
 }
 
-// needsRelease reports whether a found view must be released later.
-func (r *ImmutableReader) holdView() {
-	r.sh.views.Add(1)
-}
-
-// LookupMembershipV4 returns the membership bitmap covering ip. The view
-// must be released when done; it keeps the mapping alive until then.
-func (r *ImmutableReader) LookupMembershipV4(ip IPv4) (MembershipView, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+// LookupMembershipV4 returns the membership bitmap covering ip through the
+// pin. Zero allocations, zero atomics; the view is valid while pin stays
+// open.
+func (p *Pin) LookupMembershipV4(ip IPv4) (MembershipView, bool, error) {
+	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := r.requireMembership(4); err != nil {
+	if err := p.r.requireMembership(4); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := r.inner.LookupMembership4(uint32(ip))
+	view, found, err := p.r.inner.LookupMembership4(uint32(ip))
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
 	if !found {
 		return MembershipView{}, false, nil
 	}
-	r.holdView()
-	return MembershipView{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
+	return MembershipView{p: p, inner: view}, true, nil
 }
 
-// LookupMembershipV6 returns the membership bitmap covering ip. The view
-// must be released when done; it keeps the mapping alive until then.
-func (r *ImmutableReader) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+// LookupMembershipV6 returns the membership bitmap covering ip through the
+// pin. Zero allocations, zero atomics; the view is valid while pin stays
+// open.
+func (p *Pin) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
+	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := r.requireMembership(6); err != nil {
+	if err := p.r.requireMembership(6); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := r.inner.LookupMembership6(ip.Hi, ip.Lo)
+	view, found, err := p.r.inner.LookupMembership6(ip.Hi, ip.Lo)
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
 	if !found {
 		return MembershipView{}, false, nil
 	}
-	r.holdView()
-	return MembershipView{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
+	return MembershipView{p: p, inner: view}, true, nil
 }
 
 // NetworkEnrichmentV1 is one decoded network_enrichment_v1 payload.
@@ -500,32 +557,23 @@ type NetworkEnrichmentV1 struct {
 	HasLocation           bool
 }
 
-// NetworkEnrichmentV1View is a logical handle to one structured entry. Like
-// MembershipView it borrows the reader: Release it when done. The zero view
-// (absent entry) is inert.
+// NetworkEnrichmentV1View is a lightweight value exposing one structured
+// entry. The view is valid while its pin remains open; no per-view release
+// exists. The zero view reports WrongState.
 type NetworkEnrichmentV1View struct {
-	guard *viewGuard
+	p     *Pin
 	inner reader.NetworkEnrichmentV1View
 }
 
-func (v *NetworkEnrichmentV1View) check() error {
-	if v.guard == nil || v.guard.done.Load() {
-		return &Error{Code: ErrorHandleClosed, Detail: "view released or reader closed"}
+func (v NetworkEnrichmentV1View) check() error {
+	if v.p == nil || v.p.closed {
+		return &Error{Code: ErrorWrongState, Detail: "enrichment view without a live pin"}
 	}
 	return nil
 }
 
-// Release returns the view to its reader. Idempotent per logical borrow,
-// even when the same view was copied (see MembershipView.Release).
-func (v *NetworkEnrichmentV1View) Release() {
-	if v.guard == nil || !v.guard.done.CompareAndSwap(false, true) {
-		return
-	}
-	v.guard.sh.views.Add(-1)
-}
-
 // Value decodes the structured payload.
-func (v *NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
+func (v NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
 	if err := v.check(); err != nil {
 		return NetworkEnrichmentV1{}, err
 	}
@@ -544,10 +592,9 @@ func (v *NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
 	}, nil
 }
 
-// ThreatMembership returns the linked membership bitmap, or a zero view when
-// the payload has no threat membership. The returned view is a separately
-// held borrow: release it when done.
-func (v *NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
+// ThreatMembership returns the linked membership bitmap through the same
+// pin, or a zero view when the payload has no threat membership.
+func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
 	if err := v.check(); err != nil {
 		return MembershipView{}, err
 	}
@@ -558,62 +605,45 @@ func (v *NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
 	if err != nil {
 		return MembershipView{}, publicError(err)
 	}
-	v.guard.sh.views.Add(1)
-	return MembershipView{guard: &viewGuard{sh: v.guard.sh}, inner: view}, nil
+	return MembershipView{p: v.p, inner: view}, nil
 }
 
-// LookupNetworkEnrichmentV1V4 returns the structured value covering ip. The
-// view must be released when done.
-func (r *ImmutableReader) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmentV1View, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+// LookupNetworkEnrichmentV1V4 returns the structured value covering ip
+// through the pin. Zero allocations, zero atomics.
+func (p *Pin) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmentV1View, bool, error) {
+	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := r.requireNetworkEnrichment(4); err != nil {
+	if err := p.r.requireNetworkEnrichment(4); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := r.inner.LookupNetworkEnrichmentV14(uint32(ip))
+	view, found, err := p.r.inner.LookupNetworkEnrichmentV14(uint32(ip))
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}
 	if !found {
 		return NetworkEnrichmentV1View{}, false, nil
 	}
-	r.holdView()
-	return NetworkEnrichmentV1View{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
+	return NetworkEnrichmentV1View{p: p, inner: view}, true, nil
 }
 
-// LookupNetworkEnrichmentV1V6 returns the structured value covering ip. The
-// view must be released when done.
-func (r *ImmutableReader) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmentV1View, bool, error) {
-	if err := r.ensureOpen(); err != nil {
+// LookupNetworkEnrichmentV1V6 returns the structured value covering ip
+// through the pin. Zero allocations, zero atomics.
+func (p *Pin) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmentV1View, bool, error) {
+	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := r.requireNetworkEnrichment(6); err != nil {
+	if err := p.r.requireNetworkEnrichment(6); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := r.inner.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
+	view, found, err := p.r.inner.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}
 	if !found {
 		return NetworkEnrichmentV1View{}, false, nil
 	}
-	r.holdView()
-	return NetworkEnrichmentV1View{guard: &viewGuard{sh: r.sh}, inner: view}, true, nil
-}
-
-// MetadataJSON returns the exact decompressed opaque metadata bytes. present
-// is false when metadata is absent; empty bytes with present true are the
-// distinct empty state.
-func (r *ImmutableReader) MetadataJSON() ([]byte, bool, error) {
-	if err := r.ensureOpen(); err != nil {
-		return nil, false, err
-	}
-	bytes, present, err := r.inner.ReadMetadataJSON()
-	if err != nil {
-		return nil, false, publicError(err)
-	}
-	return bytes, present, nil
+	return NetworkEnrichmentV1View{p: p, inner: view}, true, nil
 }
 
 // publicError converts internal typed errors into the public error type.
