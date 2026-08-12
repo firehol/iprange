@@ -20,9 +20,11 @@ cross-reader reassignment regression test; the records were corrected in
 the following commit. The round-12 final review then confirmed the
 lifetime fix but found two remaining P2: decision 5A still unratified,
 and the mmap source gate still bypassable (x/sys descriptor reads, bufio
-wrappers, dot imports, build-tagged packages). Both were fixed at HEAD
-4fdc671 with a whole-tree selector scan, dot-import and bufio import
-bans, a durable --self-test mode, and the runtime strace evidence below.
+wrappers, dot imports, build-tagged packages). The gate was fixed at
+HEAD 4fdc671 with a whole-tree selector scan, dot-import and bufio
+import bans, a durable --self-test mode, and the runtime strace
+evidence below; decision 5A was recorded for the user's ratification
+and remains open (a user decision, not a code fix).
 The round-13 final review then found three remaining P2 (decision 5A
 still unratified; the gate still accepted indirect content-transfer
 forms, its line-level exemption, and a windows-tagged internal-package
@@ -47,7 +49,23 @@ re-review made the exemptions exact literals (c.r.Read(p),
 c.r.ReadByte(), and the two io.ReadFull(zr, out[...int(meta.
 MetadataUncompressed)]) inflater reads) so same-named file-backed
 readers fail closed, added a self-test-residue sweep, and grew the
-self-test to thirty mutation forms (c03e40c). Decision 5A remains open
+self-test to thirty mutation forms (c03e40c). The sixth final review
+then failed with five P2 findings, all in the mmap gate and the records:
+split-after-the-dot selectors; type-blind exact-literal exemptions; the
+open-ended stdlib denylist (compress/gzip regex bug, log/slog,
+runtime/trace, os.StartProcess ProcAttr files); the destructive
+gatemut_* startup sweep; and completion claims ahead of the review
+trail. The gate was rewritten at HEAD c920fa0 as an AST, type-light scanner
+(v4/go-gate/main.go): it parses every production file, syntactically
+taints *os.File values, bans 37 content-transfer imports and 56
+selector families, constrains *os.File use to the mapping-lifecycle
+methods and same-package/module-internal/x-sys consumers, and exempts
+the three exact in-memory inflater nodes only with file-taint
+verification; the self-test now copies the module to a private temp
+directory and durably rejects forty mutation forms including all nine
+independent reproducers of the sixth review, the startup sweep is
+removed, and the records were corrected in the same pass (details in
+the close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
@@ -984,3 +1002,39 @@ Milestone 1 is reopened
 and Milestone 2 is blocked pending the independent re-review and the
 user's decision 5A. The worker boundary decision remains scheduled for
 its later milestone per 2A.
+
+The sixth final review then failed with five P2 findings, all in the mmap
+gate and the records: (1) selector splitting after the dot - `file.\n
+Read(p)` and `io.\nReadAll(f)` compile and bypass a line-oriented scan;
+(2) type-blind exact-literal exemptions - a struct whose `c.r` is
+`*os.File` using exactly `c.r.Read(p)`, and a function whose `zr` is
+`*os.File` using exactly `io.ReadFull(zr, out[:int(meta.
+MetadataUncompressed)])`, both pass the name-keyed blanking; (3) the
+open-ended stdlib denylist - the gzip regex never matches
+`compress/gzip`, and log/slog.NewTextHandler, runtime/trace.Start, and
+os.StartProcess with ProcAttr{Files: []*os.File} consume a file unseen;
+(4) the startup sweep deletes every path named `gatemut_*` before
+scanning, so a committed gatemut_hidden_linux.go violation is removed
+and the gate reports PASS (and untracked user work can be destroyed);
+(5) the records claim completion while the six-reviewer PASS at HEAD
+360130c is not recorded and round-12 wording says decision 5A was
+"fixed". The response (HEAD c920fa0) replaces the line-oriented text scan with the
+AST, type-light scanner at v4/go-gate/main.go (stdlib only): it parses
+every production file - build tags, line wrapping, comments, aliases,
+and file names are irrelevant to the token stream - syntactically taints
+`*os.File` values (declarations, parameters, os.Open*/os.Create
+producers, same-package constructors, struct fields), bans 37
+content-transfer imports and 56 selector families, permits `*os.File`
+values only into the mapping-lifecycle methods
+(Fd/Close/Name/Stat/Sync/Truncate/Chmod/Chown) and
+same-package/module-internal/x-sys consumers, and exempts the three
+exact in-memory inflater nodes only when their receiver/arguments are
+not file-tainted. The self-test now runs in a private temp copy (cp -a
+into mktemp): forty mutation forms are rejected, including all nine
+independent reproducers of this review; an innocent gatemut_-named file
+is proven to survive; the reviewed tree is never modified; and the
+startup sweep is removed. Decision 5A remains the single open item and
+awaits user ratification. Milestone 1 is reopened and Milestone 2 is
+blocked pending the independent re-review and the user's decision 5A.
+The worker boundary decision remains scheduled for its later milestone
+per 2A.

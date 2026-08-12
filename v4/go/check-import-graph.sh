@@ -15,25 +15,21 @@
 #     approved deletion set; no legacy transfer point remains.
 #
 # In addition to import boundaries, production sources are mechanically
-# banned from content-transfer I/O so the mmap-only contract cannot regress:
-#   - selector ban: any .Read/.Write/.Seek-family selector (direct calls,
-#     method values, function aliases, wrappers) anywhere in a production
-#     source file, including build-tagged files on every platform and files
-#     in packages added later (discovery is a whole-tree find, not a fixed
-#     directory list);
-#   - dot-import ban: a dot import hides the package qualifier from the
-#     selector scan;
-#   - buffered-IO import ban: bufio wraps *os.File reads behind methods the
-#     selector scan does not enumerate (Peek, NewReader, ...), and the
-#     SDK has no legitimate bufio use (metadata decompression uses flate
-#     over an in-memory reader, which is exempt);
-#   - stdlib syscall is banned everywhere (x/sys is the mapping owner's
-#     syscall surface), and the reader core carries no
-#     sync/sync/atomic/unsafe.
-#
-# In-memory decompression readers are exempt: the metadata inflater's
-# consumedReader reads a heap buffer, not SDK artifact content — the one
-# production .Read() call the tree allows.
+# banned from content-transfer I/O so the mmap-only contract cannot regress.
+# The content scan is AST-based (v4/go-gate/main.go, a stdlib-only tool):
+# it parses every non-test .go file — build tags, line wrapping, comments,
+# aliases, and file names are irrelevant to the token stream — and reports
+#   - banned content-transfer imports and dot imports;
+#   - banned selector call families (.Read/.Write/.Seek/..., reflection
+#     Call, decoders/encoders, fmt.Fscan*, x/sys descriptor variants); and
+#   - any *os.File value used outside the approved capability surface
+#     (mapping lifecycle methods and same-package / module-internal / x/sys
+#     consumers).
+# The three in-memory inflater nodes in internal/reader/metadata.go
+# (c.r.Read(p), c.r.ReadByte(), and the two exact
+# io.ReadFull(zr, out[...int(meta.MetadataUncompressed)]) shapes) are
+# exempted as exact call shapes and only when their receiver/arguments are
+# not file-tainted; a file-backed reproduction of the same text fails.
 #
 # The gate is a mechanical tripwire, not a proof: it catches the transfer
 # forms listed above. Runtime tracing of an actual open/lookup session
@@ -42,8 +38,13 @@
 # milestone report as the runtime half of the mmap-only evidence.
 #
 # Usage: ./check-import-graph.sh [--self-test]   (run from the v4/go
-# directory). --self-test creates temporary mutation packages, asserts the
-# gate rejects every one, removes them, and exits nonzero on any miss.
+# directory). --self-test copies the module into a private temporary
+# directory, asserts the gate rejects every mutation form there, and exits
+# nonzero on any miss. The self-test never writes to the reviewed tree:
+# there is no startup sweep and no reserved file name.
+#
+# The scanner tool lives outside this module (v4/go-gate) so the gate can
+# scan every file under v4/go without scanning itself.
 
 set -eu
 cd "$(dirname "$0")"
@@ -55,16 +56,29 @@ fi
 
 fail=0
 
-# The gatemut_* names are reserved for the self-test. A leftover from an
-# interrupted run would trip every selector and wedge the tree, so sweep
-# them once at startup. The self-test's inner gate runs disable the sweep
-# so the active mutation under test is never removed.
-if [ "${GATE_SWEEP_MUTATIONS:-1}" = "1" ]; then
-	if find . -maxdepth 3 -name 'gatemut_*' -print -quit | grep -q .; then
-		echo "removing stale self-test mutation artifacts (interrupted run)"
-		find . -maxdepth 3 -name 'gatemut_*' -exec rm -rf {} +
+# The AST content-transfer scanner. Built once per run into a private
+# temp path; inner self-test runs reuse it via GATE_SCANNER_BIN (they run
+# from a temp copy of the module, where the relative ../go-gate path does
+# not exist, so the build is skipped whenever the binary is supplied).
+scanner_bin=${GATE_SCANNER_BIN:-}
+if [ -z "$scanner_bin" ]; then
+	scanner_dir=$(cd "$PWD/../go-gate" && pwd)
+	scanner_bin=$(mktemp /tmp/iprange-gatescan.XXXXXX)
+	if ! go -C "$scanner_dir" build -o "$scanner_bin" .; then
+		echo "gate scanner build failed"
+		exit 1
 	fi
 fi
+
+cleanup() {
+	if [ -n "$scanner_bin" ] && [ -z "${GATE_SCANNER_BIN:-}" ]; then
+		rm -r "$scanner_bin" 2>/dev/null || true
+	fi
+	if [ -n "${self_tree:-}" ]; then
+		rm -r "$self_tree" 2>/dev/null || true
+	fi
+}
+trap cleanup EXIT INT TERM
 
 # per-package import list (every import on its own line; the first import is
 # NOT swallowed — a join without the ImportPath prefix)
@@ -124,93 +138,10 @@ for pkg in "github.com/firehol/iprange/v4/go/internal/format" \
 	fi
 done
 
-# strip_comments removes line and multi-line block comments while keeping
-# string literals intact (a "//" inside a double-quoted string or a raw
-# backtick string is data, not a comment), so a real content-transfer call
-# after a string containing "//" is still detected.
-strip_comments() {
-	awk '
-	function strip_line(line,   out, i, n, c) {
-		out = ""
-		n = length(line)
-		i = 1
-		while (i <= n) {
-			c = substr(line, i, 1)
-			if (inblock) {
-				if (c == "*" && substr(line, i + 1, 1) == "/") { inblock = 0; i += 2; continue }
-				i++; continue
-			}
-			if (in_str) {
-				out = out c
-				if (c == "\\") { out = out substr(line, i + 1, 1); i += 2; continue }
-				if (c == "\"") in_str = 0
-				i++; continue
-			}
-			if (in_raw) {
-				out = out c
-				if (c == "`") in_raw = 0
-				i++; continue
-			}
-			if (c == "/" && substr(line, i + 1, 1) == "*") { inblock = 1; i += 2; continue }
-			if (c == "/" && substr(line, i + 1, 1) == "/") { break }
-			if (c == "\"") in_str = 1
-			if (c == "`") in_raw = 1
-			out = out c
-			i++
-		}
-		return out
-	}
-	BEGIN { inblock = 0; in_str = 0; in_raw = 0 }
-	{ print strip_line($0) }
-	'
-}
-
-# content_violations prints every production source line, after comment
-# stripping, that either mentions a content-transfer selector, uses a dot
-# import, or imports bufio/io/ioutil. Discovery is a whole-tree find over
-# every .go file (excluding _test.go), so build-tagged files for other
-# platforms and packages added later are scanned regardless of the active
-# GOOS/GOARCH.
-content_violations() {
-	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
-		# The in-memory inflater's tolerated calls are blanked as exact
-		# literal nodes and nothing else: c.r.Read(p) / c.r.ReadByte()
-		# and the two io.ReadFull(zr, out[...int(meta.
-		# MetadataUncompressed)]) inflater reads. Exact literals cannot
-		# swallow a nested transfer or a same-named file-backed reader;
-		# any other shape (b[:], out[:n], a different receiver) stays
-		# visible and fails closed.
-		strip_comments < "$f" | sed -E \
-			-e 's/(c\.r\.Read\(p\)|c\.r\.ReadByte\(\))/ /g' \
-			-e 's/io\.ReadFull\(zr, out\[:int\(meta\.MetadataUncompressed\)\]\)/ /g' \
-			-e 's/io\.ReadFull\(zr, out\[int\(meta\.MetadataUncompressed\):\]\)/ /g' \
-			| sed "s@^@$f:@"
-	done
-}
-
-violations=$(content_violations)
-
-# Content-transfer selector ban: word boundary after each name catches
-# direct calls (f.Read(x)), method values (m := f.Read), function aliases
-# (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
-# The set covers the read/write/seek language API families including the
-# x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|ReadFull|ReadAtLeast|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|Print|Printf|Println|Scan|Scanln|Scanf|MethodByName|Method|Call|CallSlice|NewDecoder|Decode|Encode|WriteString|WriteRune|NewWriter|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
-	echo "content-transfer I/O violation in production sources"
-	fail=1
-fi
-
-# Dot-import ban: an unqualified call (ReadFile(path)) would hide its
-# package qualifier from the selector scan.
-if printf '%s\n' "$violations" | grep -E '^[^:]*:[[:space:]]*(import[[:space:]]*)?\.'; then
-	echo "dot-import violation in production sources"
-	fail=1
-fi
-
-# Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
-# behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart|mime/quotedprintable|log|text/template|text/tabwriter|html/template|os/exec|net/http|debug/buildinfo|debug/elf|debug/macho|debug/pe|debug/plan9obj|go/parser|go/scanner|text/scanner)"'; then
-	echo "buffered-IO import violation in production sources"
+# AST content-transfer scan: banned imports/selectors and the *os.File
+# capability surface, over every production file (all build contexts).
+if ! "$scanner_bin" .; then
+	echo "content-transfer violation in production sources"
 	fail=1
 fi
 
@@ -237,34 +168,45 @@ done
 
 if [ "$self_test" -eq 1 ]; then
 	# Durable mutation self-test: every transfer form below must make the
-	# gate fail. Each mutation is created, checked, and removed on its own
-	# so a miss points at exactly one form.
-	cleanup() {
-		rm -rf gatemut_readall gatemut_alias gatemut_methodval gatemut_seek \
-			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile \
-			gatemut_fscan gatemut_copyn gatemut_reflect gatemut_rawsys \
-			gatemut_cfr gatemut_exline gatemut_winint gatemut_decoder \
-			gatemut_writestr gatemut_nested gatemut_refmeth gatemut_readfull \
-			gatemut_readleast gatemut_logw gatemut_flatew \
-			gatemut_rfshadow gatemut_zrfile gatemut_crfile gatemut_zrout
-		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
-			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
-			gatemut_aliased_bufio.go
+	# gate fail. The module is copied to a private temp tree; each mutation
+	# is created, checked, and removed there, so the reviewed tree is never
+	# modified and a miss points at exactly one form. No file name is
+	# reserved: the gate must detect a gatemut_-named violation, not rely on
+	# a sweep deleting it.
+	self_tree=$(mktemp -d /tmp/iprange-gate-self.XXXXXX)
+	mkdir -p "$self_tree/go"
+	cp -a . "$self_tree/go"
+	cd "$self_tree/go"
+
+	muts=""
+	cleanup_muts() {
+		for m in $muts; do
+			rm -r "$m" 2>/dev/null || true
+		done
+		muts=""
 	}
-	trap cleanup EXIT INT TERM
 
 	mutfail=0
 
 	run_mut() {
 		name=$1
-		if GATE_SWEEP_MUTATIONS=0 ./check-import-graph.sh >/dev/null 2>&1; then
+		shift
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
 			echo "self-test MISS: mutation $name did not fail the gate"
 			mutfail=1
 		fi
-		cleanup
+		cleanup_muts
 	}
 
+	# Keep every mutation path in $muts so cleanup_muts removes exactly the
+	# files of the current mutation, leaving the next mutation a clean tree.
+	add_mut() {
+		muts="$muts $1"
+	}
+
+	# --- 1: direct io.ReadAll call ---------------------------------------
 	mkdir -p gatemut_readall
+	add_mut gatemut_readall
 	cat > gatemut_readall/mut.go <<'MUTEOF'
 package gatemut_readall
 
@@ -279,7 +221,9 @@ func use() { _, _ = io.ReadAll(file) }
 MUTEOF
 	run_mut "direct io.ReadAll call"
 
+	# --- 2: io.ReadAll function alias ------------------------------------
 	mkdir -p gatemut_alias
+	add_mut gatemut_alias
 	cat > gatemut_alias/mut.go <<'MUTEOF'
 package gatemut_alias
 
@@ -296,7 +240,9 @@ func use() { _, _ = rd(file) }
 MUTEOF
 	run_mut "io.ReadAll function alias"
 
+	# --- 3: os.File.Read method value ------------------------------------
 	mkdir -p gatemut_methodval
+	add_mut gatemut_methodval
 	cat > gatemut_methodval/mut.go <<'MUTEOF'
 package gatemut_methodval
 
@@ -310,7 +256,9 @@ func use() { var b []byte; _, _ = m(b) }
 MUTEOF
 	run_mut "os.File.Read method value"
 
+	# --- 4: os.File.Seek call --------------------------------------------
 	mkdir -p gatemut_seek
+	add_mut gatemut_seek
 	cat > gatemut_seek/mut.go <<'MUTEOF'
 package gatemut_seek
 
@@ -322,7 +270,9 @@ func use() { _, _ = file.Seek(0, 0) }
 MUTEOF
 	run_mut "os.File.Seek call"
 
+	# --- 5: os.ReadFile in a new package directory -----------------------
 	mkdir -p gatemut_newdir
+	add_mut gatemut_newdir
 	cat > gatemut_newdir/mut.go <<'MUTEOF'
 package gatemut_newdir
 
@@ -332,6 +282,7 @@ func read(p string) ([]byte, error) { return os.ReadFile(p) }
 MUTEOF
 	run_mut "os.ReadFile in a new package directory"
 
+	# --- 6: unix.Readv descriptor read in the mapping owner --------------
 	cat > internal/mapping/gatemut_readv.go <<'MUTEOF'
 package mapping
 
@@ -339,9 +290,12 @@ import "golang.org/x/sys/unix"
 
 func readv(fd int, b [][]byte) (int, error) { return unix.Readv(fd, b) }
 MUTEOF
+	add_mut internal/mapping/gatemut_readv.go
 	run_mut "unix.Readv descriptor read in the mapping owner"
 
+	# --- 7: bufio.NewReader(file).ReadByte ------------------------------
 	mkdir -p gatemut_bufio
+	add_mut gatemut_bufio
 	cat > gatemut_bufio/mut.go <<'MUTEOF'
 package gatemut_bufio
 
@@ -356,7 +310,9 @@ func use() (byte, error) { return bufio.NewReader(file).ReadByte() }
 MUTEOF
 	run_mut "bufio.NewReader(file).ReadByte"
 
+	# --- 8: dot-imported os.ReadFile -------------------------------------
 	mkdir -p gatemut_dotimport
+	add_mut gatemut_dotimport
 	cat > gatemut_dotimport/mut.go <<'MUTEOF'
 package gatemut_dotimport
 
@@ -366,6 +322,7 @@ func read(p string) ([]byte, error) { return ReadFile(p) }
 MUTEOF
 	run_mut "dot-imported os.ReadFile"
 
+	# --- 9: single-line bufio import with Peek ---------------------------
 	cat > gatemut_singleline_bufio.go <<'MUTEOF'
 package iprangedb
 
@@ -375,8 +332,10 @@ var br *bufio.Reader
 
 func peek() ([]byte, error) { return br.Peek(1) }
 MUTEOF
+	add_mut gatemut_singleline_bufio.go
 	run_mut "single-line bufio import with Peek"
 
+	# --- 10: aliased bufio import with Peek ------------------------------
 	cat > gatemut_aliased_bufio.go <<'MUTEOF'
 package iprangedb
 
@@ -386,9 +345,12 @@ var br *b.Reader
 
 func peek() ([]byte, error) { return br.Peek(1) }
 MUTEOF
+	add_mut gatemut_aliased_bufio.go
 	run_mut "aliased bufio import with Peek"
 
+	# --- 11: windows-only package with os.ReadFile -----------------------
 	mkdir -p gatemut_winfile
+	add_mut gatemut_winfile
 	cat > gatemut_winfile/mut.go <<'MUTEOF'
 //go:build windows
 
@@ -400,7 +362,9 @@ func read(p string) ([]byte, error) { return os.ReadFile(p) }
 MUTEOF
 	run_mut "windows-only package with os.ReadFile"
 
+	# --- 12: fmt.Fscan over a file ----------------------------------------
 	mkdir -p gatemut_fscan
+	add_mut gatemut_fscan
 	cat > gatemut_fscan/mut.go <<'MUTEOF'
 package gatemut_fscan
 
@@ -415,7 +379,9 @@ func use(x any) (int, error) { return fmt.Fscan(f, x) }
 MUTEOF
 	run_mut "fmt.Fscan over a file"
 
+	# --- 13: io.CopyN between files ---------------------------------------
 	mkdir -p gatemut_copyn
+	add_mut gatemut_copyn
 	cat > gatemut_copyn/mut.go <<'MUTEOF'
 package gatemut_copyn
 
@@ -431,7 +397,9 @@ func use() { _, _ = io.CopyN(d, f, 10) }
 MUTEOF
 	run_mut "io.CopyN between files"
 
+	# --- 14: reflection-invoked Read --------------------------------------
 	mkdir -p gatemut_reflect
+	add_mut gatemut_reflect
 	cat > gatemut_reflect/mut.go <<'MUTEOF'
 package gatemut_reflect
 
@@ -446,6 +414,7 @@ func use() { _ = reflect.ValueOf(f).MethodByName("Read").Call(nil) }
 MUTEOF
 	run_mut "reflection-invoked Read"
 
+	# --- 15: raw unix.Syscall(SYS_READ) in the mapping owner -------------
 	cat > internal/mapping/gatemut_rawsys.go <<'MUTEOF'
 package mapping
 
@@ -456,8 +425,10 @@ func rawRead(fd int) (int, error) {
 	return int(n), e
 }
 MUTEOF
+	add_mut internal/mapping/gatemut_rawsys.go
 	run_mut "raw unix.Syscall(SYS_READ) in the mapping owner"
 
+	# --- 16: unix.CopyFileRange in the mapping owner ---------------------
 	cat > internal/mapping/gatemut_cfr.go <<'MUTEOF'
 package mapping
 
@@ -467,9 +438,12 @@ func copyRange(a, b, n int) (int, error) {
 	return unix.CopyFileRange(a, nil, b, nil, n, 0)
 }
 MUTEOF
+	add_mut internal/mapping/gatemut_cfr.go
 	run_mut "unix.CopyFileRange in the mapping owner"
 
+	# --- 17: forbidden transfer sharing a line with a tolerated call -----
 	mkdir -p gatemut_exline
+	add_mut gatemut_exline
 	cat > gatemut_exline/mut.go <<'MUTEOF'
 package gatemut_exline
 
@@ -485,7 +459,9 @@ func use() {
 MUTEOF
 	run_mut "forbidden transfer sharing a line with a tolerated call"
 
+	# --- 18: windows-only package importing internal/mapping -------------
 	mkdir -p gatemut_winint
+	add_mut gatemut_winint
 	cat > gatemut_winint/mut.go <<'MUTEOF'
 //go:build windows
 
@@ -497,7 +473,9 @@ var _ = mapping.Mapping{}
 MUTEOF
 	run_mut "windows-only package importing internal/mapping"
 
+	# --- 19: encoding/json decoder over a file ---------------------------
 	mkdir -p gatemut_decoder
+	add_mut gatemut_decoder
 	cat > gatemut_decoder/mut.go <<'MUTEOF'
 package gatemut_decoder
 
@@ -512,7 +490,9 @@ func use() { var x any; _ = json.NewDecoder(f).Decode(&x) }
 MUTEOF
 	run_mut "encoding/json decoder over a file"
 
+	# --- 20: os.File.WriteString -----------------------------------------
 	mkdir -p gatemut_writestr
+	add_mut gatemut_writestr
 	cat > gatemut_writestr/mut.go <<'MUTEOF'
 package gatemut_writestr
 
@@ -524,7 +504,9 @@ func use() { _, _ = f.WriteString("payload") }
 MUTEOF
 	run_mut "os.File.WriteString"
 
+	# --- 21: nested transfer inside the tolerated call node --------------
 	mkdir -p gatemut_nested
+	add_mut gatemut_nested
 	cat > gatemut_nested/mut.go <<'MUTEOF'
 package gatemut_nested
 
@@ -542,7 +524,9 @@ func use() {
 MUTEOF
 	run_mut "forbidden transfer nested inside the tolerated call node"
 
+	# --- 22: reflection Method(i).Call ------------------------------------
 	mkdir -p gatemut_refmeth
+	add_mut gatemut_refmeth
 	cat > gatemut_refmeth/mut.go <<'MUTEOF'
 package gatemut_refmeth
 
@@ -557,7 +541,9 @@ func use() { _ = reflect.ValueOf(f).Method(2).Call(nil) }
 MUTEOF
 	run_mut "reflection Method(i).Call"
 
+	# --- 23: io.ReadFull over a file --------------------------------------
 	mkdir -p gatemut_readfull
+	add_mut gatemut_readfull
 	cat > gatemut_readfull/mut.go <<'MUTEOF'
 package gatemut_readfull
 
@@ -572,7 +558,9 @@ func use() { var b [10]byte; _, _ = io.ReadFull(f, b[:]) }
 MUTEOF
 	run_mut "io.ReadFull over a file"
 
+	# --- 24: io.ReadAtLeast over a file -----------------------------------
 	mkdir -p gatemut_readleast
+	add_mut gatemut_readleast
 	cat > gatemut_readleast/mut.go <<'MUTEOF'
 package gatemut_readleast
 
@@ -587,7 +575,9 @@ func use() { var b [10]byte; _, _ = io.ReadAtLeast(f, b[:], 1) }
 MUTEOF
 	run_mut "io.ReadAtLeast over a file"
 
+	# --- 25: log package writing to a file --------------------------------
 	mkdir -p gatemut_logw
+	add_mut gatemut_logw
 	cat > gatemut_logw/mut.go <<'MUTEOF'
 package gatemut_logw
 
@@ -602,7 +592,9 @@ func use() { log.New(f, "", 0).Println("payload") }
 MUTEOF
 	run_mut "log package writing to a file"
 
+	# --- 26: flate.NewWriter over a file ----------------------------------
 	mkdir -p gatemut_flatew
+	add_mut gatemut_flatew
 	cat > gatemut_flatew/mut.go <<'MUTEOF'
 package gatemut_flatew
 
@@ -617,7 +609,9 @@ func use() { w, _ := flate.NewWriter(f, 6); w.Close() }
 MUTEOF
 	run_mut "flate.NewWriter over a file"
 
+	# --- 27: transfer nested inside the io.ReadFull exemption node -------
 	mkdir -p gatemut_rfshadow
+	add_mut gatemut_rfshadow
 	cat > gatemut_rfshadow/mut.go <<'MUTEOF'
 package gatemut_rfshadow
 
@@ -638,7 +632,9 @@ func use() {
 MUTEOF
 	run_mut "transfer nested inside the io.ReadFull exemption node"
 
+	# --- 28: io.ReadFull over a file-backed flate reader -----------------
 	mkdir -p gatemut_zrfile
+	add_mut gatemut_zrfile
 	cat > gatemut_zrfile/mut.go <<'MUTEOF'
 package gatemut_zrfile
 
@@ -656,7 +652,9 @@ func use(f *os.File) {
 MUTEOF
 	run_mut "io.ReadFull over a file-backed flate reader"
 
+	# --- 29: file-backed c.r receiver -------------------------------------
 	mkdir -p gatemut_crfile
+	add_mut gatemut_crfile
 	cat > gatemut_crfile/mut.go <<'MUTEOF'
 package gatemut_crfile
 
@@ -671,7 +669,9 @@ func (c *T) use() {
 MUTEOF
 	run_mut "file-backed c.r receiver"
 
+	# --- 30: file-backed zr/out reader with a different index shape ------
 	mkdir -p gatemut_zrout
+	add_mut gatemut_zrout
 	cat > gatemut_zrout/mut.go <<'MUTEOF'
 package gatemut_zrout
 
@@ -689,11 +689,176 @@ func use(f *os.File) {
 MUTEOF
 	run_mut "file-backed zr/out reader with a different index shape"
 
+	# --- 31: selector split after the dot (method) ------------------------
+	cat > internal/mapping/gatemut_splitmethod.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+func transferSplit(f *os.File, p []byte) (int, error) {
+	return f.
+		Read(p)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_splitmethod.go
+	run_mut "selector split after the dot (method)"
+
+	# --- 32: selector split after the dot (package) -----------------------
+	cat > internal/mapping/gatemut_splitpkg.go <<'MUTEOF'
+package mapping
+
+import (
+	"io"
+	"os"
+)
+
+func transferSplit(f *os.File) ([]byte, error) {
+	return io.
+		ReadAll(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_splitpkg.go
+	run_mut "selector split after the dot (package)"
+
+	# --- 33: exact tolerated c.r.Read(p) text with a file-backed r -------
+	cat > internal/mapping/gatemut_cr_exact.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type reviewFileReader struct{ r *os.File }
+
+func (c *reviewFileReader) transfer(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_cr_exact.go
+	run_mut "exact tolerated c.r.Read(p) text with a file-backed r"
+
+	# --- 34: exact tolerated io.ReadFull shape with zr *os.File ----------
+	cat > internal/mapping/gatemut_rf_exact.go <<'MUTEOF'
+package mapping
+
+import (
+	"io"
+	"os"
+)
+
+type reviewMeta struct{ MetadataUncompressed uint64 }
+
+func transferExact(zr *os.File, out []byte, meta reviewMeta) (int, error) {
+	return io.ReadFull(zr, out[:int(meta.MetadataUncompressed)])
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_rf_exact.go
+	run_mut "exact tolerated io.ReadFull shape with zr *os.File"
+
+	# --- 35: compress/gzip.NewReader(file) + exact ReadFull shape --------
+	cat > internal/mapping/gatemut_gzip.go <<'MUTEOF'
+package mapping
+
+import (
+	"compress/gzip"
+	"io"
+	"os"
+)
+
+type reviewMeta struct{ MetadataUncompressed uint64 }
+
+func transferGzip(f *os.File, out []byte, meta reviewMeta) (int, error) {
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return 0, err
+	}
+	defer zr.Close()
+	return io.ReadFull(zr, out[:int(meta.MetadataUncompressed)])
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_gzip.go
+	run_mut "compress/gzip.NewReader(file) with the exact ReadFull shape"
+
+	# --- 36: log/slog writer over a file ----------------------------------
+	cat > internal/mapping/gatemut_slog.go <<'MUTEOF'
+package mapping
+
+import (
+	"context"
+	"log/slog"
+	"os"
+)
+
+func transferSlog(f *os.File) error {
+	h := slog.NewTextHandler(f, nil)
+	return h.Handle(context.Background(), slog.Record{})
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_slog.go
+	run_mut "log/slog.NewTextHandler over a file"
+
+	# --- 37: runtime/trace writer over a file -----------------------------
+	cat > internal/mapping/gatemut_trace.go <<'MUTEOF'
+package mapping
+
+import (
+	"os"
+	"runtime/trace"
+)
+
+func transferTrace(f *os.File) error {
+	return trace.Start(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_trace.go
+	run_mut "runtime/trace.Start over a file"
+
+	# --- 38: os.StartProcess with the artifact file attached --------------
+	cat > internal/mapping/gatemut_startproc.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+func transferChild(path string, file *os.File) (*os.Process, error) {
+	return os.StartProcess("/bin/cat", []string{"cat", path}, &os.ProcAttr{Files: []*os.File{file, file, file}})
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_startproc.go
+	run_mut "os.StartProcess with the artifact file attached"
+
+	# --- 39: gatemut_-named violation must be detected, not swept --------
+	cat > internal/mapping/gatemut_hidden.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+func hidden(x *os.File) { var b [1]byte; _, _ = x.Read(b[:]) }
+MUTEOF
+	add_mut internal/mapping/gatemut_hidden.go
+	run_mut "gatemut_-named file carrying a transfer"
+
+	# --- 40: an innocent gatemut_-named file must survive and pass -------
+	cat > internal/mapping/gatemut_innocent.go <<'MUTEOF'
+package mapping
+
+func gatemutInnocent() int { return 1 }
+MUTEOF
+	if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+		if [ -f internal/mapping/gatemut_innocent.go ]; then
+			echo "self-test OK: an innocent gatemut_-named file is not deleted"
+		else
+			echo "self-test MISS: the gate deleted an innocent gatemut_-named file"
+			mutfail=1
+		fi
+	else
+		echo "self-test MISS: an innocent gatemut_-named file failed the gate"
+		mutfail=1
+	fi
+	rm -r internal/mapping/gatemut_innocent.go 2>/dev/null || true
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 30 mutation forms rejected)"
+	echo "import-graph self-test passed (all 40 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

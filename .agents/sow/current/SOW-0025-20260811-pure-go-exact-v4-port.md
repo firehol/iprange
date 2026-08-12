@@ -80,6 +80,42 @@ the same pass; decision 5A remains the single open user decision and
 blocks milestone close. Repository counts: production 4,772 raw lines /
 tests 4,832 raw lines. Milestone 2 must not start until a new
 independent final review passes.
+
+The sixth final review then failed with five P2 findings, all in the mmap
+gate and the records: selector splitting after the dot (`file.\nRead(p)`
+and `io.\nReadAll(f)` compile and bypass a line scan); type-blind
+exact-literal exemptions (a struct whose `c.r` is `*os.File` using exactly
+`c.r.Read(p)`, and a function whose `zr` is `*os.File` using exactly
+`io.ReadFull(zr, out[:int(meta.MetadataUncompressed)])`, both pass); an
+open-ended stdlib denylist (the gzip regex never matches `compress/gzip`;
+`log/slog.NewTextHandler`, `runtime/trace.Start`, and `os.StartProcess`
+with `ProcAttr{Files: []*os.File}` consume a file unseen); a destructive
+startup sweep (every path named `gatemut_*` is deleted before scanning,
+so a committed `gatemut_hidden_linux.go` violation is removed and the
+gate reports PASS, and untracked user work can be destroyed); and
+acceptance records claiming completion while the six-reviewer PASS at
+HEAD 360130c was not recorded and round-12 wording said decision 5A was
+"fixed". Fixed at HEAD c920fa0: the line-oriented text scan is replaced by
+an AST, type-light scanner (v4/go-gate/main.go, stdlib only) that parses
+every production file - build tags, line wrapping, comments, aliases,
+and file names are irrelevant to the token stream - syntactically taints
+`*os.File` values (declarations, parameters, os.Open*/os.Create
+producers, same-package constructors, struct fields), bans 37
+content-transfer imports and 56 selector families, permits `*os.File`
+values only into the mapping-lifecycle methods
+(Fd/Close/Name/Stat/Sync/Truncate/Chmod/Chown) and
+same-package/module-internal/x-sys consumers, and exempts the three
+exact in-memory inflater nodes only when their receiver/arguments are
+not file-tainted. The self-test now copies the module into a private
+temporary directory: it never touches the reviewed tree, reserves no
+file name, proves an innocent `gatemut_`-named file is not deleted, and
+durably rejects forty mutation forms including all nine independent
+reproducers of the sixth review; the startup sweep is gone. The records
+of this pass complete the trail up to this re-review. Repository counts:
+production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
+scanner lives outside the module). Milestone 2 must not start until a
+new independent final review passes; decision 5A remains the single open
+user decision.
 The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
 
@@ -313,6 +349,32 @@ sidecars, live coordination, and publication remain Milestone 4.
   tree. The self-test now durably rejects all thirty mutation forms.
   Decision 5A remains open for user ratification and is the only
   remaining P2 class.
+- Iterative pass (fifth-sweep completion): all six narrow reviewers PASS
+  at HEAD 360130c (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli); the
+  fifth-sweep records were committed in 360130c.
+- sol round 14: FAIL at HEAD 360130c with five P2 findings, all in the
+  mmap gate and the records: split-after-the-dot selectors
+  (file.\nRead(p), io.\nReadAll(f)); type-blind exact-literal
+  exemptions (a struct whose c.r is *os.File using exactly c.r.Read(p),
+  and a function whose zr is *os.File using exactly io.ReadFull(zr,
+  out[:int(meta.MetadataUncompressed)]), both reproduce the tolerated
+  shapes); the open-ended stdlib denylist (the gzip regex never matches
+  compress/gzip; log/slog.NewTextHandler, runtime/trace.Start, and
+  os.StartProcess with ProcAttr{Files: []*os.File} consume a file
+  unseen); the destructive startup sweep (any path named gatemut_* is
+  deleted before scanning, so a committed gatemut_hidden_linux.go
+  violation is removed and the gate reports PASS); and acceptance
+  records claiming completion while the six-reviewer PASS at 360130c
+  was not recorded and round-12 wording said decision 5A was "fixed".
+  Fixed at HEAD c920fa0: the line-oriented text scan is replaced by the
+  AST, type-light scanner (v4/go-gate) described in Status; the
+  self-test copies the module to a private temp directory (forty
+  mutation forms rejected, including all nine independent reproducers;
+  the reviewed tree is never modified, no file name is reserved, and an
+  innocent gatemut_-named file is proven to survive); the startup sweep
+  is removed; the records of this entry complete the trail up to this
+  re-review. Decision 5A remains open for user ratification and is the
+  only remaining P2 class.
 
 ## Requirements
 
@@ -1430,8 +1492,11 @@ Tests or equivalent validation:
 - `go test ./...` (4 packages) — green at the last commit.
 - `go test -race ./internal/format ./internal/reader ./internal/mapping .` — green.
 - `go vet ./...` — clean; `gofmt -l .` — empty.
-- `./check-import-graph.sh` — passes; it now also bans content-transfer I/O
-  in production sources and the stdlib `syscall` package.
+- `./check-import-graph.sh` — passes; the content-transfer scan is the AST
+  gate (v4/go-gate, stdlib only): banned imports/selectors and the
+  `*os.File` capability surface, with the three in-memory inflater nodes
+  exempted as exact, file-taint-verified shapes; the 40-form `--self-test`
+  runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
 - Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3 invalid
@@ -1453,6 +1518,13 @@ Reviewer findings:
   repaired with regression tests; round 2 re-review caught a shipped P0
   (blob coverage underflow, 3b4f3d5) and further P2s, all repaired and
   pinned; rounds 3-5 closed with all six reviewers at PASS (0 P0-P2).
+  The review-process sweeps through the sixth round are recorded in the
+  gate execution record: the fifth sweep completed with all six narrow
+  reviewers at PASS (360130c); the sixth final review (sol round 14)
+  failed with five P2 findings in the mmap gate and the records, all
+  fixed in this pass with the AST gate rewrite (v4/go-gate), the
+  temp-copy self-test, and the completed records; decision 5A remains an
+  open user decision.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -1680,3 +1752,30 @@ self-test, runtime strace evidence). Decision 5A was entered in the
 decision log for the user's ratification and remains the only open
 product decision. The complete re-review trail is recorded in the Gate
 execution record; the closing result is appended there when it completes.
+
+### 2026-08-13 - sixth-sweep gate rewrite (AST scanner) (HEAD c920fa0)
+
+- The sixth final review failed with five P2 findings, all in the mmap
+  gate and the records: split-after-the-dot selectors; type-blind
+  exact-literal exemptions; the open-ended stdlib denylist
+  (compress/gzip regex bug, log/slog, runtime/trace,
+  os.StartProcess ProcAttr files); the destructive gatemut_* startup
+  sweep; and completion claims ahead of the review trail.
+- The line-oriented text scan is replaced by the AST gate scanner at
+  v4/go-gate/main.go (stdlib only): it parses every production file
+  regardless of build tags, line wrapping, comments, aliases, or file
+  names; syntactically taints *os.File values; bans 37 content-transfer
+  imports and 56 selector families; constrains *os.File use to the
+  mapping-lifecycle methods and same-package/module-internal/x-sys
+  consumers; and exempts the three exact in-memory inflater nodes only
+  with file-taint verification (c.r.Read(p)/c.r.ReadByte() over a
+  *bytes.Reader field, and the two exact io.ReadFull(zr, out[...int(meta.
+  MetadataUncompressed)]) shapes with a non-file zr).
+- The self-test now runs in a private temp copy of the module (cp -a
+  into mktemp): forty mutation forms rejected, including the nine
+  independent reproducers of the sixth review; an innocent
+  gatemut_-named file is proven to survive; the reviewed tree is never
+  modified; the startup sweep is removed.
+- Gates: go test ./... incl -race, go vet, gofmt, import graph with the
+  40-form self-test, ten cross-compiles, SOW audit - all green.
+  Counts at HEAD: production 4,772 raw lines / tests 4,832 raw lines.
