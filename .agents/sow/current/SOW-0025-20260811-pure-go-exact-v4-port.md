@@ -902,6 +902,29 @@ Use these sections in this order:
   cross-compiles (darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64,
   linux/386) — all green.
 
+### 2026-08-12 - external audit round-4 follow-up 2 (membership P0)
+
+- The membership/structured/metadata reviewer's round-4 verdict found one
+  remaining P0 in batched blob-membership reads: the earlier
+  single-descent blob case still issued one span request, so ReadWords
+  crossing a blob-leaf boundary failed as corruption on a conforming file
+  (reproduced on the committed synthetic two-leaf blob database with
+  `ReadWords(505, 4)`: "blob leaf does not cover the requested bytes"),
+  while per-word Word() succeeded and the Rust reference loops per leaf
+  (blob_tree.rs read_words_from).
+- Fixed in v4/go/internal/reader/membership.go: the traversal split into
+  blobLeaf (one descent to the covering leaf, returning its mapped bytes
+  and logical start) plus the single-span blobRead wrapper; the batched
+  path now loops per covering leaf, copies min(available, remaining)
+  words, advances, and keeps the no-advance guard and the trailing-zero
+  word canonical check.
+- TestBlobReadWordsAcrossLeafBoundary (blob_test.go) fails on the pre-fix
+  tree with the exact reported error and passes at HEAD; blob per-word
+  reads and all 8 internal zero-alloc subtests remain green.
+- Counts at HEAD: production 4,634 raw lines / tests 4,252 raw lines
+  (report sections 2, 11f, 11g). Gates at HEAD: go test ./... incl -race,
+  go vet, gofmt, import graph — all green.
+
 ## Validation
 
 Acceptance criteria evidence:

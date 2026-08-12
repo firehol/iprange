@@ -63,8 +63,8 @@ and all view operations at 0)
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,592
-raw lines, including blanks; new-tree tests: 4,196 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,634
+raw lines, including blanks; new-tree tests: 4,252 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -642,6 +642,27 @@ non-blocking lock) and `TestOpenImmutableRefusesPathReplacedDuringOpen`
 
 Counts at HEAD: production 4,592 raw lines / tests 4,196 raw lines.
 
+## 11g. Round-4 membership follow-up (2026-08-12)
+
+The membership/structured/metadata reviewer found one remaining P0 in the
+batched blob-membership read: the ba09f31 "one walk per batch" blob case
+still issued a single span request, so any batched `ReadWords` crossing a
+blob-leaf boundary failed as corruption even on a conforming file (the
+synthetic two-leaf blob database reproduced it exactly: words 0..505 in
+leaf 1, 506..599 in leaf 2). The Rust reference (`blob_tree.rs
+read_words_from`) loops per leaf. The Go reader now mirrors it: the blob
+traversal was split into `blobLeaf` (one descent to the covering leaf,
+returning its mapped bytes and logical start) and the single-span
+`blobRead` wrapper; the batched path loops per covering leaf, copying
+`min(available, remaining)` words and advancing, with the no-advance
+guard and the trailing-zero-word canonical check preserved. Regression
+test `TestBlobReadWordsAcrossLeafBoundary` fails on the pre-fix tree with
+the exact reported error ("blob leaf does not cover the requested bytes",
+code 32) and passes at HEAD; `Word` per-word reads and the
+zero-allocation blob subtests stay green.
+
+Counts at HEAD: production 4,634 raw lines / tests 4,252 raw lines.
+
 ## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
@@ -668,7 +689,9 @@ passes; section 11c records the round-2 six-agent review and its repairs;
 section 11d records the round-3 verification pass (including the blob-gap
 underflow P0 and its regression test) and the six final PASS verdicts;
 section 11f records the round-4 mapping follow-up (path identity recheck
-correction, darwin EINTR parity, and the two requested regression tests). The
+correction, darwin EINTR parity, and the two requested regression tests);
+section 11g records the round-4 membership follow-up (per-leaf batched
+blob reads, failing pre-fix on the two-leaf fixture). The
 same-failure searches (content-transfer, page arrays, stale constants,
 PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
 tree: none present. Next milestone is safe to start once the three pending

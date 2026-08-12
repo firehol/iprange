@@ -108,17 +108,41 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 				return corrupt("membership word count changed")
 			}
 			data = leaf.Inline[byteOff : byteOff+byteLen]
+			for i := range output {
+				output[i] = format.U64(data[i*8:])
+			}
 		}
 	case format.MembershipStorageBlob:
-		// One blob-tree walk for the whole span (the walk already verifies
-		// the full chain and leaf geometry).
-		data, err = v.r.blobRead(v.blobRoot, format.BlobKindMembership, uint64(v.wordCount)*8, byteOff, byteLen)
+		// One blob-tree descent per covering leaf, mirroring blob_tree.rs
+		// read_words_from: each descent copies min(available, remaining)
+		// words from the covering leaf and advances to the next leaf, so a
+		// batched read crosses leaf boundaries instead of failing on them.
+		totalBytes := uint64(v.wordCount) * 8
+		pos := byteOff
+		written := 0
+		for written < len(output) {
+			leafData, start, leafErr := v.r.blobLeaf(v.blobRoot, format.BlobKindMembership, totalBytes, pos)
+			if leafErr != nil {
+				return leafErr
+			}
+			local := pos - start
+			count := int((uint64(len(leafData)) - local) / 8)
+			if count > len(output)-written {
+				count = len(output) - written
+			}
+			if count == 0 {
+				return corrupt("membership blob cannot advance by a complete word")
+			}
+			for i := 0; i < count; i++ {
+				output[written+i] = format.U64(leafData[local+uint64(i)*8:])
+			}
+			written += count
+			pos += uint64(count) * 8
+		}
+		data = nil
 	}
 	if err != nil {
 		return err
-	}
-	for i := range output {
-		output[i] = format.U64(data[i*8:])
 	}
 	if uint64(start)+uint64(len(output)) == uint64(v.wordCount) && output[len(output)-1] == 0 {
 		return corrupt("membership bitmap has a trailing zero word")
@@ -379,13 +403,32 @@ func membershipLeafFind(sl format.SlottedPage, id uint32, idLimit, feedIndexLimi
 // (section 10), mirroring blob_tree.rs find_leaf + leaf_geometry: the walk
 // verifies branch-first-offset continuity, child-level descent, leaf
 // identity and geometry, 8-byte alignment, coverage of the requested span,
-// and the end-vs-declared rules.
+// and the end-vs-declared rules. A span crossing a leaf boundary is
+// corruption here; batched readers loop over blobLeaf instead.
 func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, off, length uint64) ([]byte, error) {
 	if length == 0 {
 		return nil, corrupt("zero-length blob read")
 	}
+	data, start, err := r.blobLeaf(root, kind, totalBytes, off)
+	if err != nil {
+		return nil, err
+	}
+	end := start + uint64(len(data))
+	if length > end-off {
+		return nil, corrupt("blob leaf does not cover the requested bytes")
+	}
+	base := off - start
+	return data[base : base+length], nil
+}
+
+// blobLeaf walks one blob tree to the leaf covering off and returns its
+// mapped data and the leaf's logical start offset (blob_tree.rs find_leaf):
+// the traversal verifies branch-first-offset continuity, child-level
+// descent, leaf identity and geometry, 8-byte alignment, and the
+// end-vs-declared rules before the caller touches any byte.
+func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, off uint64) ([]byte, uint64, error) {
 	if off >= totalBytes {
-		return nil, corrupt("membership blob request exceeds its length")
+		return nil, 0, corrupt("membership blob request exceeds its length")
 	}
 	cur := root
 	expectedStart := uint64(0)
@@ -397,84 +440,83 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 	for depth := 0; depth <= int(format.MaxTreeLevel); depth++ {
 		page, err := r.page(cur)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		h, err := format.DecodePageHeader(page, r.meta.TxnID)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if h.Level == 0 {
 			if h.PageType != format.PageTypeBlobLeaf || h.Aux != kind {
-				return nil, corrupt("blob leaf identity")
+				return nil, 0, corrupt("blob leaf identity")
 			}
 			if haveExpected && expected != 0 {
-				return nil, corrupt("blob leaf expected level %d", expected)
+				return nil, 0, corrupt("blob leaf expected level %d", expected)
 			}
 			if h.ItemCount != 1 {
-				return nil, corrupt("blob leaf item count %d", h.ItemCount)
+				return nil, 0, corrupt("blob leaf item count %d", h.ItemCount)
 			}
 			leaf, err := format.DecodeBlobLeaf(page)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			// Fixed leaf geometry (blob_tree.rs leaf_geometry).
 			if h.Lower != uint16(48+int(leaf.DataLen)) || h.Upper != format.PageSize {
-				return nil, corrupt("blob leaf layout malformed")
+				return nil, 0, corrupt("blob leaf layout malformed")
 			}
 			if leaf.LogicalOffset != expectedStart || leaf.LogicalOffset%8 != 0 ||
 				leaf.DataLen%8 != 0 {
-				return nil, corrupt("blob leaf start or length not 8-byte aligned")
+				return nil, 0, corrupt("blob leaf start or length not 8-byte aligned")
 			}
 			// Checked extent arithmetic: the leaf must lie inside the
 			// declared blob and cover the requested span exactly.
 			if leaf.LogicalOffset > totalBytes || uint64(leaf.DataLen) > totalBytes-leaf.LogicalOffset {
-				return nil, corrupt("blob leaf exceeds declared length")
+				return nil, 0, corrupt("blob leaf exceeds declared length")
 			}
 			end := leaf.LogicalOffset + uint64(leaf.DataLen)
 			if end < totalBytes && leaf.DataLen != format.MaxBlobLeafDataLen {
-				return nil, corrupt("blob nonfinal leaf not full")
+				return nil, 0, corrupt("blob nonfinal leaf not full")
 			}
 			// The request must lie inside [leaf.LogicalOffset, end]; the
 			// explicit off > end guard keeps the end-off subtraction free of
 			// unsigned underflow (a blob-tree gap must be corruption, never
 			// an out-of-leaf read or a slice panic).
-			if off < leaf.LogicalOffset || off > end || length > end-off {
-				return nil, corrupt("blob leaf does not cover the requested bytes")
+			if off < leaf.LogicalOffset || off > end {
+				return nil, 0, corrupt("blob leaf does not cover the requested bytes")
 			}
-			base := off - leaf.LogicalOffset
-			return leaf.Data[base : base+length], nil
+			return leaf.Data, leaf.LogicalOffset, nil
 		}
 		if h.PageType != format.PageTypeBlobBranch || h.Aux != kind {
-			return nil, corrupt("blob branch identity")
+			return nil, 0, corrupt("blob branch identity")
 		}
 		if haveExpected && h.Level != expected {
-			return nil, corrupt("blob branch expected level %d got %d", expected, h.Level)
+			return nil, 0, corrupt("blob branch expected level %d got %d", expected, h.Level)
 		}
 		sl, err := format.OpenSlotted(page, r.meta.TxnID, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		first, err := sl.Record(0)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		firstRec, err := format.DecodeBlobBranch(first)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if firstRec.LogicalOffset != expectedStart {
-			return nil, corrupt("blob branch starts at a wrong offset")
+			return nil, 0, corrupt("blob branch starts at a wrong offset")
 		}
 		child, offset, err := blobBranchChild(sl, off, r.meta.PageCount)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		cur = child
 		expectedStart = offset
 		expected = h.Level - 1
 		haveExpected = true
 	}
-	return nil, corrupt("blob tree exceeds its maximum height")
+	return nil, 0, corrupt("blob tree exceeds its maximum height")
 }
 
 // blobBranchChild finds the greatest branch entry with logical_offset <= off

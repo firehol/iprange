@@ -211,3 +211,59 @@ func TestBlobBranchDescent(t *testing.T) {
 		t.Fatalf("absent address: %v %v", found, err)
 	}
 }
+
+// TestBlobReadWordsAcrossLeafBoundary pins the batched blob-membership
+// read contract: ReadWords must cross a blob-leaf boundary by copying
+// per-leaf chunks (blob_tree.rs read_words_from), not fail on it. The
+// synthetic database stores words 0..505 in leaf 1 and 506..599 in leaf 2;
+// a batch starting at word 505 spans both leaves. This fails on the
+// single-span implementation with "blob leaf does not cover the requested
+// bytes" (code 32).
+func TestBlobReadWordsAcrossLeafBoundary(t *testing.T) {
+	path := buildBlobDatabase(t)
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatalf("open synthetic blob database: %v", err)
+	}
+	defer r.Close()
+
+	view, found, err := r.LookupMembership4(0x0a000000)
+	if err != nil || !found {
+		t.Fatalf("membership lookup: %v %v", found, err)
+	}
+
+	// Crosses the 505/506 leaf boundary.
+	got := make([]uint64, 4)
+	n, err := view.ReadWords(505, got)
+	if err != nil {
+		t.Fatalf("batched read across leaf boundary: %v", err)
+	}
+	if n != 4 || got[0] != 0xdeadbeef || got[1] != 0xdeadbeef || got[2] != 0 || got[3] != 0 {
+		t.Fatalf("words 505..508 = %x n=%d", got, n)
+	}
+
+	// Batch starting exactly at the second leaf.
+	if n, err := view.ReadWords(506, got[:1]); err != nil || n != 1 || got[0] != 0xdeadbeef {
+		t.Fatalf("word 506 = %x n=%d err=%v", got[0], n, err)
+	}
+
+	// Full-span batch over both leaves, ending at the canonical last word.
+	all := make([]uint64, view.WordCount())
+	n, err = view.ReadWords(0, all)
+	if err != nil {
+		t.Fatalf("full-span batched read: %v", err)
+	}
+	if n != 600 || all[0] != 0x8000000000000001 || all[505] != 0xdeadbeef ||
+		all[506] != 0xdeadbeef || all[599] != 0x1 {
+		t.Fatalf("full-span words mismatch at boundary: n=%d first=%x w505=%x w506=%x w599=%x",
+			n, all[0], all[505], all[506], all[599])
+	}
+
+	// Per-word reads at the boundary stay correct (no cross-talk).
+	for word, want := range map[uint32]uint64{504: 0, 505: 0xdeadbeef, 506: 0xdeadbeef, 507: 0} {
+		got, ok, err := view.Word(word)
+		if err != nil || !ok || got != want {
+			t.Fatalf("word %d = %x ok=%v err=%v want %x", word, got, ok, err, want)
+		}
+	}
+}
