@@ -4,17 +4,21 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 REOPENED. The round-10 PASS at HEAD 253f9d5 and the
-closure commit at HEAD 1c71299 were invalidated by a fresh independent audit.
-Five P2 classes remain unresolved: an unapproved structured public-API shape,
-implicit semantic validation in structured lookup, repeated unnecessary work
-in reader hot paths plus a false report claim, contradictory closure records,
-and a raw mapping-file capability plus a bypassable content-I/O source gate.
-Repository counts remain production 4,807 raw lines / tests 4,685 raw lines
-(counts at the earlier reopening: 4,797 / 4,676). Milestone 2 must not start
-until these findings are fixed, regression-pinned, and a new independent final
-review passes. The approved later scope remains unchanged: Milestone 2 is the
-writer; sidecars, live coordination, and publication remain Milestone 4.
+Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
+253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh
+independent audit; all five P2 classes were fixed at HEAD ca30026: the
+approved NetworkEnrichmentV1Location surface restored (value + HasLocation,
+recorded as decision 5A), implicit semantic validation removed from
+structured lookup, hot-path decodes cut to one page-header decode per
+visited page with membership word reads served from the lookup-time record
+decode, the contradictory closure records corrected, and Mapping.File
+removed with the content-I/O source gate extended to io.ReadAll/io.Copy.
+Regression pins: plausible-corruption decode acceptance, record-geometry
+rejection at lookup, and the vector codec. Repository counts: production
+4,767 raw lines / tests 4,761 raw lines. Milestone 2 must not start until a
+new independent final review passes. The approved later scope remains
+unchanged: Milestone 2 is the writer; sidecars, live coordination, and
+publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -105,6 +109,14 @@ writer; sidecars, live coordination, and publication remain Milestone 4.
   continues beyond the first finding, and permits PASS only when the strongest
   plausible disproof attempts fail. The repository remains read-only; reviewers
   may not interfere with processes or install/uninstall software.
+- Fix round (external-audit findings): implemented at HEAD ca30026 with
+  pre-fix-failing pins - NetworkEnrichmentV1Location restored (decision 5A),
+  structured lookup decode-only (plausible-corruption acceptance test fails
+  pre-fix; record-geometry rejection keeps the memory-safety bound),
+  OpenSlottedHeader at every slotted call site, membership word reads from
+  the lookup-time record decode, Mapping.File removed, content-I/O gate
+  extended to ReadAll/Copy forms. All gates green; iterative reviewers
+  re-run below.
 
 ## Requirements
 
@@ -621,6 +633,15 @@ The user adopted the external re-review's decisions after the reopening:
   (plain-state closed checks under the documented no-race-Close contract).
   Measured 0.000000 heap bytes/run for every hot path; atomics only at
   Pin/Close.
+- Location shape (5A, recorded 2026-08-12 with the round-11 fix): the
+  approved parity matrix writes `Location *NetworkEnrichmentV1Location`
+  (milestone-0 report row 26). Decision 4A forbids per-lookup allocations,
+  and a pointer inside a by-value result cannot reference stable storage
+  without one; Rust itself models the field as
+  `Option<NetworkEnrichmentV1Location>`. 5A: express the option as
+  `Location NetworkEnrichmentV1Location` + `HasLocation bool`, with the type
+  name and fields matching the matrix and the Rust authority exactly. The
+  closure report surfaces this for user veto.
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).

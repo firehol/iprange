@@ -1,14 +1,18 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
 Date: 2026-08-11 (updated 2026-08-12 after review rounds, external audits, and
-the hot-path contract implementation). Status: Milestone 1 REOPENED. The
-round-10 PASS at HEAD 253f9d5 and closure commit at HEAD 1c71299 were
-invalidated by a fresh independent audit with five P2 findings: unapproved
-structured public-API shape, implicit structured semantic validation, repeated
-unnecessary hot-path work plus a false report claim, contradictory closure
-records, and a raw mapping-file capability plus a bypassable content-I/O gate.
-Milestone 2 must not start until these findings are fixed, regression-pinned,
-and a new independent final review passes.
+the hot-path contract implementation). Status: Milestone 1 REOPENED pending
+re-review. The round-10 PASS at HEAD 253f9d5 and closure commit at HEAD
+1c71299 were invalidated by a fresh independent audit with five P2 findings:
+unapproved structured public-API shape, implicit structured semantic
+validation, repeated unnecessary hot-path work plus a false report claim,
+contradictory closure records, and a raw mapping-file capability plus a
+bypassable content-I/O gate. All five are fixed at HEAD ca30026 with
+regression pins (NetworkEnrichmentV1Location + decision 5A; decode-only
+structured lookup; one page-header decode per visited page and lookup-time
+membership record decode; records corrected; Mapping.File removed and the
+content-I/O gate extended to ReadAll/Copy forms). Milestone 2 must not start
+until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
