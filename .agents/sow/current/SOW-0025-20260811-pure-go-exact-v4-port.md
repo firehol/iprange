@@ -5,14 +5,17 @@
 Status: in-progress
 
 Sub-state: milestone 1 implemented (portable mmap-only immutable reader with
-corpus cross-open); the six-agent review gate is CLOSED - the external-audit
-round-4 pass and its three follow-up rounds (mapping identity recheck,
-per-leaf batched blob reads, NameNotFound mid-open) are all regression-pinned
-and all six reviewers PASS at HEAD 2a03554 with no P0-P2 findings (execution
-log below; report sections 11c-11h); borrow-count view lifetime implemented;
-the closed-state error-class choice (HandleClosed vs WrongState), the
-deletion set, and the worker boundary remain pending user decisions; no
-tracked deletion applied yet.
+corpus cross-open); the six-agent review gate passed the round-4 external
+audit and its three follow-up rounds (all reviewers PASS at 2a03554, report
+sections 11c-11h) but was REOPENED by the subsequent hot-path contract re-
+review: the public facade allocates one guard per view lookup and one string
+per feed lookup and performs a per-call atomic load, so SOW-0025:175 and
+design-iprange-engine.md:373/:404 are not met (report sections 11e
+correction and 11i); the facade API shape is pending decision 4. The
+deletion set (decision 1), the worker boundary (decision 2), and the
+closed-state error class (decision 3, with the WordCount/Release
+corrections) remain pending user decisions; metadata staging waste fixed;
+no tracked deletion applied yet.
 
 ## Requirements
 
@@ -865,16 +868,52 @@ Use these sections in this order:
     bypass the gate); the stripper is now a quote-aware awk state machine,
     and in-memory decompression reads (consumedReader) are the documented
     exemption.
-- Verified non-findings, recorded with evidence: the per-call atomic load in
-  the public facade is parity with the frozen C ABI, which gates every call
-  (iprange-capi handle.rs Gate::enter); the design-spec sentence constrains
-  the reader core, which remains import-free of sync/atomic (mechanically
-  enforced). The atomic-load dispute stays a documented interpretation, not
-  a change, unless the user decides otherwise.
+- CORRECTED non-finding (2026-08-12 re-review): the earlier claim that the
+  per-call atomic in the public facade is parity with the frozen C ABI
+  (handle.rs Gate::enter gates every C call) was wrong in mechanics. Rust
+  reader lookups are a plain Option check (ReaderHandle::get, no gate, no
+  atomic); the C facade's real costs are one Arc::clone (atomic refcount)
+  and one Box per view-handle lookup, and view ops carry the caller-
+  serialized AtomicBool fail-fast gate. The binding Go criteria are
+  SOW-0025:175 (zero Go heap bytes for warm point lookups/cursor steps) and
+  design-iprange-engine.md:373/:404; the round-4 facade (1 guard alloc per
+  view lookup, 1 string alloc per feed lookup, per-call atomic load) does
+  not meet them. Open as the hot-path API decision, not a resolved
+  interpretation.
 - Gates at HEAD: go test ./... (5 packages, incl. -race), go vet, gofmt,
   import-graph (with quote-aware stripper), 9-target cross-compile matrix —
   all green; zero-alloc suite updated for the one-guard-per-view contract;
   report counts and this record updated in the same commit.
+
+### 2026-08-12 - hot-path contract re-review (milestone 1 reopened)
+
+- An external re-review after the round-4 closure re-examined the public
+  facade against the frozen performance contract. Verified (measurements
+  reproduced at HEAD): membership lookup+word+release = 1 allocation (16B
+  guard) and 2 atomic ops; feed lookup = 1 allocation (string); direct
+  lookup/scan = 0 allocations but 1 atomic load each; every view op adds 1
+  atomic load. SOW-0025:175, design-iprange-engine.md:373/:404 and the
+  binary-format-v4.md:2537 checked-word_count requirement are not met by
+  the round-4 facade. The earlier "Gate::enter parity" justification was
+  wrong in mechanics (Rust reader lookups are a plain Option check; SDK
+  core is atomic- and allocation-free; the C facade pays one Arc clone +
+  one Box per view-handle lookup and gates view ops).
+- Fixed now (no API change): metadata staging at internal/reader/metadata.go
+  allocated the worst-case bound and then grew an io.ReadAll output (~2.3
+  MiB / dozens of allocations for 1 MiB although exact lengths are declared
+  in the selected meta). The chain now allocates exactly its declared
+  compressed length (bootstrap bounds make it a safe capacity) and
+  decompression reads into one exact output allocation with a one-byte
+  overflow probe; truncation/trailing/Adler checks unchanged, pinned by the
+  existing tests.
+- OPEN (pending decision 4): the public facade API shape that closes the
+  gap — caller-owned pinned lookup handles with token-style views and zero
+  allocations/atomics inside the hot loop (long-term-best, recommended) vs
+  keeping the guard facade with a SOW/spec amendment. Also pending: the
+  facade moves to the WrongState closed class, WordCount becomes
+  error-capable, and Release/second-close semantics are decided explicitly
+  (decision 3 corrections from the re-review). Reopened milestone 1 does
+  not close before the hot-path contract is met.
 
 ### 2026-08-12 - external audit round-4 reviewer follow-up (mapping)
 

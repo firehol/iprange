@@ -606,13 +606,24 @@ structure_entry_count < structure_id_limit; catalog branch-key grammar).
 Performance: single-inflation metadata validation (~1.4x on the
 micro-benchmark), batched ReadWords (one decode/walk per batch), single
 page-header decode per visited page (OpenSlottedHeader) with the root
-pre-read removed, and a quote-aware gate stripper. The per-call atomic in
-the public facade was verified as parity with the frozen C ABI
-(handle.rs Gate::enter gates every C call) and remains the documented
-interpretation of design-iprange-engine.md:401, which constrains the
-sync-free reader core. Production LOC and test LOC grew with the new
-regression tests; the public zero-alloc contract now documents exactly one
-guard allocation per created view (copy-safety), zero elsewhere.
+pre-read removed, and a quote-aware gate stripper. Production LOC and test
+LOC grew with the new regression tests; the public zero-alloc contract
+documents exactly one guard allocation per created view (copy-safety).
+
+CORRECTION (recorded 2026-08-12, after the round-4 closure): the earlier
+claim that the public per-call atomic is "parity with the frozen C ABI
+(handle.rs Gate::enter gates every C call)" is false in its mechanics.
+Verified: Rust reader lookups go through ReaderHandle::get — a plain
+Option check with no gate and no atomic (iprange-capi handle.rs:551); view
+handles alone carry the AtomicBool fail-fast gate (handle.rs:69-74, caller-
+serialized per c-abi-v4.md:178), and the C-ABI lookup additionally pays one
+Arc::clone (atomic refcount) and one Box per view-handle. The binding Go
+criteria are SOW-0025:175 ("warm successful point lookups and cursor steps
+allocate zero Go heap bytes") and design-iprange-engine.md:373/:404; the
+round-4 zero-alloc suite documents one guard allocation per view and one
+string copy per feed lookup, so those criteria are NOT met by the round-4
+public facade. This is the open hot-path API decision (section 11i and the
+pending decisions list), not a resolved interpretation.
 
 ## 11f. Round-4 reviewer follow-up (2026-08-12)
 
@@ -680,6 +691,47 @@ history, and each historical "Counts at HEAD" line carries its commit.
 
 Counts at HEAD: production 4,639 raw lines / tests 4,308 raw lines.
 
+## 11i. Reopened: public hot-path contract (2026-08-12, after round-4 closure)
+
+An external re-review after the round-4 gate closure re-examined the
+public facade against the frozen performance contract. Verified with the
+report's own measurement method at HEAD:
+
+- Membership lookup + Word + Release: 1 heap allocation (16-byte
+  viewGuard) and two atomic operations per lookup (closed-state load +
+  child-view add); every view operation adds one atomic load; Release adds
+  a CAS plus a counter add.
+- Feed lookup: 1 heap allocation (the returned name string) plus one
+  atomic load.
+- Direct lookup and direct scan: 0 allocations, but still one atomic load
+  per call (ensureOpen).
+- SOW-0025:175 requires warm successful point lookups and cursor steps to
+  allocate zero Go heap bytes; design-iprange-engine.md:373 requires a
+  warmed lookup to allocate nothing and return borrowed data or write into
+  caller storage; design-iprange-engine.md:404 lets reader lookups and
+  independent scans run concurrently without a per-call mutex, atomic, or
+  active counter. The round-4 facade meets none of the three as written.
+- The claimed Rust parity was wrong in mechanics (see the 11e
+  correction): Rust's reader lookup is a plain Option check; the SDK core
+  is atomic-free and allocation-free. The Go internal core already is too;
+  only the public facade layer diverges.
+
+Metadata staging was also avoidable: the 1 MiB fixture inflated with ~2.3
+MiB of cumulative allocations (worst-case bound reserve + io.ReadAll
+doubling growth) although the exact compressed and uncompressed lengths
+are declared in the selected meta. Fixed at internal/reader/metadata.go:
+the compressed chain allocates exactly its declared length (bootstrap
+bounds make it a safe capacity) and decompression reads into one exact
+output allocation with a one-byte overflow probe; truncation, trailing
+bytes, and Adler checks are unchanged and pinned by the existing tests.
+No API change.
+
+The API shape that closes the gap is a user decision (section 13 pending
+decision 4): caller-owned pinned lookup handles with token-style views
+(zero allocations and zero atomics inside the loop, one lifetime
+registration outside it) vs keeping the guard facade with a SOW/spec
+amendment.
+
 ## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
@@ -712,9 +764,14 @@ section 11g records the round-4 membership follow-up (per-leaf batched
 blob reads, failing pre-fix on the two-leaf fixture); section 11h records
 the round-4 mapping P2 follow-up (deleted-mid-open NameNotFound parity)
 and the report-record corrections. The round-4 external audit and its
-three follow-up rounds end with all six reviewers PASS at HEAD 2a03554,
-no P0-P2 findings remaining; Milestone 1 satisfies its acceptance
-criteria and the review gate. The
+three follow-up rounds ended with all six reviewers PASS at HEAD 2a03554.
+The milestone was then REOPENED by an external re-review of the public
+hot-path contract (sections 11e correction and 11i): the round-4 facade
+does not meet SOW-0025:175 / design-iprange-engine.md:373/:404 (one guard
+allocation per view lookup, one string allocation per feed lookup, and a
+per-call atomic load), the metadata staging waste was fixed, and the
+facade API shape is pending decision 4. Milestone 1 does not close before
+the hot-path contract is met. The
 same-failure searches (content-transfer, page arrays, stale constants,
 PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
 tree: none present. Next milestone is safe to start once the three pending

@@ -18,17 +18,11 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	if meta.MetadataRoot == 0 {
 		return nil, false, nil
 	}
-	// Pre-allocation is bounded by the section-11 compressed bound (itself
-	// enforced at bootstrap) and independently by the physical page count;
-	// append grows beyond the bound if a corrupt chain slips through.
-	bound := format.MetadataCompressedBound(meta.MetadataUncompressed)
-	if pages := uint64(0); meta.PageCount >= 2 {
-		pages = (meta.PageCount - 2) * format.MaxMetadataChunkLen
-		if pages < bound {
-			bound = pages
-		}
-	}
-	compressed := make([]byte, 0, int(bound))
+	// Bootstrap already bound the declared lengths (compressed <= the
+	// section-11 bound and <= physical capacity), so the exact declared
+	// compressed length is a safe capacity: appends stay inside it because
+	// the chain-length check below fires before any overflow.
+	compressed := make([]byte, 0, int(meta.MetadataCompressed))
 	pgno := meta.MetadataRoot
 	offset := uint64(0)
 	for {
@@ -99,17 +93,23 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	// fixture); this is one pass.
 	cr := &consumedReader{r: bytes.NewReader(payload)}
 	zr := flate.NewReader(cr)
-	out, err := io.ReadAll(io.LimitReader(zr, int64(meta.MetadataUncompressed)+1))
-	zr.Close()
-	if err != nil {
+	// One exact allocation for the declared uncompressed size plus the
+	// one-byte overflow probe: a truncation is ErrUnexpectedEOF, an
+	// over-long stream leaves the probe byte set. No growth reallocations.
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		zr.Close()
 		return nil, false, corrupt("metadata deflate stream: %v", err)
+	}
+	n, err := zr.Read(out[int(meta.MetadataUncompressed):])
+	zr.Close()
+	if n != 0 || err != io.EOF {
+		return nil, false, corrupt("metadata decompressed %d declared %d", int(meta.MetadataUncompressed)+n, meta.MetadataUncompressed)
 	}
 	if cr.n != int64(len(payload)) {
 		return nil, false, corrupt("metadata stream trailing bytes")
 	}
-	if uint64(len(out)) != meta.MetadataUncompressed {
-		return nil, false, corrupt("metadata decompressed %d declared %d", len(out), meta.MetadataUncompressed)
-	}
+	out = out[:int(meta.MetadataUncompressed)]
 	if binary.BigEndian.Uint32(compressed[len(compressed)-4:]) != adler32.Checksum(out) {
 		return nil, false, corrupt("metadata adler32 trailer")
 	}
