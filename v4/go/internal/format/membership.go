@@ -11,8 +11,8 @@ const (
 )
 
 // MembershipIDLeaf is one parsed ID-tree leaf record. The Inline field, when
-// storage is inline, aliases the page view; the public view that retains it
-// guards it with a live pin, so the slice never outlives the mapping.
+// storage is inline, aliases the page view; the view that retains it is
+// guarded by a live pin, so the slice never outlives the mapping.
 type MembershipIDLeaf struct {
 	Storage      MembershipStorage
 	MembershipID uint32
