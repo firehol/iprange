@@ -47,9 +47,18 @@ a nested-paren blanking shadow, and reflect.Value.Method(i);
 the gate now also bans the reader-consumer packages, covers
 WriteString/WriteRune/NewDecoder/Decode/Encode/Method selectors, blanks
 only paren-free tolerated call nodes, and its self-test durably rejects
-twenty-two mutation forms. The records were completed in the same pass;
-decision 5A remains the single open user decision and blocks milestone
-close. Repository counts: production 4,772 raw lines /
+twenty-two mutation forms. The re-review of that fix found io.ReadFull/
+io.ReadAtLeast over a file still open, the writer-consumer packages
+(log, text/template, html/template, os/exec, net/http, flate.NewWriter)
+uncovered, and three self-test mutations that did not compile; all fixed
+at HEAD bf33f2a (selectors ReadFull/ReadAtLeast/Print/Printf/Println/
+Scan/Scanln/Scanf/NewWriter; the five writer packages join the import
+ban; the two in-memory inflater io.ReadFull(zr, ...) nodes are exempted
+exactly; the method-value and CopyFileRange forms compile, and the
+nested-node probe stays an intentional textual tripwire), and the
+self-test now durably rejects twenty-six mutation forms. The records
+were completed in the same pass; decision 5A remains the single open
+user decision and blocks milestone close. Repository counts: production 4,772 raw lines /
 tests 4,832 raw lines. Milestone 2 must not start until a new
 independent final review passes.
 The approved later scope remains unchanged: Milestone 2 is the writer;
@@ -222,10 +231,31 @@ sidecars, live coordination, and publication remain Milestone 4.
   packages join the import ban, the selector set gains
   WriteString/WriteRune/NewDecoder/Decode/Encode/Method, the blanking
   matches only paren-free tolerated arguments (c.r.Read(p) /
-  c.r.ReadByte()), the two mutations compile, and four new mutation
-  forms pin every escape; the self-test now durably rejects all
+  c.r.ReadByte()), the two previously non-compiling sweep mutations
+  compile, and four new mutation forms pin every escape; the self-test now durably rejects all
   twenty-two mutation forms. Decision 5A remains open for user
   ratification and is the only remaining P2 class.
+- Iterative pass (round-13 fixes, third sweep): five narrow reviewers
+  PASS at HEAD 2b30b29 (Peirce, Gauss, Faraday, Kant, Bernoulli);
+  Ampere found the gate still open in three classes - P1: io.ReadFull
+  and io.ReadAtLeast consume an *os.File directly (the word boundary
+  after Read kept them out of the selector set); P2: the writer-consumer
+  families curry a file unseen (log.New(f).Println / log.SetOutput(f),
+  text/template Execute, html/template ExecuteTemplate, os/exec
+  Stdout+Run, flate.NewWriter(f), http ServeContent/ServeFile; none
+  active in production, but the gate must cover the Milestone 2
+  writer); P3: three self-test mutations did not compile (method value
+  assignment arity, CopyFileRange int width, and the nested-node probe).
+  Fixed at HEAD bf33f2a: the selector set gains ReadFull/ReadAtLeast/
+  Print/Printf/Println/Scan/Scanln/Scanf/NewWriter, the five writer
+  packages join the import ban, the two in-memory inflater calls
+  io.ReadFull(zr, ...) are exempted as exact call nodes (compress/flate
+  stays importable), the method-value and CopyFileRange forms now
+  compile, and the nested-node probe is retained and documented as an
+  intentional textual tripwire (no []byte-typed file-read expression
+  exists to embed before the first closing paren); the self-test now
+  durably rejects all twenty-six mutation forms. Decision 5A remains
+  open for user ratification and is the only remaining P2 class.
 
 ## Requirements
 
