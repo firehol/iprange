@@ -10,7 +10,7 @@ import (
 
 // Synthetic blob-backed membership database.
 //
-// The five committed conformance fixtures store every membership bitmap
+// The six committed conformance fixtures store every membership bitmap
 // inline (the v4 fixture uses 2 words, the v6 fixture 1 word), so the blob
 // tree with a branch level was never exercised. This test hand-builds a
 // small valid v4 membership database whose single bitmap is 4,800 bytes =
