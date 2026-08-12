@@ -472,8 +472,9 @@ const (
 // callResultsFuncFile reports whether e is a same-package call whose
 // every declared result position is a func type producing *os.File
 // (through alias and defined-func-type expansion), so a value returned
-// through a helper keeps its file-producer taint.
-func callResultsFuncFile(e ast.Expr, info pkgInfo) bool {
+// through a helper keeps its file-producer taint. Method receivers
+// resolve through the struct instance, not the receiver variable name.
+func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
 		return false
@@ -485,7 +486,9 @@ func callResultsFuncFile(e ast.Expr, info pkgInfo) bool {
 		results = info.funcs[f.Name]
 	case *ast.SelectorExpr:
 		if recv, ok := f.X.(*ast.Ident); ok {
-			results = info.methods[recv.Name+"."+f.Sel.Name]
+			if structName, ok2 := resolveStruct(recv, st, info); ok2 {
+				results = info.methods[structName+"."+f.Sel.Name]
+			}
 		}
 	}
 	if len(results) == 0 {
@@ -739,6 +742,14 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		// A single-argument conversion through a type alias of *os.File
 		// (type zr = *os.File; zr(f)) keeps the file taint.
 		if len(call.Args) == 1 && resolveTypeText(id.Name, info) == "*os.File" {
+			return call, []int{0}, true
+		}
+	}
+	if inner, ok := fun.(*ast.CallExpr); ok {
+		// zb.mk()() and useDef(getDef2)(): the callee is itself a call
+		// whose value is a func returning *os.File; invoking it yields
+		// a file at result position zero.
+		if callResultsFuncFile(inner, st, info) {
 			return call, []int{0}, true
 		}
 	}
@@ -1154,7 +1165,7 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	}
 	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
-	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, info) {
+	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, st, info) {
 		st.funcFile[id.Name] = true
 	}
 	if fl, ok := rhs.(*ast.FuncLit); ok && st.retFile[fl.Pos()] {
