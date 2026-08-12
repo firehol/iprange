@@ -77,9 +77,10 @@ tenth sweep (HEAD 5c88ba3) closed the parenthesized-producer,
 parenthesized-closure, interface-typed-closure, alias-typed-function-variable,
 and type-switch-bound classes (forms 54-59), plus the defined-func-type
 family, the method-receiver boundary, the nested-callee double-call
-family, and the struct-field/chan-of-func/asserted-func/os-std-handle
-family (forms 60-72); the self-test now durably
-rejects sixty-six mutation forms (details in the
+family, the struct-field/chan-of-func/asserted-func/os-std-handle
+family, and the nested-field/named-helper/chan-pass family (forms
+60-77); the self-test now durably
+rejects seventy mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1060,9 +1061,11 @@ alias-typed-function-variable, and type-switch-bound forms; and the
 eleventh extension closed the defined-func-type family (defined func
 types, func-valued returns through helpers, type-switch bound func
 cases (forms 60-63), the method-receiver boundary, and the
-nested-callee double-call shapes (forms 64-67), and the round-5
+nested-callee double-call shapes (forms 64-67), the round-5
 struct-field/chan-of-func/asserted-func/os-std-handle family (forms
-68-72); the self-test now durably rejects sixty-six mutation forms. Decision 5A remains the single open item and
+68-72), and the round-6 nested-field/named-helper/chan-pass family
+(forms 73-77); the self-test now durably rejects seventy mutation
+forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

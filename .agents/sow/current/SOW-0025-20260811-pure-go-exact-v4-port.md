@@ -133,10 +133,10 @@ alias-typed-function-variable, and type-switch-bound escape classes
 durable rejection set is now fifty-six mutation forms. While
 stress-testing the round-4 fixes during the round-5 gate re-review,
 the defined-func-type family and its method/nested-callee variants
-were closed (self-test forms 60-67), and the round-5 struct-field/
-chan-of-func/asserted-func/os-std-handle family was closed (forms
-68-72); the durable rejection set is now sixty-six mutation forms.
-The records
+were closed (self-test forms 60-67), the round-5 struct-field/
+chan-of-func/asserted-func/os-std-handle family (forms 68-72), and
+the round-6 nested-field/named-helper/chan-pass family (forms 73-77);
+the durable rejection set is now seventy mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -413,8 +413,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   family (defined func types, func-valued returns through same-package
   helpers, type-switch bound func cases (forms 60-63), and the
   method-receiver/nested-callee double-call family (forms 64-67),
-  and the struct-field-func/chan-of-func/asserted-func/os-std-handle
-  family (forms 68-72); the self-test now durably rejects sixty-six
+  the struct-field-func/chan-of-func/asserted-func/os-std-handle
+  family (forms 68-72), and the nested-field/named-helper/chan-pass
+  family (forms 73-77); the self-test now durably rejects seventy
   mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
@@ -1540,7 +1541,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 66-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 70-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1966,7 +1967,16 @@ execution record; the closing result is appended there when it completes.
   producerCall/classify, func-file type assertions, and the std
   handle file-expression set. Forms 68-72 pin the four classes plus
   the benign chan-of-func() int control.
-- Gates at HEAD e5f1800: go test ./... incl -race, go vet, gofmt,
-  import graph with the 66-form self-test, nine cross-compiles, SOW
+- Ampere round 6 found three more producer routes (HEAD 36fe279):
+  nested struct-field func chains (nh.inner.fn()), named
+  interface-typed helpers whose bodies return tainted files or
+  os.Stdout (getNamed()/getStd()), and chan-of-func values passed
+  through same-package helpers. Fixed with a resolveStruct field-
+  chain walk, a per-directory pre-scan that marks named producers
+  (retFuncs) before any runFile, and callResultsChanFuncFile.
+  Forms 73-77 pin the three classes plus the benign named io.Reader
+  helper control.
+- Gates at HEAD f876148: go test ./... incl -race, go vet, gofmt,
+  import graph with the 70-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).
