@@ -11,8 +11,14 @@ bypassable content-I/O gate. All five are fixed at HEAD ca30026 with
 regression pins (NetworkEnrichmentV1Location + decision 5A; decode-only
 structured lookup; one page-header decode per visited page and lookup-time
 membership record decode; records corrected; Mapping.File removed and the
-content-I/O gate extended to ReadAll/Copy forms). Milestone 2 must not start
-until a new independent final review passes.
+content-I/O gate extended to ReadAll/Copy forms). The round-11 final
+review then failed with one P1 (pin variable reassignment retargets the
+view guard; a word read segfaults on released memory) and three P2
+(decision 5A unratified; mmap gate bypassable plus a Windows Mapping.File
+escape; stale close-out records), fixed at HEAD 2fd6cae with the
+cross-reader reassignment regression test; the records were corrected in
+the following commit. Milestone 2 must not start until a new independent
+final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -79,7 +85,7 @@ Production LOC measured at HEAD (recomputed after every repair pass;
 inside v4/go: internal/format + internal/mapping + internal/reader plus
 doc.go, errors.go, reader_public.go, types.go): 4,767 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,767 raw lines. The earlier
+tree): 4,832 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -861,5 +867,11 @@ pre-fix tree). The same-failure searches
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
 present. The later round-10 PASS at HEAD 253f9d5 and closure commit at HEAD
 1c71299 were invalidated by the five-P2 external audit recorded in the report
-header and active SOW. Milestone 1 is reopened and Milestone 2 is blocked. The
+header and active SOW. The round-11 final review then failed with one P1
+(pin variable reassignment retargets the view guard; word read segfaults on
+released memory) and three P2 (decision 5A unratified; mmap gate bypassable
+plus a Windows Mapping.File escape; stale close-out records), fixed at HEAD
+2fd6cae with the cross-reader reassignment regression test; the records were
+corrected in the following commit. Milestone 1 is reopened and Milestone 2 is
+blocked pending the independent re-review and the user's decision 5A. The
 worker boundary decision remains scheduled for its later milestone per 2A.

@@ -14,11 +14,16 @@ visited page with membership word reads served from the lookup-time record
 decode, the contradictory closure records corrected, and Mapping.File
 removed with the content-I/O source gate extended to io.ReadAll/io.Copy.
 Regression pins: plausible-corruption decode acceptance, record-geometry
-rejection at lookup, and the vector codec. Repository counts: production
-4,767 raw lines / tests 4,767 raw lines. Milestone 2 must not start until a
-new independent final review passes. The approved later scope remains
-unchanged: Milestone 2 is the writer; sidecars, live coordination, and
-publication remain Milestone 4.
+rejection at lookup, and the vector codec. The round-11 final review then
+found one P1 (pin variable reassignment retargets the view guard and a
+word read segfaults on released memory) and three P2 (decision 5A
+unratified; mmap gate bypassable plus a Windows Mapping.File escape; stale
+close-out records), all fixed at HEAD 2fd6cae with the cross-reader
+reassignment regression test, or recorded for the user's decision (5A).
+Repository counts: production 4,766 raw lines / tests 4,832 raw lines.
+Milestone 2 must not start until a new independent final review passes.
+The approved later scope remains unchanged: Milestone 2 is the writer;
+sidecars, live coordination, and publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -115,8 +120,27 @@ publication remain Milestone 4.
   pre-fix; record-geometry rejection keeps the memory-safety bound),
   OpenSlottedHeader at every slotted call site, membership word reads from
   the lookup-time record decode, Mapping.File removed, content-I/O gate
-  extended to ReadAll/Copy forms. All gates green; iterative reviewers
-  re-run below.
+  extended to ReadAll/Copy forms. All gates green.
+- Iterative pass (round-11 fixes): six narrow reviewers all PASS at HEAD
+  431e7d7 (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; one records P1
+  - stale test LOC - fixed in 73c358b; Kant flags that decision 5A needs
+  user ratification before milestone close).
+- sol round 11: FAIL at HEAD 73c358b with one P1 and three P2: a Pin
+  variable reassigned after creating a view (pinCopy = *otherPin)
+  retargets the view's close guard to another reader and a word read then
+  hits the first reader's released mapping (SIGSEGV at
+  internal/reader/membership.go:106 through reader_public.go:485);
+  decision 5A is recorded but not user-ratified; the content-I/O gate
+  misses method values (m := f.Read), function aliases (rd := io.ReadAll),
+  Seek, and new package directories, and the Windows mapping stub still
+  exposed Mapping.File; the close-out records dangled ("re-run below")
+  and the regression tail still said product repair is pending. Fixed at
+  HEAD 2fd6cae (views retain the immutable *pinState captured at creation;
+  the Windows descriptor and accessor are gone; the gate scans every go
+  list package with word-boundary selector matching, mutation-tested
+  against all five bypass forms) and in the records commit that follows.
+  Iterative re-review and the next sol round are appended below when they
+  complete.
 
 ## Requirements
 
@@ -1467,6 +1491,9 @@ plausible disproof attempts fail. It also explicitly forbids modifying the
 reviewed repository, interfering with running processes, or installing/removing
 software. This framing is generic and applies to every project final review.
 
-Product repair remains pending. Milestone 1 stays reopened and Milestone 2 stays
-blocked until all five findings are fixed, regression-pinned, and independently
-re-reviewed under the strengthened protocol.
+Resolution: the five external-audit findings were fixed at HEAD ca30026 with
+pre-fix-failing regression pins, and the round-11 final-review findings
+(view-lifetime guard retargeting, mmap-gate escapes, stale records) were fixed
+at HEAD 2fd6cae; decision 5A was entered in the decision log for the user's
+ratification. The complete re-review trail is recorded in the Gate execution
+record; the closing result is appended there when it completes.
