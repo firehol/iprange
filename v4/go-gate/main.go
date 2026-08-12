@@ -101,6 +101,7 @@ var approvedFileMethods = map[string]bool{
 type pkgInfo struct {
 	structs map[string]map[string]string
 	funcs   map[string][]string
+	methods map[string][]string // structName.method -> result type texts
 }
 
 func main() {
@@ -165,7 +166,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -217,21 +218,35 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 	}
 	for _, decl := range f.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || fd.Type.Results == nil {
+		if !ok || fd.Type.Results == nil {
 			continue
 		}
-		var results []string
-		for _, r := range fd.Type.Results.List {
-			t := exprText(r.Type)
-			for range r.Names {
-				results = append(results, t)
+		if fd.Recv != nil {
+			_, recvStruct := receiverOf(fd)
+			if recvStruct != "" {
+				info.methods[recvStruct+"."+fd.Name.Name] = collectResults(fd.Type)
 			}
-			if len(r.Names) == 0 {
-				results = append(results, t)
-			}
+			continue
 		}
-		info.funcs[fd.Name.Name] = results
+		info.funcs[fd.Name.Name] = collectResults(fd.Type)
 	}
+}
+
+func collectResults(ft *ast.FuncType) []string {
+	var results []string
+	if ft.Results == nil {
+		return results
+	}
+	for _, r := range ft.Results.List {
+		t := exprText(r.Type)
+		for range r.Names {
+			results = append(results, t)
+		}
+		if len(r.Names) == 0 {
+			results = append(results, t)
+		}
+	}
+	return results
 }
 
 func exprText(e ast.Expr) string {
@@ -384,7 +399,7 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 	case *ast.UnaryExpr:
 		return classify(v.X, st, info, imports)
 	case *ast.CallExpr:
-		if _, ok := producerCall(v, info, imports); ok {
+		if _, ok := producerCall(v, st, info, imports); ok {
 			return kindFile
 		}
 	case *ast.CompositeLit:
@@ -419,7 +434,7 @@ func applyKind(st *taints, name string, k kind) {
 
 // producerCall reports whether e is a call producing *os.File: a stdlib
 // producer, or a same-package function whose result type is *os.File.
-func producerCall(e ast.Expr, info pkgInfo, imports map[string]string) (*ast.CallExpr, bool) {
+func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) (*ast.CallExpr, bool) {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
 		return nil, false
@@ -435,6 +450,14 @@ func producerCall(e ast.Expr, info pkgInfo, imports map[string]string) (*ast.Cal
 			}
 			if fileProducers[pkg.Name+"."+sel.Sel.Name] {
 				return call, true
+			}
+		}
+		// Same-package method returning *os.File (e.g. an accessor).
+		if structName, found := resolveStruct(sel.X, st, info); found {
+			for _, r := range info.methods[structName+"."+sel.Sel.Name] {
+				if r == "*os.File" {
+					return call, true
+				}
 			}
 		}
 	}
@@ -462,7 +485,7 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 		}
 		return info.structs[structName][v.Sel.Name] == "*os.File"
 	case *ast.CallExpr:
-		_, ok := producerCall(v, info, imports)
+		_, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.StarExpr:
 		return isFileExpr(v.X, st, info, imports)
@@ -513,7 +536,7 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 			}
 		}
 	case *ast.CallExpr:
-		_, ok := producerCall(v, info, imports)
+		_, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.UnaryExpr:
 		return isFileOrContainer(v.X, st, info, imports)
@@ -702,7 +725,7 @@ func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taint
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {
 		return exempts
 	}
-	recvName, recvStruct := receiverOf(fd, info)
+	recvName, recvStruct := receiverOf(fd)
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -749,7 +772,7 @@ func isIOIdent(e ast.Expr) bool {
 	return ok && id.Name == "io"
 }
 
-func receiverOf(fd *ast.FuncDecl, info pkgInfo) (name, structName string) {
+func receiverOf(fd *ast.FuncDecl) (name, structName string) {
 	if fd.Recv == nil || len(fd.Recv.List) == 0 || len(fd.Recv.List[0].Names) == 0 {
 		return "", ""
 	}
