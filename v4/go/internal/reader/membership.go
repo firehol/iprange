@@ -357,7 +357,11 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 	}
 	cur := root
 	expectedStart := uint64(0)
-	var expected *uint16 // nil at the root; parent branch level - 1 below
+	// Value pair instead of an escaping pointer: the walk must stay
+	// allocation-free on the mapped hot path. haveExpected is false at the
+	// root and true below a branch; expected is the parent branch level - 1.
+	var expected uint16
+	haveExpected := false
 	for depth := 0; depth <= int(format.MaxTreeLevel); depth++ {
 		page, err := r.page(cur)
 		if err != nil {
@@ -371,8 +375,8 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 			if h.PageType != format.PageTypeBlobLeaf || h.Aux != kind {
 				return nil, corrupt("blob leaf identity")
 			}
-			if expected != nil && *expected != 0 {
-				return nil, corrupt("blob leaf expected level %d", *expected)
+			if haveExpected && expected != 0 {
+				return nil, corrupt("blob leaf expected level %d", expected)
 			}
 			if h.ItemCount != 1 {
 				return nil, corrupt("blob leaf item count %d", h.ItemCount)
@@ -407,8 +411,8 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 		if h.PageType != format.PageTypeBlobBranch || h.Aux != kind {
 			return nil, corrupt("blob branch identity")
 		}
-		if expected != nil && h.Level != *expected {
-			return nil, corrupt("blob branch expected level %d got %d", *expected, h.Level)
+		if haveExpected && h.Level != expected {
+			return nil, corrupt("blob branch expected level %d got %d", expected, h.Level)
 		}
 		sl, err := format.OpenSlotted(page, r.meta.TxnID, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
 		if err != nil {
@@ -431,8 +435,8 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 		}
 		cur = child
 		expectedStart = offset
-		nv := h.Level - 1
-		expected = &nv
+		expected = h.Level - 1
+		haveExpected = true
 	}
 	return nil, corrupt("blob tree exceeds its maximum height")
 }

@@ -145,7 +145,7 @@ raw lines, including blanks; new-tree tests: 3,794 raw lines. The earlier
 | direct lookup v6 (4 probes) | 0 |
 | membership lookup v4 (incl. view) | 0 |
 | membership lookup v6 (inline bitmap) | 0 |
-| ContainsIndex / Word (inline + blob) | 0 |
+| ContainsIndex / Word / ReadWords (inline + blob, incl. synthetic blob DB) | 0 |
 | structured lookup v4 | 0 |
 | feed lookup (internal) | 0 |
 | feed lookup (public) | 1 (returned name string copy; documented) |
