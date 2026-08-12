@@ -101,7 +101,7 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 		zr.Close()
 		return nil, false, corrupt("metadata deflate stream: %v", err)
 	}
-	n, err := zr.Read(out[int(meta.MetadataUncompressed):])
+	n, err := io.ReadFull(zr, out[int(meta.MetadataUncompressed):])
 	zr.Close()
 	if n != 0 || err != io.EOF {
 		return nil, false, corrupt("metadata decompressed %d declared %d", int(meta.MetadataUncompressed)+n, meta.MetadataUncompressed)
