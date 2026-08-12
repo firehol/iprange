@@ -8,7 +8,10 @@ pinned hot-path facade); the six-reviewer re-verification of the rebuilt
 facade completed with all six reviewers PASS at HEAD e02dee9 (rounds
 after the external audit, the hot-path rebuild, and the final-review
 regression guards); the final full-scope review completed with PASS at
-HEAD 6140a80 (no P0-P2 findings).
+HEAD 78373e5 after an external-audit reopening (close-out records
+corrected, Milestone 2 scope bounded to the approved plan, public
+ValueTag/metadata-limit API completed, allocation documentation made
+exact; no P0-P2 findings).
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 

@@ -51,7 +51,18 @@ cross-open); sidecars, live coordination, and publication remain Milestone 4.
   round 2: 2 P2 (retention check wording; report header contradiction) +
   1 P3 -> fixed in f6007c7;
   round 3: 1 P2 (test count 4,648 not recorded) -> fixed in 6140a80;
-  round 4: PASS, no P0-P2-P3 at HEAD 6140a80. Milestone 1 gate closed.
+  round 4: PASS, no P0-P2-P3 at HEAD 6140a80 (this gate was subsequently
+  reopened by an external audit, below).
+- External audit reopening (2026-08-12): four findings - close-out records
+  inconsistent (pending worker decision, no-deletion claim, 5/5 fixtures,
+  pin copies described as unsupported), Milestone 2 scope drift, an
+  incomplete public scalar API (raw [16]byte ValueTag, missing predefined
+  tags and the 20 MiB metadata bound), and false zero-allocation source
+  documentation. Fixed in 228be36, plus reviewer P3s in 78373e5
+  (DirectSemantic per-fixture coverage, terminal error code 69 pin,
+  decision-log 105-file count, qualified package comment).
+- sol round 5: PASS, no P0-P2-P3 at HEAD 78373e5. Milestone 1 gate closed
+  after the reopening.
 
 ## Requirements
 
