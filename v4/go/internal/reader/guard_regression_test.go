@@ -83,6 +83,56 @@ func TestMetaKindClassification(t *testing.T) {
 			t.Fatalf("code %v want 67", err)
 		}
 	})
+	// Membership file with the registered structured kind (1): invalid
+	// combination -> FormatInvalid.
+	t.Run("membership-kind1", func(t *testing.T) {
+		path := copyFixture(t, "membership-ipv4.iprdb", "membership-kind1.iprdb")
+		patchMeta(t, path, func(page []byte) { page[13] = 1 })
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+			t.Fatalf("code %v want 32", err)
+		}
+	})
+	// Membership file with an unknown kind (2): typed UnsupportedStructure.
+	t.Run("membership-kind2", func(t *testing.T) {
+		path := copyFixture(t, "membership-ipv4.iprdb", "membership-kind2.iprdb")
+		patchMeta(t, path, func(page []byte) { page[13] = 2 })
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeUnsupportedStructure {
+			t.Fatalf("code %v want 67", err)
+		}
+	})
+}
+
+// TestSoleMetaGeometry pins the per-meta physical-geometry validity rule:
+// a meta whose page_count*4096 exceeds the physical file length is not
+// bootstrap-valid, so selection falls to the sole valid meta (Rust
+// validate_generation PhysicalLength + select_candidates), and the
+// immutable open then requires the exact committed size.
+func TestSoleMetaGeometry(t *testing.T) {
+	path := copyFixture(t, "direct-ipv4.iprdb", "sole-geo.iprdb")
+	patchMetaEach(t, path, func(pg int, page []byte) {
+		if pg == 0 {
+			format.PutU64(page[48:56], 4) // txn
+			format.PutU64(page[72:80], 5) // page_count: 5*4096 > 4*4096 physical
+		} else {
+			format.PutU64(page[48:56], 3) // txn
+			format.PutU64(page[72:80], 4) // page_count: fits the physical file
+		}
+	})
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal("open:", err)
+	}
+	defer r.Close()
+	if r.Selection() != MetaSelectionSoleMeta1 {
+		t.Fatalf("selection %v want SoleMeta1", r.Selection())
+	}
+	if r.Meta().TxnID != 3 || r.Meta().PageCount != 4 {
+		t.Fatalf("meta txn=%d page_count=%d want 3/4", r.Meta().TxnID, r.Meta().PageCount)
+	}
+	v, found, err := r.LookupDirect4(0x0a00000a)
+	if err != nil || !found || v != 2 {
+		t.Fatalf("lookup: value=%d found=%v err=%v", v, found, err)
+	}
 }
 
 // TestMetadataFCheckRejected pins the RFC 1950 header check: a stream whose
