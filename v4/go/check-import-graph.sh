@@ -55,6 +55,17 @@ fi
 
 fail=0
 
+# The gatemut_* names are reserved for the self-test. A leftover from an
+# interrupted run would trip every selector and wedge the tree, so sweep
+# them once at startup. The self-test's inner gate runs disable the sweep
+# so the active mutation under test is never removed.
+if [ "${GATE_SWEEP_MUTATIONS:-1}" = "1" ]; then
+	if find . -maxdepth 3 -name 'gatemut_*' -print -quit | grep -q .; then
+		echo "removing stale self-test mutation artifacts (interrupted run)"
+		find . -maxdepth 3 -name 'gatemut_*' -exec rm -rf {} +
+	fi
+fi
+
 # per-package import list (every import on its own line; the first import is
 # NOT swallowed — a join without the ImportPath prefix)
 pkg_imports() {
@@ -163,13 +174,16 @@ strip_comments() {
 content_violations() {
 	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
 		# The in-memory inflater's tolerated calls are blanked as exact
-		# call nodes (c.r.Read(p) / c.r.ReadByte(), and the two
-		# io.ReadFull(zr, out[...]) inflater reads), never as whole
-		# lines or paren-crossing spans, so a forbidden transfer on the
-		# same line or nested inside an argument stays visible.
+		# literal nodes and nothing else: c.r.Read(p) / c.r.ReadByte()
+		# and the two io.ReadFull(zr, out[...int(meta.
+		# MetadataUncompressed)]) inflater reads. Exact literals cannot
+		# swallow a nested transfer or a same-named file-backed reader;
+		# any other shape (b[:], out[:n], a different receiver) stays
+		# visible and fails closed.
 		strip_comments < "$f" | sed -E \
-			-e 's/c\.r\.Read(Byte)?\([^()]*\)/ /g' \
-			-e 's/io\.ReadFull\(zr, out\[[^]]*\]\)/ /g' \
+			-e 's/(c\.r\.Read\(p\)|c\.r\.ReadByte\(\))/ /g' \
+			-e 's/io\.ReadFull\(zr, out\[:int\(meta\.MetadataUncompressed\)\]\)/ /g' \
+			-e 's/io\.ReadFull\(zr, out\[int\(meta\.MetadataUncompressed\):\]\)/ /g' \
 			| sed "s@^@$f:@"
 	done
 }
@@ -232,7 +246,7 @@ if [ "$self_test" -eq 1 ]; then
 			gatemut_cfr gatemut_exline gatemut_winint gatemut_decoder \
 			gatemut_writestr gatemut_nested gatemut_refmeth gatemut_readfull \
 			gatemut_readleast gatemut_logw gatemut_flatew \
-			gatemut_rfshadow gatemut_zrfile
+			gatemut_rfshadow gatemut_zrfile gatemut_crfile gatemut_zrout
 		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
 			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
 			gatemut_aliased_bufio.go
@@ -243,7 +257,7 @@ if [ "$self_test" -eq 1 ]; then
 
 	run_mut() {
 		name=$1
-		if ./check-import-graph.sh >/dev/null 2>&1; then
+		if GATE_SWEEP_MUTATIONS=0 ./check-import-graph.sh >/dev/null 2>&1; then
 			echo "self-test MISS: mutation $name did not fail the gate"
 			mutfail=1
 		fi
@@ -642,11 +656,44 @@ func use(f *os.File) {
 MUTEOF
 	run_mut "io.ReadFull over a file-backed flate reader"
 
+	mkdir -p gatemut_crfile
+	cat > gatemut_crfile/mut.go <<'MUTEOF'
+package gatemut_crfile
+
+import "os"
+
+type T struct{ r *os.File }
+
+func (c *T) use() {
+	var b [1]byte
+	_, _ = c.r.Read(b[:]) // file-backed receiver must not be exempted
+}
+MUTEOF
+	run_mut "file-backed c.r receiver"
+
+	mkdir -p gatemut_zrout
+	cat > gatemut_zrout/mut.go <<'MUTEOF'
+package gatemut_zrout
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func use(f *os.File) {
+	zr := flate.NewReader(f)
+	var out [8]byte
+	_, _ = io.ReadFull(zr, out[:]) // same names, different shape: must stay visible
+}
+MUTEOF
+	run_mut "file-backed zr/out reader with a different index shape"
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 28 mutation forms rejected)"
+	echo "import-graph self-test passed (all 30 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
