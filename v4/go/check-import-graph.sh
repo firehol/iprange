@@ -165,7 +165,10 @@ content_violations() {
 		# The in-memory inflater's tolerated calls are blanked as exact
 		# call nodes (c.r.Read(p) / c.r.ReadByte()), never as whole
 		# lines, so a forbidden transfer on the same line stays visible.
-		strip_comments < "$f" | sed -E 's/c\.r\.Read(Byte)?\([^()]*\)/ /g' | sed "s@^@$f:@"
+		strip_comments < "$f" | sed -E \
+			-e 's/c\.r\.Read(Byte)?\([^()]*\)/ /g' \
+			-e 's/io\.ReadFull\(zr, [^;]*\)/ /g' \
+			| sed "s@^@$f:@"
 	done
 }
 
@@ -176,7 +179,7 @@ violations=$(content_violations)
 # (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
 # The set covers the read/write/seek language API families including the
 # x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|MethodByName|Method|NewDecoder|Decode|Encode|WriteString|WriteRune|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|ReadFull|ReadAtLeast|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|Print|Printf|Println|Scan|Scanln|Scanf|MethodByName|Method|NewDecoder|Decode|Encode|WriteString|WriteRune|NewWriter|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
@@ -190,7 +193,7 @@ fi
 
 # Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
 # behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart)"'; then
+if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib|compress/bzip2|compress/lzw|archive/tar|archive/zip|encoding/ascii85|encoding/base64|encoding/csv|encoding/gob|encoding/json|encoding/xml|image|image/gif|image/jpeg|image/png|mime/multipart|log|text/template|html/template|os/exec|net/http)"'; then
 	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
@@ -225,7 +228,8 @@ if [ "$self_test" -eq 1 ]; then
 			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile \
 			gatemut_fscan gatemut_copyn gatemut_reflect gatemut_rawsys \
 			gatemut_cfr gatemut_exline gatemut_winint gatemut_decoder \
-			gatemut_writestr gatemut_nested gatemut_refmeth
+			gatemut_writestr gatemut_nested gatemut_refmeth gatemut_readfull \
+			gatemut_readleast gatemut_logw gatemut_flatew
 		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
 			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
 			gatemut_aliased_bufio.go
@@ -285,7 +289,7 @@ var file *os.File
 
 var m = file.Read
 
-func use() { var b []byte; _ = m(b) }
+func use() { var b []byte; _, _ = m(b) }
 MUTEOF
 	run_mut "os.File.Read method value"
 
@@ -442,7 +446,7 @@ package mapping
 
 import "golang.org/x/sys/unix"
 
-func copyRange(a, b int, n uint64) (int, error) {
+func copyRange(a, b, n int) (int, error) {
 	return unix.CopyFileRange(a, nil, b, nil, n, 0)
 }
 MUTEOF
@@ -514,7 +518,9 @@ var c = struct{ r *os.File }{f}
 
 func use() {
 	var b [1]byte
-	_ = c.r.Read(f.Read(b[:])) // textual probe: nested transfer must stay visible, not be blanked
+	_ = c.r.Read(f.Read(b[:])) // intentional textual probe (cannot typecheck: no
+	// []byte-typed file-read expression exists); the nested transfer must
+	// stay visible to the gate, not be blanked with the tolerated node
 }
 MUTEOF
 	run_mut "forbidden transfer nested inside the tolerated call node"
@@ -534,11 +540,71 @@ func use() { _ = reflect.ValueOf(f).Method(2).Call(nil) }
 MUTEOF
 	run_mut "reflection Method(i).Call"
 
+	mkdir -p gatemut_readfull
+	cat > gatemut_readfull/mut.go <<'MUTEOF'
+package gatemut_readfull
+
+import (
+	"io"
+	"os"
+)
+
+var f *os.File
+
+func use() { var b [10]byte; _, _ = io.ReadFull(f, b[:]) }
+MUTEOF
+	run_mut "io.ReadFull over a file"
+
+	mkdir -p gatemut_readleast
+	cat > gatemut_readleast/mut.go <<'MUTEOF'
+package gatemut_readleast
+
+import (
+	"io"
+	"os"
+)
+
+var f *os.File
+
+func use() { var b [10]byte; _, _ = io.ReadAtLeast(f, b[:], 1) }
+MUTEOF
+	run_mut "io.ReadAtLeast over a file"
+
+	mkdir -p gatemut_logw
+	cat > gatemut_logw/mut.go <<'MUTEOF'
+package gatemut_logw
+
+import (
+	"log"
+	"os"
+)
+
+var f *os.File
+
+func use() { log.New(f, "", 0).Println("payload") }
+MUTEOF
+	run_mut "log package writing to a file"
+
+	mkdir -p gatemut_flatew
+	cat > gatemut_flatew/mut.go <<'MUTEOF'
+package gatemut_flatew
+
+import (
+	"compress/flate"
+	"os"
+)
+
+var f *os.File
+
+func use() { w, _ := flate.NewWriter(f, 6); w.Close() }
+MUTEOF
+	run_mut "flate.NewWriter over a file"
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 22 mutation forms rejected)"
+	echo "import-graph self-test passed (all 26 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
