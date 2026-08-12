@@ -18,6 +18,20 @@ below, report sections 11j-13); repository counts: production 4,874 raw
 lines / tests 4,397 raw lines; Milestone 1 is ready to close once the
 final validation record is written; Milestone 2 (writer) may start.
 
+## Review Process (user decision, 2026-08-12)
+
+1. Implement the milestone work, always long-term-best and minimal-complete.
+2. Iteratively run 5-7 narrow-scope subagents on the session's own model (no
+   model override). Each focuses on a disjoint aspect of the changes. Fix all
+   P0 (critical), P1 (high), and P2 (medium) findings; only P3 (cosmetic)
+   issues may be ignored. Repeat until all reviewers PASS.
+3. After the iterative pass, run two full-scope final reviewers over the
+   entire milestone scope: sol (fixed at xhigh reasoning) and k3 (spawned
+   with reasoning_effort=max). The milestone is finished only when both
+   report no P0-P2 findings.
+4. If sol or k3 finds any P0-P2 issue, restart at step 1: rework, re-run the
+   iterative reviewers, then re-run sol and k3.
+
 ## Requirements
 
 ### Purpose
