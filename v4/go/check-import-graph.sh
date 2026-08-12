@@ -86,13 +86,42 @@ done
 
 # Content-transfer I/O ban in production sources: persistent artifact bytes
 # must never move through read/write/seek APIs (mmap-only contract). Test-only
-# fixture builders are exempt. Comments are stripped before matching so a
-# doc comment that names an API does not trip the gate.
-if [ -n "$(grep -RnE '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(' \
-		internal/format internal/mapping internal/reader *.go 2>/dev/null \
-		| grep -v '_test.go' \
-		| sed -e 's@//.*@@' -e 's@/\*.*\*/@@' \
-		| grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(')" ]; then
+# fixture builders are exempt. Comments (line and multi-line block) are
+# stripped before matching so a doc comment that names an API does not trip
+# the gate; the stripper is a stateful awk because a block comment can span
+# lines.
+strip_comments() {
+	awk '
+	BEGIN { inblock = 0 }
+	{
+		line = $0
+		if (inblock) {
+			if (match(line, /\*\//)) { line = substr(line, RSTART + 2); inblock = 0 }
+			else { next }
+		}
+		while (match(line, /\/\*/)) {
+			prefix = substr(line, 1, RSTART - 1)
+			rest = substr(line, RSTART + 2)
+			if (match(rest, /\*\//)) { line = prefix substr(rest, RSTART + 2) }
+			else { line = prefix; inblock = 1; break }
+		}
+		sub(/\/\/.*/, "", line)
+		print line
+	}'
+}
+
+# content_violations prints every production source line that still mentions
+# a content-transfer call after comment stripping. The strip runs on whole
+# files first: grep-then-strip would lose the block-comment state across
+# lines.
+content_violations() {
+	for f in $(find internal/format internal/mapping internal/reader -name '*.go' -not -name '*_test.go' 2>/dev/null) *.go; do
+		[ -f "$f" ] || continue
+		case "$f" in *_test.go) continue ;; esac
+		strip_comments < "$f" | sed "s@^@$f:@"
+	done
+}
+if [ -n "$(content_violations | grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile)\(')" ]; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
