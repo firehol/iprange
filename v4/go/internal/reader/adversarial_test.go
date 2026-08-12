@@ -124,7 +124,6 @@ func TestStructuredPlausibleCorruptionAcceptedAtLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseView, found, err := base.LookupNetworkEnrichmentV14(0x0a010000) // 10.1.0.0
-	base.Close()
 	if err != nil || !found {
 		t.Fatalf("baseline lookup: found=%v err=%v", found, err)
 	}
@@ -132,6 +131,7 @@ func TestStructuredPlausibleCorruptionAcceptedAtLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	base.Close()
 
 	path := copyFixture(t, "structured-ipv4.iprdb", "struct-bad.iprdb")
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
