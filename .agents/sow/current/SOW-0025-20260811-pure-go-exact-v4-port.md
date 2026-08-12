@@ -20,8 +20,18 @@ word read segfaults on released memory) and three P2 (decision 5A
 unratified; mmap gate bypassable plus a Windows Mapping.File escape; stale
 close-out records), all fixed at HEAD 2fd6cae with the cross-reader
 reassignment regression test, or recorded for the user's decision (5A).
-Repository counts: production 4,766 raw lines / tests 4,832 raw lines.
-Milestone 2 must not start until a new independent final review passes.
+The round-12 final review then confirmed the lifetime fix but found two
+remaining P2: decision 5A still unratified, and the mmap source gate still
+bypassable (x/sys descriptor reads, bufio wrappers, dot imports, and
+build-tagged packages). Fixed at HEAD 4fdc671: the gate is now a
+whole-tree selector scan (find across all build tags) with dot-import and
+bufio import bans, a durable --self-test mode rejecting nine mutation
+forms, and the runtime half of the mmap-only evidence (strace of an
+open/read/close session: openat, OFD lock, mmap, munmap, unlock, close
+with no read/pread/readv/lseek on the database descriptor) recorded in
+the report. Repository counts: production 4,771 raw lines / tests 4,832
+raw lines. Milestone 2 must not start until a new independent final
+review passes.
 The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
 
@@ -139,8 +149,24 @@ sidecars, live coordination, and publication remain Milestone 4.
   the Windows descriptor and accessor are gone; the gate scans every go
   list package with word-boundary selector matching, mutation-tested
   against all five bypass forms) and in the records commit that follows.
-  Iterative re-review and the next sol round are appended below when they
-  complete.
+- Iterative pass (round-12 fixes): six narrow reviewers all PASS at HEAD
+  002505b (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; one records P1
+  - report production LOC - and one records P2 - missing round-12
+  narrative - fixed in 002505b).
+- sol round 12: FAIL at HEAD 002505b with two P2 and one P3: decision 5A
+  remains unratified (user-decision gate); the mmap source gate is still
+  bypassable - unix.Readv descriptor reads in the mapping owner, bufio
+  wrappers (bufio.NewReader(file).ReadByte), dot-imported os.ReadFile,
+  and build-tagged packages invisible to a linux go list all compile and
+  pass the gate; the records claim gate coverage beyond what it provides
+  and the report lacks the runtime-trace evidence the SOW records
+  require. Fixed at HEAD 4fdc671: whole-tree selector scan (find covers
+  every build-tagged file), dot-import and bufio/io-ioutil import bans,
+  extended selector set (Readv/Writev/Preadv/Pwritev/ReadByte/...), a
+  durable --self-test mode that rejects all nine mutation forms, runtime
+  strace evidence recorded in the report, and P3 lifetime-comment
+  corrections. Iterative re-review and the next sol round are appended
+  below when they complete.
 
 ## Requirements
 
@@ -1494,6 +1520,9 @@ software. This framing is generic and applies to every project final review.
 Resolution: the five external-audit findings were fixed at HEAD ca30026 with
 pre-fix-failing regression pins, and the round-11 final-review findings
 (view-lifetime guard retargeting, mmap-gate escapes, stale records) were fixed
-at HEAD 2fd6cae; decision 5A was entered in the decision log for the user's
-ratification. The complete re-review trail is recorded in the Gate execution
-record; the closing result is appended there when it completes.
+at HEAD 2fd6cae; the round-12 gate findings were fixed at HEAD 4fdc671
+(whole-tree selector scan, dot-import and bufio bans, durable gate
+self-test, runtime strace evidence). Decision 5A was entered in the
+decision log for the user's ratification and remains the only open
+product decision. The complete re-review trail is recorded in the Gate
+execution record; the closing result is appended there when it completes.
