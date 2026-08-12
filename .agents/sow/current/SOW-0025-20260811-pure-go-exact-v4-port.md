@@ -25,7 +25,7 @@ remaining P2: decision 5A still unratified, and the mmap source gate still
 bypassable (x/sys descriptor reads, bufio wrappers, dot imports, and
 build-tagged packages). Fixed at HEAD 4fdc671: the gate is now a
 whole-tree selector scan (find across all build tags) with dot-import and
-bufio import bans, a durable --self-test mode rejecting nine mutation
+bufio import bans, a durable --self-test mode rejecting eleven mutation
 forms, and the runtime half of the mmap-only evidence (strace of an
 open/read/close session: openat, OFD lock, mmap, munmap, unlock, close
 with no read/pread/readv/lseek on the database descriptor) recorded in
@@ -163,7 +163,7 @@ sidecars, live coordination, and publication remain Milestone 4.
   require. Fixed at HEAD 4fdc671: whole-tree selector scan (find covers
   every build-tagged file), dot-import and bufio/io-ioutil import bans,
   extended selector set (Readv/Writev/Preadv/Pwritev/ReadByte/...), a
-  durable --self-test mode that rejects all nine mutation forms, runtime
+  durable --self-test mode that rejects all eleven mutation forms, runtime
   strace evidence recorded in the report, and P3 lifetime-comment
   corrections. Iterative re-review and the next sol round are appended
   below when they complete.

@@ -22,7 +22,7 @@ lifetime fix but found two remaining P2: decision 5A still unratified,
 and the mmap source gate still bypassable (x/sys descriptor reads, bufio
 wrappers, dot imports, build-tagged packages). Both were fixed at HEAD
 4fdc671 with a whole-tree selector scan, dot-import and bufio import
-bans, a durable --self-test mode rejecting nine mutation forms, and the
+bans, a durable --self-test mode rejecting eleven mutation forms, and the
 runtime strace evidence below. Milestone 2 must not start until a new
 independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
@@ -77,7 +77,7 @@ go test -race ./internal/format ./internal/reader ./internal/mapping .   ok
 go vet ./...                                  clean
 gofmt -l .                                    clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
-check-import-graph.sh --self-test: 9/9 mutation forms rejected
+check-import-graph.sh --self-test: 11/11 mutation forms rejected
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -110,7 +110,7 @@ tree): 4,832 raw lines. The earlier
   and the bufio / io-ioutil wrapper imports are banned outright; the
   Windows mapping stub no longer carries or exposes a raw `*os.File`
   (Mapping.File removed on every platform); `--self-test` durably
-  rejects nine mutation forms (direct call, alias, method value, Seek,
+  rejects eleven mutation forms (direct call, alias, method value, Seek,
   new directory, unix.Readv in the mapping owner, bufio wrapper, dot
   import, windows-only package).
 - view-lifetime guard (round-12): public views retain the immutable
@@ -904,7 +904,7 @@ with two P2 (decision 5A unratified; mmap gate still bypassable through
 x/sys descriptor reads, bufio wrappers, dot imports, and build-tagged
 packages) and one P3 (retained-slice lifetime comments); fixed at HEAD
 4fdc671 with the whole-tree selector scan, the dot-import and bufio bans,
-the durable nine-form gate self-test, and comment corrections, with the
+the durable eleven-form gate self-test, and comment corrections, with the
 runtime strace evidence recorded in section 2. Milestone 1 is reopened
 and Milestone 2 is blocked pending the independent re-review and the
 user's decision 5A. The worker boundary decision remains scheduled for

@@ -173,7 +173,7 @@ violations=$(content_violations)
 # (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
 # The set covers the read/write/seek language API families including the
 # x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine)\b'; then
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek)\b'; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
@@ -187,7 +187,7 @@ fi
 
 # Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
 # behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '^[^:]*:[[:space:]]*"(bufio|io/ioutil)"'; then
+if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil)"'; then
 	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
@@ -213,7 +213,8 @@ if [ "$self_test" -eq 1 ]; then
 	cleanup() {
 		rm -rf gatemut_readall gatemut_alias gatemut_methodval gatemut_seek \
 			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile
-		rm -f internal/mapping/gatemut_readv.go
+		rm -f internal/mapping/gatemut_readv.go \
+			gatemut_singleline_bufio.go gatemut_aliased_bufio.go
 	}
 	trap cleanup EXIT INT TERM
 
@@ -330,6 +331,28 @@ func read(p string) ([]byte, error) { return ReadFile(p) }
 MUTEOF
 	run_mut "dot-imported os.ReadFile"
 
+	cat > gatemut_singleline_bufio.go <<'MUTEOF'
+package iprangedb
+
+import "bufio"
+
+var br *bufio.Reader
+
+func peek() ([]byte, error) { return br.Peek(1) }
+MUTEOF
+	run_mut "single-line bufio import with Peek"
+
+	cat > gatemut_aliased_bufio.go <<'MUTEOF'
+package iprangedb
+
+import b "bufio"
+
+var br *b.Reader
+
+func peek() ([]byte, error) { return br.Peek(1) }
+MUTEOF
+	run_mut "aliased bufio import with Peek"
+
 	mkdir -p gatemut_winfile
 	cat > gatemut_winfile/mut.go <<'MUTEOF'
 //go:build windows
@@ -346,7 +369,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 9 mutation forms rejected)"
+	echo "import-graph self-test passed (all 11 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
