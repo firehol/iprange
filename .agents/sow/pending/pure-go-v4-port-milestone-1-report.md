@@ -1,7 +1,8 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
-Date: 2026-08-11. Status: implementation checkpoint complete; two decisions
-still pending (both evidence-first, per the recorded Milestone 0 closure).
+Date: 2026-08-11 (updated 2026-08-12 after review rounds 2-3). Status:
+implementation checkpoint complete; three decisions still pending
+(evidence-first, per the recorded Milestone 0 closure and round-2 mapping).
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -609,13 +610,19 @@ verification verdicts:
 Acceptance criteria evidence: portable codecs (literal vectors), mapping
 owner (geometry/lifetime/lock), public immutable reader, all five Rust
 fixture cross-reads with `cases.json` semantics, malformed bootstrap
-rejection, zero-allocation lookups/scans, first platform/worker feasibility
-report — all executed and recorded above. The independent review found three
-blocking issues and two nits; all were verified, fixed, and regression-tested
-(section 9), and the reviewer's verdict on the repaired tree was that no
-actionable finding remains in the milestone scope. The same-failure searches
-(content-transfer, page arrays, stale constants, PID-slot model) were re-run
-over the new tree: none present (the new tree contains no read/write/seek
-content calls, no `[PageSize]byte` arrays, no stale tags, no sidecar code).
-Next milestone is safe to start once Decisions 1 (deletion set, evidence now
-available) and 2 (worker boundary) are answered.
+rejection, zero-allocation lookups/scans (incl. the blob path), first
+platform/worker feasibility report — all executed and recorded above.
+Review history: sections 9/10/10b record the independent second-fourth
+passes; section 11c records the round-2 six-agent review and its repairs;
+section 11d records the round-3 verification pass (including the blob-gap
+underflow P0 and its regression test) and the six final PASS verdicts. The
+same-failure searches (content-transfer, page arrays, stale constants,
+PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
+tree: none present. Next milestone is safe to start once the three pending
+decisions are answered: (1) deletion set (100 tracked files + 2 untracked
+leftovers, atomic with the Milestone 2 writer commit), (2) worker boundary
+(assembly sigaction shim vs spec change vs drop), (3) closed-state error
+class (HandleClosed vs WrongState, Release idempotency, released-view
+WordCount silent-0); the recorded authority conflict (unknown nonzero
+structure_kind on direct/membership) is decided with the conformance
+milestone.

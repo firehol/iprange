@@ -819,9 +819,9 @@ Acceptance criteria evidence:
 - Milestone 1 evidence: milestone report
   `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md` (fixture
   cross-open with exact cases.json semantics, malformed rejection, literal
-  codec vectors, zero-allocation measurements, five review passes plus the
-  round-2 six-agent review, all repairs regression-pinned). Milestone 2 not
-  started.
+  codec vectors, zero-allocation measurements incl. the blob path, review
+  rounds 1-3 with all P0-P2 findings fixed and regression-pinned).
+  Milestone 2 not started.
 
 Tests or equivalent validation:
 
@@ -844,11 +844,12 @@ Real-use evidence:
 
 Reviewer findings:
 
-- Six-agent adversarial review (round 2, 2026-08-12): 4 FAIL verdicts and 1
-  PASS-with-pending-decision; every actionable P1/P2 finding was repaired in
-  the round-2 fix pass with a regression test; the two P1s on the closed-state
-  error class are the pending user decision. The reviewers re-review the
-  repaired tree before Milestone 1 closes.
+- Six-agent adversarial review rounds 1-3 (2026-08-12): round 1 produced
+  one P0-class false claim and fifteen P1/P2 findings, all repaired with
+  regression tests; round 2 caught a new P0 (blob coverage underflow) and
+  seven P2s, all repaired and pinned; round 3 closed with all six reviewers
+  at PASS (0 P0-P2). The closed-state error class remains the recorded
+  pending user decision, not a defect.
 
 Same-failure scan:
 
