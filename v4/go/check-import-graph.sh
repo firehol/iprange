@@ -835,6 +835,27 @@ MUTEOF
 	add_mut internal/mapping/gatemut_hidden.go
 	run_mut "gatemut_-named file carrying a transfer"
 
+	# --- 41: aliased os import must not dodge the producer taint --------
+	cat > internal/mapping/gatemut_osalias.go <<'MUTEOF'
+package mapping
+
+import (
+	fsp "os"
+	"path/filepath"
+)
+
+func aliasProbe(path string) error {
+	f, err := fsp.OpenFile(filepath.Clean(path), fsp.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Chdir() // unapproved file method: reachable only through the aliased producer taint
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_osalias.go
+	run_mut "aliased os import dodging the producer taint"
+
 	# --- 40: an innocent gatemut_-named file must survive and pass -------
 	cat > internal/mapping/gatemut_innocent.go <<'MUTEOF'
 package mapping
@@ -858,7 +879,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 40 mutation forms rejected)"
+	echo "import-graph self-test passed (all 41 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

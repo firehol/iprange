@@ -316,7 +316,7 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 			}
 			for i, name := range vs.Names {
 				if len(vs.Values) > i {
-					cls = classify(vs.Values[i], pkg, info)
+					cls = classify(vs.Values[i], pkg, info, imports)
 				}
 				applyKind(pkg, name.Name, cls)
 			}
@@ -329,8 +329,8 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 			st := cloneTaints(pkg)
 			addSignatureTaints(st, d.Recv, info)
 			addSignatureTaints(st, d.Type.Params, info)
-			prepassStmts(d.Body.List, st, info)
-			exempts := findExemptions(d, src, fset, st, info)
+			prepassStmts(d.Body.List, st, info, imports)
+			exempts := findExemptions(d, src, fset, st, info, imports)
 			rulesWalk("func "+d.Name.Name, d.Body, st, exempts, imports, info, reporter)
 		case *ast.GenDecl:
 			if d.Tok == token.VAR || d.Tok == token.CONST {
@@ -368,7 +368,7 @@ func classifyType(t ast.Expr, info pkgInfo) kind {
 }
 
 // classify maps an expression value to file/container/struct taint.
-func classify(e ast.Expr, st *taints, info pkgInfo) kind {
+func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) kind {
 	switch v := e.(type) {
 	case *ast.Ident:
 		if st.file[v.Name] {
@@ -378,13 +378,13 @@ func classify(e ast.Expr, st *taints, info pkgInfo) kind {
 			return kindContainer
 		}
 	case *ast.StarExpr:
-		return classify(v.X, st, info)
+		return classify(v.X, st, info, imports)
 	case *ast.ParenExpr:
-		return classify(v.X, st, info)
+		return classify(v.X, st, info, imports)
 	case *ast.UnaryExpr:
-		return classify(v.X, st, info)
+		return classify(v.X, st, info, imports)
 	case *ast.CallExpr:
-		if _, ok := producerCall(v, info); ok {
+		if _, ok := producerCall(v, info, imports); ok {
 			return kindFile
 		}
 	case *ast.CompositeLit:
@@ -398,7 +398,7 @@ func classify(e ast.Expr, st *taints, info pkgInfo) kind {
 			}
 		}
 	case *ast.SelectorExpr:
-		if isFileExpr(v, st, info) {
+		if isFileExpr(v, st, info, imports) {
 			return kindFile
 		}
 		if isContainerExpr(v, st, info) {
@@ -419,15 +419,23 @@ func applyKind(st *taints, name string, k kind) {
 
 // producerCall reports whether e is a call producing *os.File: a stdlib
 // producer, or a same-package function whose result type is *os.File.
-func producerCall(e ast.Expr, info pkgInfo) (*ast.CallExpr, bool) {
+func producerCall(e ast.Expr, info pkgInfo, imports map[string]string) (*ast.CallExpr, bool) {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
 		return nil, false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if ok {
-		if pkg, ok := sel.X.(*ast.Ident); ok && fileProducers[pkg.Name+"."+sel.Sel.Name] {
-			return call, true
+		if pkg, ok := sel.X.(*ast.Ident); ok {
+			// Resolve the package by local alias so an aliased
+			// `import fsp "os"` cannot dodge the producer taint.
+			path := imports[pkg.Name]
+			if path == "os" && fileProducers["os."+sel.Sel.Name] {
+				return call, true
+			}
+			if fileProducers[pkg.Name+"."+sel.Sel.Name] {
+				return call, true
+			}
 		}
 	}
 	if id, ok := call.Fun.(*ast.Ident); ok {
@@ -443,7 +451,7 @@ func producerCall(e ast.Expr, info pkgInfo) (*ast.CallExpr, bool) {
 // isFileExpr reports whether expr names a *os.File value: a tainted
 // identifier, a struct-field access whose field is *os.File, or a
 // producer call.
-func isFileExpr(e ast.Expr, st *taints, info pkgInfo) bool {
+func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) bool {
 	switch v := e.(type) {
 	case *ast.Ident:
 		return st.file[v.Name]
@@ -454,12 +462,12 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo) bool {
 		}
 		return info.structs[structName][v.Sel.Name] == "*os.File"
 	case *ast.CallExpr:
-		_, ok := producerCall(v, info)
+		_, ok := producerCall(v, info, imports)
 		return ok
 	case *ast.StarExpr:
-		return isFileExpr(v.X, st, info)
+		return isFileExpr(v.X, st, info, imports)
 	case *ast.ParenExpr:
-		return isFileExpr(v.X, st, info)
+		return isFileExpr(v.X, st, info, imports)
 	}
 	return false
 }
@@ -487,8 +495,8 @@ func isContainerExpr(e ast.Expr, st *taints, info pkgInfo) bool {
 // isFileOrContainer is the argument-taint test: a file value, a
 // container value, or a composite literal that textually or transitively
 // holds files (ProcAttr{Files: []*os.File{...}}).
-func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo) bool {
-	if isFileExpr(e, st, info) || isContainerExpr(e, st, info) {
+func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) bool {
+	if isFileExpr(e, st, info, imports) || isContainerExpr(e, st, info) {
 		return true
 	}
 	switch v := e.(type) {
@@ -500,17 +508,17 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo) bool {
 			if kv, ok := el.(*ast.KeyValueExpr); ok {
 				el = kv.Value
 			}
-			if isFileOrContainer(el, st, info) {
+			if isFileOrContainer(el, st, info, imports) {
 				return true
 			}
 		}
 	case *ast.CallExpr:
-		_, ok := producerCall(v, info)
+		_, ok := producerCall(v, info, imports)
 		return ok
 	case *ast.UnaryExpr:
-		return isFileOrContainer(v.X, st, info)
+		return isFileOrContainer(v.X, st, info, imports)
 	case *ast.ParenExpr:
-		return isFileOrContainer(v.X, st, info)
+		return isFileOrContainer(v.X, st, info, imports)
 	}
 	return false
 }
@@ -576,7 +584,7 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 
 // prepassStmts walks statements in source order so assignment-based
 // taint propagation sees earlier assignments.
-func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo) {
+func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]string) {
 	for _, s := range list {
 		switch v := s.(type) {
 		case *ast.AssignStmt:
@@ -584,7 +592,7 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo) {
 				if i >= len(v.Rhs) {
 					break
 				}
-				applyLHS(lhs, v.Rhs[i], st, info)
+				applyLHS(lhs, v.Rhs[i], st, info, imports)
 			}
 		case *ast.DeclStmt:
 			if gd, ok := v.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR {
@@ -596,7 +604,7 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo) {
 						}
 						for i, name := range vs.Names {
 							if len(vs.Values) > i {
-								cls = classify(vs.Values[i], st, info)
+								cls = classify(vs.Values[i], st, info, imports)
 								if c, ok := classifyStruct(vs.Values[i], info); ok {
 									st.struc[name.Name] = c
 								}
@@ -608,21 +616,21 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo) {
 			}
 		case *ast.IfStmt:
 			if v.Init != nil {
-				prepassStmts([]ast.Stmt{v.Init}, st, info)
+				prepassStmts([]ast.Stmt{v.Init}, st, info, imports)
 			}
-			prepassStmts(v.Body.List, st, info)
+			prepassStmts(v.Body.List, st, info, imports)
 			if v.Else != nil {
 				if blk, ok := v.Else.(*ast.BlockStmt); ok {
-					prepassStmts(blk.List, st, info)
+					prepassStmts(blk.List, st, info, imports)
 				} else if ifs, ok := v.Else.(*ast.IfStmt); ok {
-					prepassStmts([]ast.Stmt{ifs}, st, info)
+					prepassStmts([]ast.Stmt{ifs}, st, info, imports)
 				}
 			}
 		case *ast.ForStmt:
 			if v.Init != nil {
-				prepassStmts([]ast.Stmt{v.Init}, st, info)
+				prepassStmts([]ast.Stmt{v.Init}, st, info, imports)
 			}
-			prepassStmts(v.Body.List, st, info)
+			prepassStmts(v.Body.List, st, info, imports)
 		case *ast.RangeStmt:
 			// Ranging over a container yields *os.File elements in the
 			// Value position (keys are indexes or map keys, never the
@@ -632,20 +640,20 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo) {
 					st.file[k.Name] = true
 				}
 			}
-			prepassStmts(v.Body.List, st, info)
+			prepassStmts(v.Body.List, st, info, imports)
 		case *ast.SwitchStmt:
 			if v.Init != nil {
-				prepassStmts([]ast.Stmt{v.Init}, st, info)
+				prepassStmts([]ast.Stmt{v.Init}, st, info, imports)
 			}
 			for _, cc := range v.Body.List {
 				if cs, ok := cc.(*ast.CaseClause); ok {
-					prepassStmts(cs.Body, st, info)
+					prepassStmts(cs.Body, st, info, imports)
 				}
 			}
 		case *ast.BlockStmt:
-			prepassStmts(v.List, st, info)
+			prepassStmts(v.List, st, info, imports)
 		case *ast.LabeledStmt:
-			prepassStmts([]ast.Stmt{v.Stmt}, st, info)
+			prepassStmts([]ast.Stmt{v.Stmt}, st, info, imports)
 		}
 	}
 }
@@ -673,12 +681,12 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 	return "", false
 }
 
-func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo) {
+func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]string) {
 	id, ok := lhs.(*ast.Ident)
 	if !ok || id.Name == "_" {
 		return
 	}
-	cls := classify(rhs, st, info)
+	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
 	if c, ok := classifyStruct(rhs, info); ok {
 		st.struc[id.Name] = c
@@ -688,7 +696,7 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo) {
 // findExemptions locates the three tolerated in-memory inflater call
 // shapes inside internal/reader/metadata.go and records their selector
 // positions so the rules pass ignores exactly those nodes.
-func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taints, info pkgInfo) map[token.Pos]bool {
+func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taints, info pkgInfo, imports map[string]string) map[token.Pos]bool {
 	exempts := map[token.Pos]bool{}
 	path := fset.Position(fd.Pos()).Filename
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {
@@ -710,7 +718,7 @@ func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taint
 				args := src[int(call.Lparen) : int(call.Rparen)-1]
 				shape := string(args)
 				if (shape == "zr, out[:int(meta.MetadataUncompressed)]" || shape == "zr, out[int(meta.MetadataUncompressed):]") &&
-					!isFileOrContainer(call.Args[0], st, info) {
+					!isFileOrContainer(call.Args[0], st, info, imports) {
 					exempts[sel.Pos()] = true
 				}
 			}
@@ -765,12 +773,12 @@ func rulesWalk(scope string, body *ast.BlockStmt, st *taints, exempts map[token.
 			}
 		case *ast.CallExpr:
 			if sel, ok := v.Fun.(*ast.SelectorExpr); ok && !exempts[sel.Pos()] {
-				if isFileExpr(sel.X, st, info) && !approvedFileMethods[sel.Sel.Name] {
+				if isFileExpr(sel.X, st, info, imports) && !approvedFileMethods[sel.Sel.Name] {
 					reporter.failf("%s: %s on an *os.File value outside the approved capability surface", scope, sel.Sel.Name)
 				}
 			}
 			for _, arg := range v.Args {
-				if isFileOrContainer(arg, st, info) && !approvedCallee(v.Fun, imports) {
+				if isFileOrContainer(arg, st, info, imports) && !approvedCallee(v.Fun, imports) {
 					reporter.failf("%s: *os.File value passed to %s", scope, calleeText(v.Fun))
 				}
 			}
@@ -823,12 +831,12 @@ func walkRulesNode(node ast.Node, st *taints, _ map[token.Pos]bool, imports map[
 			}
 		case *ast.CallExpr:
 			if sel, ok := v.Fun.(*ast.SelectorExpr); ok {
-				if isFileExpr(sel.X, st, info) && !approvedFileMethods[sel.Sel.Name] {
+				if isFileExpr(sel.X, st, info, imports) && !approvedFileMethods[sel.Sel.Name] {
 					reporter.failf("init: %s on an *os.File value outside the approved capability surface", sel.Sel.Name)
 				}
 			}
 			for _, arg := range v.Args {
-				if isFileOrContainer(arg, st, info) && !approvedCallee(v.Fun, imports) {
+				if isFileOrContainer(arg, st, info, imports) && !approvedCallee(v.Fun, imports) {
 					reporter.failf("init: *os.File value passed to %s", calleeText(v.Fun))
 				}
 			}

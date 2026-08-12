@@ -62,7 +62,7 @@ selector families, constrains *os.File use to the mapping-lifecycle
 methods and same-package/module-internal/x-sys consumers, and exempts
 the three exact in-memory inflater nodes only with file-taint
 verification; the self-test now copies the module to a private temp
-directory and durably rejects forty mutation forms including all nine
+directory and durably rejects forty-one mutation forms including all nine
 independent reproducers of the sixth review, the startup sweep is
 removed, and the records were corrected in the same pass (details in
 the close-out narrative). Decision 5A remains open
@@ -1030,7 +1030,7 @@ values only into the mapping-lifecycle methods
 same-package/module-internal/x-sys consumers, and exempts the three
 exact in-memory inflater nodes only when their receiver/arguments are
 not file-tainted. The self-test now runs in a private temp copy (cp -a
-into mktemp): forty mutation forms are rejected, including all nine
+into mktemp): forty-one mutation forms are rejected, including all nine
 independent reproducers of this review; an innocent gatemut_-named file
 is proven to survive; the reviewed tree is never modified; and the
 startup sweep is removed. Decision 5A remains the single open item and
