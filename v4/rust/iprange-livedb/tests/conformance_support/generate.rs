@@ -58,6 +58,7 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         "rust/membership-ipv4.iprdb" => membership_ipv4(&mut writer),
         "rust/membership-ipv6.iprdb" => membership_ipv6(&mut writer, fixture),
         "rust/structured-ipv4.iprdb" => structured_ipv4(&mut writer, fixture),
+        "rust/structured-ipv4-nothreat.iprdb" => structured_ipv4_nothreat(&mut writer, fixture),
         other => panic!("no Rust fixture generator for {other}"),
     }
     writer.close().unwrap();
@@ -123,6 +124,51 @@ fn structured_ipv4(writer: &mut LiveWriter, fixture: &Fixture) {
     transaction
         .set_metadata_json(&fixture.metadata.bytes().unwrap())
         .unwrap();
+    transaction.commit().unwrap();
+}
+
+/// No-threat structured values: every interned enrichment carries
+/// membership id zero (feeds absent), pinning the canonical absence result
+/// in both readers (binary-format-v4.md section 9A).
+fn structured_ipv4_nothreat(writer: &mut LiveWriter, fixture: &Fixture) {
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_structured_transaction(&cancellation).unwrap();
+    let plain = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64514,
+                country_id: 7,
+                state_id: 8,
+                city_id: 9,
+                location: Some(NetworkEnrichmentV1Location {
+                    latitude_microdegrees: 40_640_060,
+                    longitude_microdegrees: 22_944_420,
+                }),
+            },
+            None,
+        )
+        .unwrap();
+    let bare = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64515,
+                country_id: 10,
+                state_id: 11,
+                city_id: 12,
+                location: None,
+            },
+            None,
+        )
+        .unwrap();
+    transaction
+        .assign_v4(key4("10.2.0.0"), key4("10.2.0.127"), plain)
+        .unwrap();
+    transaction
+        .assign_v4(key4("10.2.0.128"), key4("10.2.0.255"), bare)
+        .unwrap();
+    if let Some(metadata) = fixture.metadata.bytes() {
+        transaction.set_metadata_json(&metadata).unwrap();
+    }
     transaction.commit().unwrap();
 }
 

@@ -121,6 +121,22 @@ func IPv6Inclusive(fromHi, fromLo, toHi, toLo uint64) (Cardinality129, error) {
 	return Cardinality129{hi: hi, lo: lo}.Add(CardinalityFromUint64(1))
 }
 
+// Uint64 converts exactly or reports overflow.
+func (c Cardinality129) Uint64() (uint64, error) {
+	if c.bit128 != 0 || c.hi != 0 {
+		return 0, ErrCardinalityOverflow
+	}
+	return c.lo, nil
+}
+
+// Uint128 returns the two exact u128 halves or reports overflow.
+func (c Cardinality129) Uint128() (hi, lo uint64, err error) {
+	if c.bit128 != 0 {
+		return 0, 0, ErrCardinalityOverflow
+	}
+	return c.hi, c.lo, nil
+}
+
 // String returns the exact decimal representation (spec section 17).
 func (c Cardinality129) String() string {
 	limbs := [3]uint64{c.lo, c.hi, uint64(c.bit128)}

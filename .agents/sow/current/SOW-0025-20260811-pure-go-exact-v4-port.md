@@ -4,19 +4,22 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 implemented (portable mmap-only immutable reader
-with corpus cross-open); four decisions 1A-4A resolved and implemented
+Sub-state: milestone 1 CLOSED (portable mmap-only immutable reader
+with corpus cross-open). Four decisions 1A-4A resolved and implemented
 (pinned hot-path facade with zero allocations/atomics in lookups, scans,
 view operations, and feed lookups; WrongState closed class with
 error-capable WordCount; structure-kind conflict resolved; obsolete
-internal/exactv4 tree deleted in the final implementation commit - 105
-tracked files plus the untracked exactv4.test binary and empty directory;
-worker boundary recorded for the worker milestone); after the decisions,
-the six-reviewer re-verification of the rebuilt facade is complete: all
-six reviewers PASS at HEAD 2fdcce4 with no P0-P2 findings (execution log
-below, report sections 11j-13); repository counts: production 4,874 raw
-lines / tests 4,397 raw lines; Milestone 1 is ready to close once the
-final validation record is written; Milestone 2 (writer) may start.
+internal/exactv4 tree deleted - 105 tracked files plus the untracked
+exactv4.test binary and empty directory; worker boundary recorded for the
+worker milestone). The milestone closed after the six-reviewer iterative
+pass (all six reviewers PASS, execution log below) and the external audit
+close-out round (2026-08-12): obsolete RetentionTag removed, Pin value
+copies share one private close state, DirectSemantic registry 1/2/3,
+structured no-threat absence result (MembershipView, bool, error) pinned
+by the new no-threat corpus fixture, error codes and Cardinality129
+centralized to the single internal/format authorities, closure records
+repaired. Repository counts at close: production 4,890 raw lines / tests
+4,423 raw lines. Milestone 2 (writer) may start.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -513,15 +516,16 @@ The user adopted the external re-review's decisions after the reopening:
   UnsupportedStructure for unknown codes on an otherwise valid structured
   meta).
 - Decision 4A amendment (pin pointer contract, recorded at the re-review):
-  Pin is a pointer type; aliasing the pointer (p2 := p1) shares the single
-  close state, and closing through any alias closes the one logical pin.
-  Copying the Pin VALUE is unsupported (like copying a C opaque handle);
-  the misuse consequences are typed errors (HandleBusy / WrongState), never
-  memory-unsafe behavior. Pinned by TestPinPointerAliasSharesClose.
-- Non-blocking maintenance note (codec reviewer): Cardinality129 arithmetic
-  now exists in two in-sync copies (internal/format/cardinality.go and
-  public types.go); each is pinned by vectors; future edits must keep them
-  in sync.
+  Every Pin value references one shared private close state: pointer
+  aliases (p2 := p1) and value copies (p2 := *p1) close the same logical
+  pin, the count is decremented exactly once, and a second Close through
+  any alias or copy reports WrongState. Pinned by
+  TestPinPointerAliasSharesClose and the added value-copy tests
+  (TestPinValueCopySharesClose, TestPinValueCopyKeepsReaderBusy).
+- External audit close-out (resolved): the duplicated Cardinality129
+  arithmetic and the duplicated public/internal error-code tables were
+  centralized - internal/format is the single authority and v4/go/types.go
+  + v4/go/errors.go re-export aliases, so the copies can no longer drift.
 
 ### 2026-08-12 - decisions 1A-4A implemented (hot-path contract)
 
@@ -568,9 +572,9 @@ The user adopted the external re-review's decisions after the reopening:
     view-guard zero-alloc contract; the SOW current-state entries said "5
     packages". All fixed at 2fdcce4; dated historical entries keep their
     then-accurate wording.
-  - Non-blocking maintenance note (codec reviewer): Cardinality129
-    arithmetic exists in two in-sync copies (internal/format and public
-    types.go), each vector-pinned; future edits must keep them in sync.
+  - External audit close-out (resolved): Cardinality129 and error-code
+    tables centralized on the single internal/format authorities; the
+    public package re-exports aliases.
 - Final verdicts at HEAD 2fdcce4: codecs PASS; bootstrap/meta/direct
   ranges PASS (kind matrix verified pre-fix-failing); membership/blob/
   structured/metadata PASS (metadata rewrite verified incl. empty-present
@@ -1146,8 +1150,8 @@ Reviewer findings:
   repaired with regression tests; round 2 re-review caught a shipped P0
   (blob coverage underflow, 3b4f3d5) and further P2s, all repaired and
   pinned; rounds 3-5 closed with all six reviewers at PASS (0 P0-P2).
-  The closed-state error class remains the recorded pending user decision,
-  not a defect.
+  The closed-state error class was resolved by decision 3 (WrongState
+  class, error-capable WordCount) and was never an open defect.
 
 Same-failure scan:
 
@@ -1221,6 +1225,46 @@ Pending implementation and user acceptance.
 ## Lessons Extracted
 
 Pending implementation.
+
+### 2026-08-12 - external audit close-out round (milestone-1 gate re-verification)
+
+An external full-scope review found five real P0/P1 contract defects after
+the six-reviewer pass declared PASS. All were verified against code and
+specs, fixed, and pinned by pre-fix-failing tests:
+
+1. Obsolete retention semantics restored: `RetentionTag()` and its
+   "retention" test survived the deletion (binary-format-v4.md:311 forbids
+   the compatibility alias; milestone-0 report classified them for
+   deletion). Removed from v4/go/types.go and types_test.go.
+2. Pin value copies double-decremented the reader pin count: `p2 := *p1`
+   carried its own closed flag. Every Pin now references one shared
+   private pinState; value copies and pointer aliases close the same
+   logical pin. Pinned by TestPinValueCopySharesClose and
+   TestPinValueCopyKeepsReaderBusy (both fail on the pre-fix code).
+3. DirectSemantic registry drift: public Go values were 0/1/2 while the
+   Rust engine-defined registry is Generic=1, FirstSeen=2, LastSeen=3.
+   Go now exports 1/2/3; TestPublicSemanticFoundation pins them.
+4. No-threat structured values had no clean absence result: the Go
+   ThreatMembership returned a zero view with nil error. It now returns
+   (MembershipView, bool, error) mirroring the Rust Option; a new
+   Rust-produced corpus fixture (rust/structured-ipv4-nothreat.iprdb, six
+   fixture manifest) with membership-id-zero values pins the absent path
+   in both readers. Rust verify asserts Option None for the empty-feeds
+   ranges; Go asserts present=false.
+5. Duplicated authorities removed: error-code tables (public errors.go vs
+   internal/format/codes.go) and Cardinality129 arithmetic (public types.go
+   vs internal/format/cardinality.go) were independent copies. The
+   internal/format package is now the single authority; the public package
+   re-exports typed aliases (ErrorCode = format.ErrorCode and per-name
+   constants; Cardinality129 = format.Cardinality129 plus wrappers).
+   Uint64/Uint128 moved into the format authority to preserve the public
+   method set.
+
+Gates re-run at HEAD: go test ./... (4 packages), -race, vet, gofmt,
+import graph, 9 cross-compiles, SOW audit, Rust conformance (6 fixtures),
+and the regenerated no-threat fixture all pass. ZERO allocations and zero
+atomics on every measured public hot path are unchanged (12 public + 8
+internal checks at exactly 0).
 
 ## Followup
 

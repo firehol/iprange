@@ -179,7 +179,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			threat, err := view.ThreatMembership()
+			threat, _, err := view.ThreatMembership()
 			if err != nil {
 				return err
 			}

@@ -25,8 +25,8 @@ pub(crate) fn corpus(root: &Path, corpus: &Corpus) {
             .iter()
             .filter(|fixture| fixture.producer == "rust")
             .count(),
-        5,
-        "the Rust-first corpus must retain its five foundation fixtures"
+        6,
+        "the Rust-first corpus must retain its six committed fixtures: the five foundation snapshots plus the no-threat structured fixture added by the pure-Go milestone-1 close-out"
     );
     assert_eq!(corpus.invalid_cases.len(), 3);
     assert_fixture_inventory(root, corpus);

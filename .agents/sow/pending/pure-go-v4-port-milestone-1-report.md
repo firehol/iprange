@@ -66,10 +66,25 @@ feed-lookup-into); atomics exist only at Pin/Close boundaries
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,874
-raw lines, including blanks; new-tree tests: 4,397 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,890
+raw lines, including blanks; new-tree tests: 4,423 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
+
+### Close-out fixes (external audit round, 2026-08-12)
+
+- Obsolete `RetentionTag` removed (no compatibility alias, spec
+  binary-format-v4.md:311; milestone-0 report had classified it for
+  deletion).
+- Pin values now share one private close state; value copies cannot
+  double-decrement the reader pin count (value-copy tests pin it).
+- Public `DirectSemantic` registry aligned with Rust: Generic=1,
+  FirstSeen=2, LastSeen=3.
+- `ThreatMembership` returns `(MembershipView, bool, error)` for the
+  canonical no-threat absence result; corpus gained the Rust-produced
+  `rust/structured-ipv4-nothreat.iprdb` fixture (6 fixtures total).
+- Error codes and Cardinality129 are single-authority in
+  `internal/format`; the public package re-exports aliases.
 
 ## 3. Structure and owners
 

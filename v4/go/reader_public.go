@@ -15,17 +15,6 @@ import (
 // per-call mutex, atomic, or active counter). Lifetime state lives at pin
 // boundaries (Pin/Close), never in lookups.
 
-// Error codes 65-69 complete the exact 1-69 table. Codes 1-64 live in
-// errors.go; code 46's Go name is obsolete (the wire value is authoritative
-// and unchanged).
-const (
-	ErrorFaultWorkerUnavailable ErrorCode = 65 + iota
-	ErrorFaultWorkerFailed
-	ErrorUnsupportedStructure
-	ErrorWrongStructureKind
-	ErrorStructureIdExhausted
-)
-
 // StructureKind selects the immutable hardcoded structure of a structured
 // database (binary-format-v4.md section 9A).
 type StructureKind uint8
@@ -35,13 +24,15 @@ const (
 	StructureKindNetworkEnrichmentV1 StructureKind = 1
 )
 
-// DirectSemantic classifies the direct value tag.
+// DirectSemantic classifies the direct value tag. The numeric values are
+// the engine-defined registry shared with Rust and the C ABI: generic = 1,
+// first_seen = 2, last_seen = 3 (Rust contract.rs DirectSemantic).
 type DirectSemantic uint8
 
 const (
-	DirectSemanticGeneric DirectSemantic = iota
-	DirectSemanticFirstSeen
-	DirectSemanticLastSeen
+	DirectSemanticGeneric   DirectSemantic = 1
+	DirectSemanticFirstSeen DirectSemantic = 2
+	DirectSemanticLastSeen  DirectSemantic = 3
 )
 
 // MetaSelection reports how the selected meta was derived
@@ -234,13 +225,11 @@ func (r *ImmutableReader) Close() error {
 // cannot close while any pin exists (Close reports HandleBusy). Pin.Close
 // must not race lookups using the pin.
 //
-// Pin is a pointer type: aliasing the pointer (p2 := p1) is safe and
-// shares the single close state, so closing through either alias closes
-// the one logical pin. The Pin VALUE must never be copied (*p1); a
-// dereference copy would carry its own close flag and double-decrement the
-// reader's pin count. That misuse is documented as unsupported, exactly
-// like copying a C opaque handle; its consequences are typed errors
-// (HandleBusy / WrongState), never memory-unsafe behavior.
+// Pin is one caller-owned lifetime registration. Every Pin value refers to
+// one shared private close state: pointer aliases (p2 := p1) and value
+// copies (p2 := *p1) close the same logical pin, and the count is
+// decremented exactly once. The first Close through any alias or copy
+// succeeds; every later Close reports WrongState.
 func (r *ImmutableReader) Pin() (*Pin, error) {
 	if r.sh.closed.Load() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
@@ -253,30 +242,39 @@ func (r *ImmutableReader) Pin() (*Pin, error) {
 		r.sh.pins.Add(-1)
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
-	return &Pin{r: r}, nil
+	return &Pin{st: &pinState{r: r}}, nil
 }
 
-// Pin is one caller-owned lifetime registration. It is a pointer type: the
-// pointer may be aliased and shared across goroutines; the value must not
-// be copied (see Pin). Create one Pin per goroutine or workload section
-// and close it exactly once through any alias.
-type Pin struct {
+// pinState holds the one close flag shared by every alias and value copy
+// of a single logical pin. Plain state: Pin.Close must not race pin
+// operations.
+type pinState struct {
 	r      *ImmutableReader
-	closed bool // plain state; Pin.Close must not race pin operations
+	closed bool
 }
 
-// Close returns the pin to its reader. A second Close reports WrongState.
+// Pin is one caller-owned lifetime registration. The pointer may be
+// aliased and shared across goroutines; value copies (p2 := *p1) are also
+// safe because every Pin value references the same private pinState.
+// Create one Pin per goroutine or workload section and close it exactly
+// once across all aliases and copies.
+type Pin struct {
+	st *pinState
+}
+
+// Close returns the pin to its reader. A second Close through any alias or
+// copy reports WrongState.
 func (p *Pin) Close() error {
-	if p.closed {
+	if p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "pin already closed"}
 	}
-	p.closed = true
-	p.r.sh.pins.Add(-1)
+	p.st.closed = true
+	p.st.r.sh.pins.Add(-1)
 	return nil
 }
 
 func (p *Pin) checkOpen() error {
-	if p.closed {
+	if p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "pin closed"}
 	}
 	return nil
@@ -420,10 +418,10 @@ func (p *Pin) LookupFeedInto(name string, dst []byte) (FeedInfo, bool, error) {
 	if !format.FeedNameValidString(name) {
 		return FeedInfo{}, false, &Error{Code: ErrorNameInvalid, Detail: "invalid feed name"}
 	}
-	if err := p.r.requireMembershipCapable(); err != nil {
+	if err := p.st.r.requireMembershipCapable(); err != nil {
 		return FeedInfo{}, false, err
 	}
-	entry, found, err := p.r.inner.LookupFeed(name)
+	entry, found, err := p.st.r.inner.LookupFeed(name)
 	if err != nil {
 		return FeedInfo{}, false, publicError(err)
 	}
@@ -462,7 +460,7 @@ type MembershipView struct {
 }
 
 func (v MembershipView) check() error {
-	if v.p == nil || v.p.closed {
+	if v.p == nil || v.p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "membership view without a live pin"}
 	}
 	return nil
@@ -523,10 +521,10 @@ func (p *Pin) LookupMembershipV4(ip IPv4) (MembershipView, bool, error) {
 	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := p.r.requireMembership(4); err != nil {
+	if err := p.st.r.requireMembership(4); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := p.r.inner.LookupMembership4(uint32(ip))
+	view, found, err := p.st.r.inner.LookupMembership4(uint32(ip))
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
@@ -543,10 +541,10 @@ func (p *Pin) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
 	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := p.r.requireMembership(6); err != nil {
+	if err := p.st.r.requireMembership(6); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := p.r.inner.LookupMembership6(ip.Hi, ip.Lo)
+	view, found, err := p.st.r.inner.LookupMembership6(ip.Hi, ip.Lo)
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
@@ -576,7 +574,7 @@ type NetworkEnrichmentV1View struct {
 }
 
 func (v NetworkEnrichmentV1View) check() error {
-	if v.p == nil || v.p.closed {
+	if v.p == nil || v.p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "enrichment view without a live pin"}
 	}
 	return nil
@@ -603,19 +601,21 @@ func (v NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
 }
 
 // ThreatMembership returns the linked membership bitmap through the same
-// pin, or a zero view when the payload has no threat membership.
-func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
+// pin. found=false with nil error reports the canonical absence result for
+// a structured value without threat feeds (membership id zero), mirroring
+// the Rust Option<MembershipView> return.
+func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, bool, error) {
 	if err := v.check(); err != nil {
-		return MembershipView{}, err
+		return MembershipView{}, false, err
 	}
 	if v.inner.MembershipID() == 0 {
-		return MembershipView{}, nil
+		return MembershipView{}, false, nil
 	}
 	view, err := v.inner.ThreatMembership()
 	if err != nil {
-		return MembershipView{}, publicError(err)
+		return MembershipView{}, false, publicError(err)
 	}
-	return MembershipView{p: v.p, inner: view}, nil
+	return MembershipView{p: v.p, inner: view}, true, nil
 }
 
 // LookupNetworkEnrichmentV1V4 returns the structured value covering ip
@@ -624,10 +624,10 @@ func (p *Pin) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmentV1View, boo
 	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := p.r.requireNetworkEnrichment(4); err != nil {
+	if err := p.st.r.requireNetworkEnrichment(4); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := p.r.inner.LookupNetworkEnrichmentV14(uint32(ip))
+	view, found, err := p.st.r.inner.LookupNetworkEnrichmentV14(uint32(ip))
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}
@@ -643,10 +643,10 @@ func (p *Pin) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmentV1View, boo
 	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := p.r.requireNetworkEnrichment(6); err != nil {
+	if err := p.st.r.requireNetworkEnrichment(6); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := p.r.inner.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
+	view, found, err := p.st.r.inner.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}
@@ -666,7 +666,7 @@ func publicError(err error) error {
 	}
 	var ferr *format.Error
 	if errors.As(err, &ferr) {
-		return &Error{Code: ErrorCode(ferr.Code), Detail: ferr.Detail}
+		return &Error{Code: ferr.Code, Detail: ferr.Detail}
 	}
 	// Internal header/decode validation failures (fixedsize header errors
 	// and similar) are structural corruption at the public boundary.

@@ -735,10 +735,20 @@ func TestConformanceRustFixtures(t *testing.T) {
 							sr.Location.Lat, sr.Location.Long)
 					}
 				}
-				if len(sr.Feeds) > 0 {
-					threat, err := view.ThreatMembership()
-					if err != nil {
-						t.Fatal("threat membership:", err)
+				threat, present, err := view.ThreatMembership()
+				if err != nil {
+					t.Fatal("threat membership:", err)
+				}
+				if len(sr.Feeds) == 0 {
+					// No-threat structured value: canonical absence
+					// (membership id zero) reports present=false with nil
+					// error, mirroring the Rust Option result.
+					if present {
+						t.Errorf("structured %s: unexpected threat membership", sr.From)
+					}
+				} else {
+					if !present {
+						t.Errorf("structured %s: missing threat membership", sr.From)
 					}
 					for _, feed := range sr.Feeds {
 						has, err := threat.ContainsIndex(feedIndexOf(feed))
@@ -1114,9 +1124,9 @@ func TestClosedPinViewRejectsOperations(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("lookup: %v %v", found, err)
 	}
-	threat, err := view.ThreatMembership()
-	if err != nil {
-		t.Fatal("threat:", err)
+	threat, present, err := view.ThreatMembership()
+	if err != nil || !present {
+		t.Fatalf("threat: %v %v", present, err)
 	}
 	if _, err := threat.ContainsIndex(0); err != nil {
 		t.Fatalf("threat through live pin: %v", err)
@@ -1212,5 +1222,59 @@ func TestPinPointerAliasSharesClose(t *testing.T) {
 	// The single decrement leaves the reader closable.
 	if err := r.Close(); err != nil {
 		t.Fatalf("reader close after alias close: %v", err)
+	}
+}
+
+// TestPinValueCopySharesClose pins that a VALUE copy (p2 := *p1) shares the
+// same private close state as the original and the same single pin count.
+// Before the shared-state fix, a value copy carried its own closed flag and
+// a second Close double-decremented the reader's pin count, letting the
+// reader close while a live pin copy still existed.
+func TestPinValueCopySharesClose(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	p1, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	p2 := *p1 // value copy: must reference the same pinState
+	// Both copies operate through the one live pin.
+	if _, _, err := p2.LookupMembershipV4(IPv4(0x0a000000)); err != nil {
+		t.Fatal("lookup through value copy:", err)
+	}
+	// Close through one copy; the other copy must observe the single
+	// close state (WrongState, never a second decrement).
+	if err := p1.Close(); err != nil {
+		t.Fatal("close through first copy:", err)
+	}
+	if fe := errorAsCode(p2.Close()); fe != ErrorWrongState {
+		t.Fatalf("close through second copy must report WrongState, got %v", fe)
+	}
+	// Exactly one decrement happened: the reader closes cleanly.
+	if err := r.Close(); err != nil {
+		t.Fatalf("reader close after value-copy close: %v", err)
+	}
+}
+
+// TestPinValueCopyKeepsReaderBusy pins HandleBusy while two value copies of
+// one logical pin are still open, and clean close once both observed the
+// single state (one real decrement).
+func TestPinValueCopyKeepsReaderBusy(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	p1, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	p2 := *p1
+	if fe := errorAsCode(r.Close()); fe != ErrorHandleBusy {
+		t.Fatalf("reader close with live pin must report HandleBusy, got %v", fe)
+	}
+	if err := p2.Close(); err != nil {
+		t.Fatal("close copy:", err)
+	}
+	if fe := errorAsCode(p1.Close()); fe != ErrorWrongState {
+		t.Fatalf("second close must report WrongState, got %v", fe)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("reader close after both copies observed close: %v", err)
 	}
 }
