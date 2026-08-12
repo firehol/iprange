@@ -121,8 +121,11 @@ forty-five mutation forms. The eighth sweep (HEAD c4b1b52) closed the
 struct-field-storage and channel-transport classes behind the inflater
 exemptions (shared per-package taint state, struct-field write taint,
 chan *os.File taint including send/recv/range, new(T) instances,
-container index reads) and pinned them as self-test forms 47-48; the
-durable rejection set is now forty-seven mutation forms. The records
+container index reads) and pinned them as self-test forms 47-48. The
+ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
+two-hop-channel, and single-variable-channel-range escape classes
+(forms 50-53, with the benign control at form 49); the durable
+rejection set is now fifty-one mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -390,8 +393,11 @@ sidecars, live coordination, and publication remain Milestone 4.
   closed the alias conversion/parameter, ProcAttr-container, and
   os.Pipe classes, releasing the 45-form self-test; the eighth sweep
   (HEAD c4b1b52) closed the struct-field-storage and channel-transport
-  classes behind the inflater exemptions (self-test forms 47-48, now
-  forty-seven mutation forms). The records
+  classes behind the inflater exemptions (self-test forms 47-48). The
+  ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
+  two-hop-channel, and single-variable-range classes (forms 50-53);
+  the self-test now durably rejects fifty-one mutation forms. The
+  records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
   class.
@@ -1515,7 +1521,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 47-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 51-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1861,5 +1867,34 @@ execution record; the closing result is appended there when it completes.
   is now mutation-tested.
 - Gates at HEAD c4b1b52: go test ./... incl -race, go vet, gofmt,
   import graph with the 47-form self-test, nine cross-compiles, SOW
+  audit - all green. Counts: production 4,772 raw lines / tests 4,832
+  raw lines (gate scanner lives outside the module).
+
+### 2026-08-13 - ninth-sweep gate hardening (closures, assertions, nested channels)
+
+- The eighth-sweep re-review (Ampere round 3) found three more escape
+  classes in the scanner: an inline FuncLit returning *os.File
+  (`zr = func() *os.File { ... return f }()`) escaped the taint because
+  closure bodies were not taint-propagated and closure calls were not
+  producers; a type assertion `zb.r.(*os.File)` erased the taint of a
+  file hidden in an interface field (no TypeAssertExpr
+  classification); and the channel family had two gaps - chan chan
+  *os.File (and chan C with C = chan *os.File) did not resolve
+  iteratively, and the single-variable range form `for z := range ch`
+  put the element in the Key slot, which was not tainted.
+- Fixed (HEAD ddc5f9c): closure bodies are walked for taint propagation
+  (they capture the outer state); closure calls and func()-typed
+  identifiers are producers when they return *os.File; TypeAssertExpr
+  taints when the asserted type is *os.File and otherwise delegates to
+  the asserted value; chanElemFile resolves nested channels and alias
+  chains iteratively; the single-variable channel range taints the Key
+  slot; IndexExpr reads of containers are file-tainted in isFileExpr.
+- Self-test forms 50-53 pin the four classes: inline FuncLit, type
+  assertion, two-hop channel transport, and single-variable channel
+  range, all shadowing or exercising the inflater exemption; the benign
+  control (form 49) and the innocent-file survival check (form 46)
+  still pass. Durable rejection set: fifty-one mutation forms.
+- Gates at HEAD ddc5f9c: go test ./... incl -race, go vet, gofmt,
+  import graph with the 51-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).

@@ -70,9 +70,11 @@ tainted *os.File results of same-package accessor methods, and the
 seventh sweep (HEAD e2dc7e0) closed the type-alias conversion/
 parameter, separately built ProcAttr-container, and os.Pipe producer
 classes; the eighth sweep (HEAD c4b1b52) closed the struct-field-
-storage and channel-transport classes behind the inflater exemptions;
-the self-test now durably rejects forty-seven mutation forms (details
-in the close-out narrative). Decision 5A remains open
+storage and channel-transport classes behind the inflater exemptions,
+and the ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit,
+type-assertion, and nested/single-variable channel classes; the
+self-test now durably rejects fifty-one mutation forms (details in the
+close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
@@ -1043,10 +1045,11 @@ is proven to survive; the reviewed tree is never modified; and the
 startup sweep is removed. HEAD 81ca524 pinned the aliased-os producer
 form (forty-first), HEAD 6b05801 tainted *os.File results of
 same-package accessor methods, the seventh sweep closed the
-alias/ProcAttr/os.Pipe classes, and the eighth sweep added the
+alias/ProcAttr/os.Pipe classes, the eighth sweep added the
 struct-field-storage and channel-transport forms behind the inflater
-exemptions; the self-test now durably rejects forty-seven mutation
-forms. Decision 5A remains the single open item and
+exemptions, and the ninth sweep added the closure, type-assertion, and
+nested/single-variable-channel forms; the self-test now durably rejects
+fifty-one mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
