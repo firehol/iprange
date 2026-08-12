@@ -28,12 +28,27 @@ repaired. Repository counts at close: production 4,781 raw lines / tests
    model override). Each focuses on a disjoint aspect of the changes. Fix all
    P0 (critical), P1 (high), and P2 (medium) findings; only P3 (cosmetic)
    issues may be ignored. Repeat until all reviewers PASS.
-3. After the iterative pass, run two full-scope final reviewers over the
-   entire milestone scope: sol (fixed at xhigh reasoning) and k3 (spawned
-   with reasoning_effort=max). The milestone is finished only when both
-   report no P0-P2 findings.
-4. If sol or k3 finds any P0-P2 issue, restart at step 1: rework, re-run the
-   iterative reviewers, then re-run sol and k3.
+3. After the iterative pass, run the full-scope final reviewer(s) over the
+   entire milestone scope: sol (fixed at xhigh reasoning). The milestone is
+   finished only when the final reviewer reports no P0-P2 findings.
+4. If a final reviewer finds any P0-P2 issue, restart at step 1: rework,
+   re-run the iterative reviewers, then re-run the final reviewer.
+
+### Gate execution record (2026-08-12)
+
+- Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
+  (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; only P3 cosmetics,
+  fixed in 8e0f413).
+- Final reviewer execution: k3 was attempted twice (model group k3) and
+  failed in the harness with a proxy tool-call continuation error; the
+  user directed that the session rely on sol only.
+- sol full-scope rounds at c65b2b9 -> 52f7a39 -> f6007c7 -> 6140a80:
+  round 1: 2 P2 (missing pre-fix-failing guards; missing two-pin refcount
+  test) + 3 P3 -> fixed in 52f7a39/8e0f413;
+  round 2: 2 P2 (retention check wording; report header contradiction) +
+  1 P3 -> fixed in f6007c7;
+  round 3: 1 P2 (test count 4,648 not recorded) -> fixed in 6140a80;
+  round 4: PASS, no P0-P2-P3 at HEAD 6140a80. Milestone 1 gate closed.
 
 ## Requirements
 
