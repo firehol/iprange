@@ -117,7 +117,12 @@ accessor methods. The seventh-sweep hardening (HEAD e2dc7e0) closed
 the type-alias conversion and parameter classes, separately built
 `os.ProcAttr{Files}` containers, and the `os.Pipe` producer class,
 renumbered the self-test forms, and raised the durable rejection set to
-forty-five mutation forms. The records
+forty-five mutation forms. The eighth sweep (HEAD c4b1b52) closed the
+struct-field-storage and channel-transport classes behind the inflater
+exemptions (shared per-package taint state, struct-field write taint,
+chan *os.File taint including send/recv/range, new(T) instances,
+container index reads) and pinned them as self-test forms 47-48; the
+durable rejection set is now forty-seven mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -383,8 +388,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   the forty-first; HEAD 6b05801 tainted *os.File results of
   same-package accessor methods; the seventh sweep (HEAD e2dc7e0)
   closed the alias conversion/parameter, ProcAttr-container, and
-  os.Pipe classes, and the self-test now durably rejects forty-five
-  mutation forms. The records
+  os.Pipe classes, releasing the 45-form self-test; the eighth sweep
+  (HEAD c4b1b52) closed the struct-field-storage and channel-transport
+  classes behind the inflater exemptions (self-test forms 47-48, now
+  forty-seven mutation forms). The records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
   class.
@@ -1508,7 +1515,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 45-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 47-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1822,5 +1829,36 @@ execution record; the closing result is appended there when it completes.
   mutation forms.
 - Gates at HEAD e2dc7e0: go test ./... incl -race, go vet, gofmt,
   import graph with the 45-form self-test, nine cross-compiles, SOW
+  audit - all green. Counts: production 4,772 raw lines / tests 4,832
+  raw lines (gate scanner lives outside the module).
+
+### 2026-08-13 - eighth-sweep gate hardening (field storage and channel transport)
+
+- The seventh-sweep re-review (Ampere round 2) found one P1 and one P2
+  still open in the scanner: a *os.File parked in a struct field
+  (`var zb box; zb.r, _, _ = os.Pipe()`), then assigned to the exact
+  exempted inflater reader (`zr = zb.r`) in metadata.go, passed the gate
+  (compiling code, exemption granted); the same class over a
+  `chan *os.File` (`zr = <-ch`) also passed.
+- Root causes: package-level var state was per-file in the scanner, so a
+  type-only struct var declared in one file was invisible to functions
+  in another; struct-field writes and type-only/new(T) instances were
+  not registered; channel element taint did not exist (the make() chan
+  type text was never printed), and field-type aliases were resolved in
+  classifyType but not in field reads.
+- Fixed (HEAD c4b1b52): shared per-package taint state (all package vars
+  collected before any file runs); struct-field write taint overlay;
+  type-only var and new(T) struct registration; chan *os.File taint for
+  declarations, make(), parameters, sends (ch <- f), receives
+  (x := <-ch), and range loops; container index reads; alias-resolved
+  field types in isFileExpr/isContainerExpr; SelectStmt traversal.
+- Self-test forms 47 and 48 pin the two proven classes by shadowing the
+  exact inflater exemption in metadata.go with a struct-field stored
+  file and a channel-transported file; a benign same-shaped control
+  (int field) passes. Durable rejection set: forty-seven mutation
+  forms; the interplay between the exemption guard and the file taint
+  is now mutation-tested.
+- Gates at HEAD c4b1b52: go test ./... incl -race, go vet, gofmt,
+  import graph with the 47-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).
