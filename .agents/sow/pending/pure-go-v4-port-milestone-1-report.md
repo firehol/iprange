@@ -22,9 +22,16 @@ lifetime fix but found two remaining P2: decision 5A still unratified,
 and the mmap source gate still bypassable (x/sys descriptor reads, bufio
 wrappers, dot imports, build-tagged packages). Both were fixed at HEAD
 4fdc671 with a whole-tree selector scan, dot-import and bufio import
-bans, a durable --self-test mode rejecting eleven mutation forms, and the
-runtime strace evidence below. Milestone 2 must not start until a new
-independent final review passes.
+bans, a durable --self-test mode, and the runtime strace evidence below.
+The round-13 final review then found three remaining P2 (decision 5A
+still unratified; the gate still accepted indirect content-transfer
+forms, its line-level exemption, and a windows-tagged internal-package
+import; the records contradicted the source) plus two P3 comments, all
+fixed at HEAD dbdf2b7 (exact call-node blanking, extended selectors,
+gzip/compress-zlib import bans, per-target boundary checks over ten
+GOOS/GOARCH pairs, an eighteen-form durable self-test, and the records
+in this file). Decision 5A remains open for user ratification. Milestone
+2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -76,8 +83,10 @@ go test ./...                                  ok (4 packages: root, format, rea
 go test -race ./internal/format ./internal/reader ./internal/mapping .   ok
 go vet ./...                                  clean
 gofmt -l .                                    clean
-GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
-check-import-graph.sh --self-test: 11/11 mutation forms rejected
+GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
+amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
+check-import-graph.sh --self-test (with per-target boundary checks across ten
+GOOS/GOARCH pairs): 18/18 mutation forms rejected
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -94,7 +103,7 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,771 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,772 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
 tree): 4,832 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
@@ -106,13 +115,22 @@ tree): 4,832 raw lines. The earlier
   whole-tree find over every production Go file (build-tagged files for
   every platform included), matching word-boundary selectors for calls,
   method values, function aliases, Seek, x/sys descriptor reads
-  (Readv/Writev/Preadv/Pwritev), and byte-oriented readers; dot imports
-  and the bufio / io-ioutil wrapper imports are banned outright; the
-  Windows mapping stub no longer carries or exposes a raw `*os.File`
-  (Mapping.File removed on every platform); `--self-test` durably
-  rejects eleven mutation forms (direct call, alias, method value, Seek,
-  new directory, unix.Readv in the mapping owner, bufio wrapper, dot
-  import, windows-only package).
+  (Readv/Writev/Preadv/Pwritev), byte-oriented readers, and the indirect
+  forms (fmt.Fscan/Fscanf/Fscanln, io.CopyN/CopyBuffer, reflection
+  MethodByName, raw unix.Syscall(SYS_READ), unix.CopyFileRange, Sendfile,
+  Splice); tolerated c.r.Read calls are blanked as exact call nodes so a
+  forbidden transfer on the same line stays visible; dot imports and the
+  bufio / io-ioutil / gzip / compress/zlib wrapper imports are banned
+  outright; the internal-package boundary check runs per target over ten
+  GOOS/GOARCH pairs so a build-tagged package cannot import internal
+  packages unseen; the Windows mapping stub no longer carries or exposes
+  a raw `*os.File` (Mapping.File removed on every platform); `--self-test`
+  durably rejects eighteen mutation forms (direct call, alias, method
+  value, Seek, new directory, unix.Readv in the mapping owner, bufio
+  wrapper, dot import, windows-only package, single-line and aliased
+  bufio escapes, fmt.Fscan, io.CopyN, reflection-invoked Read, raw
+  SYS_READ, CopyFileRange, tolerated-call line sharing, windows-only
+  internal import).
 - view-lifetime guard (round-12): public views retain the immutable
   `*pinState` captured at creation, so reassigning the Pin variable that
   created a view cannot retarget its close guard to another reader; the
@@ -904,8 +922,20 @@ with two P2 (decision 5A unratified; mmap gate still bypassable through
 x/sys descriptor reads, bufio wrappers, dot imports, and build-tagged
 packages) and one P3 (retained-slice lifetime comments); fixed at HEAD
 4fdc671 with the whole-tree selector scan, the dot-import and bufio bans,
-the durable eleven-form gate self-test, and comment corrections, with the
-runtime strace evidence recorded in section 2. Milestone 1 is reopened
+the durable gate self-test, and comment corrections, with the runtime
+strace evidence recorded in section 2. The round-13 final review then
+failed with three P2 (decision 5A unratified; gate bypasses through
+fmt.Fscan, io.CopyN/CopyBuffer, reflection MethodByName, raw
+unix.Syscall(SYS_READ), unix.CopyFileRange, Sendfile/Splice, a same-line
+exemption shadow, and a windows-tagged package importing
+internal/mapping unseen by the linux go list boundary check;
+contradictory records and counts) and two P3 comments, all fixed at HEAD
+dbdf2b7 and in the records of this file: exact call-node blanking,
+extended selectors, gzip/compress-zlib import bans, ten-target
+per-GOOS/GOARCH boundary verification, an eighteen-form durable
+self-test, and the count refresh to production 4,772 / tests 4,832.
+Decision 5A remains the single open item and awaits user ratification.
+Milestone 1 is reopened
 and Milestone 2 is blocked pending the independent re-review and the
 user's decision 5A. The worker boundary decision remains scheduled for
 its later milestone per 2A.

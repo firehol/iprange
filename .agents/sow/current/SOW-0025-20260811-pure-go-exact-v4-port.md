@@ -25,13 +25,26 @@ remaining P2: decision 5A still unratified, and the mmap source gate still
 bypassable (x/sys descriptor reads, bufio wrappers, dot imports, and
 build-tagged packages). Fixed at HEAD 4fdc671: the gate is now a
 whole-tree selector scan (find across all build tags) with dot-import and
-bufio import bans, a durable --self-test mode rejecting eleven mutation
-forms, and the runtime half of the mmap-only evidence (strace of an
-open/read/close session: openat, OFD lock, mmap, munmap, unlock, close
-with no read/pread/readv/lseek on the database descriptor) recorded in
-the report. Repository counts: production 4,771 raw lines / tests 4,832
-raw lines. Milestone 2 must not start until a new independent final
-review passes.
+bufio import bans, a self-test mode, and the runtime half of the
+mmap-only evidence (strace of an open/read/close session: openat, OFD
+lock, mmap, munmap, unlock, close with no read/pread/readv/lseek on the
+database descriptor) recorded in the report. The round-13 final review
+then failed with three P2: decision 5A still unratified; the gate still
+accepted indirect content-transfer forms (fmt.Fscan/Fscanf, io.CopyN/
+CopyBuffer, reflection MethodByName, raw unix.Syscall(SYS_READ),
+unix.CopyFileRange, Sendfile/Splice), its line-level tolerated-call
+exemption could hide a forbidden transfer on the same line, and a
+windows-tagged package could still import internal packages unseen by a
+linux-only go list boundary check; plus two P3 comment corrections.
+All fixed at HEAD dbdf2b7: tolerated calls are blanked as exact call
+nodes instead of whole lines, the selector set covers every indirect
+form, gzip and compress/zlib wrapper imports are banned, the boundary
+check runs per target over ten GOOS/GOARCH pairs, and the self-test
+durably rejects eighteen mutation forms. The records were completed in
+the same pass; decision 5A remains the single open user decision and
+blocks milestone close. Repository counts: production 4,772 raw lines /
+tests 4,832 raw lines. Milestone 2 must not start until a new
+independent final review passes.
 The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
 
@@ -163,10 +176,34 @@ sidecars, live coordination, and publication remain Milestone 4.
   require. Fixed at HEAD 4fdc671: whole-tree selector scan (find covers
   every build-tagged file), dot-import and bufio/io-ioutil import bans,
   extended selector set (Readv/Writev/Preadv/Pwritev/ReadByte/...), a
-  durable --self-test mode that rejects all eleven mutation forms, runtime
+  durable --self-test mode that (at that commit) rejected all eleven mutation
+  forms, runtime
   strace evidence recorded in the report, and P3 lifetime-comment
-  corrections. Iterative re-review and the next sol round are appended
-  below when they complete.
+  corrections.
+- Iterative pass (round-13 fixes): six narrow reviewers all PASS at HEAD
+  a1f846f (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; no P0-P2
+  findings; only the records forward-pointer remained to be written).
+- sol round 13: FAIL at HEAD a1f846f with three P2 and two P3: decision
+  5A remains unratified (user-decision gate); the gate still accepts
+  indirect content-transfer forms (fmt.Fscan/Fscanf/Fscanln,
+  io.CopyN/CopyBuffer, reflection MethodByName("Read"), raw
+  unix.Syscall(SYS_READ), unix.CopyFileRange, Sendfile, Splice), its
+  line-level exemption lets a forbidden transfer share a line with a
+  tolerated c.r.Read call, and a windows-tagged package can import
+  internal packages unseen by a linux-only go list boundary check; the
+  records contradicted the source (open-decisions prose said no product
+  decision is open while 5A is unratified, the report header claimed the
+  round-12 gate P2 was fully fixed although the gate remained bypassable,
+  and the reported production count missed two comment lines). P3s:
+  mapping View retained-slice comment wording and
+  NetworkEnrichmentV1View.Value comment wording. All fixed at HEAD
+  dbdf2b7 and in this record: exact call-node blanking replaces the
+  line-level exemption, the selector set covers every indirect form, gzip
+  and compress/zlib wrapper imports are banned, the boundary check runs
+  per target over ten GOOS/GOARCH pairs, the self-test durably rejects
+  all eighteen mutation forms, the P3 comments were corrected, and the
+  records in this entry complete the trail. Decision 5A remains open for
+  user ratification and is the only remaining P2 class.
 
 ## Requirements
 
@@ -591,7 +628,13 @@ Open-source reference evidence:
 
 Open decisions:
 
-- No product or format decision is open. The current specifications and accepted
+- Decision 5A (NetworkEnrichmentV1 location representation) is open and
+  awaits user ratification: the approved parity matrix specifies
+  `Location *NetworkEnrichmentV1Location`, while the zero-allocation
+  lookup contract (decision 4A) is implemented as `Location
+  NetworkEnrichmentV1Location` plus `HasLocation`. The Go implementation
+  stays as recorded until the user decides. Every other product and
+  format decision is closed; the current specifications and accepted
   Rust semantics are frozen for this port.
 - The exact obsolete Go deletion set is intentionally resolved by Milestone 0
   evidence and still requires explicit user approval before deletion.
