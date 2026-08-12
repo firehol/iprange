@@ -18,8 +18,8 @@ copies share one private close state, DirectSemantic registry 1/2/3,
 structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
-repaired. Repository counts at close: production 4,890 raw lines / tests
-4,423 raw lines. Milestone 2 (writer) may start.
+repaired. Repository counts at close: production 4,803 raw lines / tests
+4,489 raw lines. Milestone 2 (writer) may start.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -552,7 +552,8 @@ The user adopted the external re-review's decisions after the reopening:
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
-- Counts at HEAD (this commit): production 4,874 raw / tests 4,397 raw.
+- Counts at the time are recorded in the close-out entry (production 4,803
+  raw / tests 4,489 raw at milestone-1 close).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 
@@ -582,9 +583,9 @@ The user adopted the external re-review's decisions after the reopening:
   (pin contract amendment verified); public API/errors/zero-alloc PASS
   (12 public + 8 internal checks at exactly 0 allocs, zero atomics in hot
   paths, WrongState class, LookupFeedInto BufferTooSmall semantics);
-  conformance/tests/reports PASS (counts 4,874/4,397 verified with the
-  documented method; deletion of 105 files verified exactly; records
-  internally consistent).
+  conformance/tests/reports PASS (counts verified with the documented
+  method and recorded in the close-out entry; deletion of 105 files
+  verified exactly; records internally consistent).
 - Gates at HEAD 2fdcce4: go test ./... (4 packages) incl -race, go vet,
   gofmt, import graph, 9-target cross-compile matrix, SOW audit - all
   green. Milestone 1 (immutable reader) review gate: CLOSED.

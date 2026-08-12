@@ -16,9 +16,10 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
   table), `internal/mapping` (the only mapping owner), `internal/reader` (the
   only healthy-generation reader core), and a public facade at the module
   root.
-- The Go reader **opens and semantically verifies all five committed
+- The Go reader **opens and semantically verifies all six committed
   Rust-produced fixtures** (direct-v4, full-IPv6 first-seen, membership-v4
-  with 70 feeds, membership-v6, structured-v4 with threat memberships) and
+  with 70 feeds, membership-v6, structured-v4 with threat memberships, and
+  structured-v4-no-threat) and
   rejects all three invalid mutations (wrong-magic, short, unaligned) with
   the exact `format-invalid` code required by the corpus. Multi-level range
   trees and multi-leaf blob bitmaps are not present in the committed corpus
@@ -56,7 +57,7 @@ go test -race ./internal/format ./internal/reader ./internal/mapping .   ok
 go vet ./...                                  clean
 gofmt -l .                                    clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
-conformance test: 5/5 fixtures pass, 3/3 invalid mutations pass
+conformance test: 6/6 fixtures pass (incl. the no-threat structured fixture), 3/3 invalid mutations pass
 zero-allocation: 12 public checks + 8 internal checks, all at exactly 0
 heap bytes/run under the pin API (direct v4/v6/scan/cardinality,
 membership v4/v6-inline/contains/word/readwords, structured v4/threat,
@@ -66,8 +67,8 @@ feed-lookup-into); atomics exist only at Pin/Close boundaries
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,890
-raw lines, including blanks; new-tree tests: 4,423 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,803
+raw lines, including blanks; new-tree tests: 4,489 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -114,7 +115,7 @@ raw lines, including blanks; new-tree tests: 4,423 raw lines. The earlier
 `v4/go/conformance_test.go` mirrors the Rust corpus verifier against
 `cases.json`:
 
-- all five fixtures open with `ProvenCurrent` meta selection and exact info
+- all six fixtures open with `ProvenCurrent` meta selection and exact info
   (family, kind, structure kind, tag semantics: `first_seen` → FirstSeen);
 - metadata states verified exactly: absent (nil), empty (0 bytes present),
   text (byte-exact JSON), repeat (1 MiB of byte 0x78);
@@ -327,7 +328,7 @@ also corrected a wrong factual claim in this report). Repairs:
    close returns ErrorHandleClosed instead of crashing (regression:
    TestOperationsAfterClose). Token reuse invalidation is impossible (no
    tokens). A concurrent lookups/scans/view-create-release test runs under
-   -race on all five fixtures with zero reported races.
+   -race on all six fixtures with zero reported races.
 2. **Membership view API completed to the mandatory contract
    (binary-format-v4.md §2537):** caller-buffer `ReadWords(start, dst)`
    added (start above length → InvalidArgument); `WordCount` now performs
@@ -805,7 +806,7 @@ All four decisions were recorded in the SOW and implemented:
 ## 13. Milestone 1 close-out
 
 Acceptance criteria evidence: portable codecs (literal vectors), mapping
-owner (geometry/lifetime/lock), public immutable reader, all five Rust
+owner (geometry/lifetime/lock), public immutable reader, all six Rust
 fixture cross-reads with `cases.json` semantics, malformed bootstrap
 rejection, zero-allocation lookups/scans (incl. the blob path), first
 platform/worker feasibility report — all executed and recorded above.
