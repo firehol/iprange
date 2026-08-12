@@ -61,8 +61,10 @@ cross-open); sidecars, live coordination, and publication remain Milestone 4.
   documentation. Fixed in 228be36, plus reviewer P3s in 78373e5
   (DirectSemantic per-fixture coverage, terminal error code 69 pin,
   decision-log 105-file count, qualified package comment).
-- sol round 5: PASS, no P0-P2-P3 at HEAD 78373e5. Milestone 1 gate closed
-  after the reopening.
+- sol round 5: PASS, no P0-P2-P3 at HEAD 78373e5 (record gap: the
+  reopening itself was not yet recorded);
+- sol round 6: PASS, no P0-P2-P3 at HEAD 29e1dde, confirming the reopened
+  records. Milestone 1 gate closed after the reopening.
 
 ## Requirements
 
