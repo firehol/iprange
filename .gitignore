@@ -33,6 +33,8 @@ packaging/iprange.spec
 *.tar.bz2
 *.tar.xz
 
+/.reasonix/
+
 # Rust / Go workspaces
 v4/rust/target/
 v4/go/bin/
