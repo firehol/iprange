@@ -1771,8 +1771,9 @@ MUTEOF
 	cp "$self_tree/meta76.orig" internal/reader/metadata.go
 
 	# --- 77: benign named interface-typed helper must pass -----------------
-	# Identical shape to form 74 but the body returns a bytes.Reader:
-	# no *os.File anywhere, the gate must stay silent.
+	# Identical shape to form 74 but the body returns a bytes.Reader
+	# wrapper (compiling shape for the io.ReadCloser slot): no *os.File
+	# anywhere, the gate must stay silent.
 	cat > internal/reader/gatemut_benignnamed.go <<'MUTEOF'
 package reader
 
@@ -1781,12 +1782,16 @@ import (
 	"io"
 )
 
-func getBR3() io.Reader { return bytes.NewReader(nil) }
+type brCloser struct{ *bytes.Reader }
+
+func (b *brCloser) Close() error { return nil }
+
+func getBR4() io.ReadCloser { return &brCloser{bytes.NewReader(nil)} }
 MUTEOF
 	add_mut internal/reader/gatemut_benignnamed.go
 	cp internal/reader/metadata.go "$self_tree/meta77.orig"
-	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = getBR3()"; next } print }' internal/reader/metadata.go > "$self_tree/meta77.new" && mv "$self_tree/meta77.new" internal/reader/metadata.go
-	if grep -Fq 'zr = getBR3()' internal/reader/metadata.go; then
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = getBR4()"; next } print }' internal/reader/metadata.go > "$self_tree/meta77.new" && mv "$self_tree/meta77.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getBR4()' internal/reader/metadata.go; then
 		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
 			echo "self-test OK: benign named interface-typed helper passes the gate"
 		else
@@ -1799,6 +1804,146 @@ MUTEOF
 	fi
 	cleanup_muts
 	cp "$self_tree/meta77.orig" internal/reader/metadata.go
+
+	# --- 78: named method returning a tainted file --------------------------
+	# mb.named() where the method body returns os.Pipe: the receiver
+	# struct must be registered as a producer through retMethods.
+	cat > internal/reader/gatemut_namedmeth.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type mbox struct{}
+
+var mb mbox
+
+func (m *mbox) named() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_namedmeth.go
+	cp internal/reader/metadata.go "$self_tree/meta78.orig"
+	INS='zr = mb.named()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta78.new" && mv "$self_tree/meta78.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mb.named()' internal/reader/metadata.go; then
+		run_mut "named method returning a tainted file"
+	else
+		echo "self-test ERROR: form 78 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta78.orig" internal/reader/metadata.go
+
+	# --- 79: named method returning os.Stdout --------------------------------
+	# The retMethods rule must see the os.Stdout singleton through the
+	# method body as well.
+	cat > internal/reader/gatemut_namedmethstd.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type mbox2 struct{}
+
+var mb2 mbox2
+
+func (m *mbox2) namedstd() io.ReadCloser { return os.Stdout }
+MUTEOF
+	add_mut internal/reader/gatemut_namedmethstd.go
+	cp internal/reader/metadata.go "$self_tree/meta79.orig"
+	INS='zr = mb2.namedstd()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta79.new" && mv "$self_tree/meta79.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mb2.namedstd()' internal/reader/metadata.go; then
+		run_mut "named method returning os.Stdout"
+	else
+		echo "self-test ERROR: form 79 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta79.orig" internal/reader/metadata.go
+
+	# --- 80: deep method chain returning a tainted file ----------------------
+	# deep() -> mid() -> os.Pipe: the fixpoint pre-scan must compose
+	# method producers across the chain.
+	cat > internal/reader/gatemut_deepmeth.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type hbox struct{}
+
+var hb2 hbox
+
+func (h *hbox) deep() io.ReadCloser {
+	return h.mid()
+}
+
+func (h *hbox) mid() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_deepmeth.go
+	cp internal/reader/metadata.go "$self_tree/meta80.orig"
+	INS='zr = hb2.deep()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta80.new" && mv "$self_tree/meta80.new" internal/reader/metadata.go
+	if grep -Fq 'zr = hb2.deep()' internal/reader/metadata.go; then
+		run_mut "deep method chain returning a tainted file"
+	else
+		echo "self-test ERROR: form 80 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta80.orig" internal/reader/metadata.go
+
+	# --- 81: benign named method must pass ------------------------------------
+	# Identical shape to form 78 but the method returns a bytes.Reader
+	# wrapper: the gate must stay silent.
+	cat > internal/reader/gatemut_benignmeth2.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rbox struct{}
+
+var rb rbox
+
+func (r *rbox) named() io.ReadCloser { return &brCloser{bytes.NewReader(nil)} }
+MUTEOF
+	add_mut internal/reader/gatemut_benignmeth2.go
+	cp internal/reader/metadata.go "$self_tree/meta81.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = rb.named()"; next } print }' internal/reader/metadata.go > "$self_tree/meta81.new" && mv "$self_tree/meta81.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rb.named()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign named method passes the gate"
+		else
+			echo "self-test MISS: benign named method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 81 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta81.orig" internal/reader/metadata.go
 
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
@@ -1852,7 +1997,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 70 mutation forms rejected)"
+	echo "import-graph self-test passed (all 73 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
