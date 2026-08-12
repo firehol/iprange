@@ -1510,6 +1510,139 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta67.orig" internal/reader/metadata.go
 
+	# --- 68: func value stored in a struct field ---------------------------
+	# hb.fn where the field type is a func() *os.File: the call must be a
+	# file producer even though the receiver is a struct instance.
+	cat > internal/reader/gatemut_fnfield.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnA func() *os.File
+
+type fnBox struct{ fn fileFnA }
+
+var hb fnBox
+
+func init() {
+	hb.fn = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_fnfield.go
+	cp internal/reader/metadata.go "$self_tree/meta68.orig"
+	INS='zr = hb.fn()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta68.new" && mv "$self_tree/meta68.new" internal/reader/metadata.go
+	if grep -Fq 'zr = hb.fn()' internal/reader/metadata.go; then
+		run_mut "func value stored in a struct field"
+	else
+		echo "self-test ERROR: form 68 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta68.orig" internal/reader/metadata.go
+
+	# --- 69: chan of func() *os.File --------------------------------------
+	# A receive from a channel whose element is a file-producer func must
+	# taint the received name as a func so its call is a producer.
+	cat > internal/reader/gatemut_chanfunc.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnB func() *os.File
+
+var fnCh = make(chan fileFnB)
+
+func init() {
+	fnCh <- func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta69.orig"
+	INS='got := <-fnCh
+	zr = got()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta69.new" && mv "$self_tree/meta69.new" internal/reader/metadata.go
+	if grep -Fq 'zr = got()' internal/reader/metadata.go; then
+		run_mut "chan of func type receive and call"
+	else
+		echo "self-test ERROR: form 69 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta69.orig" internal/reader/metadata.go
+
+	# --- 70: any-erased func return asserted and called --------------------
+	# (getFn().(func() *os.File))(): the asserted type is a func producing
+	# a file; the outer call yields the file.
+	cat > internal/reader/gatemut_anyfunc.go <<'MUTEOF'
+package reader
+
+import "os"
+
+func getFn() any { return func() *os.File { f, _ := os.Open("/dev/null"); return f } }
+MUTEOF
+	add_mut internal/reader/gatemut_anyfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta70.orig"
+	INS='zr = (getFn().(func() *os.File))()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta70.new" && mv "$self_tree/meta70.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (getFn().(func() *os.File))()' internal/reader/metadata.go; then
+		run_mut "any-erased func return asserted and called"
+	else
+		echo "self-test ERROR: form 70 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta70.orig" internal/reader/metadata.go
+
+	# --- 71: os.Stdout through an interface closure -------------------------
+	# A closure returning os.Stdout behind io.ReadCloser must be a file
+	# producer; the file reaches io.ReadAll and must be flagged.
+	cat > internal/reader/gatemut_stdout.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func useStdout3() {
+	_, _ = io.ReadAll(func() io.ReadCloser { return os.Stdout }())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_stdout.go
+	run_mut "os.Stdout through an interface closure"
+
+	# --- 72: benign chan of func() int must pass ---------------------------
+	# Identical shape to form 69 but the func returns int: no *os.File
+	# anywhere, the gate must stay silent.
+	cat > internal/reader/gatemut_benignchanfn.go <<'MUTEOF'
+package reader
+
+type intFn3 func() int
+
+var intCh = make(chan intFn3)
+
+func init() { intCh <- func() int { return 3 } }
+
+func useChanInt() int {
+	got := <-intCh
+	return got()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benignchanfn.go
+	if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+		echo "self-test OK: benign chan of func() int passes the gate"
+	else
+		echo "self-test MISS: benign chan of func() int failed the gate (false positive)"
+		mutfail=1
+	fi
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1562,7 +1695,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 62 mutation forms rejected)"
+	echo "import-graph self-test passed (all 66 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
