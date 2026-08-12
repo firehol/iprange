@@ -55,7 +55,7 @@ split-after-the-dot selectors; type-blind exact-literal exemptions; the
 open-ended stdlib denylist (compress/gzip regex bug, log/slog,
 runtime/trace, os.StartProcess ProcAttr files); the destructive
 gatemut_* startup sweep; and completion claims ahead of the review
-trail. The gate was rewritten at HEAD c920fa0 as an AST, type-light scanner
+trail. The gate was rewritten at HEAD c42325a as an AST, type-light scanner
 (v4/go-gate/main.go): it parses every production file, syntactically
 taints *os.File values, bans 37 content-transfer imports and 56
 selector families, constrains *os.File use to the mapping-lifecycle
@@ -1018,7 +1018,7 @@ scanning, so a committed gatemut_hidden_linux.go violation is removed
 and the gate reports PASS (and untracked user work can be destroyed);
 (5) the records claim completion while the six-reviewer PASS at HEAD
 360130c is not recorded and round-12 wording says decision 5A was
-"fixed". The response (HEAD c920fa0) replaces the line-oriented text scan with the
+"fixed". The response (HEAD c42325a) replaces the line-oriented text scan with the
 AST, type-light scanner at v4/go-gate/main.go (stdlib only): it parses
 every production file - build tags, line wrapping, comments, aliases,
 and file names are irrelevant to the token stream - syntactically taints

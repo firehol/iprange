@@ -95,7 +95,7 @@ so a committed `gatemut_hidden_linux.go` violation is removed and the
 gate reports PASS, and untracked user work can be destroyed); and
 acceptance records claiming completion while the six-reviewer PASS at
 HEAD 360130c was not recorded and round-12 wording said decision 5A was
-"fixed". Fixed at HEAD c920fa0: the line-oriented text scan is replaced by
+"fixed". Fixed at HEAD c42325a: the line-oriented text scan is replaced by
 an AST, type-light scanner (v4/go-gate/main.go, stdlib only) that parses
 every production file - build tags, line wrapping, comments, aliases,
 and file names are irrelevant to the token stream - syntactically taints
@@ -366,7 +366,7 @@ sidecars, live coordination, and publication remain Milestone 4.
   violation is removed and the gate reports PASS); and acceptance
   records claiming completion while the six-reviewer PASS at 360130c
   was not recorded and round-12 wording said decision 5A was "fixed".
-  Fixed at HEAD c920fa0: the line-oriented text scan is replaced by the
+  Fixed at HEAD c42325a: the line-oriented text scan is replaced by the
   AST, type-light scanner (v4/go-gate) described in Status; the
   self-test copies the module to a private temp directory (forty
   mutation forms rejected, including all nine independent reproducers;
@@ -1753,7 +1753,7 @@ decision log for the user's ratification and remains the only open
 product decision. The complete re-review trail is recorded in the Gate
 execution record; the closing result is appended there when it completes.
 
-### 2026-08-13 - sixth-sweep gate rewrite (AST scanner) (HEAD c920fa0)
+### 2026-08-13 - sixth-sweep gate rewrite (AST scanner) (HEAD c42325a)
 
 - The sixth final review failed with five P2 findings, all in the mmap
   gate and the records: split-after-the-dot selectors; type-blind
