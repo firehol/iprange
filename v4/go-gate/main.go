@@ -21,9 +21,14 @@
 //
 // The analysis is deliberately type-light: a small syntactic taint tracks
 // *os.File values (declarations, parameters, os.Open*/os.Create*
-// producers, same-package constructors returning *os.File, and struct
-// fields). That keeps the gate a mechanical tripwire with no module
-// dependency beyond the standard library.
+// producers, same-package constructors returning *os.File, struct
+// fields, chan elements, func values producing files, and the
+// os.Stdin/Stdout/Stderr singletons). That keeps the gate a mechanical
+// tripwire with no module dependency beyond the standard library.
+// Known residual: a *os.File value exported by a third-party package
+// (other than the os std handles enumerated above) is not visible to
+// the taint unless the code mentions *os.File textually or moves the
+// value through an already-tainted route.
 package main
 
 import (

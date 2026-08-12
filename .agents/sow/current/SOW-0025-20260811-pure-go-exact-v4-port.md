@@ -1954,6 +1954,10 @@ execution record; the closing result is appended there when it completes.
   is itself a call returning func() *os.File is a file producer
   (zb.mk()(), useDef2(getDef3)()). Forms 64-67 pin the method
   boundary, both double-call shapes, and the benign int control.
+  Documented residual: a *os.File exported by a third-party package
+  (other than os.Stdin/Stdout/Stderr) is invisible to the syntactic
+  taint unless the code names *os.File textually or moves it through
+  an already-tainted route.
 - Ampere round 5 found four more producer routes (HEAD 5f97f94):
   struct-field func values, chan of func() *os.File, any-erased func
   returns recovered by type assertion, and os.Stdin/Stdout/Stderr
