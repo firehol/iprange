@@ -133,8 +133,10 @@ alias-typed-function-variable, and type-switch-bound escape classes
 durable rejection set is now fifty-six mutation forms. While
 stress-testing the round-4 fixes during the round-5 gate re-review,
 the defined-func-type family and its method/nested-callee variants
-were closed (self-test forms 60-67); the durable rejection set is
-now sixty-two mutation forms. The records
+were closed (self-test forms 60-67), and the round-5 struct-field/
+chan-of-func/asserted-func/os-std-handle family was closed (forms
+68-72); the durable rejection set is now sixty-six mutation forms.
+The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -410,8 +412,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   and type-switch-bound classes (forms 54-59), and the defined-func-type
   family (defined func types, func-valued returns through same-package
   helpers, type-switch bound func cases (forms 60-63), and the
-  method-receiver/nested-callee double-call family (forms 64-67);
-  the self-test now durably rejects sixty-two mutation forms. The
+  method-receiver/nested-callee double-call family (forms 64-67),
+  and the struct-field-func/chan-of-func/asserted-func/os-std-handle
+  family (forms 68-72); the self-test now durably rejects sixty-six
+  mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1950,7 +1954,15 @@ execution record; the closing result is appended there when it completes.
   is itself a call returning func() *os.File is a file producer
   (zb.mk()(), useDef2(getDef3)()). Forms 64-67 pin the method
   boundary, both double-call shapes, and the benign int control.
-- Gates at HEAD 8ce56ab: go test ./... incl -race, go vet, gofmt,
-  import graph with the 62-form self-test, nine cross-compiles, SOW
+- Ampere round 5 found four more producer routes (HEAD 5f97f94):
+  struct-field func values, chan of func() *os.File, any-erased func
+  returns recovered by type assertion, and os.Stdin/Stdout/Stderr
+  through interface closures. Fixed with the kindFuncFile/
+  kindChanFuncFile split, struct-field func resolution in
+  producerCall/classify, func-file type assertions, and the std
+  handle file-expression set. Forms 68-72 pin the four classes plus
+  the benign chan-of-func() int control.
+- Gates at HEAD e5f1800: go test ./... incl -race, go vet, gofmt,
+  import graph with the 66-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).
