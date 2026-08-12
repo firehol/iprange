@@ -105,6 +105,37 @@ func TestMetaKindClassification(t *testing.T) {
 			t.Fatalf("code %v want 32", err)
 		}
 	})
+	// Structured file with an unknown kind AND broken structure counts:
+	// the count validation wins (bootstrap.rs validate_structured runs for
+	// any nonzero kind), so the open fails with FormatInvalid - the 67
+	// classification happens only after the pair selected (finish_open).
+	t.Run("structured-kind2-bad-counts", func(t *testing.T) {
+		path := copyFixture(t, "structured-ipv4.iprdb", "structured-kind2-badcounts.iprdb")
+		patchMeta(t, path, func(page []byte) {
+			page[13] = 2
+			limit := format.U64(page[208:216])
+			format.PutU64(page[200:208], limit) // entry_count >= id_limit
+		})
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+			t.Fatalf("code %v want 32", err)
+		}
+	})
+	// Structured file with an unknown kind AND a transaction gap between
+	// the metas: pair selection fails first -> FormatInvalid, exactly like
+	// Rust (select_candidates/select_pair precede finish_open).
+	t.Run("structured-kind2-txn-gap", func(t *testing.T) {
+		path := copyFixture(t, "structured-ipv4.iprdb", "structured-kind2-gap.iprdb")
+		patchMetaEach(t, path, func(pg int, page []byte) {
+			page[13] = 2
+			if pg == 1 {
+				txn := format.U64(page[48:56]) + 5
+				format.PutU64(page[48:56], txn)
+			}
+		})
+		if _, err := OpenImmutable(path); mustCode(err) != format.CodeFormatInvalid {
+			t.Fatalf("code %v want 32", err)
+		}
+	})
 }
 
 // TestSoleMetaGeometry pins the per-meta physical-geometry validity rule:

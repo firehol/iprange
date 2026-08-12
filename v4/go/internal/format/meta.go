@@ -148,16 +148,14 @@ type errMeta struct {
 
 func (e *errMeta) Error() string { return "v4 meta: " + e.reason }
 
-// ErrUnsupportedStructureKind reports a recognizable v4 identity whose
-// structure kind this SDK does not implement.
-var ErrUnsupportedStructureKind = &errMeta{reason: "unsupported structure kind", code: ErrUnsupportedStructure}
-
 // ValidateKindInvariants applies the dynamic bootstrap checks of sections
 // 4.2/4.3 that depend only on this one meta page (counts, limits, roots,
 // geometry, checked host-addressability). It must be called only on an
-// identity-readable meta. A nonzero structure kind other than the supported
-// registry value yields ErrUnsupportedStructureKind so the reader can return
-// the typed UnsupportedStructure after selection.
+// identity-readable meta. Mirrors the Rust bootstrap: an unknown nonzero
+// structure kind on a structured file is NOT a validation failure - the
+// full structured count/root checks still run (bootstrap.rs
+// validate_structured); the reader reports UnsupportedStructure only after
+// the meta pair is selected (finish_open).
 func (m *Meta) ValidateKindInvariants() error {
 	if m.TxnID == 0 {
 		return &errMeta{reason: "zero transaction id", code: ErrFormat}
@@ -249,18 +247,17 @@ func (m *Meta) ValidateKindInvariants() error {
 	case ValueKindMembership:
 		return validateMembershipMeta(m)
 	case ValueKindStructured:
-		switch m.StructureKind {
-		case StructureKindNetworkEnrichmentV1:
-			return validateStructuredMeta(m)
-		case 0:
+		if m.StructureKind == 0 {
 			// A structured file requires one supported nonzero structure
 			// kind; zero is a known wire value and an invalid combination
 			// (bootstrap.rs validate_structured -> KindInvariant).
 			return &errMeta{reason: "structured file with zero structure kind", code: ErrFormat}
-		default:
-			// Only an unknown nonzero kind is the typed unsupported error.
-			return ErrUnsupportedStructureKind
 		}
+		// The same count/root checks run for ANY nonzero structure kind,
+		// including unknown codes (bootstrap.rs validate_structured); only
+		// after pair selection does an unknown kind become the typed
+		// UnsupportedStructure (finish_open).
+		return validateStructuredMeta(m)
 	default:
 		return &errMeta{reason: "invalid value kind", code: ErrNotV4}
 	}
@@ -418,10 +415,4 @@ func zeroRelations(m *Meta, checkMembership, checkCatalog bool) error {
 		}
 	}
 	return nil
-}
-
-// UnsupportedKind reports whether ValidateKindInvariants failed because of an
-// unknown nonzero structure kind.
-func UnsupportedKind(err error) bool {
-	return err == ErrUnsupportedStructureKind
 }

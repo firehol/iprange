@@ -130,6 +130,12 @@ func (r *ImmutableReader) bootstrap() error {
 	if err := r.selectBetween(p0, p1, m0, m1, valid0, valid1, e0, e1); err != nil {
 		return err
 	}
+	// An unknown structure kind on a structured file is reported only
+	// after the meta pair selected (bootstrap.rs finish_open), never as a
+	// validation failure.
+	if r.meta.ValueKind == format.ValueKindStructured && r.meta.StructureKind != format.StructureKindNetworkEnrichmentV1 {
+		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
+	}
 	// Immutable open requires the exact physical size (section 3).
 	if r.meta.PageCount*format.PageSize != r.m.Size() {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "file size does not match meta page count"}
@@ -140,9 +146,6 @@ func (r *ImmutableReader) bootstrap() error {
 func (r *ImmutableReader) selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool, e0, e1 error) error {
 	bootstrapFail := func(detail string) error {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
-	}
-	unsupported := func() error {
-		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
 	}
 	if valid0 && valid1 {
 		switch {
@@ -180,9 +183,6 @@ func (r *ImmutableReader) selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid
 		}
 		return nil
 	}
-	if unsupportedKindError(e0) || unsupportedKindError(e1) {
-		return unsupported()
-	}
 	return bootstrapFail("no bootstrap-valid meta")
 }
 
@@ -199,25 +199,12 @@ func validateMeta(m format.Meta, ok bool, physical uint64) error {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta not identity-readable"}
 	}
 	if err := m.ValidateKindInvariants(); err != nil {
-		if format.UnsupportedKind(err) {
-			return &format.Error{Code: format.CodeUnsupportedStructure, Detail: err.Error()}
-		}
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
 	}
 	if m.PageCount*format.PageSize > physical {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta page count exceeds physical size"}
 	}
 	return nil
-}
-
-func unsupportedKindError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if ferr, ok := err.(*format.Error); ok {
-		return ferr.Code == format.CodeUnsupportedStructure
-	}
-	return false
 }
 
 // Close releases the mapping and the shared lifetime lock.

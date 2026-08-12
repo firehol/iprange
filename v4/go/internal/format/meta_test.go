@@ -129,16 +129,37 @@ func TestMetaKindInvariants(t *testing.T) {
 	if err := m.ValidateKindInvariants(); err == nil {
 		t.Fatal("direct with membership limit accepted")
 	}
-	// Direct with any nonzero structure kind is the KindInvariant class.
+	// Direct with any nonzero structure kind is the KindInvariant class:
+	// a plain format error, never the typed unsupported classification.
 	for _, kind := range []byte{1, 2} {
 		m = valid()
 		m.StructureKind = kind
-		if err := m.ValidateKindInvariants(); err == nil || UnsupportedKind(err) {
-			t.Fatalf("direct kind %d: want plain format error, got %v", kind, err)
+		if err := m.ValidateKindInvariants(); err == nil {
+			t.Fatalf("direct kind %d accepted", kind)
+		} else if ferr, ok := err.(*errMeta); !ok || ferr.code != ErrFormat {
+			t.Fatalf("direct kind %d: plain format error expected, got %v", kind, err)
 		}
 	}
-	// Structured with an unknown nonzero structure kind is the typed
-	// unsupported error.
+	// Structured with an unknown nonzero structure kind and valid counts:
+	// validation PASSES (bootstrap.rs validate_structured runs for any
+	// nonzero kind); the reader reports UnsupportedStructure only after
+	// pair selection (finish_open). Base the meta on the structured
+	// fixture so all structured/membership relations are consistent.
+	rawStructured, err := os.ReadFile(filepath.Join("..", "..", "..", "conformance", "rust", "structured-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := ParseIdentity(rawStructured[:PageSize])
+	if !ok {
+		t.Fatal("structured fixture not identity readable")
+	}
+	m.StructureKind = 2
+	if err := m.ValidateKindInvariants(); err != nil {
+		t.Fatalf("structured unknown kind with valid counts must validate, got %v", err)
+	}
+	// Unknown kind with broken structure counts/roots is a plain format
+	// error, never the typed unsupported error: other validation failures
+	// win over the unknown-kind classification, exactly like Rust.
 	m = valid()
 	m.ValueKind = ValueKindStructured
 	m.StructureKind = 2
@@ -150,8 +171,12 @@ func TestMetaKindInvariants(t *testing.T) {
 	if m.PageCount < 6 {
 		m.PageCount = 6
 	}
-	if err := m.ValidateKindInvariants(); err == nil || !UnsupportedKind(err) {
-		t.Fatalf("structured unknown kind: unsupported kind error expected, got %v", err)
+	got := m.ValidateKindInvariants()
+	if got == nil {
+		t.Fatal("structured unknown kind with broken counts accepted")
+	}
+	if ferr, ok := got.(*errMeta); !ok || ferr.code != ErrFormat {
+		t.Fatalf("structured unknown kind with broken counts: plain format error expected, got %v", got)
 	}
 	// Root out of range.
 	m = valid()
