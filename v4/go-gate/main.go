@@ -109,10 +109,11 @@ var approvedFileMethods = map[string]bool{
 // text. funcs maps same-package function names to their result type
 // texts. Both are collected syntactically.
 type pkgInfo struct {
-	structs map[string]map[string]string
-	funcs   map[string][]string
-	methods map[string][]string // structName.method -> result type texts
-	aliases map[string]string   // type-alias name -> underlying type text
+	structs  map[string]map[string]string
+	funcs    map[string][]string
+	methods  map[string][]string // structName.method -> result type texts
+	aliases  map[string]string   // type-alias name -> underlying type text
+	retFuncs map[string]bool     // named funcs whose body returns a tainted *os.File value
 }
 
 func main() {
@@ -154,6 +155,27 @@ func main() {
 		for _, f := range list {
 			collectPkgTaints(parsed[f], shared, info)
 		}
+		// Pre-scan every named function: a body whose return statement
+		// yields a file-tainted value is a file producer even when the
+		// declared result type hides the file behind an interface. The
+		// pre-scan runs before any runFile so call sites in every file
+		// of the directory see the complete producer set.
+		for _, f := range list {
+			for _, decl := range parsed[f].Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+				fst := cloneTaints(shared)
+				addSignatureTaints(fst, fd.Recv, info)
+				addSignatureTaints(fst, fd.Type.Params, info)
+				imp := fileImports(parsed[f], nil)
+				prepassStmts(fd.Body.List, fst, info, imp)
+				if returnsFileIn(fd.Body, fst, info, imp) {
+					info.retFuncs[fd.Name.Name] = true
+				}
+			}
+		}
 		for _, f := range list {
 			if err := runFile(f, parsed[f], fses[f], srcs[f], info, shared); err != nil {
 				fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
@@ -184,7 +206,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -421,8 +443,11 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 }
 
 // runFile applies the rules to one production file.
-func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkgInfo, shared *taints) error {
-	reporter := &reporter{path: path}
+// fileImports builds the import lookup for one file: path text and local
+// name both map to the canonical path so `import fsp "os"` cannot dodge
+// a package check. Dot and blank imports are skipped (dot imports are
+// separately rejected), and banned content-transfer imports are reported.
+func fileImports(f *ast.File, reporter *reporter) map[string]string {
 	imports := map[string]string{}
 	for _, imp := range f.Imports {
 		pathText := strings.Trim(imp.Path.Value, `"`)
@@ -430,7 +455,9 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 		if imp.Name != nil && imp.Name.Name != "." {
 			name = imp.Name.Name
 		} else if imp.Name != nil && imp.Name.Name == "." {
-			reporter.fail("dot-import of " + pathText)
+			if reporter != nil {
+				reporter.fail("dot-import of " + pathText)
+			}
 			continue
 		}
 		if imp.Name != nil && imp.Name.Name == "_" {
@@ -439,9 +466,17 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 		imports[pathText] = pathText
 		imports[name] = pathText
 		if bannedImports[pathText] {
-			reporter.fail("banned content-transfer import " + pathText)
+			if reporter != nil {
+				reporter.fail("banned content-transfer import " + pathText)
+			}
 		}
 	}
+	return imports
+}
+
+func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkgInfo, shared *taints) error {
+	reporter := &reporter{path: path}
+	imports := fileImports(f, reporter)
 
 	pkg := cloneTaints(shared)
 
@@ -508,6 +543,38 @@ func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 	for _, r := range results {
 		rt := resolveTypeText(r, info)
 		if !strings.HasPrefix(rt, "func(") || !strings.Contains(rt, "*os.File") {
+			return false
+		}
+	}
+	return true
+}
+
+// callResultsChanFuncFile reports whether e is a same-package call whose
+// declared results are channels whose element is a func type producing
+// *os.File (chan F with F = func() *os.File), so a channel returned
+// through a helper keeps its chan-of-func taint.
+func callResultsChanFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fun := unwrapParen(call.Fun)
+	var results []string
+	switch f := fun.(type) {
+	case *ast.Ident:
+		results = info.funcs[f.Name]
+	case *ast.SelectorExpr:
+		if recv, ok := f.X.(*ast.Ident); ok {
+			if structName, ok2 := resolveStruct(recv, st, info); ok2 {
+				results = info.methods[structName+"."+f.Sel.Name]
+			}
+		}
+	}
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		if !chanElemFuncFile(resolveTypeText(r, info), info) {
 			return false
 		}
 	}
@@ -729,6 +796,9 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if callResultsFuncFile(v, st, info) {
 			return kindFuncFile
 		}
+		if callResultsChanFuncFile(v, st, info) {
+			return kindChanFuncFile
+		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
 		if strings.Contains(text, "*os.File") {
@@ -826,6 +896,9 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 	if id, ok := fun.(*ast.Ident); ok {
 		if pos := positionsOf("*os.File", info.funcs[id.Name]); pos != nil {
 			return call, pos, true
+		}
+		if info.retFuncs[id.Name] {
+			return call, []int{0}, true
 		}
 		if st.funcFile[id.Name] {
 			return call, []int{0}, true
@@ -984,6 +1057,35 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 // resolveStruct resolves an expression to a same-package struct type
 // name: tainted-struct identifiers, struct return values, and struct
 // composite literals.
+// returnsFileIn reports whether any return statement of the function
+// body (not inside nested closures) yields a file or file-container
+// tainted value.
+func returnsFileIn(body *ast.BlockStmt, st *taints, info pkgInfo, imports map[string]string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.FuncLit:
+			return false // closure returns do not mark the enclosing func
+		case *ast.ReturnStmt:
+			for _, res := range v.Results {
+				if isFileOrContainer(res, st, info, imports) {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// resolveStruct resolves the struct type name of an instance expression:
+// an identifier registered as a struct value, new(T), a same-package
+// constructor, a composite literal, or a field chain like h.inner where
+// the root instance's field holds a nested struct value.
 func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -1011,6 +1113,22 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 				return id.Name, true
 			}
 		}
+	case *ast.SelectorExpr:
+		// h.inner.fn: resolve the root instance, then walk the field
+		// chain until the final field's type is a struct.
+		rootName, ok := resolveStruct(v.X, st, info)
+		if !ok {
+			return "", false
+		}
+		ft, okf := info.structs[rootName][v.Sel.Name]
+		if !okf {
+			return "", false
+		}
+		base := strings.TrimPrefix(resolveTypeText(ft, info), "*")
+		if _, isStruct := info.structs[base]; isStruct {
+			return base, true
+		}
+		return "", false
 	case *ast.StarExpr:
 		return resolveStruct(v.X, st, info)
 	case *ast.ParenExpr:
@@ -1283,11 +1401,21 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, st, info) {
 		st.funcFile[id.Name] = true
 	}
+	if callResultsChanFuncFile(rhs, st, info) {
+		st.chanFuncFile[id.Name] = true
+	}
 	if fl, ok := rhs.(*ast.FuncLit); ok && st.retFile[fl.Pos()] {
 		st.funcFile[id.Name] = true
 	}
 	if c, ok := classifyStruct(rhs, info); ok {
 		st.struc[id.Name] = c
+	}
+	if sel, ok := rhs.(*ast.SelectorExpr); ok {
+		// x := h.inner registers the nested struct instance so later
+		// x.fn() field reads resolve through it.
+		if sn, ok2 := resolveStruct(sel, st, info); ok2 {
+			st.struc[id.Name] = sn
+		}
 	}
 }
 
