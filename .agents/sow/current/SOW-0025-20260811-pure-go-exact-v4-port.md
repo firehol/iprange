@@ -125,7 +125,12 @@ container index reads) and pinned them as self-test forms 47-48. The
 ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
 two-hop-channel, and single-variable-channel-range escape classes
 (forms 50-53, with the benign control at form 49); the durable
-rejection set is now fifty-one mutation forms. The records
+rejection set is now fifty-one mutation forms. The tenth sweep
+(HEAD 5c88ba3) closed the parenthesized-producer,
+parenthesized-closure, interface-typed-closure,
+alias-typed-function-variable, and type-switch-bound escape classes
+(forms 54-58, with the parenthesized benign control at form 59); the
+durable rejection set is now fifty-six mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -396,7 +401,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   classes behind the inflater exemptions (self-test forms 47-48). The
   ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
   two-hop-channel, and single-variable-range classes (forms 50-53);
-  the self-test now durably rejects fifty-one mutation forms. The
+  the tenth sweep (HEAD 5c88ba3) closed the parenthesized-producer,
+  parenthesized-closure, interface-typed-closure, alias-typed-function-variable,
+  and type-switch-bound classes (forms 54-59); the self-test now durably rejects
+  fifty-six mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1896,5 +1904,34 @@ execution record; the closing result is appended there when it completes.
   still pass. Durable rejection set: fifty-one mutation forms.
 - Gates at HEAD ddc5f9c: go test ./... incl -race, go vet, gofmt,
   import graph with the 51-form self-test, nine cross-compiles, SOW
+  audit - all green. Counts: production 4,772 raw lines / tests 4,832
+  raw lines (gate scanner lives outside the module).
+
+
+### 2026-08-13 - tenth-sweep gate hardening (parenthesized producers, alias funcs, type-switch binds)
+
+- The ninth-sweep re-review (Ampere round 4) found five more scanner gaps:
+  a parenthesized producer call `zr = (getFile)()` and a parenthesized
+  closure `zr = (func() *os.File { ... return f })()` both hid the callee
+  shape behind a ParenExpr node; a closure declared as
+  `func() io.ReadCloser { ... return f }` hid the returned *os.File behind
+  an interface result type; a type-only alias
+  `type fileFn = func() *os.File; var getFat fileFn` registered nothing in
+  the funcs table; and a type-switch guard `switch zv := x.(type) { case
+  *os.File: ... }` never tainted the bound identifier.
+- Fixed (HEAD 7caf351): unwrapParen strips parentheses in producerCall and
+  the rules walk so selector and argument checks see the same call;
+  closures whose body returns a tainted value are marked retFile at their
+  FuncLit node and every declared result position is treated as
+  file-tainted; funcTypeResultsFile resolves alias text through the
+  package alias map before falling back to AST result checks; the
+  type-switch prepass binds the guarded identifier when a case type
+  resolves to *os.File.
+- Self-test forms 54-58 pin the five closed classes and form 59 pins the
+  parenthesized benign control (HEAD 5c88ba3). Durable rejection set:
+  fifty-six mutation forms; the real tree stays green under the hardened
+  scanner.
+- Gates at HEAD 5c88ba3: go test ./... incl -race, go vet, gofmt,
+  import graph with the 56-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).

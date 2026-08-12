@@ -73,7 +73,10 @@ classes; the eighth sweep (HEAD c4b1b52) closed the struct-field-
 storage and channel-transport classes behind the inflater exemptions,
 and the ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit,
 type-assertion, and nested/single-variable channel classes; the
-self-test now durably rejects fifty-one mutation forms (details in the
+tenth sweep (HEAD 5c88ba3) closed the parenthesized-producer,
+parenthesized-closure, interface-typed-closure, alias-typed-function-variable,
+and type-switch-bound classes (forms 54-59); the self-test now durably
+rejects fifty-six mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1047,9 +1050,11 @@ form (forty-first), HEAD 6b05801 tainted *os.File results of
 same-package accessor methods, the seventh sweep closed the
 alias/ProcAttr/os.Pipe classes, the eighth sweep added the
 struct-field-storage and channel-transport forms behind the inflater
-exemptions, and the ninth sweep added the closure, type-assertion, and
-nested/single-variable-channel forms; the self-test now durably rejects
-fifty-one mutation forms. Decision 5A remains the single open item and
+exemptions, the ninth sweep added the closure, type-assertion, and
+nested/single-variable-channel forms; and the tenth sweep added the
+parenthesized-producer, parenthesized-closure, interface-typed-closure,
+alias-typed-function-variable, and type-switch-bound forms; the
+self-test now durably rejects fifty-six mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
