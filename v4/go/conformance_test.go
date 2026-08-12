@@ -281,10 +281,12 @@ func TestConformanceRustFixtures(t *testing.T) {
 			}
 			// Tag, selection, and geometry assertions (verify.rs: value_tag,
 			// MetaSelection::ProvenCurrent, page_count*4096 == file length).
-			var wantTag [16]byte
-			copy(wantTag[:], tc.Tag)
+			wantTag, err := NewValueTag([]byte(tc.Tag))
+			if err != nil {
+				t.Fatal("tag:", err)
+			}
 			if info.ValueTag != wantTag {
-				t.Errorf("value tag %x want %x", info.ValueTag, wantTag)
+				t.Errorf("value tag %q want %q", info.ValueTag.Wire(), wantTag.Wire())
 			}
 			if info.MetaSelection != MetaSelectionProvenCurrent {
 				t.Errorf("meta selection %v want ProvenCurrent", info.MetaSelection)

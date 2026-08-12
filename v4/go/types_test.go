@@ -76,4 +76,16 @@ func TestPublicSemanticFoundation(t *testing.T) {
 	if ErrorInvalidArgument != 1 || ErrorCleanupInProgress != 64 {
 		t.Fatalf("error registry endpoints = %d/%d", ErrorInvalidArgument, ErrorCleanupInProgress)
 	}
+	// Engine-defined semantic tags and the 20 MiB metadata bound share the
+	// Rust contract registries (contract.rs ValueTag::FIRST_SEEN/LAST_SEEN,
+	// MAX_METADATA_UNCOMPRESSED).
+	if ValueTagFirstSeen.Wire() != [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'} {
+		t.Fatalf("first_seen tag wire = %q", ValueTagFirstSeen.Wire())
+	}
+	if ValueTagLastSeen.Wire() != [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'} {
+		t.Fatalf("last_seen tag wire = %q", ValueTagLastSeen.Wire())
+	}
+	if MaxMetadataUncompressed != 20_971_520 {
+		t.Fatalf("metadata limit = %d", MaxMetadataUncompressed)
+	}
 }

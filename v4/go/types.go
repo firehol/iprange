@@ -114,6 +114,20 @@ func (t ValueTag) Bytes() []byte {
 	panic("invalid ValueTag invariant")
 }
 
+// ValueTagFirstSeen and ValueTagLastSeen are the engine-defined semantic
+// tags (binary-format-v4.md section 4; Rust contract ValueTag::FIRST_SEEN
+// and ValueTag::LAST_SEEN). Any other tag is caller-defined via
+// NewValueTag.
+var (
+	ValueTagFirstSeen = ValueTag{wire: [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'}}
+	ValueTagLastSeen  = ValueTag{wire: [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'}}
+)
+
+// MaxMetadataUncompressed is the exact 20 MiB uncompressed metadata bound
+// (binary-format-v4.md section 2; Rust contract MAX_METADATA_UNCOMPRESSED).
+// The single authority is internal/format.
+const MaxMetadataUncompressed = format.MaxMetadataUncompressed
+
 // ErrCardinalityOverflow reports an exact cardinality outside 0..=2^129-1.
 // The single implementation lives in internal/format.
 var ErrCardinalityOverflow = format.ErrCardinalityOverflow

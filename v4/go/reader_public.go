@@ -46,13 +46,14 @@ const (
 )
 
 // ImmutableInfo is the public logical identity of the selected generation.
-// ValueTag carries the exact 16 raw wire bytes (binary-format-v4.md section
-// 4: at most 15 non-NUL bytes, then a mandatory NUL).
+// ValueTag carries the canonical tag: the engine-defined first_seen and
+// last_seen tags or any caller-created tag (binary-format-v4.md section 4:
+// at most 15 non-NUL bytes, then a mandatory NUL).
 type ImmutableInfo struct {
 	Family           AddressFamily
 	ValueKind        ValueKind
 	StructureKind    StructureKind
-	ValueTag         [16]byte
+	ValueTag         ValueTag
 	DatabaseID       [16]byte
 	TransactionID    uint64
 	CommitNonce      [16]byte
@@ -68,19 +69,14 @@ func (i ImmutableInfo) DirectSemantic() (DirectSemantic, bool) {
 		return DirectSemanticGeneric, false
 	}
 	switch i.ValueTag {
-	case firstSeenTag:
+	case ValueTagFirstSeen:
 		return DirectSemanticFirstSeen, true
-	case lastSeenTag:
+	case ValueTagLastSeen:
 		return DirectSemanticLastSeen, true
 	default:
 		return DirectSemanticGeneric, true
 	}
 }
-
-var (
-	firstSeenTag = [16]byte{0x66, 0x69, 0x72, 0x73, 0x74, 0x5f, 0x73, 0x65, 0x65, 0x6e}
-	lastSeenTag  = [16]byte{0x6c, 0x61, 0x73, 0x74, 0x5f, 0x73, 0x65, 0x65, 0x6e}
-)
 
 // shared is the reader-wide lifetime state. Lookups and scans synchronize
 // nothing: they read the plain closedState mirror, which is written only by
@@ -95,9 +91,12 @@ type shared struct {
 
 // ImmutableReader is one opened immutable v4 database.
 //
-// Reader-level operations (Info, direct lookups and scans, cardinality,
-// feed lookup, metadata) are zero-allocation and take no atomics; they
-// report WrongState when the reader is closed. Callers must not race Close
+// Reader-level hot paths (Info, direct lookups and scans, cardinality) are
+// zero-allocation and take no atomics; feed lookup adds exactly one
+// returned string copy and metadata decode allocates its decompressed
+// buffer, both bounded caller-visible values per the format contract; all
+// reader-level operations report WrongState when the reader is closed.
+// Callers must not race Close
 // with reader work. A reader with live pins cannot close: Close returns
 // ErrorHandleBusy until every pin is closed. A second Close reports
 // ErrorWrongState.
@@ -145,7 +144,7 @@ func (r *ImmutableReader) Info() (ImmutableInfo, error) {
 		Family:           AddressFamily(meta.AddressFamily),
 		ValueKind:        ValueKind(meta.ValueKind),
 		StructureKind:    StructureKind(meta.StructureKind),
-		ValueTag:         meta.ValueTag,
+		ValueTag:         ValueTag{wire: meta.ValueTag},
 		DatabaseID:       meta.DatabaseID,
 		TransactionID:    meta.TxnID,
 		CommitNonce:      meta.CommitNonce,

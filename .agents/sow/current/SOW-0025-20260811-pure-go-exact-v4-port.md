@@ -18,8 +18,11 @@ copies share one private close state, DirectSemantic registry 1/2/3,
 structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
-repaired. Repository counts at close: production 4,781 raw lines / tests
-4,648 raw lines. Milestone 2 (writer) may start.
+repaired. Repository counts at close: production 4,794 raw lines / tests
+4,662 raw lines. Milestone 2 (writer) may start, scoped exactly to the
+approved milestone plan (one physical writer, allocation/retirement/commit,
+direct/membership/structured construction, Go-produced corpus, Rust
+cross-open); sidecars, live coordination, and publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -567,10 +570,10 @@ The user adopted the external re-review's decisions after the reopening:
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
-- Counts at the time are recorded in the close-out entry (production 4,781
-  raw / tests 4,648 raw at milestone-1 close after the meta-precedence
-  parity fix, the sole-meta kind regression test, and the final-review
-  regression guards).
+- Counts at the time are recorded in the close-out entry (production 4,794
+  raw / tests 4,662 raw at milestone-1 close after the meta-precedence
+  parity fix, the sole-meta kind regression test, the final-review
+  regression guards, and the public tag/metadata-limit API completion).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 
@@ -1149,7 +1152,7 @@ Tests or equivalent validation:
   in production sources and the stdlib `syscall` package.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
-- Conformance: 5/5 Rust fixtures cross-open with exact semantics; 3/3 invalid
+- Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3 invalid
   mutations rejected with code 32; structured absence probes added.
 - `.agents/sow/audit.sh` — clean.
 

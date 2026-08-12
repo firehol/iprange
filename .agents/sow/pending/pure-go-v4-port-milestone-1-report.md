@@ -40,17 +40,18 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
   discrimination, in-region si_addr, exact previous-disposition chaining,
   and no unwinding are all unimplementable in pure Go. The worker
   milestone needs either a minimal project-owned assembly sigaction shim
-  (spec-exact, Rust-mirror) or an explicit spec change; the user decision
-  is pending.
+  (spec-exact, Rust-mirror) or an explicit spec change; the user resolved
+  this as decision 2A: the project-owned assembly sigaction shim (SOW
+  resolved-decisions log, 2026-08-12).
 - Commits: `913f4e6` (reader + tests), `9441f85` (independent-review
   repairs), `1df90fa` (milestone report), `4eec44e` (third-pass repairs,
   superseded worker conclusion), `03a910f` (fourth-pass repairs: lifetime
   redesign, view semantics, absence vs corruption, concurrency tests, report
   facts), `1e1ac4b` (fifth-pass repairs: meta tail invariant, mandatory aux,
   exact zlib stream, namespace under lock, structured decode at lookup,
-  adversarial suite), `9a835e4` (six-agent gap analysis). No tracked file was
-  deleted (Decision 1 = decide after evidence; the old Go tree remains green
-  and untouched).
+  adversarial suite), `9a835e4` (six-agent gap analysis). No tracked file
+  was deleted in this commit range (Decision 1 was decided after evidence;
+  the 105-file 1A deletion landed later in the final milestone-1 commit).
 
 ## 2. Commands and factual results
 
@@ -71,9 +72,9 @@ feed-lookup-into); atomics exist only at Pin/Close boundaries
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,781 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,794 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,648 raw lines. The earlier
+tree): 4,662 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -835,9 +836,11 @@ path, the closed class is WrongState, WordCount is error-capable, the
 structure-kind conflict is resolved, metadata staging waste is fixed, and
 the obsolete tree is deleted. The six-reviewer re-verification of the
 rebuilt facade re-reviewed every brief at HEAD 2fdcce4: all six PASS
-with no P0-P2 findings (the single P2 found in the round — Pin value
-copies — was closed as a formal decision-4A pointer contract and pinned
-by TestPinPointerAliasSharesClose). The same-failure searches
+with no P0-P2 findings (the round's Pin value-copy P2 was subsequently
+fixed in the external-audit round: every Pin references one shared
+pinState, value copies are supported, and the TestPinValueCopy* and
+TestPinValueCopyCannotReleaseSecondPin tests pin the behavior on the
+pre-fix tree). The same-failure searches
 (content-transfer, page arrays, stale constants, PID-slot model,
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
 present. Milestone 2 (writer) starts only after the re-verification
