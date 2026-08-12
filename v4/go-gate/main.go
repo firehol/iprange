@@ -286,22 +286,39 @@ func exprText(e ast.Expr) string {
 			return "<-chan " + exprText(t.Value)
 		}
 		return "chan " + exprText(t.Value)
+	case *ast.FuncType:
+		parts := []string{}
+		if t.Params != nil {
+			for _, fld := range t.Params.List {
+				parts = append(parts, exprText(fld.Type))
+			}
+		}
+		out := "func(" + strings.Join(parts, ", ") + ")"
+		if t.Results != nil && len(t.Results.List) > 0 {
+			rps := []string{}
+			for _, fld := range t.Results.List {
+				rps = append(rps, exprText(fld.Type))
+			}
+			out += " " + strings.Join(rps, ", ")
+		}
+		return out
 	}
 	return ""
 }
 
 // taints is the per-scope syntactic *os.File state.
 type taints struct {
-	file       map[string]bool   // identifiers holding *os.File
-	container  map[string]bool   // identifiers holding []*os.File or a struct with file fields
-	struc      map[string]string // identifiers holding a same-package struct value: name -> type name
-	chanFile   map[string]bool   // identifiers holding chan *os.File (make, declared, or send-marked)
-	fieldTaint map[string]kind   // expr.field = file/container from an assignment of a tainted value
-	funcFile   map[string]bool   // identifiers holding func() *os.File (closures and declared func types)
+	file       map[string]bool    // identifiers holding *os.File
+	container  map[string]bool    // identifiers holding []*os.File or a struct with file fields
+	struc      map[string]string  // identifiers holding a same-package struct value: name -> type name
+	chanFile   map[string]bool    // identifiers holding chan *os.File (make, declared, or send-marked)
+	fieldTaint map[string]kind    // expr.field = file/container from an assignment of a tainted value
+	funcFile   map[string]bool    // identifiers holding func() *os.File (closures and declared func types)
+	retFile    map[token.Pos]bool // closure/function nodes whose body returns a file-tainted value
 }
 
 func newTaints() *taints {
-	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, fieldTaint: map[string]kind{}, funcFile: map[string]bool{}}
+	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, fieldTaint: map[string]kind{}, funcFile: map[string]bool{}, retFile: map[token.Pos]bool{}}
 }
 
 func cloneTaints(t *taints) *taints {
@@ -323,6 +340,9 @@ func cloneTaints(t *taints) *taints {
 	}
 	for k, v := range t.funcFile {
 		c.funcFile[k] = v
+	}
+	for k, v := range t.retFile {
+		c.retFile[k] = v
 	}
 	return c
 }
@@ -364,16 +384,17 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 					if c, ok := classifyStruct(vs.Values[i], info); ok {
 						pkg.struc[name.Name] = c
 					}
-					if funcTypeResultsFile(vs.Values[i]) {
+					if funcTypeResultsFile(vs.Values[i], info) {
 						pkg.funcFile[name.Name] = true
 					}
 				} else if vs.Type != nil {
 					// type-only package var: register struct instances so
-					// field reads in any file resolve the taint.
+					// field reads in any file resolve the taint, and
+					// func-typed values (incl. aliases) as producers.
 					if base, ok := structBase(vs.Type, info); ok {
 						pkg.struc[name.Name] = base
 					}
-					if funcTypeResultsFile(vs.Type) {
+					if funcTypeResultsFile(vs.Type, info) {
 						pkg.funcFile[name.Name] = true
 					}
 				}
@@ -441,6 +462,18 @@ const (
 	kindChanFile
 )
 
+// unwrapParen strips parentheses around an expression so call and
+// selector matching sees (getFile)() and ((f).Read)(p) the same way.
+func unwrapParen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
 // chanElemFile reports whether a type text is a channel whose element
 // type resolves to *os.File, directly or through nested channels and
 // aliases (chan chan *os.File and chan C with C = chan *os.File both
@@ -479,9 +512,34 @@ func resolveTypeText(text string, info pkgInfo) string {
 	return text
 }
 
+// typeSwitchBound returns the identifier bound by a type-switch guard
+// (switch zv := x.(type)) or the empty string.
+func typeSwitchBound(assign ast.Stmt) string {
+	switch a := assign.(type) {
+	case *ast.AssignStmt:
+		if len(a.Lhs) == 1 {
+			if id, ok := a.Lhs[0].(*ast.Ident); ok {
+				return id.Name
+			}
+		}
+	case *ast.ExprStmt:
+		if as, ok := a.X.(*ast.TypeAssertExpr); ok {
+			// switch x.(type) without a bound variable: nothing to taint.
+			_ = as
+		}
+	}
+	return ""
+}
+
 // funcTypeResultsFile reports whether a declared function type or
-// closure literal returns *os.File in any result position.
-func funcTypeResultsFile(e ast.Expr) bool {
+// closure literal returns *os.File in any result position. Alias-typed
+// function values (type fileFn = func() *os.File) resolve through the
+// textual alias expansion first.
+func funcTypeResultsFile(e ast.Expr, info pkgInfo) bool {
+	txt := resolveTypeText(exprText(e), info)
+	if strings.HasPrefix(txt, "func(") && strings.Contains(txt, "*os.File") {
+		return true
+	}
 	switch t := e.(type) {
 	case *ast.FuncType:
 		return len(positionsOf("*os.File", collectResults(t))) > 0
@@ -611,7 +669,8 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 	if !ok {
 		return nil, nil, false
 	}
-	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+	fun := unwrapParen(call.Fun)
+	if sel, ok := fun.(*ast.SelectorExpr); ok {
 		if pkg, ok := sel.X.(*ast.Ident); ok {
 			// Resolve the package by local alias so an aliased
 			// `import fsp "os"` cannot dodge the producer taint.
@@ -632,7 +691,7 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			}
 		}
 	}
-	if id, ok := call.Fun.(*ast.Ident); ok {
+	if id, ok := fun.(*ast.Ident); ok {
 		if pos := positionsOf("*os.File", info.funcs[id.Name]); pos != nil {
 			return call, pos, true
 		}
@@ -645,8 +704,18 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			return call, []int{0}, true
 		}
 	}
-	if fl, ok := call.Fun.(*ast.FuncLit); ok {
+	if fl, ok := fun.(*ast.FuncLit); ok {
 		if pos := positionsOf("*os.File", collectResults(fl.Type)); pos != nil {
+			return call, pos, true
+		}
+		// A closure whose declared result type hides the file behind an
+		// interface is still a producer when its body returns a tainted
+		// value; every declared result position is then file-tainted.
+		if st.retFile[fl.Pos()] {
+			pos := make([]int, len(collectResults(fl.Type)))
+			for i := range pos {
+				pos[i] = i
+			}
 			return call, pos, true
 		}
 	}
@@ -811,7 +880,7 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 			switch {
 			case t == "*os.File":
 				st.file[name.Name] = true
-			case funcTypeResultsFile(field.Type):
+			case funcTypeResultsFile(field.Type, info):
 				st.funcFile[name.Name] = true
 			case chanElemFile(t, info):
 				st.chanFile[name.Name] = true
@@ -840,6 +909,20 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 		ast.Inspect(s, func(n ast.Node) bool {
 			if fl, ok := n.(*ast.FuncLit); ok {
 				prepassStmts(fl.Body.List, st, info, imports)
+				// A closure whose body returns a file-tainted value is a
+				// producer regardless of its declared result type (a
+				// *os.File satisfies io.ReadCloser).
+				ast.Inspect(fl.Body, func(rn ast.Node) bool {
+					if ret, ok := rn.(*ast.ReturnStmt); ok {
+						for _, res := range ret.Results {
+							if isFileOrContainer(res, st, info, imports) {
+								st.retFile[fl.Pos()] = true
+								return false
+							}
+						}
+					}
+					return true
+				})
 			}
 			return true
 		})
@@ -943,8 +1026,18 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			if v.Assign != nil {
 				prepassStmts([]ast.Stmt{v.Assign}, st, info, imports)
 			}
+			bound := typeSwitchBound(v.Assign)
 			for _, cc := range v.Body.List {
 				if cs, ok := cc.(*ast.CaseClause); ok {
+					// switch zv := x.(type) { case *os.File: ... } binds
+					// zv as *os.File inside the clause.
+					if bound != "" {
+						for _, ce := range cs.List {
+							if resolveTypeText(exprText(ce), info) == "*os.File" {
+								st.file[bound] = true
+							}
+						}
+					}
 					prepassStmts(cs.Body, st, info, imports)
 				}
 			}
@@ -1019,7 +1112,10 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	}
 	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
-	if funcTypeResultsFile(rhs) {
+	if funcTypeResultsFile(rhs, info) {
+		st.funcFile[id.Name] = true
+	}
+	if fl, ok := rhs.(*ast.FuncLit); ok && st.retFile[fl.Pos()] {
 		st.funcFile[id.Name] = true
 	}
 	if c, ok := classifyStruct(rhs, info); ok {
@@ -1136,14 +1232,15 @@ func rulesWalk(scope string, body *ast.BlockStmt, st *taints, exempts map[token.
 				reporter.failf("%s: banned content-transfer selector .%s", scope, v.Sel.Name)
 			}
 		case *ast.CallExpr:
-			if sel, ok := v.Fun.(*ast.SelectorExpr); ok && !exempts[sel.Pos()] {
+			fun := unwrapParen(v.Fun)
+			if sel, ok := fun.(*ast.SelectorExpr); ok && !exempts[sel.Pos()] {
 				if isFileExpr(sel.X, st, info, imports) && !approvedFileMethods[sel.Sel.Name] {
 					reporter.failf("%s: %s on an *os.File value outside the approved capability surface", scope, sel.Sel.Name)
 				}
 			}
 			for _, arg := range v.Args {
-				if isFileOrContainer(arg, st, info, imports) && !approvedCallee(v.Fun, imports) {
-					reporter.failf("%s: *os.File value passed to %s", scope, calleeText(v.Fun))
+				if isFileOrContainer(arg, st, info, imports) && !approvedCallee(fun, imports) {
+					reporter.failf("%s: *os.File value passed to %s", scope, calleeText(fun))
 				}
 			}
 		case *ast.FuncLit:
