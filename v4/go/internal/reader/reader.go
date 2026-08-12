@@ -25,10 +25,13 @@ const (
 )
 
 // ImmutableReader is the opened immutable database. Its state (mapping,
-// committed meta, selection) is write-once at open and every access re-derives
-// checked views, so lookups and independent scans are safe for concurrent use
-// by multiple goroutines without a per-call lock (design-iprange-engine.md);
-// Close must never race reader work.
+// committed meta, selection) is write-once at open; direct lookups read
+// mapped bytes, membership word reads re-derive checked mapped views at call
+// time, and structured lookups validate and decode during lookup with the
+// scalar retained in a lightweight view. Lookups and independent scans are
+// therefore safe for concurrent use by multiple goroutines without a
+// per-call lock (design-iprange-engine.md); Close must never race reader
+// work.
 type ImmutableReader struct {
 	m         *mapping.Mapping
 	meta      format.Meta

@@ -151,7 +151,6 @@ fi
 # Only the reader may hold the mapping, and only the reader core may be
 # consumed by the facade.
 for pkg in $(go list ./... | grep -v '^github.com/firehol/iprange/v4/go$' \
-		| grep -v '^github.com/firehol/iprange/v4/go/internal/exactv4$' \
 		| grep -v '^github.com/firehol/iprange/v4/go/internal/format$' \
 		| grep -v '^github.com/firehol/iprange/v4/go/internal/mapping$' \
 		| grep -v '^github.com/firehol/iprange/v4/go/internal/reader$'); do

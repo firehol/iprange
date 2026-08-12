@@ -12,7 +12,7 @@ fixed at HEAD 73bba50: writable canonical ValueTag variables (now private wires
 behind accessor functions), the unapproved ImmutableInfo name (renamed to the
 approved DatabaseInfo surface), and the report's contradictory allocation,
 worker-decision, and view behavior statements (corrected; the metadata
-allocation figure re-measured). The code fixes are regression-pinned; the
+allocation figure re-measured at HEAD 2d2197a). The code fixes are regression-pinned; the
 record fixes are verified against the tree. Milestone 2 must not start until a
 new independent final review passes.
 Repository counts at reopening: production 4,797 raw lines / tests 4,676 raw
@@ -1349,8 +1349,10 @@ same failure mode is prevented across all project work.
 
 Validation for the process repair uses HEAD 29e1dde as the historical benchmark:
 the workflow must identify the mutable tag authority, API-name deviation, and
-three stale report claims even though every mechanical gate passes. Product
-fixes and their final re-review remain pending in this SOW.
+three stale report claims even though every mechanical gate passes. Resolution:
+the product fixes landed at HEAD 73bba50 (immutable tag accessors, DatabaseInfo
+rename, corrected report statements) with the metadata figure re-measured at
+2d2197a; the final re-review result is recorded in the Gate execution record.
 
 Append regression entries here only after this SOW was completed or closed and
 later testing or use found broken behavior. Use a dated

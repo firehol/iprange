@@ -6,9 +6,11 @@ import (
 )
 
 // Warm successful point lookups and cursor steps must allocate zero Go heap
-// bytes (acceptance criterion; decision 4A). Every operation below runs
-// through a pin created outside the measured loop, is warmed before the
-// measured run, and AllocsPerRun must report exactly zero.
+// bytes (acceptance criterion; decision 4A). Direct lookups, scans, and
+// cardinality run at reader level; membership, structured, and feed
+// operations run through a pin created outside the measured loop. Every
+// operation is warmed before the measured run, and AllocsPerRun must
+// report exactly zero.
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
@@ -202,7 +204,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 				}
 			})
 			if allocs != 0 {
-				t.Errorf("%s allocated %f heap bytes per run (contract: exactly zero)", check.name, allocs)
+				t.Errorf("%s allocated %f allocations per run (contract: exactly zero)", check.name, allocs)
 			}
 		})
 	}

@@ -1,15 +1,16 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
 Date: 2026-08-11 (updated 2026-08-12 after review rounds, external audits, and
-the hot-path contract implementation). Status: Milestone 1 REOPENED. The
-round-6 PASS at HEAD 29e1dde was invalidated by an independent adversarial
-review: exported writable canonical ValueTag variables control
-DirectSemantic, the public ImmutableInfo name deviates from the approved and
-normative DatabaseInfo surface without a recorded decision, and this report
-retained stale allocation, worker-decision, and view-behavior statements.
-Mechanical gates remain green but do not establish closure. Milestone 2 must
-not start until the implementation findings are fixed and a new independent
-final review passes.
+the hot-path contract implementation). Status: Milestone 1 REOPENED pending a
+new independent final review. The round-6 PASS at HEAD 29e1dde was
+invalidated by an independent adversarial review; all three reopened findings
+are now fixed and regression-pinned at HEAD 73bba50: exported writable
+canonical ValueTag variables became private wires behind accessor functions,
+ImmutableInfo was renamed to the approved DatabaseInfo surface, and this
+report's stale allocation, worker-decision, and view-behavior statements were
+corrected. The metadata allocation figure was re-measured at HEAD 2d2197a.
+Mechanical gates are green but do not establish closure. Milestone 2 must not
+start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -64,10 +65,11 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
 conformance test: 6/6 fixtures pass (incl. the no-threat structured fixture), 3/3 invalid mutations pass
 zero-allocation: 12 public checks + 8 internal checks, all at exactly 0
-heap bytes/run under the pin API (direct v4/v6/scan/cardinality,
-membership v4/v6-inline/contains/word/readwords, structured v4/threat,
-feed-lookup-into); atomics exist only at Pin/Close boundaries
-(reader-level LookupFeed keeps its spec-mandated copied string: 1 alloc)
+allocations/run for every measured hot path (reader-level direct
+v4/v6/scan/cardinality; pinned membership v4/v6-inline/contains/word/
+readwords, structured v4/threat, feed-lookup-into); atomics exist only
+at Pin/Close boundaries (reader-level LookupFeed keeps its spec-mandated
+copied string: 1 alloc)
 ```
 
 Production LOC measured at HEAD (recomputed after every repair pass;
@@ -165,12 +167,15 @@ tree): 4,683 raw lines. The earlier
 - `errors.go`: the full 1–69 table now exists in `format/codes.go` with the
   exact current names; code 46 is `LiveCoordinationMalformedRequiresReset`
   (the old Go name is obsolete); codes 65–69 added publicly.
-- The old files remain untouched and will be deleted only per Decision 1.
+- The obsolete `internal/exactv4` sources are deleted per Decision 1 in the
+  final milestone-1 implementation commit (105 tracked files; see
+  Deletion (1A)).
 
 ## 6. Zero-allocation evidence
 
-`v4/go/zeroalloc_test.go` (public surface) + `internal/reader/zeroalloc_test.go`
-(internal surface), warmed, `AllocsPerRun(200)`:
+`v4/go/zeroalloc_test.go` (public surface, warmed, `AllocsPerRun(400)`) +
+`internal/reader/zeroalloc_test.go` (internal surface, warmed,
+`AllocsPerRun(200)`):
 
 | Operation | Allocations |
 |---|---|
@@ -848,6 +853,7 @@ pre-fix tree). The same-failure searches
 (content-transfer, page arrays, stale constants, PID-slot model,
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
 present. This close-out verdict was later invalidated by the adversarial review
-recorded in the report header and active SOW. Milestone 2 remains blocked until
-the reopened findings are fixed and a new final review passes; the worker
+recorded in the report header and active SOW. All reopened findings are now
+fixed at HEAD 73bba50 (metadata figure re-measured at 2d2197a); Milestone 2
+remains blocked until a new independent final review passes; the worker
 boundary decision remains scheduled for its later milestone per 2A.

@@ -117,7 +117,7 @@ func TestInternalZeroAllocation(t *testing.T) {
 				}
 			})
 			if allocs != 0 {
-				t.Errorf("%s allocated %f heap bytes per run", check.name, allocs)
+				t.Errorf("%s allocated %f allocations per run", check.name, allocs)
 			}
 		})
 	}
