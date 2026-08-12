@@ -233,6 +233,14 @@ func (r *ImmutableReader) Close() error {
 // lookups through the pin allocate nothing and take no atomics. The reader
 // cannot close while any pin exists (Close reports HandleBusy). Pin.Close
 // must not race lookups using the pin.
+//
+// Pin is a pointer type: aliasing the pointer (p2 := p1) is safe and
+// shares the single close state, so closing through either alias closes
+// the one logical pin. The Pin VALUE must never be copied (*p1); a
+// dereference copy would carry its own close flag and double-decrement the
+// reader's pin count. That misuse is documented as unsupported, exactly
+// like copying a C opaque handle; its consequences are typed errors
+// (HandleBusy / WrongState), never memory-unsafe behavior.
 func (r *ImmutableReader) Pin() (*Pin, error) {
 	if r.sh.closed.Load() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
@@ -248,8 +256,10 @@ func (r *ImmutableReader) Pin() (*Pin, error) {
 	return &Pin{r: r}, nil
 }
 
-// Pin is one caller-owned lifetime registration. It is not copied: create
-// one Pin per goroutine or workload section and close it exactly once.
+// Pin is one caller-owned lifetime registration. It is a pointer type: the
+// pointer may be aliased and shared across goroutines; the value must not
+// be copied (see Pin). Create one Pin per goroutine or workload section
+// and close it exactly once through any alias.
 type Pin struct {
 	r      *ImmutableReader
 	closed bool // plain state; Pin.Close must not race pin operations

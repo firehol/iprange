@@ -1188,3 +1188,29 @@ func TestScanCallbackErrorPassthrough(t *testing.T) {
 		t.Fatalf("callback error rewritten: %v", err)
 	}
 }
+
+// TestPinPointerAliasSharesClose pins the Pin pointer contract: aliasing
+// the pointer shares one close state (closing through either alias closes
+// the single logical pin, a second close reports WrongState, and the pin
+// count is decremented exactly once so the reader closes cleanly).
+func TestPinPointerAliasSharesClose(t *testing.T) {
+	r := mustOpen(t, "rust/membership-ipv4.iprdb")
+	p1, err := r.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	p2 := p1 // pointer alias: one logical pin, one close state
+	if _, _, err := p2.LookupMembershipV4(IPv4(0x0a000000)); err != nil {
+		t.Fatal("lookup through alias:", err)
+	}
+	if err := p1.Close(); err != nil {
+		t.Fatal("close through first alias:", err)
+	}
+	if fe := errorAsCode(p2.Close()); fe != ErrorWrongState {
+		t.Fatalf("close through second alias must report WrongState, got %v", fe)
+	}
+	// The single decrement leaves the reader closable.
+	if err := r.Close(); err != nil {
+		t.Fatalf("reader close after alias close: %v", err)
+	}
+}

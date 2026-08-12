@@ -496,6 +496,16 @@ The user adopted the external re-review's decisions after the reopening:
   (validate_direct/validate_no_structures -> KindInvariant; finish_open ->
   UnsupportedStructure for unknown codes on an otherwise valid structured
   meta).
+- Decision 4A amendment (pin pointer contract, recorded at the re-review):
+  Pin is a pointer type; aliasing the pointer (p2 := p1) shares the single
+  close state, and closing through any alias closes the one logical pin.
+  Copying the Pin VALUE is unsupported (like copying a C opaque handle);
+  the misuse consequences are typed errors (HandleBusy / WrongState), never
+  memory-unsafe behavior. Pinned by TestPinPointerAliasSharesClose.
+- Non-blocking maintenance note (codec reviewer): Cardinality129 arithmetic
+  now exists in two in-sync copies (internal/format/cardinality.go and
+  public types.go); each is pinned by vectors; future edits must keep them
+  in sync.
 
 ### 2026-08-12 - decisions 1A-4A implemented (hot-path contract)
 
