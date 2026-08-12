@@ -844,12 +844,15 @@ Real-use evidence:
 
 Reviewer findings:
 
-- Six-agent adversarial review rounds 1-3 (2026-08-12): round 1 produced
-  one P0-class false claim and fifteen P1/P2 findings, all repaired with
-  regression tests; round 2 caught a new P0 (blob coverage underflow) and
-  seven P2s, all repaired and pinned; round 3 closed with all six reviewers
-  at PASS (0 P0-P2). The closed-state error class remains the recorded
-  pending user decision, not a defect.
+- Six-agent adversarial review rounds 1-5 (2026-08-11/12, see execution
+  log): the pre-session gap-analysis pass found one real BLOCKER (structure
+  radix) and ten MAJOR findings, all repaired (58c4d8f); this session's
+  round 1 found no P0 but P1/P2 findings across all six aspects, all
+  repaired with regression tests; round 2 re-review caught a shipped P0
+  (blob coverage underflow, 3b4f3d5) and further P2s, all repaired and
+  pinned; rounds 3-5 closed with all six reviewers at PASS (0 P0-P2).
+  The closed-state error class remains the recorded pending user decision,
+  not a defect.
 
 Same-failure scan:
 
