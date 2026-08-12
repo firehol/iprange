@@ -1,17 +1,14 @@
 # SOW-0025 — Milestone 1 Report: portable mapped immutable reader
 
 Date: 2026-08-11 (updated 2026-08-12 after review rounds, external audits, and
-the hot-path contract implementation). Status: Milestone 1 CLOSED. The
-round-6 PASS at HEAD 29e1dde was invalidated by an independent adversarial
-review; all three reopened findings were fixed and regression-pinned at HEAD
-73bba50: exported writable canonical ValueTag variables became private wires
-behind accessor functions, ImmutableInfo was renamed to the approved
-DatabaseInfo surface, and this report's stale allocation, worker-decision,
-and view-behavior statements were corrected. The metadata allocation figure
-was re-measured at HEAD 2d2197a, and the record gaps found by final-review
-rounds 7-9 were closed at a64a495, 12b2e7f, 1af6135, and 253f9d5. The
-closing full-scope final review (sol round 10) PASSed at HEAD 253f9d5 with
-zero P0-P2-P3 findings. Milestone 2 (writer) may start.
+the hot-path contract implementation). Status: Milestone 1 REOPENED. The
+round-10 PASS at HEAD 253f9d5 and closure commit at HEAD 1c71299 were
+invalidated by a fresh independent audit with five P2 findings: unapproved
+structured public-API shape, implicit structured semantic validation, repeated
+unnecessary hot-path work plus a false report claim, contradictory closure
+records, and a raw mapping-file capability plus a bypassable content-I/O gate.
+Milestone 2 must not start until these findings are fixed, regression-pinned,
+and a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -853,10 +850,7 @@ TestPinValueCopyCannotReleaseSecondPin tests pin the behavior on the
 pre-fix tree). The same-failure searches
 (content-transfer, page arrays, stale constants, PID-slot model,
 unsigned-subtraction-under-`||`) were re-run over the new tree: none
-present. This close-out verdict was later invalidated by the adversarial review
-recorded in the report header and active SOW. All reopened findings were
-fixed at HEAD 73bba50 (metadata figure re-measured at 2d2197a) and the
-record gaps found in final-review rounds 7-9 at a64a495, 12b2e7f, 1af6135,
-and 253f9d5; the closing full-scope final review PASSed at HEAD 253f9d5
-(round 10, zero P0-P2-P3), so Milestone 2 may start. The worker boundary
-decision remains scheduled for its later milestone per 2A.
+present. The later round-10 PASS at HEAD 253f9d5 and closure commit at HEAD
+1c71299 were invalidated by the five-P2 external audit recorded in the report
+header and active SOW. Milestone 1 is reopened and Milestone 2 is blocked. The
+worker boundary decision remains scheduled for its later milestone per 2A.

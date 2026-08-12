@@ -4,22 +4,17 @@
 
 Status: in-progress
 
-Sub-state: milestone 1 CLOSED. The portable mmap-only immutable reader with
-corpus cross-open is the current implementation checkpoint. The reopened
-findings were fixed at HEAD 73bba50 (writable canonical ValueTag variables
-became private wires behind accessor functions; ImmutableInfo was renamed to
-the approved DatabaseInfo surface; the report's contradictory allocation,
-worker-decision, and view behavior statements were corrected), the metadata
-allocation figure was re-measured at HEAD 2d2197a, and the record gaps found
-by final-review rounds 7-9 were fixed at a64a495, 12b2e7f, 1af6135, and
-253f9d5. The closing full-scope final review (sol round 10) PASSed at HEAD
-253f9d5 with zero P0-P2-P3 findings.
-Repository counts at close: production 4,807 raw lines / tests 4,685 raw
-lines (counts at reopening: 4,797 / 4,676). Milestone 2 (writer) may start,
-scoped exactly to the approved milestone plan (one physical writer,
-allocation/retirement/commit, direct/membership/structured construction,
-Go-produced corpus, Rust cross-open); sidecars, live coordination, and
-publication remain Milestone 4.
+Sub-state: milestone 1 REOPENED. The round-10 PASS at HEAD 253f9d5 and the
+closure commit at HEAD 1c71299 were invalidated by a fresh independent audit.
+Five P2 classes remain unresolved: an unapproved structured public-API shape,
+implicit semantic validation in structured lookup, repeated unnecessary work
+in reader hot paths plus a false report claim, contradictory closure records,
+and a raw mapping-file capability plus a bypassable content-I/O source gate.
+Repository counts remain production 4,807 raw lines / tests 4,685 raw lines
+(counts at the earlier reopening: 4,797 / 4,676). Milestone 2 must not start
+until these findings are fixed, regression-pinned, and a new independent final
+review passes. The approved later scope remains unchanged: Milestone 2 is the
+writer; sidecars, live coordination, and publication remain Milestone 4.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -93,7 +88,23 @@ publication remain Milestone 4.
   exist. This entry records the complete round-8 result.
 - sol round 10: PASS at HEAD 253f9d5, zero P0-P2-P3, full-scope zero-trust
   re-review (records, pin lifetime, mapping/locking, format/API, resources,
-  regression proof, gates). Milestone 1 is accepted at this revision.
+  regression proof, gates). This verdict was later invalidated.
+- External audit after closure: FAIL at HEAD 1c71299 with five P2 findings:
+  the public NetworkEnrichmentV1 location shape deviates from the approved API
+  matrix; structured lookup performs full semantic validation that Rust and the
+  normal-operation contract omit; range/blob/membership hot paths repeat
+  decodes and the report falsely claims one page-header decode per visited
+  page; the closure header contradicts Validation and skill-maintenance text;
+  Mapping.File exposes an unused raw descriptor capability while the
+  content-transfer source gate misses helper forms such as io.ReadAll and
+  io.Copy. Milestone 1 is reopened and Milestone 2 is blocked.
+- Review-process repair: `project-final-review` now defines the reviewer's
+  mission as proving the work faulty or incomplete with concrete evidence. It
+  authorizes unrestricted relevant investigation and `/tmp` tests, requires an
+  objective/blast-radius model, treats every green claim as something to attack,
+  continues beyond the first finding, and permits PASS only when the strongest
+  plausible disproof attempts fail. The repository remains read-only; reviewers
+  may not interfere with processes or install/uninstall software.
 
 ## Requirements
 
@@ -1240,9 +1251,12 @@ Sensitive data gate:
 Artifact maintenance gate:
 
 - AGENTS.md: updated to register the generic final-review runtime skill.
-- Runtime project skills: added `project-final-review` after repeated false PASS
-  verdicts exposed a reusable review-process failure; the Rust skill remains
-  unchanged. A Go implementation skill is still not invented here.
+- Runtime project skills: added `project-final-review` after the first repeated
+  false PASS, then reframed it after the round-10 false PASS around one explicit
+  adversarial objective: prove the work should not merge. It now grants broad
+  investigative authority, requires concrete evidence, and defines PASS as a
+  failed full-scope disproof attempt. The Rust skill remains unchanged. A Go
+  implementation skill is still not invented here.
 - Specs: reviewed completely; no format or behavior change was made.
 - End-user/operator docs: unaffected; the milestone report is corrected as a
   project record, not published product documentation.
@@ -1258,8 +1272,14 @@ Specs update:
 
 Project skills update:
 
-- None for Milestone 1: create the Go runtime skill only from proven commands
-  and hazards later in this SOW.
+- Updated `project-final-review` after the round-10 false PASS. The generic
+  workflow now makes fault discovery its explicit mission, requires reviewers
+  to understand the objective and blast radius, grants authority to examine any
+  relevant surface and build `/tmp` reproducers, requires proven findings, and
+  defines PASS as failure to prove a blocking defect after the strongest
+  plausible attacks. Repository modification, process interference, and
+  software installation/removal are forbidden. A Go implementation skill
+  remains deferred until proven commands and hazards exist later in this SOW.
 
 End-user/operator docs update:
 
@@ -1385,3 +1405,47 @@ Append regression entries here only after this SOW was completed or closed and
 later testing or use found broken behavior. Use a dated
 `## Regression - YYYY-MM-DD` heading at the end of the file. Never prepend
 regression content above the original SOW narrative.
+
+## Regression - 2026-08-12 - round-10 false PASS and evidence-protocol hardening
+
+A fresh independent review of closure HEAD 1c71299 invalidated the round-10 PASS
+at 253f9d5. Four implementation/contract defects already existed at the reviewed
+revision, and the closure commit introduced a fifth records contradiction:
+
+- the approved public API requires `NetworkEnrichmentV1Location` with
+  `Location *NetworkEnrichmentV1Location`, but the Go facade flattened the
+  coordinates and added `HasLocation` without an approved deviation;
+- structured lookup performs semantic flags/coordinate validation that the Rust
+  hot path and the normal-operation contract intentionally omit, and a test
+  incorrectly labels this extra work as Rust parity;
+- direct scans, blob branches, and inline membership word reads repeat decodes or
+  record reconstruction, while the milestone report claims one page-header
+  decode per visited page;
+- the closure header said Milestone 1 was closed and Milestone 2 could start while
+  Validation still said reopened/blocked and contradicted the skill update;
+- `Mapping.File()` exposes an unused raw file capability, and the source gate's
+  method-call regex does not catch content-transfer helpers such as `io.ReadAll`
+  or `io.Copy`.
+
+Root cause: the generic final-review skill described the right review lanes but
+did not make adversarial disproof the reviewer's explicit success condition. The
+round-10 execution therefore sampled exported names, equated zero
+allocations/atomics with necessary work, trusted the source gate, ignored an
+unused boundary escape hatch, and attached PASS to a revision followed by an
+unreviewed closure commit.
+
+The first repair draft overcorrected with six mandatory evidence artifacts and a
+formal closure protocol. The user rejected that as compliance-heavy and likely
+to narrow thinking. Final process repair: `project-final-review` now gives the
+reviewer one explicit mission - prove with concrete evidence that the work is
+faulty, incomplete, harmful, or unsafe to merge. It requires understanding the
+objective and blast radius, grants authority to inspect any relevant surface and
+create `/tmp` tests or mutations, treats green evidence as something to attack,
+continues after the first finding, and permits PASS only when the strongest
+plausible disproof attempts fail. It also explicitly forbids modifying the
+reviewed repository, interfering with running processes, or installing/removing
+software. This framing is generic and applies to every project final review.
+
+Product repair remains pending. Milestone 1 stays reopened and Milestone 2 stays
+blocked until all five findings are fixed, regression-pinned, and independently
+re-reviewed under the strengthened protocol.
