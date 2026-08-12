@@ -458,12 +458,17 @@ func (r *ImmutableReader) MetadataJSON() ([]byte, bool, error) {
 // exists (decision 4A). A view derived from a closed pin reports WrongState.
 // The zero MembershipView is inert and reports WrongState.
 type MembershipView struct {
-	p     *Pin
+	// st is the immutable private pin state captured at view creation.
+	// Storing *pinState instead of *Pin keeps the guard attached to the
+	// logical pin: later reassignment of the Pin variable that created the
+	// view (e.g. p = *otherPin) cannot retarget the guard to another
+	// reader's lifetime state.
+	st    *pinState
 	inner reader.MembershipView
 }
 
 func (v MembershipView) check() error {
-	if v.p == nil || v.p.st.closed {
+	if v.st == nil || v.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "membership view without a live pin"}
 	}
 	return nil
@@ -534,7 +539,7 @@ func (p *Pin) LookupMembershipV4(ip IPv4) (MembershipView, bool, error) {
 	if !found {
 		return MembershipView{}, false, nil
 	}
-	return MembershipView{p: p, inner: view}, true, nil
+	return MembershipView{st: p.st, inner: view}, true, nil
 }
 
 // LookupMembershipV6 returns the membership bitmap covering ip through the
@@ -554,7 +559,7 @@ func (p *Pin) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
 	if !found {
 		return MembershipView{}, false, nil
 	}
-	return MembershipView{p: p, inner: view}, true, nil
+	return MembershipView{st: p.st, inner: view}, true, nil
 }
 
 // NetworkEnrichmentV1Location is the optional WGS84 location of one
@@ -587,12 +592,12 @@ type NetworkEnrichmentV1 struct {
 // entry. The view is valid while its pin remains open; no per-view release
 // exists. The zero view reports WrongState.
 type NetworkEnrichmentV1View struct {
-	p     *Pin
+	st    *pinState
 	inner reader.NetworkEnrichmentV1View
 }
 
 func (v NetworkEnrichmentV1View) check() error {
-	if v.p == nil || v.p.st.closed {
+	if v.st == nil || v.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "enrichment view without a live pin"}
 	}
 	return nil
@@ -635,7 +640,7 @@ func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, bool, error
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
-	return MembershipView{p: v.p, inner: view}, true, nil
+	return MembershipView{st: v.st, inner: view}, true, nil
 }
 
 // LookupNetworkEnrichmentV1V4 returns the structured value covering ip
@@ -654,7 +659,7 @@ func (p *Pin) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmentV1View, boo
 	if !found {
 		return NetworkEnrichmentV1View{}, false, nil
 	}
-	return NetworkEnrichmentV1View{p: p, inner: view}, true, nil
+	return NetworkEnrichmentV1View{st: p.st, inner: view}, true, nil
 }
 
 // LookupNetworkEnrichmentV1V6 returns the structured value covering ip
@@ -673,7 +678,7 @@ func (p *Pin) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmentV1View, boo
 	if !found {
 		return NetworkEnrichmentV1View{}, false, nil
 	}
-	return NetworkEnrichmentV1View{p: p, inner: view}, true, nil
+	return NetworkEnrichmentV1View{st: p.st, inner: view}, true, nil
 }
 
 // publicError converts internal typed errors into the public error type.

@@ -133,17 +133,23 @@ strip_comments() {
 }
 
 # content_violations prints every production source line that still mentions
-# a content-transfer call after comment stripping. The strip runs on whole
-# files first: grep-then-strip would lose the block-comment state across
-# lines.
+# a content-transfer selector after comment stripping. The strip runs on
+# whole files first: grep-then-strip would lose the block-comment state
+# across lines. The directory discovery comes from `go list` (all packages,
+# including any added later), so a new production package cannot escape the
+# scan. The word-boundary match catches direct calls, method values
+# (m := f.Read), function aliases (rd := io.ReadAll), and Seek, not only
+# parenthesized calls.
 content_violations() {
-	for f in $(find internal/format internal/mapping internal/reader -name '*.go' -not -name '*_test.go' 2>/dev/null) *.go; do
-		[ -f "$f" ] || continue
-		case "$f" in *_test.go) continue ;; esac
-		strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read('
+	for dir in $(go list -f '{{.Dir}}' ./... | sort -u); do
+		for f in "$dir"/*.go; do
+			[ -f "$f" ] || continue
+			case "$f" in *_test.go) continue ;; esac
+			strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read('
+		done
 	done
 }
-if [ -n "$(content_violations | grep -E '\.(Read|Write|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile|ReadAll|Copy)\(')" ]; then
+if [ -n "$(content_violations | grep -E '\.(Read|Write|Seek|ReadAt|WriteAt|Pread|Pwrite|ReadFile|WriteFile|ReadAll|Copy)\b')" ]; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
