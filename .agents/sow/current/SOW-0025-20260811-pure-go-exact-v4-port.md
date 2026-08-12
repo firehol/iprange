@@ -66,9 +66,18 @@ text/scanner, text/tabwriter, mime/quotedprintable) unlocked; all fixed
 at HEAD 149a200 (the io.ReadFull exemption is shape-bounded to the two
 real nodes io.ReadFull(zr, out[...]), Call/CallSlice join the
 selectors, the constructor packages join the import ban), and the
-self-test now durably rejects twenty-eight mutation forms. The records
-were completed in the same pass; decision 5A remains the single open
-user decision and blocks milestone close. Repository counts: production 4,772 raw lines /
+self-test now durably rejects twenty-eight mutation forms. The re-review
+of that fix found the exemptions still name-keyed (a file-backed flate
+reader named zr with a buffer named out, and a receiver field r, could
+reproduce the tolerated shapes), so at HEAD c03e40c the exemptions are
+exact literals and nothing else: c.r.Read(p), c.r.ReadByte(), and the
+two io.ReadFull(zr, out[...int(meta.MetadataUncompressed)]) inflater
+reads; same-named file-backed readers and other index shapes now fail
+closed, two pin forms were added, and a startup sweep removes stale
+gatemut_* artifacts from interrupted self-test runs. The self-test now
+durably rejects thirty mutation forms. The records were completed in
+the same pass; decision 5A remains the single open user decision and
+blocks milestone close. Repository counts: production 4,772 raw lines /
 tests 4,832 raw lines. Milestone 2 must not start until a new
 independent final review passes.
 The approved later scope remains unchanged: Milestone 2 is the writer;
@@ -283,6 +292,25 @@ sidecars, live coordination, and publication remain Milestone 4.
   join the selector set; the constructor packages join the import ban;
   two new mutation forms pin the shadow and the zr-name collision. The
   self-test now durably rejects all twenty-eight mutation forms.
+  Decision 5A remains open for user ratification and is the only
+  remaining P2 class.
+- Iterative pass (round-13 fixes, fifth sweep): five narrow reviewers
+  PASS at HEAD 6a25450 (Peirce, Gauss, Faraday, Kant, Bernoulli; Kant
+  adds a P3 hygiene finding - stale gatemut_* artifacts from an
+  interrupted self-test can wedge the tree); Ampere found the
+  exemptions still name-keyed: P1 - `zr := flate.NewReader(f)` with a
+  buffer literally named `out` reproduces the tolerated
+  io.ReadFull(zr, out[...]) shape (the project's own inflater naming),
+  and P2 - a receiver field `r *os.File` reproduces the c.r.Read shape.
+  Fixed at HEAD c03e40c: all four tolerated nodes are blanked as exact
+  literals (c.r.Read(p), c.r.ReadByte(), and the two
+  io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]) /
+  io.ReadFull(zr, out[int(meta.MetadataUncompressed):]) inflater
+  reads) and nothing else, so same-named file-backed readers and other
+  index shapes fail closed; two new mutation forms pin the file-backed
+  c.r and the zr/out name collision; the startup sweep removes stale
+  gatemut_* artifacts so an interrupted self-test cannot wedge the
+  tree. The self-test now durably rejects all thirty mutation forms.
   Decision 5A remains open for user ratification and is the only
   remaining P2 class.
 
