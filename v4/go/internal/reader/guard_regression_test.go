@@ -192,3 +192,36 @@ func TestBlobBranchProbedChildValidation(t *testing.T) {
 		t.Fatalf("probed branch child accepted: %v", err)
 	}
 }
+
+// TestBlobGapRejectedCorruption pins the blob coverage check against the
+// unsigned-underflow class: a blob tree with a gap (second branch entry
+// starting past the first leaf's end) must reject a request in the gap as
+// corruption. Before the off > end guard this request wrapped end-off and
+// either panicked on the leaf slice or returned bytes from outside the leaf
+// extent.
+func TestBlobGapRejectedCorruption(t *testing.T) {
+	path := buildBlobDatabase(t)
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	// Branch page 4, entry 1 (offset 4080:4088): first logical offset
+	// 4048 -> 5000, leaving a gap (4048, 5000] in the declared 4800-byte
+	// blob; word 512 (byte 4096) falls into the gap.
+	if _, err := file.WriteAt([]byte{0x88, 0x13, 0, 0, 0, 0, 0, 0}, int64(4*format.PageSize+4080)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	view, found, err := r.LookupMembership4(0x0a000000)
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	if _, _, err := view.Word(512); err == nil || !isFormatError(err, format.CodeFormatInvalid) {
+		t.Fatalf("blob gap read accepted or wrong error: %v", err)
+	}
+}

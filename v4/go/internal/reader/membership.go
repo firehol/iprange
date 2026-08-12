@@ -402,7 +402,11 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, 
 			if end < totalBytes && leaf.DataLen != format.MaxBlobLeafDataLen {
 				return nil, corrupt("blob nonfinal leaf not full")
 			}
-			if off < leaf.LogicalOffset || length > end-off {
+			// The request must lie inside [leaf.LogicalOffset, end]; the
+			// explicit off > end guard keeps the end-off subtraction free of
+			// unsigned underflow (a blob-tree gap must be corruption, never
+			// an out-of-leaf read or a slice panic).
+			if off < leaf.LogicalOffset || off > end || length > end-off {
 				return nil, corrupt("blob leaf does not cover the requested bytes")
 			}
 			base := off - leaf.LogicalOffset
