@@ -51,17 +51,17 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 ## 2. Commands and factual results
 
 ```
-go test ./...                    ok (root 0.013s, format, reader; old exactv4 cached)
-go test -race ./internal/format ./internal/reader .   ok
-go vet ./internal/format ./internal/reader .          clean
-gofmt -l .                                           clean
+go test ./...                                  ok (4 packages: root, format, reader, mapping)
+go test -race ./internal/format ./internal/reader ./internal/mapping .   ok
+go vet ./...                                  clean
+gofmt -l .                                    clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
 conformance test: 5/5 fixtures pass, 3/3 invalid mutations pass
-zero-allocation: 18 checks (8 internal at 0 allocs + 10 public: direct,
-scan, cardinality, and feed at 0; view-returning lookups at exactly one
-documented view-guard allocation per created view — the copy-safety cost —
-and all view operations at 0)
-(feed-lookup: 1 documented string copy per lookup)
+zero-allocation: 12 public checks + 8 internal checks, all at exactly 0
+heap bytes/run under the pin API (direct v4/v6/scan/cardinality,
+membership v4/v6-inline/contains/word/readwords, structured v4/threat,
+feed-lookup-into); atomics exist only at Pin/Close boundaries
+(reader-level LookupFeed keeps its spec-mandated copied string: 1 alloc)
 ```
 
 Production LOC measured at HEAD (recomputed after every repair pass;
@@ -774,11 +774,12 @@ All four decisions were recorded in the SOW and implemented:
 
 ## 12. Deviations and open items
 
-- No tracked deletion executed (Decision 1 = C: decide after this
-  evidence). The old Go tree is untouched and green.
-- The public facade temporarily reuses the verified scalar aliases
-  (`IPv4`, `IPv6`, `Cardinality129`, `ErrorCode`) from the old root package;
-  the reset relocates them into the final public package.
+- Deletion executed per decision 1A (see section 11j): the obsolete
+  internal/exactv4 tree (105 tracked files + the untracked test binary and
+  empty directory) is removed; git history preserves the sources.
+- The verified scalar types (`IPv4`, `IPv6`, `Cardinality129`, `ValueTag`,
+  address/value families) live in `v4/go/types.go`; `ErrorCode` lives in
+  `errors.go`.
 - `LookupFeed` returns a Go string (one copy); the internal path is
   zero-alloc. Cursors, namespaces beyond basename rules, windows mapping,
   darwin/freebsd runtime proof, big-endian vector execution, and the

@@ -533,7 +533,7 @@ The user adopted the external re-review's decisions after the reopening:
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
 - Counts at HEAD (this commit): production 4,874 raw / tests 4,397 raw.
-  Gates: go test ./... (5 packages) incl -race, vet, gofmt, import graph,
+  Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,
   SOW audit - all green.
 
 ## Implications And Decisions
@@ -1071,7 +1071,7 @@ Acceptance criteria evidence:
 
 Tests or equivalent validation:
 
-- `go test ./...` (5 packages) — green at the last commit.
+- `go test ./...` (4 packages) — green at the last commit.
 - `go test -race ./internal/format ./internal/reader ./internal/mapping .` — green.
 - `go vet ./...` — clean; `gofmt -l .` — empty.
 - `./check-import-graph.sh` — passes; it now also bans content-transfer I/O
