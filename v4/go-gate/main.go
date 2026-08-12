@@ -109,11 +109,12 @@ var approvedFileMethods = map[string]bool{
 // text. funcs maps same-package function names to their result type
 // texts. Both are collected syntactically.
 type pkgInfo struct {
-	structs  map[string]map[string]string
-	funcs    map[string][]string
-	methods  map[string][]string // structName.method -> result type texts
-	aliases  map[string]string   // type-alias name -> underlying type text
-	retFuncs map[string]bool     // named funcs whose body returns a tainted *os.File value
+	structs    map[string]map[string]string
+	funcs      map[string][]string
+	methods    map[string][]string // structName.method -> result type texts
+	aliases    map[string]string   // type-alias name -> underlying type text
+	retFuncs   map[string]bool     // named funcs whose body returns a tainted *os.File value
+	retMethods map[string]bool     // structName.method whose body returns a tainted *os.File value
 }
 
 func main() {
@@ -155,27 +156,13 @@ func main() {
 		for _, f := range list {
 			collectPkgTaints(parsed[f], shared, info)
 		}
-		// Pre-scan every named function: a body whose return statement
-		// yields a file-tainted value is a file producer even when the
-		// declared result type hides the file behind an interface. The
-		// pre-scan runs before any runFile so call sites in every file
-		// of the directory see the complete producer set.
-		for _, f := range list {
-			for _, decl := range parsed[f].Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Body == nil {
-					continue
-				}
-				fst := cloneTaints(shared)
-				addSignatureTaints(fst, fd.Recv, info)
-				addSignatureTaints(fst, fd.Type.Params, info)
-				imp := fileImports(parsed[f], nil)
-				prepassStmts(fd.Body.List, fst, info, imp)
-				if returnsFileIn(fd.Body, fst, info, imp) {
-					info.retFuncs[fd.Name.Name] = true
-				}
-			}
-		}
+		// Pre-scan every named function and method: a body whose return
+		// statement yields a file-tainted value is a file producer even
+		// when the declared result type hides the file behind an
+		// interface. The pre-scan runs before any runFile so call sites
+		// in every file of the directory see the complete producer set;
+		// it iterates to a fixpoint so helper chains compose.
+		prescanFileProducers(list, parsed, shared, info)
 		for _, f := range list {
 			if err := runFile(f, parsed[f], fses[f], srcs[f], info, shared); err != nil {
 				fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
@@ -206,7 +193,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -880,10 +867,14 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 				return call, pos, true
 			}
 		}
-		// Same-package method returning *os.File (e.g. an accessor).
+		// Same-package method returning *os.File (e.g. an accessor), or
+		// whose body returns a tainted value behind an interface.
 		if structName, found := resolveStruct(sel.X, st, info); found {
 			if pos := positionsOf("*os.File", info.methods[structName+"."+sel.Sel.Name]); pos != nil {
 				return call, pos, true
+			}
+			if info.retMethods[structName+"."+sel.Sel.Name] {
+				return call, []int{0}, true
 			}
 			// hb.fn() where the struct field type is func() *os.File.
 			if ft, okf := info.structs[structName][sel.Sel.Name]; okf {
@@ -1057,6 +1048,45 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 // resolveStruct resolves an expression to a same-package struct type
 // name: tainted-struct identifiers, struct return values, and struct
 // composite literals.
+// prescanFileProducers marks named functions and methods whose bodies
+// return file-tainted values as producers. It runs to a fixpoint (up to
+// 8 passes) so chains like deep() -> mid() -> os.Pipe resolve even when
+// the declaration order is not topological.
+func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *taints, info pkgInfo) {
+	for pass := 0; pass < 8; pass++ {
+		added := 0
+		for _, f := range list {
+			imp := fileImports(parsed[f], nil)
+			for _, decl := range parsed[f].Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+				fst := cloneTaints(shared)
+				addSignatureTaints(fst, fd.Recv, info)
+				addSignatureTaints(fst, fd.Type.Params, info)
+				prepassStmts(fd.Body.List, fst, info, imp)
+				if !returnsFileIn(fd.Body, fst, info, imp) {
+					continue
+				}
+				if _, recvStruct := receiverOf(fd); recvStruct != "" {
+					key := recvStruct + "." + fd.Name.Name
+					if !info.retMethods[key] {
+						info.retMethods[key] = true
+						added++
+					}
+				} else if !info.retFuncs[fd.Name.Name] {
+					info.retFuncs[fd.Name.Name] = true
+					added++
+				}
+			}
+		}
+		if added == 0 {
+			return
+		}
+	}
+}
+
 // returnsFileIn reports whether any return statement of the function
 // body (not inside nested closures) yields a file or file-container
 // tainted value.
