@@ -130,7 +130,11 @@ rejection set is now fifty-one mutation forms. The tenth sweep
 parenthesized-closure, interface-typed-closure,
 alias-typed-function-variable, and type-switch-bound escape classes
 (forms 54-58, with the parenthesized benign control at form 59); the
-durable rejection set is now fifty-six mutation forms. While stress-testing the round-4 fixes during the round-5 gate re-review, the defined-func-type family was closed (defined func types, func-valued returns through same-package helpers, and type-switch bound func cases, self-test forms 60-63); the durable rejection set is now fifty-nine mutation forms. The records
+durable rejection set is now fifty-six mutation forms. While
+stress-testing the round-4 fixes during the round-5 gate re-review,
+the defined-func-type family and its method/nested-callee variants
+were closed (self-test forms 60-67); the durable rejection set is
+now sixty-two mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -405,8 +409,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   parenthesized-closure, interface-typed-closure, alias-typed-function-variable,
   and type-switch-bound classes (forms 54-59), and the defined-func-type
   family (defined func types, func-valued returns through same-package
-  helpers, type-switch bound func cases, forms 60-63); the self-test now
-  durably rejects fifty-nine mutation forms. The
+  helpers, type-switch bound func cases (forms 60-63), and the
+  method-receiver/nested-callee double-call family (forms 64-67);
+  the self-test now durably rejects sixty-two mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1939,7 +1944,13 @@ execution record; the closing result is appended there when it completes.
   the producer taint (callResultsFuncFile), and type-switch cases
   binding defined func types enter funcFile. Forms 60-63 pin the
   three classes plus the benign bytes.Reader control.
-- Gates at HEAD 3952097: go test ./... incl -race, go vet, gofmt,
-  import graph with the 59-form self-test, nine cross-compiles, SOW
+- Extended again during the round-5 re-review (HEAD b168aba): method
+  receivers now resolve through the struct instance (not the
+  receiver variable name) in callResultsFuncFile, and a callee that
+  is itself a call returning func() *os.File is a file producer
+  (zb.mk()(), useDef2(getDef3)()). Forms 64-67 pin the method
+  boundary, both double-call shapes, and the benign int control.
+- Gates at HEAD 8ce56ab: go test ./... incl -race, go vet, gofmt,
+  import graph with the 62-form self-test, nine cross-compiles, SOW
   audit - all green. Counts: production 4,772 raw lines / tests 4,832
   raw lines (gate scanner lives outside the module).
