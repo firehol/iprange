@@ -211,6 +211,9 @@ func (m *Meta) ValidateKindInvariants() error {
 		if m.MetadataCompressed > MetadataCompressedBound(m.MetadataUncompressed) {
 			return &errMeta{reason: "metadata compressed length beyond bound", code: ErrFormat}
 		}
+		if m.MetadataCompressed > (m.PageCount-2)*uint64(MaxBlobLeafDataLen) {
+			return &errMeta{reason: "metadata compressed beyond physical capacity", code: ErrFormat}
+		}
 	}
 	if m.RetiredExtentCount == 0 {
 		if m.RetirementRoot != 0 {
@@ -225,6 +228,19 @@ func (m *Meta) ValidateKindInvariants() error {
 		}
 	} else if m.RangeRoot == 0 {
 		return &errMeta{reason: "range records without root", code: ErrFormat}
+	}
+	// Capacity bounds (bootstrap.rs validate_range_count /
+	// validate_retirement_count / metadata_lengths_valid): the counts must
+	// fit the physical extent available in the non-meta pages.
+	leafCapacity := uint64((PageSize - 32) / (12 + 2))
+	if m.AddressFamily == 6 {
+		leafCapacity = uint64((PageSize - 32) / (36 + 2))
+	}
+	if m.RangeRecordCount > (m.PageCount-2)*leafCapacity {
+		return &errMeta{reason: "range record count beyond capacity", code: ErrFormat}
+	}
+	if m.RetiredExtentCount > (m.PageCount-2)*uint64((PageSize-32)/(16+2)) {
+		return &errMeta{reason: "retirement extents beyond capacity", code: ErrFormat}
 	}
 
 	switch m.ValueKind {
@@ -281,6 +297,9 @@ func validateMembershipMeta(m *Meta) error {
 	if m.MembershipIDLimit < 1 || m.MembershipIDLimit > MaxPageCount {
 		return &errMeta{reason: "membership id limit out of range", code: ErrFormat}
 	}
+	if m.MembershipEntryCount >= m.MembershipIDLimit {
+		return &errMeta{reason: "membership entries at or above id limit", code: ErrFormat}
+	}
 	if m.MembershipEntryCount > m.RangeRecordCount {
 		return &errMeta{reason: "membership entries above range records", code: ErrFormat}
 	}
@@ -307,6 +326,9 @@ func validateStructuredMeta(m *Meta) error {
 	}
 	if m.MembershipIDLimit < 1 || m.MembershipIDLimit > MaxPageCount {
 		return &errMeta{reason: "membership id limit out of range", code: ErrFormat}
+	}
+	if m.MembershipEntryCount >= m.MembershipIDLimit {
+		return &errMeta{reason: "membership entries at or above id limit", code: ErrFormat}
 	}
 	if m.StructureEntryCount >= MaxPageCount {
 		return &errMeta{reason: "structure entry count out of range", code: ErrFormat}

@@ -22,7 +22,10 @@ func TestConcurrentLookupsAndScans(t *testing.T) {
 		f := f
 		t.Run(f, func(t *testing.T) {
 			db := mustOpen(t, f)
-			info := db.Info()
+			info, err := db.Info()
+			if err != nil {
+				t.Fatal(err)
+			}
 			const workers = 8
 			const rounds = 500
 			ops := []struct {

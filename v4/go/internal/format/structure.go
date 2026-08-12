@@ -116,6 +116,14 @@ func DecodeStructureIDRecord(b []byte) (StructureIDRecord, error) {
 // structure-ID directory page: 512 at bytes [32, 2080).
 const StructureDirectoryChildCount = 512
 
+// StructureLeafEnd is the fixed end of the record array of a level-0
+// structure-ID page (32 + 50*80): the header lower field on record pages.
+const StructureLeafEnd = 32 + StructureRecordSlots*StructureRecordSize
+
+// StructureBranchEnd is the fixed end of the child array of a level>0
+// structure-ID directory page (32 + 512*4): its header lower field.
+const StructureBranchEnd = 32 + StructureDirectoryChildCount*4
+
 // StructureSpanOfLevel returns the number of consecutive IDs covered by one
 // node at the given tree level: R at level zero, R*512^(L-1) at level L>0.
 func StructureSpanOfLevel(level uint32) (uint64, bool) {

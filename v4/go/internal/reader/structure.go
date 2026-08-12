@@ -45,8 +45,8 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV14(addr uint32) (NetworkEnrich
 	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, err := r.lookupStructureID(value)
-	if err != nil {
+	view, found, err := r.lookupStructureID(value)
+	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
 	return view, true, nil
@@ -59,74 +59,63 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV16(addrHi, addrLo uint64) (Net
 	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, err := r.lookupStructureID(value)
-	if err != nil {
+	view, found, err := r.lookupStructureID(value)
+	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
 	return view, true, nil
 }
 
-// lookupStructureID resolves one nonzero structure ID through the sparse
-// radix table.
-func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View, error) {
-	if id == 0 {
-		return NetworkEnrichmentV1View{}, corrupt("zero structure id lookup")
+// lookupStructureID resolves one structure ID through the sparse radix
+// table, mirroring structured_value/table.rs: an id of zero or at/above the
+// limit, an empty root, an empty directory child, or a zero slot cell is a
+// clean miss; inconsistent pages or slots are corruption.
+func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View, bool, error) {
+	if id == 0 || uint64(id) >= r.meta.StructureIDLimit {
+		return NetworkEnrichmentV1View{}, false, nil
 	}
 	root := r.meta.StructureIDRoot
 	if root == 0 {
-		return NetworkEnrichmentV1View{}, corrupt("structure dictionary empty")
+		return NetworkEnrichmentV1View{}, false, nil
 	}
-	expectedLevel, ok := format.StructureRootLevel(r.meta.StructureIDLimit)
+	level, ok := format.StructureRootLevel(r.meta.StructureIDLimit)
 	if !ok {
-		return NetworkEnrichmentV1View{}, corrupt("structure root level overflow")
+		return NetworkEnrichmentV1View{}, false, corrupt("structure root level overflow")
 	}
 	cur := root
-	level, err := r.structureLevel(cur)
-	if err != nil {
-		return NetworkEnrichmentV1View{}, err
-	}
-	if level != expectedLevel {
-		return NetworkEnrichmentV1View{}, corrupt("structure root level %d expected %d", level, expectedLevel)
-	}
 	for level > 0 {
 		page, err := r.page(cur)
 		if err != nil {
-			return NetworkEnrichmentV1View{}, err
+			return NetworkEnrichmentV1View{}, false, err
 		}
 		child, err := structureDirectoryChild(page, r.meta, level, id)
 		if err != nil {
-			return NetworkEnrichmentV1View{}, err
+			return NetworkEnrichmentV1View{}, false, err
 		}
 		if child == 0 {
-			// A stored range value naming an absent structure record is
-			// corruption (mirroring structured_value/view.rs: absent
-			// structure ID).
-			return NetworkEnrichmentV1View{}, corrupt("range names an absent structure ID")
+			return NetworkEnrichmentV1View{}, false, nil // empty child: clean miss
 		}
-		cur = child
-		level--
+		cur, level = child, level-1
 	}
 	page, err := r.page(cur)
 	if err != nil {
-		return NetworkEnrichmentV1View{}, err
+		return NetworkEnrichmentV1View{}, false, err
 	}
-	rec, err := structureRecordAt(page, r.meta, id)
-	if err != nil {
-		return NetworkEnrichmentV1View{}, err
+	rec, found, err := structureRecordAt(page, r.meta, id)
+	if err != nil || !found {
+		return NetworkEnrichmentV1View{}, false, err
 	}
 	value, err := format.DecodeNetworkEnrichmentV1(rec.Payload)
 	if err != nil {
-		return NetworkEnrichmentV1View{}, corrupt("structure payload: %v", err)
+		return NetworkEnrichmentV1View{}, false, corrupt("structure payload: %v", err)
 	}
-	return NetworkEnrichmentV1View{
-		r:     r,
-		id:    id,
-		value: value,
-	}, nil
+	return NetworkEnrichmentV1View{r: r, id: id, value: value}, true, nil
 }
 
-// structureDirectoryChild follows one directory level for id. The child index
-// derives directly from the ID and the level span.
+// structureDirectoryChild follows one directory level for id. The child
+// index derives directly from the ID and the level span: a directory at
+// level L covers R*512^(L-1) IDs per child (table.rs child_index divides
+// by coverage(level-1)).
 func structureDirectoryChild(page []byte, meta format.Meta, level uint32, id uint32) (uint32, error) {
 	h, err := format.DecodePageHeader(page, meta.TxnID)
 	if err != nil {
@@ -135,13 +124,19 @@ func structureDirectoryChild(page []byte, meta format.Meta, level uint32, id uin
 	if h.PageType != format.PageTypeStructureIDDirectory || h.Aux != uint32(meta.StructureKind) || uint32(h.Level) != level {
 		return 0, corrupt("structure directory page")
 	}
-	span, ok := format.StructureSpanOfLevel(level - 1)
+	if h.Lower != format.StructureBranchEnd || h.Upper != format.PageSize {
+		return 0, corrupt("structure branch geometry")
+	}
+	if h.ItemCount < 1 || h.ItemCount > format.StructureDirectoryChildCount {
+		return 0, corrupt("structure branch item count %d", h.ItemCount)
+	}
+	span, ok := format.StructureSpanOfLevel(level)
 	if !ok {
 		return 0, corrupt("structure span overflow")
 	}
 	idx := (uint64(id) / span) % format.StructureDirectoryChildCount
 	off := uint64(32) + idx*4
-	if off+4 > 2080 {
+	if off+4 > uint64(format.StructureBranchEnd) {
 		return 0, corrupt("structure child index out of range")
 	}
 	child := format.U32(page[off : off+4])
@@ -157,45 +152,48 @@ type structureRecord struct {
 	format.StructureIDRecord
 }
 
-// structureRecordAt decodes the record at the implied slot for id.
-func structureRecordAt(page []byte, meta format.Meta, id uint32) (structureRecord, error) {
+// structureRecordAt decodes the record at the implied slot for id. An
+// all-zero slot cell is a clean miss; any stored id other than the slot's
+// is corruption (table.rs read_record).
+func structureRecordAt(page []byte, meta format.Meta, id uint32) (structureRecord, bool, error) {
 	h, err := format.DecodePageHeader(page, meta.TxnID)
 	if err != nil {
-		return structureRecord{}, err
+		return structureRecord{}, false, err
 	}
 	if h.PageType != format.PageTypeStructureIDRecord || h.Aux != uint32(meta.StructureKind) || h.Level != 0 {
-		return structureRecord{}, corrupt("structure record page")
+		return structureRecord{}, false, corrupt("structure record page")
 	}
-	slotOff := uint16(uint64(id) % format.StructureRecordSlots)
-	slot := uint32(slotOff)
-	if slot >= format.StructureRecordSlots {
-		return structureRecord{}, corrupt("structure slot %d beyond capacity", slot)
+	if h.Lower != format.StructureLeafEnd || h.Upper != format.PageSize {
+		return structureRecord{}, false, corrupt("structure leaf geometry")
 	}
-	off := uint32(32) + slot*format.StructureRecordSize
+	if h.ItemCount < 1 || h.ItemCount > format.StructureRecordSlots {
+		return structureRecord{}, false, corrupt("structure leaf item count %d", h.ItemCount)
+	}
+	slot := uint64(id) % format.StructureRecordSlots
+	off := uint32(32) + uint32(slot*format.StructureRecordSize)
 	if off+format.StructureRecordSize > format.PageSize {
-		return structureRecord{}, corrupt("structure slot out of page")
+		return structureRecord{}, false, corrupt("structure slot out of page")
 	}
-	rec, err := format.DecodeStructureIDRecord(page[off : off+format.StructureRecordSize])
+	cell := page[off : off+format.StructureRecordSize]
+	if allZero(cell) {
+		return structureRecord{}, false, nil
+	}
+	rec, err := format.DecodeStructureIDRecord(cell)
 	if err != nil {
-		return structureRecord{}, err
+		return structureRecord{}, false, err
 	}
 	if rec.StructureID != id {
-		return structureRecord{}, corrupt("structure id %d at slot implying %d", rec.StructureID, id)
+		return structureRecord{}, false, corrupt("structure id %d at slot implying %d", rec.StructureID, id)
 	}
-	return structureRecord{slotOff: slotOff, StructureIDRecord: rec}, nil
+	return structureRecord{slotOff: uint16(slot), StructureIDRecord: rec}, true, nil
 }
 
-func (r *ImmutableReader) structureLevel(pgno uint32) (uint32, error) {
-	page, err := r.page(pgno)
-	if err != nil {
-		return 0, err
+// allZero reports whether b is entirely zero.
+func allZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
-	if err != nil {
-		return 0, err
-	}
-	if h.Level > format.MaxTreeLevel {
-		return 0, corrupt("structure level %d over max", h.Level)
-	}
-	return uint32(h.Level), nil
+	return true
 }

@@ -44,8 +44,8 @@ func buildBlobDatabase(t *testing.T) string {
 	putU64(meta1, 80, 1)
 	putU64(meta0, 88, 1) // active_feed_count
 	putU64(meta1, 88, 1)
-	putU64(meta0, 96, 64) // feed_index_limit: bits up to 63 observable
-	putU64(meta1, 96, 64)
+	putU64(meta0, 96, 38400) // feed_index_limit: 600 words = 38400 bits
+	putU64(meta1, 96, 38400)
 	putU64(meta0, 104, 1) // membership_entry_count
 	putU64(meta1, 104, 1)
 	putU64(meta0, 112, 2) // membership_id_limit
@@ -76,34 +76,35 @@ func buildBlobDatabase(t *testing.T) string {
 	const bitmapLen = wordCount * 8 // 4800 bytes: two blob leaves
 
 	// Page 2: range leaf, one record 10.0.0.0-255 = membership 1.
+	// Canonical slotted geometry: lower == 32+2, upper == 4096-12.
 	p := file[2]
-	header(p, format.PageTypeRangeLeaf, 4, 0, 1, 46, 46)
-	format.PutU16(p[32:34], 46)
-	format.PutU32(p[46:50], 0x0a000000)
-	format.PutU32(p[50:54], 0x0a0000ff)
-	format.PutU32(p[54:58], 1)
+	header(p, format.PageTypeRangeLeaf, 4, 0, 1, 34, 4084)
+	format.PutU16(p[32:34], 4084)
+	format.PutU32(p[4084:4088], 0x0a000000)
+	format.PutU32(p[4088:4092], 0x0a0000ff)
+	format.PutU32(p[4092:4096], 1)
 
 	// Page 3: membership ID leaf, one blob-stored record.
 	p = file[3]
-	header(p, format.PageTypeMembershipIDLeaf, 0, 0, 1, 96, 96)
-	format.PutU16(p[32:34], 96)
-	format.PutU16(p[96:98], 64)  // record_len
-	p[98] = 1                    // storage: blob
-	format.PutU32(p[100:104], 1) // membership id
-	format.PutU64(p[104:112], 1) // refcount
-	format.PutU32(p[112:116], wordCount)
-	format.PutU32(p[116:120], bitmapLen)
-	format.PutU32(p[120:124], 4) // blob root
+	header(p, format.PageTypeMembershipIDLeaf, 0, 0, 1, 34, 4032)
+	format.PutU16(p[32:34], 4032)
+	format.PutU16(p[4032:4034], 64) // record_len
+	p[4034] = 1                     // storage: blob
+	format.PutU32(p[4036:4040], 1)  // membership id
+	format.PutU64(p[4040:4048], 1)  // refcount
+	format.PutU32(p[4048:4052], wordCount)
+	format.PutU32(p[4052:4056], bitmapLen)
+	format.PutU32(p[4056:4060], 4) // blob root
 
 	// Page 4: blob branch, two entries over two leaves.
 	p = file[4]
-	header(p, format.PageTypeBlobBranch, 1, 1, 2, 48, 48)
-	format.PutU16(p[32:34], 48)
-	format.PutU16(p[34:36], 64)
-	format.PutU64(p[48:56], 0)
-	format.PutU32(p[56:60], 5)
-	format.PutU64(p[64:72], 4048)
-	format.PutU32(p[72:76], 6)
+	header(p, format.PageTypeBlobBranch, 1, 1, 2, 36, 4064)
+	format.PutU16(p[32:34], 4064)
+	format.PutU16(p[34:36], 4080)
+	format.PutU64(p[4064:4072], 0)
+	format.PutU32(p[4072:4076], 5)
+	format.PutU64(p[4080:4088], 4048)
+	format.PutU32(p[4088:4092], 6)
 
 	// Page 5: blob leaf 1, offsets 0..4047 (words 0..505).
 	p = file[5]

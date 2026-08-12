@@ -51,7 +51,7 @@ const (
 	ErrorCoordinationSequenceExhausted
 	ErrorLiveCoordinationUnsupported
 	ErrorLiveCoordinationCleanupRequired
-	ErrorLiveCoordinationDomainMismatchRequiresReset
+	ErrorLiveCoordinationMalformedRequiresReset
 	ErrorLiveOpenCleanupRequired
 	ErrorLiveRecoveryCoordinationUnavailable
 	ErrorLiveRecoveryCurrentGenerationUnprovable

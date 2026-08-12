@@ -235,7 +235,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 		t.Run(tc.File, func(t *testing.T) {
 			db := mustOpen(t, tc.File)
 			t.Cleanup(func() { mustClose(t, db) })
-			info := db.Info()
+			info, err := db.Info()
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			wantFamily := uint8(4)
 			if tc.Family == "ipv6" {
@@ -262,6 +265,40 @@ func TestConformanceRustFixtures(t *testing.T) {
 				}
 			} else if tc.Kind != "structured" && info.StructureKind != StructureKindNone {
 				t.Errorf("structure kind %d want 0", info.StructureKind)
+			}
+			// Tag, selection, and geometry assertions (verify.rs: value_tag,
+			// MetaSelection::ProvenCurrent, page_count*4096 == file length).
+			var wantTag [16]byte
+			copy(wantTag[:], tc.Tag)
+			if info.ValueTag != wantTag {
+				t.Errorf("value tag %x want %x", info.ValueTag, wantTag)
+			}
+			if info.MetaSelection != MetaSelectionProvenCurrent {
+				t.Errorf("meta selection %v want ProvenCurrent", info.MetaSelection)
+			}
+			st, err := os.Stat(fixturePath(tc.File))
+			if err != nil {
+				t.Fatal("stat:", err)
+			}
+			if info.PageCount*4096 != uint64(st.Size()) {
+				t.Errorf("page count %d * 4096 != file size %d", info.PageCount, st.Size())
+			}
+			switch tc.Kind {
+			case "direct":
+				if info.RangeRecordCount != uint64(len(tc.DirectRanges)) {
+					t.Errorf("range record count %d want %d", info.RangeRecordCount, len(tc.DirectRanges))
+				}
+				if info.ActiveFeedCount != 0 {
+					t.Errorf("direct fixture with %d active feeds", info.ActiveFeedCount)
+				}
+			case "membership":
+				if info.RangeRecordCount != uint64(len(tc.MembershipRanges)) {
+					t.Errorf("range record count %d want %d", info.RangeRecordCount, len(tc.MembershipRanges))
+				}
+			case "structured":
+				if info.RangeRecordCount != uint64(len(tc.StructuredRanges)) {
+					t.Errorf("range record count %d want %d", info.RangeRecordCount, len(tc.StructuredRanges))
+				}
 			}
 
 			// Metadata states.
@@ -347,6 +384,46 @@ func TestConformanceRustFixtures(t *testing.T) {
 					v, ok, _ = db.LookupDirectV6(IPv6{Hi: toHi, Lo: toLo})
 					if !ok || v != want.Value {
 						t.Errorf("direct v6 %s: got %d %v", want.To, v, ok)
+					}
+				}
+			}
+
+			// Absence at the family edges and inside inter-range gaps.
+			if tc.Family == "ipv4" && len(tc.DirectRanges) > 0 {
+				first, last := tc.DirectRanges[0], tc.DirectRanges[len(tc.DirectRanges)-1]
+				_, _, f4 := addressBytes(first.From, "ipv4")
+				_, _, l4 := addressBytes(last.To, "ipv4")
+				if f4 > 0 {
+					if _, ok, err := db.LookupDirectV4(IPv4(0)); err != nil || ok {
+						t.Errorf("0.0.0.0: found=%v err=%v want absent", ok, err)
+					}
+				}
+				if l4 < 0xffffffff {
+					if _, ok, err := db.LookupDirectV4(IPv4(0xffffffff)); err != nil || ok {
+						t.Errorf("255.255.255.255: found=%v err=%v want absent", ok, err)
+					}
+				}
+				for i := 1; i < len(tc.DirectRanges); i++ {
+					_, _, prevTo := addressBytes(tc.DirectRanges[i-1].To, "ipv4")
+					_, _, curFrom := addressBytes(tc.DirectRanges[i].From, "ipv4")
+					if curFrom > prevTo+1 {
+						if _, ok, err := db.LookupDirectV4(IPv4(prevTo + 1)); err != nil || ok {
+							t.Errorf("gap after %s: found=%v err=%v want absent", tc.DirectRanges[i-1].To, ok, err)
+						}
+					}
+				}
+			} else if tc.Family == "ipv6" && len(tc.DirectRanges) > 0 {
+				first, last := tc.DirectRanges[0], tc.DirectRanges[len(tc.DirectRanges)-1]
+				fh, fl, _ := addressBytes(first.From, "ipv6")
+				th, tl, _ := addressBytes(last.To, "ipv6")
+				if fh != 0 || fl != 0 {
+					if _, ok, err := db.LookupDirectV6(IPv6{Hi: 0, Lo: 0}); err != nil || ok {
+						t.Errorf(":: : found=%v err=%v want absent", ok, err)
+					}
+				}
+				if th != ^uint64(0) || tl != ^uint64(0) {
+					if _, ok, err := db.LookupDirectV6(IPv6{Hi: ^uint64(0), Lo: ^uint64(0)}); err != nil || ok {
+						t.Errorf("ffff:…: found=%v err=%v want absent", ok, err)
 					}
 				}
 			}
@@ -528,6 +605,77 @@ func TestConformanceRustFixtures(t *testing.T) {
 						if has {
 							t.Errorf("membership %s contains undeclared feed %s (%d)", mr.From, f.Name, f.Index)
 						}
+					}
+				}
+				// Word-exact bitmap verification: the stored word count must
+				// be exactly the words needed for the highest listed feed,
+				// and every word must equal the canonical expectation.
+				maxBit := uint32(0)
+				for _, feed := range mr.Feeds {
+					if idx := feedIndexOf(feed); idx > maxBit {
+						maxBit = idx
+					}
+				}
+				wantWords := int(maxBit/64 + 1)
+				if int(view.WordCount()) != wantWords {
+					t.Errorf("membership %s word count %d want %d", mr.From, view.WordCount(), wantWords)
+				}
+				words := make([]uint64, wantWords)
+				n, err := view.ReadWords(0, words)
+				if err != nil || n != wantWords {
+					t.Errorf("membership %s read words: n=%d err=%v", mr.From, n, err)
+				}
+				expected := make([]uint64, wantWords)
+				for _, feed := range mr.Feeds {
+					idx := feedIndexOf(feed)
+					expected[idx/64] |= uint64(1) << (idx % 64)
+				}
+				for i := range expected {
+					if words[i] != expected[i] {
+						t.Errorf("membership %s word %d = %x want %x", mr.From, i, words[i], expected[i])
+					}
+				}
+				// Any index at or beyond the generation limit is
+				// InvalidArgument; 0xffffffff is always beyond any limit.
+				if _, err := view.ContainsIndex(0xffffffff); err == nil || errorAsCode(err) != ErrorInvalidArgument {
+					t.Errorf("membership %s feed-limit probe: %v", mr.From, err)
+				}
+			}
+
+			// Absence at the family edges and inside inter-range gaps of the
+			// membership ranges.
+			if len(tc.MembershipRanges) > 0 {
+				probeMembership := func(hi, lo uint64) bool {
+					if tc.Family == "ipv4" {
+						_, ok, err := db.LookupMembershipV4(IPv4(uint32(lo)))
+						return err != nil || ok
+					}
+					_, ok, err := db.LookupMembershipV6(IPv6{Hi: hi, Lo: lo})
+					return err != nil || ok
+				}
+				first, last := tc.MembershipRanges[0], tc.MembershipRanges[len(tc.MembershipRanges)-1]
+				fh, fl, _ := addressBytes(first.From, tc.Family)
+				th, tl, _ := addressBytes(last.To, tc.Family)
+				if tc.Family == "ipv4" {
+					if fh > 0 && probeMembership(0, 0) {
+						t.Errorf("membership 0.0.0.0: want absent")
+					}
+					if th < 0xffffffff && probeMembership(0, 0xffffffff) {
+						t.Errorf("membership 255.255.255.255: want absent")
+					}
+					for i := 1; i < len(tc.MembershipRanges); i++ {
+						_, _, prevTo := addressBytes(tc.MembershipRanges[i-1].To, "ipv4")
+						_, _, curFrom := addressBytes(tc.MembershipRanges[i].From, "ipv4")
+						if curFrom > prevTo+1 && probeMembership(0, uint64(prevTo+1)) {
+							t.Errorf("membership gap after %s: want absent", tc.MembershipRanges[i-1].To)
+						}
+					}
+				} else {
+					if (fh != 0 || fl != 0) && probeMembership(0, 0) {
+						t.Errorf("membership :: : want absent")
+					}
+					if (th != ^uint64(0) || tl != ^uint64(0)) && probeMembership(^uint64(0), ^uint64(0)) {
+						t.Errorf("membership ffff:…: want absent")
 					}
 				}
 			}

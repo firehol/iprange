@@ -161,7 +161,10 @@ func (r *ImmutableReader) Close() error {
 }
 
 // Info returns the public identity of the selected generation.
-func (r *ImmutableReader) Info() ImmutableInfo {
+func (r *ImmutableReader) Info() (ImmutableInfo, error) {
+	if err := r.ensureOpen(); err != nil {
+		return ImmutableInfo{}, err
+	}
 	meta := r.inner.Meta()
 	var selection MetaSelection
 	switch r.inner.Selection() {
@@ -184,7 +187,7 @@ func (r *ImmutableReader) Info() ImmutableInfo {
 		RangeRecordCount: meta.RangeRecordCount,
 		ActiveFeedCount:  meta.ActiveFeedCount,
 		MetaSelection:    selection,
-	}
+	}, nil
 }
 
 // The four require* helpers mirror the Rust reader pre-checks exactly:
@@ -332,6 +335,12 @@ type FeedEntry struct {
 func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 	if err := r.ensureOpen(); err != nil {
 		return FeedEntry{}, false, err
+	}
+	// The name is validated before the kind check, mirroring
+	// feed_catalog.rs, so an invalid name on a direct database reports
+	// NameInvalid, not WrongValueKind.
+	if !format.FeedNameValidString(name) {
+		return FeedEntry{}, false, &Error{Code: ErrorNameInvalid, Detail: "invalid feed name"}
 	}
 	if err := r.requireMembershipCapable(); err != nil {
 		return FeedEntry{}, false, err

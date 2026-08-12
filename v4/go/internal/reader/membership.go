@@ -105,7 +105,7 @@ func (v MembershipView) wordBytes(i uint32) ([]byte, error) {
 	case format.MembershipStorageInline:
 		return v.inlineBytes(byteOff)
 	case format.MembershipStorageBlob:
-		return v.r.blobRead(v.blobRoot, format.BlobKindMembership, byteOff, 8)
+		return v.r.blobRead(v.blobRoot, format.BlobKindMembership, uint64(v.wordCount)*8, byteOff, 8)
 	default:
 		return nil, corrupt("membership storage %d", v.storage)
 	}
@@ -217,7 +217,7 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 			}
 			cur, level = child, level-1
 		case format.PageTypeMembershipIDLeaf:
-			slot, leaf, found, err := membershipLeafFind(sl, id)
+			slot, leaf, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
 			if err != nil {
 				return MembershipView{}, err
 			}
@@ -291,14 +291,38 @@ func membershipBranchChild(sl format.SlottedPage, id uint32, pageCount uint64) (
 }
 
 // membershipLeafFind finds the record with the exact membership ID and
-// returns its slot number and decoded record.
-func membershipLeafFind(sl format.SlottedPage, id uint32) (uint16, format.MembershipIDLeaf, bool, error) {
+// returns its slot number and decoded record. Every probed record is
+// validated against the generation limits, mirroring
+// membership_tree.rs require_record_fields: an id outside the namespace,
+// a zero refcount, an oversized word count, or an out-of-range blob root is
+// corruption.
+func membershipLeafFind(sl format.SlottedPage, id uint32, idLimit, feedIndexLimit uint64, pageCount uint64) (uint16, format.MembershipIDLeaf, bool, error) {
+	maxWords := feedIndexLimit / 64
+	if feedIndexLimit%64 != 0 {
+		maxWords++
+	}
 	probe := func(i int) (format.MembershipIDLeaf, error) {
 		b, err := sl.Record(i)
 		if err != nil {
 			return format.MembershipIDLeaf{}, err
 		}
-		return format.DecodeMembershipIDLeaf(b)
+		rec, err := format.DecodeMembershipIDLeaf(b)
+		if err != nil {
+			return format.MembershipIDLeaf{}, err
+		}
+		if rec.MembershipID == 0 || uint64(rec.MembershipID) >= idLimit {
+			return format.MembershipIDLeaf{}, corrupt("membership ID is outside the declared namespace")
+		}
+		if rec.OwnerRef == 0 {
+			return format.MembershipIDLeaf{}, corrupt("membership dictionary record is malformed")
+		}
+		if uint64(rec.WordCount) > maxWords {
+			return format.MembershipIDLeaf{}, corrupt("membership word count beyond limit")
+		}
+		if rec.Storage == format.MembershipStorageBlob && !format.PageNumberValid(rec.BlobRoot, pageCount) {
+			return format.MembershipIDLeaf{}, corrupt("membership blob root out of range")
+		}
+		return rec, nil
 	}
 	lo, hi := 0, int(sl.Header.ItemCount)
 	for lo < hi {
@@ -320,17 +344,21 @@ func membershipLeafFind(sl format.SlottedPage, id uint32) (uint16, format.Member
 }
 
 // blobRead returns the mapped bytes of [off, off+len) inside one blob tree
-// (section 10), re-validating leaf geometry at call time.
-func (r *ImmutableReader) blobRead(root uint32, kind uint32, off, length uint64) ([]byte, error) {
+// (section 10), mirroring blob_tree.rs find_leaf + leaf_geometry: the walk
+// verifies branch-first-offset continuity, child-level descent, leaf
+// identity and geometry, 8-byte alignment, coverage of the requested span,
+// and the end-vs-declared rules.
+func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, off, length uint64) ([]byte, error) {
 	if length == 0 {
 		return nil, corrupt("zero-length blob read")
 	}
-	cur := root
-	level, err := r.blobLevel(cur)
-	if err != nil {
-		return nil, err
+	if off >= totalBytes {
+		return nil, corrupt("membership blob request exceeds its length")
 	}
-	for {
+	cur := root
+	expectedStart := uint64(0)
+	var expected *uint16 // nil at the root; parent branch level - 1 below
+	for depth := 0; depth <= int(format.MaxTreeLevel); depth++ {
 		page, err := r.page(cur)
 		if err != nil {
 			return nil, err
@@ -339,26 +367,13 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, off, length uint64)
 		if err != nil {
 			return nil, err
 		}
-		if h.Level != level {
-			return nil, corrupt("blob level %d expected %d", h.Level, level)
-		}
-		if h.Aux != kind {
-			return nil, corrupt("blob kind %d expected %d", h.Aux, kind)
-		}
-		switch h.PageType {
-		case format.PageTypeBlobBranch:
-			if level == 0 {
-				return nil, corrupt("zero-level blob branch")
+		if h.Level == 0 {
+			if h.PageType != format.PageTypeBlobLeaf || h.Aux != kind {
+				return nil, corrupt("blob leaf identity")
 			}
-			if h.ItemCount < 1 {
-				return nil, corrupt("empty blob branch")
+			if expected != nil && *expected != 0 {
+				return nil, corrupt("blob leaf expected level %d", *expected)
 			}
-			child, err := blobBranchChild(page, off, kind, r.meta.PageCount, r.meta.TxnID)
-			if err != nil {
-				return nil, err
-			}
-			cur, level = child, level-1
-		case format.PageTypeBlobLeaf:
 			if h.ItemCount != 1 {
 				return nil, corrupt("blob leaf item count %d", h.ItemCount)
 			}
@@ -366,28 +381,64 @@ func (r *ImmutableReader) blobRead(root uint32, kind uint32, off, length uint64)
 			if err != nil {
 				return nil, err
 			}
-			if off < leaf.LogicalOffset {
-				return nil, corrupt("blob leaf offset %d above read %d", leaf.LogicalOffset, off)
+			// Fixed leaf geometry (blob_tree.rs leaf_geometry).
+			if h.Lower != uint16(48+int(leaf.DataLen)) || h.Upper != format.PageSize {
+				return nil, corrupt("blob leaf layout malformed")
+			}
+			if leaf.LogicalOffset != expectedStart || leaf.LogicalOffset%8 != 0 {
+				return nil, corrupt("blob leaf start mismatch")
+			}
+			end := leaf.LogicalOffset + uint64(leaf.DataLen)
+			if end > totalBytes {
+				return nil, corrupt("blob leaf exceeds declared length")
+			}
+			if end < totalBytes && leaf.DataLen != format.MaxBlobLeafDataLen {
+				return nil, corrupt("blob nonfinal leaf not full")
+			}
+			if off < leaf.LogicalOffset || off+length > end {
+				return nil, corrupt("blob leaf does not cover the requested bytes")
 			}
 			base := off - leaf.LogicalOffset
-			if base+length > uint64(leaf.DataLen) {
-				return nil, corrupt("blob read beyond leaf")
-			}
 			return leaf.Data[base : base+length], nil
-		default:
-			return nil, corrupt("unexpected blob page type %d", h.PageType)
 		}
+		if h.PageType != format.PageTypeBlobBranch || h.Aux != kind {
+			return nil, corrupt("blob branch identity")
+		}
+		if expected != nil && h.Level != *expected {
+			return nil, corrupt("blob branch expected level %d got %d", *expected, h.Level)
+		}
+		sl, err := format.OpenSlotted(page, r.meta.TxnID, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
+		if err != nil {
+			return nil, err
+		}
+		first, err := sl.Record(0)
+		if err != nil {
+			return nil, err
+		}
+		firstRec, err := format.DecodeBlobBranch(first)
+		if err != nil {
+			return nil, err
+		}
+		if firstRec.LogicalOffset != expectedStart {
+			return nil, corrupt("blob branch starts at a wrong offset")
+		}
+		child, offset, err := blobBranchChild(sl, off, r.meta.PageCount)
+		if err != nil {
+			return nil, err
+		}
+		cur = child
+		expectedStart = offset
+		nv := h.Level - 1
+		expected = &nv
 	}
+	return nil, corrupt("blob tree exceeds its maximum height")
 }
 
 // blobBranchChild finds the greatest branch entry with logical_offset <= off
-// by binary search over the fixed 16-byte slotted records. selectedTxn is
-// the committed generation the entire traversal is bound to.
-func blobBranchChild(page []byte, off uint64, kind uint32, pageCount uint64, selectedTxn uint64) (uint32, error) {
-	sl, err := format.OpenSlotted(page, selectedTxn, format.PageTypeBlobBranch, kind, format.SlotItemsPerPage)
-	if err != nil {
-		return 0, err
-	}
+// by binary search over the fixed 16-byte slotted records, returning the
+// selected child and its first logical offset (the expected start of the
+// next level, blob_tree.rs select_branch + find_leaf).
+func blobBranchChild(sl format.SlottedPage, off uint64, pageCount uint64) (uint32, uint64, error) {
 	probe := func(i int) (format.BlobBranchRecord, error) {
 		b, err := sl.Record(i)
 		if err != nil {
@@ -401,7 +452,7 @@ func blobBranchChild(page []byte, off uint64, kind uint32, pageCount uint64, sel
 		mid := lo + (hi-lo)/2
 		rec, err := probe(mid)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if rec.LogicalOffset <= off {
 			best = mid
@@ -411,26 +462,14 @@ func blobBranchChild(page []byte, off uint64, kind uint32, pageCount uint64, sel
 		}
 	}
 	if best < 0 {
-		return 0, corrupt("blob branch has no qualifying child")
+		return 0, 0, corrupt("blob branch has no qualifying child")
 	}
 	rec, err := probe(best)
-	if err != nil || !format.PageNumberValid(rec.Child, pageCount) {
-		return 0, corrupt("blob child out of range")
-	}
-	return rec.Child, nil
-}
-
-func (r *ImmutableReader) blobLevel(pgno uint32) (uint16, error) {
-	page, err := r.page(pgno)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
-	if err != nil {
-		return 0, err
+	if !format.PageNumberValid(rec.Child, pageCount) {
+		return 0, 0, corrupt("blob child out of range")
 	}
-	if h.Level > format.MaxTreeLevel {
-		return 0, corrupt("blob level %d over max", h.Level)
-	}
-	return h.Level, nil
+	return rec.Child, rec.LogicalOffset, nil
 }

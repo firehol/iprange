@@ -7,8 +7,10 @@
 // APIs. Page views alias the mapping and are valid only for the lifetime of
 // the Mapping; no view may escape the operation that owns it.
 //
-// Windows gets its own file in milestone 1; this POSIX implementation covers
-// Linux, macOS, and FreeBSD.
+// Windows gets its own file in milestone 1; this POSIX implementation
+// covers Linux and macOS (OFD lifetime lock). FreeBSD and other unix
+// platforms mirror the Rust platform table and refuse opens until the
+// platform milestone implements live coordination there.
 //
 //go:build !windows
 
@@ -80,8 +82,8 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
 
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "shared lock: " + err.Error()}
+	if err := lockLifetimeShared(int(f.Fd())); err != nil {
+		return nil, err
 	}
 	if check != nil {
 		if err := check(clean); err != nil {
@@ -126,8 +128,8 @@ func (m *Mapping) Close() error {
 		first = &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
 	}
 	m.data = nil
-	if err := unix.Flock(int(m.file.Fd()), unix.LOCK_UN); err != nil && first == nil {
-		first = &format.Error{Code: format.CodeIO, Detail: "unlock: " + err.Error()}
+	if err := unlockLifetime(int(m.file.Fd())); err != nil && first == nil {
+		first = err
 	}
 	if err := m.file.Close(); err != nil && first == nil {
 		first = &format.Error{Code: format.CodeIO, Detail: "close: " + err.Error()}

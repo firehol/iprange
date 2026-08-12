@@ -105,8 +105,10 @@ type SlottedPage struct {
 }
 
 // OpenSlotted validates the common header and slotted geometry of one page.
-// itemLimit caps the type-specific record count (the page capacity bounds);
-// auxExpected, when nonzero, must equal the page aux.
+// The geometry rules are exact, mirroring slotted_page.rs shape_valid:
+// lower == 32 + 2*item_count and upper < page size, with every record
+// offset inside [upper, page size). itemLimit caps the type-specific record
+// count.
 func OpenSlotted(page []byte, selectedTxn uint64, expectedType PageType, auxExpected uint32, itemLimit uint16) (SlottedPage, error) {
 	h, err := DecodePageHeader(page, selectedTxn)
 	if err != nil {
@@ -124,17 +126,14 @@ func OpenSlotted(page []byte, selectedTxn uint64, expectedType PageType, auxExpe
 	if h.ItemCount > itemLimit {
 		return SlottedPage{}, headerErr("item count %d over limit %d", h.ItemCount, itemLimit)
 	}
-	if uint32(h.Lower) < uint32(32)+uint32(h.ItemCount)*2 {
-		return SlottedPage{}, headerErr("lower %d below slot array", h.Lower)
+	if uint32(h.Lower) != uint32(32)+uint32(h.ItemCount)*2 {
+		return SlottedPage{}, headerErr("lower %d expected %d", h.Lower, 32+uint32(h.ItemCount)*2)
 	}
-	if h.Lower > PageSize {
-		return SlottedPage{}, headerErr("lower %d above page size", h.Lower)
+	if h.Upper >= PageSize {
+		return SlottedPage{}, headerErr("upper %d not below page size", h.Upper)
 	}
 	if h.Upper < h.Lower {
 		return SlottedPage{}, headerErr("upper %d below lower %d", h.Upper, h.Lower)
-	}
-	if h.Upper > PageSize {
-		return SlottedPage{}, headerErr("upper %d above page size", h.Upper)
 	}
 	return SlottedPage{Page: page, Header: h}, nil
 }
