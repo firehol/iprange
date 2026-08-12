@@ -158,8 +158,9 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 func (m *Mapping) Size() uint64 { return m.size }
 
 // View returns a checked view of [off, off+length) inside the mapping. The
-// returned slice aliases the mapping and must not escape the calling
-// operation.
+// returned slice aliases the mapping; it must not outlive the Mapping
+// (retained slices are permitted only under a live pin guard, per the
+// package doc).
 func (m *Mapping) View(off, length uint64) ([]byte, error) {
 	if m.data == nil {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}

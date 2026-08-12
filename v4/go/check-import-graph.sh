@@ -162,7 +162,10 @@ strip_comments() {
 # GOOS/GOARCH.
 content_violations() {
 	find . -name '*.go' -not -name '*_test.go' -print | sort | while read -r f; do
-		strip_comments < "$f" | sed "s@^@$f:@" | grep -v '^[^:]*:.*c\.r\.Read\(Byte\)\?('
+		# The in-memory inflater's tolerated calls are blanked as exact
+		# call nodes (c.r.Read(...) / c.r.ReadByte()), never as whole
+		# lines, so a forbidden transfer on the same line stays visible.
+		strip_comments < "$f" | sed -E 's/c\.r\.Read(Byte)?\([^)]*\)/ /g' | sed "s@^@$f:@"
 	done
 }
 
@@ -173,7 +176,7 @@ violations=$(content_violations)
 # (rd := io.ReadAll), wrapper methods (bufio ... .ReadByte()), and Seek.
 # The set covers the read/write/seek language API families including the
 # x/sys descriptor variants (Readv/Writev/Preadv/Pwritev).
-if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek)\b'; then
+if printf '%s\n' "$violations" | grep -E '\.(Read|Write|Seek|Pread|Pwrite|Readv|Writev|Preadv|Pwritev|ReadAt|WriteAt|ReadFile|WriteFile|ReadAll|Copy|CopyN|CopyBuffer|ReadByte|WriteByte|ReadRune|ReadFrom|WriteTo|ReadString|ReadLine|Peek|Fscan|Fscanf|Fscanln|Fprint|Fprintf|Fprintln|MethodByName|Syscall|Syscall6|Syscall9|SyscallN|CopyFileRange|Sendfile|Splice)\b'; then
 	echo "content-transfer I/O violation in production sources"
 	fail=1
 fi
@@ -187,23 +190,30 @@ fi
 
 # Buffered-IO import ban: bufio (and the deprecated io/ioutil) wrap *os.File
 # behind methods not enumerated above; the SDK has no legitimate use.
-if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil)"'; then
+if printf '%s\n' "$violations" | grep -E '(^|[[:space:]()])"(bufio|io/ioutil|gzip|compress/zlib)"'; then
 	echo "buffered-IO import violation in production sources"
 	fail=1
 fi
 
 # Only the reader may hold the mapping, and only the reader core may be
-# consumed by the facade.
-for pkg in $(go list ./... | grep -v '^github.com/firehol/iprange/v4/go$' \
-		| grep -v '^github.com/firehol/iprange/v4/go/internal/format$' \
-		| grep -v '^github.com/firehol/iprange/v4/go/internal/mapping$' \
-		| grep -v '^github.com/firehol/iprange/v4/go/internal/reader$'); do
-	case "$(pkg_imports "$pkg")" in
-	*"github.com/firehol/iprange/v4/go/internal"*)
-		echo "boundary violation: $pkg imports internal packages"
-		fail=1
-		;;
-	esac
+# consumed by the facade. The check runs under every supported target so a
+# build-tagged package that exists only on one GOOS/GOARCH cannot import
+# internal packages unseen.
+targets="linux/amd64 linux/386 linux/arm linux/arm64 linux/loong64 \
+	darwin/amd64 darwin/arm64 freebsd/amd64 windows/amd64 windows/arm64"
+for target in $targets; do
+	GOOS=${target%/*} GOARCH=${target#*/} export GOOS GOARCH
+	for pkg in $(go list ./... 2>/dev/null | grep -v '^github.com/firehol/iprange/v4/go$' \
+			| grep -v '^github.com/firehol/iprange/v4/go/internal/format$' \
+			| grep -v '^github.com/firehol/iprange/v4/go/internal/mapping$' \
+			| grep -v '^github.com/firehol/iprange/v4/go/internal/reader$'); do
+		case "$(pkg_imports "$pkg")" in
+		*"github.com/firehol/iprange/v4/go/internal"*)
+			echo "boundary violation: $pkg (target $target) imports internal packages"
+			fail=1
+			;;
+		esac
+	done
 done
 
 if [ "$self_test" -eq 1 ]; then
@@ -212,9 +222,12 @@ if [ "$self_test" -eq 1 ]; then
 	# so a miss points at exactly one form.
 	cleanup() {
 		rm -rf gatemut_readall gatemut_alias gatemut_methodval gatemut_seek \
-			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile
-		rm -f internal/mapping/gatemut_readv.go \
-			gatemut_singleline_bufio.go gatemut_aliased_bufio.go
+			gatemut_newdir gatemut_bufio gatemut_dotimport gatemut_winfile \
+			gatemut_fscan gatemut_copyn gatemut_reflect gatemut_rawsys \
+			gatemut_cfr gatemut_exline gatemut_winint
+		rm -f internal/mapping/gatemut_readv.go internal/mapping/gatemut_rawsys.go \
+			internal/mapping/gatemut_cfr.go gatemut_singleline_bufio.go \
+			gatemut_aliased_bufio.go
 	}
 	trap cleanup EXIT INT TERM
 
@@ -365,11 +378,107 @@ func read(p string) ([]byte, error) { return os.ReadFile(p) }
 MUTEOF
 	run_mut "windows-only package with os.ReadFile"
 
+	mkdir -p gatemut_fscan
+	cat > gatemut_fscan/mut.go <<'MUTEOF'
+package gatemut_fscan
+
+import (
+	"fmt"
+	"os"
+)
+
+var f *os.File
+
+func use(x any) (int, error) { return fmt.Fscan(f, x) }
+MUTEOF
+	run_mut "fmt.Fscan over a file"
+
+	mkdir -p gatemut_copyn
+	cat > gatemut_copyn/mut.go <<'MUTEOF'
+package gatemut_copyn
+
+import (
+	"io"
+	"os"
+)
+
+var f *os.File
+var d *os.File
+
+func use() { _, _ = io.CopyN(d, f, 10) }
+MUTEOF
+	run_mut "io.CopyN between files"
+
+	mkdir -p gatemut_reflect
+	cat > gatemut_reflect/mut.go <<'MUTEOF'
+package gatemut_reflect
+
+import (
+	"os"
+	"reflect"
+)
+
+var f *os.File
+
+func use() { _ = reflect.ValueOf(f).MethodByName("Read").Call(nil) }
+MUTEOF
+	run_mut "reflection-invoked Read"
+
+	cat > internal/mapping/gatemut_rawsys.go <<'MUTEOF'
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func rawRead(fd int) (int, error) {
+	n, _, e := unix.Syscall(unix.SYS_READ, uintptr(fd), 0, 0)
+	return int(n), e
+}
+MUTEOF
+	run_mut "raw unix.Syscall(SYS_READ) in the mapping owner"
+
+	cat > internal/mapping/gatemut_cfr.go <<'MUTEOF'
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func copyRange(a, b int, n uint64) (int64, error) {
+	return unix.CopyFileRange(a, nil, b, nil, n, 0)
+}
+MUTEOF
+	run_mut "unix.CopyFileRange in the mapping owner"
+
+	mkdir -p gatemut_exline
+	cat > gatemut_exline/mut.go <<'MUTEOF'
+package gatemut_exline
+
+import "os"
+
+var f *os.File
+
+func use() {
+	var b [1]byte
+	_ = f.Read(b[:]); _ = c.r.Read(b[:]) // tolerated call on the same line must not hide the file read
+}
+MUTEOF
+	run_mut "forbidden transfer sharing a line with a tolerated call"
+
+	mkdir -p gatemut_winint
+	cat > gatemut_winint/mut.go <<'MUTEOF'
+//go:build windows
+
+package gatemut_winint
+
+import "github.com/firehol/iprange/v4/go/internal/mapping"
+
+var _ = mapping.Mapping{}
+MUTEOF
+	run_mut "windows-only package importing internal/mapping"
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 11 mutation forms rejected)"
+	echo "import-graph self-test passed (all 18 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

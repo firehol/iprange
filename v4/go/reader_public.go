@@ -576,9 +576,9 @@ type NetworkEnrichmentV1Location struct {
 // with decision 4A's zero-allocation lookup contract a pointer inside a
 // by-value result cannot reference stable storage without a per-call
 // allocation, so the Rust Option<NetworkEnrichmentV1Location> is mirrored
-// as the value Location plus the presence flag HasLocation (resolved
-// decision 5A, SOW decision log). Names and fields match the matrix and
-// the Rust authority.
+// as the value Location plus the presence flag HasLocation (decision 5A,
+// SOW decision log, recorded for user ratification). Names and fields
+// match the matrix and the Rust authority.
 type NetworkEnrichmentV1 struct {
 	ASN         uint32
 	CountryID   uint32
@@ -603,7 +603,7 @@ func (v NetworkEnrichmentV1View) check() error {
 	return nil
 }
 
-// Value decodes the structured payload.
+// Value returns the structured payload that was decoded at lookup.
 func (v NetworkEnrichmentV1View) Value() (NetworkEnrichmentV1, error) {
 	if err := v.check(); err != nil {
 		return NetworkEnrichmentV1{}, err
