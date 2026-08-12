@@ -63,8 +63,8 @@ and all view operations at 0)
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,578
-raw lines, including blanks; new-tree tests: 4,066 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,592
+raw lines, including blanks; new-tree tests: 4,196 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -614,6 +614,34 @@ sync-free reader core. Production LOC and test LOC grew with the new
 regression tests; the public zero-alloc contract now documents exactly one
 guard allocation per created view (copy-safety), zero elsewhere.
 
+## 11f. Round-4 reviewer follow-up (2026-08-12)
+
+The round-4 external-audit reviewer for bootstrap/mapping asked for two
+regression tests that were still missing: the blocking F_OFD_SETLKW wait
+semantics and the post-lock/post-mmap path identity recheck. Writing the
+identity test exposed that the shipped "three-point" recheck compared the
+opened fd against the initial path stat — a comparison that can never fail
+once the fd is open — so a replacement after open could still publish a
+mapping of the old unlinked inode while the path named a new database.
+The mapping owner was corrected to re-stat the path itself with
+`os.Lstat` (symlink-aware, like Rust `fs::symlink_metadata`) at every
+check point and require it to still name the opened inode; a mismatch or a
+non-regular path entry under the lock is the WrongState class (code 11),
+matching Rust `WrongMode` ("live path identity changed"). The initial
+pre-open stat remains only as the early non-regular-file gate (FIFO and
+directory refusal); it no longer vetoes the opened file, matching Rust's
+open-what-the-path-names semantics. The darwin lifetime lock additionally
+retries EINTR in the wait loop, matching the linux peer and the Rust
+`live_lock` platform module (linux+apple use one shared loop).
+
+Regression tests added at `v4/go/internal/mapping/mapping_test.go`:
+`TestOpenImmutableWaitsForExclusiveLifetimeLock` (an exclusive contender
+at the lifetime offset blocks the open until released; fails pre-fix on a
+non-blocking lock) and `TestOpenImmutableRefusesPathReplacedDuringOpen`
+(fails on the pre-fix tree, passes after the path-vs-inode correction).
+
+Counts at HEAD: production 4,592 raw lines / tests 4,196 raw lines.
+
 ## 12. Deviations and open items
 
 - No tracked deletion executed (Decision 1 = C: decide after this
@@ -638,7 +666,9 @@ platform/worker feasibility report — all executed and recorded above.
 Review history: sections 9/10/10b record the independent second-fourth
 passes; section 11c records the round-2 six-agent review and its repairs;
 section 11d records the round-3 verification pass (including the blob-gap
-underflow P0 and its regression test) and the six final PASS verdicts. The
+underflow P0 and its regression test) and the six final PASS verdicts;
+section 11f records the round-4 mapping follow-up (path identity recheck
+correction, darwin EINTR parity, and the two requested regression tests). The
 same-failure searches (content-transfer, page arrays, stale constants,
 PID-slot model, unsigned-subtraction-under-`||`) were re-run over the new
 tree: none present. Next milestone is safe to start once the three pending

@@ -38,15 +38,20 @@ type Mapping struct {
 // Geometry refusals carry CodeFormatInvalid; operating-system failures carry
 // CodeIO. The optional check runs after the shared lifetime lock is held and
 // before any byte of the file is mapped, so namespace decisions observe one
-// consistent locking state. Path identity is verified before the lock, after
-// the lock, and after mapping, mirroring Rust open_immutable: a replacement
-// race must never open an old unlinked inode while the path names a new
-// database.
+// consistent locking state. Path identity is verified after the open, after
+// the lock, and after mapping; each check re-stats the path and requires it
+// to still name the opened inode, mirroring Rust open_immutable
+// (verify_path_any_link): a replacement race must never publish a mapping of
+// an old unlinked inode while the path names a new database. An identity
+// change or non-regular path entry under the lock is the WrongState class
+// (Rust WrongMode maps to code 11).
 func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
-	// Stat the final name, then reopen with O_NOFOLLOW and verify the file
-	// identity again after open: the EvalSymlinks+reopen pattern alone
-	// leaves a swap race between check and open.
+	// Stat the final name before opening so non-regular files (FIFOs,
+	// directories) are refused without a blocking or surprising open, then
+	// reopen with O_NOFOLLOW. The fd identity, not this first stat, is the
+	// reference for every later path identity check: the initial stat may
+	// already be stale, so it must never veto the opened file.
 	before, err := os.Stat(clean)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
@@ -65,7 +70,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		}
 	}()
 
-	verifyIdentity := func() error {
+	verifyPathIdentity := func() error {
 		st, err := f.Stat()
 		if err != nil {
 			return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
@@ -73,12 +78,23 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		if !st.Mode().IsRegular() {
 			return &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
 		}
-		if !os.SameFile(before, st) {
-			return &format.Error{Code: format.CodeFormatInvalid, Detail: "file replaced between stat and open"}
+		// Re-stat the path itself (no symlink following, like Rust's
+		// symlink_metadata-based directory entry) and compare against the
+		// opened inode: this is the check that detects replacement after
+		// the fd was opened.
+		now, err := os.Lstat(clean)
+		if err != nil {
+			return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
+		}
+		if !now.Mode().IsRegular() {
+			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names a regular file"}
+		}
+		if !os.SameFile(now, st) {
+			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names the opened file"}
 		}
 		return nil
 	}
-	if err := verifyIdentity(); err != nil {
+	if err := verifyPathIdentity(); err != nil {
 		return nil, err
 	}
 	st, err := f.Stat()
@@ -99,7 +115,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if err := lockLifetimeShared(int(f.Fd())); err != nil {
 		return nil, err
 	}
-	if err := verifyIdentity(); err != nil {
+	if err := verifyPathIdentity(); err != nil {
 		return nil, err
 	}
 	if check != nil {
@@ -114,7 +130,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	// The path may have been replaced while the lock was taken or the
 	// mapping was created; recheck identity and the namespace contract on
 	// the mapped file before publishing the Mapping.
-	if err := verifyIdentity(); err != nil {
+	if err := verifyPathIdentity(); err != nil {
 		unix.Munmap(data)
 		return nil, err
 	}

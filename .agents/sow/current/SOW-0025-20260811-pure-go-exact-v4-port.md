@@ -873,6 +873,35 @@ Use these sections in this order:
   all green; zero-alloc suite updated for the one-guard-per-view contract;
   report counts and this record updated in the same commit.
 
+### 2026-08-12 - external audit round-4 reviewer follow-up (mapping)
+
+- The bootstrap/mapping reviewer's round-4 P2 was that the mapping owner
+  still lacked regression tests for (a) the blocking F_OFD_SETLKW wait
+  semantics and (b) the post-lock/post-mmap path identity recheck.
+- Writing test (b) exposed that the shipped three-point recheck compared
+  the opened fd against the initial path stat — a comparison that can never
+  fail once the fd is open — so a replacement after open could still publish
+  a mapping of the old unlinked inode while the path named a new database.
+  Corrected at v4/go/internal/mapping/mapping.go: every recheck now
+  re-stats the path itself with os.Lstat (symlink-aware, like Rust
+  fs::symlink_metadata) and requires it to still name the opened inode;
+  a mismatch or non-regular path entry under the lock is the WrongState
+  class (code 11), matching Rust WrongMode ("live path identity changed").
+  The initial pre-open stat remains only as the early non-regular-file gate
+  and no longer vetoes the opened file, matching Rust's
+  open-what-the-path-names semantics.
+- TestOpenImmutableRefusesPathReplacedDuringOpen fails on the pre-fix tree
+  and passes after the correction; TestOpenImmutableWaitsForExclusive-
+  LifetimeLock pins the blocking wait (fails on a non-blocking lock).
+- The darwin lifetime lock now retries EINTR in the wait loop, matching the
+  linux peer and the Rust live_lock platform module (one loop for
+  linux+apple), at v4/go/internal/mapping/mapping_lifetime_darwin.go.
+- Counts at HEAD refreshed: production 4,592 raw lines / tests 4,196 raw
+  lines (report sections 2 and 11f). Gates at HEAD: go test ./... (5
+  packages, -race, mapping -count=3), go vet, gofmt, import-graph, five
+  cross-compiles (darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64,
+  linux/386) — all green.
+
 ## Validation
 
 Acceptance criteria evidence:
