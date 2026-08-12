@@ -54,14 +54,17 @@ go vet ./internal/format ./internal/reader .          clean
 gofmt -l .                                           clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
 conformance test: 5/5 fixtures pass, 3/3 invalid mutations pass
-zero-allocation: 18 checks (8 internal + 10 public), all 0 allocs
+zero-allocation: 18 checks (8 internal at 0 allocs + 10 public: direct,
+scan, cardinality, and feed at 0; view-returning lookups at exactly one
+documented view-guard allocation per created view — the copy-safety cost —
+and all view operations at 0)
 (feed-lookup: 1 documented string copy per lookup)
 ```
 
 Production LOC measured at HEAD (recomputed after every repair pass;
 `cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
-reader_public.go types.go errors.go | wc -l`, test files excluded): 4,500
-raw lines, including blanks; new-tree tests: 3,922 raw lines. The earlier
+reader_public.go types.go errors.go | wc -l`, test files excluded): 4,578
+raw lines, including blanks; new-tree tests: 4,066 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -144,10 +147,10 @@ raw lines, including blanks; new-tree tests: 3,922 raw lines. The earlier
 |---|---|
 | direct lookup v4 (12 probes) | 0 |
 | direct lookup v6 (4 probes) | 0 |
-| membership lookup v4 (incl. view) | 0 |
-| membership lookup v6 (inline bitmap) | 0 |
+| membership lookup v4 (incl. view) | 1 per view (guard; documented copy-safety cost) |
+| membership lookup v6 (inline bitmap) | 1 per view (guard) |
 | ContainsIndex / Word / ReadWords (inline + blob, incl. synthetic blob DB) | 0 |
-| structured lookup v4 | 0 |
+| structured lookup v4 | 1 per view (guard) |
 | feed lookup (internal) | 0 |
 | feed lookup (public) | 1 (returned name string copy; documented) |
 | full direct scan v4 | 0 |
