@@ -30,7 +30,13 @@ import; the records contradicted the source) plus two P3 comments, all
 fixed at HEAD dbdf2b7 (exact call-node blanking, extended selectors,
 gzip/compress-zlib import bans, per-target boundary checks over ten
 GOOS/GOARCH pairs, an eighteen-form durable self-test, and the records
-in this file). Decision 5A remains open for user ratification. Milestone
+in this file). The six-reviewer re-review of that fix found the decoder/
+encoder family and two write/reflection gaps still open; the gate now
+also bans the reader-consumer packages, covers
+WriteString/WriteRune/NewDecoder/Decode/Encode/Method, blanks only
+paren-free tolerated call nodes, and its self-test durably rejects
+twenty-two mutation forms. Decision 5A remains open for user
+ratification. Milestone
 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
@@ -86,7 +92,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 18/18 mutation forms rejected
+GOOS/GOARCH pairs): 22/22 mutation forms rejected
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -125,12 +131,13 @@ tree): 4,832 raw lines. The earlier
   GOOS/GOARCH pairs so a build-tagged package cannot import internal
   packages unseen; the Windows mapping stub no longer carries or exposes
   a raw `*os.File` (Mapping.File removed on every platform); `--self-test`
-  durably rejects eighteen mutation forms (direct call, alias, method
+  durably rejects twenty-two mutation forms (direct call, alias, method
   value, Seek, new directory, unix.Readv in the mapping owner, bufio
   wrapper, dot import, windows-only package, single-line and aliased
   bufio escapes, fmt.Fscan, io.CopyN, reflection-invoked Read, raw
   SYS_READ, CopyFileRange, tolerated-call line sharing, windows-only
-  internal import).
+  internal import, json decoder over a file, os.File.WriteString,
+  transfer nested inside the tolerated node, reflection Method(i)).
 - view-lifetime guard (round-12): public views retain the immutable
   `*pinState` captured at creation, so reassigning the Pin variable that
   created a view cannot retarget its close guard to another reader; the
@@ -934,6 +941,14 @@ dbdf2b7 and in the records of this file: exact call-node blanking,
 extended selectors, gzip/compress-zlib import bans, ten-target
 per-GOOS/GOARCH boundary verification, an eighteen-form durable
 self-test, and the count refresh to production 4,772 / tests 4,832.
+The six-reviewer re-review then found the decoder/encoder family
+(json/xml/gob NewDecoder over a file, archive/image/bzip2 etc.),
+os.File.WriteString, reflect.Value.Method(i), and a nested-paren
+blanking shadow still open; fixed at HEAD f9c88b2 with the
+reader-consumer import bans, the WriteString/WriteRune/NewDecoder/
+Decode/Encode/Method selectors, paren-free-only tolerated-node
+blanking, compiling self-test mutations, and four new mutation forms -
+the durable self-test now rejects twenty-two mutation forms.
 Decision 5A remains the single open item and awaits user ratification.
 Milestone 1 is reopened
 and Milestone 2 is blocked pending the independent re-review and the

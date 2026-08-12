@@ -40,9 +40,16 @@ All fixed at HEAD dbdf2b7: tolerated calls are blanked as exact call
 nodes instead of whole lines, the selector set covers every indirect
 form, gzip and compress/zlib wrapper imports are banned, the boundary
 check runs per target over ten GOOS/GOARCH pairs, and the self-test
-durably rejects eighteen mutation forms. The records were completed in
-the same pass; decision 5A remains the single open user decision and
-blocks milestone close. Repository counts: production 4,772 raw lines /
+durably rejects eighteen mutation forms. The narrow re-review of that
+fix then found the decoder/encoder family still open (encoding/json,
+xml, gob NewDecoder(f).Decode, image/archive wrappers), os.File.WriteString,
+a nested-paren blanking shadow, and reflect.Value.Method(i);
+the gate now also bans the reader-consumer packages, covers
+WriteString/WriteRune/NewDecoder/Decode/Encode/Method selectors, blanks
+only paren-free tolerated call nodes, and its self-test durably rejects
+twenty-two mutation forms. The records were completed in the same pass;
+decision 5A remains the single open user decision and blocks milestone
+close. Repository counts: production 4,772 raw lines /
 tests 4,832 raw lines. Milestone 2 must not start until a new
 independent final review passes.
 The approved later scope remains unchanged: Milestone 2 is the writer;
@@ -176,8 +183,8 @@ sidecars, live coordination, and publication remain Milestone 4.
   require. Fixed at HEAD 4fdc671: whole-tree selector scan (find covers
   every build-tagged file), dot-import and bufio/io-ioutil import bans,
   extended selector set (Readv/Writev/Preadv/Pwritev/ReadByte/...), a
-  durable --self-test mode that (at that commit) rejected all eleven mutation
-  forms, runtime
+  durable --self-test mode that at that commit rejected nine mutation forms
+  (the two bufio escape forms followed in 9567067), runtime
   strace evidence recorded in the report, and P3 lifetime-comment
   corrections.
 - Iterative pass (round-13 fixes): six narrow reviewers all PASS at HEAD
@@ -202,8 +209,23 @@ sidecars, live coordination, and publication remain Milestone 4.
   and compress/zlib wrapper imports are banned, the boundary check runs
   per target over ten GOOS/GOARCH pairs, the self-test durably rejects
   all eighteen mutation forms, the P3 comments were corrected, and the
-  records in this entry complete the trail. Decision 5A remains open for
-  user ratification and is the only remaining P2 class.
+  records in this entry complete the trail.
+- Iterative pass (round-13 fixes, second sweep): five narrow reviewers
+  PASS at HEAD 26f0527 (Peirce, Gauss, Faraday, Kant, Bernoulli); Ampere
+  found the gate still open in four classes - P1: stdlib decoder/
+  encoder families consume the file directly
+  (json/xml/gob NewDecoder(f).Decode, plus archive/image/bzip2/etc.
+  reader packages); P2: os.File.WriteString, reflect.Value.Method(i),
+  and the exact-node blanking swallowed a forbidden transfer nested
+  inside the tolerated call's parentheses; P3: two self-test mutations
+  did not compile. All fixed at HEAD f9c88b2: the reader-consumer
+  packages join the import ban, the selector set gains
+  WriteString/WriteRune/NewDecoder/Decode/Encode/Method, the blanking
+  matches only paren-free tolerated arguments (c.r.Read(p) /
+  c.r.ReadByte()), the two mutations compile, and four new mutation
+  forms pin every escape; the self-test now durably rejects all
+  twenty-two mutation forms. Decision 5A remains open for user
+  ratification and is the only remaining P2 class.
 
 ## Requirements
 
@@ -636,8 +658,10 @@ Open decisions:
   stays as recorded until the user decides. Every other product and
   format decision is closed; the current specifications and accepted
   Rust semantics are frozen for this port.
-- The exact obsolete Go deletion set is intentionally resolved by Milestone 0
-  evidence and still requires explicit user approval before deletion.
+- The obsolete Go deletion set from Milestone 0 was resolved by decision 1A
+  (user decision, 2026-08-12) and executed at HEAD e65e8b7 (105 tracked
+  files removed with the compiling replacement); no approval remains
+  outstanding for it.
 - If pure Go cannot meet the exact fault-worker contract without a new assembly
   or native boundary, stop and present evidence and options. Do not silently add
   cgo, use the Rust worker, reach into Go runtime internals, or weaken fault
