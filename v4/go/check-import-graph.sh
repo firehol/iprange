@@ -986,6 +986,116 @@ MUTEOF
 	run_mut "channel-transported file shadowing the inflater exemption"
 	cp "$self_tree/meta48.orig" internal/reader/metadata.go
 
+	# --- 50: inline FuncLit returning *os.File behind the exemption ------
+	# A closure that opens a file and returns it must keep the taint when
+	# its call result shadows the exempted in-memory inflater reader.
+	cat > internal/reader/gatemut_funclit.go <<'MUTEOF'
+package reader
+MUTEOF
+	add_mut internal/reader/gatemut_funclit.go
+	cp internal/reader/metadata.go "$self_tree/meta50.orig"
+	INS='zr = func() *os.File { f, _ := os.Open("/dev/null"); return f }()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta50.new" && mv "$self_tree/meta50.new" internal/reader/metadata.go
+	if grep -Fq 'zr = func() *os.File' internal/reader/metadata.go; then
+		run_mut "inline FuncLit file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 50 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta50.orig" internal/reader/metadata.go
+
+	# --- 51: type assertion to *os.File behind the exemption -------------
+	# A file hidden in an interface field, recovered with a type
+	# assertion, must keep the taint at the exempted inflater reader.
+	cat > internal/reader/gatemut_assert.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type zrBox struct{ r any }
+
+var zb zrBox
+
+func init() {
+	w, _, _ := os.Pipe()
+	zb.r = w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_assert.go
+	cp internal/reader/metadata.go "$self_tree/meta51.orig"
+	INS='zr = zb.r.(*os.File)'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta51.new" && mv "$self_tree/meta51.new" internal/reader/metadata.go
+	if grep -Fq 'zb.r.(*os.File)' internal/reader/metadata.go; then
+		run_mut "type-assertion file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 51 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta51.orig" internal/reader/metadata.go
+
+	# --- 52: two-hop channel transport behind the exemption --------------
+	# A file moved through chan chan *os.File must stay tainted across
+	# both receives at the exempted inflater reader.
+	cat > internal/reader/gatemut_chan2.go <<'MUTEOF'
+package reader
+
+import "os"
+
+var outer = make(chan chan *os.File)
+
+func init() {
+	inner := make(chan *os.File)
+	w, _, _ := os.Pipe()
+	inner <- w
+	outer <- inner
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chan2.go
+	cp internal/reader/metadata.go "$self_tree/meta52.orig"
+	INS='inner2 := <-outer; zr = <-inner2'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta52.new" && mv "$self_tree/meta52.new" internal/reader/metadata.go
+	if grep -Fq 'zr = <-inner2' internal/reader/metadata.go; then
+		run_mut "two-hop channel file behind the inflater exemption"
+	else
+		echo "self-test ERROR: form 52 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta52.orig" internal/reader/metadata.go
+
+	# --- 53: single-variable channel range must taint the element --------
+	# for z := range ch on a chan *os.File puts the file in the Key slot;
+	# an unapproved method on it must be flagged.
+	cat > internal/reader/gatemut_chanrange.go <<'MUTEOF'
+package reader
+
+import "os"
+
+var ch53 = make(chan *os.File)
+
+func init() {
+	w, _, _ := os.Pipe()
+	ch53 <- w
+}
+
+func rangeProbe() error {
+	for z := range ch53 {
+		return z.Chdir() // unapproved method on a ranged channel element
+	}
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanrange.go
+	run_mut "single-variable channel range element"
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1038,7 +1148,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 47 mutation forms rejected)"
+	echo "import-graph self-test passed (all 51 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
