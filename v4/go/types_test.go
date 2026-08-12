@@ -79,11 +79,18 @@ func TestPublicSemanticFoundation(t *testing.T) {
 	// Engine-defined semantic tags and the 20 MiB metadata bound share the
 	// Rust contract registries (contract.rs ValueTag::FIRST_SEEN/LAST_SEEN,
 	// MAX_METADATA_UNCOMPRESSED).
-	if ValueTagFirstSeen.Wire() != [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'} {
-		t.Fatalf("first_seen tag wire = %q", ValueTagFirstSeen.Wire())
+	first, last := ValueTagFirstSeen(), ValueTagLastSeen()
+	if first.Wire() != [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'} {
+		t.Fatalf("first_seen tag wire = %q", first.Wire())
 	}
-	if ValueTagLastSeen.Wire() != [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'} {
-		t.Fatalf("last_seen tag wire = %q", ValueTagLastSeen.Wire())
+	if last.Wire() != [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'} {
+		t.Fatalf("last_seen tag wire = %q", last.Wire())
+	}
+	// The canonical tags are accessor-returned values: caller mutation of
+	// the returned copy cannot change later classification.
+	first.wire[0] = 'X'
+	if got, _ := (DatabaseInfo{ValueKind: ValueKindDirect, ValueTag: ValueTagFirstSeen()}).DirectSemantic(); got != DirectSemanticFirstSeen {
+		t.Fatalf("mutation of a returned tag copy changed classification: %d", got)
 	}
 	if MaxMetadataUncompressed != 20_971_520 {
 		t.Fatalf("metadata limit = %d", MaxMetadataUncompressed)

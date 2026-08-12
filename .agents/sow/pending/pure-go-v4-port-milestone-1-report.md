@@ -73,9 +73,9 @@ feed-lookup-into); atomics exist only at Pin/Close boundaries
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,797 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,809 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,676 raw lines. The earlier
+tree): 4,683 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -497,7 +497,7 @@ All were repaired in this pass, each with a committed regression test:
   lock at offset 1<<44 with len 1 (live_sidecar.rs MAIN_LIFETIME_LOCK);
   a held-lock exclusion test proves a concurrent writer is now excluded;
   freebsd/other-unix mirror the Rust platform table (typed unsupported).
-- M5 binding: Info() is guarded and returns (ImmutableInfo, error);
+- M5 binding: Info() is guarded and returns (DatabaseInfo, error);
   public code 46 renamed to LiveCoordinationMalformedRequiresReset; the
   feed name is validated before the kind check (feed_catalog.rs order).
 - M6 conformance evidence: info assertions (value tag vs cases.json,

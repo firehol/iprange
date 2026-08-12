@@ -45,11 +45,12 @@ const (
 	MetaSelectionSoleMeta1
 )
 
-// ImmutableInfo is the public logical identity of the selected generation.
-// ValueTag carries the canonical tag: the engine-defined first_seen and
-// last_seen tags or any caller-created tag (binary-format-v4.md section 4:
-// at most 15 non-NUL bytes, then a mandatory NUL).
-type ImmutableInfo struct {
+// DatabaseInfo is the public logical identity of the selected generation
+// (approved parity-matrix name, milestone-0 report row 6). ValueTag
+// carries the canonical tag: the engine-defined first_seen and last_seen
+// tags or any caller-created tag (binary-format-v4.md section 4: at most 15
+// non-NUL bytes, then a mandatory NUL).
+type DatabaseInfo struct {
 	Family           AddressFamily
 	ValueKind        ValueKind
 	StructureKind    StructureKind
@@ -64,14 +65,16 @@ type ImmutableInfo struct {
 }
 
 // DirectSemantic returns the tag-derived semantic for direct databases.
-func (i ImmutableInfo) DirectSemantic() (DirectSemantic, bool) {
+// Classification compares the private canonical wire forms, so callers can
+// never alter it.
+func (i DatabaseInfo) DirectSemantic() (DirectSemantic, bool) {
 	if i.ValueKind != ValueKindDirect {
 		return DirectSemanticGeneric, false
 	}
-	switch i.ValueTag {
-	case ValueTagFirstSeen:
+	switch i.ValueTag.wire {
+	case firstSeenWire:
 		return DirectSemanticFirstSeen, true
-	case ValueTagLastSeen:
+	case lastSeenWire:
 		return DirectSemanticLastSeen, true
 	default:
 		return DirectSemanticGeneric, true
@@ -127,9 +130,9 @@ func (r *ImmutableReader) checkOpen() error {
 }
 
 // Info returns the selected generation's logical identity.
-func (r *ImmutableReader) Info() (ImmutableInfo, error) {
+func (r *ImmutableReader) Info() (DatabaseInfo, error) {
 	if err := r.checkOpen(); err != nil {
-		return ImmutableInfo{}, err
+		return DatabaseInfo{}, err
 	}
 	meta := r.inner.Meta()
 	var selection MetaSelection
@@ -141,7 +144,7 @@ func (r *ImmutableReader) Info() (ImmutableInfo, error) {
 	default:
 		selection = MetaSelectionProvenCurrent
 	}
-	return ImmutableInfo{
+	return DatabaseInfo{
 		Family:           AddressFamily(meta.AddressFamily),
 		ValueKind:        ValueKind(meta.ValueKind),
 		StructureKind:    StructureKind(meta.StructureKind),

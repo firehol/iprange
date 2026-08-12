@@ -116,14 +116,21 @@ func (t ValueTag) Bytes() []byte {
 	panic("invalid ValueTag invariant")
 }
 
-// ValueTagFirstSeen and ValueTagLastSeen are the engine-defined semantic
-// tags (binary-format-v4.md section 4; Rust contract ValueTag::FIRST_SEEN
-// and ValueTag::LAST_SEEN). Any other tag is caller-defined via
-// NewValueTag. Never mutate these values: they back DirectSemantic.
+// firstSeenWire and lastSeenWire are the private canonical wire forms of
+// the engine-defined semantic tags. They are package-private and never
+// reassigned, so no caller can change the classification authority or race
+// DirectSemantic.
 var (
-	ValueTagFirstSeen = ValueTag{wire: [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'}}
-	ValueTagLastSeen  = ValueTag{wire: [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'}}
+	firstSeenWire = [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'}
+	lastSeenWire  = [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'}
 )
+
+// ValueTagFirstSeen returns the engine-defined first_seen semantic tag
+// (binary-format-v4.md section 4; Rust contract ValueTag::FIRST_SEEN).
+func ValueTagFirstSeen() ValueTag { return ValueTag{wire: firstSeenWire} }
+
+// ValueTagLastSeen returns the engine-defined last_seen semantic tag.
+func ValueTagLastSeen() ValueTag { return ValueTag{wire: lastSeenWire} }
 
 // MaxMetadataUncompressed is the exact 20 MiB uncompressed metadata bound
 // (binary-format-v4.md section 2; Rust contract MAX_METADATA_UNCOMPRESSED).

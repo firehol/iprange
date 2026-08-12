@@ -5,8 +5,10 @@ import (
 )
 
 // Structured-value lookup (binary-format-v4.md section 9A). The
-// NetworkEnrichmentV1View is a logical handle: every value() or membership
-// read re-derives a checked mapped view at call time.
+// NetworkEnrichmentV1View is a decoded-value handle: the payload is
+// validated and decoded during the lookup, the scalar value is retained in
+// the lightweight view, and membership word reads re-derive checked mapped
+// views at call time (like MembershipView).
 
 // NetworkEnrichmentV1View exposes one network_enrichment_v1 structure entry.
 // The payload is validated and decoded during the lookup, mirroring
