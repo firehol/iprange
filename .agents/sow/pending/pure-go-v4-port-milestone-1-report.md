@@ -25,20 +25,24 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 - Cross-compilation passes for darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/arm64+386. Windows is an explicit honest
   stub (open refuses with `os-unsupported`) until the platform milestone.
-- **Pure-Go worker feasibility: PROVEN on linux/amd64 with empirical
-  evidence** — `runtime/debug.SetPanicOnFault` converts a file-mapping SIGBUS
-  into a recoverable panic whose fault address (via `runtime.Error.Addr`)
-  is exact for the probed platform; the earlier "disproven" conclusion was
-  wrong and is superseded (section 11). Remaining proofs (go-routine scoping,
-  best-effort addresses, macOS/FreeBSD/Windows, unrelated-fault re-raise)
-  belong to the worker milestone; no assembly shim and no native boundary is
-  needed.
+- **Worker conclusion (corrected, spec-text authority, section 11):**
+  `runtime/debug.SetPanicOnFault` recovers mapping faults on linux/amd64
+  (empirically reproduced) but cannot satisfy the normative worker
+  contract — SA_SIGINFO + alternate stack, kernel-generated si_code
+  discrimination, in-region si_addr, exact previous-disposition chaining,
+  and no unwinding are all unimplementable in pure Go. The worker
+  milestone needs either a minimal project-owned assembly sigaction shim
+  (spec-exact, Rust-mirror) or an explicit spec change; the user decision
+  is pending.
 - Commits: `913f4e6` (reader + tests), `9441f85` (independent-review
   repairs), `1df90fa` (milestone report), `4eec44e` (third-pass repairs,
-  superseded worker conclusion), `(pending)` (fourth-pass repairs: lifetime
+  superseded worker conclusion), `03a910f` (fourth-pass repairs: lifetime
   redesign, view semantics, absence vs corruption, concurrency tests, report
-  facts). No tracked file was deleted (Decision 1 = decide after evidence;
-  the old Go tree remains green and untouched).
+  facts), `1e1ac4b` (fifth-pass repairs: meta tail invariant, mandatory aux,
+  exact zlib stream, namespace under lock, structured decode at lookup,
+  adversarial suite), `9a835e4` (six-agent gap analysis). No tracked file was
+  deleted (Decision 1 = decide after evidence; the old Go tree remains green
+  and untouched).
 
 ## 2. Commands and factual results
 
@@ -49,13 +53,15 @@ go vet ./internal/format ./internal/reader .          clean
 gofmt -l .                                           clean
 GOOS/GOARCH builds (darwin, freebsd, windows, linux arm/386): all ok
 conformance test: 5/5 fixtures pass, 3/3 invalid mutations pass
-zero-allocation: 11 operation groups, all 0 allocs (feed-lookup: 1 copy/lookup)
+zero-allocation: 16 checks (6 internal + 10 public), all 0 allocs
+(feed-lookup: 1 documented string copy per lookup)
 ```
 
-Production LOC added: `internal/format` 1,497; `internal/mapping` 161;
-`internal/reader` 1,615; root facade ~450 — total ~3,720 new production lines
-(+~1,700 test lines). Largest new file: `internal/reader/range.go` 557 lines
-(within the 500-line preference; splitting it would reduce clarity).
+Production LOC measured at HEAD (recomputed after every repair pass;
+`cat internal/format/*.go internal/mapping/*.go internal/reader/*.go
+reader_public.go | wc -l`): 6,160 raw lines, including blanks; new-tree
+tests: ~2,850 lines. The ~3,720/~1,700 figures printed in earlier passes
+were stale snapshots and are superseded.
 
 ## 3. Structure and owners
 
@@ -232,8 +238,8 @@ Real issues found, fixed, and regression-tested in this pass:
    require_membership). The Go facade now mirrors each rule exactly: wrong
    kind → WrongValueKind (13) except network enrichment → WrongStructureKind
    (67); wrong family → WrongAddressFamily (12); feed access requires kind
-   Membership or Structured. A 19-probe wrong-mode matrix pins all cases on
-   the committed fixtures (conformance tests).
+   Membership or Structured. An 18-probe wrong-mode matrix (12 error-asserting + 6 positive)
+   pins all cases on the committed fixtures (conformance tests).
 2. **Child-handle safety.** `Close` unmapped the file while public views
    still held page descriptors, and any later view operation could fault.
    The Rust contract (close with live children → ErrorHandleBusy; operations
@@ -408,16 +414,79 @@ Findings:
   during an armed operation (both designs crash; observable difference
   only in the message).
 
-**Conclusion (supersedes): the POSIX fault-worker is implementable in pure
-Go via SetPanicOnFault; no assembly shim or other native boundary is
-needed.** The earlier A/B/C option set is revised accordingly:
-- A. (recommended) proceed with the pure-Go SetPanicOnFault worker design
-  in the worker milestone; assembly remains available as fallback if the
-  platform proofs fail;
-- B. assembly shim anyway, for exact si_code/signal semantics (not needed
-  per the equivalence analysis; deviates from the smallest-implementation
-  direction);
-- C. pure-Go-only with stop-at-worker (moot now: pure Go is feasible).
+**Conclusion (corrected, spec-text authority): the normative worker
+contract is not satisfiable in pure Go.** binary-format-v4.md lines
+3080-3096 and the engine design spec require SA_SIGINFO with an alternate
+stack, kernel-generated (SI_KERNEL) discrimination, in-region si_addr with
+checked subtraction, exact previous-disposition chaining, and no unwinding
+through SDK code. SetPanicOnFault provides none of these: it converts the
+fault into a recoverable panic — an unwinding mechanism the contract
+forbids — exposes no siginfo/si_code, is goroutine-scoped, and its
+address is documented best-effort. The linux/amd64 probe remains evidence
+for a panic-based subset, not for the contract.
+
+Options for the worker milestone (user decision pending; the gap analysis
+recommends A):
+- A. minimal project-owned assembly sigaction shim (SA_SIGINFO, kernel-bus
+  check, si_addr interval, previous-disposition chaining, raw exit(197))
+  — spec-exact, mirrors the Rust worker posix.rs;
+- B. propose a spec change to panic-based semantics (weakens crash
+  isolation; needs explicit approval);
+- C. drop the fault worker (sacrifices bounded crash isolation).
+
+## 11b. Gap-analysis repair pass (2026-08-11, commit 58c4d8f)
+
+The six-agent concurrent gap analysis (commit 9a835e4,
+pure-go-m1-gap-analysis.md) produced one BLOCKER and ten MAJOR findings.
+All were repaired in this pass, each with a committed regression test:
+
+- B1 structure radix: the directory child index divided by R*512^(L-2)
+  instead of R*512^(L-1) at levels >= 2; fixed (span = level), plus the
+  synthetic level-2 structure-tree database (TestMultiLevelStructureTree)
+  that fails on the old arithmetic. Child==0, id 0, id >= limit, and zero
+  slot cells are now clean misses, mirroring table.rs.
+- M1 blob walks: branch-first-offset continuity, child-level descent, leaf
+  identity/geometry (lower==48+data_len, upper==4096, %8), nonfinal-full,
+  end-vs-declared, and coverage of the requested span (blob_tree.rs
+  find_leaf + leaf_geometry); exercised by the 2-leaf synthetic blob.
+- M2 record limits: feed_index >= limit, membership id 0/>= limit, zero
+  refcount, word_count beyond the limit-derived maximum, and out-of-range
+  blob roots are corruption (decode_leaf + require_record_fields).
+- M3 slotted exactness: lower == 32+2*item_count and upper < page size
+  (slotted_page.rs shape_valid); structure pages enforce their fixed
+  geometry (leaf_end 4032 / branch_end 2080, upper 4096, item-count
+  bounds); all synthetic builders were made canonical (the blob builder
+  previously wrote pages the Rust reader would reject).
+- M4 lifetime lock: whole-file flock(2) replaced by the OFD byte-range
+  lock at offset 1<<44 with len 1 (live_sidecar.rs MAIN_LIFETIME_LOCK);
+  a held-lock exclusion test proves a concurrent writer is now excluded;
+  freebsd/other-unix mirror the Rust platform table (typed unsupported).
+- M5 binding: Info() is guarded and returns (ImmutableInfo, error);
+  public code 46 renamed to LiveCoordinationMalformedRequiresReset; the
+  feed name is validated before the kind check (feed_catalog.rs order).
+- M6 conformance evidence: info assertions (value tag vs cases.json,
+  MetaSelection==ProvenCurrent, page_count*4096==file size, range/feed
+  counts); absence probes at family edges and inter-range gaps for
+  direct/membership ranges; word-exact bitmap verification through
+  ReadWords per range; feed-limit InvalidArgument probes.
+- M7 reports: LOC recomputed at HEAD (6,160 raw production lines, tests
+  ~2,850), 18 probes and 16 zero-allocation checks replace the stale 19/11,
+  SOW worker sentence aligned with the corrected section 11.
+- M8 gate: check-import-graph.sh dropped each package's first import
+  (mapping->format was silently unchecked); it now checks every import,
+  bans sync/sync-atomic/unsafe in format+reader, and encodes the
+  mapping->format allowance.
+- Bootstrap minima: range-record and retirement capacity bounds, metadata
+  physical bound ((page_count-2)*4048), and membership entry_count <
+  id_limit were added (bootstrap.rs mirrors), without changing fixture
+  acceptance.
+- Authority conflict recorded (no code change): unknown structure_kind on
+  direct/membership files — the Go reader follows the spec text
+  (UnsupportedStructure) where Rust reports NoBootstrapMeta; decision
+  tracked for the conformance milestone.
+
+Gates at commit: go test ./... (5 packages ok), -race, vet, gofmt clean,
+check-import-graph.sh passed, cross-builds darwin/freebsd/windows/linux-386.
 
 ## 12. Deviations and open items
 

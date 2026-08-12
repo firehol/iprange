@@ -695,9 +695,11 @@ Use these sections in this order:
   files + 2 untracked leftovers, re-approvable at any time) and the worker
   boundary — superseded: the third-pass evidence proves pure Go via
   `runtime/debug.SetPanicOnFault` (empirical recover with exact fault
-  address), so no assembly shim is needed; the worker milestone proceeds
-  pure-Go (see milestone-1 report section 11). Milestone 2 is safe to start
-  after the user's answer to the deletion decision.
+  address); the worker milestone therefore needs either a minimal
+  project-owned assembly sigaction shim (spec-exact) or an explicit
+  spec change — user decision pending (see milestone-1 report section 11).
+  Milestone 2 is safe to start after the user's answers to the deletion and
+  worker decisions.
 - Commands and results: `wc -l` design spec 519; `grep` evidence for error
   code 46 in `errors.go:54` and `sdk_error.rs:58`; sidecar/spec magic and slot
   layout at `sidecar.go:11,15,394-396` vs `binary-format-v4.md:2104,2130-2138`;
