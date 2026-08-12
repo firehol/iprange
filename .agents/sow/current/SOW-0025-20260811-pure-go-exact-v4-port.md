@@ -18,8 +18,8 @@ copies share one private close state, DirectSemantic registry 1/2/3,
 structured no-threat absence result (MembershipView, bool, error) pinned
 by the new no-threat corpus fixture, error codes and Cardinality129
 centralized to the single internal/format authorities, closure records
-repaired. Repository counts at close: production 4,794 raw lines / tests
-4,662 raw lines. Milestone 2 (writer) may start, scoped exactly to the
+repaired. Repository counts at close: production 4,797 raw lines / tests
+4,676 raw lines. Milestone 2 (writer) may start, scoped exactly to the
 approved milestone plan (one physical writer, allocation/retirement/commit,
 direct/membership/structured construction, Go-produced corpus, Rust
 cross-open); sidecars, live coordination, and publication remain Milestone 4.
@@ -503,8 +503,9 @@ Resolved decisions (2026-08-11, Milestone 0 closure):
 The user adopted the external re-review's decisions after the reopening:
 
 - Decision 1 (deletion set) = A with correction: the obsolete Go tree
-  (internal/exactv4: 100 tracked files + untracked exactv4.test + empty
-  directory) is removed in the FINAL Milestone 1 commit, not the first
+  (internal/exactv4: 105 tracked files - 47 production + 58 test, the
+  recorded "100" was stale - + untracked exactv4.test + empty directory)
+  is removed in the FINAL Milestone 1 commit, not the first
   Milestone 2 writer commit. Before removal the verified scalar types must
   be relocated out of internal/exactv4 (v4/go/types.go is the only new-tree
   importer). .reasonix/ is preserved. Git history already preserves the
@@ -570,8 +571,8 @@ The user adopted the external re-review's decisions after the reopening:
 - Structure-kind rule: direct/membership + nonzero structure kind ->
   FormatInvalid; structured + unknown nonzero kind -> UnsupportedStructure;
   pinned by reader and format tests (fails on the pre-fix tree).
-- Counts at the time are recorded in the close-out entry (production 4,794
-  raw / tests 4,662 raw at milestone-1 close after the meta-precedence
+- Counts at the time are recorded in the close-out entry (production 4,797
+  raw / tests 4,676 raw at milestone-1 close after the meta-precedence
   parity fix, the sole-meta kind regression test, the final-review
   regression guards, and the public tag/metadata-limit API completion).
   Gates: go test ./... (4 packages) incl -race, vet, gofmt, import graph,

@@ -93,8 +93,9 @@ type shared struct {
 //
 // Reader-level hot paths (Info, direct lookups and scans, cardinality) are
 // zero-allocation and take no atomics; feed lookup adds exactly one
-// returned string copy and metadata decode allocates its decompressed
-// buffer, both bounded caller-visible values per the format contract; all
+// returned string copy and metadata decode allocates its compressed and
+// decompressed buffers, all bounded caller-visible values per the format
+// contract; all
 // reader-level operations report WrongState when the reader is closed.
 // Callers must not race Close
 // with reader work. A reader with live pins cannot close: Close returns

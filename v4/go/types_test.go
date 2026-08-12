@@ -73,8 +73,8 @@ func TestPublicSemanticFoundation(t *testing.T) {
 	if count != FullIPv6Space() {
 		t.Fatalf("full IPv6 cardinality = %#v", count)
 	}
-	if ErrorInvalidArgument != 1 || ErrorCleanupInProgress != 64 {
-		t.Fatalf("error registry endpoints = %d/%d", ErrorInvalidArgument, ErrorCleanupInProgress)
+	if ErrorInvalidArgument != 1 || ErrorCleanupInProgress != 64 || ErrorStructureIdExhausted != 69 {
+		t.Fatalf("error registry endpoints = %d/%d/%d", ErrorInvalidArgument, ErrorCleanupInProgress, ErrorStructureIdExhausted)
 	}
 	// Engine-defined semantic tags and the 20 MiB metadata bound share the
 	// Rust contract registries (contract.rs ValueTag::FIRST_SEEN/LAST_SEEN,

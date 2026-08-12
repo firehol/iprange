@@ -288,6 +288,20 @@ func TestConformanceRustFixtures(t *testing.T) {
 			if info.ValueTag != wantTag {
 				t.Errorf("value tag %q want %q", info.ValueTag.Wire(), wantTag.Wire())
 			}
+			// DirectSemantic classification per fixture kind and tag
+			// (verify.rs semantic mapping; only direct databases carry a
+			// tag-derived semantic).
+			wantSem, wantOK := DirectSemanticGeneric, tc.Kind == "direct"
+			if tc.Tag == "first_seen" {
+				wantSem = DirectSemanticFirstSeen
+			}
+			if tc.Tag == "last_seen" {
+				wantSem = DirectSemanticLastSeen
+			}
+			gotSem, gotOK := info.DirectSemantic()
+			if gotSem != wantSem || gotOK != wantOK {
+				t.Errorf("direct semantic %d/%v want %d/%v", gotSem, gotOK, wantSem, wantOK)
+			}
 			if info.MetaSelection != MetaSelectionProvenCurrent {
 				t.Errorf("meta selection %v want ProvenCurrent", info.MetaSelection)
 			}

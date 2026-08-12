@@ -1,6 +1,8 @@
 // Package iprangedb implements the exact unsigned Phase-1 iprange v4
-// database reader: a portable, mmap-only, zero-allocation immutable reader
-// that cross-opens the shared v4 conformance corpus.
+// database reader: a portable, mmap-only immutable reader with
+// zero-allocation hot paths that cross-opens the shared v4 conformance
+// corpus (feed lookup returns one copied string and metadata decode
+// allocates its buffers; see reader_public.go).
 //
 // The scalar types in this file are the relocated, verified public
 // foundation (previously aliased from the obsolete milestone-0 tree):
@@ -117,7 +119,7 @@ func (t ValueTag) Bytes() []byte {
 // ValueTagFirstSeen and ValueTagLastSeen are the engine-defined semantic
 // tags (binary-format-v4.md section 4; Rust contract ValueTag::FIRST_SEEN
 // and ValueTag::LAST_SEEN). Any other tag is caller-defined via
-// NewValueTag.
+// NewValueTag. Never mutate these values: they back DirectSemantic.
 var (
 	ValueTagFirstSeen = ValueTag{wire: [16]byte{'f', 'i', 'r', 's', 't', '_', 's', 'e', 'e', 'n'}}
 	ValueTagLastSeen  = ValueTag{wire: [16]byte{'l', 'a', 's', 't', '_', 's', 'e', 'e', 'n'}}
