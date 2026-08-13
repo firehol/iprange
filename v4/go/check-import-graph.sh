@@ -2493,6 +2493,183 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta97.orig" internal/reader/metadata.go
 
+	# --- 98: range over a struct-field chan of func-file -------------------
+	# for got := range cb.ch where the field holds chan fileFn: the
+	# loop variable is a func-file and calling it yields the file.
+	cat > internal/reader/gatemut_rangefieldchan.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnP func() *os.File
+
+type chBoxR98 struct{ ch chan fileFnP }
+
+var cbr98 chBoxR98
+
+func init() {
+	cbr98.ch = make(chan fileFnP)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rangefieldchan.go
+	cp internal/reader/metadata.go "$self_tree/meta98.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfor got98 := range cbr98.ch {"; print "\t\tzr = got98()"; print "\t}"; next } print }' internal/reader/metadata.go > "$self_tree/meta98.new" && mv "$self_tree/meta98.new" internal/reader/metadata.go
+	if grep -Fq 'for got98 := range cbr98.ch' internal/reader/metadata.go; then
+		run_mut "range over a field chan of func-file"
+	else
+		echo "self-test ERROR: form 98 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	cp "$self_tree/meta98.orig" internal/reader/metadata.go
+
+	# --- 99: receive from a struct-field chan of files ---------------------
+	cat > internal/reader/gatemut_recvfieldchan.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type chFileR99 struct{ ch chan *os.File }
+
+var cfr99 chFileR99
+
+func init() {
+	cfr99.ch = make(chan *os.File)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_recvfieldchan.go
+	cp internal/reader/metadata.go "$self_tree/meta99.orig"
+	INS='zr = <-cfr99.ch'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta99.new" && mv "$self_tree/meta99.new" internal/reader/metadata.go
+	if grep -Fq 'zr = <-cfr99.ch' internal/reader/metadata.go; then
+		run_mut "receive from a field chan of files"
+	else
+		echo "self-test ERROR: form 99 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta99.orig" internal/reader/metadata.go
+
+	# --- 100: method value sent into a field chan from another function ----
+	cat > internal/reader/gatemut_sendfieldchan.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gm100 struct{}
+
+var gs100 gm100
+
+func (g *gm100) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type chBox100 struct{ ch chan func() io.ReadCloser }
+
+var cbs100 chBox100
+
+func init() {
+	cbs100.ch = make(chan func() io.ReadCloser)
+}
+
+func fill100() {
+	cbs100.ch <- gs100.get
+}
+MUTEOF
+	add_mut internal/reader/gatemut_sendfieldchan.go
+	cp internal/reader/metadata.go "$self_tree/meta100.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tgot100 := <-cbs100.ch"; print "\tzr = got100()"; next } print }' internal/reader/metadata.go > "$self_tree/meta100.new" && mv "$self_tree/meta100.new" internal/reader/metadata.go
+	if grep -Fq 'got100 := <-cbs100.ch' internal/reader/metadata.go; then
+		run_mut "method value sent into a field chan"
+	else
+		echo "self-test ERROR: form 100 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	cp "$self_tree/meta100.orig" internal/reader/metadata.go
+
+	# --- 101: benign range over a field chan must pass ----------------------
+	cat > internal/reader/gatemut_benignrangefieldchan.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw101 struct{ *bytes.Reader }
+
+func (w *rcw101) Close() error { return nil }
+
+type chBoxB101 struct{ ch chan func() io.ReadCloser }
+
+var cbb101 chBoxB101
+
+func init() {
+	cbb101.ch = make(chan func() io.ReadCloser)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benignrangefieldchan.go
+	cp internal/reader/metadata.go "$self_tree/meta101.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfor got101 := range cbb101.ch {"; print "\t\tzr = got101()"; print "\t}"; next } print }' internal/reader/metadata.go > "$self_tree/meta101.new" && mv "$self_tree/meta101.new" internal/reader/metadata.go
+	if grep -Fq 'for got101 := range cbb101.ch' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign range over a field chan passes the gate"
+		else
+			echo "self-test MISS: benign range over a field chan failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 101 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta101.orig" internal/reader/metadata.go
+
+	# --- 102: benign receive from a field chan must pass --------------------
+	cat > internal/reader/gatemut_benignrecvfieldchan.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw102 struct{ *bytes.Reader }
+
+func (w *rcw102) Close() error { return nil }
+
+type chBoxC102 struct{ ch chan io.ReadCloser }
+
+var cbc102 chBoxC102
+
+func init() {
+	cbc102.ch = make(chan io.ReadCloser)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benignrecvfieldchan.go
+	cp internal/reader/metadata.go "$self_tree/meta102.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = <-cbc102.ch"; next } print }' internal/reader/metadata.go > "$self_tree/meta102.new" && mv "$self_tree/meta102.new" internal/reader/metadata.go
+	if grep -Fq 'zr = <-cbc102.ch' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign receive from a field chan passes the gate"
+		else
+			echo "self-test MISS: benign receive from a field chan failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 102 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta102.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -2545,7 +2722,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 84 mutation forms rejected)"
+	echo "import-graph self-test passed (all 87 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
