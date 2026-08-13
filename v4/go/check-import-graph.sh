@@ -2670,6 +2670,196 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta102.orig" internal/reader/metadata.go
 
+	# --- 103: map field element holding a file-producing closure ----------
+	# fm.m["k"] with m map[string]func() io.ReadCloser filled by a
+	# closure returning os.Pipe: the element read and call must be a
+	# producer even though the declared element type hides the file.
+	cat > internal/reader/gatemut_mapfield.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type fnMap103 struct{ m map[string]func() io.ReadCloser }
+
+var fm103 fnMap103
+
+func init() {
+	fm103.m = map[string]func() io.ReadCloser{
+		"k": func() io.ReadCloser {
+			w, _, _ := os.Pipe()
+			return w
+		},
+	}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_mapfield.go
+	cp internal/reader/metadata.go "$self_tree/meta103.orig"
+	INS='zr = fm103.m["k"]()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta103.new" && mv "$self_tree/meta103.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fm103.m["k"]()' internal/reader/metadata.go; then
+		run_mut "map field element holding a file closure"
+	else
+		echo "self-test ERROR: form 103 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta103.orig" internal/reader/metadata.go
+
+	# --- 104: slice field element holding a file-producing closure --------
+	cat > internal/reader/gatemut_slicefield.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type fnSlice104 struct{ s []func() io.ReadCloser }
+
+var fs104 fnSlice104
+
+func init() {
+	fs104.s = []func() io.ReadCloser{
+		func() io.ReadCloser {
+			w, _, _ := os.Pipe()
+			return w
+		},
+	}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_slicefield.go
+	cp internal/reader/metadata.go "$self_tree/meta104.orig"
+	INS='zr = fs104.s[0]()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta104.new" && mv "$self_tree/meta104.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fs104.s[0]()' internal/reader/metadata.go; then
+		run_mut "slice field element holding a file closure"
+	else
+		echo "self-test ERROR: form 104 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta104.orig" internal/reader/metadata.go
+
+	# --- 105: method value stored in a map field ---------------------------
+	cat > internal/reader/gatemut_mapmethodval.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gm105 struct{}
+
+var gm105v gm105
+
+func (g *gm105) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type fnMap105 struct{ m map[string]func() io.ReadCloser }
+
+var fg105 fnMap105
+
+func init() {
+	fg105.m = map[string]func() io.ReadCloser{}
+	fg105.m["k"] = gm105v.get
+}
+MUTEOF
+	add_mut internal/reader/gatemut_mapmethodval.go
+	cp internal/reader/metadata.go "$self_tree/meta105.orig"
+	INS='zr = fg105.m["k"]()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta105.new" && mv "$self_tree/meta105.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fg105.m["k"]()' internal/reader/metadata.go; then
+		run_mut "method value stored in a map field"
+	else
+		echo "self-test ERROR: form 105 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta105.orig" internal/reader/metadata.go
+
+	# --- 106: declared map element shape of a defined func-file type -------
+	cat > internal/reader/gatemut_declaredmap.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnR func() *os.File
+
+type fnMap106 struct{ m map[string]fileFnR }
+
+var fm106 fnMap106
+
+func init() {
+	fm106.m = map[string]fileFnR{}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_declaredmap.go
+	cp internal/reader/metadata.go "$self_tree/meta106.orig"
+	INS='zr = fm106.m["k"]()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta106.new" && mv "$self_tree/meta106.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fm106.m["k"]()' internal/reader/metadata.go; then
+		run_mut "declared map element of a func-file type"
+	else
+		echo "self-test ERROR: form 106 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta106.orig" internal/reader/metadata.go
+
+	# --- 107: benign map field must pass ------------------------------------
+	cat > internal/reader/gatemut_benignmapfield.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw107 struct{ *bytes.Reader }
+
+func (w *rcw107) Close() error { return nil }
+
+type fnMapB107 struct{ m map[string]func() io.ReadCloser }
+
+var fmb107 fnMapB107
+
+func init() {
+	fmb107.m = map[string]func() io.ReadCloser{
+		"k": func() io.ReadCloser { return &rcw107{bytes.NewReader(nil)} },
+	}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benignmapfield.go
+	cp internal/reader/metadata.go "$self_tree/meta107.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = fmb107.m[\"k\"]()"; next } print }' internal/reader/metadata.go > "$self_tree/meta107.new" && mv "$self_tree/meta107.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fmb107.m["k"]()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign map field passes the gate"
+		else
+			echo "self-test MISS: benign map field failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 107 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta107.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -2722,7 +2912,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 87 mutation forms rejected)"
+	echo "import-graph self-test passed (all 91 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
