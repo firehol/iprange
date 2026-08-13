@@ -245,10 +245,6 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 			if err != nil {
 				return MembershipView{}, err
 			}
-			work.LeafValidation(1)
-			if err != nil {
-				return MembershipView{}, err
-			}
 			if !found {
 				return MembershipView{}, corrupt("range names an absent membership ID")
 			}
@@ -335,6 +331,7 @@ func membershipLeafFind(sl format.SlottedPage, id uint32, idLimit, feedIndexLimi
 	if key != id {
 		return 0, format.MembershipIDLeaf{}, false, nil // clean miss, no decode
 	}
+	work.LeafValidation(1)
 	rec, err := format.DecodeMembershipIDLeaf(b)
 	if err != nil {
 		return 0, format.MembershipIDLeaf{}, false, err

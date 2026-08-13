@@ -471,6 +471,33 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					pf.analyzeStmts(st, cc.Body, fs)
 				}
 			}
+		case *ast.DeferStmt:
+			pf.evalExpr(st, v.Call)
+		case *ast.GoStmt:
+			pf.evalExpr(st, v.Call)
+		case *ast.SelectStmt:
+			for _, c := range v.Body.List {
+				cc, ok := c.(*ast.CommClause)
+				if !ok {
+					continue
+				}
+				switch comm := cc.Comm.(type) {
+				case *ast.SendStmt:
+					pf.evalExpr(st, comm.Chan)
+					pf.evalExpr(st, comm.Value)
+				case *ast.AssignStmt:
+					for _, rhs := range comm.Rhs {
+						pf.evalExpr(st, rhs)
+					}
+				case *ast.ExprStmt:
+					pf.evalExpr(st, comm.X)
+				}
+				pf.analyzeStmts(st, cc.Body, fs)
+			}
+		case *ast.LabeledStmt:
+			pf.analyzeStmts(st, []ast.Stmt{v.Stmt}, fs)
+		case *ast.BlockStmt:
+			pf.analyzeStmts(st, v.List, fs)
 		}
 	}
 }
@@ -568,6 +595,12 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 		out = pf.evalComposite(st, v)
 	case *ast.CallExpr:
 		out = pf.evalCall(st, v)
+	case *ast.FuncLit:
+		// A closure in expression position: its body may receive tainted
+		// captured variables, so it is analyzed in the enclosing state.
+		// The literal's own parameters are bound at call time (direct
+		// calls) or remain unbound when the closure is passed on.
+		pf.analyzeFuncLitBody(st, v)
 	case *ast.UnaryExpr:
 		switch v.Op {
 		case token.AND, token.MUL:
@@ -708,6 +741,13 @@ const formatImportPath = moduleImportPrefix + "/internal/format"
 
 // evalCall resolves callee summaries and mints.
 func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
+	// Direct call of a function literal: bind the literal's parameters to
+	// the evaluated argument taints and analyze the body in the enclosing
+	// variable state, then carry the literal's return taint as the call
+	// result (a closure returning a mapped view or an owned copy of it).
+	if lit, ok := unparen(call.Fun).(*ast.FuncLit); ok {
+		return pf.analyzeFuncLitCall(st, lit, call.Args)
+	}
 	obj := calleeObject(pf.pc, call)
 	fn, ok := obj.(*types.Func)
 	if !ok || fn.Pkg() == nil {
@@ -793,6 +833,56 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		return pageValue{tainted: true, maxLen: maxUnknown}
 	}
 	return pageValue{}
+}
+
+// analyzeFuncLitBody analyzes a closure body in the current statement
+// state. The closure shares the enclosing variable scope, so captured
+// variables keep their taint; parameters are left unbound (they are
+// assigned at direct-call sites).
+func (pf *pageFlow) analyzeFuncLitBody(st *stmtState, lit *ast.FuncLit) {
+	fs := &funcSummary{}
+	pf.analyzeStmts(st, lit.Body.List, fs)
+}
+
+// analyzeFuncLitCall binds a closure's parameters to the call-site
+// argument taints, analyzes the body, and returns the closure's first
+// result taint as the call result.
+func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, args []ast.Expr) pageValue {
+	fs := &funcSummary{}
+	if lit.Type.Results != nil {
+		for range lit.Type.Results.List {
+			fs.results = append(fs.results, fieldTaint{})
+		}
+	}
+	if lit.Type.Params != nil {
+		idx := 0
+		for _, f := range lit.Type.Params.List {
+			for _, name := range f.Names {
+				obj := pf.pc.info.ObjectOf(name)
+				if idx < len(args) {
+					pv := pf.evalExpr(st, args[idx])
+					if pv.tainted {
+						st.stmtVars[obj] = pv
+					} else {
+						delete(st.stmtVars, obj)
+					}
+				}
+				idx++
+			}
+		}
+	}
+	pf.analyzeStmts(st, lit.Body.List, fs)
+	if lit.Type.Params != nil {
+		for _, f := range lit.Type.Params.List {
+			for _, name := range f.Names {
+				delete(st.stmtVars, pf.pc.info.ObjectOf(name))
+			}
+		}
+	}
+	if len(fs.results) == 0 || !fs.results[0].tainted {
+		return pageValue{}
+	}
+	return pageValue{tainted: true, maxLen: maxUnknown}
 }
 
 // argFlowOf binds the value taint and struct-field taints of one call

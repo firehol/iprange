@@ -103,12 +103,13 @@ func buildContext(cfg osConfig) *build.Context {
 
 // packageCheck is the typed result of one package under one OS config.
 type packageCheck struct {
-	pkg    *types.Package
-	info   *types.Info
-	fset   *token.FileSet
-	loader *loader
-	files  []*parsedFile
-	pf     *pageFlow
+	pkg      *types.Package
+	info     *types.Info
+	fset     *token.FileSet
+	loader   *loader
+	files    []*parsedFile
+	pf       *pageFlow
+	varInits map[*types.Var]ast.Expr
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -135,7 +136,29 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	if err != nil {
 		return nil, err
 	}
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files}, nil
+	// Package-level variable initializers keyed by their resolved object.
+	// Function-typed variables are approved call targets only when their
+	// initializer provably binds a function whose body is scanned here.
+	varInits := map[*types.Var]ast.Expr{}
+	for _, f := range asts {
+		ast.Inspect(f, func(n ast.Node) bool {
+			vs, ok := n.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					break
+				}
+				obj, ok := info.Defs[name].(*types.Var)
+				if ok && obj.Parent() == pkg.Scope() {
+					varInits[obj] = vs.Values[i]
+				}
+			}
+			return true
+		})
+	}
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -354,14 +377,28 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 	switch f := unparen(fun).(type) {
 	case *ast.Ident:
 		obj := w.pc.info.Uses[f]
-		if fn, ok := obj.(*types.Func); ok {
-			if pkg := fn.Pkg(); pkg != nil {
+		switch o := obj.(type) {
+		case *types.Func:
+			if pkg := o.Pkg(); pkg != nil {
 				return pkg.Path() == w.pc.pkg.Path()
 			}
+			return false
+		case *types.Builtin:
+			// Builtins do not move a mapped view into owned memory by
+			// themselves; the copy/append/conversion page sinks are
+			// checked separately.
+			return true
+		case *types.Var:
+			// A function-typed variable can hold a callee whose body is
+			// not part of the scanned source (a stdlib function, a bound
+			// method value, a func parameter). Approving it would let a
+			// full mapped page or a file descriptor flow into owned
+			// memory through an indirection the source scan cannot
+			// follow, so such calls are transfers unless the variable
+			// provably binds a scanned function.
+			return w.approvedFuncVar(o, 0)
 		}
-		// builtins and same-package values: copy/append are handled by
-		// the page sinks, conversions by the type rules.
-		return true
+		return false
 	case *ast.SelectorExpr:
 		obj := w.pc.info.Uses[f.Sel]
 		fn, ok := obj.(*types.Func)
@@ -398,6 +435,52 @@ func (w *fileRules) visit(n ast.Node) bool {
 		}
 	}
 	return true
+}
+
+// approvedFuncVar approves a call through a function-typed variable only
+// when the variable's package-level initializer provably names a function
+// whose body is scanned in this tree: a func literal, a direct reference
+// to an approved function, or a bounded chain of variable references
+// ending in one. Local variables, parameters, and values bound to
+// unlisted callees (stdlib functions, method values) are never approved.
+func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
+	if v == nil || depth > 2 {
+		return false
+	}
+	init, ok := w.pc.varInits[v]
+	if !ok {
+		return false
+	}
+	switch i := unparen(init).(type) {
+	case *ast.FuncLit:
+		return true
+	case *ast.Ident:
+		obj := w.pc.info.Uses[i]
+		if fn, ok := obj.(*types.Func); ok {
+			return w.approvedFuncPkg(fn)
+		}
+		if ov, ok := obj.(*types.Var); ok {
+			return w.approvedFuncVar(ov, depth+1)
+		}
+		return false
+	case *ast.SelectorExpr:
+		fn, ok := w.pc.info.Uses[i.Sel].(*types.Func)
+		if !ok {
+			return false
+		}
+		return w.approvedFuncPkg(fn)
+	}
+	return false
+}
+
+// approvedFuncPkg applies the callee package policy: the current package,
+// module-internal packages, and the pinned x/sys syscall surface.
+func (w *fileRules) approvedFuncPkg(fn *types.Func) bool {
+	if pkg := fn.Pkg(); pkg != nil {
+		p := pkg.Path()
+		return p == w.pc.pkg.Path() || strings.HasPrefix(p, moduleInternalPrefix) || p == xsysImport
+	}
+	return false
 }
 
 // methodReceiverBearsFile reports whether the resolved method's DECLARED
