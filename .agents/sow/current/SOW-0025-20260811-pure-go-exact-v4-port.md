@@ -136,9 +136,10 @@ the defined-func-type family and its method/nested-callee variants
 were closed (self-test forms 60-67), the round-5 struct-field/
 chan-of-func/asserted-func/os-std-handle family (forms 68-72), and
 the round-6 nested-field/named-helper/chan-pass family, the
-named-method extension, and the nested-method-receiver extension
-(forms 73-83); the durable rejection set is
-now seventy-four mutation forms. The records
+named-method extension, the nested-method-receiver extension, the
+method-value family, and the generic pass-through family
+(forms 73-91); the durable rejection set is
+now eighty mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -418,8 +419,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   the struct-field-func/chan-of-func/asserted-func/os-std-handle
   family (forms 68-72), the nested-field/named-helper/chan-pass
   family (forms 73-77), the named-method extension (forms
-  78-81), and the nested-method-receiver extension (forms 82-83);
-  the self-test now durably rejects seventy-four mutation forms. The
+  78-81), the nested-method-receiver extension (forms 82-83),
+  the method-value family (forms 84-87), and the generic
+  pass-through family (forms 88-89);
+  the self-test now durably rejects eighty mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1544,7 +1547,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 74-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 80-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1993,7 +1996,21 @@ execution record; the closing result is appended there when it completes.
   plain identifier; the same fix applies to the chan-of-func caller
   (callResultsChanFuncFile). Form 82 pins the escape; form 83 pins
   the benign nested-method control.
-- Gates at HEAD 8696af3 + local fix: go test ./... incl -race, go vet,
-  gofmt, import graph with the 74-form self-test, nine cross-compiles,
+- Ampere round 8 found two more producer families (HEAD 96f0515):
+  method values are never classified (a method value bound to a
+  variable, returned through an interface-typed helper, bound from a
+  nested receiver chain, or sent through a package-level channel), and
+  generic type-parameter pass-through erases the file taint
+  (idf[T any](f T) T instantiated with *os.File). Fixed with method
+  resolution in classify (declared *os.File results, retMethods
+  taint, defined func-type results), a retFuncFiles/retMethodFiles
+  body-scan registry, double-call resolution on func-file variables,
+  package-level channel taint propagation, and type-parameter result
+  mapping for generic calls. Forms 84-89 pin the six escapes; forms
+  90-91 pin the benign method-value and benign generic controls.
+  Residual documented: third-party exported *os.File and cross-file
+  local-channel flows remain visible only through declarative types.
+- Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
+  import graph with the 80-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).

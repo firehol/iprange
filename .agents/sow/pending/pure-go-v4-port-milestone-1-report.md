@@ -79,9 +79,10 @@ and type-switch-bound classes (forms 54-59), plus the defined-func-type
 family, the method-receiver boundary, the nested-callee double-call
 family, the struct-field/chan-of-func/asserted-func/os-std-handle
 family, the nested-field/named-helper/chan-pass family, the
-named-method extension, and the nested-method-receiver extension
-(forms 60-83); the self-test now durably
-rejects seventy-four mutation forms (details in the
+named-method extension, the nested-method-receiver extension, the
+method-value family, and the generic pass-through family
+(forms 60-91); the self-test now durably
+rejects eighty mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1065,9 +1066,11 @@ cases (forms 60-63), the method-receiver boundary, and the
 nested-callee double-call shapes (forms 64-67), the round-5
 struct-field/chan-of-func/asserted-func/os-std-handle family (forms
 68-72), the round-6 nested-field/named-helper/chan-pass family
-(forms 73-77), the named-method extension (forms 78-81), and the
-nested-method-receiver extension (forms 82-83); the
-self-test now durably rejects seventy-four mutation forms. Decision 5A remains the single open item and
+(forms 73-77), the named-method extension (forms 78-81), the
+nested-method-receiver extension (forms 82-83), the method-value
+family (forms 84-87), and the generic pass-through family
+(forms 88-89); the
+self-test now durably rejects eighty mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
