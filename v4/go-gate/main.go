@@ -1213,7 +1213,12 @@ func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 		}
 		for _, emb := range info.embedded[base] {
 			embBase := resolveStructName(emb, info)
-			args := parseBracketArgs(emb)
+			// The embedded text may name a defined type over an
+			// instantiated generic interface (type D IBaseG[func() *os.File];
+			// type IEmb interface{ D }): the brackets live in the defined
+			// chain, not in the spelling, so resolve the text before
+			// extracting the type arguments.
+			args := parseBracketArgs(resolveTaintType(emb, info))
 			if mm, r := walk(embBase); r {
 				return mm, r
 			} else if len(mm) > 0 {
@@ -2323,7 +2328,7 @@ func genericMethodResults(sel *ast.SelectorExpr, st *taints, info pkgInfo) ([]st
 	for _, emb := range info.embedded[base] {
 		embBase := resolveStructName(emb, info)
 		if tps, ok2 := info.recvTypeParams[embBase+"."+sel.Sel.Name]; ok2 {
-			args := parseBracketArgs(emb)
+			args := parseBracketArgs(resolveTaintType(emb, info))
 			if len(args) < len(tps) {
 				continue
 			}
