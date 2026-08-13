@@ -128,7 +128,14 @@ method expressions, value-bound cross-package producer vars, and
 interface-conversion launders; round-50 forms 267-270 pin generic
 interface erasure, composite-literal field launders,
 instantiated-generic-wrapper method expressions, and deep
-embedding chains; details in the
+embedding chains (forms 267-268 were converted to exemption-shape
+metadata.go appends in round 51 because their separate-file
+launders were rejected unconditionally and never exercised the
+taint; forms 269-270 were genuine); round-51 forms 271-277 pin the
+renamed-qualifier and other-stdlib interface-erasure class, the
+slice/array-of-type-parameter class, the positional
+composite-literal field-launder class, the chan-send class, and
+the positional os.Root opener class; details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -187,7 +194,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 220/220 mutation forms rejected (plus 50 benign controls)
+GOOS/GOARCH pairs): 227/227 mutation forms rejected (plus 50 benign controls)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor

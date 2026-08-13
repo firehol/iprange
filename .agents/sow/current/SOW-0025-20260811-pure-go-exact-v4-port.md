@@ -173,7 +173,19 @@ value-bound cross-package producer-var, and
 interface-conversion-launder class, forms 261-266;
 round-50 closed the generic interface-erasure, composite-literal
 field-launder, generic-wrapper method-expression, and deep
-embedding-chain class, forms 267-270);
+embedding-chain class, forms 267-270, note that forms 267-268 were
+initially vacuous (separate-file launders rejected by the
+unconditional selector ban) and were converted to exemption-shape
+appends in round 51);
+round-51 closed the file-bound generic result-erasure class
+(all declared result positions of a generic call with a file-typed
+argument binding a type parameter stay tainted: renamed-qualifier
+interfaces, other-stdlib interfaces, slice/array/map/chan/func
+wrappers) and the positional composite-literal field-launder class
+(unkeyed elements resolve through the struct's declared field
+order, including an os.Root opener hidden behind a positional
+field), forms 271-277 plus the converted 267-268, raising the set
+to two hundred twenty-seven mutation forms);
 round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -2110,6 +2122,58 @@ Use these sections in this order:
   Decision 5A remains open for user ratification; Milestone 2 remains
   blocked until the final review passes.
 
+### 2026-08-13 - round-51 gate re-review closed file-bound generic result erasure and positional composite-literal field launders (HEAD 875b19205fb3)
+
+- The round-51 adversarial gate hunt (six narrow reviewers:
+  codecs, membership/zero-alloc, mapping/pin/gate, metadata/bootstrap,
+  records, gate hunting) failed with seven live escapes across three
+  root causes in the content-transfer scanner:
+- P0 - spelling-based interface-erased results: generic interface
+  results were recognized only under the literal `io` qualifier, so a
+  renamed import (`import r "io"`; `func gateHuntWrapA[T r.Reader](v T)
+  r.Reader { return v }`), another stdlib interface (`fs.File`), and a
+  chan send of the erased call value all flowed a file into the
+  exempted inflater shape (live, gate exit 0; probes A/B/F).
+- P0 - container-of-type-parameter results: `[]T` and `[2]T` results
+  never resolved to file taint, so `files[0]`/`arr[0]` read a clean
+  value (live, gate exit 0; probes C/E). Maps and func wrappers share
+  the miss.
+- P0 - positional (unkeyed) composite-literal elements: the registry
+  skipped non-keyed elements, hiding a file field (`s := gateHuntS{f}`;
+  `zr := s.r`) and an os.Root opener
+  (`gateHuntRootIface{root}`; `zr0.Open(name)`) (live, gate exit 0;
+  probes D/G). Keyed twins were already pinned.
+- Vacuous-form discovery: forms 267-268 as separate files were
+  rejected by the unconditional `.ReadFull` selector ban regardless of
+  taint, so they never exercised the exemption-shape escape; the
+  pre-fix scanner passes the full 220-form self-test at
+  zero MISSes. Forms 269-270 (method-expression classes) were genuine.
+- Fixed at HEAD 875b19205fb3:
+  `genericParamFilePositions` now taints every declared result
+  position once a file-typed argument binds a type parameter (the
+  generic body is opaque; exact parameter, interface spellings of any
+  qualifier, containers, channels, and func wrappers all keep the
+  taint); `registerCompositeFieldTaints` resolves unkeyed elements
+  through the struct's declared field order (embedded fields by type
+  text), mirrors the order cross-package like the struct registry, and
+  records the element's classified kind; self-test machinery gained
+  metadata.go save/restore appends (`append_mut`) and import-block
+  injection (`inject_import`).
+- Pinned as durable exemption-shape appends: forms 267-268 converted
+  and 271-277 added (renamed-io interface result, io/fs interface
+  result, slice-of-T, positional field, array-of-T, chan send of an
+  erased value, positional os.Root opener), raising the rejection set
+  to two hundred twenty-seven mutation forms. Vacuity proof: the
+  round-50 scanner misses exactly the seven new forms (and the
+  converted 267-268 against the pre-round-50 scanner), the fixed
+  scanner rejects all 227. Gates: go test ./... incl -race, go vet,
+  gofmt, import graph (self-test, all 227 forms rejected), the real
+  tree gate, CGO_ENABLED=0 build and test, ten cross-compiles across
+  the per-target listing matrix, SOW audit — all green. Counts
+  unchanged at this commit: production 4,792 raw lines / tests 4,877
+  raw lines. Decision 5A remains open for user ratification; Milestone
+  2 remains blocked until the final review passes.
+
 ## Validation
 
 Acceptance criteria evidence:
@@ -2180,6 +2244,21 @@ Reviewer findings:
   expression, and the deep embedding-chain method expression
   (forms 267-270, two hundred twenty forms); re-verification at the
   round-50 HEAD passed the full replay and gate suites.
+  The round-51 gate re-review then failed with seven live escapes
+  across three root causes: interface-erased generic results were
+  recognized only under the literal io qualifier (renamed imports,
+  io/fs interfaces, and chan sends of the erased value escaped),
+  container-of-type-parameter results ([]T, [2]T) never resolved to
+  file taint, and positional (unkeyed) composite-literal elements
+  registered no field taint (a plain file field and an os.Root
+  opener both laundered); closed at 875b192 by tainting every
+  declared result position of a file-bound generic call and by
+  resolving unkeyed literal elements through the struct's declared
+  field order, pinned as forms 271-277 and by converting the vacuous
+  separate-file forms 267-268 to exemption-shape metadata.go appends
+  (forms 269-270 were already genuine); the pre-fix scanner misses
+  exactly the seven new forms, the fixed scanner rejects all two
+  hundred twenty-seven.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
