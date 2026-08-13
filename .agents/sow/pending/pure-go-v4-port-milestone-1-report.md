@@ -93,8 +93,9 @@ class (forms 127-132), the range-literal-receiver
 class (forms 134-135), the bound-receiver
 class (forms 137-138), the call-result-binding
 class (forms 140-143), and the explicit-instantiation
-and interface-binding class (forms 145-148); the
-self-test now durably rejects one hundred twenty-three
+and interface-binding class (forms 145-148), and the
+generic-receiver-binding class (forms 151-156); the
+self-test now durably rejects one hundred twenty-nine
 mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
@@ -1095,8 +1096,9 @@ class (forms 98-100), the container-element class
 (forms 134-135), the bound-receiver class
 (forms 137-138), the call-result-binding class
 (forms 140-143), and the explicit-instantiation
-and interface-binding class (forms 145-148); the
-self-test now durably rejects one hundred twenty-three mutation forms. Decision 5A remains the single open item and
+and interface-binding class (forms 145-148), and the
+generic-receiver-binding class (forms 151-156); the
+self-test now durably rejects one hundred twenty-nine mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

@@ -150,8 +150,9 @@ class (forms 127-132), the range-literal-receiver
 class (forms 134-135), the bound-receiver
 class (forms 137-138), the call-result-binding
 class (forms 140-143), the explicit-instantiation and
-interface-binding class (forms 145-148); the durable
-rejection set is now one hundred twenty-three mutation
+interface-binding class (forms 145-148), the
+generic-receiver-binding class (forms 151-156); the durable
+rejection set is now one hundred twenty-nine mutation
 forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
@@ -448,8 +449,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   class (forms 134-135), the bound-receiver
   class (forms 137-138), the call-result-binding
   class (forms 140-143), the explicit-instantiation and
-  interface-binding class (forms 145-148);
-  the self-test now durably rejects one hundred twenty-three mutation forms. The
+  interface-binding class (forms 145-148), the
+  generic-receiver-binding class (forms 151-156);
+  the self-test now durably rejects one hundred twenty-nine mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1574,7 +1576,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 123-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 129-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2165,7 +2167,20 @@ execution record; the closing result is appended there when it completes.
   union over signature-identical implementations, and a typeOfBase
   UnaryExpr ARROW case. Forms 145-148 pin the four escapes; forms
   149-150 pin the benign generic and interface-default controls.
+- Ampere round 21 found the generic receiver-binding class (HEAD
+  5f18d4f): generic-receiver method results never substituted
+  receiver type arguments, explicit-instantiation calls
+  (mkT[*os.File]()) and their direct method flows were invisible,
+  and argument-inferred generic struct bindings
+  (mkT2(&gsG{}).get()) bound no file taint. Fixed with a
+  recvTypeParams registry feeding genericMethodResults, a unified
+  genericCallResults helper (explicit and inferred via
+  inferTypeArgs), a typeOfBase unary-& case for generic literal
+  receivers, and generic-first wiring in producerCall/classify/
+  resolveStruct/classifyStruct/applyLHS/applyLHSMulti. Forms
+  151-156 pin the six escapes; forms 157-158 pin the benign
+  bytes-only controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 123-form self-test, ten cross-compiles,
+  import graph with the 129-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
