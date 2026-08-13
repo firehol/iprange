@@ -1676,6 +1676,10 @@ func typeOfBase(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 			}
 		}
 		return "", false
+	case *ast.CompositeLit:
+		// map[string]*gs{"a": {}} / []chan *gs{...}: the literal's
+		// declared type names the container or element type.
+		return exprText(v.Type), true
 	case *ast.CallExpr:
 		fun := unwrapParen(v.Fun)
 		if id, ok := fun.(*ast.Ident); ok {
@@ -1710,6 +1714,22 @@ func stripElemType(t string) string {
 		if t == prev {
 			break
 		}
+	}
+	return t
+}
+
+// elemTypeOne strips exactly one container or channel wrapper from a
+// declared type text, leaving the element type spelling of the
+// outermost wrapper (used for range-variable bindings).
+func elemTypeOne(t string) string {
+	if n := elementTypeText(t); n != "" {
+		return n
+	}
+	if strings.HasPrefix(t, "chan ") {
+		return strings.TrimPrefix(t, "chan ")
+	}
+	if strings.HasPrefix(t, "<-chan ") {
+		return strings.TrimPrefix(t, "<-chan ")
 	}
 	return t
 }
@@ -1932,15 +1952,24 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			// ranged element type is a struct: the two-variable form
 			// binds the element in Value; a channel's single-variable
 			// form binds it in Key (a container's single-variable form
-			// binds the index, never a struct element).
-			if esn, esnOK := exprElemStruct(v.X, st, info); esnOK {
+			// binds the index, never a struct element). The element
+			// type is also recorded so the binding itself can serve as
+			// an indexed or receive base later.
+			if rtt, rtOK := typeOfBase(v.X, st, info); rtOK {
+				one := elemTypeOne(rtt)
 				if v.Value != nil {
 					if k, ok := v.Value.(*ast.Ident); ok && k.Name != "_" {
-						st.struc[k.Name] = esn
+						info.varTypes[k.Name] = one
+						if esn, esnOK := exprElemStruct(v.X, st, info); esnOK {
+							st.struc[k.Name] = esn
+						}
 					}
 				} else if exprIsChan(v.X, st, info) {
 					if k, ok := v.Key.(*ast.Ident); ok && k.Name != "_" {
-						st.struc[k.Name] = esn
+						info.varTypes[k.Name] = one
+						if esn, esnOK := exprElemStruct(v.X, st, info); esnOK {
+							st.struc[k.Name] = esn
+						}
 					}
 				}
 			}
