@@ -457,8 +457,8 @@ hundred twenty mutation forms). The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
-new independent final review passes; decision 5A remains the single open
-user decision.
+new independent final review passes; decision 5A was ratified (option A,
+2026-08-13); no open user decision remains.
 The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
 
