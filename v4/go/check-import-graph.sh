@@ -2860,6 +2860,176 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta107.orig" internal/reader/metadata.go
 
+	# --- 108: anonymous-receiver method returning a file ------------------
+	# func (T) m() with no receiver variable name: the receiver type alone
+	# must key the method producer route and taint the caller.
+	cat > internal/reader/gatemut_anonrecv.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type an108 struct{}
+
+func (an108) getf() *os.File {
+	f, _ := os.Open("/dev/null")
+	return f
+}
+MUTEOF
+	add_mut internal/reader/gatemut_anonrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta108.orig"
+	INS='zr = an108{}.getf()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta108.new" && mv "$self_tree/meta108.new" internal/reader/metadata.go
+	if grep -Fq 'zr = an108{}.getf()' internal/reader/metadata.go; then
+		run_mut "anonymous-receiver method returning a file"
+	else
+		echo "self-test ERROR: form 108 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta108.orig" internal/reader/metadata.go
+
+	# --- 109: anonymous-receiver method returning an interface file ------
+	# Same hidden-by-interface shape as form 105, with an unnamed receiver.
+	cat > internal/reader/gatemut_anonrecviface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type an109 struct{}
+
+func (an109) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_anonrecviface.go
+	cp internal/reader/metadata.go "$self_tree/meta109.orig"
+	INS='zr = an109{}.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta109.new" && mv "$self_tree/meta109.new" internal/reader/metadata.go
+	if grep -Fq 'zr = an109{}.get()' internal/reader/metadata.go; then
+		run_mut "anonymous-receiver method returning an interface-hidden file"
+	else
+		echo "self-test ERROR: form 109 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta109.orig" internal/reader/metadata.go
+
+	# --- 110: anonymous pointer-receiver method returning a file ----------
+	cat > internal/reader/gatemut_anonptrrecv.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type an110 struct{}
+
+func (*an110) getf() *os.File {
+	f, _ := os.Open("/dev/null")
+	return f
+}
+MUTEOF
+	add_mut internal/reader/gatemut_anonptrrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta110.orig"
+	INS='zr = (&an110{}).getf()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta110.new" && mv "$self_tree/meta110.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (&an110{}).getf()' internal/reader/metadata.go; then
+		run_mut "anonymous pointer-receiver method returning a file"
+	else
+		echo "self-test ERROR: form 110 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta110.orig" internal/reader/metadata.go
+
+	# --- 111: anonymous-receiver method value stored in a map field ------
+	cat > internal/reader/gatemut_anonrecvmap.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type an111 struct{}
+
+func (an111) getf() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type fnMap111 struct{ m map[string]func() io.ReadCloser }
+
+var fm111 fnMap111
+
+func init() {
+	fm111.m = map[string]func() io.ReadCloser{}
+	fm111.m["k"] = an111{}.getf
+}
+MUTEOF
+	add_mut internal/reader/gatemut_anonrecvmap.go
+	cp internal/reader/metadata.go "$self_tree/meta111.orig"
+	INS='zr = fm111.m["k"]()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta111.new" && mv "$self_tree/meta111.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fm111.m["k"]()' internal/reader/metadata.go; then
+		run_mut "anonymous-receiver method value stored in a map field"
+	else
+		echo "self-test ERROR: form 111 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta111.orig" internal/reader/metadata.go
+
+	# --- 112: benign anonymous-receiver method must pass ------------------
+	# Same receiver syntax as 108-110 but the payload never touches the
+	# filesystem: the scanner must not flag it.
+	cat > internal/reader/gatemut_benignanonrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw112 struct{ *bytes.Reader }
+
+func (w *rcw112) Close() error { return nil }
+
+type an112 struct{}
+
+func (an112) get() io.ReadCloser { return &rcw112{bytes.NewReader(nil)} }
+MUTEOF
+	add_mut internal/reader/gatemut_benignanonrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta112.orig"
+	INS='zr = an112{}.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta112.new" && mv "$self_tree/meta112.new" internal/reader/metadata.go
+	if grep -Fq 'zr = an112{}.get()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign anonymous-receiver method passes the gate"
+		else
+			echo "self-test MISS: benign anonymous-receiver method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 112 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta112.orig" internal/reader/metadata.go
+
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -2912,7 +3082,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 91 mutation forms rejected)"
+	echo "import-graph self-test passed (all 95 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
