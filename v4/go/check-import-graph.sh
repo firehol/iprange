@@ -4575,6 +4575,334 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta150.orig" internal/reader/metadata.go
 
+	# --- 151: generic-receiver container index receiver -------------------
+	# rr := gR[*gsG]{}; a := rr.mk(); a[0].get(): the receiver's type
+	# arguments substitute into the method's raw []T result so the
+	# binding serves as an indexed base.
+	cat > internal/reader/gatemut_genrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsG151 struct{ x int }
+
+func (g *gsG151) get() io.ReadCloser {
+	r, _, _ := os.Pipe()
+	return r
+}
+
+type gR151[T any] struct{}
+
+func (r gR151[T]) mk() []T { return nil }
+
+func gb151() io.ReadCloser {
+	rr := gR151[*gsG151]{}
+	a := rr.mk()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta151.orig"
+	INS='zr = gb151()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta151.new" && mv "$self_tree/meta151.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb151()' internal/reader/metadata.go; then
+		run_mut "generic-receiver container index receiver"
+	else
+		echo "self-test ERROR: form 151 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta151.orig" internal/reader/metadata.go
+
+	# --- 152: generic-receiver direct file result --------------------------
+	# rr := &gR[*os.File]{}; rr.mk(): the instantiated receiver makes
+	# the address-of composite literal resolve, and the substituted T
+	# result is a direct *os.File producer.
+	cat > internal/reader/gatemut_genrecvf.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gR152[T any] struct{}
+
+func (r *gR152[T]) mk() T { var z T; return z }
+
+func gb152() io.ReadCloser {
+	rr := &gR152[*os.File]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genrecvf.go
+	cp internal/reader/metadata.go "$self_tree/meta152.orig"
+	INS='zr = gb152()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta152.new" && mv "$self_tree/meta152.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb152()' internal/reader/metadata.go; then
+		run_mut "generic-receiver direct file result"
+	else
+		echo "self-test ERROR: form 152 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta152.orig" internal/reader/metadata.go
+
+	# --- 153: embedded generic-receiver promotion -------------------------
+	# type hE struct{ gR[*gsG] }; he.mk(): promotion carries the
+	# embedded field's instantiation into the method result binding.
+	cat > internal/reader/gatemut_genpromo.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsG153 struct{ x int }
+
+func (g *gsG153) get() io.ReadCloser {
+	r, _, _ := os.Pipe()
+	return r
+}
+
+type gR153[T any] struct{}
+
+func (r gR153[T]) mk() []T { return nil }
+
+type hE153 struct{ gR153[*gsG153] }
+
+func gb153() io.ReadCloser {
+	he := hE153{}
+	a := he.mk()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genpromo.go
+	cp internal/reader/metadata.go "$self_tree/meta153.orig"
+	INS='zr = gb153()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta153.new" && mv "$self_tree/meta153.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb153()' internal/reader/metadata.go; then
+		run_mut "embedded generic-receiver promotion"
+	else
+		echo "self-test ERROR: form 153 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta153.orig" internal/reader/metadata.go
+
+	# --- 154: explicit-instantiation direct file flow ----------------------
+	# zr = mkT[*os.File](): the substituted T result is a bare
+	# *os.File entering the exempted io.ReadFull shape.
+	cat > internal/reader/gatemut_genexpf.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func mkT154[T any]() T { var zero T; return zero }
+
+func gb154() io.ReadCloser {
+	return mkT154[*os.File]()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genexpf.go
+	cp internal/reader/metadata.go "$self_tree/meta154.orig"
+	INS='zr = gb154()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta154.new" && mv "$self_tree/meta154.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb154()' internal/reader/metadata.go; then
+		run_mut "explicit-instantiation direct file flow"
+	else
+		echo "self-test ERROR: form 154 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta154.orig" internal/reader/metadata.go
+
+	# --- 155: explicit-instantiation struct receiver -----------------------
+	# zr = mkT[*gsG]().get(): the substituted result resolves the
+	# struct so the method receiver classifies.
+	cat > internal/reader/gatemut_genexps.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsG155 struct{ x int }
+
+func (g *gsG155) get() io.ReadCloser {
+	r, _, _ := os.Pipe()
+	return r
+}
+
+func mkT155[T any]() T { var zero T; return zero }
+
+func gb155() io.ReadCloser {
+	return mkT155[*gsG155]().get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genexps.go
+	cp internal/reader/metadata.go "$self_tree/meta155.orig"
+	INS='zr = gb155()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta155.new" && mv "$self_tree/meta155.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb155()' internal/reader/metadata.go; then
+		run_mut "explicit-instantiation struct receiver"
+	else
+		echo "self-test ERROR: form 155 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta155.orig" internal/reader/metadata.go
+
+	# --- 156: arg-inferred struct-bound result ----------------------------
+	# zr = mkT2(&gsG{}).get(): T binds from the argument's resolved
+	# type, so the result registers as a struct receiver.
+	cat > internal/reader/gatemut_geninf.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsG156 struct{ x int }
+
+func (g *gsG156) get() io.ReadCloser {
+	r, _, _ := os.Pipe()
+	return r
+}
+
+func mkT156[T any](x T) T { return x }
+
+func gb156() io.ReadCloser {
+	return mkT156(&gsG156{}).get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_geninf.go
+	cp internal/reader/metadata.go "$self_tree/meta156.orig"
+	INS='zr = gb156()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta156.new" && mv "$self_tree/meta156.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb156()' internal/reader/metadata.go; then
+		run_mut "arg-inferred struct-bound result"
+	else
+		echo "self-test ERROR: form 156 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta156.orig" internal/reader/metadata.go
+
+	# --- 157: benign generic-receiver container must pass -----------------
+	# Same shape as forms 151-153 with a bytes-only payload: the
+	# receiver instantiation must not taint a non-file element struct.
+	cat > internal/reader/gatemut_bengenrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv157 struct{ *bytes.Reader }
+
+func (w *rcv157) Close() error { return nil }
+
+type gsGB157 struct{}
+
+func (gsGB157) get() io.ReadCloser { return &rcv157{bytes.NewReader(nil)} }
+
+type gRB157[T any] struct{}
+
+func (r gRB157[T]) mk() []T { return nil }
+
+func gbb157() io.ReadCloser {
+	rr := gRB157[*gsGB157]{}
+	a := rr.mk()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bengenrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta157.orig"
+	INS='zr = gbb157()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta157.new" && mv "$self_tree/meta157.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb157()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign generic-receiver container passes the gate"
+		else
+			echo "self-test MISS: benign generic-receiver container failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 157 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta157.orig" internal/reader/metadata.go
+
+	# --- 158: benign inferred struct-bound result must pass ---------------
+	# Same shape as form 156 with a bytes-only payload.
+	cat > internal/reader/gatemut_bengeninf.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv158 struct{ *bytes.Reader }
+
+func (w *rcv158) Close() error { return nil }
+
+type gsGB158 struct{}
+
+func (gsGB158) get() io.ReadCloser { return &rcv158{bytes.NewReader(nil)} }
+
+func mkTB158[T any](x T) T { return x }
+
+func gbb158() io.ReadCloser {
+	return mkTB158(&gsGB158{}).get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bengeninf.go
+	cp internal/reader/metadata.go "$self_tree/meta158.orig"
+	INS='zr = gbb158()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta158.new" && mv "$self_tree/meta158.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb158()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign inferred struct-bound result passes the gate"
+		else
+			echo "self-test MISS: benign inferred struct-bound result failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 158 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta158.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -4627,7 +4955,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 123 mutation forms rejected)"
+	echo "import-graph self-test passed (all 129 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
