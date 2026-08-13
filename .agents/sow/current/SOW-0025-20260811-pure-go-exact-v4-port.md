@@ -7,8 +7,8 @@ Status: in-progress
 Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
 253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh
 independent audit; all five P2 classes were fixed at HEAD ca30026: the
-approved NetworkEnrichmentV1Location surface restored (value + HasLocation,
-recorded as decision 5A), implicit semantic validation removed from
+implemented NetworkEnrichmentV1Location surface (value + HasLocation,
+recorded as open decision 5A awaiting user ratification), implicit semantic validation removed from
 structured lookup, hot-path decodes cut to one page-header decode per
 visited page with membership word reads served from the lookup-time record
 decode, the contradictory closure records corrected, and Mapping.File
@@ -161,9 +161,10 @@ interface-method and method-result class (forms 199-205), the
 embedded-interface and cross-package chain class (forms 207-210), the
 remote-interface and generic-instantiation class (forms 213-217), the
 defined-hop instantiation class (forms 222-223), the nested generic-
-instantiation class (forms 225-226); the durable
-rejection set is now one hundred seventy-eight mutation
-forms. The round-24 gate re-review then found the import-renamed qualified
+instantiation class (forms 225-226), and the cgo-import,
+raw-syscall, and linkname classes (forms 228-230), pinned with the
+benign lifecycle control (form 231); the durable rejection set is
+now one hundred eighty-one mutation forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -303,8 +304,10 @@ and a frame-level interface-parameter registry (ifaceParams, mirrored
 process-wide) carries generic interface parameters across packages;
 the receiver-substitution walk gained the same threading and the
 embedded-entry argument list. Pinned as self-test forms 225-226
-(rejects) and 227 (benign bytes control). The durable rejection
-set is now one hundred seventy-eight mutation forms. The records
+(rejects) and 227 (benign bytes control); forms 228-230 pin the
+round-32 cgo-import, raw-syscall, and linkname rejects with form 231
+the benign lifecycle control. The durable rejection set is now one
+hundred eighty-one mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -613,7 +616,7 @@ sidecars, live coordination, and publication remain Milestone 4.
   the remote-interface and generic-instantiation class (forms
   213-217), the defined-hop instantiation class (forms 222-223), and
   the nested generic-instantiation class (forms 225-226);
-  the self-test now durably rejects one hundred seventy-eight mutation forms. The
+  the self-test now durably rejects one hundred eighty-one mutation forms (round-32 rejects 228-230, benign control 231). The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1090,7 +1093,7 @@ The user adopted the external re-review's decisions after the reopening:
   uses no Go runtime code, cgo, or unwinding inside the handler, and is
   proven natively on each supported POSIX platform in the worker milestone.
 - Decision 3 (closed-state class) = A with corrections: closed readers and
-  pinned handles report WrongState (11); numeric code 9 stays reserved (no
+  pinned handles report WrongState (11); numeric code 9 remains HandleClosed (no
   table renumbering); WordCount becomes error-capable "(uint32, error)";
   under decision 4 per-view Release disappears and second-close errors
   apply to the reader and the pinned handle.
@@ -1132,7 +1135,7 @@ The user adopted the external re-review's decisions after the reopening:
   project-owned assembly sigaction shim, no Go runtime code/cgo/unwinding
   in the handler, proven natively per POSIX platform.
 - Closed class (3A): closed readers/pins -> WrongState (11), second Close
-  -> WrongState, code 9 reserved, WordCount -> (uint32, error), per-view
+  -> WrongState, code 9 = HandleClosed, WordCount -> (uint32, error), per-view
   Release removed (views are pin-valid values).
 - Hot-path facade (4A): ImmutableReader.Pin / Pin.Close (one lifetime
   registration outside the workload; HandleBusy while pins exist);
@@ -1738,7 +1741,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 178-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 181-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2549,6 +2552,6 @@ execution record; the closing result is appended there when it completes.
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 178-form self-test, ten cross-compiles,
+  import graph with the 181-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).

@@ -32,6 +32,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -50,6 +51,7 @@ const moduleInternalPrefix = "github.com/firehol/iprange/v4/go/internal"
 // that exist only to move bytes. compress/flate is deliberately absent:
 // the metadata inflater reads an in-memory payload.
 var bannedImports = map[string]bool{
+	"C": true, // cgo: C.pread etc. would bypass every Go selector ban
 	"archive/tar": true, "archive/zip": true,
 	"bufio": true, "compress/bzip2": true, "compress/gzip": true,
 	"compress/lzw": true, "compress/zlib": true,
@@ -76,7 +78,8 @@ var bannedSelectors = map[string]bool{
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
 	"Preadv": true, "Print": true, "Printf": true, "Println": true,
-	"Pwrite": true, "Pwritev": true, "Read": true, "ReadAll": true,
+	"Pwrite": true, "Pwritev": true, "RawSyscall": true, "RawSyscall6": true, "RawSyscall9": true, "RawSyscallN": true,
+	"Read": true, "ReadAll": true,
 	"ReadAt": true, "ReadAtLeast": true, "ReadByte": true, "ReadFile": true,
 	"ReadFrom": true, "ReadFull": true, "ReadLine": true, "ReadRune": true,
 	"ReadString": true, "Readv": true, "Scan": true, "Scanf": true,
@@ -285,6 +288,10 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
 			continue
+		}
+		if bytes.Contains(src, []byte("//go:linkname")) {
+			fmt.Fprintf(os.Stderr, "gatescan: %s uses //go:linkname (raw-symbol aliasing bypasses the import and selector bans)\n", p)
+			os.Exit(1)
 		}
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, p, src, parser.SkipObjectResolution)

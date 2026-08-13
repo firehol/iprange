@@ -7932,11 +7932,117 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta227.orig" internal/reader/metadata.go
 
+
+	# --- 228: cgo content transfer via import "C" + C.pread ------------
+	# cgo selectors are lowercase (C.pread), so they never match the
+	# uppercase Go selector bans; the import itself must be rejected.
+	cat > gatemut_cgo.go <<'MUTEOF'
+package iprangedb
+
+/*
+#include <unistd.h>
+*/
+import "C"
+
+import (
+	"os"
+	"unsafe"
+)
+
+func gateCGORead228(file *os.File, out []byte) int {
+	if len(out) == 0 {
+		return 0
+	}
+	return int(C.pread(C.int(file.Fd()), unsafe.Pointer(&out[0]), C.size_t(len(out)), 0))
+}
+MUTEOF
+	add_mut gatemut_cgo.go
+	run_mut "cgo C.pread content transfer"
+
+	# --- 229: unix.RawSyscall descriptor read in the mapping owner -----
+	# RawSyscall falls through the capital-S Syscall bans; the raw
+	# syscall family must be rejected by name.
+	cat > internal/mapping/gatemut_rawsyscall_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
+func gateRawSyscallRead229(file *os.File, out []byte) int {
+	if len(out) == 0 {
+		return 0
+	}
+	n, _, _ := unix.RawSyscall(unix.SYS_READ, file.Fd(), uintptr(unsafe.Pointer(&out[0])), uintptr(len(out)))
+	return int(n)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_rawsyscall_linux.go
+	run_mut "unix.RawSyscall descriptor read in the mapping owner"
+
+	# --- 230: go:linkname raw-symbol aliasing ---------------------------
+	# //go:linkname aliases unexported runtime/syscall symbols and
+	# bypasses every import and selector ban; any file carrying the
+	# directive is rejected outright.
+	cat > gatemut_linkname.go <<'MUTEOF'
+package iprangedb
+
+import (
+	_ "unsafe"
+)
+
+//go:linkname gateRawRead230 syscall.read
+func gateRawRead230(fd int, p []byte, n int) (int, error)
+
+func useLinkname230(fd int, p []byte) {
+	_, _ = gateRawRead230(fd, p, len(p))
+}
+MUTEOF
+	add_mut gatemut_linkname.go
+	run_mut "go:linkname alias to syscall.read"
+
+	# --- 231: benign x/sys lifecycle twin -------------------------------
+	# The mapping owner's real syscall surface (ofd locks + mmap) must
+	# still pass: this proves the new rejects do not false-positive on
+	# the sanctioned mapping/lifecycle calls.
+	cat > internal/mapping/gatemut_lifecycle_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func gateLifecycle231(file *os.File, size int) error {
+	flock := unix.Flock_t{Type: unix.F_RDLCK}
+	if err := unix.FcntlFlock(file.Fd(), unix.F_SETLKW, &flock); err != nil {
+		return err
+	}
+	_, err := unix.Mmap(int(file.Fd()), 0, size, unix.PROT_READ, unix.MAP_SHARED)
+	return err
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_lifecycle_linux.go
+	if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+		echo "self-test OK: benign x/sys lifecycle twin passes the gate"
+	else
+		echo "self-test MISS: benign x/sys lifecycle twin failed the gate (false positive)"
+		mutfail=1
+	fi
+	cleanup_muts
+
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 178 mutation forms rejected)"
+	echo "import-graph self-test passed (all 181 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
