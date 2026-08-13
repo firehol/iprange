@@ -164,8 +164,14 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred six
-mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
+231); the durable rejection set is now two hundred sixteen
+mutation forms (round-48 closed the bound method-expression and
+same-module cross-package producer-var class, forms 257-260;
+round-49 closed the nested-parenthesized, renamed-import,
+alias-over-renamed, wrapper-promoted method-expression,
+value-bound cross-package producer-var, and
+interface-conversion-launder class, forms 261-266);
+round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
 238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
@@ -404,7 +410,15 @@ declared-type gap predated the Root work for *os.File (var openPath func(string)
 os.Open). Fixed by checking the file method in value position against the approved surface, registering the
 declared result type of initialized func-typed variables, and registering stdlib producer values (os.Open
 and friends) as func-files wherever bound; pinned as self-test forms 253-256, raising the durable rejection
-set to two hundred six mutation forms. The records
+set to two hundred six mutation forms. The round-48 re-review then
+closed bound method expressions on file-bearing receiver types and
+same-module cross-package producer vars (forms 257-260, two hundred
+ten mutation forms); the round-49 re-review closed nested-
+parenthesized, renamed-import, alias-over-renamed, and
+wrapper-promoted method expressions, value-bound cross-package
+producer vars, and interface-conversion laundering of a file into
+the metadata inflater exemption (forms 261-266, two hundred sixteen
+mutation forms). The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -1977,8 +1991,59 @@ Use these sections in this order:
   (self-test, all 210 forms rejected), CGO_ENABLED=0 build and test,
   four cross-compiles, SOW audit — all green. Counts unchanged at
   this commit. Decision 5A remains open for user ratification;
-  Milestone 2 remains blocked until the round-49 re-review and the
-  final review pass.
+  Milestone 2 remains blocked until the final review pass.
+
+### 2026-08-13 - round-49 gate re-review closed method-expression spelling variants, value-bound cross-package producers, and interface-conversion laundering (HEAD 041cf6098ee6)
+
+- The round-49 adversarial re-review (six narrow reviewers: codecs,
+  membership/zero-alloc, mapping/pin/gate, metadata/bootstrap, records,
+  gate hunting) passed codecs, membership/zero-alloc, and metadata,
+  and failed with two gate findings plus one records finding.
+- P0 - nested-parenthesized method expressions: `open := ((*os.Root)).Open`
+  (and deeper paren nesting) wrapped the receiver so the single paren
+  strip left a hidden type spelling while Go still compiled and invoked
+  the bound open; the same gap applied to package-level initializers.
+- P1 - renamed-import and alias spellings: `import o "os"; (*o.Root).Open`
+  escaped because only the canonical os.Root spelling resolved, and the
+  alias hop `type RR = o.Root` over a renamed import compounded it. A
+  wrapper struct `type WE struct{ *os.Root }` promoted Open/OpenFile/
+  Create into the method set, so `(*WE).Open` escaped with no Root
+  spelling in the receiver at all. All four were reproduced live at gate
+  exit 0.
+- P1 - value-bound cross-package producer vars: form 260 pinned the
+  direct call `format.Open(name)`; binding the producer into a local
+  (`open := format.Open`), a package-level var (`var bound = fm.Open`),
+  or a renamed qualifier (`fm.Open`) dropped the func-file taint and the
+  invoked binding returned an untainted *os.File (live, gate exit 0).
+- P0 - interface-conversion laundering: `zr := gateZR(f)` converts a
+  live *os.File into a fresh named interface; the conversion resolved as
+  a function call, zr carried no taint, and the exact metadata inflater
+  exemption shape consumed file bytes (live, gate exit 0).
+- P1 (records) - the SOW `## Status` close-out and the reviewer-findings
+  close-out still reported the round-47 count (two hundred six forms)
+  instead of the round-48 count and closure; corrected here.
+- Fixed at HEAD 041cf6098ee6: method-expression receivers now strip parens
+  to a fixpoint, translate renamed stdlib imports, chase alias chains,
+  and walk defined-struct embedding chains for promoted file-handle
+  methods (fileCapableReceiverType); same-module package-level producer
+  vars resolve in value position through the process-wide registry
+  (producerVarSelector in classify, function and package-level
+  bindings); type conversions of file-tainted values keep the file
+  taint in every binding and argument context, so the inflater
+  exemption no longer shields a laundered reader
+  (typeConversionFile); pinned as self-test forms 261-266, raising the
+  durable rejection set to two hundred sixteen mutation forms.
+- Replayed at the new gate: all round-47 replays (R1-R14), round-48
+  probes (P1-P15), the new nested-paren/renamed/alias/wrapper
+  method-expression probes, the cross-package value-bound producer
+  probes (function-level, package-level, renamed-import), and the
+  interface-conversion launder probe are rejected; the benign controls
+  still pass. Gates: go test ./... incl -race, go vet, gofmt, import
+  graph (self-test, all 216 forms rejected), CGO_ENABLED=0 build and
+  test, four cross-compiles, SOW audit — all green. Counts unchanged
+  at this commit: production 4,792 raw lines / tests 4,877 raw lines.
+  Decision 5A remains open for user ratification; Milestone 2 remains
+  blocked until the final review passes.
 
 ## Validation
 
@@ -1999,7 +2064,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 210-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 216-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2035,8 +2100,16 @@ Reviewer findings:
   handles, x/sys descriptor-transfer primitives), all fixed at the next
   HEAD with self-test forms 249-251, the same-class Root-laundering P0 closed
   with form 252, and the producer-value P0s closed with forms 253-256;
-  the rejection set is two hundred six mutation forms;
-  re-verification is pending.
+  the rejection set is two hundred six mutation forms; the round-48
+  gate re-review then closed bound method expressions and
+  same-module cross-package producer vars (forms 257-260, two
+  hundred ten forms); the round-49 gate re-review closed nested-
+  paren, renamed-import, alias-over-renamed, and wrapper-promoted
+  method expressions, value-bound cross-package producer vars, and
+  interface-conversion laundering of a file into the metadata
+  inflater exemption (forms 261-266, two hundred sixteen forms);
+  re-verification at the round-49 HEAD passed the full replay and
+  gate suites.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -2866,7 +2939,7 @@ execution record; the closing result is appended there when it completes.
   same-module cross-package producer vars (forms 257-260), raising
   the set to two hundred ten mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 210-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  import graph with the 216-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
   rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
   descriptor-transfer primitives, *os.Root laundering through struct
@@ -2874,6 +2947,10 @@ execution record; the closing result is appended there when it completes.
   file-bearing declared results, and stdlib producer values bound
   without a declared type, and round-48 rejects 257-260 cover bound
   method expressions on file-bearing receiver types and same-module
-  cross-package producer vars), ten cross-compiles,
+  cross-package producer vars, and round-49 rejects 261-266 cover
+  doubly-parenthesized, renamed-import, alias-over-renamed, and
+  wrapper-promoted method expressions, value-bound cross-package
+  producer vars, and interface conversions laundering file values),
+  ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
