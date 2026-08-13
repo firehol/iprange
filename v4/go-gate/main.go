@@ -756,13 +756,22 @@ func resolveDefinedType(text string, info pkgInfo) string {
 
 // resolveStructName reduces any receiver or instance type spelling to the
 // underlying struct name: type aliases, defined-type chains, pointer
-// prefixes, and generic instantiations all resolve to the base name.
+// prefixes, and generic instantiations all resolve to the base name. The
+// reductions run to a fixpoint so a pointer to a defined type (*d where
+// d is defined from a struct) resolves in either order.
 func resolveStructName(name string, info pkgInfo) string {
-	text := resolveTypeText(name, info)
-	text = resolveDefinedType(text, info)
-	text = strings.TrimPrefix(text, "*")
-	if i := strings.IndexByte(text, '['); i >= 0 {
-		text = text[:i]
+	text := name
+	for i := 0; i < 8; i++ {
+		prev := text
+		text = resolveTypeText(text, info)
+		text = resolveDefinedType(text, info)
+		text = strings.TrimPrefix(text, "*")
+		if j := strings.IndexByte(text, '['); j >= 0 {
+			text = text[:j]
+		}
+		if text == prev {
+			break
+		}
 	}
 	return text
 }
