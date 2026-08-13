@@ -164,7 +164,7 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now one hundred ninety-four
+231); the durable rejection set is now one hundred ninety-eight
 mutation forms (round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -2668,7 +2668,7 @@ execution record; the closing result is appended there when it completes.
   stays authoritative), pinned by the pre-fix-failing test
   TestSidecarPresence/missing-main-sidecar-present.
 - Round-42 gate re-review found the x/sys source-content gap at HEAD
-  550d107: the path-only allowlist accepted a poisoned GOMODCACHE
+  6733d1c: the path-only allowlist accepted a poisoned GOMODCACHE
   checkout (evil extracted dir plus download cache at the allowed path)
   and a file proxy serving an evil x/sys with a self-consistent forged
   go.sum (both proven live with a smuggled unix.Pread2, gate exit 0 on
