@@ -268,9 +268,16 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 			continue
 		}
 		if fd.Recv != nil {
-			_, recvStruct := receiverOf(fd)
+			// Methods are never package funcs, whether or not the
+			// receiver names its variable: anonymous-receiver methods
+			// key under the receiver type like any other.
+			_, recvStruct := receiverOf(fd, *info)
 			if recvStruct != "" {
-				info.methods[recvStruct+"."+fd.Name.Name] = collectResults(fd.Type)
+				mkey := recvStruct + "." + fd.Name.Name
+				info.methods[mkey] = collectResults(fd.Type)
+				if res := resolveTypeText(recvStruct, *info); res != recvStruct {
+					info.methods[res+"."+fd.Name.Name] = collectResults(fd.Type)
+				}
 			}
 			continue
 		}
@@ -1337,7 +1344,7 @@ func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *ta
 						shared.elementTaint[k] = kv
 					}
 				}
-				if _, recvStruct := receiverOf(fd); recvStruct != "" {
+				if _, recvStruct := receiverOf(fd, info); recvStruct != "" {
 					key := recvStruct + "." + fd.Name.Name
 					if returnsFileIn(fd.Body, fst, info, imp) && !info.retMethods[key] {
 						info.retMethods[key] = true
@@ -1922,7 +1929,7 @@ func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taint
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {
 		return exempts
 	}
-	recvName, recvStruct := receiverOf(fd)
+	recvName, recvStruct := receiverOf(fd, info)
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1969,13 +1976,23 @@ func isIOIdent(e ast.Expr) bool {
 	return ok && id.Name == "io"
 }
 
-func receiverOf(fd *ast.FuncDecl) (name, structName string) {
-	if fd.Recv == nil || len(fd.Recv.List) == 0 || len(fd.Recv.List[0].Names) == 0 {
+func receiverOf(fd *ast.FuncDecl, info pkgInfo) (name, structName string) {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
 		return "", ""
 	}
-	name = fd.Recv.List[0].Names[0].Name
-	t := exprText(fd.Recv.List[0].Type)
+	recv := fd.Recv.List[0]
+	if len(recv.Names) > 0 {
+		name = recv.Names[0].Name
+	}
+	// The receiver type itself identifies the struct: anonymous
+	// receivers (func (T) m()) carry no name, generic receivers spell
+	// T[P], and aliases must resolve to the underlying struct so
+	// instance lookups key consistently.
+	t := exprText(recv.Type)
 	structName = strings.TrimPrefix(t, "*")
+	if i := strings.IndexByte(structName, '['); i >= 0 {
+		structName = structName[:i]
+	}
 	return name, structName
 }
 
