@@ -164,8 +164,8 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred two
-mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, and *os.Root laundering through fields/params/helpers, forms 249-252; round-36 closed the dup/exec subprocess escape and the
+231); the durable rejection set is now two hundred six
+mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
 238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
@@ -394,7 +394,17 @@ gateRootField{r: root}; h.r.Open(name)) dropped the file taint, so the returned 
 flate.NewReader untainted and the stream was consumed through the exact inflater exemption shape with gate
 exit 0; *os.Root now resolves as a file-bearing type everywhere *os.File does (fields, parameters,
 helper returns, type assertions, func/chan elements, results), so every laundering route fails closed.
-Pinned as self-test forms 249-252, raising the durable rejection set to two hundred two mutation forms. The records
+Pinned as self-test forms 249-252, raising the durable rejection set to two hundred two mutation forms. The
+adversarial re-review of that closure then found three P0 escapes in the same producer-value class, all
+proven live with full metadata-exemption chains at gate exit 0: (1) a file method value (open := root.Open;
+open(name)) escaped the call-receiver ban and the bound method produced an untainted *os.File; (2) a
+func-typed variable with an initializer (var newRoot func(string) (*os.Root, error) = os.OpenRoot) lost
+its declared file-bearing result type because the type was only consulted for type-only vars; (3) the same
+declared-type gap predated the Root work for *os.File (var openPath func(string) (*os.File, error) =
+os.Open). Fixed by checking the file method in value position against the approved surface, registering the
+declared result type of initialized func-typed variables, and registering stdlib producer values (os.Open
+and friends) as func-files wherever bound; pinned as self-test forms 253-256, raising the durable rejection
+set to two hundred six mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -751,7 +761,14 @@ sidecars, live coordination, and publication remain Milestone 4.
   same-class P0 (Root laundered through a struct field, gate exit
   0) was then closed by resolving *os.Root as a file-bearing type
   everywhere *os.File does, pinned as form 252, raising the set to
-  two hundred two mutation forms. The
+  two hundred two mutation forms; the following re-review then found
+  three producer-value P0 escapes (file method values; func-typed
+  vars with file-bearing declared results and an initializer, Root
+  and *os.File; stdlib producer values bound without a declared
+  type), all closed by the value-position capability check, the
+  declared-type func-file registration, and stdlib producer-value
+  registration, pinned as forms 253-256, raising the set to two
+  hundred six mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1889,8 +1906,26 @@ Use these sections in this order:
   func/chan elements, method results), pinned as self-test form 252,
   raising the durable rejection set to two hundred two mutation forms.
 - The P0 closure landed at HEAD 262756c on top of the round-45 gate fix
-  (14c0698); the record trail and counts above reflect both commits. Gates: go test ./... incl -race, go vet,
-  gofmt, import graph (self-test, all 201 forms rejected), CGO_ENABLED=0
+  (14c0698); the record trail and counts above reflect both commits.
+- The following adversarial re-review then found three producer-value
+  P0 escapes, all proven live with the metadata-exemption consumption
+  chain at gate exit 0: file method values (open := root.Open;
+  open(name)), initialized func-typed variables with file-bearing
+  declared results (var newRoot func(string) (*os.Root, error) =
+  os.OpenRoot and the pre-existing *os.File form var openPath
+  func(string) (*os.File, error) = os.Open), and stdlib producer
+  values bound without a declared type (openPath := os.Open). Fixed
+  in v4/go-gate/main.go: the file method in value position is checked
+  against the approved capability surface, the declared result type of
+  an initialized func-typed variable registers as a func-file, and
+  stdlib producer values register as func-files wherever bound;
+  pinned as self-test forms 253-256, raising the durable rejection
+  set to two hundred six mutation forms.
+- The producer-value closure landed at HEAD 5ff9116 on top of the
+  Root-taint fix (262756c); the record trail and counts above reflect
+  all four commits of the round-45/46/47 chain (14c0698, 262756c,
+  5ff9116, and the records commit). Gates: go test ./... incl -race, go vet,
+  gofmt, import graph (self-test, all 206 forms rejected), CGO_ENABLED=0
   build and test, four cross-compiles, SOW audit — all green.
 - Counts unchanged at this commit: production 4,792 raw lines / tests
   4,877 raw lines (the gate scanner lives outside the module). Decision
@@ -1916,7 +1951,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 202-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 206-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1951,8 +1986,9 @@ Reviewer findings:
   three P2 mmap-gate findings (os.CopyFS, os.OpenInRoot/os.OpenRoot
   handles, x/sys descriptor-transfer primitives), all fixed at the next
   HEAD with self-test forms 249-251, the same-class Root-laundering P0 closed
-  with form 252, and the rejection set at two hundred two mutation
-  forms; re-verification is pending.
+  with form 252, and the producer-value P0s closed with forms 253-256;
+  the rejection set is two hundred six mutation forms;
+  re-verification is pending.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -2773,12 +2809,18 @@ execution record; the closing result is appended there when it completes.
   through a struct field: h.r.Open(name) after h := struct{r
   *os.Root}, gate exit 0) was then closed by resolving *os.Root as a
   file-bearing type everywhere *os.File does, pinned as form 252,
-  raising the set to two hundred two mutation forms.
+  raising the set to two hundred two mutation forms; the
+  producer-value re-review then closed the file-method-value,
+  initialized func-typed-variable (Root and *os.File), and plain
+  stdlib-producer-value escapes (forms 253-256), raising the set to
+  two hundred six mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 202-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
-  rejects 249-252 cover os.CopyFS directory copies, os.OpenInRoot/
+  import graph with the 206-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
-  descriptor-transfer primitives, and *os.Root laundering through
-  struct fields), ten cross-compiles,
+  descriptor-transfer primitives, *os.Root laundering through struct
+  fields, file method values, initialized func-typed variables with
+  file-bearing declared results, and stdlib producer values bound
+  without a declared type), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
