@@ -4090,6 +4090,222 @@ MUTEOF
 
 
 
+	# --- 140: single-LHS call-result index receiver ---------------------
+	# a := mkArr(); a[0].get(): a single-value call result must record
+	# the declared result type so the binding can be an indexed base.
+	cat > internal/reader/gatemut_singlecall.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsSC140 struct{}
+
+func (gsSC140) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func mkArr140() []*gsSC140 { return nil }
+
+func sgGet140() io.ReadCloser {
+	a := mkArr140()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_singlecall.go
+	cp internal/reader/metadata.go "$self_tree/meta140.orig"
+	INS='zr = sgGet140()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta140.new" && mv "$self_tree/meta140.new" internal/reader/metadata.go
+	if grep -Fq 'zr = sgGet140()' internal/reader/metadata.go; then
+		run_mut "single-LHS call-result index receiver"
+	else
+		echo "self-test ERROR: form 140 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta140.orig" internal/reader/metadata.go
+
+	# --- 141: single-LHS method-call result index receiver ----------------
+	# a := box.mkArr(); a[0].get(): the method-call result type resolves
+	# through the receiver instance, like form 140's plain call.
+	cat > internal/reader/gatemut_singlemeth.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsSC141 struct{}
+
+func (gsSC141) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type mkBox141 struct{}
+
+func (mkBox141) mkArr() []*gsSC141 { return nil }
+
+var mkbox141 mkBox141
+
+func sgGet141() io.ReadCloser {
+	a := mkbox141.mkArr()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_singlemeth.go
+	cp internal/reader/metadata.go "$self_tree/meta141.orig"
+	INS='zr = sgGet141()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta141.new" && mv "$self_tree/meta141.new" internal/reader/metadata.go
+	if grep -Fq 'zr = sgGet141()' internal/reader/metadata.go; then
+		run_mut "single-LHS method-call result index receiver"
+	else
+		echo "self-test ERROR: form 141 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta141.orig" internal/reader/metadata.go
+
+	# --- 142: type-switch default clause bound receiver -------------------
+	# switch v := iv.(type) { default: v.get() }: the default clause
+	# binds the switched expression's own type and instance, so the
+	# bound variable resolves method receivers like case-bound forms.
+	cat > internal/reader/gatemut_tsdefault.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type ifD142 interface{ get() io.ReadCloser }
+
+type gsTS142 struct{}
+
+func (gsTS142) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var iv142 ifD142 = &gsTS142{}
+
+func tsGet142() io.ReadCloser {
+	switch v := iv142.(type) {
+	default:
+		return v.get()
+	}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_tsdefault.go
+	cp internal/reader/metadata.go "$self_tree/meta142.orig"
+	INS='zr = tsGet142()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta142.new" && mv "$self_tree/meta142.new" internal/reader/metadata.go
+	if grep -Fq 'zr = tsGet142()' internal/reader/metadata.go; then
+		run_mut "type-switch default clause bound receiver"
+	else
+		echo "self-test ERROR: form 142 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta142.orig" internal/reader/metadata.go
+
+	# --- 143: multi-assign non-call RHS index receiver --------------------
+	# a, _ := mm["k"], 0; a[0].get(): the element read binds the
+	# container's element type (one wrapper stripped), so the binding
+	# stays a container-typed base for later indexing.
+	cat > internal/reader/gatemut_multimap.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsMM143 struct{}
+
+func (gsMM143) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var mm143 map[string][]*gsMM143
+
+func mgGet143() io.ReadCloser {
+	a, _ := mm143["k"], 0
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_multimap.go
+	cp internal/reader/metadata.go "$self_tree/meta143.orig"
+	INS='zr = mgGet143()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta143.new" && mv "$self_tree/meta143.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mgGet143()' internal/reader/metadata.go; then
+		run_mut "multi-assign non-call RHS index receiver"
+	else
+		echo "self-test ERROR: form 143 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta143.orig" internal/reader/metadata.go
+
+	# --- 144: benign single-LHS call-result index must pass --------------
+	# Same shape as forms 140-141 with a bytes-only payload: the gate
+	# must not taint the binding when the call result holds no file.
+	cat > internal/reader/gatemut_benscall.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv144 struct{ *bytes.Reader }
+
+func (w *rcv144) Close() error { return nil }
+
+type gsSCB144 struct{}
+
+func (gsSCB144) get() io.ReadCloser { return &rcv144{bytes.NewReader(nil)} }
+
+func mkArrB144() []*gsSCB144 { return nil }
+
+func sgGetB144() io.ReadCloser {
+	a := mkArrB144()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benscall.go
+	cp internal/reader/metadata.go "$self_tree/meta144.orig"
+	INS='zr = sgGetB144()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta144.new" && mv "$self_tree/meta144.new" internal/reader/metadata.go
+	if grep -Fq 'zr = sgGetB144()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign single-LHS call-result index passes the gate"
+		else
+			echo "self-test MISS: benign single-LHS call-result index failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 144 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta144.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -4142,7 +4358,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 115 mutation forms rejected)"
+	echo "import-graph self-test passed (all 119 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
