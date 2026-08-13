@@ -1997,8 +1997,12 @@ Use these sections in this order:
 
 - The round-49 adversarial re-review (six narrow reviewers: codecs,
   membership/zero-alloc, mapping/pin/gate, metadata/bootstrap, records,
-  gate hunting) passed codecs, membership/zero-alloc, and metadata,
-  and failed with two gate findings plus one records finding.
+  gate hunting) passed membership/zero-alloc and metadata, and failed
+  codecs (P1 value-bound cross-package producer vars), mapping/pin/gate
+  (P1 renamed-import and alias-over-renamed method expressions, P2
+  wrapper-promoted methods), records (P1 stale count prose), and gate
+  hunting (P0 nested-parenthesized method expressions, P0
+  interface-conversion laundering).
 - P0 - nested-parenthesized method expressions: `open := ((*os.Root)).Open`
   (and deeper paren nesting) wrapped the receiver so the single paren
   strip left a hidden type spelling while Go still compiled and invoked
