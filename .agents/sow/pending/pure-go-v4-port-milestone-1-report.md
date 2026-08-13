@@ -96,8 +96,9 @@ class (forms 140-143), and the explicit-instantiation
 and interface-binding class (forms 145-148), the
 generic-receiver-binding class (forms 151-156), the
 alias-spelled generic binding class (forms 159-164), and the
-reader-shape binding class (forms 167-174); the
-self-test now durably rejects one hundred forty-three
+reader-shape binding class (forms 167-174), and the
+renamed-qualified alias class (forms 179-182); the
+self-test now durably rejects one hundred forty-seven
 mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
@@ -1101,8 +1102,9 @@ class (forms 98-100), the container-element class
 and interface-binding class (forms 145-148), the
 generic-receiver-binding class (forms 151-156), the
 alias-spelled generic binding class (forms 159-164), and the
-reader-shape binding class (forms 167-174); the
-self-test now durably rejects one hundred forty-three mutation forms. Decision 5A remains the single open item and
+reader-shape binding class (forms 167-174), and the
+renamed-qualified alias class (forms 179-182); the
+self-test now durably rejects one hundred forty-seven mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

@@ -153,9 +153,19 @@ class (forms 140-143), the explicit-instantiation and
 interface-binding class (forms 145-148), the
 generic-receiver-binding class (forms 151-156), the
 alias-spelled generic binding class (forms 159-164), and the
-reader-shape binding class (forms 167-174); the durable
-rejection set is now one hundred forty-three mutation
-forms. The records
+reader-shape binding class (forms 167-174), and the renamed-qualified alias
+  class (forms 179-182); the durable
+rejection set is now one hundred forty-seven mutation
+forms. The round-24 gate re-review then found the import-renamed qualified
+alias class: an import mm ".../internal/mapping" local qualifier was
+never translated back to a package path, so mm.MappingFile generic type
+arguments, local alias chains of renamed imports, element spellings,
+declared variables, and type assertions all escaped with gate exit 0.
+Fixed in the go-gate scanner with per-directory alias registration
+(pkgAliasesByDir), a per-file import snapshot (currentImports), and
+qualifier translation in aliasLookup; pinned as self-test forms
+179-182 (rejects) and 183-184 (benign controls). The durable rejection
+set is now one hundred forty-seven mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -454,8 +464,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   interface-binding class (forms 145-148), the
   generic-receiver-binding class (forms 151-156), the
   alias-spelled generic binding class (forms 159-164), and the
-  reader-shape binding class (forms 167-174);
-  the self-test now durably rejects one hundred forty-three mutation forms. The
+  reader-shape binding class (forms 167-174), and the
+  renamed-qualified alias class (forms 179-182);
+  the self-test now durably rejects one hundred forty-seven mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1580,7 +1591,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 143-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 147-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2217,7 +2228,22 @@ execution record; the closing result is appended there when it completes.
   and genericMethodResults/methodMeta consultation in resolveStruct
   and classifyStruct. Forms 167-174 pin the eight escapes; forms
   175-178 pin the benign bytes-backed controls.
+- Ampere round 24 found the import-renamed qualified alias class
+  (HEAD 932a0e8): a locally renamed import qualifier (import mm
+  ".../internal/mapping") was never translated back to a package
+  path, so mm.MappingFile generic type arguments, local alias chains
+  of renamed imports (type MChainRen = mm.MappingFile), container
+  element spellings ([]mm.MappingFile), declared variables
+  (var z mm.MappingFile; z.Chdir()), and type assertions
+  (v.(mm.MappingFile).Chdir()) all bypassed the gate with exit 0.
+  Fixed with a per-directory alias registry (pkgAliasesByDir keyed by
+  relative package dir), a per-file import snapshot (currentImports),
+  and aliasLookup qualifier translation through the import map before
+  matching the scanned directory; resolveTypeText, resolveDefinedType
+  and resolveStructName all route through aliasLookup. Forms 179-182
+  pin the four rejects; forms 183-184 pin the benign renamed-qualified
+  bytes controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 143-form self-test, ten cross-compiles,
+  import graph with the 147-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
