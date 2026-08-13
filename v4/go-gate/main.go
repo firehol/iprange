@@ -1020,6 +1020,11 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo, dir string) {
 					}
 				}
 				applyKind(pkg, name.Name, cls)
+				// var s = S{r: f} registers the literal's named fields
+				// so later s.r reads stay file-tainted.
+				if len(vs.Values) > i {
+					registerCompositeFieldTaints(vs.Values[i], name.Name, pkg, info, imports)
+				}
 				// A package-level producer var is visible to every file
 				// of the declaring directory through pkg.funcFile; a
 				// caller in another package of the module has no view
@@ -2291,10 +2296,12 @@ func fileCapableReceiverType(x ast.Expr, info pkgInfo, imports map[string]string
 	if rt := fileHandleTypeText(text, info, imports); rt != "" {
 		return rt
 	}
-	base := strings.TrimPrefix(text, "*")
+	base := genericBase(strings.TrimPrefix(text, "*"))
 	base = resolveTypeText(base, info)
 	base = resolveDefinedType(base, info)
-	for depth := 0; depth < 4 && base != ""; depth++ {
+	seen := map[string]bool{}
+	for base != "" && !seen[base] {
+		seen[base] = true
 		if _, isStruct := info.structs[base]; !isStruct {
 			return ""
 		}
@@ -2308,7 +2315,7 @@ func fileCapableReceiverType(x ast.Expr, info pkgInfo, imports map[string]string
 			if fileHandleTypeText(emb, info, imports) != "" {
 				continue
 			}
-			cand := strings.TrimPrefix(emb, "*")
+			cand := genericBase(strings.TrimPrefix(emb, "*"))
 			cand = resolveTypeText(cand, info)
 			cand = resolveDefinedType(cand, info)
 			if _, isStruct := info.structs[cand]; isStruct {
@@ -2322,6 +2329,17 @@ func fileCapableReceiverType(x ast.Expr, info pkgInfo, imports map[string]string
 		base = next
 	}
 	return ""
+}
+
+// genericBase strips an explicit instantiation suffix from a type
+// text (gW[byte] -> gW) so the struct and embedding registries,
+// which key by the bare declared name, resolve a generic wrapper
+// receiver the same way they resolve its definition.
+func genericBase(text string) string {
+	if i := strings.IndexByte(text, '['); i > 0 {
+		return text[:i]
+	}
+	return text
 }
 
 // typeConversionCallee reports whether fun names a declared type (a
@@ -3038,14 +3056,30 @@ func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imp
 	var pos []int
 	for ri, rt := range info.funcs[id.Name] {
 		for _, tp := range tps {
-			if rt != tp {
-				continue
-			}
+			fileArg := false
 			for ai, pt := range params {
 				if bindsTypeParam(pt, tp) && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
-					pos = append(pos, ri)
+					fileArg = true
 					break
 				}
+			}
+			if !fileArg {
+				continue
+			}
+			// An exact type-parameter result keeps the substituted
+			// argument's taint (idf[*os.File]()). A result spelled as
+			// an interface (func wrap[T io.Reader](v T) io.Reader
+			// { return v }) erases the taint when the file flows
+			// through the type parameter into the result; the gate
+			// keeps the file taint there too, so the metadata
+			// inflater exemption cannot consume the file through an
+			// identity-like generic. A bare same-package declared
+			// result can only compile with a file argument when the
+			// type parameter's constraint is an interface, so the
+			// result is interface-erased as well.
+			if rt == tp || interfaceErasedResult(rt, info) {
+				pos = append(pos, ri)
+				break
 			}
 		}
 	}
@@ -3053,6 +3087,31 @@ func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imp
 		return nil
 	}
 	return pos
+}
+
+// interfaceErasedResult reports whether a declared result type text
+// erases the file taint when a type-parameter-bound argument flows
+// into it: the builtin any/error, an anonymous interface literal, a
+// qualified stdlib io interface (io.Reader and friends), or a bare
+// same-package declared type (structs and interfaces register under
+// the same bare key; with a file-typed argument the call only
+// compiles when the constraint is an interface, so the result is
+// interface-erased either way).
+func interfaceErasedResult(rt string, info pkgInfo) bool {
+	if rt == "any" || rt == "error" || strings.HasPrefix(rt, "interface") {
+		return true
+	}
+	if i := strings.IndexByte(rt, '.'); i > 0 {
+		return rt[:i] == "io"
+	}
+	if _, isS := info.structs[rt]; isS {
+		return true
+	}
+	if _, isA := info.aliases[rt]; isA {
+		return true
+	}
+	_, isD := info.definedTo[rt]
+	return isD
 }
 
 // pkgVarRoot reports whether the root identifier of a fieldTaint key
@@ -3505,6 +3564,12 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 								}
 							}
 							applyKind(st, name.Name, cls)
+							// var s = S{r: f} registers the literal's
+							// named fields so later s.r reads stay
+							// file-tainted.
+							if len(vs.Values) > i {
+								registerCompositeFieldTaints(vs.Values[i], name.Name, st, info, imports)
+							}
 						}
 					}
 				}
@@ -3770,6 +3835,36 @@ func applyLHSField(lhs, rhs ast.Expr, cls kind, st *taints, info pkgInfo, import
 				break
 			}
 		}
+		// t.s = S{r: f} registers the nested named fields the same
+		// way an ident binding does (t.s.r stays file-tainted).
+		registerCompositeFieldTaints(cl, exprText(sel.X)+"."+sel.Sel.Name, st, info, imports)
+	}
+}
+
+// registerCompositeFieldTaints records field-level file taint for a
+// composite literal bound to a name (s := S{r: f} -> s.r is a file):
+// the container kind alone does not taint later field reads, so the
+// binding must register each named element and any nested literal the
+// same way (s := S{inner: I{r: f}} -> s.inner.r).
+func registerCompositeFieldTaints(rhs ast.Expr, bound string, st *taints, info pkgInfo, imports map[string]string) {
+	cl, ok := rhs.(*ast.CompositeLit)
+	if !ok || bound == "" {
+		return
+	}
+	for _, el := range cl.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key := bound + "." + exprText(kv.Key)
+		if isFileExpr(kv.Value, st, info, imports) {
+			st.fieldTaint[key] = kindFile
+		} else if isFileOrContainer(kv.Value, st, info, imports) {
+			st.fieldTaint[key] = kindContainer
+		}
+		if inner, ok := kv.Value.(*ast.CompositeLit); ok {
+			registerCompositeFieldTaints(inner, key, st, info, imports)
+		}
 	}
 }
 
@@ -3789,6 +3884,9 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	}
 	cls := classify(rhs, st, info, imports)
 	applyKind(st, id.Name, cls)
+	// s := S{r: f} registers the literal's named fields so later
+	// s.r reads stay file-tainted.
+	registerCompositeFieldTaints(rhs, id.Name, st, info, imports)
 	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, st, info) {
 		st.funcFile[id.Name] = true
 	}

@@ -9060,12 +9060,137 @@ MUTEOF
 	add_mut internal/reader/gatemut_zr_linux.go
 	run_mut "file value laundered through an interface conversion"
 
+	# --- 267: generic identity erasing the taint into an interface ------
+	# func probeWrapR[T io.Reader](v T) io.Reader { return v } binds a
+	# file argument to a type parameter and returns an interface-typed
+	# result; the generic result propagation only tracked exact
+	# type-parameter results, so zr := probeWrapR(f) erased the taint
+	# and the exempted inflater shape consumed file bytes (live, gate
+	# exit 0). Interface-erased results now keep the file taint.
+	cat > internal/reader/gatemut_geniface_linux.go <<'MUTEOF'
+//go:build linux
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func probeWrapR[T io.Reader](v T) io.Reader { return v }
+
+func gateGenIface267(f *os.File, n int) ([]byte, error) {
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	zr := probeWrapR(f)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_geniface_linux.go
+	run_mut "generic identity erasing the taint into an interface"
+
+	# --- 268: composite-literal field launder ----------------------------
+	# s := gateLaunderS{r: f} followed by zr := s.r dropped the taint:
+	# field taint was registered only for selector writes, so the
+	# literal's named element stayed clean and the exempted inflater
+	# shape consumed file bytes (live, gate exit 0). Composite-literal
+	# bindings now register named-element field taint.
+	cat > internal/reader/gatemut_complit_linux.go <<'MUTEOF'
+//go:build linux
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gateLaunderS struct{ r io.Reader }
+
+func gateComplit268(f *os.File, n int) ([]byte, error) {
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	s := gateLaunderS{r: f}
+	zr := s.r
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_complit_linux.go
+	run_mut "composite-literal field launder"
+
+	# --- 269: method expression on an instantiated generic wrapper ------
+	# type gW[T any] struct{ *os.Root } promotes Open/OpenFile/Create;
+	# (*gW[byte]).Open bound the method with the explicit receiver while
+	# the receiver resolution looked up the instantiated spelling
+	# (struct and embedding registries key by the bare name), so the
+	# bound open reached a flate reader untainted (live, gate exit 0).
+	# Generic instantiation suffixes now strip before registry lookup.
+	cat > internal/reader/gatemut_genwrap_linux.go <<'MUTEOF'
+//go:build linux
+package reader
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+type gW[T any] struct{ *os.Root }
+
+func gateGenWrap269(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	w := &gW[byte]{Root: root}
+	open := (*gW[byte]).Open
+	f, _ := open(w, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genwrap_linux.go
+	run_mut "method expression on an instantiated generic wrapper"
+
+	# --- 270: embedding chain deeper than the original walk budget ------
+	# A five-level wrapper chain (gDE5 -> gDE4 -> gDE3 -> gDE2 -> gDE1 ->
+	# *os.Root) hid the promoted Open from the bounded embedding walk;
+	# (*gDE5).Open bound the method and a flate reader consumed the file
+	# (live, gate exit 0). The embedding walk now tracks visited types
+	# and runs to a fixpoint.
+	cat > internal/reader/gatemut_deep_linux.go <<'MUTEOF'
+//go:build linux
+package reader
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+type gDE1 struct{ *os.Root }
+type gDE2 struct{ *gDE1 }
+type gDE3 struct{ *gDE2 }
+type gDE4 struct{ *gDE3 }
+type gDE5 struct{ *gDE4 }
+
+func gateDeep270(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	w := &gDE5{&gDE4{&gDE3{&gDE2{&gDE1{Root: root}}}}}
+	open := (*gDE5).Open
+	f, _ := open(w, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_deep_linux.go
+	run_mut "embedding chain deeper than the original walk budget"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 216 mutation forms rejected)"
+	echo "import-graph self-test passed (all 220 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
