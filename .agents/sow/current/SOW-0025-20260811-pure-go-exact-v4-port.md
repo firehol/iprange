@@ -139,8 +139,9 @@ the round-6 nested-field/named-helper/chan-pass family, the
 named-method extension, the nested-method-receiver extension, the
 method-value family, the generic pass-through family, the
 generic-element family, the chan-result method-value class, and the
-field-assignment class (forms 73-97); the durable rejection set is
-now eighty-four mutation forms. The records
+field-assignment class and the channel-consumer class
+(forms 73-102); the durable rejection set is
+now eighty-seven mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -423,9 +424,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   78-81), the nested-method-receiver extension (forms 82-83),
   the method-value family (forms 84-87), the generic
   pass-through family (forms 88-89), the generic-element
-  family, the chan-result method-value class, and the
-  field-assignment class (forms 92-95);
-  the self-test now durably rejects eighty-four mutation forms. The
+  family, the chan-result method-value class, the
+  field-assignment class (forms 92-95), and the channel-consumer
+  class (forms 98-100);
+  the self-test now durably rejects eighty-seven mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1550,7 +1552,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 84-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 87-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2024,7 +2026,13 @@ execution record; the closing result is appended there when it completes.
   producerCall, and package-var fieldTaint propagation from the
   prescan. Forms 92-95 pin the four escapes; forms 96-97 pin the
   benign generic-container and benign func-field controls.
+- Self-audit before Ampere round 10 closed the remaining channel
+  consumers: receive classification (ARROW) distinguished chan-file
+  element kind, RangeStmt classified the ranged expression whole
+  (struct-field channels and method values), and SendStmt recorded
+  selector-typed channel fields. Forms 98-100 pin the three escapes;
+  forms 101-102 pin the benign range and benign receive controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 84-form self-test, nine cross-compiles,
+  import graph with the 87-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
