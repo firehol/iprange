@@ -1480,13 +1480,17 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			// (rr := &gR[*os.File]{}; rr.mk() T) produces the file
 			// after the receiver's type arguments are substituted.
 			if mresG, okG := genericMethodResults(sel, st, info); okG {
+				// A func-typed generic method result (T bound to
+				// func() *os.File) must stay a func-file, not be
+				// claimed as a direct file: classify's own mresG
+				// loop yields kindFuncFile and applyKind records
+				// the binding in st.funcFile, so a later call of
+				// the bound func keeps the file taint. Claiming it
+				// here as a file position made the invocation lose
+				// the taint and let a file-backed zr slip through
+				// the io.ReadFull exemption.
 				if pos := positionsOf("*os.File", mresG); pos != nil {
 					return call, pos, true
-				}
-				for _, r := range mresG {
-					if funcTextFile(resolveTypeText(r, info)) {
-						return call, []int{0}, true
-					}
 				}
 			}
 		}
