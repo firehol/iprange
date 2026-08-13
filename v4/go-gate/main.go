@@ -116,6 +116,19 @@ var approvedFileMethods = map[string]bool{
 // through this process-wide registry.
 var qualifiedAliases = map[string]string{}
 
+// pkgAliasesByDir keys directory-relative package paths
+// ("internal/mapping") to the type aliases that directory declares,
+// so an alias imported under a renamed local identifier (import mm
+// ".../internal/mapping"; mm.MappingFile) resolves through the
+// importing file's own import map.
+var pkgAliasesByDir = map[string]map[string]string{}
+
+// currentImports snapshots the import map of the file being analyzed.
+// The scanner is single-threaded and processes one file at a time;
+// the snapshot lets alias resolution translate the local qualifier
+// of a cross-package type argument back to its package path.
+var currentImports map[string]string
+
 type pkgInfo struct {
 	structs        map[string]map[string]string
 	funcs          map[string][]string
@@ -228,12 +241,13 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 			os.Exit(1)
 		}
 		srcs[p], fses[p], parsed[p] = src, fset, file
-		collectPkgInfo(file, &info)
+		collectPkgInfo(p, file, &info)
 	}
 	return info, srcs, fses, parsed
 }
 
-func collectPkgInfo(f *ast.File, info *pkgInfo) {
+func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
+	pkgDir := filepath.Dir(path)
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok || gd.Tok != token.TYPE {
@@ -252,6 +266,10 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 				// as generic type arguments or declared types.
 				info.aliases[ts.Name.Name] = exprText(ts.Type)
 				qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = exprText(ts.Type)
+				if pkgAliasesByDir[pkgDir] == nil {
+					pkgAliasesByDir[pkgDir] = map[string]string{}
+				}
+				pkgAliasesByDir[pkgDir][ts.Name.Name] = exprText(ts.Type)
 				continue
 			}
 			if it, ok := ts.Type.(*ast.InterfaceType); ok {
@@ -512,6 +530,7 @@ func cloneTaints(t *taints) *taints {
 // shared package taint so every file of the package sees them.
 func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 	imports := map[string]string{}
+	currentImports = imports
 	for _, imp := range f.Imports {
 		pathText := strings.Trim(imp.Path.Value, `"`)
 		name := pathText
@@ -520,6 +539,7 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 		}
 		imports[pathText] = pathText
 		imports[name] = pathText
+		currentImports = imports
 	}
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
@@ -608,6 +628,7 @@ func fileImports(f *ast.File, reporter *reporter) map[string]string {
 func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkgInfo, shared *taints) error {
 	reporter := &reporter{path: path}
 	imports := fileImports(f, reporter)
+	currentImports = imports
 
 	pkg := cloneTaints(shared)
 
@@ -775,16 +796,41 @@ func chanElemFuncFileDepth(text string, info pkgInfo, depth int) bool {
 	return false
 }
 
+// aliasLookup resolves an alias name through the same-package alias
+// map, the clause-name cross-package registry, or the current file's
+// import map (a locally renamed qualifier such as mm.MappingFile).
+func aliasLookup(name string, info pkgInfo) (string, bool) {
+	if a, ok := info.aliases[name]; ok {
+		return a, true
+	}
+	if a, ok := qualifiedAliases[name]; ok {
+		return a, true
+	}
+	// Cross-package alias spelled with a locally renamed import
+	// qualifier: translate the qualifier through the current file's
+	// import map, then match the scanned directory of the alias.
+	if i := strings.IndexByte(name, '.'); i > 0 && i < len(name)-1 {
+		q, rest := name[:i], name[i+1:]
+		if spec, ok := currentImports[q]; ok {
+			for dir, aliases := range pkgAliasesByDir {
+				if !strings.HasSuffix(spec, "/"+dir) && spec != dir {
+					continue
+				}
+				if a, ok := aliases[rest]; ok {
+					return a, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 // resolveTypeText expands type aliases (bare or pointer-qualified) so a
 // `type zr = *os.File` alias is seen as a file type by the taint checks.
 func resolveTypeText(text string, info pkgInfo) string {
 	for i := 0; i < 8; i++ {
 		stripped := strings.TrimPrefix(text, "*")
-		if a, ok := info.aliases[stripped]; ok {
-			text = strings.Repeat("*", len(text)-len(stripped)) + a
-			continue
-		}
-		if a, ok := qualifiedAliases[stripped]; ok {
+		if a, ok := aliasLookup(stripped, info); ok {
 			text = strings.Repeat("*", len(text)-len(stripped)) + a
 			continue
 		}
@@ -1680,6 +1726,7 @@ func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *ta
 		added := 0
 		for _, f := range list {
 			imp := fileImports(parsed[f], nil)
+			currentImports = imp
 			for _, decl := range parsed[f].Decls {
 				fd, ok := decl.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
