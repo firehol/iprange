@@ -3833,6 +3833,125 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta133.orig" internal/reader/metadata.go
 
+	# --- 134: range-variable container index receiver ---------------------
+	# for _, sl := range arrx { sl[0].get() } with var arrx [][]*gs: the
+	# range variable must record its element type so it can serve as an
+	# indexed base.
+	cat > internal/reader/gatemut_rangeidx.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsRG134 struct{}
+
+func (gsRG134) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var arrx134 [][]*gsRG134
+
+func rgGet134() io.ReadCloser {
+	for _, sl := range arrx134 {
+		return sl[0].get()
+	}
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rangeidx.go
+	cp internal/reader/metadata.go "$self_tree/meta134.orig"
+	INS='zr = rgGet134()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta134.new" && mv "$self_tree/meta134.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rgGet134()' internal/reader/metadata.go; then
+		run_mut "range-variable container index receiver"
+	else
+		echo "self-test ERROR: form 134 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta134.orig" internal/reader/metadata.go
+
+	# --- 135: composite-literal indexed receiver --------------------------
+	# map[string]*gs{"a": {}}["a"].get(): the literal's declared type
+	# must name the container for the element resolution.
+	cat > internal/reader/gatemut_litidx.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsMK135 struct{}
+
+func (gsMK135) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func litGet135() io.ReadCloser { return map[string]*gsMK135{"a": {}}["a"].get() }
+MUTEOF
+	add_mut internal/reader/gatemut_litidx.go
+	cp internal/reader/metadata.go "$self_tree/meta135.orig"
+	INS='zr = litGet135()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta135.new" && mv "$self_tree/meta135.new" internal/reader/metadata.go
+	if grep -Fq 'zr = litGet135()' internal/reader/metadata.go; then
+		run_mut "composite-literal indexed receiver"
+	else
+		echo "self-test ERROR: form 135 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta135.orig" internal/reader/metadata.go
+
+	# --- 136: benign composite-literal indexed receiver must pass ---------
+	# Same literal-indexed shape as form 135 with a bytes-only payload.
+	cat > internal/reader/gatemut_benlitidx.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcq136 struct{ *bytes.Reader }
+
+func (w *rcq136) Close() error { return nil }
+
+type gsBQ136 struct{}
+
+func (gsBQ136) get() io.ReadCloser { return &rcq136{bytes.NewReader(nil)} }
+
+func litGetB136() io.ReadCloser { return map[string]*gsBQ136{"a": {}}["a"].get() }
+MUTEOF
+	add_mut internal/reader/gatemut_benlitidx.go
+	cp internal/reader/metadata.go "$self_tree/meta136.orig"
+	INS='zr = litGetB136()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta136.new" && mv "$self_tree/meta136.new" internal/reader/metadata.go
+	if grep -Fq 'zr = litGetB136()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign composite-literal indexed receiver passes the gate"
+		else
+			echo "self-test MISS: benign composite-literal indexed receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 136 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta136.orig" internal/reader/metadata.go
+
+
 
 
 
@@ -3891,7 +4010,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 111 mutation forms rejected)"
+	echo "import-graph self-test passed (all 113 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
