@@ -164,8 +164,9 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now one hundred eighty-five
-mutation forms. The round-24 gate re-review then found the import-renamed qualified
+231); the durable rejection set is now one hundred eighty-seven
+mutation forms (round-36 closed the dup/exec subprocess escape and the
+bodyless assembly-stub class, forms 236-237). The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -309,7 +310,14 @@ embedded-entry argument list. Pinned as self-test forms 225-226
 round-32 cgo-import, raw-syscall, linkname, no-error syscall, and
 preadv2/pwritev2 rejects with form 231 the benign lifecycle
 control. The durable rejection set is now one hundred eighty-five
-mutation forms. The records
+mutation forms. The round-36 gate re-review then found the
+subprocess-escape class: dup'ing the database descriptor onto stdin and
+exec'ing a reader (unix.Dup2 + unix.Exec, /bin/cat) streams file content
+out with no banned read call, and a bodyless Go declaration attaches an
+assembly syscall body the AST scan cannot see. Fixed by banning the
+Dup/Dup2/Dup3/Exec/ForkExec selectors and rejecting bodyless
+declarations outright; pinned as self-test forms 236-237. The durable
+rejection set is now one hundred eighty-seven mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -618,7 +626,7 @@ sidecars, live coordination, and publication remain Milestone 4.
   the remote-interface and generic-instantiation class (forms
   213-217), the defined-hop instantiation class (forms 222-223), and
   the nested generic-instantiation class (forms 225-226);
-  the self-test now durably rejects one hundred eighty-five mutation forms (round-32 rejects 228-235, benign control 231). The
+  the self-test now durably rejects one hundred eighty-five mutation forms (round-32 rejects 228-235, benign control 231); the round-36 re-review then closed the dup/exec subprocess-escape and bodyless assembly-stub classes as forms 236-237, bringing the set to one hundred eighty-seven mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1743,7 +1751,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 185-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 187-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2554,6 +2562,6 @@ execution record; the closing result is appended there when it completes.
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 185-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2), ten cross-compiles,
+  import graph with the 187-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237 cover the dup/exec subprocess escape and bodyless assembly stubs), ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).

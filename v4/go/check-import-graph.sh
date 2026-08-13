@@ -8125,12 +8125,59 @@ MUTEOF
 	add_mut internal/mapping/gatemut_pwritev2_linux.go
 	run_mut "unix.Pwritev2 descriptor write in the mapping owner"
 
+	# --- 236: unix.Dup2 + unix.Exec subprocess content transfer --------
+	# Duplicating the database descriptor onto stdin and exec'ing a
+	# reader process streams file content out without a single banned
+	# read call; the dup/exec family must be rejected by name.
+	cat > internal/mapping/gatemut_dupexec_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func gateDup2Exec236(file *os.File) error {
+	if err := unix.Dup2(int(file.Fd()), 0); err != nil {
+		return err
+	}
+	return unix.Exec("/bin/cat", []string{"/bin/cat"}, nil)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_dupexec_linux.go
+	run_mut "unix.Dup2+Exec subprocess content transfer"
+
+	# --- 237: bodyless assembly-backed raw read -------------------------
+	# A bodyless Go declaration is the only way to attach an assembly
+	# syscall body; the scanner must reject the declaration itself and
+	# must never nil-guard it into acceptance. The .s probe is never
+	# compiled: the self-test tree is scanned, not built.
+	cat > internal/mapping/gatemut_asmread_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+func gateAsmRead237(fd uintptr, p []byte) (int, error)
+MUTEOF
+	cat > internal/mapping/gatemut_asmread_linux.s <<'MUTEOF'
+//go:build linux
+
+TEXT ·gateAsmRead237(SB),NOSPLIT,$0
+	MOVQ $0, AX
+	SYSCALL
+	RET
+MUTEOF
+	add_mut internal/mapping/gatemut_asmread_linux.go
+	add_mut internal/mapping/gatemut_asmread_linux.s
+	run_mut "bodyless assembly-backed raw read"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 185 mutation forms rejected)"
+	echo "import-graph self-test passed (all 187 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

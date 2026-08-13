@@ -107,8 +107,9 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), the cgo-import, raw-syscall,
 linkname, no-error syscall, and preadv2/pwritev2 classes (forms
 228-230 and 232-235) with the benign lifecycle control (form
-231); the self-test now durably rejects one hundred eighty-five
-mutation forms (details in the
+231); the self-test now durably rejects one hundred eighty-seven
+mutation forms (round-36 forms 236-237 pin the dup/exec subprocess
+escape and the bodyless assembly-stub class; details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -166,7 +167,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 185/185 mutation forms rejected (plus 50 benign controls)
+GOOS/GOARCH pairs): 187/187 mutation forms rejected (plus 50 benign controls)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -1140,7 +1141,7 @@ round-32 cgo-import, raw-syscall, and linkname gate class (forms
 capability, and //go:linkname aliasing), fixed in the round-32 gate
 pass recorded in the active SOW exec log (rejects extended with the
 no-error syscall and preadv2/pwritev2 classes, forms 232-235); the
-self-test now durably rejects one hundred eighty-five mutation forms. Decision 5A remains the single open item and
+self-test now durably rejects one hundred eighty-seven mutation forms (forms 236-237 pin the round-36 dup/exec subprocess escape and bodyless assembly-stub rejection). Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

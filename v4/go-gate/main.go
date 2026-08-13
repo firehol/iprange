@@ -51,7 +51,7 @@ const moduleInternalPrefix = "github.com/firehol/iprange/v4/go/internal"
 // that exist only to move bytes. compress/flate is deliberately absent:
 // the metadata inflater reads an in-memory payload.
 var bannedImports = map[string]bool{
-	"C": true, // cgo: C.pread etc. would bypass every Go selector ban
+	"C":           true, // cgo: C.pread etc. would bypass every Go selector ban
 	"archive/tar": true, "archive/zip": true,
 	"bufio": true, "compress/bzip2": true, "compress/gzip": true,
 	"compress/lzw": true, "compress/zlib": true,
@@ -70,10 +70,12 @@ var bannedImports = map[string]bool{
 
 // bannedSelectors are the content-transfer call families. The list is
 // deliberately broad: it also covers function aliases, method values,
-// reflection Invocation, and x/sys descriptor variants.
+// reflection Invocation, x/sys descriptor variants, and the subprocess
+// escape (dup the descriptor onto stdin, then exec a reader).
 var bannedSelectors = map[string]bool{
 	"Call": true, "CallSlice": true, "Copy": true, "CopyBuffer": true,
-	"CopyFileRange": true, "CopyN": true, "Decode": true, "Encode": true,
+	"CopyFileRange": true, "CopyN": true, "Decode": true, "Dup": true, "Dup2": true, "Dup3": true,
+	"Encode": true, "Exec": true, "ForkExec": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
@@ -82,14 +84,14 @@ var bannedSelectors = map[string]bool{
 	"RawSyscall": true, "RawSyscall6": true, "RawSyscall9": true,
 	"RawSyscallN": true, "RawSyscallNoError": true, "Read": true,
 	"ReadAll": true,
-	"ReadAt": true, "ReadAtLeast": true, "ReadByte": true, "ReadFile": true,
+	"ReadAt":  true, "ReadAtLeast": true, "ReadByte": true, "ReadFile": true,
 	"ReadFrom": true, "ReadFull": true, "ReadLine": true, "ReadRune": true,
 	"ReadString": true, "Readv": true, "Scan": true, "Scanf": true,
 	"Scanln": true, "Seek": true, "Sendfile": true, "Splice": true,
 	"StartProcess": true,
 	"Syscall":      true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
 	"SyscallNoError": true,
-	"Write": true, "WriteAt": true, "WriteByte": true, "WriteFile": true,
+	"Write":          true, "WriteAt": true, "WriteByte": true, "WriteFile": true,
 	"WriteRune": true, "WriteString": true, "WriteTo": true, "Writev": true,
 }
 
@@ -887,6 +889,14 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
+			if d.Body == nil {
+				// A bodyless Go function can only be implemented by
+				// assembly (or //go:linkname, banned above): both attach
+				// a syscall body the source gate cannot see. Reject the
+				// declaration itself instead of crashing on it.
+				reporter.fail("bodyless function declaration " + d.Name.Name + " (assembly stub)")
+				continue
+			}
 			st := cloneTaints(pkg)
 			addSignatureTaints(st, d.Recv, info)
 			addSignatureTaints(st, d.Type.Params, info)
