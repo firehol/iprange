@@ -4526,8 +4526,8 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 	}
 }
 
-// findExemptions locates the three tolerated in-memory inflater call
-// shapes inside internal/reader/metadata.go and records their selector
+// findExemptions locates the tolerated in-memory inflater call shapes
+// inside internal/reader/metadata.go and records their selector
 // positions so the rules pass ignores exactly those nodes.
 func findExemptions(fd *ast.FuncDecl, src []byte, fset *token.FileSet, st *taints, info pkgInfo, imports map[string]string) map[token.Pos]bool {
 	exempts := map[token.Pos]bool{}

@@ -91,8 +91,6 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 	}
 	byteOff := uint64(start) * 8
 	byteLen := uint64(len(output)) * 8
-	var data []byte
-	var err error
 	switch v.storage {
 	case format.MembershipStorageInline:
 		// The record was validated and decoded at lookup; slice the
@@ -101,7 +99,7 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 		if byteOff+byteLen > uint64(v.bitmapLen) {
 			return corrupt("inline bitmap offset out of range")
 		}
-		data = v.leaf.Inline[byteOff : byteOff+byteLen]
+		data := v.leaf.Inline[byteOff : byteOff+byteLen]
 		for i := range output {
 			output[i] = format.U64(data[i*8:])
 		}
@@ -132,10 +130,6 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 			written += count
 			pos += uint64(count) * 8
 		}
-		data = nil
-	}
-	if err != nil {
-		return err
 	}
 	if uint64(start)+uint64(len(output)) == uint64(v.wordCount) && output[len(output)-1] == 0 {
 		return corrupt("membership bitmap has a trailing zero word")

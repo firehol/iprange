@@ -268,6 +268,9 @@ type Pin struct {
 // Close returns the pin to its reader. A second Close through any alias or
 // copy reports WrongState.
 func (p *Pin) Close() error {
+	if p.st == nil {
+		return &Error{Code: ErrorWrongState, Detail: "pin without a live reader"}
+	}
 	if p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "pin already closed"}
 	}
@@ -277,7 +280,7 @@ func (p *Pin) Close() error {
 }
 
 func (p *Pin) checkOpen() error {
-	if p.st.closed {
+	if p.st == nil || p.st.closed {
 		return &Error{Code: ErrorWrongState, Detail: "pin closed"}
 	}
 	return nil

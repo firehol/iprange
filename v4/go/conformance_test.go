@@ -1302,6 +1302,16 @@ func TestPinValueCopyKeepsReaderBusy(t *testing.T) {
 	}
 }
 
+// TestPinZeroValueClose pins the zero Pin contract: a Pin that was never
+// created by a reader (zero value) reports WrongState instead of panicking,
+// matching the inert zero-view contract.
+func TestPinZeroValueClose(t *testing.T) {
+	var p Pin
+	if fe := errorAsCode(p.Close()); fe != ErrorWrongState {
+		t.Fatalf("zero Pin close must report WrongState, got %v", fe)
+	}
+}
+
 // TestPinValueCopyCannotReleaseSecondPin pins the exact audit scenario: two
 // independent pins exist, then one value copy of the first pin is made and
 // both the first pin and its copy are closed. The reader must remain

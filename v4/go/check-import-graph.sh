@@ -28,7 +28,7 @@
 #   - any *os.File value used outside the approved capability surface
 #     (mapping lifecycle methods and same-package / module-internal / x/sys
 #     consumers).
-# The three in-memory inflater nodes in internal/reader/metadata.go
+# The in-memory inflater call sites in internal/reader/metadata.go
 # (c.r.Read(p), c.r.ReadByte(), and the two exact
 # io.ReadFull(zr, out[...int(meta.MetadataUncompressed)]) shapes) are
 # exempted as exact call shapes and only when their receiver/arguments are
