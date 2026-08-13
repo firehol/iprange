@@ -7670,11 +7670,146 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta221.orig" internal/reader/metadata.go
 
+
+	# --- 222: defined type over instantiated generic interface ------------
+	# type D IBaseG[func() *os.File]; type IEmb interface{ D }: the
+	# embedding promotion must substitute the type arguments held in the
+	# defined chain, not only in the raw embedded spelling.
+	cat > internal/reader/gatemut_definst.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type IBaseGA222[T any] interface{ Get() T }
+type DA222 IBaseGA222[func() *os.File]
+type IEmbA222 interface{ DA222 }
+
+type gRZ222[T any] struct{}
+
+func (r gRZ222[T]) mk() T { var z T; return z }
+
+func gb222() io.ReadCloser {
+	x := gRZ222[IEmbA222]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_definst.go
+	cp internal/reader/metadata.go "$self_tree/meta222.orig"
+	INS='zr = gb222()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta222.new" && mv "$self_tree/meta222.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb222()' internal/reader/metadata.go; then
+		run_mut "defined type over instantiated generic interface embedding"
+	else
+		echo "self-test ERROR: form 222 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta222.orig" internal/reader/metadata.go
+
+
+	# --- 223: renamed-qualified defined-over-instantiated interface -------
+	# Combined shape: the defined hop's target spells the generic
+	# interface with a renamed import qualifier.
+	cat > internal/mapping/gatemut_rndefinst.go <<'MUTEOF'
+package mapping
+
+type IBaseGG223[T any] interface{ Get() T }
+
+type Mk223[T any] struct{}
+
+func (r Mk223[T]) Mk() T { var z T; return z }
+MUTEOF
+	add_mut internal/mapping/gatemut_rndefinst.go
+	cat > internal/reader/gatemut_rndefinst.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type DG223 mm.IBaseGG223[func() *os.File]
+type IEmbG223 interface{ DG223 }
+
+type gRZ223[T any] struct{}
+
+func (r gRZ223[T]) mk() T { var z T; return z }
+
+func gb223() io.ReadCloser {
+	x := gRZ223[IEmbG223]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rndefinst.go
+	cp internal/reader/metadata.go "$self_tree/meta223.orig"
+	INS='zr = gb223()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta223.new" && mv "$self_tree/meta223.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb223()' internal/reader/metadata.go; then
+		run_mut "renamed-qualified defined-over-instantiated generic interface embedding"
+	else
+		echo "self-test ERROR: form 223 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta223.orig" internal/reader/metadata.go
+
+
+	# --- 224: benign defined-over-instantiated interface bytes twin -------
+	cat > internal/reader/gatemut_bandefinst.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type IBaseGH224[T any] interface{ Get() T }
+type DH224 IBaseGH224[func() *bytes.Reader]
+type IEmbH224 interface{ DH224 }
+
+type gRZ224[T any] struct{}
+
+func (r gRZ224[T]) mk() T { var z T; return z }
+
+func gbb224() io.ReadCloser {
+	x := gRZ224[IEmbH224]{}.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bandefinst.go
+	cp internal/reader/metadata.go "$self_tree/meta224.orig"
+	INS='zr = gbb224()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta224.new" && mv "$self_tree/meta224.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb224()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign defined-over-instantiated interface bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign defined-over-instantiated interface bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 224 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta224.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 174 mutation forms rejected)"
+	echo "import-graph self-test passed (all 176 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
