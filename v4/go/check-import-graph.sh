@@ -8038,11 +8038,99 @@ MUTEOF
 	cleanup_muts
 
 
+	# --- 232: unix.Preadv2 descriptor read in the mapping owner ---------
+	# preadv2(2) reads file content into []byte with an offset; it is
+	# the same content-transfer class as Preadv but was outside the ban.
+	cat > internal/mapping/gatemut_preadv2_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func gatePreadv2Read232(file *os.File, iovs [][]byte) (int, error) {
+	return unix.Preadv2(int(file.Fd()), iovs, 0, 0)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_preadv2_linux.go
+	run_mut "unix.Preadv2 descriptor read in the mapping owner"
+
+	# --- 233: unix.RawSyscallNoError descriptor read --------------------
+	cat > internal/mapping/gatemut_rawsyscallnoerror_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
+func gateRawSyscallNoErrorRead233(file *os.File, out []byte) uintptr {
+	if len(out) == 0 {
+		return 0
+	}
+	r1, _ := unix.RawSyscallNoError(unix.SYS_READ, file.Fd(), uintptr(unsafe.Pointer(&out[0])), uintptr(len(out)))
+	return r1
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_rawsyscallnoerror_linux.go
+	run_mut "unix.RawSyscallNoError descriptor read in the mapping owner"
+
+	# --- 234: unix.SyscallNoError descriptor read -----------------------
+	cat > internal/mapping/gatemut_syscallnoerror_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
+func gateSyscallNoErrorRead234(file *os.File, out []byte) uintptr {
+	if len(out) == 0 {
+		return 0
+	}
+	r1, _ := unix.SyscallNoError(unix.SYS_READ, file.Fd(), uintptr(unsafe.Pointer(&out[0])), uintptr(len(out)))
+	return r1
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_syscallnoerror_linux.go
+	run_mut "unix.SyscallNoError descriptor read in the mapping owner"
+
+
+	# --- 235: unix.Pwritev2 descriptor write in the mapping owner -------
+	# Write-side sibling of Preadv2: content transfer in the opposite
+	# direction is equally forbidden.
+	cat > internal/mapping/gatemut_pwritev2_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func gatePwritev2Write235(file *os.File, iovs [][]byte) (int, error) {
+	return unix.Pwritev2(int(file.Fd()), iovs, 0, 0)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_pwritev2_linux.go
+	run_mut "unix.Pwritev2 descriptor write in the mapping owner"
+
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 181 mutation forms rejected)"
+	echo "import-graph self-test passed (all 185 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

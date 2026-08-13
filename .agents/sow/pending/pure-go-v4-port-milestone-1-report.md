@@ -104,10 +104,11 @@ interface-method and method-result class (forms 199-205), the
 embedded-interface and cross-package chain class (forms 207-210), the
 remote-interface and generic-instantiation class (forms 213-217), the
 defined-hop instantiation class (forms 222-223), the nested generic-
-instantiation class (forms 225-226), and the cgo-import,
-raw-syscall, and linkname classes (forms 228-230) with the benign
-lifecycle control (form 231); the self-test now durably rejects one
-hundred eighty-one mutation forms (details in the
+instantiation class (forms 225-226), the cgo-import, raw-syscall,
+linkname, no-error syscall, and preadv2/pwritev2 classes (forms
+228-230 and 232-235) with the benign lifecycle control (form
+231); the self-test now durably rejects one hundred eighty-five
+mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -165,7 +166,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 181/181 mutation forms rejected (plus 50 benign controls)
+GOOS/GOARCH pairs): 185/185 mutation forms rejected (plus 50 benign controls)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -1137,7 +1138,9 @@ round-31 gate pass recorded in the active SOW exec log; and the
 round-32 cgo-import, raw-syscall, and linkname gate class (forms
 228-230: import "C" + C.pread, unix.RawSyscall on a file
 capability, and //go:linkname aliasing), fixed in the round-32 gate
-pass recorded in the active SOW exec log; the self-test now durably rejects one hundred eighty-one mutation forms. Decision 5A remains the single open item and
+pass recorded in the active SOW exec log (rejects extended with the
+no-error syscall and preadv2/pwritev2 classes, forms 232-235); the
+self-test now durably rejects one hundred eighty-five mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
