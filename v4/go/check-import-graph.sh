@@ -6632,11 +6632,342 @@ MUTEOF
 
 
 
+
+
+	# --- 199: interface-typed generic result of a mixed method, pos 0 ----
+	# A generic receiver bound to an interface whose method declares
+	# (func() *os.File, error): the func-file result position must keep
+	# the invoke-able kind, not be claimed as a raw file position.
+	cat > internal/reader/gatemut_ifacepos0.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type Iface199 interface{ Get() (func() *os.File, error) }
+
+type gRZ199[T any] struct{}
+
+func (r gRZ199[T]) mk() T { var z T; return z }
+
+func gb199() io.ReadCloser {
+	rr := gRZ199[Iface199]{}
+	x := rr.mk()
+	f, _ := x.Get()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_ifacepos0.go
+	cp internal/reader/metadata.go "$self_tree/meta199.orig"
+	INS='zr = gb199()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta199.new" && mv "$self_tree/meta199.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb199()' internal/reader/metadata.go; then
+		run_mut "interface-typed generic result of a mixed method at position 0"
+	else
+		echo "self-test ERROR: form 199 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta199.orig" internal/reader/metadata.go
+
+	# --- 200: interface-typed generic result of a mixed method, pos 1 ----
+	# Same shape with the func-file at the second position.
+	cat > internal/reader/gatemut_ifacepos1.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type Iface200 interface{ Get() (error, func() *os.File) }
+
+type gRZ200[T any] struct{}
+
+func (r gRZ200[T]) mk() T { var z T; return z }
+
+func gb200() io.ReadCloser {
+	rr := gRZ200[Iface200]{}
+	x := rr.mk()
+	_, f := x.Get()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_ifacepos1.go
+	cp internal/reader/metadata.go "$self_tree/meta200.orig"
+	INS='zr = gb200()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta200.new" && mv "$self_tree/meta200.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb200()' internal/reader/metadata.go; then
+		run_mut "interface-typed generic result of a mixed method at position 1"
+	else
+		echo "self-test ERROR: form 200 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta200.orig" internal/reader/metadata.go
+
+	# --- 201: interface-typed generic result, chan-of-func mixed method --
+	# The chan position must keep the chan-of-func carrier kind through
+	# the receive and the invocation.
+	cat > internal/reader/gatemut_ifacechan.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type Iface201 interface{ Get() (chan func() *os.File, error) }
+
+type gRZ201[T any] struct{}
+
+func (r gRZ201[T]) mk() T { var z T; return z }
+
+func gb201() io.ReadCloser {
+	rr := gRZ201[Iface201]{}
+	x := rr.mk()
+	c, _ := x.Get()
+	z := <-c
+	return z()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_ifacechan.go
+	cp internal/reader/metadata.go "$self_tree/meta201.orig"
+	INS='zr = gb201()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta201.new" && mv "$self_tree/meta201.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb201()' internal/reader/metadata.go; then
+		run_mut "interface-typed generic chan-of-func mixed method result"
+	else
+		echo "self-test ERROR: form 201 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta201.orig" internal/reader/metadata.go
+
+	# --- 202: cross-package defined type over a same-package alias -------
+	# mapping: type FA202 = func() *os.File; type FD202 FA202: the
+	# qualified spelling mm.FD202 must expand through the defined hop and
+	# the alias hop to the func text.
+	cat > internal/mapping/gatemut_defalias.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type FA202 = func() *os.File
+type FD202 FA202
+MUTEOF
+	add_mut internal/mapping/gatemut_defalias.go
+	cat > internal/reader/gatemut_defalias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ202[T any] struct{}
+
+func (r gRZ202[T]) mk() T { var z T; return z }
+
+func gb202() io.ReadCloser {
+	rr := gRZ202[mm.FD202]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_defalias.go
+	cp internal/reader/metadata.go "$self_tree/meta202.orig"
+	INS='zr = gb202()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta202.new" && mv "$self_tree/meta202.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb202()' internal/reader/metadata.go; then
+		run_mut "cross-package defined type over a same-package alias"
+	else
+		echo "self-test ERROR: form 202 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta202.orig" internal/reader/metadata.go
+
+	# --- 203: cross-package alias over a defined func type ---------------
+	# mapping: type FD203 func() *os.File; type FE203 = FD203: the
+	# alias hop must resolve into the defined func text.
+	cat > internal/mapping/gatemut_aliasdef.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type FD203 func() *os.File
+type FE203 = FD203
+MUTEOF
+	add_mut internal/mapping/gatemut_aliasdef.go
+	cat > internal/reader/gatemut_aliasdef.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ203[T any] struct{}
+
+func (r gRZ203[T]) mk() T { var z T; return z }
+
+func gb203() io.ReadCloser {
+	rr := gRZ203[mm.FE203]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasdef.go
+	cp internal/reader/metadata.go "$self_tree/meta203.orig"
+	INS='zr = gb203()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta203.new" && mv "$self_tree/meta203.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb203()' internal/reader/metadata.go; then
+		run_mut "cross-package alias over a defined func type"
+	else
+		echo "self-test ERROR: form 203 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta203.orig" internal/reader/metadata.go
+
+	# --- 204: non-generic method mixed results, func-file at pos 0 -------
+	# A plain struct method declaring (func() *os.File, error): the
+	# declared-result path must resolve methods whose ok flag is off.
+	cat > internal/reader/gatemut_methpos0.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type hM204 struct{}
+
+func (h hM204) mk() (func() *os.File, error) { return nil, nil }
+
+func gb204() io.ReadCloser {
+	h := hM204{}
+	f, _ := h.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_methpos0.go
+	cp internal/reader/metadata.go "$self_tree/meta204.orig"
+	INS='zr = gb204()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta204.new" && mv "$self_tree/meta204.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb204()' internal/reader/metadata.go; then
+		run_mut "non-generic method mixed results at position 0"
+	else
+		echo "self-test ERROR: form 204 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta204.orig" internal/reader/metadata.go
+
+	# --- 205: non-generic method mixed results, func-file at pos 1 -------
+	cat > internal/reader/gatemut_methpos1.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type hM205 struct{}
+
+func (h hM205) mk() (int, func() *os.File) { return 0, nil }
+
+func gb205() io.ReadCloser {
+	h := hM205{}
+	_, f := h.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_methpos1.go
+	cp internal/reader/metadata.go "$self_tree/meta205.orig"
+	INS='zr = gb205()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta205.new" && mv "$self_tree/meta205.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb205()' internal/reader/metadata.go; then
+		run_mut "non-generic method mixed results at position 1"
+	else
+		echo "self-test ERROR: form 205 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta205.orig" internal/reader/metadata.go
+
+	# --- 206: benign interface-typed generic mixed bytes method ----------
+	# The same interface-method shape returning func() *mrc206 must stay
+	# benign (no *os.File anywhere in the declared chain).
+	cat > internal/reader/gatemut_beniface.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type mrc206 struct{ *bytes.Reader }
+
+func (w *mrc206) Close() error { return nil }
+
+type Iface206 interface{ Get() (func() *mrc206, error) }
+
+type gRZ206[T any] struct{}
+
+func (r gRZ206[T]) mk() T { var z T; return z }
+
+func gbb206() io.ReadCloser {
+	rr := gRZ206[Iface206]{}
+	x := rr.mk()
+	f, _ := x.Get()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_beniface.go
+	cp internal/reader/metadata.go "$self_tree/meta206.orig"
+	INS='zr = gbb206()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta206.new" && mv "$self_tree/meta206.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb206()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign interface-typed mixed bytes method passes the gate"
+		else
+			echo "self-test MISS: benign interface-typed mixed bytes method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 206 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta206.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 158 mutation forms rejected)"
+	echo "import-graph self-test passed (all 165 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
