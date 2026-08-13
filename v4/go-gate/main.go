@@ -129,6 +129,20 @@ var pkgAliasesByDir = map[string]map[string]string{}
 // of a cross-package type argument back to its package path.
 var currentImports map[string]string
 
+// remoteStructs/remoteMethods/remoteMethodFull/remoteEmbedded mirror
+// every scanned directory's struct and interface metadata under both
+// the bare type name and the clause-qualified spelling ("S28" and
+// "mapping.S28"). Each parseDir merges the mirrors into its local
+// pkgInfo, so a type argument spelled with an import qualifier
+// (mm.S28) resolves to the other package's struct, and method calls
+// on the bound value resolve their declared results. Local
+// declarations always win on bare-name collisions because the local
+// collectPkgInfo overwrites merged entries.
+var remoteStructs = map[string]map[string]string{}
+var remoteMethods = map[string][]string{}
+var remoteMethodFull = map[string]string{}
+var remoteEmbedded = map[string][]string{}
+
 type pkgInfo struct {
 	structs        map[string]map[string]string
 	funcs          map[string][]string
@@ -225,6 +239,31 @@ func sortStrings(s []string) {
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
 	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, recvTypeParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, varTypes: map[string]string{}}
+	// Cross-package struct and method metadata collected from
+	// previously parsed directories resolves generic type arguments
+	// that spell a struct with an import qualifier (mm.S28): the
+	// remote mirrors are merged before the local files register, so
+	// local declarations always win on a bare-name collision.
+	for k, v := range remoteStructs {
+		if _, exists := info.structs[k]; !exists {
+			info.structs[k] = v
+		}
+	}
+	for k, v := range remoteMethods {
+		if _, exists := info.methods[k]; !exists {
+			info.methods[k] = v
+		}
+	}
+	for k, v := range remoteMethodFull {
+		if _, exists := info.methodFull[k]; !exists {
+			info.methodFull[k] = v
+		}
+	}
+	for k, v := range remoteEmbedded {
+		if _, exists := info.embedded[k]; !exists {
+			info.embedded[k] = v
+		}
+	}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -264,7 +303,18 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 // another package (mm.D, mm.E) expands to the func text instead of a
 // name that is meaningless outside the defining directory.
 func finalizeDirAliases(dir, clause string, info pkgInfo) {
-	if aliases, ok := pkgAliasesByDir[dir]; ok {
+	aliases, ok := pkgAliasesByDir[dir]
+	if !ok {
+		return
+	}
+	// Iterate to a true fixpoint: with a single pass the outcome of a
+	// long chain depended on map iteration order (an entry processed
+	// before its intermediate hops were finalized stopped at a bare
+	// hop name), which made long qualified chains nondeterministically
+	// bypass the gate. Repeating until no entry changes makes the
+	// final registered text order-independent.
+	for changed := true; changed; {
+		changed = false
 		for name, text := range aliases {
 			nt := resolveDirText(text, aliases, info.definedTo)
 			if nt == text {
@@ -274,21 +324,25 @@ func finalizeDirAliases(dir, clause string, info pkgInfo) {
 			if clause != "" {
 				qualifiedAliases[clause+"."+name] = nt
 			}
+			changed = true
 		}
 	}
 }
 
 // resolveDirText follows alias and defined-type hops within one
 // directory's registries to a fixpoint, yielding the final underlying
-// type text of the named entry.
+// type text of the named entry. Self-entries (a struct name registered
+// as itself for qualifier translation) and alias cycles (which Go
+// forbids, but the mechanical scanner still guards) terminate via the
+// self-hop guard and the iteration cap.
 func resolveDirText(text string, aliases map[string]string, definedTo map[string]string) string {
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 64; i++ {
 		prev := text
-		if a, ok := aliases[text]; ok {
+		if a, ok := aliases[text]; ok && a != text {
 			text = a
 			continue
 		}
-		if n, ok := definedTo[text]; ok {
+		if n, ok := definedTo[text]; ok && n != text {
 			text = n
 			continue
 		}
@@ -335,7 +389,14 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				fields := map[string]string{}
 				for _, m := range it.Methods.List {
 					if len(m.Names) == 0 {
-						continue // embedded interface: promotion is not modeled
+						// Embedded interface: record the promoted type
+						// so method resolution walks the embedding
+						// chain exactly like a struct's embedded
+						// fields; without it, x.get() on an interface
+						// that embeds a file-producing interface
+						// resolves no method at all.
+						info.embedded[ts.Name.Name] = append(info.embedded[ts.Name.Name], exprText(m.Type))
+						continue
 					}
 					t := exprText(m.Type)
 					for _, name := range m.Names {
@@ -346,6 +407,18 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 					}
 				}
 				info.structs[ts.Name.Name] = fields
+				remoteStructs[ts.Name.Name] = fields
+				remoteStructs[f.Name.Name+"."+ts.Name.Name] = fields
+				for mname, mres := range info.methods {
+					if strings.HasPrefix(mname, ts.Name.Name+".") {
+						remoteMethods[mname] = mres
+						remoteMethods[f.Name.Name+"."+mname] = mres
+					}
+				}
+				for _, emb := range info.embedded[ts.Name.Name] {
+					remoteEmbedded[ts.Name.Name] = append(remoteEmbedded[ts.Name.Name], emb)
+					remoteEmbedded[f.Name.Name+"."+ts.Name.Name] = append(remoteEmbedded[f.Name.Name+"."+ts.Name.Name], emb)
+				}
 				continue
 			}
 			st, ok := ts.Type.(*ast.StructType)
@@ -414,6 +487,27 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				}
 			}
 			info.structs[ts.Name.Name] = fields
+			// Cross-package struct spellings (mm.S28 as a generic type
+			// argument, composite literal, or embedded name) must
+			// resolve: mirror the struct into the remote registries
+			// under the bare and clause-qualified keys, and register
+			// the qualified name in the alias registry as itself so
+			// the local import qualifier translates to the bare name
+			// (structs carry no func text, so the self-entry only
+			// serves the name translation).
+			remoteStructs[ts.Name.Name] = fields
+			remoteStructs[f.Name.Name+"."+ts.Name.Name] = fields
+			if pkgDir != "" {
+				if pkgAliasesByDir[pkgDir] == nil {
+					pkgAliasesByDir[pkgDir] = map[string]string{}
+				}
+				pkgAliasesByDir[pkgDir][ts.Name.Name] = ts.Name.Name
+			}
+			qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = ts.Name.Name
+			for _, emb := range info.embedded[ts.Name.Name] {
+				remoteEmbedded[ts.Name.Name] = append(remoteEmbedded[ts.Name.Name], emb)
+				remoteEmbedded[f.Name.Name+"."+ts.Name.Name] = append(remoteEmbedded[f.Name.Name+"."+ts.Name.Name], emb)
+			}
 		}
 	}
 	for _, decl := range f.Decls {
@@ -430,6 +524,10 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				mkey := recvStruct + "." + fd.Name.Name
 				info.methods[mkey] = collectResults(fd.Type)
 				info.methodFull[mkey] = exprText(fd.Type)
+				remoteMethods[mkey] = collectResults(fd.Type)
+				remoteMethods[f.Name.Name+"."+mkey] = collectResults(fd.Type)
+				remoteMethodFull[mkey] = exprText(fd.Type)
+				remoteMethodFull[f.Name.Name+"."+mkey] = exprText(fd.Type)
 				// Generic receivers (gR[T] mk() []T) record their type
 				// parameters so call sites through gR[*gsG] substitute
 				// the instantiation into the raw results.
@@ -1073,6 +1171,12 @@ func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 		for _, emb := range info.embedded[base] {
 			if mm, r := walk(emb); r {
 				return mm, r
+			} else if len(mm) > 0 {
+				// Declared results on a promoted embedded type are authoritative
+				// even when the embedded method body was never marked as a file
+				// producer: ok only records body-marked claims, so dropping mm
+				// here would blind the whole embedding chain.
+				return mm, false
 			}
 		}
 		return nil, false
@@ -2380,7 +2484,7 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 	case *ast.CallExpr:
 		if gcr, okG := genericCallResults(v, st, info); okG {
 			for _, r := range gcr {
-				n := strings.TrimPrefix(r, "*")
+				n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
 				}
@@ -2393,14 +2497,14 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
 				if mres, okM := genericMethodResults(sel, st, info); okM {
 					for _, r := range mres {
-						n := strings.TrimPrefix(r, "*")
+						n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 						if _, isStruct := info.structs[n]; isStruct {
 							return n, true
 						}
 					}
 				}
 				for _, r := range methodMetaResults(sn, sel.Sel.Name, info) {
-					n := strings.TrimPrefix(r, "*")
+					n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 					if _, isStruct := info.structs[n]; isStruct {
 						return n, true
 					}
@@ -2417,7 +2521,7 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 				}
 			}
 			for _, r := range info.funcs[id.Name] {
-				n := strings.TrimPrefix(r, "*")
+				n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
 				}
@@ -2937,7 +3041,7 @@ func classifyStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 	case *ast.CallExpr:
 		if gcr, okG := genericCallResults(v, st, info); okG {
 			for _, r := range gcr {
-				n := strings.TrimPrefix(r, "*")
+				n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
 				}
@@ -2947,14 +3051,14 @@ func classifyStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
 				if mres, okM := genericMethodResults(sel, st, info); okM {
 					for _, r := range mres {
-						n := strings.TrimPrefix(r, "*")
+						n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 						if _, isStruct := info.structs[n]; isStruct {
 							return n, true
 						}
 					}
 				}
 				for _, r := range methodMetaResults(sn, sel.Sel.Name, info) {
-					n := strings.TrimPrefix(r, "*")
+					n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 					if _, isStruct := info.structs[n]; isStruct {
 						return n, true
 					}
@@ -2971,7 +3075,7 @@ func classifyStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 				}
 			}
 			for _, r := range info.funcs[id.Name] {
-				n := strings.TrimPrefix(r, "*")
+				n := resolveStructName(strings.TrimPrefix(r, "*"), info)
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
 				}
