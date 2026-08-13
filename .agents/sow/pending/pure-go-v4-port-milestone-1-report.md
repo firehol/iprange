@@ -102,9 +102,10 @@ func-typed generic-method class (forms 185-189), the
 mixed result and qualified-defined class (forms 191-196), the
 interface-method and method-result class (forms 199-205), the
 embedded-interface and cross-package chain class (forms 207-210), the
-remote-interface and generic-instantiation class (forms 213-217);
+remote-interface and generic-instantiation class (forms 213-217), the
+defined-hop instantiation class (forms 222-223);
 the
-self-test now durably rejects one hundred seventy-four
+self-test now durably rejects one hundred seventy-six
 mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
@@ -1125,8 +1126,11 @@ interface embedding, generic-interface instantiation at the
 embedding site with func-file and chan-of-func arguments, and the
 adjacent renamed generic interface and cross-package generic struct
 shapes), fixed in the round-29 gate pass recorded in the active SOW
-exec log; the
-self-test now durably rejects one hundred seventy-four mutation forms. Decision 5A remains the single open item and
+exec log; and the round-30 defined-hop instantiation class (forms
+222-223: a defined type over an instantiated generic interface,
+reader-local and renamed-qualified), fixed in the round-30 gate pass
+recorded in the active SOW exec log; the
+self-test now durably rejects one hundred seventy-six mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

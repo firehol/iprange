@@ -159,8 +159,9 @@ generic-method class (forms 185-189), the mixed result and
 qualified-defined class (forms 191-196), the
 interface-method and method-result class (forms 199-205), the
 embedded-interface and cross-package chain class (forms 207-210), the
-remote-interface and generic-instantiation class (forms 213-217); the durable
-rejection set is now one hundred seventy-four mutation
+remote-interface and generic-instantiation class (forms 213-217), the
+defined-hop instantiation class (forms 222-223); the durable
+rejection set is now one hundred seventy-six mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -271,6 +272,21 @@ non-compiling benign form-212 twin) was fixed by removing its unused
 import. Pinned as self-test forms 213-217 (rejects) and 218-221
 (benign bytes controls). The durable rejection
 set is now one hundred seventy-four mutation forms. The records
+of this pass complete the trail up to this re-review. The round-30
+gate re-review then found the defined-hop instantiation class: a
+defined type over an instantiated generic interface embedded in an
+interface (type D IBaseG[func() *os.File]; type IEmb interface{ D })
+lost the instantiation at the embedding walk because the brackets
+live in the defined chain's target text, not in the raw embedded
+spelling, so the promoted method results propagated the raw type
+parameter and Get() T never matched the file shapes (both the
+reader-local and the renamed-qualified cross-package shapes). Fixed
+by extracting the embedding's type arguments from the resolved
+defined/alias text (resolveTaintType then parseBracketArgs) in both
+the promoted-method walk and the generic receiver-substitution walk;
+pinned as self-test forms 222-223 (rejects) and 224 (benign bytes
+control). The durable rejection
+set is now one hundred seventy-six mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -576,9 +592,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   qualified-defined class (forms 191-196), the
   interface-method and method-result class (forms 199-205), and the
   embedded-interface and cross-package chain class (forms 207-210),
-  and the remote-interface and generic-instantiation class (forms
-  213-217);
-  the self-test now durably rejects one hundred seventy-four mutation forms. The
+  the remote-interface and generic-instantiation class (forms
+  213-217), and the defined-hop instantiation class (forms 222-223);
+  the self-test now durably rejects one hundred seventy-six mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1703,7 +1719,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 174-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 176-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2475,7 +2491,24 @@ execution record; the closing result is appended there when it completes.
   chan-of-func argument, renamed-qualified generic interface
   instantiation, cross-package generic struct method); forms 218-221
   pin the benign bytes controls.
+- Ampere round 30 found the defined-hop instantiation class at HEAD
+  b53652d/9be245e: a defined type over an instantiated generic
+  interface embedded in an interface (type D IBaseG[func() *os.File];
+  type IEmb interface{ D }) lost the type arguments at the embedding
+  walk because methodMeta's promoted-walk extracted brackets from the
+  raw embedded spelling ("D") while the instantiation lives in the
+  defined chain's target text ("IBaseG[func() *os.File]"), so the
+  promoted results propagated the raw type parameter and Get() T
+  reached the io.ReadFull exemption with gate exit 0; the renamed-
+  qualified cross-package twin had the same shape. The same gap
+  existed in genericMethodResults' embedded loop. Fixed by extracting
+  the embedding's type arguments from the resolved text
+  (parseBracketArgs(resolveTaintType(emb, info))) in both walk sites,
+  so alias and defined chains carrying the instantiation substitute
+  exactly like a direct spelling. Forms 222-223 pin the two rejects
+  (reader-local and renamed-qualified defined-over-instantiated
+  embedding); form 224 pins the benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 174-form self-test, ten cross-compiles,
+  import graph with the 176-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
