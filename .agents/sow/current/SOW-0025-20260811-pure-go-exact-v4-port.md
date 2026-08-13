@@ -227,6 +227,27 @@ variant, the defined-over-alias and alias-over-defined hops, and both
 method-result positions) and 206 (benign interface-typed bytes
 control). The durable rejection
 set is now one hundred sixty-five mutation forms. The records
+of this pass complete the trail up to this re-review. The round-28
+gate re-review then found the embedded-interface and cross-package
+chain class: (1) an interface embedding a file-producing interface
+(type IEmb interface{ IBase } with IBase.Get() func() *os.File)
+resolved no promoted method because methodMeta's embedded walk
+propagated only body-marked producers and dropped declared results,
+so x.Get()() on an interface-typed generic result reached the
+io.ReadFull exemption with gate exit 0 (both the single-result and
+the mixed multi-result shapes); (2) a defined struct in another
+package used as a generic type argument (gRZ[mm.S28]{}, s.Get())
+was invisible to the reader's local package info; (3) a qualified
+defined chain of nine named hops (mm.J28 after alias A and hops
+B..I) exceeded the single-pass fixpoint budget and was map-order
+dependent. Fixed by propagating promoted declared results in
+methodMeta's embedding walk, process-wide mirrors of remote
+structs/methods/embedded chains with a parse-time seed-merge,
+self-entries for struct spellings in the qualified registries, and
+a full fixpoint loop for the per-directory alias/defined closure
+with self-hop guards; pinned as self-test forms 207-210 (rejects)
+and 211-212 (benign bytes controls). The durable rejection
+set is now one hundred seventy-one mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -1656,7 +1677,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 165-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 171-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2371,7 +2392,34 @@ execution record; the closing result is appended there when it completes.
   chan-of-func, defined over alias, alias over defined func, method
   mixed pos 0, method mixed pos 1); form 206 pins the benign
   interface-typed bytes control.
+- Ampere round 28 found three adjacent escape classes at HEAD
+  a8097a1: (1) an interface embedding a file-producing interface
+  (type IEmb interface{ IBase }, IBase.Get() func() *os.File)
+  resolved no promoted method because methodMeta's embedded walk
+  propagated only body-marked producers (ok flag) and dropped
+  declared results, so x.Get()() on an interface-typed generic
+  result reached the io.ReadFull exemption with gate exit 0, in
+  both the single-result and the mixed multi-result shapes; (2) a
+  defined struct in another package used as a generic type argument
+  (gRZ28[mm.S28]{}, s.Get()) never resolved because each directory
+  keeps an independent package info and only aliases/func types
+  were mirrored across directories; (3) a qualified defined chain
+  of nine named hops (mm.J28 behind alias A28 and hops B28..I28)
+  exceeded the single-pass fixpoint budget and was map-order
+  dependent (passing only when the map iteration chanced to make
+  the final hop resolvable early). Fixed by propagating promoted
+  declared results in methodMeta's embedding walk, process-wide
+  mirrors of remote structs/methods/method-full/embedded chains
+  with a parse-time seed-merge (local wins on collision),
+  self-entries for struct spellings in the qualified alias
+  registries, result-type resolution through resolveStructName in
+  classifyStruct/resolveStruct, and a full fixpoint loop for the
+  per-directory alias/defined closure with self-hop guards
+  (resolveDirText budget 8 -> 64). Forms 207-210 pin the four
+  rejects (embedded interface single, embedded interface mixed,
+  cross-package struct method, nine-hop qualified chain); forms
+  211-212 pin the benign bytes controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 165-form self-test, ten cross-compiles,
+  import graph with the 171-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
