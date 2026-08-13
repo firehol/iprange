@@ -2301,6 +2301,198 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta91.orig" internal/reader/metadata.go
 
+	# --- 92: generic container element binding a file ----------------------
+	# get92[T any](xs []T) T instantiated with []*os.File: the result
+	# position bound through the container element must be a file.
+	cat > internal/reader/gatemut_genericcont.go <<'MUTEOF'
+package reader
+
+import "os"
+
+func get92[T any](xs []T) T { return xs[0] }
+
+var osFiles92 = []*os.File{os.Stdin}
+MUTEOF
+	add_mut internal/reader/gatemut_genericcont.go
+	cp internal/reader/metadata.go "$self_tree/meta92.orig"
+	INS='zr = get92(osFiles92)'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta92.new" && mv "$self_tree/meta92.new" internal/reader/metadata.go
+	if grep -Fq 'zr = get92(osFiles92)' internal/reader/metadata.go; then
+		run_mut "generic container element binding a file"
+	else
+		echo "self-test ERROR: form 92 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta92.orig" internal/reader/metadata.go
+
+	# --- 93: method value returning a chan of func-file --------------------
+	# fn := hh.ch with ch() chan fileFn; fn() yields the channel, a
+	# receive yields the func-file, calling it yields the file.
+	cat > internal/reader/gatemut_chanmethval.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnM func() *os.File
+
+type chH93 struct{}
+
+var chh93 chH93
+
+func (h chH93) ch() chan fileFnM { return nil }
+MUTEOF
+	add_mut internal/reader/gatemut_chanmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta93.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfn93 := chh93.ch"; print "\tgot93 := <-fn93()"; print "\tzr = got93()"; next } print }' internal/reader/metadata.go > "$self_tree/meta93.new" && mv "$self_tree/meta93.new" internal/reader/metadata.go
+	if grep -Fq 'fn93 := chh93.ch' internal/reader/metadata.go; then
+		run_mut "method value returning a chan of func-file"
+	else
+		echo "self-test ERROR: form 93 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	cp "$self_tree/meta93.orig" internal/reader/metadata.go
+
+	# --- 94: func-typed struct field assigned a file closure --------------
+	# init() fills fb94.fn with a closure returning io.ReadCloser over
+	# os.Pipe; calling the field must be a producer.
+	cat > internal/reader/gatemut_fnfieldassign.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type fnBox94 struct{ fn func() io.ReadCloser }
+
+var fb94 fnBox94
+
+func init() {
+	fb94.fn = func() io.ReadCloser {
+		w, _, _ := os.Pipe()
+		return w
+	}
+}
+MUTEOF
+	add_mut internal/reader/gatemut_fnfieldassign.go
+	cp internal/reader/metadata.go "$self_tree/meta94.orig"
+	INS='zr = fb94.fn()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta94.new" && mv "$self_tree/meta94.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fb94.fn()' internal/reader/metadata.go; then
+		run_mut "func-typed field assigned a file closure"
+	else
+		echo "self-test ERROR: form 94 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta94.orig" internal/reader/metadata.go
+
+	# --- 95: chan-typed struct field assigned a chan of func-file ---------
+	cat > internal/reader/gatemut_chanfieldassign.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnN func() *os.File
+
+type chBox95 struct{ ch chan fileFnN }
+
+var cb95 chBox95
+
+func init() {
+	cb95.ch = make(chan fileFnN)
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanfieldassign.go
+	cp internal/reader/metadata.go "$self_tree/meta95.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tgot95 := <-cb95.ch"; print "\tzr = got95()"; next } print }' internal/reader/metadata.go > "$self_tree/meta95.new" && mv "$self_tree/meta95.new" internal/reader/metadata.go
+	if grep -Fq 'got95 := <-cb95.ch' internal/reader/metadata.go; then
+		run_mut "chan-typed field assigned a chan of func-file"
+	else
+		echo "self-test ERROR: form 95 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	cp "$self_tree/meta95.orig" internal/reader/metadata.go
+
+	# --- 96: benign generic container must pass ----------------------------
+	cat > internal/reader/gatemut_benigengenericcont.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw96 struct{ *bytes.Reader }
+
+func (w *rcw96) Close() error { return nil }
+
+func getB96[T any](xs []T) T { return xs[0] }
+
+var rcList96 = []io.ReadCloser{&rcw96{bytes.NewReader(nil)}}
+MUTEOF
+	add_mut internal/reader/gatemut_benigengenericcont.go
+	cp internal/reader/metadata.go "$self_tree/meta96.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = getB96(rcList96)"; next } print }' internal/reader/metadata.go > "$self_tree/meta96.new" && mv "$self_tree/meta96.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getB96(rcList96)' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign generic container passes the gate"
+		else
+			echo "self-test MISS: benign generic container failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 96 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta96.orig" internal/reader/metadata.go
+
+	# --- 97: benign func-typed field must pass ------------------------------
+	cat > internal/reader/gatemut_benignfnfield.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcw97 struct{ *bytes.Reader }
+
+func (w *rcw97) Close() error { return nil }
+
+type fnBox97 struct{ fn func() io.ReadCloser }
+
+var fb97 fnBox97
+
+func init() {
+	fb97.fn = func() io.ReadCloser { return &rcw97{bytes.NewReader(nil)} }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benignfnfield.go
+	cp internal/reader/metadata.go "$self_tree/meta97.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = fb97.fn()"; next } print }' internal/reader/metadata.go > "$self_tree/meta97.new" && mv "$self_tree/meta97.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fb97.fn()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign func-typed field passes the gate"
+		else
+			echo "self-test MISS: benign func-typed field failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 97 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta97.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -2353,7 +2545,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 80 mutation forms rejected)"
+	echo "import-graph self-test passed (all 84 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
