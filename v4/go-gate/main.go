@@ -806,6 +806,24 @@ func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 	return walk(structName)
 }
 
+// typeSwitchSwitched returns the switched expression of a type-switch
+// guard (the x in `switch v := x.(type)` or `switch x.(type)`), or nil.
+func typeSwitchSwitched(assign ast.Stmt) ast.Expr {
+	switch a := assign.(type) {
+	case *ast.AssignStmt:
+		if len(a.Rhs) == 1 {
+			if ta, ok := a.Rhs[0].(*ast.TypeAssertExpr); ok {
+				return ta.X
+			}
+		}
+	case *ast.ExprStmt:
+		if ta, ok := a.X.(*ast.TypeAssertExpr); ok {
+			return ta.X
+		}
+	}
+	return nil
+}
+
 // typeSwitchBound returns the identifier bound by a type-switch guard
 // (switch zv := x.(type)) or the empty string.
 func typeSwitchBound(assign ast.Stmt) string {
@@ -1680,6 +1698,15 @@ func typeOfBase(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		// map[string]*gs{"a": {}} / []chan *gs{...}: the literal's
 		// declared type names the container or element type.
 		return exprText(v.Type), true
+	case *ast.IndexExpr:
+		// s[i] / m["k"]: the base container's element type (one
+		// wrapper stripped), so the read value itself can serve as an
+		// indexed or receiver base later.
+		bt, ok := typeOfBase(v.X, st, info)
+		if !ok {
+			return "", false
+		}
+		return elemTypeOne(bt), true
 	case *ast.CallExpr:
 		fun := unwrapParen(v.Fun)
 		if id, ok := fun.(*ast.Ident); ok {
@@ -2017,7 +2044,23 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			for _, cc := range v.Body.List {
 				if cs, ok := cc.(*ast.CaseClause); ok {
 					// switch zv := x.(type) { case *os.File: ... } binds
-					// zv as *os.File inside the clause.
+					// zv as *os.File inside the clause. The default
+					// clause binds the switched expression's own type:
+					// 	func f() io.ReadCloser {
+					// 		switch v := ivd.(type) { default: return v.get() }
+					// 	}
+					// copies the variable's struct instance and type
+					// text to v so v.method() and v.field reads resolve.
+					if bound != "" && len(cs.List) == 0 {
+						if sx := typeSwitchSwitched(v.Assign); sx != nil {
+							if sn, ok := resolveStruct(sx, st, info); ok {
+								st.struc[bound] = sn
+							}
+							if tt, ok := typeOfBase(sx, st, info); ok {
+								info.varTypes[bound] = tt
+							}
+						}
+					}
 					if bound != "" {
 						for _, ce := range cs.List {
 							ct := resolveTypeText(exprText(ce), info)
@@ -2151,13 +2194,53 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 		st.funcFile[id.Name] = true
 	}
 	if c, ok := classifyStruct(rhs, st, info); ok {
-		st.struc[id.Name] = c
+		if _, isIx := rhs.(*ast.IndexExpr); isIx {
+			// mm["k"] binds the container's element type: the struct
+			// instance is only valid when that element type itself
+			// names a struct (map[string]*gs binds *gs, not the
+			// stripped gs instance of a []*gs element).
+			if tt, ok := info.varTypes[id.Name]; ok {
+				if base := resolveStructName(tt, info); base != "" {
+					if _, isStruct := info.structs[base]; isStruct {
+						st.struc[id.Name] = base
+					}
+				}
+			}
+		} else {
+			st.struc[id.Name] = c
+		}
 	}
 	if sel, ok := rhs.(*ast.SelectorExpr); ok {
 		// x := h.inner registers the nested struct instance so later
 		// x.fn() field reads resolve through it.
 		if sn, ok2 := resolveStruct(sel, st, info); ok2 {
 			st.struc[id.Name] = sn
+		}
+	}
+	// A non-call RHS also declares the binding's static type: a
+	// container element read (a, _ := mm["k"], 0 binds the element
+	// type []*gs), a struct field value, or a composite literal.
+	if _, isCall := rhs.(*ast.CallExpr); !isCall {
+		if tt, ok := typeOfBase(rhs, st, info); ok && tt != "" {
+			info.varTypes[id.Name] = tt
+		}
+	}
+	// A single-value call result declares the binding's type (a :=
+	// mkArr() binds []*gs), so the binding can serve as an indexed or
+	// field base later. Method-call receivers resolve like the
+	// multi-assign path.
+	if call, ok := rhs.(*ast.CallExpr); ok {
+		fun := unwrapParen(call.Fun)
+		var results []string
+		if fid, ok := fun.(*ast.Ident); ok {
+			results = info.funcs[fid.Name]
+		} else if sel, ok := fun.(*ast.SelectorExpr); ok {
+			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
+				results, _ = methodMeta(sn, sel.Sel.Name, info)
+			}
+		}
+		if len(results) > 0 {
+			info.varTypes[id.Name] = results[0]
 		}
 	}
 }
@@ -2203,9 +2286,35 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 			applyKind(st, id.Name, cls)
 		}
 	}
+	// A non-call RHS also declares the binding's static type: a
+	// container element read (a, _ := mm["k"], 0 binds the element
+	// type []*gs), a struct field, a composite literal, or a channel
+	// value. Multi-result calls are recorded by the call path above at
+	// the exact result index, so calls are not re-resolved here.
+	if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+		if _, isCall := rhs.(*ast.CallExpr); !isCall {
+			if tt, ok := typeOfBase(rhs, st, info); ok && tt != "" {
+				info.varTypes[id.Name] = tt
+			}
+		}
+	}
 	if c, ok := classifyStruct(rhs, st, info); ok {
 		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
-			st.struc[id.Name] = c
+			if _, isIx := rhs.(*ast.IndexExpr); isIx {
+				// mm["k"] binds the container's element type: the
+				// struct instance is only valid when that element type
+				// itself names the struct (map[string]*gs binds *gs,
+				// not the stripped gs instance of a []*gs element).
+				if tt, ok := info.varTypes[id.Name]; ok {
+					if base := resolveStructName(tt, info); base != "" {
+						if _, isStruct := info.structs[base]; isStruct {
+							st.struc[id.Name] = base
+						}
+					}
+				}
+			} else {
+				st.struc[id.Name] = c
+			}
 		}
 	}
 }
