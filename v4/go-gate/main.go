@@ -303,11 +303,29 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				// resolveTypeText expand it.
 				if ft, ok := ts.Type.(*ast.FuncType); ok {
 					info.aliases[ts.Name.Name] = exprText(ft)
+					// A defined func type is also reachable through the
+					// package qualifier (mm.F with F func() *os.File):
+					// register it like an alias so renamed and
+					// clause-name references expand to the func text.
+					if pkgDir != "" {
+						if pkgAliasesByDir[pkgDir] == nil {
+							pkgAliasesByDir[pkgDir] = map[string]string{}
+						}
+						pkgAliasesByDir[pkgDir][ts.Name.Name] = exprText(ft)
+					}
+					qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = exprText(ft)
 				} else if id, ok := ts.Type.(*ast.Ident); ok {
 					// A defined type (type b a) chains to its underlying
 					// name so receivers and instances resolve to the
 					// base struct.
 					info.definedTo[ts.Name.Name] = id.Name
+				} else {
+					// A defined type over a qualified or complex
+					// underlying (type x mm.A, type x []*os.File,
+					// type x map[string]F) chains to its underlying
+					// type text so type arguments, receivers, and
+					// instances resolve through it.
+					info.definedTo[ts.Name.Name] = exprText(ts.Type)
 				}
 				continue
 			}
@@ -699,6 +717,74 @@ func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 		}
 	}
 	return true
+}
+
+// callResults resolves a call's declared result type texts: plain
+// functions by name, methods through the struct instance, with generic
+// instantiation and receiver type-parameter substitution applied when
+// the call carries them.
+func callResults(e ast.Expr, st *taints, info pkgInfo) []string {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	if gcr, okG := genericCallResults(call, st, info); okG {
+		return gcr
+	}
+	fun := unwrapParen(call.Fun)
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return info.funcs[f.Name]
+	case *ast.SelectorExpr:
+		if structName, ok2 := resolveStruct(unwrapParen(f.X), st, info); ok2 {
+			if mres, ok3 := genericMethodResults(f, st, info); ok3 {
+				return mres
+			}
+			if mres, ok3 := methodMeta(structName, f.Sel.Name, info); ok3 {
+				return mres
+			}
+		}
+	}
+	return nil
+}
+
+// callResultKinds reports the taint classes present among a call's
+// declared results: func-file, chan-of-func-file, and chan-of-file,
+// resolved per position through alias and defined-type chains. Mixed
+// multi-result calls (getFn() (func() *os.File, error)) keep their
+// producer class even when other result positions are plain values.
+func callResultKinds(e ast.Expr, st *taints, info pkgInfo) (funcFile, chanFuncFile, chanFile bool) {
+	for _, r := range callResults(e, st, info) {
+		rt := resolveTaintType(r, info)
+		switch {
+		case funcTextFile(rt):
+			funcFile = true
+		case chanElemFuncFile(rt, info):
+			chanFuncFile = true
+		case chanElemFile(rt, info):
+			chanFile = true
+		}
+	}
+	return funcFile, chanFuncFile, chanFile
+}
+
+// callResultKindAt returns the taint kind of one declared result
+// position (func-file, chan-of-func-file, chan-of-file), or kindNone.
+func callResultKindAt(e ast.Expr, index int, st *taints, info pkgInfo) kind {
+	results := callResults(e, st, info)
+	if index < 0 || index >= len(results) {
+		return kindNone
+	}
+	rt := resolveTaintType(results[index], info)
+	switch {
+	case funcTextFile(rt):
+		return kindFuncFile
+	case chanElemFuncFile(rt, info):
+		return kindChanFuncFile
+	case chanElemFile(rt, info):
+		return kindChanFile
+	}
+	return kindNone
 }
 
 // callResultsChanFuncFile reports whether e is a same-package call whose
@@ -1222,11 +1308,12 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if _, _, ok := producerCall(v, st, info, imports); ok {
 			return kindFile
 		}
-		if callResultsFuncFile(v, st, info) {
+		if funcF, chanFF, chanF := callResultKinds(v, st, info); funcF {
 			return kindFuncFile
-		}
-		if callResultsChanFuncFile(v, st, info) {
+		} else if chanFF {
 			return kindChanFuncFile
+		} else if chanF {
+			return kindChanFile
 		}
 		if gcr, okG := genericCallResults(v, st, info); okG {
 			for _, r := range gcr {
@@ -2961,6 +3048,23 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 			}
 		}
 		return // non-file result positions (error results) get no taint
+	}
+	// Mixed multi-result calls (f, err := getFn() with getFn()
+	// (func() *os.File, error)) keep their producer taint at the
+	// exact func-typed result position: register that position's own
+	// carrier kind instead of applying the whole-call class to every
+	// binding (which would taint the error position).
+	if _, isCall := rhs.(*ast.CallExpr); isCall {
+		if k := callResultKindAt(rhs, index, st, info); k != kindNone {
+			applyLHSField(lhs, nil, k, st, info, imports)
+			if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+				applyKind(st, id.Name, k)
+			}
+			return
+		}
+		// An unmatched position of a multi-result call (an error
+		// result, or a plain value) gets no taint.
+		return
 	}
 	cls := classify(rhs, st, info, imports)
 	if cls != kindNone {
