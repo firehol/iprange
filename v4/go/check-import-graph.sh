@@ -5759,11 +5759,297 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta178.orig" internal/reader/metadata.go
 
+	# --- 179: renamed-import qualified alias generic type argument ------
+	# import mm ".../internal/mapping" + gR[mm.MappingFile]{}: the local
+	# import qualifier must translate to the package path before the
+	# process-wide alias registry can resolve the file taint.
+	cat > internal/mapping/gatemut_rqalias.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type MappingFile = *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_rqalias.go
+	cat > internal/reader/gatemut_rqalias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gR179[T any] struct{}
+
+func (r gR179[T]) mk() T { var z T; return z }
+
+func gb179() io.ReadCloser {
+	rr := gR179[mm.MappingFile]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rqalias.go
+	cp internal/reader/metadata.go "$self_tree/meta179.orig"
+	INS='zr = gb179()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta179.new" && mv "$self_tree/meta179.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb179()' internal/reader/metadata.go; then
+		run_mut "renamed-import qualified alias generic type argument"
+	else
+		echo "self-test ERROR: form 179 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta179.orig" internal/reader/metadata.go
+
+	# --- 180: local alias of renamed-import qualified alias --------------
+	# type MChainRen180 = mm.MappingFile, then gR180[MChainRen180]{}: the
+	# same-package alias must chain into the renamed-qualified lookup.
+	cat > internal/mapping/gatemut_rqchain.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type MappingFile = *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_rqchain.go
+	cat > internal/reader/gatemut_rqchain.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type MChainRen180 = mm.MappingFile
+
+type gR180[T any] struct{}
+
+func (r gR180[T]) mk() T { var z T; return z }
+
+func gb180() io.ReadCloser {
+	rr := gR180[MChainRen180]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rqchain.go
+	cp internal/reader/metadata.go "$self_tree/meta180.orig"
+	INS='zr = gb180()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta180.new" && mv "$self_tree/meta180.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb180()' internal/reader/metadata.go; then
+		run_mut "local alias of renamed-import qualified alias"
+	else
+		echo "self-test ERROR: form 180 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta180.orig" internal/reader/metadata.go
+
+	# --- 181: renamed-import qualified alias element spelling ------------
+	# gR181[[]mm.MappingFile]{} + a[0]: the container element must keep
+	# the file taint through the renamed qualifier.
+	cat > internal/mapping/gatemut_rqelem.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type MappingFile = *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_rqelem.go
+	cat > internal/reader/gatemut_rqelem.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gR181[T any] struct{}
+
+func (r gR181[T]) mk() T { var z T; return z }
+
+func gb181() io.ReadCloser {
+	rr := gR181[[]mm.MappingFile]{}
+	a := rr.mk()
+	return a[0]
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rqelem.go
+	cp internal/reader/metadata.go "$self_tree/meta181.orig"
+	INS='zr = gb181()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta181.new" && mv "$self_tree/meta181.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb181()' internal/reader/metadata.go; then
+		run_mut "renamed-import qualified alias element spelling"
+	else
+		echo "self-test ERROR: form 181 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta181.orig" internal/reader/metadata.go
+
+	# --- 182: renamed-import qualified alias declared variable -----------
+	# var z mm.MappingFile; z.Chdir(): the declared variable type must
+	# resolve through the renamed qualifier to the file producer taint.
+	cat > internal/mapping/gatemut_rqvar.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type MappingFile = *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_rqvar.go
+	cat > internal/reader/gatemut_rqvar.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+func gb182() io.ReadCloser {
+	var z mm.MappingFile
+	z.Chdir()
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rqvar.go
+	cp internal/reader/metadata.go "$self_tree/meta182.orig"
+	INS='zr = gb182()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta182.new" && mv "$self_tree/meta182.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb182()' internal/reader/metadata.go; then
+		run_mut "renamed-import qualified alias declared variable"
+	else
+		echo "self-test ERROR: form 182 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta182.orig" internal/reader/metadata.go
+
+	# --- 183: benign renamed-import qualified alias must pass ------------
+	# mm.MappingRC183 with a bytes-backed base: the renamed qualifier
+	# must not flag a non-file alias.
+	cat > internal/mapping/gatemut_benrq.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type mrc183 struct{ *bytes.Reader }
+
+func (w *mrc183) Close() error { return nil }
+
+type MappingRC183 = *mrc183
+MUTEOF
+	add_mut internal/mapping/gatemut_benrq.go
+	cat > internal/reader/gatemut_benrq.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRB183[T any] struct{}
+
+func (r gRB183[T]) mk() T { var z T; return z }
+
+func gbb183() io.ReadCloser {
+	rr := gRB183[mm.MappingRC183]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benrq.go
+	cp internal/reader/metadata.go "$self_tree/meta183.orig"
+	INS='zr = gbb183()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta183.new" && mv "$self_tree/meta183.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb183()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign renamed-import qualified alias passes the gate"
+		else
+			echo "self-test MISS: benign renamed-import qualified alias failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 183 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta183.orig" internal/reader/metadata.go
+
+	# --- 184: benign local alias of renamed-import alias must pass -------
+	# type MChainRenB184 = mm.MappingRC184: the same-package alias chain
+	# into a renamed-qualified bytes alias must stay benign.
+	cat > internal/mapping/gatemut_benrqchain.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type mrc184 struct{ *bytes.Reader }
+
+func (w *mrc184) Close() error { return nil }
+
+type MappingRC184 = *mrc184
+MUTEOF
+	add_mut internal/mapping/gatemut_benrqchain.go
+	cat > internal/reader/gatemut_benrqchain.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type MChainRenB184 = mm.MappingRC184
+
+type gRB184[T any] struct{}
+
+func (r gRB184[T]) mk() T { var z T; return z }
+
+func gbb184() io.ReadCloser {
+	rr := gRB184[MChainRenB184]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benrqchain.go
+	cp internal/reader/metadata.go "$self_tree/meta184.orig"
+	INS='zr = gbb184()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta184.new" && mv "$self_tree/meta184.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb184()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign local alias of renamed-import alias passes the gate"
+		else
+			echo "self-test MISS: benign local alias of renamed-import alias failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 184 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta184.orig" internal/reader/metadata.go
+
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 143 mutation forms rejected)"
+	echo "import-graph self-test passed (all 147 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
