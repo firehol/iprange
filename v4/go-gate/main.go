@@ -40,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 const moduleInternalPrefix = "github.com/firehol/iprange/v4/go/internal"
@@ -838,8 +839,21 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		// A call whose result is a func-file value: the callee's body
 		// returns a funcFile behind an interface, or a generic
 		// instantiation binds a type parameter to a funcFile argument.
-		if id, ok2 := v.Fun.(*ast.Ident); ok2 && info.retFuncFiles[id.Name] {
-			return kindFuncFile
+		if id, ok2 := v.Fun.(*ast.Ident); ok2 {
+			if info.retFuncFiles[id.Name] {
+				return kindFuncFile
+			}
+			// fn() where fn holds a chan value (a chan-typed method
+			// value bound to a variable): the call yields the channel.
+			// chan-of-file mirrors the Ident read semantic (element
+			// kind); chan-of-funcFile keeps the carrier kind so a
+			// receive afterwards yields the func-file.
+			if st.chanFile[id.Name] {
+				return kindFile
+			}
+			if st.chanFuncFile[id.Name] {
+				return kindChanFuncFile
+			}
 		}
 		if sel, ok2 := v.Fun.(*ast.SelectorExpr); ok2 {
 			if structName, ok3 := resolveStruct(sel.X, st, info); ok3 {
@@ -872,6 +886,18 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 			}
 		}
 	case *ast.SelectorExpr:
+		switch st.fieldTaint[exprText(v.X)+"."+v.Sel.Name] {
+		case kindFile:
+			return kindFile
+		case kindContainer:
+			return kindContainer
+		case kindFuncFile:
+			return kindFuncFile
+		case kindChanFile:
+			return kindChanFile
+		case kindChanFuncFile:
+			return kindChanFuncFile
+		}
 		if isFileExpr(v, st, info, imports) {
 			return kindFile
 		}
@@ -894,8 +920,15 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				return kindFuncFile
 			}
 			for _, r := range mres {
-				if funcTextFile(resolveTypeText(r, info)) {
+				rt := resolveTypeText(r, info)
+				if funcTextFile(rt) {
 					return kindFuncFile
+				}
+				if chanElemFile(rt, info) {
+					return kindChanFile
+				}
+				if chanElemFuncFile(rt, info) {
+					return kindChanFuncFile
 				}
 			}
 		}
@@ -942,6 +975,13 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			if pos, found := fileProducers[pkg.Name+"."+sel.Sel.Name]; found {
 				return call, pos, true
 			}
+		}
+		// A struct field whose runtime value is a func-file (assigned
+		// through a tainted closure or method value) is a producer
+		// even when the declared field type hides the file behind an
+		// interface.
+		if st.fieldTaint[exprText(sel.X)+"."+sel.Sel.Name] == kindFuncFile {
+			return call, []int{0}, true
 		}
 		// Same-package method returning *os.File (e.g. an accessor), or
 		// whose body returns a tainted value behind an interface.
@@ -1178,6 +1218,15 @@ func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *ta
 						shared.chanFile[k] = true
 					}
 				}
+				// Field writes on package-level struct instances are
+				// shared state too: init() filling fb.fn with a
+				// file-producing closure taints the field for every
+				// function (and file) that reads it later.
+				for k, kv := range fst.fieldTaint {
+					if pkgVarRoot(k, info) {
+						shared.fieldTaint[k] = kv
+					}
+				}
 				if _, recvStruct := receiverOf(fd); recvStruct != "" {
 					key := recvStruct + "." + fd.Name.Name
 					if returnsFileIn(fd.Body, fst, info, imp) && !info.retMethods[key] {
@@ -1277,7 +1326,7 @@ func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imp
 				continue
 			}
 			for ai, pt := range params {
-				if pt == tp && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
+				if bindsTypeParam(pt, tp) && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
 					pos = append(pos, ri)
 					break
 				}
@@ -1288,6 +1337,34 @@ func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imp
 		return nil
 	}
 	return pos
+}
+
+// pkgVarRoot reports whether the root identifier of a fieldTaint key
+// (expr.field or expr.inner.field) names a package-level variable.
+func pkgVarRoot(key string, info pkgInfo) bool {
+	root := key
+	if i := strings.IndexByte(key, '.'); i >= 0 {
+		root = key[:i]
+	}
+	return info.pkgVars[root]
+}
+
+// bindsTypeParam reports whether a parameter type text binds the named
+// type parameter: exactly (T), or through a container/pointer element
+// shape ([]T, chan T, map[K]T, *T). Token matching avoids a substring
+// false positive for longer identifiers containing the parameter name.
+func bindsTypeParam(pt, tp string) bool {
+	if pt == tp {
+		return true
+	}
+	for _, tok := range strings.FieldsFunc(pt, func(r rune) bool {
+		return !(r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	}) {
+		if tok == tp {
+			return true
+		}
+	}
+	return false
 }
 
 // genericResultFuncFile reports a same-package generic call whose
@@ -1309,7 +1386,7 @@ func genericResultFuncFile(call *ast.CallExpr, st *taints, info pkgInfo, imports
 				continue
 			}
 			for ai, pt := range params {
-				if pt == tp && ai < len(call.Args) && classify(call.Args[ai], st, info, imports) == kindFuncFile {
+				if bindsTypeParam(pt, tp) && ai < len(call.Args) && classify(call.Args[ai], st, info, imports) == kindFuncFile {
 					return true
 				}
 			}
@@ -1611,15 +1688,18 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 	return "", false
 }
 
-// applyLHSField records file/container taint behind a struct-field write
+// applyLHSField records value taint behind a struct-field write
 // (t.r = w or t.r, _ = producer()), so a later read of t.r stays tainted
-// even when the field's declared type is not *os.File (any, io.Reader).
+// even when the field's declared type hides the taint (any, io.Reader,
+// func() io.ReadCloser). Every producer kind is recorded: file,
+// container, func-file, and channel carriers.
 func applyLHSField(lhs ast.Expr, cls kind, st *taints) {
 	sel, ok := lhs.(*ast.SelectorExpr)
 	if !ok {
 		return
 	}
-	if cls == kindFile || cls == kindContainer {
+	switch cls {
+	case kindFile, kindContainer, kindFuncFile, kindChanFile, kindChanFuncFile:
 		st.fieldTaint[exprText(sel.X)+"."+sel.Sel.Name] = cls
 	}
 }
