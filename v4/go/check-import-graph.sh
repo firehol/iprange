@@ -4951,11 +4951,329 @@ MUTEOF
 	fi
 	rm -r internal/mapping/gatemut_innocent.go 2>/dev/null || true
 
+	# --- 159: alias-spelled generic receiver result -----------------------
+	# rr := gRA[zfA]{}; rr.mk() with type zfA = *os.File: the type
+	# argument must be alias-resolved before the substituted result is
+	# compared, so the receiver instantiation cannot hide a file value.
+	cat > internal/reader/gatemut_aliasrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA159 = *os.File
+
+type gRA159[T any] struct{}
+
+func (r gRA159[T]) mk() T { var z T; return z }
+
+func gb159() io.ReadCloser {
+	rr := gRA159[zfA159]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta159.orig"
+	INS='zr = gb159()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta159.new" && mv "$self_tree/meta159.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb159()' internal/reader/metadata.go; then
+		run_mut "alias-spelled generic receiver result"
+	else
+		echo "self-test ERROR: form 159 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta159.orig" internal/reader/metadata.go
+
+	# --- 160: nested alias generic receiver result ------------------------
+	# var rr gRA[zfB]; zfB = zfA; zfA = *os.File: the alias chain must
+	# resolve before substitution, not only the bare name.
+	cat > internal/reader/gatemut_aliasnested.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA160 = *os.File
+type zfB160 = zfA160
+
+type gRA160[T any] struct{}
+
+func (r gRA160[T]) mk() T { var z T; return z }
+
+func gb160() io.ReadCloser {
+	var rr gRA160[zfB160]
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasnested.go
+	cp internal/reader/metadata.go "$self_tree/meta160.orig"
+	INS='zr = gb160()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta160.new" && mv "$self_tree/meta160.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb160()' internal/reader/metadata.go; then
+		run_mut "nested alias generic receiver result"
+	else
+		echo "self-test ERROR: form 160 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta160.orig" internal/reader/metadata.go
+
+	# --- 161: alias-spelled explicit instantiation result -----------------
+	# mkGen[zfA](): the direct generic call result must be alias-resolved
+	# before the binding is recorded as a file value.
+	cat > internal/reader/gatemut_aliasinst.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA161 = *os.File
+
+func mkGen161[T any]() T { var z T; return z }
+
+func gb161() io.ReadCloser {
+	return mkGen161[zfA161]()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasinst.go
+	cp internal/reader/metadata.go "$self_tree/meta161.orig"
+	INS='zr = gb161()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta161.new" && mv "$self_tree/meta161.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb161()' internal/reader/metadata.go; then
+		run_mut "alias-spelled explicit instantiation result"
+	else
+		echo "self-test ERROR: form 161 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta161.orig" internal/reader/metadata.go
+
+	# --- 162: alias-spelled generic method value result -------------------
+	# f := rr.mk; f(): the method value carries the alias-spelled
+	# instantiation of the receiver through the call expression.
+	cat > internal/reader/gatemut_aliasmethval.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA162 = *os.File
+
+type gRA162[T any] struct{}
+
+func (r gRA162[T]) mk() T { var z T; return z }
+
+func gb162() io.ReadCloser {
+	rr := gRA162[zfA162]{}
+	f := rr.mk
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta162.orig"
+	INS='zr = gb162()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta162.new" && mv "$self_tree/meta162.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb162()' internal/reader/metadata.go; then
+		run_mut "alias-spelled generic method value result"
+	else
+		echo "self-test ERROR: form 162 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta162.orig" internal/reader/metadata.go
+
+	# --- 163: alias-spelled embedded generic promotion --------------------
+	# type hEA struct{ gRA[zfA] }: the embedding chain carries the alias
+	# type argument into the promoted method result.
+	cat > internal/reader/gatemut_aliaspromo.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA163 = *os.File
+
+type gRA163[T any] struct{}
+
+func (r gRA163[T]) mk() T { var z T; return z }
+
+type hEA163 struct{ gRA163[zfA163] }
+
+func gb163() io.ReadCloser {
+	he := hEA163{}
+	return he.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliaspromo.go
+	cp internal/reader/metadata.go "$self_tree/meta163.orig"
+	INS='zr = gb163()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta163.new" && mv "$self_tree/meta163.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb163()' internal/reader/metadata.go; then
+		run_mut "alias-spelled embedded generic promotion"
+	else
+		echo "self-test ERROR: form 163 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta163.orig" internal/reader/metadata.go
+
+	# --- 164: alias-spelled inferred element binding ----------------------
+	# idc([]zfA{nil}): the argument-inferred element type must resolve
+	# the alias before the generic result is recorded.
+	cat > internal/reader/gatemut_aliasinf.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA164 = *os.File
+
+func idc164[T any](xs []T) T { var z T; return z }
+
+func gb164() io.ReadCloser {
+	return idc164([]zfA164{nil})
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliasinf.go
+	cp internal/reader/metadata.go "$self_tree/meta164.orig"
+	INS='zr = gb164()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta164.new" && mv "$self_tree/meta164.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb164()' internal/reader/metadata.go; then
+		run_mut "alias-spelled inferred element binding"
+	else
+		echo "self-test ERROR: form 164 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta164.orig" internal/reader/metadata.go
+
+	# --- 165: benign alias generic receiver must pass ---------------------
+	# Same shape as form 159 with an alias to a bytes-backed element
+	# struct: alias resolution must not taint a non-file element.
+	cat > internal/reader/gatemut_benaliasrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv165 struct{ *bytes.Reader }
+
+func (w *rcv165) Close() error { return nil }
+
+type gsGB165 struct{}
+
+func (gsGB165) get() io.ReadCloser { return &rcv165{bytes.NewReader(nil)} }
+
+type zfC165 = *gsGB165
+
+type gRB165[T any] struct{}
+
+func (r gRB165[T]) mk() T { var z T; return z }
+
+func gbb165() io.ReadCloser {
+	rr := gRB165[zfC165]{}
+	return rr.mk().get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benaliasrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta165.orig"
+	INS='zr = gbb165()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta165.new" && mv "$self_tree/meta165.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb165()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign alias generic receiver passes the gate"
+		else
+			echo "self-test MISS: benign alias generic receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 165 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta165.orig" internal/reader/metadata.go
+
+	# --- 166: benign alias inferred element must pass ---------------------
+	# Same shape as form 164 with an alias to a bytes-backed element
+	# struct.
+	cat > internal/reader/gatemut_benaliasinf.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv166 struct{ *bytes.Reader }
+
+func (w *rcv166) Close() error { return nil }
+
+type gsGB166 struct{}
+
+func (gsGB166) get() io.ReadCloser { return &rcv166{bytes.NewReader(nil)} }
+
+type zfC166 = *gsGB166
+
+func idcB166[T any](xs []T) T { var z T; return z }
+
+func gbb166() io.ReadCloser {
+	return idcB166([]zfC166{nil}).get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benaliasinf.go
+	cp internal/reader/metadata.go "$self_tree/meta166.orig"
+	INS='zr = gbb166()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta166.new" && mv "$self_tree/meta166.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb166()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign alias inferred element passes the gate"
+		else
+			echo "self-test MISS: benign alias inferred element failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 166 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta166.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 129 mutation forms rejected)"
+	echo "import-graph self-test passed (all 135 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
