@@ -6044,12 +6044,255 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta184.orig" internal/reader/metadata.go
 
+	# --- 185: generic method func-typed type argument --------------------
+	# gRZ[func() *os.File]{}.mk() bound to f, then f(): the func-typed
+	# generic method result must register as a func-file so invoking
+	# the bound func keeps the file taint behind the io.ReadFull
+	# exemption.
+	cat > internal/reader/gatemut_genmethfunc.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gRZ185[T any] struct{}
+
+func (r gRZ185[T]) mk() T { var z T; return z }
+
+func gb185() io.ReadCloser {
+	rr := gRZ185[func() *os.File]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genmethfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta185.orig"
+	INS='zr = gb185()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta185.new" && mv "$self_tree/meta185.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb185()' internal/reader/metadata.go; then
+		run_mut "generic method func-typed type argument"
+	else
+		echo "self-test ERROR: form 185 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta185.orig" internal/reader/metadata.go
+
+	# --- 186: embedded generic receiver func-typed promotion -------------
+	# type hE struct{ gRZ[func() *os.File] }; he.mk(): the promoted
+	# generic method must register the func-file through embedding.
+	cat > internal/reader/gatemut_genmethfuncemb.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gRZ186[T any] struct{}
+
+func (r gRZ186[T]) mk() T { var z T; return z }
+
+type hE186 struct{ gRZ186[func() *os.File] }
+
+func gb186() io.ReadCloser {
+	he := hE186{}
+	f := he.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genmethfuncemb.go
+	cp internal/reader/metadata.go "$self_tree/meta186.orig"
+	INS='zr = gb186()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta186.new" && mv "$self_tree/meta186.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb186()' internal/reader/metadata.go; then
+		run_mut "embedded generic receiver func-typed promotion"
+	else
+		echo "self-test ERROR: form 186 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta186.orig" internal/reader/metadata.go
+
+	# --- 187: local alias of func-typed generic type argument ------------
+	# type Fz = func() *os.File; gRZ[Fz]{}: the alias must resolve to
+	# the func type before the taint class is chosen.
+	cat > internal/reader/gatemut_genmethfuncalias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type Fz187 = func() *os.File
+
+type gRZ187[T any] struct{}
+
+func (r gRZ187[T]) mk() T { var z T; return z }
+
+func gb187() io.ReadCloser {
+	rr := gRZ187[Fz187]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genmethfuncalias.go
+	cp internal/reader/metadata.go "$self_tree/meta187.orig"
+	INS='zr = gb187()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta187.new" && mv "$self_tree/meta187.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb187()' internal/reader/metadata.go; then
+		run_mut "local alias of func-typed generic type argument"
+	else
+		echo "self-test ERROR: form 187 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta187.orig" internal/reader/metadata.go
+
+	# --- 188: renamed-import func alias as generic type argument ---------
+	# mm.F with F = func() *os.File in internal/mapping: the qualified
+	# func alias must keep the func-file class through the renamed
+	# import qualifier.
+	cat > internal/mapping/gatemut_rqfunc.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type F188 = func() *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_rqfunc.go
+	cat > internal/reader/gatemut_rqfunc.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ188[T any] struct{}
+
+func (r gRZ188[T]) mk() T { var z T; return z }
+
+func gb188() io.ReadCloser {
+	rr := gRZ188[mm.F188]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rqfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta188.orig"
+	INS='zr = gb188()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta188.new" && mv "$self_tree/meta188.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb188()' internal/reader/metadata.go; then
+		run_mut "renamed-import func alias as generic type argument"
+	else
+		echo "self-test ERROR: form 188 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta188.orig" internal/reader/metadata.go
+
+	# --- 189: unapproved method on an invoked generic func result --------
+	# f := rr.mk(); f().Chdir(): the invoked func-file result must be
+	# file-tainted so the unapproved method call is flagged.
+	cat > internal/reader/gatemut_genmethfuncchdir.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gRZ189[T any] struct{}
+
+func (r gRZ189[T]) mk() T { var z T; return z }
+
+func gb189() io.ReadCloser {
+	rr := gRZ189[func() *os.File]{}
+	f := rr.mk()
+	f().Chdir()
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genmethfuncchdir.go
+	cp internal/reader/metadata.go "$self_tree/meta189.orig"
+	INS='zr = gb189()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta189.new" && mv "$self_tree/meta189.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb189()' internal/reader/metadata.go; then
+		run_mut "unapproved method on invoked generic func result"
+	else
+		echo "self-test ERROR: form 189 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta189.orig" internal/reader/metadata.go
+
+	# --- 190: benign func-typed generic method result must pass ----------
+	# gRZ[func() *mrc190]{} with a bytes-backed func result: the
+	# func-file class must not flag a non-file func type.
+	cat > internal/reader/gatemut_bengenmethfunc.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type mrc190 struct{ *bytes.Reader }
+
+func (w *mrc190) Close() error { return nil }
+
+type gRB190[T any] struct{}
+
+func (r gRB190[T]) mk() T { var z T; return z }
+
+func gbb190() io.ReadCloser {
+	rr := gRB190[func() *mrc190]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bengenmethfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta190.orig"
+	INS='zr = gbb190()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta190.new" && mv "$self_tree/meta190.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb190()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign func-typed generic method result passes the gate"
+		else
+			echo "self-test MISS: benign func-typed generic method result failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 190 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta190.orig" internal/reader/metadata.go
+
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 147 mutation forms rejected)"
+	echo "import-graph self-test passed (all 152 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
