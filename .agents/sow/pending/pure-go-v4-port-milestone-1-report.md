@@ -107,10 +107,10 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), the cgo-import, raw-syscall,
 linkname, no-error syscall, and preadv2/pwritev2 classes (forms
 228-230 and 232-235) with the benign lifecycle control (form
-231); the self-test now durably rejects two hundred six
+231); the self-test now durably rejects two hundred ten
 mutation forms (round-36 forms 236-237, follow-up forms 238-239,
 round-38 form 240, round-39/40 forms 241-244, round-42 forms 245-247,
-round-43 form 248, and round-45 forms 249-256 pin the dup/exec subprocess escape, the bodyless assembly-stub
+round-43 form 248, and round-45/46/47 forms 249-256 pin the dup/exec subprocess escape, the bodyless assembly-stub
 class, the x/sys owner boundary, assembly objects, fcntl F_DUPFD
 duplication, out-of-tree module-graph attach, x/sys source replacement,
 hidden dot-directories, x/sys source-content spoofing (poisoned module
@@ -119,8 +119,10 @@ objects, os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles
 reaching stream wrappers, the x/sys descriptor-transfer primitives
 Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering
 through struct fields, file method values, initialized func-typed
-variables with file-bearing declared results, and stdlib producer
-values bound without a declared type; details in the
+variables with file-bearing declared results, stdlib producer
+values bound without a declared type, and round-48 forms 257-260 pin
+bound method expressions on file-bearing receiver types and
+same-module cross-package producer vars; details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -178,7 +180,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 206/206 mutation forms rejected (plus 50 benign controls)
+GOOS/GOARCH pairs): 210/210 mutation forms rejected (plus 50 benign controls)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -1152,13 +1154,17 @@ round-32 cgo-import, raw-syscall, and linkname gate class (forms
 capability, and //go:linkname aliasing), fixed in the round-32 gate
 pass recorded in the active SOW exec log (rejects extended with the
 no-error syscall and preadv2/pwritev2 classes, forms 232-235); the
-self-test now durably rejects two hundred six mutation forms (forms 236-248 pin the round-36/37/38/39/40/42/43 dup/exec subprocess escape, bodyless assembly-stub, x/sys-owner-boundary, assembly-object, fcntl F_DUPFD duplication, out-of-tree module-graph, x/sys source-replacement, hidden dot-directory, x/sys source-content spoofing, case-variant assembly-object, and unlistable-module rejections; forms 249-256 pin the round-45 os.CopyFS directory-copy, os.OpenInRoot/os.OpenRoot stream-wrapper, x/sys descriptor-transfer-primitive, *os.Root struct-field-laundering, file-method-value, initialized func-typed-variable, and stdlib-producer-value rejections). The round-39 gate re-review found the module-graph escape: go.mod replace and go.work workspaces attach out-of-tree modules the scan never walks (reproduced with a wrapper calling unix.Pread, gate exit 0 on both vectors); fixed by validating the module graph to exactly this module plus golang.org/x/sys with no workspace active, pinned as self-test forms 241-242. The round-40 gate re-review then found the path-only allowlist gap: a replace of golang.org/x/sys to an evil directory keeps the allowed path in the graph while loading code the walk never scans (proven live with unix.Pread2 reading the database), and the walk skipped hidden dot-directories; fixed by banning all replace/exclude directives, verifying the resolved x/sys source is the module-cache checkout, and scanning hidden directories (only .git skipped), pinned as forms 243-244. The round-42 gate re-review then found the x/sys source-content gap: the path-only allowlist accepted a poisoned GOMODCACHE checkout and a file proxy serving an evil x/sys with a self-consistent forged go.sum (both proven live with a smuggled unix.Pread2, gate exit 0 on both vectors) because nothing pinned the module content; fixed by pinning the exact version, the module-cache path, the extracted-tree content hash, and the module zip/go.mod sums to the official v0.35.0 values, plus a case-insensitive assembly-object rejection, pinned as forms 245-247. The round-43 gate re-review then found the fail-open listing gap: the per-target go list ./... loop swallowed listing failures (2>/dev/null), so a module the go toolchain cannot list - symlinked package files or parse errors - passed with an empty package list and no import checks; go list failures now fail the gate per target and pkg_imports fails closed, pinned as form 248. The round-45 final review then found the mmap-gate denylist gaps: os.CopyFS was absent from the selector ban (a directory copy streams artifact bytes with no banned selector), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File, or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes; Root.Open/Create/OpenFile also produce files), and the x/sys surface still carried descriptor-transfer primitives (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/DedupeRange, darwin unix.Clonefile/Clonefileat); CopyFS and the x/sys primitives join the banned selector set, os.OpenInRoot/os.OpenRoot join the file-producer table so Root methods fail closed, pinned as self-test forms 249-251; the adversarial re-review then proved a P0 in the same class
+self-test now durably rejects two hundred ten mutation forms (forms 236-248 pin the round-36/37/38/39/40/42/43 dup/exec subprocess escape, bodyless assembly-stub, x/sys-owner-boundary, assembly-object, fcntl F_DUPFD duplication, out-of-tree module-graph, x/sys source-replacement, hidden dot-directory, x/sys source-content spoofing, case-variant assembly-object, and unlistable-module rejections; forms 249-256 pin the round-45/46/47 os.CopyFS directory-copy, os.OpenInRoot/os.OpenRoot stream-wrapper, x/sys descriptor-transfer-primitive, *os.Root struct-field-laundering, file-method-value, initialized func-typed-variable, and stdlib-producer-value rejections; forms 257-260 pin the round-48 bound-method-expression and same-module cross-package producer-var rejections). The round-39 gate re-review found the module-graph escape: go.mod replace and go.work workspaces attach out-of-tree modules the scan never walks (reproduced with a wrapper calling unix.Pread, gate exit 0 on both vectors); fixed by validating the module graph to exactly this module plus golang.org/x/sys with no workspace active, pinned as self-test forms 241-242. The round-40 gate re-review then found the path-only allowlist gap: a replace of golang.org/x/sys to an evil directory keeps the allowed path in the graph while loading code the walk never scans (proven live with unix.Pread2 reading the database), and the walk skipped hidden dot-directories; fixed by banning all replace/exclude directives, verifying the resolved x/sys source is the module-cache checkout, and scanning hidden directories (only .git skipped), pinned as forms 243-244. The round-42 gate re-review then found the x/sys source-content gap: the path-only allowlist accepted a poisoned GOMODCACHE checkout and a file proxy serving an evil x/sys with a self-consistent forged go.sum (both proven live with a smuggled unix.Pread2, gate exit 0 on both vectors) because nothing pinned the module content; fixed by pinning the exact version, the module-cache path, the extracted-tree content hash, and the module zip/go.mod sums to the official v0.35.0 values, plus a case-insensitive assembly-object rejection, pinned as forms 245-247. The round-43 gate re-review then found the fail-open listing gap: the per-target go list ./... loop swallowed listing failures (2>/dev/null), so a module the go toolchain cannot list - symlinked package files or parse errors - passed with an empty package list and no import checks; go list failures now fail the gate per target and pkg_imports fails closed, pinned as form 248. The round-45 final review then found the mmap-gate denylist gaps: os.CopyFS was absent from the selector ban (a directory copy streams artifact bytes with no banned selector), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File, or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes; Root.Open/Create/OpenFile also produce files), and the x/sys surface still carried descriptor-transfer primitives (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/DedupeRange, darwin unix.Clonefile/Clonefileat); CopyFS and the x/sys primitives join the banned selector set, os.OpenInRoot/os.OpenRoot join the file-producer table so Root methods fail closed, pinned as self-test forms 249-251; the adversarial re-review then proved a P0 in the same class
 (*os.Root stored in a struct field and opened through the field drops the taint, so the returned *os.File
 reached flate.NewReader and the exempted inflater shape, gate exit 0), closed by resolving *os.Root as a
 file-bearing type everywhere *os.File does, pinned as form 252; the producer-value re-review then
 closed three more P0 escapes (file method values; initialized func-typed variables with file-bearing
 declared results, Root and *os.File; stdlib producer values bound without a declared type), pinned as
-forms 253-256. Decision 5A remains the single open item and
+forms 253-256. The round-48 re-review then closed two further gate classes (bound method expressions
+on file-bearing receiver types, form-local and package-level, and same-module cross-package
+package-level producer vars such as format.OpenRoot/format.Open), pinned as forms 257-260; the
+round-48 exec-log entry in the owning SOW cites the exact round-45/46/47 chain HEADs (14c0698,
+70dcc42, 262756c, e1410eb, 5ff9116, 8c6cc44). Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

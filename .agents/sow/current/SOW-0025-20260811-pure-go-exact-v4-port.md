@@ -1906,7 +1906,8 @@ Use these sections in this order:
   func/chan elements, method results), pinned as self-test form 252,
   raising the durable rejection set to two hundred two mutation forms.
 - The P0 closure landed at HEAD 262756c on top of the round-45 gate fix
-  (14c0698); the record trail and counts above reflect both commits.
+  (14c0698, records 70dcc42); the record trail and counts above reflect
+  the full chain 14c0698 -> 70dcc42 -> 262756c -> e1410eb.
 - The following adversarial re-review then found three producer-value
   P0 escapes, all proven live with the metadata-exemption consumption
   chain at gate exit 0: file method values (open := root.Open;
@@ -1922,15 +1923,62 @@ Use these sections in this order:
   pinned as self-test forms 253-256, raising the durable rejection
   set to two hundred six mutation forms.
 - The producer-value closure landed at HEAD 5ff9116 on top of the
-  Root-taint fix (262756c); the record trail and counts above reflect
-  all four commits of the round-45/46/47 chain (14c0698, 262756c,
-  5ff9116, and the records commit). Gates: go test ./... incl -race, go vet,
-  gofmt, import graph (self-test, all 206 forms rejected), CGO_ENABLED=0
+  Root-taint fix (262756c); the exact round-45/46/47 chain is 14c0698
+  (gate gaps), 70dcc42 (its records), 262756c (Root laundering), e1410eb
+  (its records), 5ff9116 (producer values), 8c6cc44 (its records). Gates:
+  go test ./... incl -race, go vet,
+  gofmt, import graph (self-test, all 206 forms rejected at that commit),
+  CGO_ENABLED=0
   build and test, four cross-compiles, SOW audit — all green.
 - Counts unchanged at this commit: production 4,792 raw lines / tests
   4,877 raw lines (the gate scanner lives outside the module). Decision
   5A remains open for user ratification; Milestone 2 remains blocked
   until the re-review passes.
+
+### 2026-08-13 - round-48 gate re-review bound method expressions and cross-package producer vars closed (HEAD aec609c)
+
+- The round-48 adversarial re-review (six narrow reviewers: codecs,
+  membership/zero-alloc, mapping/pin/gate, metadata/bootstrap, records,
+  gate hunting) passed codecs, membership/zero-alloc, mapping/pin/gate,
+  and metadata, and failed with two gate findings plus one records
+  finding.
+- P0 - bound method expressions: `open := (*os.Root).Open` followed by
+  `open(root, name)` binds the Open method with the receiver as an
+  explicit first argument. The receiver node is a type expression and
+  never carries value taint, so the value-position selector check could
+  not see it; the same held for the package-level initializer
+  `var openRootPkg = (*os.Root).Open`. Both reproduced live at gate
+  exit 0 with the exempted inflater chain consuming the file.
+- P2 - same-module cross-package producer vars: `internal/format`
+  declares `var OpenRoot = os.OpenRoot` (and the *os.File sibling
+  `var Open = os.Open`); a caller in `internal/mapping` invoking
+  `format.OpenRoot(dir)` cannot see the declaring directory's taint
+  registry, so the returned *os.Root/*os.File reached a flate reader
+  untainted, reproduced live at gate exit 0.
+- P2 (records) - the round-47 exec-log bullet never cited the terminal
+  records HEAD by hash; the corrected chain 14c0698 -> 70dcc42 ->
+  262756c -> e1410eb -> 5ff9116 -> 8c6cc44 is now named in the
+  round-45/46/47 bullets above and in this entry.
+- Fixed at HEAD aec609c: the selector rules now recognize method
+  expressions whose receiver type resolves to a file-bearing handle
+  (methodExprFileType, rejecting every method outside the approved
+  lifecycle surface in both function and package-level scans), and a
+  process-wide package-level producer-var registry
+  (qualifiedProducerVars plus the per-directory pkgProducerVarsByDir)
+  resolves same-module producer vars through the call-site import path,
+  with the clause-name fallback for plain (non-renamed) imports;
+  pinned as self-test forms 257-260, raising the durable rejection set
+  to two hundred ten mutation forms.
+- Replayed at the new gate: all round-47 replays (R4-R14) and the new
+  probes (P10 method expression, P12 exempted-inflater chain, P14
+  package-level method expression, P15 cross-package producer var)
+  are rejected; the benign close-value/Fd-value/Chdir controls still
+  pass. Gates: go test ./... incl -race, go vet, gofmt, import graph
+  (self-test, all 210 forms rejected), CGO_ENABLED=0 build and test,
+  four cross-compiles, SOW audit — all green. Counts unchanged at
+  this commit. Decision 5A remains open for user ratification;
+  Milestone 2 remains blocked until the round-49 re-review and the
+  final review pass.
 
 ## Validation
 
@@ -1951,7 +1999,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 206-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 210-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2812,15 +2860,20 @@ execution record; the closing result is appended there when it completes.
   raising the set to two hundred two mutation forms; the
   producer-value re-review then closed the file-method-value,
   initialized func-typed-variable (Root and *os.File), and plain
-  stdlib-producer-value escapes (forms 253-256), raising the set to
-  two hundred six mutation forms.
+  stdlib-producer-value escapes (forms 253-256); the round-48
+  adversarial re-review then closed bound method expressions on
+  file-bearing receiver types (form-local and package-level) and
+  same-module cross-package producer vars (forms 257-260), raising
+  the set to two hundred ten mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 206-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  import graph with the 210-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
   rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
   descriptor-transfer primitives, *os.Root laundering through struct
   fields, file method values, initialized func-typed variables with
   file-bearing declared results, and stdlib producer values bound
-  without a declared type), ten cross-compiles,
+  without a declared type, and round-48 rejects 257-260 cover bound
+  method expressions on file-bearing receiver types and same-module
+  cross-package producer vars), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
