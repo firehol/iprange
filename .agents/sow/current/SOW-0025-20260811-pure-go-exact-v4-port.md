@@ -425,9 +425,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   the method-value family (forms 84-87), the generic
   pass-through family (forms 88-89), the generic-element
   family, the chan-result method-value class, the
-  field-assignment class (forms 92-95), and the channel-consumer
-  class (forms 98-100);
-  the self-test now durably rejects eighty-seven mutation forms. The
+  field-assignment class (forms 92-95), the channel-consumer
+  class (forms 98-100), and the container-element
+  class (forms 103-106);
+  the self-test now durably rejects ninety-one mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
