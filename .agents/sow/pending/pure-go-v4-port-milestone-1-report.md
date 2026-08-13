@@ -108,9 +108,9 @@ instantiation class (forms 225-226), the cgo-import, raw-syscall,
 linkname, no-error syscall, and preadv2/pwritev2 classes (forms
 228-230 and 232-235) with the benign lifecycle control (form
 231); the self-test now durably rejects one hundred eighty-nine
-mutation forms (round-36 forms 236-239 pin the dup/exec subprocess
-escape, the bodyless assembly-stub class, the x/sys owner boundary,
-and assembly objects; details in the
+mutation forms (round-36 forms 236-237 and follow-up forms 238-239
+pin the dup/exec subprocess escape, the bodyless assembly-stub class,
+the x/sys owner boundary, and assembly objects; details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1142,7 +1142,7 @@ round-32 cgo-import, raw-syscall, and linkname gate class (forms
 capability, and //go:linkname aliasing), fixed in the round-32 gate
 pass recorded in the active SOW exec log (rejects extended with the
 no-error syscall and preadv2/pwritev2 classes, forms 232-235); the
-self-test now durably rejects one hundred eighty-nine mutation forms (forms 236-239 pin the round-36 dup/exec subprocess escape, bodyless assembly-stub, x/sys-owner-boundary, and assembly-object rejections). Decision 5A remains the single open item and
+self-test now durably rejects one hundred eighty-nine mutation forms (forms 236-239 pin the round-36/37 dup/exec subprocess escape, bodyless assembly-stub, x/sys-owner-boundary, and assembly-object rejections). Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone

@@ -177,7 +177,7 @@ Fixed in the go-gate scanner with per-directory alias registration
 (pkgAliasesByDir), a per-file import snapshot (currentImports), and
 qualifier translation in aliasLookup; pinned as self-test forms
 179-182 (rejects) and 183-184 (benign controls). The durable rejection
-set is now one hundred fifty-two mutation forms. The records
+set is now one hundred forty-seven mutation forms. The records
 of this pass complete the trail up to this re-review. The round-25
 gate re-review then found the func-typed generic-method class: a
 generic method whose type argument binds a func type producing
@@ -2583,6 +2583,6 @@ execution record; the closing result is appended there when it completes.
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 189-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-239 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, and assembly objects), ten cross-compiles,
+  import graph with the 189-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237 and follow-up rejects 238-239 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, and assembly objects), ten cross-compiles,
   SOW audit - all green. Counts: production 4,780 raw lines / tests
   4,863 raw lines (gate scanner lives outside the module).
