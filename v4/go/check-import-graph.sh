@@ -3559,6 +3559,281 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta126.orig" internal/reader/metadata.go
 
+	# --- 127: struct-field container index receiver -----------------------
+	# s.arr[1].get() where s is a struct whose field arr holds the
+	# pointers: the indexed base must resolve through the field type.
+	cat > internal/reader/gatemut_fieldidx.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsF127 struct{}
+
+func (gsF127) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type sf127 struct{ arr []*gsF127 }
+
+var s127 sf127
+
+func fldGet127() io.ReadCloser { return s127.arr[1].get() }
+MUTEOF
+	add_mut internal/reader/gatemut_fieldidx.go
+	cp internal/reader/metadata.go "$self_tree/meta127.orig"
+	INS='zr = fldGet127()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta127.new" && mv "$self_tree/meta127.new" internal/reader/metadata.go
+	if grep -Fq 'zr = fldGet127()' internal/reader/metadata.go; then
+		run_mut "struct-field container index receiver"
+	else
+		echo "self-test ERROR: form 127 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta127.orig" internal/reader/metadata.go
+
+	# --- 128: call-result index receiver ----------------------------------
+	# arrSrc()[0].get(): the indexed base is a same-package call whose
+	# declared result type names the container.
+	cat > internal/reader/gatemut_callidx.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsC128 struct{}
+
+func (gsC128) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func arrSrc128() []*gsC128 { return nil }
+
+func clGet128() io.ReadCloser { return arrSrc128()[0].get() }
+MUTEOF
+	add_mut internal/reader/gatemut_callidx.go
+	cp internal/reader/metadata.go "$self_tree/meta128.orig"
+	INS='zr = clGet128()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta128.new" && mv "$self_tree/meta128.new" internal/reader/metadata.go
+	if grep -Fq 'zr = clGet128()' internal/reader/metadata.go; then
+		run_mut "call-result index receiver"
+	else
+		echo "self-test ERROR: form 128 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta128.orig" internal/reader/metadata.go
+
+	# --- 129: dereferenced pointer-to-container index receiver ------------
+	# (*pdp)[0].get() with var pdp *[]*gs: the pointer wrapper and the
+	# container wrapper must both strip to the element struct.
+	cat > internal/reader/gatemut_derefidx.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsDP129 struct{}
+
+func (gsDP129) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var pdp129 *[]*gsDP129
+
+func drGet129() io.ReadCloser { return (*pdp129)[0].get() }
+MUTEOF
+	add_mut internal/reader/gatemut_derefidx.go
+	cp internal/reader/metadata.go "$self_tree/meta129.orig"
+	INS='zr = drGet129()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta129.new" && mv "$self_tree/meta129.new" internal/reader/metadata.go
+	if grep -Fq 'zr = drGet129()' internal/reader/metadata.go; then
+		run_mut "dereferenced pointer-to-container index receiver"
+	else
+		echo "self-test ERROR: form 129 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta129.orig" internal/reader/metadata.go
+
+	# --- 130: make() short-declared map receiver --------------------------
+	# mm := make(map[string]*gs); mm["k"].get(): the short declaration
+	# must record the container type from the make argument.
+	cat > internal/reader/gatemut_makerecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsMK130 struct{}
+
+func (gsMK130) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func mkGet130() io.ReadCloser {
+	mmk := make(map[string]*gsMK130)
+	return mmk["k"].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_makerecv.go
+	cp internal/reader/metadata.go "$self_tree/meta130.orig"
+	INS='zr = mkGet130()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta130.new" && mv "$self_tree/meta130.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mkGet130()' internal/reader/metadata.go; then
+		run_mut "make() short-declared map receiver"
+	else
+		echo "self-test ERROR: form 130 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta130.orig" internal/reader/metadata.go
+
+	# --- 131: range-variable element receiver -----------------------------
+	# for _, v := range arr { v.get() }: the range variable must
+	# register as a struct instance from the ranged element type.
+	cat > internal/reader/gatemut_rangerecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsR131 struct{}
+
+func (gsR131) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var arrr131 [2]*gsR131
+
+func rngGet131() io.ReadCloser {
+	for _, v := range arrr131 {
+		return v.get()
+	}
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rangerecv.go
+	cp internal/reader/metadata.go "$self_tree/meta131.orig"
+	INS='zr = rngGet131()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta131.new" && mv "$self_tree/meta131.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rngGet131()' internal/reader/metadata.go; then
+		run_mut "range-variable element receiver"
+	else
+		echo "self-test ERROR: form 131 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta131.orig" internal/reader/metadata.go
+
+	# --- 132: chan-receive element receiver -------------------------------
+	# (<-chch).get() with var chch chan *gs: the receive expression must
+	# resolve the channel's element struct.
+	cat > internal/reader/gatemut_chanrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsCH132 struct{}
+
+func (gsCH132) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var chch132 chan *gsCH132
+
+func chGet132() io.ReadCloser { return (<-chch132).get() }
+MUTEOF
+	add_mut internal/reader/gatemut_chanrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta132.orig"
+	INS='zr = chGet132()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta132.new" && mv "$self_tree/meta132.new" internal/reader/metadata.go
+	if grep -Fq 'zr = chGet132()' internal/reader/metadata.go; then
+		run_mut "chan-receive element receiver"
+	else
+		echo "self-test ERROR: form 132 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta132.orig" internal/reader/metadata.go
+
+	# --- 133: benign make() map receiver must pass ------------------------
+	# Same make/map-indexed shape as form 130 with a bytes-only payload:
+	# the scanner must not flag it.
+	cat > internal/reader/gatemut_benmakerecv.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcbM133 struct{ *bytes.Reader }
+
+func (w *rcbM133) Close() error { return nil }
+
+type gsBM133 struct{}
+
+func (gsBM133) get() io.ReadCloser { return &rcbM133{bytes.NewReader(nil)} }
+
+func mkGetB133() io.ReadCloser {
+	mb := make(map[string]*gsBM133)
+	return mb["k"].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benmakerecv.go
+	cp internal/reader/metadata.go "$self_tree/meta133.orig"
+	INS='zr = mkGetB133()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta133.new" && mv "$self_tree/meta133.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mkGetB133()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign make() map receiver passes the gate"
+		else
+			echo "self-test MISS: benign make() map receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 133 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta133.orig" internal/reader/metadata.go
+
+
 
 
 
@@ -3616,7 +3891,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 105 mutation forms rejected)"
+	echo "import-graph self-test passed (all 111 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
