@@ -83,9 +83,10 @@ named-method extension, the nested-method-receiver extension, the
 method-value family, the generic pass-through family, the
 generic-element family, the chan-result method-value class, and the
 field-assignment class, the channel-consumer class, the
-container-element class (forms 60-107), and the anonymous-receiver
-method class (forms 108-111); the self-test now durably
-rejects ninety-five mutation forms (details in the
+container-element class (forms 60-107), the anonymous-receiver
+method class (forms 108-111), and the alias-receiver method
+class (forms 113-114); the self-test now durably
+rejects ninety-seven mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1075,9 +1076,10 @@ family (forms 84-87), the generic pass-through family
 (forms 88-89), the generic-element family, the chan-result
 method-value class, the field-assignment class (forms 92-95), the channel-consumer
 class (forms 98-100), the container-element class
-(forms 103-106), and the anonymous-receiver method class
-(forms 108-111); the
-self-test now durably rejects ninety-five mutation forms. Decision 5A remains the single open item and
+(forms 103-106), the anonymous-receiver method class
+(forms 108-111), and the alias-receiver method class
+(forms 113-114); the
+self-test now durably rejects ninety-seven mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
