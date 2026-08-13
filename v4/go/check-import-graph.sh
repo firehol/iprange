@@ -6963,11 +6963,311 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta206.orig" internal/reader/metadata.go
 
+
+	# --- 207: embedded interface promotion, single func-file method ------
+	# An interface embedding a file-producing interface promotes the
+	# embedded methods: the resolved receiver is the embedding interface,
+	# so the walk must follow the embedding chain and keep the promoted
+	# declared results (the ok flag alone records body-marked claims).
+	cat > internal/reader/gatemut_embiface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type IBase207 interface{ Get() func() *os.File }
+
+type IEmb207 interface{ IBase207 }
+
+type gRZ207[T any] struct{}
+
+func (r gRZ207[T]) mk() T { var z T; return z }
+
+func gb207() io.ReadCloser {
+	rr := gRZ207[IEmb207]{}
+	x := rr.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_embiface.go
+	cp internal/reader/metadata.go "$self_tree/meta207.orig"
+	INS='zr = gb207()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta207.new" && mv "$self_tree/meta207.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb207()' internal/reader/metadata.go; then
+		run_mut "embedded interface promotion with a single func-file method"
+	else
+		echo "self-test ERROR: form 207 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta207.orig" internal/reader/metadata.go
+
+
+	# --- 208: embedded interface promotion, mixed multi-result method -----
+	# The promoted method declares (func() *os.File, error): position 0
+	# keeps the func-file kind through the assign and the invocation.
+	cat > internal/reader/gatemut_embifacemixed.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type IBase208 interface{ Get() (func() *os.File, error) }
+
+type IEmb208 interface{ IBase208 }
+
+type gRZ208[T any] struct{}
+
+func (r gRZ208[T]) mk() T { var z T; return z }
+
+func gb208() io.ReadCloser {
+	rr := gRZ208[IEmb208]{}
+	x := rr.mk()
+	f, _ := x.Get()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_embifacemixed.go
+	cp internal/reader/metadata.go "$self_tree/meta208.orig"
+	INS='zr = gb208()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta208.new" && mv "$self_tree/meta208.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb208()' internal/reader/metadata.go; then
+		run_mut "embedded interface promotion with mixed multi-result method"
+	else
+		echo "self-test ERROR: form 208 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta208.orig" internal/reader/metadata.go
+
+
+	# --- 209: cross-package defined struct method via generic arg ---------
+	# The generic argument is a struct defined in mapping with a declared
+	# file-producing method: the qualified spelling must resolve the
+	# mirrored struct and its method.
+	cat > internal/mapping/gatemut_crossstruct.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type S209 struct{ F func() *os.File }
+
+func (s S209) Get() func() *os.File { return s.F }
+
+type Mk209[T any] struct{}
+
+func (r Mk209[T]) Mk() T { var z T; return z }
+MUTEOF
+	add_mut internal/mapping/gatemut_crossstruct.go
+	cat > internal/reader/gatemut_crossstruct.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ209[T any] struct{}
+
+func (r gRZ209[T]) md() T { var z T; return z }
+
+func gb209() io.ReadCloser {
+	rr := gRZ209[mm.S209]{}
+	s := rr.md()
+	f := s.Get()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_crossstruct.go
+	cp internal/reader/metadata.go "$self_tree/meta209.orig"
+	INS='zr = gb209()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta209.new" && mv "$self_tree/meta209.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb209()' internal/reader/metadata.go; then
+		run_mut "cross-package defined struct method through a generic argument"
+	else
+		echo "self-test ERROR: form 209 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta209.orig" internal/reader/metadata.go
+
+
+	# --- 210: nine-hop qualified defined chain -----------------------------
+	# A defined chain that needs the full alias/defined fixpoint (alias +
+	# nine named hops): the qualified spelling mm.J210 must expand to the
+	# func text so the generic result carries the file.
+	cat > internal/mapping/gatemut_longchain.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type A210 = func() *os.File
+type B210 A210
+type C210 B210
+type D210 C210
+type E210 D210
+type F210 E210
+type G210 F210
+type H210 G210
+type I210 H210
+type J210 I210
+MUTEOF
+	add_mut internal/mapping/gatemut_longchain.go
+	cat > internal/reader/gatemut_longchain.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ210[T any] struct{}
+
+func (r gRZ210[T]) mc() T { var z T; return z }
+
+func gb210() io.ReadCloser {
+	rr := gRZ210[mm.J210]{}
+	f := rr.mc()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_longchain.go
+	cp internal/reader/metadata.go "$self_tree/meta210.orig"
+	INS='zr = gb210()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta210.new" && mv "$self_tree/meta210.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb210()' internal/reader/metadata.go; then
+		run_mut "nine-hop qualified defined chain through a generic argument"
+	else
+		echo "self-test ERROR: form 210 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta210.orig" internal/reader/metadata.go
+
+
+	# --- 211: benign embedded interface bytes twin --------------------------
+	# The same promoted-method shape over *bytes.Reader must stay benign
+	# (no *os.File in the declared chain).
+	cat > internal/reader/gatemut_benembiface.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type IBase211 interface{ Get() func() *bytes.Reader }
+
+type IEmb211 interface{ IBase211 }
+
+type gRZ211[T any] struct{}
+
+func (r gRZ211[T]) mk() T { var z T; return z }
+
+func gbb211() io.ReadCloser {
+	rr := gRZ211[IEmb211]{}
+	x := rr.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benembiface.go
+	cp internal/reader/metadata.go "$self_tree/meta211.orig"
+	INS='zr = gbb211()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta211.new" && mv "$self_tree/meta211.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb211()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign embedded interface bytes method passes the gate"
+		else
+			echo "self-test MISS: benign embedded interface bytes method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 211 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta211.orig" internal/reader/metadata.go
+
+
+	# --- 212: benign cross-package struct method bytes twin ----------------
+	# The same cross-package struct-method shape over *bytes.Reader must
+	# stay benign.
+	cat > internal/mapping/gatemut_bencrossstruct.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type SB212 struct{ F func() *bytes.Reader }
+
+func (s SB212) Get() func() *bytes.Reader { return s.F }
+
+type Mk212[T any] struct{}
+
+func (r Mk212[T]) Mk() T { var z T; return z }
+MUTEOF
+	add_mut internal/mapping/gatemut_bencrossstruct.go
+	cat > internal/reader/gatemut_bencrossstruct.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ212[T any] struct{}
+
+func (r gRZ212[T]) md() T { var z T; return z }
+
+func gbb212() io.ReadCloser {
+	rr := gRZ212[mm.SB212]{}
+	s := rr.md()
+	f := s.Get()
+	return io.NopCloser(f())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bencrossstruct.go
+	cp internal/reader/metadata.go "$self_tree/meta212.orig"
+	INS='zr = gbb212()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta212.new" && mv "$self_tree/meta212.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb212()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign cross-package struct method bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign cross-package struct method bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 212 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta212.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 165 mutation forms rejected)"
+	echo "import-graph self-test passed (all 171 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
