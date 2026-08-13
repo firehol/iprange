@@ -151,9 +151,10 @@ class (forms 134-135), the bound-receiver
 class (forms 137-138), the call-result-binding
 class (forms 140-143), the explicit-instantiation and
 interface-binding class (forms 145-148), the
-generic-receiver-binding class (forms 151-156), and the
-alias-spelled generic binding class (forms 159-164); the durable
-rejection set is now one hundred thirty-five mutation
+generic-receiver-binding class (forms 151-156), the
+alias-spelled generic binding class (forms 159-164), and the
+reader-shape binding class (forms 167-174); the durable
+rejection set is now one hundred forty-three mutation
 forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
@@ -451,9 +452,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   class (forms 137-138), the call-result-binding
   class (forms 140-143), the explicit-instantiation and
   interface-binding class (forms 145-148), the
-  generic-receiver-binding class (forms 151-156), and the
-  alias-spelled generic binding class (forms 159-164);
-  the self-test now durably rejects one hundred thirty-five mutation forms. The
+  generic-receiver-binding class (forms 151-156), the
+  alias-spelled generic binding class (forms 159-164), and the
+  reader-shape binding class (forms 167-174);
+  the self-test now durably rejects one hundred forty-three mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1578,7 +1580,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 135-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 143-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2195,7 +2197,27 @@ execution record; the closing result is appended there when it completes.
   inferred generic calls, method values, and embedded promotion.
   Forms 159-164 pin the six alias escapes; forms 165-166 pin the
   benign bytes-backed alias controls.
+- Ampere round 23 found four reader-shape escape classes (HEAD
+  85c6f2c), all reaching the io.ReadFull exemption with gate exit 0:
+  (1) container element reads from call results (a[0] of a
+  []*os.File generic or plain result, m["k"], *p on *zfA) never
+  classified the element; (2) chan-of-file carriers were blind in
+  return positions (return <-c) and method/generic-call results
+  (h.ch() chan *os.File, mkC[*os.File](), rr.mc()) never registered
+  as chan taint; (3) cross-package aliases as generic type arguments
+  (mapping.MappingFile) could not resolve because each directory is
+  an independent pkgInfo; (4) generic method results naming a struct
+  (r := rr.mk() with T bound to wS) never registered as struct
+  instances, losing field taint on r.f. Fixed with elementReadKind
+  (declared-element shape of index/deref bases) in classify,
+  isFileExpr and isFileOrContainer; chanCarrier (identifier
+  registries plus call classification) for receive positions, and a
+  declared-results chan loop for method and function calls; a
+  process-wide qualifiedAliases registry keyed package-clause name;
+  and genericMethodResults/methodMeta consultation in resolveStruct
+  and classifyStruct. Forms 167-174 pin the eight escapes; forms
+  175-178 pin the benign bytes-backed controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 135-form self-test, ten cross-compiles,
+  import graph with the 143-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
