@@ -750,16 +750,15 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	}
 	obj := calleeObject(pf.pc, call)
 	// Calls through a function-typed variable whose package-level
-	// initializer is a func literal: analyze the literal body here with
-	// the call-site arguments bound to its parameters, so a complete-page
-	// sink inside the literal is visible (the literal's own file position
-	// is scanned by the rules pass; the taint must be supplied at the
-	// call). Variables without a literal initializer have no scanable body.
-	if v, ok := obj.(*types.Var); ok && !pf.pc.reassignedVars[v] {
-		if lit, ok2 := pf.pc.varInits[v]; ok2 {
-			if fl, ok3 := unparen(lit).(*ast.FuncLit); ok3 {
-				return pf.analyzeFuncLitCall(st, fl, call.Args)
-			}
+	// initializer chain ends in a func literal: analyze the literal body
+	// here with the call-site arguments bound to its parameters, so a
+	// complete-page sink inside the literal is visible (the literal's own
+	// file position is scanned by the rules pass; the taint must be
+	// supplied at the call). Variables without a literal initializer, or
+	// with a reassigned hop in the chain, have no provably scanable body.
+	if v, ok := obj.(*types.Var); ok {
+		if fl := funclitOf(pf.pc, v, 0); fl != nil {
+			return pf.analyzeFuncLitCall(st, fl, call.Args)
 		}
 	}
 	fn, ok := obj.(*types.Func)
@@ -896,6 +895,29 @@ func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, args []a
 		return pageValue{}
 	}
 	return pageValue{tainted: true, maxLen: maxUnknown}
+}
+
+// funclitOf follows a package-level variable's initializer chain (at most
+// two hops, mirroring approvedFuncVar) and returns the func literal the
+// chain provably binds, or nil when any hop is reassigned or the chain
+// ends elsewhere. Only literals reached this way have a scanable body.
+func funclitOf(pc *packageCheck, v *types.Var, depth int) *ast.FuncLit {
+	if v == nil || depth > 2 || pc.reassignedVars[v] {
+		return nil
+	}
+	init, ok := pc.varInits[v]
+	if !ok {
+		return nil
+	}
+	switch i := unparen(init).(type) {
+	case *ast.FuncLit:
+		return i
+	case *ast.Ident:
+		if ov, ok := pc.info.Uses[i].(*types.Var); ok {
+			return funclitOf(pc, ov, depth+1)
+		}
+	}
+	return nil
 }
 
 // argFlowOf binds the value taint and struct-field taints of one call

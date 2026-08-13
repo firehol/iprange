@@ -78,4 +78,12 @@ var batteryPageCases = []batteryCase{
 	{name: "P18: reassigned func-literal variable with a page", desc: "var f = func(p){ return p }; f = bytes.Clone; f(page) rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_reassignfn.go", content: "package reader\n\nimport \"bytes\"\n\nvar cloneLitR = func(page []byte) []byte {\n\treturn page\n}\n\nfunc fnLitVarProbeR(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tcloneLitR = bytes.Clone\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneLitR(page), nil\n}"},
 	}},
+
+	{name: "P19: full page through a two-hop func-literal variable chain", desc: "var a = func(p){ copy(out,p) }; var b = a; b(page) rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_chainfn.go", content: "package reader\n\nvar cloneChainA = func(page []byte) []byte {\n\tout := make([]byte, len(page))\n\tcopy(out, page)\n\treturn out\n}\n\nvar cloneChainB = cloneChainA\n\nfunc chainFnProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneChainB(page), nil\n}"},
+	}},
+
+	{name: "P20: benign two-hop chain with a bounded slice", desc: "var a = func(p){ copy(out,p) }; var b = a; b(page[48:112]) stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_chainfnok.go", content: "package reader\n\nvar cloneChainC = func(page []byte) []byte {\n\tout := make([]byte, len(page))\n\tcopy(out, page)\n\treturn out\n}\n\nvar cloneChainD = cloneChainC\n\nfunc chainFnOkProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneChainD(page[48:112]), nil\n}"},
+	}},
 }

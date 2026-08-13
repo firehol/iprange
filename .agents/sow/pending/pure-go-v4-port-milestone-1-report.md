@@ -159,9 +159,10 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(4,487 lines) plus a trimmed shell harness (552 lines) whose 300-case
+(4,517 lines) plus a trimmed shell harness (552 lines) whose 302-case
 durable battery includes the complete-page ownership forms and the
-function-variable, closure-body, and func-literal-variable bypass pins, and compact
+function-variable, closure-body, func-literal-variable, and
+multi-hop-chain bypass pins, and compact
 records with the history preserved in the SOW appendix. Independent
 review outcome: section 14.
 
@@ -1272,14 +1273,14 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 300 cases (282 source-transfer forms + 18
-  complete-page forms; 243 rejections, 57 benign acceptances). The shell
+  data inside the tool: 302 cases (282 source-transfer forms + 20
+  complete-page forms; 244 rejections, 58 benign acceptances). The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 4,487 (tool) + 552 (shell) = 5,039
-  lines against module production 5,052 / tests 5,180.
+  unlistable module). Gate totals: 4,517 (tool) + 552 (shell) = 5,069
+  lines against module production 5,049 / tests 5,180.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
   and copied shell-only module-graph forms (18/238/243/248); benign
@@ -1293,9 +1294,21 @@ Fixes (one commit; HEAD recorded in the review entry below):
   moved to the shell self-test.
 - Validation at the rework commit: go test ./... (both tag sets),
   -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
-  gate --self-test 300/300 + 9 shell mutations exit 0, production scan
+  gate --self-test 302/302 + 9 shell mutations exit 0, production scan
   across all five target configs exit 0, cross-compilation, Rust
   conformance corpus cross-open, SOW audit green.
+
+- Swarm round 3 (2026-08-14): six residents PASS at the round-2 fix
+  commit; K3's remaining theoretical bypass (two-hop function-variable
+  chain: var a = func(p){ copy(out, p) }; var b = a; b(page) allowed the
+  call while the literal body analysis stayed at the direct initializer)
+  was closed: evalCall now follows the bounded initializer chain
+  (funclitOf, max two hops, no reassigned hop) and binds call-site
+  arguments to the literal parameters. Pinned as battery forms P19
+  (reject) and P20 (benign bounded slice through the same chain).
+  Reviewer P3 (stale production-LOC in the SOW Status) fixed: measured
+  module production 5,049 / reader core 1,894 after the membership.go
+  counter cleanup.
 
 - Lead adversarial pass after round 2 (2026-08-14): one more hole in the
   same class was found and fixed before the round closed - a
