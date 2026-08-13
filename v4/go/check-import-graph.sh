@@ -7226,7 +7226,6 @@ MUTEOF
 package reader
 
 import (
-	"bytes"
 	"io"
 
 	mm "github.com/firehol/iprange/v4/go/internal/mapping"
@@ -7263,11 +7262,419 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta212.orig" internal/reader/metadata.go
 
+
+	# --- 213: renamed-qualifier cross-package interface embedding ---------
+	# A reader interface embedding a mapping interface spelled with a
+	# renamed import qualifier (mm.IMapBase) promotes the file-producing
+	# method: the qualifier must reduce to the bare interface name
+	# through the per-directory self-entry before method lookup.
+	cat > internal/mapping/gatemut_rniface.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type IMapBase213 interface{ Get() func() *os.File }
+MUTEOF
+	add_mut internal/mapping/gatemut_rniface.go
+	cat > internal/reader/gatemut_rniface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type IEmb213 interface{ mm.IMapBase213 }
+
+type gRZ213[T any] struct{}
+
+func (r gRZ213[T]) mk() T { var z T; return z }
+
+func gb213() io.ReadCloser {
+	x := gRZ213[IEmb213]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rniface.go
+	cp internal/reader/metadata.go "$self_tree/meta213.orig"
+	INS='zr = gb213()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta213.new" && mv "$self_tree/meta213.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb213()' internal/reader/metadata.go; then
+		run_mut "renamed-qualifier cross-package interface embedding"
+	else
+		echo "self-test ERROR: form 213 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta213.orig" internal/reader/metadata.go
+
+
+	# --- 214: generic-interface instantiation embedding, func arg ---------
+	# IEmb embeds IBaseG[T any] instantiated with func() *os.File: the
+	# promoted declared result carries the raw type parameter and must be
+	# substituted from the embedding's type argument.
+	cat > internal/reader/gatemut_geniface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type IBaseGN214[T any] interface{ Get() T }
+type IEmbGN214 interface{ IBaseGN214[func() *os.File] }
+
+type gRZ214[T any] struct{}
+
+func (r gRZ214[T]) mk() T { var z T; return z }
+
+func gb214() io.ReadCloser {
+	x := gRZ214[IEmbGN214]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_geniface.go
+	cp internal/reader/metadata.go "$self_tree/meta214.orig"
+	INS='zr = gb214()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta214.new" && mv "$self_tree/meta214.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb214()' internal/reader/metadata.go; then
+		run_mut "generic-interface instantiation embedding with func-file argument"
+	else
+		echo "self-test ERROR: form 214 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta214.orig" internal/reader/metadata.go
+
+
+	# --- 215: generic-interface instantiation embedding, chan arg ---------
+	# The same shape instantiated with chan func() *os.File: receive then
+	# invoke must keep the chan-of-func carrier kind.
+	cat > internal/reader/gatemut_genifacechan.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type IBaseGO215[T any] interface{ Get() T }
+type IEmbGO215 interface{ IBaseGO215[chan func() *os.File] }
+
+type gRZ215[T any] struct{}
+
+func (r gRZ215[T]) mk() T { var z T; return z }
+
+func gb215() io.ReadCloser {
+	x := gRZ215[IEmbGO215]{}.mk()
+	ch := x.Get()
+	f := <-ch
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genifacechan.go
+	cp internal/reader/metadata.go "$self_tree/meta215.orig"
+	INS='zr = gb215()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta215.new" && mv "$self_tree/meta215.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb215()' internal/reader/metadata.go; then
+		run_mut "generic-interface instantiation embedding with chan-of-func argument"
+	else
+		echo "self-test ERROR: form 215 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta215.orig" internal/reader/metadata.go
+
+
+	# --- 216: renamed-qualified generic interface instantiation -----------
+	# Combined shape: a mapping generic interface spelled with a renamed
+	# qualifier AND instantiated at the embedding site.
+	cat > internal/mapping/gatemut_rngeniface.go <<'MUTEOF'
+package mapping
+
+type IMapBase216[T any] interface{ Get() T }
+MUTEOF
+	add_mut internal/mapping/gatemut_rngeniface.go
+	cat > internal/reader/gatemut_rngeniface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type IEmb216 interface{ mm.IMapBase216[func() *os.File] }
+
+type gRZ216[T any] struct{}
+
+func (r gRZ216[T]) mk() T { var z T; return z }
+
+func gb216() io.ReadCloser {
+	x := gRZ216[IEmb216]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rngeniface.go
+	cp internal/reader/metadata.go "$self_tree/meta216.orig"
+	INS='zr = gb216()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta216.new" && mv "$self_tree/meta216.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb216()' internal/reader/metadata.go; then
+		run_mut "renamed-qualified generic interface instantiation embedding"
+	else
+		echo "self-test ERROR: form 216 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta216.orig" internal/reader/metadata.go
+
+
+	# --- 217: cross-package generic struct method via renamed qualifier ---
+	# A mapping generic struct instantiated with func() *os.File and
+	# invoked through the renamed qualifier: the receiver's type
+	# parameters must substitute from the remote mirror.
+	cat > internal/mapping/gatemut_rngenstruct.go <<'MUTEOF'
+package mapping
+
+type MkS217[T any] struct{}
+
+func (r MkS217[T]) Mk() T { var z T; return z }
+MUTEOF
+	add_mut internal/mapping/gatemut_rngenstruct.go
+	cat > internal/reader/gatemut_rngenstruct.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+func gb217() io.ReadCloser {
+	rr := mm.MkS217[func() *os.File]{}
+	f := rr.Mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_rngenstruct.go
+	cp internal/reader/metadata.go "$self_tree/meta217.orig"
+	INS='zr = gb217()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta217.new" && mv "$self_tree/meta217.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb217()' internal/reader/metadata.go; then
+		run_mut "cross-package generic struct method instantiated via renamed qualifier"
+	else
+		echo "self-test ERROR: form 217 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta217.orig" internal/reader/metadata.go
+
+
+	# --- 218: benign renamed-qualifier interface bytes twin ---------------
+	# The same promoted shape over *bytes.Reader must stay benign.
+	cat > internal/mapping/gatemut_benrniface.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type IMapBaseL218 interface{ Get() func() *bytes.Reader }
+MUTEOF
+	add_mut internal/mapping/gatemut_benrniface.go
+	cat > internal/reader/gatemut_benrniface.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type IEmb218 interface{ mm.IMapBaseL218 }
+
+type gRZ218[T any] struct{}
+
+func (r gRZ218[T]) mk() T { var z T; return z }
+
+func gbb218() io.ReadCloser {
+	x := gRZ218[IEmb218]{}.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benrniface.go
+	cp internal/reader/metadata.go "$self_tree/meta218.orig"
+	INS='zr = gbb218()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta218.new" && mv "$self_tree/meta218.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb218()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign renamed-qualifier interface bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign renamed-qualifier interface bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 218 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta218.orig" internal/reader/metadata.go
+
+
+	# --- 219: benign generic-interface instantiation bytes twin -----------
+	cat > internal/reader/gatemut_bengeniface.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type IBaseGP219[T any] interface{ Get() T }
+type IEmbGP219 interface{ IBaseGP219[func() *bytes.Reader] }
+
+type gRZ219[T any] struct{}
+
+func (r gRZ219[T]) mk() T { var z T; return z }
+
+func gbb219() io.ReadCloser {
+	x := gRZ219[IEmbGP219]{}.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bengeniface.go
+	cp internal/reader/metadata.go "$self_tree/meta219.orig"
+	INS='zr = gbb219()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta219.new" && mv "$self_tree/meta219.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb219()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign generic-interface instantiation bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign generic-interface instantiation bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 219 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta219.orig" internal/reader/metadata.go
+
+
+	# --- 220: benign renamed-qualified generic interface bytes twin -------
+	cat > internal/mapping/gatemut_benrngeniface.go <<'MUTEOF'
+package mapping
+
+type IMapBaseQ220[T any] interface{ Get() T }
+MUTEOF
+	add_mut internal/mapping/gatemut_benrngeniface.go
+	cat > internal/reader/gatemut_benrngeniface.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type IEmb220 interface{ mm.IMapBaseQ220[func() *bytes.Reader] }
+
+type gRZ220[T any] struct{}
+
+func (r gRZ220[T]) mk() T { var z T; return z }
+
+func gbb220() io.ReadCloser {
+	x := gRZ220[IEmb220]{}.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benrngeniface.go
+	cp internal/reader/metadata.go "$self_tree/meta220.orig"
+	INS='zr = gbb220()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta220.new" && mv "$self_tree/meta220.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb220()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign renamed-qualified generic interface bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign renamed-qualified generic interface bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 220 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta220.orig" internal/reader/metadata.go
+
+
+	# --- 221: benign remote generic struct bytes twin ---------------------
+	cat > internal/mapping/gatemut_benrngenstruct.go <<'MUTEOF'
+package mapping
+
+type MkT221[T any] struct{}
+
+func (r MkT221[T]) Mk() T { var z T; return z }
+MUTEOF
+	add_mut internal/mapping/gatemut_benrngenstruct.go
+	cat > internal/reader/gatemut_benrngenstruct.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+func gbb221() io.ReadCloser {
+	rr := mm.MkT221[func() *bytes.Reader]{}
+	f := rr.Mk()
+	return io.NopCloser(f())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benrngenstruct.go
+	cp internal/reader/metadata.go "$self_tree/meta221.orig"
+	INS='zr = gbb221()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta221.new" && mv "$self_tree/meta221.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb221()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign remote generic struct bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign remote generic struct bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 221 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta221.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 169 mutation forms rejected)"
+	echo "import-graph self-test passed (all 174 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
