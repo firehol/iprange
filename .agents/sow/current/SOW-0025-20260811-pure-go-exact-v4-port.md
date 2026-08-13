@@ -156,8 +156,9 @@ alias-spelled generic binding class (forms 159-164), and the
 reader-shape binding class (forms 167-174), and the renamed-qualified alias
   class (forms 179-182), and the func-typed
 generic-method class (forms 185-189), the mixed result and
-qualified-defined class (forms 191-196); the durable
-rejection set is now one hundred fifty-eight mutation
+qualified-defined class (forms 191-196), the
+interface-method and method-result class (forms 199-205); the durable
+rejection set is now one hundred sixty-five mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -199,6 +200,33 @@ non-func non-ident underlying, and qualified registration of defined
 func types; pinned as self-test forms 191-196 (rejects) and 197-198
 (benign bytes controls). The durable rejection
 set is now one hundred fifty-eight mutation forms. The records
+of this pass complete the trail up to this re-review. The round-27
+gate re-review then found the interface-method and method-result
+class: (1) a generic receiver bound to an interface whose method
+declares mixed results (Get() (func() *os.File, error)) lost the
+func-file position because producerCall claimed the interface method
+signature (stored as a pseudo-field) as a raw file position, so the
+binding was recorded as a file and invoking it lost the taint;
+(2) callResults dropped every declared result of a non-generic method
+because methodMeta's ok flag reports body-marked producers, not
+whether the method exists - mixed method results (mk() (func() *os.File,
+error)) bound with gate exit 0; (3) defined types over aliases and
+aliases over defined func types (type D A with A = func() *os.File;
+type E = D2) were invisible to cross-package spellings because only
+aliases and defined func types entered the qualified registries, and a
+first-hop name from another directory could not resolve further.
+Fixed with declared-result precedence in classify and per-position
+kind preference in applyLHSMulti (func-file/chan carriers keep their
+invoke-able kind), method-existence detection in producerCall's
+field-type claim (a declared method is not a func field),
+non-nil-results acceptance in callResults for ordinary methods, and
+defined-type registration plus a per-directory fixpoint in the
+qualified registries (finalizeDirAliases); pinned as self-test forms
+199-205 (rejects covering both mixed positions, the chan-of-func
+variant, the defined-over-alias and alias-over-defined hops, and both
+method-result positions) and 206 (benign interface-typed bytes
+control). The durable rejection
+set is now one hundred sixty-five mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -500,9 +528,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   reader-shape binding class (forms 167-174), and the
   renamed-qualified alias class (forms 179-182), and the
   func-typed generic-method class
-  (forms 185-189), and the mixed result and
-  qualified-defined class (forms 191-196);
-  the self-test now durably rejects one hundred fifty-eight mutation forms. The
+  (forms 185-189), the mixed result and
+  qualified-defined class (forms 191-196), and the
+  interface-method and method-result class (forms 199-205);
+  the self-test now durably rejects one hundred sixty-five mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1627,7 +1656,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 158-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 165-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2314,7 +2343,35 @@ execution record; the closing result is appended there when it completes.
   rejects (mixed pos 0, mixed pos 1, defined over renamed alias,
   local defined func type, cross-package defined func type, defined
   over defined); forms 197-198 pin the benign bytes controls.
+- Ampere round 27 found three adjacent escape classes at HEAD
+  180024b: (1) a generic receiver bound to an interface whose method
+  declares mixed results (Get() (func() *os.File, error)) was claimed
+  by producerCall as a raw file position because interface method
+  signatures are stored as pseudo-fields, so applyLHSMulti recorded
+  st.file instead of st.funcFile and invoking the bound func lost the
+  taint (both mixed positions and the chan-of-func variant); (2) all
+  non-generic methods lost their declared results in callResults
+  because methodMeta's ok flag reports body-marked producers
+  (retMethods), not method existence - mixed method results
+  (mk() (func() *os.File, error)) bound with no position taint; (3)
+  a defined type over an alias (type D A; A = func() *os.File) and an
+  alias over a defined func type (type E = D2) were invisible to
+  cross-package spellings: only aliases and defined func types
+  entered the qualified registries, and a first-hop bare name from
+  another directory could not resolve further. Fixed with declared-
+  result precedence in classify plus a per-position kind preference
+  in applyLHSMulti (func-file/chan carriers keep their invoke-able
+  kind when a producer claim overlaps), method-existence detection in
+  producerCall's func-field claim (a declared method is not a func
+  field), non-nil-results acceptance in callResults for ordinary
+  methods, and defined-type registration plus a per-directory
+  fixpoint (finalizeDirAliases) closing alias/defined chains in the
+  qualified registries. Forms 199-205 pin the seven rejects
+  (interface mixed pos 0, interface mixed pos 1, interface
+  chan-of-func, defined over alias, alias over defined func, method
+  mixed pos 0, method mixed pos 1); form 206 pins the benign
+  interface-typed bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 158-form self-test, ten cross-compiles,
+  import graph with the 165-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
