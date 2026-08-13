@@ -408,7 +408,7 @@ no remaining actionable finding in the milestone scope.
 
 ## 10. Review findings and repairs — third pass (2026-08-11)
 
-A second external reviewer (codex) returned ten claims. Every claim was
+A second independent external review returned ten claims. Every claim was
 verified against the current tree, the spec, and the Rust sources before any
 action; five were real, two were already fixed, two were test/report gaps,
 and one (SetPanicOnFault) was a correct refutation of this report's worker
@@ -462,20 +462,20 @@ Real issues found, fixed, and regression-tested in this pass:
 
 Already fixed before this pass (stale claims): the slotted-page bounds
 panic and the blob branch txn-zero bug were both repaired in the second
-pass with regression tests; codex reviewed the pre-repair tree.
+pass with regression tests; an independent external reviewer inspected the pre-repair tree.
 
 Review verdict on the third-pass repairs: same-failure searches re-run
 (no other slotted access paths, no other handle-holding surfaces, no other
 wrong-mode entry points), full suite green including race and vet.
 
-## 10b. Review findings and repairs — fourth pass (2026-08-11, second codex review)
+## 10b. Review findings and repairs — fourth pass (2026-08-11, second independent review)
 
-A second codex review returned nine numbered findings. All were verified
+A second independent review returned nine numbered findings. All were verified
 against the tree, the spec, and the Rust sources; all nine were real (one
 also corrected a wrong factual claim in this report). Repairs:
 
 1. **Handle registry replaced by borrow-count lifetime (API redesign).** The
-   1024-slot token registry was unapproved, non-concurrent (codex
+   1024-slot token registry was unapproved, non-concurrent (the reviewer
    reproduced 19 data races in register/alive/release), and had a free-slot
    exhaustion defect in its bit-scan. The spec requires concurrent lookups
    and scans without a per-call mutex, atomic, or active counter
