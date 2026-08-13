@@ -3141,6 +3141,198 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta115.orig" internal/reader/metadata.go
 
+	# --- 116: defined-type receiver with an interface-hidden result ------
+	# type b gsV (defined, not aliased) with func (bV) get(); the
+	# receiver and the instance variable must both resolve through the
+	# defined-type chain to the base struct.
+	cat > internal/reader/gatemut_defrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsV116 struct{}
+
+type bV116 gsV116
+
+func (bV116) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var bv116 bV116
+MUTEOF
+	add_mut internal/reader/gatemut_defrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta116.orig"
+	INS='zr = bv116.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta116.new" && mv "$self_tree/meta116.new" internal/reader/metadata.go
+	if grep -Fq 'zr = bv116.get()' internal/reader/metadata.go; then
+		run_mut "defined-type receiver with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 116 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta116.orig" internal/reader/metadata.go
+
+	# --- 117: generic-instantiated struct variable method call -----------
+	# var gv gsG[int] with func (gsG[T]) get(): the instantiation suffix
+	# must strip to the base struct name for the method lookup.
+	cat > internal/reader/gatemut_geninst.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsG117[T any] struct{}
+
+func (gsG117[T]) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var gv117 gsG117[int]
+MUTEOF
+	add_mut internal/reader/gatemut_geninst.go
+	cp internal/reader/metadata.go "$self_tree/meta117.orig"
+	INS='zr = gv117.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta117.new" && mv "$self_tree/meta117.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gv117.get()' internal/reader/metadata.go; then
+		run_mut "generic-instantiated struct variable method call"
+	else
+		echo "self-test ERROR: form 117 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta117.orig" internal/reader/metadata.go
+
+	# --- 118: embedded-field method promotion ----------------------------
+	# type hE struct{ gsE } with func (gsE) get(): hve.get() promotes
+	# through the embedded field and must resolve to gsE's method.
+	cat > internal/reader/gatemut_embedmeth.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsE118 struct{}
+
+func (gsE118) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+type hE118 struct{ gsE118 }
+
+var hve118 hE118
+MUTEOF
+	add_mut internal/reader/gatemut_embedmeth.go
+	cp internal/reader/metadata.go "$self_tree/meta118.orig"
+	INS='zr = hve118.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta118.new" && mv "$self_tree/meta118.new" internal/reader/metadata.go
+	if grep -Fq 'zr = hve118.get()' internal/reader/metadata.go; then
+		run_mut "embedded-field method promotion with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 118 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta118.orig" internal/reader/metadata.go
+
+	# --- 119: pointer-alias receiver --------------------------------------
+	# type p = *gsP; func (p) get(): the alias resolves to the pointer
+	# spelling and must reduce to the base struct on both the receiver
+	# key and the instance variable.
+	cat > internal/reader/gatemut_ptralias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsP119 struct{}
+
+type p119 = *gsP119
+
+func (p119) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var pv119 p119 = &gsP119{}
+MUTEOF
+	add_mut internal/reader/gatemut_ptralias.go
+	cp internal/reader/metadata.go "$self_tree/meta119.orig"
+	INS='zr = pv119.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta119.new" && mv "$self_tree/meta119.new" internal/reader/metadata.go
+	if grep -Fq 'zr = pv119.get()' internal/reader/metadata.go; then
+		run_mut "pointer-alias receiver with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 119 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta119.orig" internal/reader/metadata.go
+
+	# --- 120: benign embedded-promotion method must pass ------------------
+	# Same promoted-method shape as form 118 but the payload never
+	# touches the filesystem: the scanner must not flag it.
+	cat > internal/reader/gatemut_benemb.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcE120 struct{ *bytes.Reader }
+
+func (w *rcE120) Close() error { return nil }
+
+type gsBE120 struct{}
+
+func (gsBE120) get() io.ReadCloser { return &rcE120{bytes.NewReader(nil)} }
+
+type hBE120 struct{ gsBE120 }
+
+var hvbe120 hBE120
+MUTEOF
+	add_mut internal/reader/gatemut_benemb.go
+	cp internal/reader/metadata.go "$self_tree/meta120.orig"
+	INS='zr = hvbe120.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta120.new" && mv "$self_tree/meta120.new" internal/reader/metadata.go
+	if grep -Fq 'zr = hvbe120.get()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign embedded-promotion method passes the gate"
+		else
+			echo "self-test MISS: benign embedded-promotion method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 120 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta120.orig" internal/reader/metadata.go
+
+
 
 
 	# --- 49: benign same-shaped control must pass (no false positive) ----
@@ -3195,7 +3387,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 97 mutation forms rejected)"
+	echo "import-graph self-test passed (all 101 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
