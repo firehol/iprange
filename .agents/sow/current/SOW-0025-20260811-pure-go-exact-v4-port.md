@@ -2343,7 +2343,7 @@ Use these sections in this order:
   depends on this item.
 - Gates at this commit: go test ./... incl -race, go vet, gofmt,
   import graph (self-test, all 240 forms rejected), the real tree gate,
-  CGO_ENABLED=0 build and test, ten cross-compiles, SOW audit - all
+  CGO_ENABLED=0 build and test, ten cross-compiles, SOW audit - all green.
 ### 2026-08-13 - round-54 cosmetic alignment: dead word-read state removed, zero Pin reports WrongState, inflater wording aligned (HEAD 72e4d89d75fb)
 
 - Removed dead state in internal/reader/membership.go readWordsInner
