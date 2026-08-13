@@ -153,8 +153,9 @@ Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 - Warm point lookups, membership word reads, feed lookup, direct scans, and
   cardinality allocate **zero Go heap bytes** (measured; the only public
   exception is the returned feed-name string copy).
-- Cross-compilation passes for darwin/amd64+arm64, freebsd/amd64+arm64,
-  windows/amd64+arm64+386, linux/arm64+386. Windows is an explicit honest
+- Cross-compilation passes for linux amd64/386/arm/arm64/loong64, darwin
+  amd64/arm64, freebsd amd64, windows amd64/arm64 (the gate's per-target
+  listing matrix). Windows is an explicit honest
   stub (open refuses with `os-unsupported`) until the platform milestone.
 - **Worker conclusion (corrected, spec-text authority, section 11):**
   `runtime/debug.SetPanicOnFault` recovers mapping faults on linux/amd64
