@@ -2019,6 +2019,288 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta83.orig" internal/reader/metadata.go
 
+	# --- 84: method value bound to a variable, called once ----------------
+	# fn := m.get with m.get a file producer (io.ReadCloser behind an
+	# interface); calling fn() must be seen as producing the file.
+	cat > internal/reader/gatemut_methodval.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gm84 struct{}
+
+var gm84v gm84
+
+func (g *gm84) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_methodval.go
+	cp internal/reader/metadata.go "$self_tree/meta84.orig"
+	INS='zr = fn84()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfn84 := gm84v.get"; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta84.new" && mv "$self_tree/meta84.new" internal/reader/metadata.go
+	if grep -Fq 'fn84 := gm84v.get' internal/reader/metadata.go; then
+		run_mut "method value bound to a variable"
+	else
+		echo "self-test ERROR: form 84 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta84.orig" internal/reader/metadata.go
+
+	# --- 85: helper returning a method value through an interface ---------
+	# getFn85() returns func() io.ReadCloser whose body returns a
+	# method value; the double call must be seen as producing the file.
+	cat > internal/reader/gatemut_funcretmethval.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gm85 struct{}
+
+var gm85v gm85
+
+func (g *gm85) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func getFn85() func() io.ReadCloser {
+	return gm85v.get
+}
+MUTEOF
+	add_mut internal/reader/gatemut_funcretmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta85.orig"
+	INS='zr = getFn85()()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta85.new" && mv "$self_tree/meta85.new" internal/reader/metadata.go
+	if grep -Fq 'zr = getFn85()()' internal/reader/metadata.go; then
+		run_mut "helper returning a method value"
+	else
+		echo "self-test ERROR: form 85 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta85.orig" internal/reader/metadata.go
+
+	# --- 86: nested-receiver method value, double call --------------------
+	# fn := mhv.inner.mk with mk returning a defined func type
+	# producing *os.File; fn()() must be seen as producing the file.
+	cat > internal/reader/gatemut_nestedmethval.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnI func() *os.File
+
+type minner86 struct{}
+
+type mholder86 struct{ inner minner86 }
+
+var mhv86 mholder86
+
+func (m *minner86) mk() fileFnI { return func() *os.File { f, _ := os.Open("/dev/null"); return f } }
+MUTEOF
+	add_mut internal/reader/gatemut_nestedmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta86.orig"
+	INS='zr = fn86()()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfn86 := mhv86.inner.mk"; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta86.new" && mv "$self_tree/meta86.new" internal/reader/metadata.go
+	if grep -Fq 'fn86 := mhv86.inner.mk' internal/reader/metadata.go; then
+		run_mut "nested-receiver method value double call"
+	else
+		echo "self-test ERROR: form 86 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta86.orig" internal/reader/metadata.go
+
+	# --- 87: method value through a package-level channel -----------------
+	# init() sends the method value into a package chan; a receive in
+	# the checked function must carry the func-file taint.
+	cat > internal/reader/gatemut_chanmethval.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gm87 struct{}
+
+var gm87v gm87
+
+func (g *gm87) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var ch87 = make(chan func() io.ReadCloser)
+
+func init() {
+	ch87 <- gm87v.get
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta87.orig"
+	INS='zr = (<-ch87)()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta87.new" && mv "$self_tree/meta87.new" internal/reader/metadata.go
+	if grep -Fq 'zr = (<-ch87)()' internal/reader/metadata.go; then
+		run_mut "method value through a package channel"
+	else
+		echo "self-test ERROR: form 87 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta87.orig" internal/reader/metadata.go
+
+	# --- 88: generic pass-through of a file -------------------------------
+	# idf88[T any](f T) T instantiated with *os.File routes the file
+	# through the type parameter; the call must be a producer.
+	cat > internal/reader/gatemut_genericfile.go <<'MUTEOF'
+package reader
+
+import "os"
+
+func idf88[T any](f T) T { return f }
+
+var osFile88 *os.File
+MUTEOF
+	add_mut internal/reader/gatemut_genericfile.go
+	cp internal/reader/metadata.go "$self_tree/meta88.orig"
+	INS='zr = idf88(osFile88)'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta88.new" && mv "$self_tree/meta88.new" internal/reader/metadata.go
+	if grep -Fq 'zr = idf88(osFile88)' internal/reader/metadata.go; then
+		run_mut "generic pass-through of a file"
+	else
+		echo "self-test ERROR: form 88 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta88.orig" internal/reader/metadata.go
+
+	# --- 89: generic pass-through of a func-file, double call -------------
+	# idg89(getDef89)() with idg89[T any](f T) T and T bound to a
+	# func() *os.File value: the double call yields the file.
+	cat > internal/reader/gatemut_genericfunc.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnJ func() *os.File
+
+func idg89[T any](f T) T { return f }
+
+var getDef89 fileFnJ
+
+func init() {
+	getDef89 = func() *os.File { f, _ := os.Open("/dev/null"); return f }
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genericfunc.go
+	cp internal/reader/metadata.go "$self_tree/meta89.orig"
+	INS='zr = idg89(getDef89)()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta89.new" && mv "$self_tree/meta89.new" internal/reader/metadata.go
+	if grep -Fq 'zr = idg89(getDef89)()' internal/reader/metadata.go; then
+		run_mut "generic pass-through of a func-file"
+	else
+		echo "self-test ERROR: form 89 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta89.orig" internal/reader/metadata.go
+
+	# --- 90: benign method value must pass ----------------------------------
+	# Identical shape to form 84 but the method returns a bytes.Reader
+	# wrapper: the gate must stay silent.
+	cat > internal/reader/gatemut_benignmethval.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type mcw90 struct{ *bytes.Reader }
+
+func (w *mcw90) Close() error { return nil }
+
+type gm90 struct{}
+
+var gm90v gm90
+
+func (g *gm90) get() io.ReadCloser { return &mcw90{bytes.NewReader(nil)} }
+MUTEOF
+	add_mut internal/reader/gatemut_benignmethval.go
+	cp internal/reader/metadata.go "$self_tree/meta90.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tfn90 := gm90v.get"; print "\tzr = fn90()"; next } print }' internal/reader/metadata.go > "$self_tree/meta90.new" && mv "$self_tree/meta90.new" internal/reader/metadata.go
+	if grep -Fq 'fn90 := gm90v.get' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign method value passes the gate"
+		else
+			echo "self-test MISS: benign method value failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 90 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta90.orig" internal/reader/metadata.go
+
+	# --- 91: benign generic pass-through must pass --------------------------
+	# idh91[T any](f T) T with a non-file argument: the generic rule
+	# must not fire.
+	cat > internal/reader/gatemut_benigngeneric.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type mcw91 struct{ *bytes.Reader }
+
+func (w *mcw91) Close() error { return nil }
+
+func idh91[T any](f T) T { return f }
+
+var rc91 io.ReadCloser = &mcw91{bytes.NewReader(nil)}
+MUTEOF
+	add_mut internal/reader/gatemut_benigngeneric.go
+	cp internal/reader/metadata.go "$self_tree/meta91.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = idh91(rc91)"; next } print }' internal/reader/metadata.go > "$self_tree/meta91.new" && mv "$self_tree/meta91.new" internal/reader/metadata.go
+	if grep -Fq 'zr = idh91(rc91)' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign generic pass-through passes the gate"
+		else
+			echo "self-test MISS: benign generic pass-through failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 91 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta91.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -2071,7 +2353,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 74 mutation forms rejected)"
+	echo "import-graph self-test passed (all 80 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
