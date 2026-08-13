@@ -139,9 +139,9 @@ the round-6 nested-field/named-helper/chan-pass family, the
 named-method extension, the nested-method-receiver extension, the
 method-value family, the generic pass-through family, the
 generic-element family, the chan-result method-value class, and the
-field-assignment class and the channel-consumer class
-(forms 73-102); the durable rejection set is
-now eighty-seven mutation forms. The records
+field-assignment class, the channel-consumer class, and the
+container-element class (forms 73-107); the durable rejection set is
+now ninety-one mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -1553,7 +1553,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 87-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 91-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2033,7 +2033,17 @@ execution record; the closing result is appended there when it completes.
   (struct-field channels and method values), and SendStmt recorded
   selector-typed channel fields. Forms 98-100 pin the three escapes;
   forms 101-102 pin the benign range and benign receive controls.
+- Ampere round 10 found the container-element route (HEAD ed0a0f9):
+  map/slice fields holding file-producing funcs (fm.m["k"]()) were
+  invisible because producerCall had no IndexExpr callee case,
+  applyLHS did not record element writes, and classify read only
+  file-container elements. Fixed with an elementTaint registry
+  (element reads/writes, composite element kinds, declared element
+  shapes for fields/params/vars), an IndexExpr callee case in
+  producerCall, and exprText coverage for map/ellipsis/index types.
+  Forms 103-106 pin the four escapes; form 107 pins the benign map
+  field control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 87-form self-test, nine cross-compiles,
+  import graph with the 91-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
