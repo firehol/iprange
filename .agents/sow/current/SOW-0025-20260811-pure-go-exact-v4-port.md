@@ -151,8 +151,9 @@ class (forms 134-135), the bound-receiver
 class (forms 137-138), the call-result-binding
 class (forms 140-143), the explicit-instantiation and
 interface-binding class (forms 145-148), the
-generic-receiver-binding class (forms 151-156); the durable
-rejection set is now one hundred twenty-nine mutation
+generic-receiver-binding class (forms 151-156), and the
+alias-spelled generic binding class (forms 159-164); the durable
+rejection set is now one hundred thirty-five mutation
 forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
@@ -450,8 +451,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   class (forms 137-138), the call-result-binding
   class (forms 140-143), the explicit-instantiation and
   interface-binding class (forms 145-148), the
-  generic-receiver-binding class (forms 151-156);
-  the self-test now durably rejects one hundred twenty-nine mutation forms. The
+  generic-receiver-binding class (forms 151-156), and the
+  alias-spelled generic binding class (forms 159-164);
+  the self-test now durably rejects one hundred thirty-five mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1576,7 +1578,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 129-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 135-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2180,7 +2182,20 @@ execution record; the closing result is appended there when it completes.
   resolveStruct/classifyStruct/applyLHS/applyLHSMulti. Forms
   151-156 pin the six escapes; forms 157-158 pin the benign
   bytes-only controls.
+- Ampere round 22 found the alias-spelled generic binding class
+  (HEAD 82b96bf): a generic type argument written through a type
+  alias (type zfA = *os.File; gRA[zfA]{}) was substituted as
+  literal text and never alias-resolved, so the taint checks
+  compared container results like []zfA instead of []*os.File and
+  the io.ReadFull exemption could grant a file-backed zr. Fixed in
+  substituteTypeParams: every type argument is reduced through
+  resolveTaintType (alias and defined-type chains to a fixpoint)
+  before substitution, and the substituted result is reduced
+  again. This covers receiver instantiations, explicit and
+  inferred generic calls, method values, and embedded promotion.
+  Forms 159-164 pin the six alias escapes; forms 165-166 pin the
+  benign bytes-backed alias controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 129-form self-test, ten cross-compiles,
+  import graph with the 135-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
