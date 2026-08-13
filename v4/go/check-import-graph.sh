@@ -11,6 +11,9 @@
 #     paths carry no per-call synchronization (design-iprange-engine.md).
 #   - the module root (public facade) imports only stdlib + internal/format
 #     + internal/reader. Nothing else may import internal/*.
+#   - golang.org/x/sys is the mapping owner's surface only: every package,
+#     on every target, must not import it (checked in the per-target loop
+#     below, so a build-tagged new package cannot bypass the owner rule).
 #   - the obsolete milestone-0 internal/exactv4 tree was deleted with the
 #     approved deletion set; no legacy transfer point remains.
 #
@@ -153,14 +156,35 @@ targets="linux/amd64 linux/386 linux/arm linux/arm64 linux/loong64 \
 	darwin/amd64 darwin/arm64 freebsd/amd64 windows/amd64 windows/arm64"
 for target in $targets; do
 	GOOS=${target%/*} GOARCH=${target#*/} export GOOS GOARCH
-	for pkg in $(go list ./... 2>/dev/null | grep -v '^github.com/firehol/iprange/v4/go$' \
-			| grep -v '^github.com/firehol/iprange/v4/go/internal/format$' \
-			| grep -v '^github.com/firehol/iprange/v4/go/internal/mapping$' \
-			| grep -v '^github.com/firehol/iprange/v4/go/internal/reader$'); do
-		case "$(pkg_imports "$pkg")" in
-		*"github.com/firehol/iprange/v4/go/internal"*)
-			echo "boundary violation: $pkg (target $target) imports internal packages"
-			fail=1
+	for pkg in $(go list ./... 2>/dev/null); do
+		imps=$(pkg_imports "$pkg")
+		case "$pkg" in
+		"github.com/firehol/iprange/v4/go/internal/mapping")
+			# the mapping owner is the syscall authority
+			;;
+		*)
+			case "$imps" in
+			*"golang.org/x/sys"*)
+				echo "boundary violation: $pkg (target $target) imports golang.org/x/sys (mapping is the syscall owner)"
+				fail=1
+				;;
+			esac
+			;;
+		esac
+		case "$pkg" in
+		"github.com/firehol/iprange/v4/go"|\
+		"github.com/firehol/iprange/v4/go/internal/format"|\
+		"github.com/firehol/iprange/v4/go/internal/mapping"|\
+		"github.com/firehol/iprange/v4/go/internal/reader")
+			# these may import internal/* by the approved boundary
+			;;
+		*)
+			case "$imps" in
+			*"github.com/firehol/iprange/v4/go/internal"*)
+				echo "boundary violation: $pkg (target $target) imports internal packages"
+				fail=1
+				;;
+			esac
 			;;
 		esac
 	done
@@ -8172,12 +8196,46 @@ MUTEOF
 	add_mut internal/mapping/gatemut_asmread_linux.s
 	run_mut "bodyless assembly-backed raw read"
 
+	# --- 238: x/sys imported outside the mapping owner ------------------
+	# The syscall surface is the mapping owner's alone; a new package
+	# importing golang.org/x/sys (even for an innocent call) breaks the
+	# owner rule and must fail in the per-target boundary loop.
+	mkdir -p gatemut_sysowner
+	cat > gatemut_sysowner/gatemut_sysowner_linux.go <<'MUTEOF'
+//go:build linux
+package gatemut_sysowner
+
+import "golang.org/x/sys/unix"
+
+func gateClose238(fd int) error {
+	return unix.Close(fd)
+}
+MUTEOF
+	add_mut gatemut_sysowner
+	run_mut "x/sys import outside the mapping owner"
+
+	# --- 239: assembly object without a Go declaration ------------------
+	# A .s file alone cannot be called without a bodyless declaration or
+	# //go:linkname (both banned), but the walk must fail closed on the
+	# object itself so no future relaxation silently attaches a syscall
+	# body. The probe is never compiled: the self-test tree is scanned,
+	# not built.
+	mkdir -p gatemut_asmfile
+	cat > gatemut_asmfile/gatemut_asmfile_linux.s <<'MUTEOF'
+//go:build linux
+
+TEXT ·gateAsmNop239(SB),NOSPLIT,$0
+	RET
+MUTEOF
+	add_mut gatemut_asmfile
+	run_mut "assembly object file"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 187 mutation forms rejected)"
+	echo "import-graph self-test passed (all 189 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

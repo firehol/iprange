@@ -11,6 +11,9 @@
 //   - any *os.File-typed value used outside the approved capability
 //     surface (mapping lifecycle: Fd/Close/Name/Stat/Sync/Truncate, and
 //     consumers in the same package, module-internal packages, or x/sys).
+//   - any .s/.syso assembly object (a hand-written syscall body the
+//     token stream cannot see; only a bodyless Go declaration or
+//     //go:linkname can link it, and both fail closed).
 //
 // The three in-memory inflater nodes in internal/reader/metadata.go are
 // exempted as exact call shapes (their source text is compared
@@ -179,6 +182,7 @@ func main() {
 		root = os.Args[1]
 	}
 	files := []string{}
+	asmFiles := []string{}
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
@@ -193,10 +197,20 @@ func main() {
 		if strings.HasSuffix(d.Name(), ".go") && !strings.HasSuffix(d.Name(), "_test.go") {
 			files = append(files, path)
 		}
+		if strings.HasSuffix(d.Name(), ".s") || strings.HasSuffix(d.Name(), ".syso") {
+			asmFiles = append(asmFiles, path)
+		}
 		return nil
 	})
 
-	fail := false
+	// Assembly objects are rejected outright: a syscall body written in
+	// assembly is invisible to the token scan. Only a bodyless Go
+	// declaration or //go:linkname (both banned) could link it, so this
+	// is defense in depth, not a second choke point.
+	fail := len(asmFiles) > 0
+	for _, path := range asmFiles {
+		fmt.Fprintf(os.Stderr, "gatescan: %s: assembly object rejected (syscall body invisible to the source scan)\n", path)
+	}
 	byDir := map[string][]string{}
 	for _, f := range files {
 		dir := filepath.Dir(f)
@@ -892,8 +906,10 @@ func runFile(path string, f *ast.File, fset *token.FileSet, src []byte, info pkg
 			if d.Body == nil {
 				// A bodyless Go function can only be implemented by
 				// assembly (or //go:linkname, banned above): both attach
-				// a syscall body the source gate cannot see. Reject the
-				// declaration itself instead of crashing on it.
+				// a syscall body the source gate cannot see. The
+				// .s/.syso walk rejects the assembly object, and this
+				// check rejects the declaration itself instead of
+				// crashing on it.
 				reporter.fail("bodyless function declaration " + d.Name.Name + " (assembly stub)")
 				continue
 			}
