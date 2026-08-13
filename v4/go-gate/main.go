@@ -2027,6 +2027,15 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 							case strings.HasPrefix(ct, "func(") && strings.Contains(ct, "*os.File"):
 								st.funcFile[bound] = true
 							}
+							// case *gs: the bound variable is an
+							// instance of the case struct (and keeps
+							// the case type text for indexed bases).
+							if base := resolveStructName(ct, info); base != "" {
+								if _, isStruct := info.structs[base]; isStruct {
+									st.struc[bound] = base
+								}
+							}
+							info.varTypes[bound] = ct
 						}
 					}
 					prepassStmts(cs.Body, st, info, imports)
@@ -2157,6 +2166,24 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 // several results: only the result positions declared as *os.File become
 // file-tainted (an error result must not).
 func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, imports map[string]string) {
+	// a, b := f(): record the declared result type at this index so
+	// the binding can serve as an indexed or receive base later.
+	if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+		if call, ok := rhs.(*ast.CallExpr); ok {
+			fun := unwrapParen(call.Fun)
+			var results []string
+			if fid, ok := fun.(*ast.Ident); ok {
+				results = info.funcs[fid.Name]
+			} else if sel, ok := fun.(*ast.SelectorExpr); ok {
+				if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
+					results, _ = methodMeta(sn, sel.Sel.Name, info)
+				}
+			}
+			if index < len(results) {
+				info.varTypes[id.Name] = results[index]
+			}
+		}
+	}
 	if _, pos, isProducer := producerCall(rhs, st, info, imports); isProducer {
 		for _, p := range pos {
 			if p == index {
