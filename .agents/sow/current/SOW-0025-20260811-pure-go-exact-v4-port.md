@@ -155,8 +155,9 @@ generic-receiver-binding class (forms 151-156), the
 alias-spelled generic binding class (forms 159-164), and the
 reader-shape binding class (forms 167-174), and the renamed-qualified alias
   class (forms 179-182), and the func-typed
-generic-method class (forms 185-189); the durable
-rejection set is now one hundred fifty-two mutation
+generic-method class (forms 185-189), the mixed result and
+qualified-defined class (forms 191-196); the durable
+rejection set is now one hundred fifty-eight mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -178,8 +179,26 @@ exemption with gate exit 0. Fixed by removing the funcTextFile claim
 from producerCall's generic-method branch so classify's own generic
 method loop yields kindFuncFile and applyKind records the func-file
 binding; pinned as self-test forms 185-189 (rejects) and 190 (benign
-bytes control). The durable rejection set is now one hundred
-fifty-two mutation forms. The records
+bytes control). The durable rejection
+set is now one hundred fifty-two mutation forms. The records
+of this pass complete the trail up to this re-review. The round-26
+gate re-review then found the mixed-result and qualified-defined
+class: (1) callResultsFuncFile required every declared result of a
+non-generic function to be a func-file, so mixed multi-result calls
+(getFn() (func() *os.File, error)) lost the func-file taint at the
+exact func-typed position and f() reached the io.ReadFull exemption
+with gate exit 0; (2) a defined type over a qualified or complex
+underlying (type x mm.A, type x []*os.File) registered nothing, so
+the chain never expanded, and cross-package defined func types
+(type F func() *os.File in mapping) were invisible to qualified
+references. Fixed with per-position result-kind resolution
+(callResults/callResultKinds/callResultKindAt routed through
+generic and declared signatures), per-position carrier registration
+in applyLHSMulti for call RHS, definedTo registration for every
+non-func non-ident underlying, and qualified registration of defined
+func types; pinned as self-test forms 191-196 (rejects) and 197-198
+(benign bytes controls). The durable rejection
+set is now one hundred fifty-eight mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -480,8 +499,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   alias-spelled generic binding class (forms 159-164), and the
   reader-shape binding class (forms 167-174), and the
   renamed-qualified alias class (forms 179-182), and the
-  func-typed generic-method class (forms 185-189);
-  the self-test now durably rejects one hundred fifty-two mutation forms. The
+  func-typed generic-method class
+  (forms 185-189), and the mixed result and
+  qualified-defined class (forms 191-196);
+  the self-test now durably rejects one hundred fifty-eight mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1606,7 +1627,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 152-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 158-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2273,7 +2294,27 @@ execution record; the closing result is appended there when it completes.
   (direct, embedded promotion, local alias, renamed-import func
   alias, unapproved method on the invoked result); form 190 pins
   the benign bytes-backed func control.
+- Ampere round 26 found two adjacent escape classes at HEAD
+  e1b1229: (1) mixed multi-result non-generic functions
+  (getFn() (func() *os.File, error) bound as f, _ := getFn();
+  f()) lost the func-file at the exact func-typed position
+  because callResultsFuncFile required every declared result to be
+  a func-file, with no per-position fallback for plain functions;
+  (2) a defined type over a qualified or complex underlying
+  (type x mm.A, type x []*os.File) registered nothing in
+  definedTo, and cross-package defined func types
+  (type F func() *os.File in mapping) were invisible to
+  qualified references, so both reached the io.ReadFull exemption
+  with gate exit 0. Fixed with callResults/callResultKinds/
+  callResultKindAt (per-position result kinds through generic and
+  declared signatures), per-position carrier registration in
+  applyLHSMulti for call RHS, definedTo registration for every
+  non-func non-ident underlying type text, and qualified
+  registration of defined func types. Forms 191-196 pin the six
+  rejects (mixed pos 0, mixed pos 1, defined over renamed alias,
+  local defined func type, cross-package defined func type, defined
+  over defined); forms 197-198 pin the benign bytes controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 152-form self-test, ten cross-compiles,
+  import graph with the 158-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
