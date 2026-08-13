@@ -164,7 +164,7 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred twenty
+231); the durable rejection set is now two hundred thirty-eight
 mutation forms (round-48 closed the bound method-expression and
 same-module cross-package producer-var class, forms 257-260;
 round-49 closed the nested-parenthesized, renamed-import,
@@ -186,6 +186,19 @@ wrappers) and the positional composite-literal field-launder class
 order, including an os.Root opener hidden behind a positional
 field), forms 271-277 plus the converted 267-268, raising the set
 to two hundred twenty-seven mutation forms);
+round-52 closed the embedded and anonymous struct-literal launder
+classes (embedded fields are named by type name, not qualifier
+spelling, so positional io.Reader and positional/keyed *os.Root
+wrapper literals no longer leave a live promoted handle; variables
+bound to explicit generic instantiations keep the base generic's
+substituted results; anonymous struct literals resolve positional
+order from their own fields, and anonymous structs embedding
+*os.File/*os.Root escalate like named wrappers), forms 278-281, and
+the continuation class of the same round (elided inner composite
+literals in slice, map, nested-container, and channel elements,
+pointer composite literals, and func-valued arguments to explicitly
+instantiated generics), forms 283-288, raising the set to two
+hundred thirty-eight mutation forms);
 round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -2174,6 +2187,120 @@ Use these sections in this order:
   raw lines. Decision 5A remains open for user ratification; Milestone
   2 remains blocked until the final review passes.
 
+### 2026-08-13 - round-52 gate re-review closed embedded, var-bound, anonymous struct-literal, container-element, pointer-literal, and explicit-instantiation launders (HEAD 5acd2a6)
+
+- The round-52 adversarial gate hunt (six narrow reviewers:
+  validation runner, reader endpoint, records, self-test integrity,
+  scanner diff review, gate hunting) failed with four live escapes
+  across three root causes in the content-transfer scanner plus one
+  vacuous self-test pair; the continuation hunt then found twelve
+  further live escapes across three more classes, all confirmed
+  against the final scanner:
+- P0 - embedded-type composite-literal field laundering: type gateEmb
+  struct{ io.Reader } with s := gateEmb{f} (positional) and s :=
+  gateEmbR{root} / gateEmbR{Root: root} over type gateEmbR struct{
+  *os.Root } left the binding container-tainted while the promoted
+  Reader/Open methods stayed live, so io.ReadFull(s.Reader) and
+  s.Open(name) streamed file bytes into the exempted shape (live,
+  gate exit 0; probes embed/embedR/embedRk; the constructor twins
+  embedC/embedAR were already rejected). Root cause: embedded fields
+  were registered by type TEXT (io.Reader, *os.Root) while Go names
+  embedded fields by type NAME (Reader, Root), so positional taint
+  landed on a dead key; the keyed *os.Root twin escaped because the
+  binding stayed kindContainer and promoted s.Open needed kindFile to
+  trip the approved capability surface.
+- P0 - var-bound generic instantiation: var gateHuntAliasXP =
+  gateHuntWrapXP[*os.File] registered nothing (the variable has no
+  generic parameters of its own), so files := gateHuntAliasXP(f) read
+  a clean []*os.File result and files[0] fed the exempted inflater
+  (live, gate exit 0; probe varinst). The direct explicit
+  instantiation wrap[*os.File](f) was already rejected by the
+  argument-approval rule; only the variable route slipped past.
+- P0 - anonymous struct-literal positional elements: x := struct{ r
+  io.Reader }{f} has no declared struct name, so the field-order
+  registry had no entry and x.r stayed clean (live, gate exit 0;
+  probe anons); the anonymous twin s := struct{ *os.Root }{root}
+  combined the missing positional order with a missing embedded-
+  handle escalation and promoted s.Open(name) flowed an untainted
+  file into the exempted inflater (live, gate exit 0; probe
+  anonroot).
+- P0 - elided inner composite literals in containers: the element
+  type name is omitted inside the container literal (s := []S1{{fn}},
+  m := map[string]S1{"a": {fn}}, s := S6{in: []S1{{fn}}}, and a chan
+  *os.File element []S5{{ch}}), so the inner composite literal carried
+  no explicit type text and its fields were never registered; calling
+  s[0].fn(name) or receiving from s[0].ch returned a clean io.Reader
+  into the exempted inflater (live, gate exit 0; probes e1a, e10,
+  e1c, e20, e36).
+- P0 - pointer composite literals: s := &S1{fn} and s := &S2{r: f}
+  addressed the struct before use; the unary & was never unwrapped,
+  so neither positional func-file nor keyed any-field binding was
+  registered and the file reached the exempted inflater untainted
+  (live, gate exit 0; probes e8a, e8b, e34, e35).
+- P0 - func-valued arguments to explicitly instantiated generics:
+  gateH2E7[io.Reader](name, closure) and the variadic
+  gateH2E31[io.Reader](name, closure) use an index-expression callee,
+  which never reached the Ident-callee type-parameter mapping; the
+  closure's *os.File surfaced through the erased body as a clean
+  io.Reader (live, gate exit 0; probes e7, e31, e33 with e33 closed
+  by the opaque-body result umbrella).
+- P1 (self-test integrity) - forms 245-246 never ran the gate:
+  run_mut expanded the GOMODCACHE/GOPROXY environment prefix as a
+  command name and both x/sys-poisoning mutations "rejected" with
+  exit 127 before the gate executed (silent vacuity since c86e162);
+  run_mut now prefixes env. Running them for real exposed a second
+  dormant defect in the same forms: the forged go.sum was written
+  with a double h1: prefix (--dirhash already emits h1:), so the
+  module could never resolve and the forms rejected via the
+  fail-closed listing rule instead of the content pin; the /go.mod
+  sum was also computed with the wrong format. The evil tree's
+  go.mod is byte-identical to the official v0.35.0 go.mod, so the
+  correct self-consistent forge pins the official /go.mod sum and
+  the evil module/tree hash; with that, go list resolves the
+  poisoned module and the gate's own checkout content-hash
+  boundary violation fires for real in both forms.
+- Fixed at HEAD: embedded struct fields register by type name
+  (embeddedFieldName strips pointer, package qualifier, and generic
+  instantiation), so positional and keyed embedded elements share
+  the key a selector read uses; registerGenericInstantiationVar
+  records var-bound explicit instantiations and
+  genericParamFilePositions resolves their calls through the base
+  generic's fixed type arguments (parameter text substituted before
+  the file-binding check, so the opaque-body rule covers both
+  inference and fixed-argument calls); registerCompositeFieldTaints
+  resolves anonymous literal order from the literal's own fields
+  (named by name, embedded by type name);
+  compositeLitEmbedsFileHandle escalates named and anonymous structs
+  whose embedding chain reaches *os.File/*os.Root.
+- Fixed at 5acd2a6: the explicit-instantiation callee route
+  mounts genericParamFilePositions on index-expression callees whose
+  base is an identifier (g[io.Reader](...));
+  registerContainerElementFields records elided slice, map,
+  nested-container, and channel elements by the element struct's
+  declaration through a new element-field taint registry, and the
+  read side resolves container element selects (s[0].fn, m["a"].fn,
+  c[0].ch) against it; pointer composite literals unwrap their
+  leading & before field registration and LHS taint application;
+  genericMethodResults claims every declared result position when
+  any call argument bears a file, covering closures surfaced through
+  erased generic bodies.
+- Pinned as durable exemption-shape appends: forms 278-281 (embedded
+  *os.Root wrapper literal, var-bound generic instantiation,
+  anonymous positional element, anonymous embedded handle) and
+  forms 283-288 (explicit single and variadic instantiation with a
+  func-file argument, elided slice element, map elided element,
+  pointer composite literal, nested and channel elided container
+  elements), raising the rejection set to two hundred thirty-eight
+  mutation forms. Vacuity proof: the round-51 scanner misses exactly
+  the eleven new forms (and forms 245-246 were vacuous before the
+  env fix), the fixed scanner rejects all 238. Gates: go test ./...
+  incl -race, go vet, gofmt, import graph (self-test, all 238 forms
+  rejected), the real tree gate, CGO_ENABLED=0 build and test, ten
+  cross-compiles, SOW audit — all green. Counts unchanged at this
+  commit: production 4,792 raw lines / tests 4,877 raw lines.
+  Decision 5A remains open for user ratification; Milestone 2
+  remains blocked until the final review passes.
+
 ## Validation
 
 Acceptance criteria evidence:
@@ -2193,7 +2320,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 220-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 238-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
   amd64/arm64, freebsd amd64, windows amd64/arm64 (the gate's
@@ -2259,6 +2386,31 @@ Reviewer findings:
   (forms 269-270 were already genuine); the pre-fix scanner misses
   exactly the seven new forms, the fixed scanner rejects all two
   hundred twenty-seven.
+  The round-52 gate re-review then failed with four live escapes
+  across three root causes: embedded fields were registered by type
+  text while Go names them by type name, so positional io.Reader and
+  positional/keyed *os.Root wrapper literals left promoted handles
+  live; a variable bound to an explicit generic instantiation
+  (var a = wrap[*os.File]) erased container-result taint; anonymous
+  struct literals registered no positional order (x := struct{ r
+  io.Reader }{f}, and an anonymous struct embedding *os.Root with a
+  positional element); the continuation hunt then added twelve live
+  escapes across three more classes (elided inner composite
+  literals in slice, map, nested-container, and channel elements;
+  pointer composite literals; func-valued arguments to explicitly
+  instantiated generics); closed at 5acd2a6 by naming embedded
+  fields by type name, resolving var-bound instantiations through
+  the base generic's fixed arguments, resolving anonymous literal
+  order from the literal's own fields, escalating anonymous
+  embedded-handle wrappers, registering elided container element
+  fields by the element struct's declaration, unwrapping pointer
+  literals, and mounting the explicit-instantiation callee route,
+  pinned as forms 278-288; the self-test
+  integrity review also exposed forms 245-246 as never running the
+  gate (the env prefix expanded to a command name), fixed by
+  prefixing env in run_mut; the pre-fix scanner misses exactly the
+  eleven new forms, the fixed scanner rejects all two hundred
+  thirty-eight.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -3088,7 +3240,7 @@ execution record; the closing result is appended there when it completes.
   same-module cross-package producer vars (forms 257-260), raising
   the set to two hundred ten mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 220-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  import graph with the 238-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
   rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
   descriptor-transfer primitives, *os.Root laundering through struct
@@ -3104,6 +3256,13 @@ execution record; the closing result is appended there when it completes.
   erasing a file taint into an interface result, composite-literal
   field laundering, method expressions on instantiated generic
   wrappers, and embedding chains deeper than the original walk
-  budget), ten cross-compiles,
+  budget, and round-51 rejects 271-277 cover file-bound generic
+  result erasure and positional composite-literal field launders
+  (with 267-268 converted to exemption-shape appends), and round-52
+  rejects 278-288 cover embedded file-handle literal launders,
+  var-bound generic-instantiation results, anonymous struct-literal
+  positional elements, elided container-element fields, pointer
+  composite literals, and explicit-instantiation callee closures),
+  ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
