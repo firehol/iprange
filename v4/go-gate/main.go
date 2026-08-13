@@ -120,6 +120,7 @@ type pkgInfo struct {
 	retMethodFiles map[string]bool     // structName.method whose body returns a func-file value
 	funcTypeParams map[string][]string // generic func name -> type-parameter names
 	funcParams     map[string][]string // generic func name -> parameter type texts
+	methodFull     map[string]string   // "struct.method" -> full signature text
 	pkgVars        map[string]bool     // package-level variable names
 	definedTo      map[string]string   // defined type (type a b) -> underlying type name
 	embedded       map[string][]string // struct name -> embedded (promoted) type names
@@ -202,7 +203,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, varTypes: map[string]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, varTypes: map[string]string{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -239,6 +240,29 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 				// type X = T: record the alias so file-taint checks
 				// resolve it instead of being blind to the name.
 				info.aliases[ts.Name.Name] = exprText(ts.Type)
+				continue
+			}
+			if it, ok := ts.Type.(*ast.InterfaceType); ok {
+				// Interfaces register as pseudo-structs: the method
+				// signatures (and their result metadata) resolve
+				// interface-valued receivers - a type-switch default
+				// clause, a constructor return, a struct field - so
+				// v.get() classifies when the declared signature is a
+				// file producer (get() *os.File, get() func() *os.File).
+				fields := map[string]string{}
+				for _, m := range it.Methods.List {
+					if len(m.Names) == 0 {
+						continue // embedded interface: promotion is not modeled
+					}
+					t := exprText(m.Type)
+					for _, name := range m.Names {
+						fields[name.Name] = t
+						if ft, ok2 := m.Type.(*ast.FuncType); ok2 {
+							info.methods[ts.Name.Name+"."+name.Name] = collectResults(ft)
+						}
+					}
+				}
+				info.structs[ts.Name.Name] = fields
 				continue
 			}
 			st, ok := ts.Type.(*ast.StructType)
@@ -286,8 +310,10 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 			if recvStruct != "" {
 				mkey := recvStruct + "." + fd.Name.Name
 				info.methods[mkey] = collectResults(fd.Type)
+				info.methodFull[mkey] = exprText(fd.Type)
 				if res := resolveTypeText(recvStruct, *info); res != recvStruct {
 					info.methods[res+"."+fd.Name.Name] = collectResults(fd.Type)
+					info.methodFull[res+"."+fd.Name.Name] = exprText(fd.Type)
 				}
 			}
 			continue
@@ -824,6 +850,40 @@ func typeSwitchSwitched(assign ast.Stmt) ast.Expr {
 	return nil
 }
 
+// ifaceImplProducer reports whether a call to method on an
+// interface-typed receiver can produce a file through a concrete
+// implementation: any same-package struct method whose full signature
+// text matches the interface method's is a valid dynamic type, and the
+// type-switch default clause can bind any of them, so a producer among
+// them taints the call (the interface's own declared signature is
+// already covered by methodMeta on the pseudo-struct).
+func ifaceImplProducer(structName, method string, info pkgInfo) bool {
+	sig, ok := info.structs[structName][method]
+	if !ok {
+		return false
+	}
+	for base := range info.structs {
+		if base == structName {
+			continue
+		}
+		fsig, ok2 := info.methodFull[base+"."+method]
+		if !ok2 || fsig != sig {
+			continue
+		}
+		if info.retMethodFiles[base+"."+method] || info.retMethods[base+"."+method] {
+			return true
+		}
+		mres, _ := methodMeta(base, method, info)
+		for _, r := range mres {
+			rt := resolveTypeText(r, info)
+			if rt == "*os.File" || funcTextFile(rt) || chanElemFile(rt, info) || chanElemFuncFile(rt, info) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // typeSwitchBound returns the identifier bound by a type-switch guard
 // (switch zv := x.(type)) or the empty string.
 func typeSwitchBound(assign ast.Stmt) string {
@@ -1057,6 +1117,9 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				if info.retMethodFiles[structName+"."+sel.Sel.Name] {
 					return kindFuncFile
 				}
+				if ifaceImplProducer(structName, sel.Sel.Name, info) {
+					return kindFuncFile
+				}
 			}
 		}
 		if genericResultFuncFile(v, st, info, imports) {
@@ -1112,6 +1175,9 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 			}
 			mres, retM := methodMeta(structName, v.Sel.Name, info)
 			if positionsOf("*os.File", mres) != nil || retM {
+				return kindFuncFile
+			}
+			if ifaceImplProducer(structName, v.Sel.Name, info) {
 				return kindFuncFile
 			}
 			for _, r := range mres {
@@ -1193,6 +1259,13 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 				if funcTextFile(resolveTypeText(ft, info)) {
 					return call, []int{0}, true
 				}
+			}
+			// An interface-typed receiver whose declaration (or any
+			// signature-identical implementation) produces a file: the
+			// dynamic type is unknowable at the call, so the producer
+			// union taints the call.
+			if ifaceImplProducer(structName, sel.Sel.Name, info) {
+				return call, []int{0}, true
 			}
 		}
 	}
@@ -1513,6 +1586,82 @@ func returnsFuncFileIn(body *ast.BlockStmt, st *taints, info pkgInfo, imports ma
 	return found
 }
 
+// explicitGenericCall identifies an explicitly instantiated generic
+// call callee (mkGen[*gsG] or mkGen[*gsG, int]) and returns the
+// function name and the provided type-argument texts.
+func explicitGenericCall(fun ast.Expr) (string, []string, bool) {
+	switch f := fun.(type) {
+	case *ast.IndexExpr:
+		if id, ok := f.X.(*ast.Ident); ok {
+			return id.Name, []string{exprText(f.Index)}, true
+		}
+	case *ast.IndexListExpr:
+		if id, ok := f.X.(*ast.Ident); ok {
+			args := make([]string, 0, len(f.Indices))
+			for _, ix := range f.Indices {
+				args = append(args, exprText(ix))
+			}
+			return id.Name, args, true
+		}
+	}
+	return "", nil, false
+}
+
+// substituteTypeParams replaces every type-parameter identifier in a
+// declared type text with the explicit instantiation argument at the
+// same position: mkGen[*gsG]() binds []T to []*gsG before recording.
+// Token boundaries are respected so T2 is never touched when T is the
+// parameter.
+func substituteTypeParams(text string, tps, args []string) string {
+	if len(args) == 0 {
+		return text
+	}
+	var b strings.Builder
+	start := 0
+	for i := 0; i <= len(text); i++ {
+		if i == len(text) || !(text[i] == '_' || text[i] >= 'a' && text[i] <= 'z' || text[i] >= 'A' && text[i] <= 'Z' || text[i] >= '0' && text[i] <= '9') {
+			if i > start {
+				tok := text[start:i]
+				for pi, tp := range tps {
+					if tok == tp && pi < len(args) {
+						tok = args[pi]
+						break
+					}
+				}
+				b.WriteString(tok)
+			}
+			if i < len(text) {
+				b.WriteByte(text[i])
+			}
+			start = i + 1
+		}
+	}
+	return b.String()
+}
+
+// genericSubstitutedResults returns the declared result types of an
+// explicitly instantiated generic call with the type parameters
+// replaced by the call's type arguments (mkGen[*gsG]() []T -> []*gsG).
+func genericSubstitutedResults(fun ast.Expr, info pkgInfo) []string {
+	name, args, ok := explicitGenericCall(fun)
+	if !ok {
+		return nil
+	}
+	results := info.funcs[name]
+	if len(results) == 0 {
+		return nil
+	}
+	tps := info.funcTypeParams[name]
+	if len(tps) == 0 {
+		return nil
+	}
+	out := make([]string, len(results))
+	for i, r := range results {
+		out[i] = substituteTypeParams(r, tps, args)
+	}
+	return out
+}
+
 // genericParamFilePositions maps type-parameter result positions back
 // to argument positions for a same-package generic call: idf(os.Stdin)
 // with idf[T any](f T) T binds T to *os.File, so the result position
@@ -1720,6 +1869,18 @@ func typeOfBase(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 					return resolveTypeText(mres[0], info), true
 				}
 			}
+		}
+		return "", false
+	case *ast.UnaryExpr:
+		if v.Op == token.ARROW {
+			// <-ch: the channel's element type is the received value's
+			// type (one wrapper stripped), so multi-assign receive
+			// bindings can serve as indexed or receiver bases.
+			ct, ok := typeOfBase(v.X, st, info)
+			if !ok {
+				return "", false
+			}
+			return elemTypeOne(ct), true
 		}
 		return "", false
 	}
@@ -2232,12 +2393,17 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	if call, ok := rhs.(*ast.CallExpr); ok {
 		fun := unwrapParen(call.Fun)
 		var results []string
-		if fid, ok := fun.(*ast.Ident); ok {
-			results = info.funcs[fid.Name]
-		} else if sel, ok := fun.(*ast.SelectorExpr); ok {
-			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
-				results, _ = methodMeta(sn, sel.Sel.Name, info)
+		switch f := fun.(type) {
+		case *ast.Ident:
+			results = info.funcs[f.Name]
+		case *ast.SelectorExpr:
+			if sn, ok2 := resolveStruct(f.X, st, info); ok2 {
+				results, _ = methodMeta(sn, f.Sel.Name, info)
 			}
+		case *ast.IndexExpr, *ast.IndexListExpr:
+			// Explicit generic instantiation: mkGen[*gsG]() []T binds
+			// the result after substituting the type arguments.
+			results = genericSubstitutedResults(f, info)
 		}
 		if len(results) > 0 {
 			info.varTypes[id.Name] = results[0]
@@ -2255,12 +2421,15 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 		if call, ok := rhs.(*ast.CallExpr); ok {
 			fun := unwrapParen(call.Fun)
 			var results []string
-			if fid, ok := fun.(*ast.Ident); ok {
-				results = info.funcs[fid.Name]
-			} else if sel, ok := fun.(*ast.SelectorExpr); ok {
-				if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
-					results, _ = methodMeta(sn, sel.Sel.Name, info)
+			switch f := fun.(type) {
+			case *ast.Ident:
+				results = info.funcs[f.Name]
+			case *ast.SelectorExpr:
+				if sn, ok2 := resolveStruct(f.X, st, info); ok2 {
+					results, _ = methodMeta(sn, f.Sel.Name, info)
 				}
+			case *ast.IndexExpr, *ast.IndexListExpr:
+				results = genericSubstitutedResults(f, info)
 			}
 			if index < len(results) {
 				info.varTypes[id.Name] = results[index]
