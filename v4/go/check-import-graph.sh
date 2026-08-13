@@ -7805,11 +7805,138 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta224.orig" internal/reader/metadata.go
 
+
+	# --- 225: multi-level generic-interface instantiation embedding -------
+	# type InnerL[T] interface{ Get() T }; type IBaseGL[T] interface{
+	# InnerL[T] }; type IEmbL interface{ IBaseGL[func() *os.File] }: the
+	# embedding walk must thread the instantiation through every frame so
+	# the declaring frame substitutes the accumulated arguments.
+	cat > internal/reader/gatemut_nestedgen.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type InnerL225[T any] interface{ Get() T }
+type IBaseGL225[T any] interface{ InnerL225[T] }
+type IEmbL225 interface{ IBaseGL225[func() *os.File] }
+
+type gRZ225[T any] struct{}
+
+func (r gRZ225[T]) mk() T { var z T; return z }
+
+func gb225() io.ReadCloser {
+	x := gRZ225[IEmbL225]{}.mk()
+	return x.Get()()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_nestedgen.go
+	cp internal/reader/metadata.go "$self_tree/meta225.orig"
+	INS='zr = gb225()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta225.new" && mv "$self_tree/meta225.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb225()' internal/reader/metadata.go; then
+		run_mut "multi-level generic-interface instantiation embedding"
+	else
+		echo "self-test ERROR: form 225 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta225.orig" internal/reader/metadata.go
+
+
+	# --- 226: three-level generic-interface instantiation embedding ------
+	# One more frame (MidX[T] above InnerX[T]) with the chan-of-func
+	# argument at the top frame: receive then invoke.
+	cat > internal/reader/gatemut_nestedgen3.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type InnerX226[T any] interface{ Get() T }
+type MidX226[T any] interface{ InnerX226[T] }
+type TopX226 interface{ MidX226[chan func() *os.File] }
+
+type gRZ226[T any] struct{}
+
+func (r gRZ226[T]) mk() T { var z T; return z }
+
+func gb226() io.ReadCloser {
+	x := gRZ226[TopX226]{}.mk()
+	ch := x.Get()
+	f := <-ch
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_nestedgen3.go
+	cp internal/reader/metadata.go "$self_tree/meta226.orig"
+	INS='zr = gb226()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta226.new" && mv "$self_tree/meta226.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb226()' internal/reader/metadata.go; then
+		run_mut "three-level generic-interface instantiation embedding with chan argument"
+	else
+		echo "self-test ERROR: form 226 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta226.orig" internal/reader/metadata.go
+
+
+	# --- 227: benign multi-level generic-interface bytes twin ------------
+	cat > internal/reader/gatemut_bennestedgen.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type InnerXB227[T any] interface{ Get() T }
+type MidXB227[T any] interface{ InnerXB227[T] }
+type TopXB227 interface{ MidXB227[func() *bytes.Reader] }
+
+type gRZ227[T any] struct{}
+
+func (r gRZ227[T]) mk() T { var z T; return z }
+
+func gbb227() io.ReadCloser {
+	x := gRZ227[TopXB227]{}.mk()
+	return io.NopCloser(x.Get()())
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bennestedgen.go
+	cp internal/reader/metadata.go "$self_tree/meta227.orig"
+	INS='zr = gbb227()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta227.new" && mv "$self_tree/meta227.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb227()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign multi-level generic-interface bytes twin passes the gate"
+		else
+			echo "self-test MISS: benign multi-level generic-interface bytes twin failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 227 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta227.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 176 mutation forms rejected)"
+	echo "import-graph self-test passed (all 178 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
