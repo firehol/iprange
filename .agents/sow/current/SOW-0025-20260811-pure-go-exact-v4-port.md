@@ -139,9 +139,10 @@ the round-6 nested-field/named-helper/chan-pass family, the
 named-method extension, the nested-method-receiver extension, the
 method-value family, the generic pass-through family, the
 generic-element family, the chan-result method-value class, and the
-field-assignment class, the channel-consumer class, and the
-container-element class (forms 73-107); the durable rejection set is
-now ninety-one mutation forms. The records
+field-assignment class, the channel-consumer class, the
+container-element class (forms 73-107), and the anonymous-receiver
+method class (forms 108-111); the durable rejection set is
+now ninety-five mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -426,9 +427,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   pass-through family (forms 88-89), the generic-element
   family, the chan-result method-value class, the
   field-assignment class (forms 92-95), the channel-consumer
-  class (forms 98-100), and the container-element
-  class (forms 103-106);
-  the self-test now durably rejects ninety-one mutation forms. The
+  class (forms 98-100), the container-element
+  class (forms 103-106), and the anonymous-receiver
+  method class (forms 108-111);
+  the self-test now durably rejects ninety-five mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1553,7 +1555,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 91-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 95-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2043,7 +2045,16 @@ execution record; the closing result is appended there when it completes.
   producerCall, and exprText coverage for map/ellipsis/index types.
   Forms 103-106 pin the four escapes; form 107 pins the benign map
   field control.
+- Ampere round 11 found the anonymous-receiver method route (HEAD
+  63d665d): func (T) m() with no receiver variable name was invisible
+  because receiverOf required a receiver name and never resolved the
+  receiver type for method-value keys. Fixed by deriving the receiver
+  struct from the receiver type expression, trimming pointer/generic
+  spellings, keying alias-resolved method signatures, and never
+  misregistering methods as package funcs. Forms 108-111 pin the four
+  escapes (direct file, interface-hidden, pointer receiver, map-field
+  method value); form 112 pins the benign anonymous-receiver control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 91-form self-test, nine cross-compiles,
+  import graph with the 95-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
