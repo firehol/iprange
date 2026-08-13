@@ -6286,13 +6286,357 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta190.orig" internal/reader/metadata.go
 
+	# --- 191: mixed multi-result function, func-file at position 0 -------
+	# getFn() (func() *os.File, error): the func-typed result position
+	# must keep the func-file taint even though the error position is
+	# not a producer.
+	cat > internal/reader/gatemut_mixedfunc0.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func getFn191() (func() *os.File, error) { return nil, nil }
+
+func gb191() io.ReadCloser {
+	f, _ := getFn191()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_mixedfunc0.go
+	cp internal/reader/metadata.go "$self_tree/meta191.orig"
+	INS='zr = gb191()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta191.new" && mv "$self_tree/meta191.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb191()' internal/reader/metadata.go; then
+		run_mut "mixed multi-result function func-file at position 0"
+	else
+		echo "self-test ERROR: form 191 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta191.orig" internal/reader/metadata.go
+
+	# --- 192: mixed multi-result function, func-file at position 1 -------
+	# hW() (int, func() *os.File): the func-file at the second position
+	# must still taint its binding.
+	cat > internal/reader/gatemut_mixedfunc1.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func hW192() (int, func() *os.File) { return 0, nil }
+
+func gb192() io.ReadCloser {
+	_, f := hW192()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_mixedfunc1.go
+	cp internal/reader/metadata.go "$self_tree/meta192.orig"
+	INS='zr = gb192()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta192.new" && mv "$self_tree/meta192.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb192()' internal/reader/metadata.go; then
+		run_mut "mixed multi-result function func-file at position 1"
+	else
+		echo "self-test ERROR: form 192 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta192.orig" internal/reader/metadata.go
+
+	# --- 193: defined type over a renamed-qualified alias ----------------
+	# type F193 mm.FUnqual with FUnqual = func() *os.File in mapping:
+	# the defined-type chain must expand through the renamed import
+	# qualifier.
+	cat > internal/mapping/gatemut_defren.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type FUnqual = func() *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_defren.go
+	cat > internal/reader/gatemut_defren.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type F193 mm.FUnqual
+
+type gRZ193[T any] struct{}
+
+func (r gRZ193[T]) mk() T { var z T; return z }
+
+func gb193() io.ReadCloser {
+	rr := gRZ193[F193]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_defren.go
+	cp internal/reader/metadata.go "$self_tree/meta193.orig"
+	INS='zr = gb193()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta193.new" && mv "$self_tree/meta193.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb193()' internal/reader/metadata.go; then
+		run_mut "defined type over renamed-qualified alias"
+	else
+		echo "self-test ERROR: form 193 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta193.orig" internal/reader/metadata.go
+
+	# --- 194: local defined func type as generic type argument -----------
+	# type F194 func() *os.File (defined, not alias): the defined func
+	# type must expand before the generic method result class is chosen.
+	cat > internal/reader/gatemut_deffunc.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type F194 func() *os.File
+
+type gRZ194[T any] struct{}
+
+func (r gRZ194[T]) mk() T { var z T; return z }
+
+func gb194() io.ReadCloser {
+	rr := gRZ194[F194]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_deffunc.go
+	cp internal/reader/metadata.go "$self_tree/meta194.orig"
+	INS='zr = gb194()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta194.new" && mv "$self_tree/meta194.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb194()' internal/reader/metadata.go; then
+		run_mut "local defined func type as generic type argument"
+	else
+		echo "self-test ERROR: form 194 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta194.orig" internal/reader/metadata.go
+
+	# --- 195: cross-package defined func type as generic type argument ---
+	# mm.F195 with F195 func() *os.File (defined, not alias): qualified
+	# references to defined func types must resolve like aliases.
+	cat > internal/mapping/gatemut_defqual.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type F195 func() *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_defqual.go
+	cat > internal/reader/gatemut_defqual.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRZ195[T any] struct{}
+
+func (r gRZ195[T]) mk() T { var z T; return z }
+
+func gb195() io.ReadCloser {
+	rr := gRZ195[mm.F195]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_defqual.go
+	cp internal/reader/metadata.go "$self_tree/meta195.orig"
+	INS='zr = gb195()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta195.new" && mv "$self_tree/meta195.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb195()' internal/reader/metadata.go; then
+		run_mut "cross-package defined func type as generic type argument"
+	else
+		echo "self-test ERROR: form 195 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta195.orig" internal/reader/metadata.go
+
+	# --- 196: defined type over a cross-package defined func type --------
+	# type F196 mm.F195: the chain must expand through both defined-type
+	# hops.
+	cat > internal/mapping/gatemut_defdef.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type F196 func() *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_defdef.go
+	cat > internal/reader/gatemut_defdef.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type F196B mm.F196
+
+type gRZ196[T any] struct{}
+
+func (r gRZ196[T]) mk() T { var z T; return z }
+
+func gb196() io.ReadCloser {
+	rr := gRZ196[F196B]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_defdef.go
+	cp internal/reader/metadata.go "$self_tree/meta196.orig"
+	INS='zr = gb196()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta196.new" && mv "$self_tree/meta196.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb196()' internal/reader/metadata.go; then
+		run_mut "defined type over cross-package defined func type"
+	else
+		echo "self-test ERROR: form 196 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta196.orig" internal/reader/metadata.go
+
+	# --- 197: benign mixed multi-result bytes func must pass -------------
+	# (func() *mrc197, error): a bytes-backed func result at a mixed
+	# position must not taint.
+	cat > internal/reader/gatemut_benmixed.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type mrc197 struct{ *bytes.Reader }
+
+func (w *mrc197) Close() error { return nil }
+
+func getB197() (func() *mrc197, error) { return nil, nil }
+
+func gbb197() io.ReadCloser {
+	f, _ := getB197()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benmixed.go
+	cp internal/reader/metadata.go "$self_tree/meta197.orig"
+	INS='zr = gbb197()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta197.new" && mv "$self_tree/meta197.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb197()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign mixed multi-result bytes func passes the gate"
+		else
+			echo "self-test MISS: benign mixed multi-result bytes func failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 197 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta197.orig" internal/reader/metadata.go
+
+	# --- 198: benign defined-over-renamed bytes type must pass -----------
+	# type B198 mm.MRC198 with MRC198 = func() *mrc198: the defined
+	# chain over a renamed-qualified bytes alias must stay benign.
+	cat > internal/mapping/gatemut_bandef.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type mrc198 struct{ *bytes.Reader }
+
+func (w *mrc198) Close() error { return nil }
+
+type MRC198 = func() *mrc198
+MUTEOF
+	add_mut internal/mapping/gatemut_bandef.go
+	cat > internal/reader/gatemut_bandef.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	mm "github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type B198 mm.MRC198
+
+type gRB198[T any] struct{}
+
+func (r gRB198[T]) mk() T { var z T; return z }
+
+func gbb198() io.ReadCloser {
+	rr := gRB198[B198]{}
+	f := rr.mk()
+	return f()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bandef.go
+	cp internal/reader/metadata.go "$self_tree/meta198.orig"
+	INS='zr = gbb198()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta198.new" && mv "$self_tree/meta198.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb198()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign defined-over-renamed bytes type passes the gate"
+		else
+			echo "self-test MISS: benign defined-over-renamed bytes type failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 198 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta198.orig" internal/reader/metadata.go
+
+
 
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 152 mutation forms rejected)"
+	echo "import-graph self-test passed (all 158 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
