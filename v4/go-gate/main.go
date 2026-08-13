@@ -180,6 +180,10 @@ var currentImports map[string]string
 // declarations always win on bare-name collisions because the local
 // collectPkgInfo overwrites merged entries.
 var remoteStructs = map[string]map[string]string{}
+// remoteStructOrder mirrors every scanned directory's struct field name
+// order (embedded fields by type text), so a positional composite
+// literal in another package resolves its unkeyed elements to fields.
+var remoteStructOrder = map[string][]string{}
 var remoteMethods = map[string][]string{}
 var remoteMethodFull = map[string]string{}
 var remoteEmbedded = map[string][]string{}
@@ -188,6 +192,7 @@ var remoteIfaceParams = map[string][]string{}
 
 type pkgInfo struct {
 	structs        map[string]map[string]string
+	structOrder    map[string][]string // type name -> field names in declaration order (embedded by type text)
 	funcs          map[string][]string
 	methods        map[string][]string // structName.method -> result type texts
 	aliases        map[string]string   // type-alias name -> underlying type text
@@ -406,7 +411,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, recvTypeParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, ifaceParams: map[string][]string{}, varTypes: map[string]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, structOrder: map[string][]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, recvTypeParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, ifaceParams: map[string][]string{}, varTypes: map[string]string{}}
 	// Cross-package struct and method metadata collected from
 	// previously parsed directories resolves generic type arguments
 	// that spell a struct with an import qualifier (mm.S28): the
@@ -415,6 +420,11 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 	for k, v := range remoteStructs {
 		if _, exists := info.structs[k]; !exists {
 			info.structs[k] = v
+		}
+	}
+	for k, v := range remoteStructOrder {
+		if _, exists := info.structOrder[k]; !exists {
+			info.structOrder[k] = v
 		}
 	}
 	for k, v := range remoteMethods {
@@ -696,19 +706,24 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				continue
 			}
 			fields := map[string]string{}
+			var order []string
 			for _, field := range st.Fields.List {
 				if len(field.Names) == 0 {
 					// Embedded field: record the promoted type so method
-					// resolution can walk the embedding chain.
+					// resolution can walk the embedding chain; positional
+					// composite literals name the embedded field by type.
 					info.embedded[ts.Name.Name] = append(info.embedded[ts.Name.Name], exprText(field.Type))
+					order = append(order, exprText(field.Type))
 					continue
 				}
 				t := exprText(field.Type)
 				for _, name := range field.Names {
 					fields[name.Name] = t
+					order = append(order, name.Name)
 				}
 			}
 			info.structs[ts.Name.Name] = fields
+			info.structOrder[ts.Name.Name] = order
 			// Cross-package struct spellings (mm.S28 as a generic type
 			// argument, composite literal, or embedded name) must
 			// resolve: mirror the struct into the remote registries
@@ -719,6 +734,8 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 			// serves the name translation).
 			remoteStructs[ts.Name.Name] = fields
 			remoteStructs[f.Name.Name+"."+ts.Name.Name] = fields
+			remoteStructOrder[ts.Name.Name] = order
+			remoteStructOrder[f.Name.Name+"."+ts.Name.Name] = order
 			if pkgDir != "" {
 				if pkgAliasesByDir[pkgDir] == nil {
 					pkgAliasesByDir[pkgDir] = map[string]string{}
@@ -3042,7 +3059,17 @@ func genericCallResults(call *ast.CallExpr, st *taints, info pkgInfo) ([]string,
 // genericParamFilePositions maps type-parameter result positions back
 // to argument positions for a same-package generic call: idf(os.Stdin)
 // with idf[T any](f T) T binds T to *os.File, so the result position
-// carrying T is a file position.
+// carrying T is a file position. The generic body is opaque to the
+// scanner, so once a file-typed argument binds a type parameter every
+// declared result position keeps the file taint: the value can come
+// back as the exact parameter (idf[T any](f T) T), an interface-erased
+// spelling in any qualifier form (func wrap[T io.Reader](v T) io.Reader
+// { return v } with a renamed import, fs.File, or a bare same-package
+// interface), a container of the parameter ([]T, [2]T, map[K]T), a
+// channel, or a func wrapper. Over-tainting is conservative: a
+// same-package generic that returns an unrelated value from a
+// file-typed argument is not a shape the gate must admit, and no
+// in-tree generic needs the carve-out.
 func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imports map[string]string) []int {
 	id, ok := call.Fun.(*ast.Ident)
 	if !ok {
@@ -3053,65 +3080,26 @@ func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imp
 		return nil
 	}
 	params := info.funcParams[id.Name]
-	var pos []int
-	for ri, rt := range info.funcs[id.Name] {
-		for _, tp := range tps {
-			fileArg := false
-			for ai, pt := range params {
-				if bindsTypeParam(pt, tp) && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
-					fileArg = true
-					break
-				}
-			}
-			if !fileArg {
-				continue
-			}
-			// An exact type-parameter result keeps the substituted
-			// argument's taint (idf[*os.File]()). A result spelled as
-			// an interface (func wrap[T io.Reader](v T) io.Reader
-			// { return v }) erases the taint when the file flows
-			// through the type parameter into the result; the gate
-			// keeps the file taint there too, so the metadata
-			// inflater exemption cannot consume the file through an
-			// identity-like generic. A bare same-package declared
-			// result can only compile with a file argument when the
-			// type parameter's constraint is an interface, so the
-			// result is interface-erased as well.
-			if rt == tp || interfaceErasedResult(rt, info) {
-				pos = append(pos, ri)
+	fileArg := false
+	for _, tp := range tps {
+		for ai, pt := range params {
+			if bindsTypeParam(pt, tp) && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
+				fileArg = true
 				break
 			}
 		}
+		if fileArg {
+			break
+		}
 	}
-	if len(pos) == 0 {
+	if !fileArg {
 		return nil
 	}
+	pos := make([]int, len(info.funcs[id.Name]))
+	for i := range pos {
+		pos[i] = i
+	}
 	return pos
-}
-
-// interfaceErasedResult reports whether a declared result type text
-// erases the file taint when a type-parameter-bound argument flows
-// into it: the builtin any/error, an anonymous interface literal, a
-// qualified stdlib io interface (io.Reader and friends), or a bare
-// same-package declared type (structs and interfaces register under
-// the same bare key; with a file-typed argument the call only
-// compiles when the constraint is an interface, so the result is
-// interface-erased either way).
-func interfaceErasedResult(rt string, info pkgInfo) bool {
-	if rt == "any" || rt == "error" || strings.HasPrefix(rt, "interface") {
-		return true
-	}
-	if i := strings.IndexByte(rt, '.'); i > 0 {
-		return rt[:i] == "io"
-	}
-	if _, isS := info.structs[rt]; isS {
-		return true
-	}
-	if _, isA := info.aliases[rt]; isA {
-		return true
-	}
-	_, isD := info.definedTo[rt]
-	return isD
 }
 
 // pkgVarRoot reports whether the root identifier of a fieldTaint key
@@ -3844,27 +3832,41 @@ func applyLHSField(lhs, rhs ast.Expr, cls kind, st *taints, info pkgInfo, import
 // registerCompositeFieldTaints records field-level file taint for a
 // composite literal bound to a name (s := S{r: f} -> s.r is a file):
 // the container kind alone does not taint later field reads, so the
-// binding must register each named element and any nested literal the
-// same way (s := S{inner: I{r: f}} -> s.inner.r).
+// binding must register each named element, each positional element
+// (resolved through the struct's declared field order: s := S{f} ->
+// s.r), and any nested literal the same way (s := S{inner: I{r: f}}
+// -> s.inner.r).
 func registerCompositeFieldTaints(rhs ast.Expr, bound string, st *taints, info pkgInfo, imports map[string]string) {
 	cl, ok := rhs.(*ast.CompositeLit)
 	if !ok || bound == "" {
 		return
 	}
+	order := info.structOrder[resolveStructName(exprText(cl.Type), info)]
+	posIdx := 0
 	for _, el := range cl.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
-		if !ok {
+		if ok {
+			registerElementFieldTaint(bound+"."+exprText(kv.Key), kv.Value, st, info, imports)
 			continue
 		}
-		key := bound + "." + exprText(kv.Key)
-		if isFileExpr(kv.Value, st, info, imports) {
-			st.fieldTaint[key] = kindFile
-		} else if isFileOrContainer(kv.Value, st, info, imports) {
-			st.fieldTaint[key] = kindContainer
+		if posIdx < len(order) {
+			registerElementFieldTaint(bound+"."+order[posIdx], el, st, info, imports)
+			posIdx++
 		}
-		if inner, ok := kv.Value.(*ast.CompositeLit); ok {
-			registerCompositeFieldTaints(inner, key, st, info, imports)
-		}
+	}
+}
+
+// registerElementFieldTaint records one composite-literal element's
+// taint on a field key and recurses into nested literals. The kind set
+// mirrors applyLHSField: file, container, func-file, and channel
+// carriers all survive the struct-field hop.
+func registerElementFieldTaint(key string, val ast.Expr, st *taints, info pkgInfo, imports map[string]string) {
+	switch k := classify(val, st, info, imports); k {
+	case kindFile, kindContainer, kindFuncFile, kindChanFile, kindChanFuncFile:
+		st.fieldTaint[key] = k
+	}
+	if inner, ok := val.(*ast.CompositeLit); ok {
+		registerCompositeFieldTaints(inner, key, st, info, imports)
 	}
 }
 

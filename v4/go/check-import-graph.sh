@@ -301,11 +301,19 @@ if [ "$self_test" -eq 1 ]; then
 	cd "$self_tree/go"
 
 	muts=""
+	mut_restores=""
 	cleanup_muts() {
 		for m in $muts; do
 			rm -r "$m" 2>/dev/null || true
 		done
 		muts=""
+		for f in $mut_restores; do
+			if [ -f "$f.gatemut-save" ]; then
+				cp "$f.gatemut-save" "$f"
+				rm -f "$f.gatemut-save" 2>/dev/null || true
+			fi
+		done
+		mut_restores=""
 	}
 
 	mutfail=0
@@ -325,6 +333,30 @@ if [ "$self_test" -eq 1 ]; then
 	# files of the current mutation, leaving the next mutation a clean tree.
 	add_mut() {
 		muts="$muts $1"
+	}
+
+	# append_mut appends a mutation to an existing tracked file and
+	# registers a save/restore pair so the next mutation starts clean.
+	# The io.ReadFull exemption shape applies only inside
+	# internal/reader/metadata.go: the generic-erasure and
+	# composite-literal escapes must be appended there, because the
+	# same launder in a separate file is rejected by the unconditional
+	# selector ban and the form would not test the taint escape.
+	append_mut() {
+		file=$1
+		cp "$file" "$file.gatemut-save"
+		mut_restores="$mut_restores $file"
+		cat >> "$file"
+	}
+
+	# inject_import adds import lines into metadata.go's import block
+	# before an appended mutation needs names the file does not import
+	# ("os", a renamed "io", io/fs). The block's "io" line is the
+	# anchor; the caller passes the complete escaped insertion.
+	inject_import() {
+		file=$1
+		line=$2
+		sed -i "s|\t\"io\"|\t\"io\"\n\t$line|" "$file"
 	}
 
 	# --- 1: direct io.ReadAll call ---------------------------------------
@@ -9066,15 +9098,12 @@ MUTEOF
 	# result; the generic result propagation only tracked exact
 	# type-parameter results, so zr := probeWrapR(f) erased the taint
 	# and the exempted inflater shape consumed file bytes (live, gate
-	# exit 0). Interface-erased results now keep the file taint.
-	cat > internal/reader/gatemut_geniface_linux.go <<'MUTEOF'
-//go:build linux
-package reader
-
-import (
-	"io"
-	"os"
-)
+	# exit 0). Interface-erased results now keep the file taint. The
+	# mutation is appended to metadata.go because the exemption shape
+	# is recognized only there; a separate file is rejected by the
+	# unconditional selector ban and would not exercise the taint.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
 
 func probeWrapR[T io.Reader](v T) io.Reader { return v }
 
@@ -9088,7 +9117,6 @@ func gateGenIface267(f *os.File, n int) ([]byte, error) {
 	return out[:int(meta.MetadataUncompressed)], nil
 }
 MUTEOF
-	add_mut internal/reader/gatemut_geniface_linux.go
 	run_mut "generic identity erasing the taint into an interface"
 
 	# --- 268: composite-literal field launder ----------------------------
@@ -9096,15 +9124,10 @@ MUTEOF
 	# field taint was registered only for selector writes, so the
 	# literal's named element stayed clean and the exempted inflater
 	# shape consumed file bytes (live, gate exit 0). Composite-literal
-	# bindings now register named-element field taint.
-	cat > internal/reader/gatemut_complit_linux.go <<'MUTEOF'
-//go:build linux
-package reader
-
-import (
-	"io"
-	"os"
-)
+	# bindings now register named-element field taint. Appended to
+	# metadata.go for the same exemption-shape reason as form 267.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
 
 type gateLaunderS struct{ r io.Reader }
 
@@ -9119,7 +9142,6 @@ func gateComplit268(f *os.File, n int) ([]byte, error) {
 	return out[:int(meta.MetadataUncompressed)], nil
 }
 MUTEOF
-	add_mut internal/reader/gatemut_complit_linux.go
 	run_mut "composite-literal field launder"
 
 	# --- 269: method expression on an instantiated generic wrapper ------
@@ -9185,12 +9207,181 @@ MUTEOF
 	add_mut internal/reader/gatemut_deep_linux.go
 	run_mut "embedding chain deeper than the original walk budget"
 
+	# --- 271: generic interface result under a renamed io qualifier ------
+	# import r "io" with func probeWrapR271[T r.Reader](v T) r.Reader
+	# { return v } erases the file taint through the interface result
+	# typed with a qualifier the scanner did not spell "io", so zr
+	# stayed clean and the exempted inflater shape consumed the file
+	# (live, gate exit 0, round-51 hunt-A). Generic calls whose file
+	# argument binds a type parameter now taint every result position.
+	inject_import internal/reader/metadata.go '"os"\n\tr "io"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapA[T r.Reader](v T) r.Reader { return v }
+
+func gateHuntA(f *os.File, n int) ([]byte, error) {
+	zr := gateHuntWrapA(f)
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "generic interface result under a renamed io qualifier"
+
+	# --- 272: generic interface result from another stdlib package ------
+	# fs.File (io/fs) is an interface result the same spelling-based
+	# erasure rule missed (live, gate exit 0, round-51 hunt-B): the
+	# qualifier resolution never reached canonical package paths.
+	inject_import internal/reader/metadata.go '"os"\n\t"io/fs"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapB[T fs.File](v T) fs.File { return v }
+
+func gateHuntB(f *os.File, n int) ([]byte, error) {
+	zr := gateHuntWrapB(f)
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "generic interface result from another stdlib package"
+
+	# --- 273: generic slice-of-type-parameter result ---------------------
+	# func gateHuntWrapC[T any](v T) []T returns the file inside a
+	# slice; the generic result tracking only recognized exact
+	# parameter or interface-erased results, so files[0] stayed clean
+	# (live, gate exit 0, round-51 hunt-C). All result positions of a
+	# file-bound generic call are now tainted.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapC[T any](v T) []T { return []T{v} }
+
+func gateHuntC(f *os.File, n int) ([]byte, error) {
+	files := gateHuntWrapC(f)
+	zr := files[0]
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "generic slice-of-type-parameter result"
+
+	# --- 274: positional composite-literal field launder -----------------
+	# s := gateHuntS{f} (unkeyed element) never registered the field
+	# hop, so s.r stayed clean while the keyed twin was pinned (live,
+	# gate exit 0, round-51 hunt-D). Positional elements now resolve
+	# through the struct's declared field order.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateHuntS struct{ r io.Reader }
+
+func gateHuntD(f *os.File, n int) ([]byte, error) {
+	s := gateHuntS{f}
+	zr := s.r
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "positional composite-literal field launder"
+
+	# --- 275: generic array-of-type-parameter result ---------------------
+	# [2]T result, the array twin of 273 (live, gate exit 0, round-51
+	# hunt-E). Maps and func wrappers share the same result-position
+	# miss and are closed by the same all-positions rule.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapE[T any](v T) [2]T { return [2]T{v, v} }
+
+func gateHuntE(f *os.File, n int) ([]byte, error) {
+	arr := gateHuntWrapE(f)
+	zr := arr[0]
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "generic array-of-type-parameter result"
+
+	# --- 276: chan send of a generic-erased value ------------------------
+	# ch <- gateHuntWrapF(f) sent the erased call value into an
+	# untyped channel; the send mark only inspected the value's own
+	# kind, so the receive read a clean reader (live, gate exit 0,
+	# round-51 hunt-F). The call now classifies as file, so the send
+	# marks the channel and the receive stays tainted.
+	inject_import internal/reader/metadata.go '"os"\n\tr "io"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapF[T r.Reader](v T) r.Reader { return v }
+
+func gateHuntF(f *os.File, n int) ([]byte, error) {
+	ch := make(chan r.Reader, 1)
+	ch <- gateHuntWrapF(f)
+	zr := <-ch
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "chan send of a generic-erased value"
+
+	# --- 277: positional literal hiding an os.Root opener ----------------
+	# gateHuntRootIface{root} (unkeyed) hid the os.OpenRoot handle in
+	# a struct field; zr0.Open(name) then flowed an untainted file into
+	# the exempted inflater (live, gate exit 0, round-51 hunt-G).
+	# Positional field registration (274) covers this capability too.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateHuntRootIface struct {
+	opener interface {
+		Open(string) (*os.File, error)
+	}
+}
+
+func gateHuntG(dir, name string, n int) ([]byte, error) {
+	root, _ := os.OpenRoot(dir)
+	s := gateHuntRootIface{root}
+	zr0 := s.opener
+	f, _ := zr0.Open(name)
+	zr := f
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "positional literal hiding an os.Root opener"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 220 mutation forms rejected)"
+	echo "import-graph self-test passed (all 227 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
