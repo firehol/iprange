@@ -243,7 +243,60 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 		srcs[p], fses[p], parsed[p] = src, fset, file
 		collectPkgInfo(p, file, &info)
 	}
+	if len(paths) > 0 {
+		dir := filepath.Dir(paths[0])
+		clause := ""
+		if pf, ok := parsed[paths[0]]; ok {
+			clause = pf.Name.Name
+		}
+		finalizeDirAliases(dir, clause, info)
+	}
 	return info, srcs, fses, parsed
+}
+
+// finalizeDirAliases resolves every cross-package alias/defined entry
+// of one directory to its final type text now that the whole directory
+// is parsed and information is complete. During collection a defined
+// type over an alias (type D A; type A = func() *os.File) keeps the
+// bare first-hop text (the alias may be declared after the defined
+// type), and an alias over a defined func type stops at the defined
+// name; the fixpoint closes both chains so a qualified spelling from
+// another package (mm.D, mm.E) expands to the func text instead of a
+// name that is meaningless outside the defining directory.
+func finalizeDirAliases(dir, clause string, info pkgInfo) {
+	if aliases, ok := pkgAliasesByDir[dir]; ok {
+		for name, text := range aliases {
+			nt := resolveDirText(text, aliases, info.definedTo)
+			if nt == text {
+				continue
+			}
+			aliases[name] = nt
+			if clause != "" {
+				qualifiedAliases[clause+"."+name] = nt
+			}
+		}
+	}
+}
+
+// resolveDirText follows alias and defined-type hops within one
+// directory's registries to a fixpoint, yielding the final underlying
+// type text of the named entry.
+func resolveDirText(text string, aliases map[string]string, definedTo map[string]string) string {
+	for i := 0; i < 8; i++ {
+		prev := text
+		if a, ok := aliases[text]; ok {
+			text = a
+			continue
+		}
+		if n, ok := definedTo[text]; ok {
+			text = n
+			continue
+		}
+		if text == prev {
+			break
+		}
+	}
+	return text
 }
 
 func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
@@ -319,6 +372,17 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 					// name so receivers and instances resolve to the
 					// base struct.
 					info.definedTo[ts.Name.Name] = id.Name
+					// Cross-package spellings (mm.b) must expand the
+					// chain too; the per-directory fixpoint resolves
+					// the first hop (and any alias hop) to the final
+					// type text once the whole directory is parsed.
+					if pkgDir != "" {
+						if pkgAliasesByDir[pkgDir] == nil {
+							pkgAliasesByDir[pkgDir] = map[string]string{}
+						}
+						pkgAliasesByDir[pkgDir][ts.Name.Name] = id.Name
+					}
+					qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = id.Name
 				} else {
 					// A defined type over a qualified or complex
 					// underlying (type x mm.A, type x []*os.File,
@@ -326,6 +390,13 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 					// type text so type arguments, receivers, and
 					// instances resolve through it.
 					info.definedTo[ts.Name.Name] = exprText(ts.Type)
+					if pkgDir != "" {
+						if pkgAliasesByDir[pkgDir] == nil {
+							pkgAliasesByDir[pkgDir] = map[string]string{}
+						}
+						pkgAliasesByDir[pkgDir][ts.Name.Name] = exprText(ts.Type)
+					}
+					qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = exprText(ts.Type)
 				}
 				continue
 			}
@@ -740,7 +811,13 @@ func callResults(e ast.Expr, st *taints, info pkgInfo) []string {
 			if mres, ok3 := genericMethodResults(f, st, info); ok3 {
 				return mres
 			}
-			if mres, ok3 := methodMeta(structName, f.Sel.Name, info); ok3 {
+			// methodMeta's bool reports body-marked file producers
+			// (retMethods), not whether the method exists: declared
+			// results are authoritative whenever the resolver finds
+			// any, so a mixed method (get() (func() *os.File, error))
+			// keeps its func-file position kind instead of losing
+			// every result to a false ok.
+			if mres, _ := methodMeta(structName, f.Sel.Name, info); len(mres) > 0 {
 				return mres
 			}
 		}
@@ -1305,15 +1382,21 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				}
 			}
 		}
-		if _, _, ok := producerCall(v, st, info, imports); ok {
-			return kindFile
-		}
+		// Declared-result kinds take precedence over the whole-call
+		// producer claim: a func-file result (an interface method
+		// returning func() *os.File) stays invoke-able instead of
+		// being misread as a plain file, while calls whose declared
+		// results hide the file (io.ReadCloser behind a tainted body)
+		// still fall through to producerCall below.
 		if funcF, chanFF, chanF := callResultKinds(v, st, info); funcF {
 			return kindFuncFile
 		} else if chanFF {
 			return kindChanFuncFile
 		} else if chanF {
 			return kindChanFile
+		}
+		if _, _, ok := producerCall(v, st, info, imports); ok {
+			return kindFile
 		}
 		if gcr, okG := genericCallResults(v, st, info); okG {
 			for _, r := range gcr {
@@ -1551,9 +1634,18 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 				return call, []int{0}, true
 			}
 			// hb.fn() where the struct field type is func() *os.File.
-			if ft, okf := info.structs[structName][sel.Sel.Name]; okf {
-				if funcTextFile(resolveTypeText(ft, info)) {
-					return call, []int{0}, true
+			// A declared method is not a field: interface methods are
+			// stored as pseudo-fields with their signature text, and
+			// claiming their func-file results as raw file positions
+			// would taint bindings as plain files, so a later
+			// invocation of the bound func would lose the taint. The
+			// declared-result path (callResults/classify) keeps the
+			// func-file kind for methods.
+			if _, isMethod := info.methods[structName+"."+sel.Sel.Name]; !isMethod {
+				if ft, okf := info.structs[structName][sel.Sel.Name]; okf {
+					if funcTextFile(resolveTypeText(ft, info)) {
+						return call, []int{0}, true
+					}
 				}
 			}
 			// An interface-typed receiver whose declaration (or any
@@ -3040,6 +3132,19 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 	if _, pos, isProducer := producerCall(rhs, st, info, imports); isProducer {
 		for _, p := range pos {
 			if p == index {
+				// A producer claim made for a func-file-shaped
+				// declared result (an interface method, an iface-impl
+				// union) must stay a func-file/chan carrier so the
+				// binding can be invoked and traced; only the raw
+				// *os.File positions are plain files. The declared
+				// position kind, when it resolves, is authoritative.
+				if k := callResultKindAt(rhs, index, st, info); k != kindNone && k != kindFile {
+					applyLHSField(lhs, nil, k, st, info, imports)
+					if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+						applyKind(st, id.Name, k)
+					}
+					return
+				}
 				applyLHSField(lhs, nil, kindFile, st, info, imports)
 				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
 					st.file[id.Name] = true
