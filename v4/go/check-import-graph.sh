@@ -1945,6 +1945,80 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta81.orig" internal/reader/metadata.go
 
+	# --- 82: nested method receiver returning a tainted file ----------------
+	# mhv.inner.mk()() walks a receiver field chain (mholder.inner of
+	# type minner) before selecting the method; the scanner must resolve
+	# the nested instance, not only a plain receiver identifier.
+	cat > internal/reader/gatemut_nestedmethrecv.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type fileFnF func() *os.File
+
+type minner struct{}
+
+var mh minner
+
+type mholder struct{ inner minner }
+
+var mhv mholder
+
+func (m *minner) mk() fileFnF { return func() *os.File { f, _ := os.Open("/dev/null"); return f } }
+MUTEOF
+	add_mut internal/reader/gatemut_nestedmethrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta82.orig"
+	INS='zr = mhv.inner.mk()()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta82.new" && mv "$self_tree/meta82.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mhv.inner.mk()()' internal/reader/metadata.go; then
+		run_mut "nested method receiver returning a tainted file"
+	else
+		echo "self-test ERROR: form 82 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta82.orig" internal/reader/metadata.go
+
+	# --- 83: benign nested method must pass ----------------------------------
+	# Identical shape to form 82 but the method returns a bytes.Reader
+	# wrapper: the gate must stay silent.
+	cat > internal/reader/gatemut_benignnestedmeth.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type inbox2 struct{}
+
+var ib2 inbox2
+
+type iholder struct{ inner inbox2 }
+
+var ihv iholder
+
+func (i *inbox2) named() io.ReadCloser { return &brCloser{bytes.NewReader(nil)} }
+MUTEOF
+	add_mut internal/reader/gatemut_benignnestedmeth.go
+	cp internal/reader/metadata.go "$self_tree/meta83.orig"
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\tzr = ihv.inner.named()"; next } print }' internal/reader/metadata.go > "$self_tree/meta83.new" && mv "$self_tree/meta83.new" internal/reader/metadata.go
+	if grep -Fq 'zr = ihv.inner.named()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign nested method passes the gate"
+		else
+			echo "self-test MISS: benign nested method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 83 insert did not take"
+		mutfail=1
+	fi
+	cleanup_muts
+	cp "$self_tree/meta83.orig" internal/reader/metadata.go
+
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
 	# must not flag the shadow when the field holds no file.
@@ -1997,7 +2071,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 73 mutation forms rejected)"
+	echo "import-graph self-test passed (all 74 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
