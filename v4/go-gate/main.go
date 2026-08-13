@@ -78,7 +78,7 @@ var bannedImports = map[string]bool{
 var bannedSelectors = map[string]bool{
 	"Call": true, "CallSlice": true, "Copy": true, "CopyBuffer": true,
 	"CopyFileRange": true, "CopyN": true, "Decode": true, "Dup": true, "Dup2": true, "Dup3": true,
-	"Encode": true, "Exec": true, "ForkExec": true,
+	"Encode": true, "Exec": true, "FcntlInt": true, "ForkExec": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,

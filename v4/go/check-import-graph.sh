@@ -8230,12 +8230,30 @@ MUTEOF
 	add_mut gatemut_asmfile
 	run_mut "assembly object file"
 
+	# --- 240: fcntl F_DUPFD descriptor duplication ----------------------
+	# F_DUPFD duplicates a descriptor onto a free low fd (stdin reach),
+	# the same capability class as dup; the generic fcntl carrier joins
+	# the banned dup/exec family. FcntlFlock (the mapping owner's lock
+	# path) is a different function and stays allowed.
+	cat > internal/mapping/gatemut_fcntldup_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func gateFcntlDup240(fd uintptr) (int, error) {
+	return unix.FcntlInt(int(fd), unix.F_DUPFD, 0)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_fcntldup_linux.go
+	run_mut "fcntl F_DUPFD descriptor duplication"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 189 mutation forms rejected)"
+	echo "import-graph self-test passed (all 190 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
