@@ -164,7 +164,7 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now one hundred ninety-two
+231); the durable rejection set is now one hundred ninety-four
 mutation forms (round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -172,7 +172,8 @@ x/sys-owner boundary for every package plus assembly-object files, forms
 primitive, form 240; round-39 closed the out-of-tree module-graph
 escape (go.mod replace and go.work can attach code the walk never
 scans; the graph is validated to exactly this module plus x/sys with
-no workspace, forms 241-242). The round-24 gate re-review then found the import-renamed qualified
+no workspace, forms 241-242; round-40 closed the x/sys source
+replacement and hidden dot-directory vectors, forms 243-244). The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -350,7 +351,15 @@ unseen (both vectors exited 0). Fixed by validating the module graph
 itself - go list -m all must be exactly this module plus
 golang.org/x/sys, and no workspace may be active - pinned as self-test
 forms 241-242, raising the set to one hundred ninety-two mutation
-forms. The records
+forms. The round-40 re-review then found the path-only allowlist gap:
+replace golang.org/x/sys => <evil dir> keeps the allowed path in the
+graph while loading attacker-controlled code the walk never scans
+(proven live with unix.Pread2 reading the database), and the walk
+skipped every hidden dot-directory, hiding in-tree replacements. Fixed
+by banning all replace/exclude directives, verifying the resolved
+x/sys source is the module-cache checkout, and scanning hidden
+directories (only .git is skipped), pinned as self-test forms 243-244,
+raising the set to one hundred ninety-four mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,780 raw lines / tests 4,863 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -673,7 +682,15 @@ sidecars, live coordination, and publication remain Milestone 4.
   (reproduced with a wrapper calling unix.Pread, gate exit 0 on both
   vectors); the graph is now validated to exactly this module plus
   golang.org/x/sys with no workspace active, pinned as forms 241-242,
-  raising the set to one hundred ninety-two mutation forms. The
+  raising the set to one hundred ninety-two mutation forms. The round-40
+  re-review then closed the x/sys source-replacement gap: a replace of
+  golang.org/x/sys to an evil dir keeps the allowed path in the graph
+  while loading code the walk never scans (live pread2 reproducer), and
+  hidden dot-directories were skipped by the walk; replace/exclude
+  directives are now banned, the resolved x/sys source is verified to be
+  the module-cache checkout, and the walk skips only .git, pinned as
+  forms 243-244, raising the set to one hundred ninety-four mutation
+  forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1798,7 +1815,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 192-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 194-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2609,6 +2626,6 @@ execution record; the closing result is appended there when it completes.
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 192-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, and round-39 rejects 241-242 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, and out-of-tree module-graph attach via replace/go.work), ten cross-compiles,
+  import graph with the 194-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, and round-39/40 rejects 241-244 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, and hidden dot-directories), ten cross-compiles,
   SOW audit - all green. Counts: production 4,780 raw lines / tests
   4,863 raw lines (gate scanner lives outside the module).

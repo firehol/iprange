@@ -1,7 +1,9 @@
 // Command gatescan enforces the v4 Go mmap-only content-transfer ban over
 // production sources (the AST half of v4/go/check-import-graph.sh).
 //
-// It parses every non-test .go file under the walk root — build tags,
+// It parses every non-test .go file under the walk root (only .git is
+// skipped; hidden directories are scanned like any other), and rejects
+// any .s/.syso object — build tags,
 // line wrapping, comments, aliases, and file names are irrelevant to the
 // token stream — and reports:
 //
@@ -189,7 +191,7 @@ func main() {
 			return nil
 		}
 		if d.IsDir() {
-			if path != root && strings.HasPrefix(d.Name(), ".") {
+			if path != root && d.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil

@@ -172,6 +172,30 @@ for m in $mods; do
 		;;
 	esac
 done
+# A replace (or exclude) directive can redirect any module - including
+# golang.org/x/sys itself - to a directory the scan never walks while the
+# allowed path stays in the graph; no source redirection is permitted.
+if grep -Eq '^(replace|exclude) ' go.mod; then
+	echo "boundary violation: go.mod contains a replace or exclude directive (module source redirection)"
+	fail=1
+fi
+# Defense in depth: the resolved x/sys source must be the module-cache
+# checkout, not a replacement or a proxy-served imposter.
+if [ "$fail" -eq 0 ]; then
+	xsys_dir=$(go list -m -f '{{.Dir}}' golang.org/x/sys 2>/dev/null)
+	case "$xsys_dir" in
+	"$(go env GOMODCACHE)"/golang.org/x/sys@*)
+		;;
+	"")
+		echo "boundary violation: golang.org/x/sys cannot be resolved (go list -m failed)"
+		fail=1
+		;;
+	*)
+		echo "boundary violation: golang.org/x/sys resolves to $xsys_dir (expected the module-cache checkout)"
+		fail=1
+		;;
+	esac
+fi
 
 # Only the reader may hold the mapping, and only the reader core may be
 # consumed by the facade. The check runs under every supported target so a
@@ -8307,12 +8331,60 @@ MUTEOF
 	add_mut go.work
 	run_mut "go.work workspace"
 
+	# --- 243: replace of golang.org/x/sys to an evil source --------------
+	# The allowed path survives in the module graph; the replace itself
+	# must fail closed because the replaced source is never walked.
+	mkdir -p gatemut_xsys/unix
+	cat > gatemut_xsys/go.mod <<'MUTEOF'
+module golang.org/x/sys
+
+go 1.23.0
+MUTEOF
+	cat > gatemut_xsys/unix/smuggle.go <<'MUTEOF'
+package unix
+
+func Smuggle(fd int, p []byte) (int, error) { return 0, nil }
+MUTEOF
+	cat > internal/mapping/gatemut_xsread_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func gateXsysRead243(fd uintptr, b []byte) (int, error) {
+	return unix.Smuggle(int(fd), b)
+}
+MUTEOF
+	add_mut gatemut_xsys
+	cp go.mod "$self_tree/gomod.sav"
+	printf '\nreplace golang.org/x/sys => ./gatemut_xsys\n' >> go.mod
+	run_mut "replace of golang.org/x/sys to an evil source"
+	cp "$self_tree/gomod.sav" go.mod
+	rm "$self_tree/gomod.sav"
+
+	# --- 244: hidden dot-directory is scanned like any other -------------
+	# A dot-directory is invisible to the Go tooling and, before the
+	# walk fix, to the scanner; hidden smuggled code must fail closed.
+	mkdir -p .smuggle
+	cat > .smuggle/.smuggle.go <<'MUTEOF'
+package smuggle
+
+import (
+	"io"
+	"os"
+)
+
+func ReadAll(f *os.File) ([]byte, error) { return io.ReadAll(f) }
+MUTEOF
+	add_mut .smuggle
+	run_mut "hidden dot-directory content"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 192 mutation forms rejected)"
+	echo "import-graph self-test passed (all 194 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
