@@ -180,21 +180,52 @@ if grep -Eq '^(replace|exclude) ' go.mod; then
 	fail=1
 fi
 # Defense in depth: the resolved x/sys source must be the module-cache
-# checkout, not a replacement or a proxy-served imposter.
+# checkout of the exact official version with the official content. The
+# path alone is not enough: GOMODCACHE and GOPROXY are environment
+# inputs, so a poisoned module cache or a proxy-served imposter keeps the
+# allowed path and version while loading code this scan never walks (the
+# ban list cannot know a function the genuine module does not have). The
+# extracted-tree hash and the module zip/go.mod sums are pinned to the
+# official values; any deviation fails closed.
+x_sys_version=v0.35.0
+x_sys_zip_sum=h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
+x_sys_mod_sum=h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
 if [ "$fail" -eq 0 ]; then
+	modroot=$(go env GOMODCACHE)
 	xsys_dir=$(go list -m -f '{{.Dir}}' golang.org/x/sys 2>/dev/null)
+	xsys_ver=$(go list -m -f '{{.Version}}' golang.org/x/sys 2>/dev/null)
+	if [ "$xsys_ver" != "$x_sys_version" ]; then
+		echo "boundary violation: golang.org/x/sys version is ${xsys_ver:-unresolved}, want $x_sys_version"
+		fail=1
+	fi
 	case "$xsys_dir" in
-	"$(go env GOMODCACHE)"/golang.org/x/sys@*)
+	"$modroot"/golang.org/x/sys@v0.35.0)
 		;;
 	"")
 		echo "boundary violation: golang.org/x/sys cannot be resolved (go list -m failed)"
 		fail=1
 		;;
 	*)
-		echo "boundary violation: golang.org/x/sys resolves to $xsys_dir (expected the module-cache checkout)"
+		echo "boundary violation: golang.org/x/sys resolves to $xsys_dir (expected the module-cache checkout of v0.35.0)"
 		fail=1
 		;;
 	esac
+	if [ -n "$xsys_dir" ] && [ "$fail" -eq 0 ]; then
+		got_hash=$("$scanner_bin" --dirhash "golang.org/x/sys@v0.35.0" "$xsys_dir" 2>/dev/null)
+		if [ "$got_hash" != "$x_sys_zip_sum" ]; then
+			echo "boundary violation: golang.org/x/sys checkout content hash ${got_hash:-unreadable} does not match the official module ($x_sys_zip_sum); the module cache is not the genuine source"
+			fail=1
+		fi
+	fi
+	if [ "$fail" -eq 0 ]; then
+		dl=$(go mod download -json golang.org/x/sys 2>/dev/null || true)
+		dl_sum=$(printf '%s\n' "$dl" | grep -o '"Sum": "[^"]*"' | head -1 | cut -d'"' -f4)
+		dl_modsum=$(printf '%s\n' "$dl" | grep -o '"GoModSum": "[^"]*"' | head -1 | cut -d'"' -f4)
+		if [ "$dl_sum" != "$x_sys_zip_sum" ] || [ "$dl_modsum" != "$x_sys_mod_sum" ]; then
+			echo "boundary violation: golang.org/x/sys module sums (${dl_sum:-unresolved}, ${dl_modsum:-unresolved}) do not match the official module ($x_sys_zip_sum, $x_sys_mod_sum); a proxy or cache is serving an imposter"
+			fail=1
+		fi
+	fi
 fi
 
 # Only the reader may hold the mapping, and only the reader core may be
@@ -260,11 +291,12 @@ if [ "$self_test" -eq 1 ]; then
 	}
 
 	mutfail=0
+	mut_env=""
 
 	run_mut() {
 		name=$1
 		shift
-		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+		if GATE_SCANNER_BIN="$scanner_bin" $mut_env ./check-import-graph.sh >/dev/null 2>&1; then
 			echo "self-test MISS: mutation $name did not fail the gate"
 			mutfail=1
 		fi
@@ -8379,12 +8411,87 @@ MUTEOF
 	add_mut .smuggle
 	run_mut "hidden dot-directory content"
 
+	# The evil x/sys module used by forms 245-246: a fake golang.org/x/sys
+	# whose unix package adds Pread2, a content-transfer function the ban
+	# list cannot know because the genuine module does not have it. Built
+	# once; hashes are computed with the scanner's own Hash1 so the forged
+	# go.sum is self-consistent.
+	mkdir -p gatemut_evil_src/unix
+	cat > gatemut_evil_src/go.mod <<'MUTEOF'
+module golang.org/x/sys
+
+go 1.23.0
+MUTEOF
+	cat > gatemut_evil_src/unix/smuggle.go <<'MUTEOF'
+package unix
+
+func Pread2(fd int, p []byte, offset int64) (int, error) { return 0, nil }
+MUTEOF
+	"$scanner_bin" --makezip golang.org/x/sys@v0.35.0 gatemut_evil_src gatemut_evil.zip
+	evil_sum=$("$scanner_bin" --dirhash golang.org/x/sys@v0.35.0 gatemut_evil_src)
+	mkdir -p gatemut_modhash/golang.org/x/sys@v0.35.0
+	cp gatemut_evil_src/go.mod gatemut_modhash/golang.org/x/sys@v0.35.0/go.mod
+	evil_modsum=$("$scanner_bin" --dirhash golang.org/x/sys@v0.35.0 gatemut_modhash)
+	# The evil materials are shared by forms 245-246 and must survive each
+	# form's cleanup_muts; only the form-specific cache/proxy dirs are
+	# registered for removal.
+
+	# --- 245: poisoned module cache serving an evil x/sys checkout -------
+	# GOMODCACHE is an environment input. An evil extraction plus download
+	# cache at the allowed path resolves normally while smuggling a
+	# function the ban list has never heard of; the pinned content hash
+	# must fail closed.
+	mkdir -p gatemut_cache/cache/download/golang.org/x/sys/@v
+	cp gatemut_evil.zip gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.zip
+	cp gatemut_evil_src/go.mod gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.mod
+	printf '{"Version":"v0.35.0","Time":"2026-01-01T00:00:00Z"}\n' > gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.info
+	mkdir -p gatemut_cache/golang.org/x/sys@v0.35.0/unix
+	cp gatemut_evil_src/go.mod gatemut_cache/golang.org/x/sys@v0.35.0/go.mod
+	cp gatemut_evil_src/unix/smuggle.go gatemut_cache/golang.org/x/sys@v0.35.0/unix/smuggle.go
+	add_mut gatemut_cache
+	cp go.sum "$self_tree/gosum.sav"
+	printf 'golang.org/x/sys v0.35.0 h1:%s\ngolang.org/x/sys v0.35.0/go.mod h1:%s\n' "$evil_sum" "$evil_modsum" > go.sum
+	mut_env="GOMODCACHE=$PWD/gatemut_cache GOPROXY=off GOSUMDB=off"
+	run_mut "poisoned module cache with an evil x/sys checkout"
+	mut_env=""
+	cp "$self_tree/gosum.sav" go.sum
+	rm "$self_tree/gosum.sav"
+
+	# --- 246: file proxy serving an evil x/sys with a forged go.sum ------
+	# GOPROXY is an environment input. A file proxy plus a repo go.sum
+	# rewritten with the evil zip's self-consistent hashes launders the
+	# imposter into a fresh cache; the pinned official sums must fail
+	# closed.
+	mkdir -p gatemut_proxy/golang.org/x/sys/@v
+	cp gatemut_evil.zip gatemut_proxy/golang.org/x/sys/@v/v0.35.0.zip
+	cp gatemut_evil_src/go.mod gatemut_proxy/golang.org/x/sys/@v/v0.35.0.mod
+	printf '{"Version":"v0.35.0","Time":"2026-01-01T00:00:00Z"}\n' > gatemut_proxy/golang.org/x/sys/@v/v0.35.0.info
+	mkdir -p gatemut_proxycache
+	add_mut gatemut_proxy; add_mut gatemut_proxycache
+	cp go.sum "$self_tree/gosum.sav"
+	printf 'golang.org/x/sys v0.35.0 h1:%s\ngolang.org/x/sys v0.35.0/go.mod h1:%s\n' "$evil_sum" "$evil_modsum" > go.sum
+	mut_env="GOMODCACHE=$PWD/gatemut_proxycache GOPROXY=file://$PWD/gatemut_proxy GOSUMDB=off"
+	run_mut "file proxy serving an evil x/sys with a forged go.sum"
+	mut_env=""
+	cp "$self_tree/gosum.sav" go.sum
+	rm "$self_tree/gosum.sav"
+
+	# --- 247: uppercase assembly-object suffix ---------------------------
+	# The toolchain accepts .S/.SYSO objects; the walk must reject them
+	# case-insensitively, not only lowercase .s/.syso.
+	cat > internal/mapping/gatemut_evil.S <<'MUTEOF'
+TEXT ·GateMut247(SB),0,$0-0
+	RET
+MUTEOF
+	add_mut internal/mapping/gatemut_evil.S
+	run_mut "uppercase .S assembly object"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 194 mutation forms rejected)"
+	echo "import-graph self-test passed (all 197 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

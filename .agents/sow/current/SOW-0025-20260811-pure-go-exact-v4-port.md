@@ -173,7 +173,7 @@ primitive, form 240; round-39 closed the out-of-tree module-graph
 escape (go.mod replace and go.work can attach code the walk never
 scans; the graph is validated to exactly this module plus x/sys with
 no workspace, forms 241-242; round-40 closed the x/sys source
-replacement and hidden dot-directory vectors, forms 243-244). The round-24 gate re-review then found the import-renamed qualified
+replacement and hidden dot-directory vectors, forms 243-244; round-42 closed the x/sys source-content gap, forms 245-247). The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -359,7 +359,16 @@ skipped every hidden dot-directory, hiding in-tree replacements. Fixed
 by banning all replace/exclude directives, verifying the resolved
 x/sys source is the module-cache checkout, and scanning hidden
 directories (only .git is skipped), pinned as self-test forms 243-244,
-raising the set to one hundred ninety-four mutation forms. The records
+raising the set to one hundred ninety-four mutation forms. The round-42
+gate re-review then closed the x/sys source-content gap: the path-only
+allowlist accepted a poisoned GOMODCACHE checkout or a file proxy
+serving an evil x/sys with a self-consistent forged go.sum (both proven
+live with a smuggled unix.Pread2 the ban list cannot know, because
+nothing pinned the module content); the gate now pins the exact version,
+the module-cache path, the extracted-tree content hash, and the module
+zip/go.mod sums to the official v0.35.0 values, and the assembly-object
+rejection is case-insensitive, pinned as self-test forms 245-247,
+raising the set to one hundred ninety-seven mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -690,7 +699,15 @@ sidecars, live coordination, and publication remain Milestone 4.
   directives are now banned, the resolved x/sys source is verified to be
   the module-cache checkout, and the walk skips only .git, pinned as
   forms 243-244, raising the set to one hundred ninety-four mutation
-  forms. The
+  forms. The round-42
+  re-review then closed the x/sys source-content gap: a poisoned module
+  cache or a file proxy with a forged go.sum keeps the allowed path and
+  version while loading an evil x/sys (live Pread2 reproducers on both
+  vectors); replace/exclude were already banned, so the gate now pins
+  the exact version, the module-cache path, the extracted-tree content
+  hash, and the module zip/go.mod sums to the official v0.35.0 values,
+  and rejects assembly objects case-insensitively, pinned as forms
+  245-247, raising the set to one hundred ninety-seven mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1815,7 +1832,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 194-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 197-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2636,7 +2653,18 @@ execution record; the closing result is appended there when it completes.
   file is touched (the under-lock re-check inside the mapping open
   stays authoritative), pinned by the pre-fix-failing test
   TestSidecarPresence/missing-main-sidecar-present.
+- Round-42 gate re-review found the x/sys source-content gap at HEAD
+  550d107: the path-only allowlist accepted a poisoned GOMODCACHE
+  checkout (evil extracted dir plus download cache at the allowed path)
+  and a file proxy serving an evil x/sys with a self-consistent forged
+  go.sum (both proven live with a smuggled unix.Pread2, gate exit 0 on
+  both vectors), because nothing pinned the module content; the gate now
+  pins the exact version, the module-cache path, the extracted-tree
+  content hash, and the module zip/go.mod sums to the official v0.35.0
+  values, and the assembly-object rejection is case-insensitive, pinned
+  as self-test forms 245-247, raising the set to one hundred
+  ninety-seven mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 194-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, and round-39/40 rejects 241-244 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, and hidden dot-directories), ten cross-compiles,
+  import graph with the 197-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, and round-42 rejects 245-247 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), and case-variant assembly objects), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).

@@ -37,7 +37,10 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -45,6 +48,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -178,8 +182,120 @@ type pkgInfo struct {
 	varTypes       map[string]string   // variable name -> declared type text
 }
 
+// makeZip writes a module-cache zip of dir with every entry named
+// base+"/"+rel (the module zip layout: golang.org/x/sys@v0.35.0/...). The
+// self-test uses it to build the evil module cache and file-proxy
+// fixtures without external tools; the produced zip hashes to the same
+// h1: value as the dir (Hash1 over the same names and contents).
+func makeZip(base, dir, zipPath string) error {
+	out, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(out)
+	prefix := filepath.ToSlash(base)
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		w, err := zw.Create(prefix + "/" + filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
+	})
+	if err == nil {
+		err = zw.Close()
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// dirHash returns the h1: dirhash of dir with every file name prefixed
+// by base (the module-cache name, e.g. golang.org/x/sys@v0.35.0, which
+// the caller derives by trimming the module cache root; it contains
+// slashes and is not a filesystem basename). The result is exactly the
+// official module zip sum from go.sum (the Hash1 scheme of
+// golang.org/x/mod/sumdb/dirhash): one "sha256:<hex>  <name>" line per
+// regular file, sorted by name, hashed as one blob. The module cache
+// checkout of golang.org/x/sys must hash to the pinned official value; a
+// poisoned cache that keeps the allowed path while smuggling files
+// changes this hash.
+func dirHash(base, dir string) (string, error) {
+	type entry struct{ name, rel string }
+	prefix := filepath.ToSlash(base)
+	var entries []entry
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		slashed := filepath.ToSlash(rel)
+		entries = append(entries, entry{name: prefix + "/" + slashed, rel: slashed})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+	h := sha256.New()
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(e.rel)))
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.Sum256(data)
+		fmt.Fprintf(h, "%x  %s\n", sum, e.name)
+	}
+	return "h1:" + base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
+}
+
 func main() {
 	root := "."
+	if len(os.Args) > 1 && os.Args[1] == "--makezip" {
+		if len(os.Args) != 5 {
+			fmt.Fprintln(os.Stderr, "gatescan: --makezip requires a base name, a source directory, and a zip output path")
+			os.Exit(2)
+		}
+		if err := makeZip(os.Args[2], os.Args[3], os.Args[4]); err != nil {
+			fmt.Fprintf(os.Stderr, "gatescan: --makezip: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--dirhash" {
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "gatescan: --dirhash requires a module-cache base name and one directory argument")
+			os.Exit(2)
+		}
+		hash, err := dirHash(os.Args[2], os.Args[3])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gatescan: --dirhash %s: %v\n", os.Args[3], err)
+			os.Exit(1)
+		}
+		fmt.Println(hash)
+		return
+	}
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
@@ -199,7 +315,8 @@ func main() {
 		if strings.HasSuffix(d.Name(), ".go") && !strings.HasSuffix(d.Name(), "_test.go") {
 			files = append(files, path)
 		}
-		if strings.HasSuffix(d.Name(), ".s") || strings.HasSuffix(d.Name(), ".syso") {
+		switch lower := strings.ToLower(d.Name()); {
+		case strings.HasSuffix(lower, ".s"), strings.HasSuffix(lower, ".syso"):
 			asmFiles = append(asmFiles, path)
 		}
 		return nil
