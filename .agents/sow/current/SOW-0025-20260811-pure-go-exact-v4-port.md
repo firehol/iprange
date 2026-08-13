@@ -145,9 +145,10 @@ method class (forms 108-111), the alias-receiver method
 class (forms 113-114), the receiver-resolution
 class (forms 116-119), the pointer-defined-type
 class (forms 121), the indexed-receiver
-class (forms 123-125), and the element-receiver
-class (forms 127-132); the durable rejection set is
-now one hundred eleven mutation forms. The records
+class (forms 123-125), the element-receiver
+class (forms 127-132), and the range-literal-receiver
+class (forms 134-135); the durable rejection set is
+now one hundred thirteen mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -438,9 +439,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   method class (forms 113-114), the receiver-resolution
   class (forms 116-119), the pointer-defined-type
   class (forms 121), the indexed-receiver
-  class (forms 123-125), and the element-receiver
-  class (forms 127-132);
-  the self-test now durably rejects one hundred eleven mutation forms. The
+  class (forms 123-125), the element-receiver
+  class (forms 127-132), and the range-literal-receiver
+  class (forms 134-135);
+  the self-test now durably rejects one hundred thirteen mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1565,7 +1567,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 111-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 113-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2113,7 +2115,15 @@ execution record; the closing result is appended there when it completes.
   short-declared containers, and ARROW receive resolution in
   resolveStruct/classifyStruct. Forms 127-132 pin the six escapes;
   form 133 pins the benign make() map receiver control.
+- Ampere round 17 found the range-literal-receiver class (HEAD
+  255f34c): range variables never recorded their element type in
+  varTypes, so container/chan-typed bindings were blind as indexed or
+  receive bases, and composite-literal index bases (map[string]*gs{...}
+  ["a"]) had no typeOfBase case. Fixed by recording one wrapper-stripped
+  element type for range bindings and adding the CompositeLit case to
+  typeOfBase. Forms 134-135 pin the two escapes; form 136 pins the
+  benign composite-literal indexed receiver control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 111-form self-test, nine cross-compiles,
+  import graph with the 113-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
