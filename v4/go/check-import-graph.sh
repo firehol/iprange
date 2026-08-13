@@ -3413,6 +3413,153 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta122.orig" internal/reader/metadata.go
 
+	# --- 123: new() of a defined type as the receiver ---------------------
+	# new(d) with type d gs (defined type): the argument must resolve
+	# through the defined-type chain to the base struct.
+	cat > internal/reader/gatemut_newdef.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsM123 struct{}
+
+type dM123 gsM123
+
+func (dM123) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+MUTEOF
+	add_mut internal/reader/gatemut_newdef.go
+	cp internal/reader/metadata.go "$self_tree/meta123.orig"
+	INS='zr = new(dM123).get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta123.new" && mv "$self_tree/meta123.new" internal/reader/metadata.go
+	if grep -Fq 'zr = new(dM123).get()' internal/reader/metadata.go; then
+		run_mut "new() of a defined type as the receiver"
+	else
+		echo "self-test ERROR: form 123 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta123.orig" internal/reader/metadata.go
+
+	# --- 124: array-index receiver ----------------------------------------
+	# arr[1].get() where var arr [3]*gsH: the element type of the
+	# declared variable must resolve to the struct for the method call.
+	cat > internal/reader/gatemut_arrrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsH124 struct{}
+
+func (gsH124) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var arr124 [3]*gsH124
+MUTEOF
+	add_mut internal/reader/gatemut_arrrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta124.orig"
+	INS='zr = arr124[1].get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta124.new" && mv "$self_tree/meta124.new" internal/reader/metadata.go
+	if grep -Fq 'zr = arr124[1].get()' internal/reader/metadata.go; then
+		run_mut "array-index receiver with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 124 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta124.orig" internal/reader/metadata.go
+
+	# --- 125: map-index receiver ------------------------------------------
+	# mm["k"].get() where var mm map[string]*gsH: the element type must
+	# resolve through the map wrapper.
+	cat > internal/reader/gatemut_maprecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsH125 struct{}
+
+func (gsH125) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var mm125 map[string]*gsH125
+MUTEOF
+	add_mut internal/reader/gatemut_maprecv.go
+	cp internal/reader/metadata.go "$self_tree/meta125.orig"
+	INS='zr = mm125["k"].get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta125.new" && mv "$self_tree/meta125.new" internal/reader/metadata.go
+	if grep -Fq 'zr = mm125["k"].get()' internal/reader/metadata.go; then
+		run_mut "map-index receiver with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 125 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta125.orig" internal/reader/metadata.go
+
+	# --- 126: benign array-index receiver must pass -----------------------
+	# Same indexed-receiver shape as forms 124-125 but the payload never
+	# touches the filesystem: the scanner must not flag it.
+	cat > internal/reader/gatemut_benarrrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcbH126 struct{ *bytes.Reader }
+
+func (w *rcbH126) Close() error { return nil }
+
+type gsHB126 struct{}
+
+func (gsHB126) get() io.ReadCloser { return &rcbH126{bytes.NewReader(nil)} }
+
+var arrB126 [3]*gsHB126
+MUTEOF
+	add_mut internal/reader/gatemut_benarrrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta126.orig"
+	INS='zr = arrB126[1].get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta126.new" && mv "$self_tree/meta126.new" internal/reader/metadata.go
+	if grep -Fq 'zr = arrB126[1].get()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign array-index receiver passes the gate"
+		else
+			echo "self-test MISS: benign array-index receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 126 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta126.orig" internal/reader/metadata.go
+
+
 
 
 
@@ -3469,7 +3616,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 102 mutation forms rejected)"
+	echo "import-graph self-test passed (all 105 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
