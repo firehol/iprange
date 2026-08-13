@@ -2343,8 +2343,26 @@ Use these sections in this order:
 - Gates at this commit: go test ./... incl -race, go vet, gofmt,
   import graph (self-test, all 240 forms rejected), the real tree gate,
   CGO_ENABLED=0 build and test, ten cross-compiles, SOW audit - all
-  green. Counts unchanged: production 4,792 raw lines / tests 4,877
-  raw lines (gate scanner lives outside the module).
+### 2026-08-13 - round-54 cosmetic alignment: dead word-read state removed, zero Pin reports WrongState, inflater wording aligned (HEAD 72e4d89d75fb)
+
+- Removed dead state in internal/reader/membership.go readWordsInner
+  (var data []byte, var err error, and the never-true error check after
+  the storage switch); behavior identical.
+- The zero-value Pin now reports WrongState on Close and checkOpen,
+  matching the inert zero-view contract instead of panicking; pinned by
+  TestPinZeroValueClose.
+- Wording: "the three in-memory inflater nodes" became "the in-memory
+  inflater call sites" (check-import-graph.sh header, v4/go-gate/main.go
+  findExemptions comment, Validation section).
+- Blank-import decision recorded: blank imports of banned packages remain
+  intentionally uncaught by the import ban - blank imports expose no
+  names and cannot transfer bytes, and the only blank-import-sensitive
+  mechanism, //go:embed, is separately rejected as a directive.
+- Gates at this commit: go test ./... incl -race, go vet, gofmt,
+  import graph (self-test, all 240 forms rejected), the real tree gate,
+  ten cross-compiles, SOW audit - all green. Counts unchanged:
+  production 4,792 raw lines / tests 4,877 raw lines (gate scanner
+  lives outside the module).
 
 ## Validation
 
@@ -2364,7 +2382,7 @@ Tests or equivalent validation:
 - `go vet ./...` — clean; `gofmt -l .` — empty.
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
-  `*os.File` capability surface, with the three in-memory inflater nodes
+  `*os.File` capability surface, with the in-memory inflater call sites
   exempted as exact, file-taint-verified shapes; the 240-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
