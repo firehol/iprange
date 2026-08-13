@@ -123,6 +123,7 @@ type pkgInfo struct {
 	pkgVars        map[string]bool     // package-level variable names
 	definedTo      map[string]string   // defined type (type a b) -> underlying type name
 	embedded       map[string][]string // struct name -> embedded (promoted) type names
+	varTypes       map[string]string   // variable name -> declared type text
 }
 
 func main() {
@@ -201,7 +202,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, varTypes: map[string]string{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -315,6 +316,9 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 				for _, n := range vs.Names {
 					if n.Name != "_" {
 						info.pkgVars[n.Name] = true
+						if vs.Type != nil {
+							info.varTypes[n.Name] = exprText(vs.Type)
+						}
 					}
 				}
 			}
@@ -1594,8 +1598,9 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		if id, ok := v.Fun.(*ast.Ident); ok {
 			if id.Name == "new" && len(v.Args) == 1 {
 				if aid, ok := v.Args[0].(*ast.Ident); ok {
-					if _, isStruct := info.structs[aid.Name]; isStruct {
-						return aid.Name, true
+					base := resolveStructName(aid.Name, info)
+					if _, isStruct := info.structs[base]; isStruct {
+						return base, true
 					}
 				}
 			}
@@ -1614,6 +1619,8 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		if _, isStruct := info.structs[base]; isStruct {
 			return base, true
 		}
+	case *ast.IndexExpr:
+		return containerElementStruct(v, info)
 	case *ast.SelectorExpr:
 		// h.inner.fn: resolve the root instance, then walk the field
 		// chain until the final field's type is a struct.
@@ -1636,6 +1643,42 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		return resolveStruct(v.X, st, info)
 	case *ast.UnaryExpr:
 		return resolveStruct(v.X, st, info)
+	}
+	return "", false
+}
+
+// containerElementStruct resolves the struct name behind a container
+// variable's element access (arr[1], mm["k"]): the variable's declared
+// type is stripped of every container wrapper, then the element type is
+// resolved to the base struct name.
+func containerElementStruct(v *ast.IndexExpr, info pkgInfo) (string, bool) {
+	base := v.X
+	for {
+		ix, ok := base.(*ast.IndexExpr)
+		if !ok {
+			break
+		}
+		base = ix.X
+	}
+	id, ok := base.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	tt, ok := info.varTypes[id.Name]
+	if !ok || tt == "" {
+		return "", false
+	}
+	elem := tt
+	for {
+		nxt := elementTypeText(elem)
+		if nxt == "" {
+			break
+		}
+		elem = nxt
+	}
+	baseName := resolveStructName(elem, info)
+	if _, isStruct := info.structs[baseName]; isStruct {
+		return baseName, true
 	}
 	return "", false
 }
@@ -1716,6 +1759,13 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 					break
 				}
 				applyLHS(lhs, v.Rhs[i], st, info, imports)
+				if v.Tok == token.DEFINE && len(v.Lhs) == 1 {
+					if id, ok := lhs.(*ast.Ident); ok {
+						if cl, ok := v.Rhs[i].(*ast.CompositeLit); ok {
+							info.varTypes[id.Name] = exprText(cl.Type)
+						}
+					}
+				}
 			}
 		case *ast.DeclStmt:
 			if gd, ok := v.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR {
@@ -1724,6 +1774,11 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 						var cls kind
 						if vs.Type != nil {
 							cls = classifyType(vs.Type, info)
+							for _, n := range vs.Names {
+								if n.Name != "_" {
+									info.varTypes[n.Name] = exprText(vs.Type)
+								}
+							}
 						}
 						for i, name := range vs.Names {
 							if len(vs.Values) > i {
@@ -1878,8 +1933,9 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 		if id, ok := v.Fun.(*ast.Ident); ok {
 			if id.Name == "new" && len(v.Args) == 1 {
 				if aid, ok := v.Args[0].(*ast.Ident); ok {
-					if _, isStruct := info.structs[aid.Name]; isStruct {
-						return aid.Name, true
+					base := resolveStructName(aid.Name, info)
+					if _, isStruct := info.structs[base]; isStruct {
+						return base, true
 					}
 				}
 			}
@@ -1890,6 +1946,8 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 				}
 			}
 		}
+	case *ast.IndexExpr:
+		return containerElementStruct(v, info)
 	}
 	return "", false
 }
