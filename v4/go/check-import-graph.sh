@@ -322,7 +322,7 @@ if [ "$self_test" -eq 1 ]; then
 	run_mut() {
 		name=$1
 		shift
-		if GATE_SCANNER_BIN="$scanner_bin" $mut_env ./check-import-graph.sh >/dev/null 2>&1; then
+		if env GATE_SCANNER_BIN="$scanner_bin" $mut_env ./check-import-graph.sh >/dev/null 2>&1; then
 			echo "self-test MISS: mutation $name did not fail the gate"
 			mutfail=1
 		fi
@@ -8479,9 +8479,6 @@ func Pread2(fd int, p []byte, offset int64) (int, error) { return 0, nil }
 MUTEOF
 	"$scanner_bin" --makezip golang.org/x/sys@v0.35.0 gatemut_evil_src gatemut_evil.zip
 	evil_sum=$("$scanner_bin" --dirhash golang.org/x/sys@v0.35.0 gatemut_evil_src)
-	mkdir -p gatemut_modhash/golang.org/x/sys@v0.35.0
-	cp gatemut_evil_src/go.mod gatemut_modhash/golang.org/x/sys@v0.35.0/go.mod
-	evil_modsum=$("$scanner_bin" --dirhash golang.org/x/sys@v0.35.0 gatemut_modhash)
 	# The evil materials are shared by forms 245-246 and must survive each
 	# form's cleanup_muts; only the form-specific cache/proxy dirs are
 	# registered for removal.
@@ -8500,7 +8497,7 @@ MUTEOF
 	cp gatemut_evil_src/unix/smuggle.go gatemut_cache/golang.org/x/sys@v0.35.0/unix/smuggle.go
 	add_mut gatemut_cache
 	cp go.sum "$self_tree/gosum.sav"
-	printf 'golang.org/x/sys v0.35.0 h1:%s\ngolang.org/x/sys v0.35.0/go.mod h1:%s\n' "$evil_sum" "$evil_modsum" > go.sum
+	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
 	mut_env="GOMODCACHE=$PWD/gatemut_cache GOPROXY=off GOSUMDB=off"
 	run_mut "poisoned module cache with an evil x/sys checkout"
 	mut_env=""
@@ -8519,7 +8516,7 @@ MUTEOF
 	mkdir -p gatemut_proxycache
 	add_mut gatemut_proxy; add_mut gatemut_proxycache
 	cp go.sum "$self_tree/gosum.sav"
-	printf 'golang.org/x/sys v0.35.0 h1:%s\ngolang.org/x/sys v0.35.0/go.mod h1:%s\n' "$evil_sum" "$evil_modsum" > go.sum
+	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
 	mut_env="GOMODCACHE=$PWD/gatemut_proxycache GOPROXY=file://$PWD/gatemut_proxy GOSUMDB=off"
 	run_mut "file proxy serving an evil x/sys with a forged go.sum"
 	mut_env=""
@@ -9376,12 +9373,358 @@ func gateHuntG(dir, name string, n int) ([]byte, error) {
 MUTEOF
 	run_mut "positional literal hiding an os.Root opener"
 
+	# --- 278: embedded file-handle literal launder ----------------------
+	# type gateEmbR struct{ *os.Root } promoted the handle's Open method;
+	# s := gateEmbR{root} (positional) and s := gateEmbR{Root: root} (keyed)
+	# left the binding container-tainted, so s.Open(name) flowed an
+	# untainted *os.File into the exempted inflater (live, gate exit 0,
+	# round-52). Embedded fields are named by type NAME (Root), not by
+	# qualifier spelling, and a container binding whose struct embeds a
+	# file handle escalates to file-bearing (kindFile), so every promoted
+	# method outside the approved surface fails closed.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateEmbR struct {
+	*os.Root
+}
+
+func gateEmbeddedR278(dir, name string, n int) ([]byte, error) {
+	root, _ := os.OpenRoot(dir)
+	s := gateEmbR{root}
+	f, _ := s.Open(name)
+	zr := f
+	meta := struct{ MetadataUncompressed int }{n}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, err
+	}
+	return out[:int(meta.MetadataUncompressed)], nil
+}
+MUTEOF
+	run_mut "embedded file-handle literal launder"
+
+	# --- 279: var-bound generic instantiation erasing container taint ---
+	# var gateHuntAliasXP = gateHuntWrapXP[*os.File] fixes the type
+	# arguments at the binding; calling gateHuntAliasXP(f) then read a
+	# clean []*os.File result, and files[0] fed the exempted inflater
+	# (live, gate exit 0, round-52). A variable holding an explicit
+	# generic instantiation resolves through the base generic's results
+	# substituted with the fixed arguments.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapXP[T any](v T) []T { return []T{v} }
+
+var gateHuntAliasXP = gateHuntWrapXP[*os.File]
+
+func gateVarInst279(name string) ([]byte, bool, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, false, err
+	}
+	files := gateHuntAliasXP(f)
+	zr := files[0]
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "var-bound generic instantiation erasing container taint"
+
+	# --- 280: positional element of an anonymous struct literal ----------
+	# x := struct{ r io.Reader }{f} has no declared struct name, so the
+	# field-order registry had no entry and the positional element was
+	# skipped; x.r stayed clean and fed the exempted inflater (live,
+	# gate exit 0, round-52). Anonymous struct literals resolve their
+	# positional order from the literal's own fields.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateAnonStruct280(name string, f *os.File) ([]byte, bool, error) {
+	x := struct{ r io.Reader }{f}
+	zr := x.r
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "positional element of an anonymous struct literal"
+
+	# --- 281: anonymous struct embedding a file handle -------------------
+	# s := struct{ *os.Root }{root} combines both anonymous-literal gaps:
+	# the positional handle element was never registered and the binding
+	# stayed a container, so the promoted s.Open(name) flowed an
+	# untainted *os.File into the exempted inflater (live, gate exit 0,
+	# round-52). Anonymous struct types that embed a file-bearing handle
+	# escalate like named wrappers.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateAnonRoot281(dir, name string) ([]byte, bool, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	s := struct{ *os.Root }{root}
+	f, _ := s.Open(name)
+	zr := f
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "anonymous struct embedding a file handle"
+
+	# --- 282: var-bound generic instantiation erased to an interface -----
+	# var gateHuntAliasXR = gateHuntWrapXR[io.Reader] fixes the type
+	# argument to an interface; calling gateHuntAliasXR(f) accepted the
+	# file at the erased parameter and returned it through the opaque
+	# generic body as a clean io.Reader that fed the exempted inflater
+	# (live, gate exit 0, round-52). The declared parameter binds the
+	# type parameter, so the opaque-body umbrella applies to the fixed
+	# argument just as it does to inference.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateHuntWrapXR[T io.Reader](v T) T { return v }
+
+var gateHuntAliasXR = gateHuntWrapXR[io.Reader]
+
+func gateVarR282(name string, f *os.File) ([]byte, bool, error) {
+	zr := gateHuntAliasXR(f)
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "var-bound generic instantiation erased to an interface"
+
+	# --- 283: explicit single instantiation with a func-file arg ---------
+	# zr, err := gateH2E7[io.Reader](name, func(n string) (io.Reader, error)
+	# { return os.Open(n) }) fixed the type argument but the func-file
+	# closure flowed through the erased generic body and returned as a
+	# clean io.Reader that fed the exempted inflater (live, gate exit 0,
+	# round-52). An explicit instantiation used as a callee applies the
+	# same type-parameter result mapping as an Ident callee.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateForm283[T any](name string, mk func(string) (T, error)) (T, error) {
+	return mk(name)
+}
+
+func gateForm283main(name string) ([]byte, bool, error) {
+	zr, err := gateForm283[io.Reader](name, func(n string) (io.Reader, error) { return os.Open(n) })
+	if err != nil {
+		return nil, false, err
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "explicit single instantiation with a func-file arg"
+
+	# --- 284: variadic explicit instantiation ----------------------------
+	# gateH2E31[io.Reader](name, closure) is the variadic twin: the
+	# func-file argument lands in a ...T parameter and the erased body
+	# returns it as a clean io.Reader (live, gate exit 0, round-52).
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+func gateForm284[T any](name string, mks ...func(string) (T, error)) (T, error) {
+	return mks[0](name)
+}
+
+func gateForm284main(name string) ([]byte, bool, error) {
+	zr, err := gateForm284[io.Reader](name, func(n string) (io.Reader, error) { return os.Open(n) })
+	if err != nil {
+		return nil, false, err
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "variadic explicit instantiation"
+
+	# --- 285: elided slice element positional ----------------------------
+	# s := []gateH2S1{{fn}} omits the element type name inside the
+	# container literal, so the inner composite literal was never
+	# registered and s[0].fn(name) returned a clean io.Reader (live,
+	# gate exit 0, round-52). Elided container elements register their
+	# fields by position from the element struct's declaration.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateForm285S struct {
+	fn func(string) (io.Reader, error)
+}
+
+func gateForm285main(name string) ([]byte, bool, error) {
+	fn := func(name string) (io.Reader, error) { return os.Open(name) }
+	s := []gateForm285S{{fn}}
+	zr, err := s[0].fn(name)
+	if err != nil {
+		return nil, false, err
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "elided slice element positional"
+
+	# --- 286: map elided element with a keyed literal ---------------------
+	# m := map[string]gateH2S1{"a": {fn}} elides the element type name
+	# under a string key; m["a"].fn(name) kept the taint invisible
+	# (live, gate exit 0, round-52). Map elements register their fields
+	# by the element struct's declaration, not the key type.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateForm286S struct {
+	fn func(string) (io.Reader, error)
+}
+
+func gateForm286main(name string) ([]byte, bool, error) {
+	fn := func(name string) (io.Reader, error) { return os.Open(name) }
+	m := map[string]gateForm286S{"a": {fn}}
+	zr, err := m["a"].fn(name)
+	if err != nil {
+		return nil, false, err
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "map elided element with a keyed literal"
+
+	# --- 287: pointer composite literal -----------------------------------
+	# s := &gateH2S1{fn} and s := &gateH2S2{r: f} address the struct
+	# before use; the unary & was never unwrapped, so both the
+	# positional func-file and the keyed any-field binding stayed clean
+	# (live, gate exit 0, round-52). Address-of literals unwrap before
+	# field registration and taint application.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateForm287A struct {
+	fn func(string) (io.Reader, error)
+}
+
+type gateForm287B struct {
+	r any
+}
+
+func gateForm287main(name string) ([]byte, bool, error) {
+	fn := func(name string) (io.Reader, error) { return os.Open(name) }
+	s := &gateForm287A{fn}
+	zr, err := s.fn(name)
+	if err != nil {
+		return nil, false, err
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, false, err
+	}
+	t := &gateForm287B{r: f}
+	if zr2, ok2 := t.r.(io.Reader); ok2 {
+		zr = zr2
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "pointer composite literal"
+
+	# --- 288: nested and channel elided container elements ----------------
+	# s := gateH2S6{in: []gateH2S1{{fn}}} nests an elided element inside
+	# a container field, and []gateH2S5{{ch}} elides a chan *os.File
+	# element; both left the inner binding invisible (live, gate exit 0,
+	# round-52). Container fields register nested elided elements and
+	# channel-typed fields escalate to file-bearing selects.
+	inject_import internal/reader/metadata.go '"os"'
+	append_mut internal/reader/metadata.go <<'MUTEOF'
+
+type gateForm288S1 struct {
+	fn func(string) (io.Reader, error)
+}
+
+type gateForm288S6 struct {
+	in []gateForm288S1
+}
+
+type gateForm288S5 struct {
+	ch any
+}
+
+func gateForm288main(name string) ([]byte, bool, error) {
+	fn := func(name string) (io.Reader, error) { return os.Open(name) }
+	s := gateForm288S6{in: []gateForm288S1{{fn}}}
+	zr, err := s.in[0].fn(name)
+	if err != nil {
+		return nil, false, err
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, false, err
+	}
+	ch := make(chan *os.File, 1)
+	ch <- f
+	c := []gateForm288S5{{ch}}
+	if c0, ok0 := c[0].ch.(chan *os.File); ok0 {
+		zr = <-c0
+	}
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	run_mut "nested and channel elided container elements"
+
+
+
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 227 mutation forms rejected)"
+	echo "import-graph self-test passed (all 238 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
