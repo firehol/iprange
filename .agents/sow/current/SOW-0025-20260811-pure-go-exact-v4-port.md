@@ -160,8 +160,9 @@ qualified-defined class (forms 191-196), the
 interface-method and method-result class (forms 199-205), the
 embedded-interface and cross-package chain class (forms 207-210), the
 remote-interface and generic-instantiation class (forms 213-217), the
-defined-hop instantiation class (forms 222-223); the durable
-rejection set is now one hundred seventy-six mutation
+defined-hop instantiation class (forms 222-223), the nested generic-
+instantiation class (forms 225-226); the durable
+rejection set is now one hundred seventy-eight mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -287,6 +288,23 @@ the promoted-method walk and the generic receiver-substitution walk;
 pinned as self-test forms 222-223 (rejects) and 224 (benign bytes
 control). The durable rejection
 set is now one hundred seventy-six mutation forms. The records
+of this pass complete the trail up to this re-review. The round-31
+gate re-review then found the nested generic-instantiation class:
+a multi-level generic-interface embedding (type InnerL[T]
+interface{ Get() T }; type IBaseGL[T] interface{ InnerL[T] };
+type IEmb interface{ IBaseGL[func() *os.File] }) substituted only
+at the frame owning the brackets, so the frame declaring the method
+returned the raw type parameter and Get() T reached the io.ReadFull
+exemption (three-level and chan-of-func variants included). Fixed by
+threading type parameters and arguments down the embedding chain:
+each frame substitutes its own instantiation into the next embedded
+type text, the declaring frame applies the accumulated arguments,
+and a frame-level interface-parameter registry (ifaceParams, mirrored
+process-wide) carries generic interface parameters across packages;
+the receiver-substitution walk gained the same threading and the
+embedded-entry argument list. Pinned as self-test forms 225-226
+(rejects) and 227 (benign bytes control). The durable rejection
+set is now one hundred seventy-eight mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -593,8 +611,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   interface-method and method-result class (forms 199-205), and the
   embedded-interface and cross-package chain class (forms 207-210),
   the remote-interface and generic-instantiation class (forms
-  213-217), and the defined-hop instantiation class (forms 222-223);
-  the self-test now durably rejects one hundred seventy-six mutation forms. The
+  213-217), the defined-hop instantiation class (forms 222-223), and
+  the nested generic-instantiation class (forms 225-226);
+  the self-test now durably rejects one hundred seventy-eight mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1719,7 +1738,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 176-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 178-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2508,7 +2527,28 @@ execution record; the closing result is appended there when it completes.
   exactly like a direct spelling. Forms 222-223 pin the two rejects
   (reader-local and renamed-qualified defined-over-instantiated
   embedding); form 224 pins the benign bytes control.
+- Ampere round 31 found the nested generic-instantiation class at
+  HEAD f2d40d4: a multi-level generic-interface embedding (type
+  InnerL[T] interface{ Get() T }; type IBaseGL[T] interface{
+  InnerL[T] }; type IEmb interface{ IBaseGL[func() *os.File] })
+  substituted type arguments only at the frame owning the brackets,
+  so the frame declaring Get returned the raw type parameter "T"
+  and x.Get()() reached the io.ReadFull exemption with gate exit 0
+  (three-level and chan-of-func variants included); the intermediate
+  frame's identity substitution (InnerL[T] with its own argument T)
+  masked the leak during the audit's control probes. Fixed by
+  threading type parameters and arguments down the embedding chain
+  in methodMeta: every frame substitutes its own instantiation into
+  the next embedded type text before recursing, the declaring frame
+  applies the accumulated arguments to its declared results, and a
+  frame-level interface-parameter registry (ifaceParams, mirrored
+  process-wide like the receiver-parameter registry) carries generic
+  interface parameters across packages, with the genericMethodResults
+  receiver-substitution walk given the same threading and the
+  embedded-entry argument list. Forms 225-226 pin the two rejects
+  (two-level and three-level/chan variants); form 227 pins the
+  benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 176-form self-test, ten cross-compiles,
+  import graph with the 178-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
