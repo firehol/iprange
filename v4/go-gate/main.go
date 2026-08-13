@@ -109,12 +109,17 @@ var approvedFileMethods = map[string]bool{
 // text. funcs maps same-package function names to their result type
 // texts. Both are collected syntactically.
 type pkgInfo struct {
-	structs    map[string]map[string]string
-	funcs      map[string][]string
-	methods    map[string][]string // structName.method -> result type texts
-	aliases    map[string]string   // type-alias name -> underlying type text
-	retFuncs   map[string]bool     // named funcs whose body returns a tainted *os.File value
-	retMethods map[string]bool     // structName.method whose body returns a tainted *os.File value
+	structs        map[string]map[string]string
+	funcs          map[string][]string
+	methods        map[string][]string // structName.method -> result type texts
+	aliases        map[string]string   // type-alias name -> underlying type text
+	retFuncs       map[string]bool     // named funcs whose body returns a tainted *os.File value
+	retMethods     map[string]bool     // structName.method whose body returns a tainted *os.File value
+	retFuncFiles   map[string]bool     // named funcs whose body returns a func-file value
+	retMethodFiles map[string]bool     // structName.method whose body returns a func-file value
+	funcTypeParams map[string][]string // generic func name -> type-parameter names
+	funcParams     map[string][]string // generic func name -> parameter type texts
+	pkgVars        map[string]bool     // package-level variable names
 }
 
 func main() {
@@ -193,7 +198,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -269,7 +274,53 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 			continue
 		}
 		info.funcs[fd.Name.Name] = collectResults(fd.Type)
+		var tps []string
+		if fd.Type.TypeParams != nil {
+			for _, fld := range fd.Type.TypeParams.List {
+				for _, n := range fld.Names {
+					tps = append(tps, n.Name)
+				}
+			}
+		}
+		if len(tps) > 0 {
+			info.funcTypeParams[fd.Name.Name] = tps
+			info.funcParams[fd.Name.Name] = collectParams(fd.Type)
+		}
 	}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			if vs, ok := spec.(*ast.ValueSpec); ok {
+				for _, n := range vs.Names {
+					if n.Name != "_" {
+						info.pkgVars[n.Name] = true
+					}
+				}
+			}
+		}
+	}
+}
+
+// collectParams returns the parameter type texts of a function type,
+// one entry per declared parameter position.
+func collectParams(ft *ast.FuncType) []string {
+	var params []string
+	if ft.Params == nil {
+		return params
+	}
+	for _, fld := range ft.Params.List {
+		t := exprText(fld.Type)
+		for range fld.Names {
+			params = append(params, t)
+		}
+		if len(fld.Names) == 0 {
+			params = append(params, t)
+		}
+	}
+	return params
 }
 
 func collectResults(ft *ast.FuncType) []string {
@@ -784,6 +835,22 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if callResultsChanFuncFile(v, st, info) {
 			return kindChanFuncFile
 		}
+		// A call whose result is a func-file value: the callee's body
+		// returns a funcFile behind an interface, or a generic
+		// instantiation binds a type parameter to a funcFile argument.
+		if id, ok2 := v.Fun.(*ast.Ident); ok2 && info.retFuncFiles[id.Name] {
+			return kindFuncFile
+		}
+		if sel, ok2 := v.Fun.(*ast.SelectorExpr); ok2 {
+			if structName, ok3 := resolveStruct(sel.X, st, info); ok3 {
+				if info.retMethodFiles[structName+"."+sel.Sel.Name] {
+					return kindFuncFile
+				}
+			}
+		}
+		if genericResultFuncFile(v, st, info, imports) {
+			return kindFuncFile
+		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
 		if strings.Contains(text, "*os.File") {
@@ -811,13 +878,24 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if isContainerExpr(v, st, info) {
 			return kindContainer
 		}
-		// hb.fn where the struct field type is func() *os.File.
-		if id, ok := v.X.(*ast.Ident); ok {
-			if structName, ok2 := resolveStruct(id, st, info); ok2 {
-				if ft, ok3 := info.structs[structName][v.Sel.Name]; ok3 {
-					if funcTextFile(resolveTypeText(ft, info)) {
-						return kindFuncFile
-					}
+		// A selector into a struct instance: hb.fn where the field type
+		// is func() *os.File, or a method value (g.get, mh.inner.mk)
+		// whose method is a file producer. Receivers may be nested
+		// field chains, resolved like the call path.
+		if structName, ok2 := resolveStruct(v.X, st, info); ok2 {
+			if ft, ok3 := info.structs[structName][v.Sel.Name]; ok3 {
+				if funcTextFile(resolveTypeText(ft, info)) {
+					return kindFuncFile
+				}
+			}
+			mkey := structName + "." + v.Sel.Name
+			mres := info.methods[mkey]
+			if positionsOf("*os.File", mres) != nil || info.retMethods[mkey] {
+				return kindFuncFile
+			}
+			for _, r := range mres {
+				if funcTextFile(resolveTypeText(r, info)) {
+					return kindFuncFile
 				}
 			}
 		}
@@ -897,12 +975,35 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		if len(call.Args) == 1 && resolveTypeText(id.Name, info) == "*os.File" {
 			return call, []int{0}, true
 		}
+		// A generic instantiation (idf[T any](f T) T called with a
+		// file argument) makes the matching result positions files.
+		if pos := genericParamFilePositions(call, info, st, imports); pos != nil {
+			return call, pos, true
+		}
 	}
 	if inner, ok := fun.(*ast.CallExpr); ok {
 		// zb.mk()() and useDef(getDef2)(): the callee is itself a call
 		// whose value is a func returning *os.File; invoking it yields
 		// a file at result position zero.
 		if callResultsFuncFile(inner, st, info) {
+			return call, []int{0}, true
+		}
+		// fn()() where fn is a variable holding a func-file value (a
+		// method value bound to a name, or a helper returning one):
+		// the inner call yields a funcFile, the outer yields the file.
+		if id, ok2 := unwrapParen(inner.Fun).(*ast.Ident); ok2 {
+			if st.funcFile[id.Name] || info.retFuncFiles[id.Name] {
+				return call, []int{0}, true
+			}
+		}
+		if classify(inner, st, info, imports) == kindFuncFile {
+			return call, []int{0}, true
+		}
+	}
+	if ue, ok := fun.(*ast.UnaryExpr); ok && ue.Op == token.ARROW {
+		// (<-ch)(): a receive whose value is a funcFile, invoked
+		// immediately; calling it yields the file.
+		if classify(ue, st, info, imports) == kindFuncFile {
 			return call, []int{0}, true
 		}
 	}
@@ -1064,18 +1165,38 @@ func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *ta
 				addSignatureTaints(fst, fd.Recv, info)
 				addSignatureTaints(fst, fd.Type.Params, info)
 				prepassStmts(fd.Body.List, fst, info, imp)
-				if !returnsFileIn(fd.Body, fst, info, imp) {
-					continue
+				// Sends into package-level channels are shared state:
+				// a send in one function taints the channel for every
+				// function that later receives from it.
+				for k := range fst.chanFuncFile {
+					if info.pkgVars[k] {
+						shared.chanFuncFile[k] = true
+					}
+				}
+				for k := range fst.chanFile {
+					if info.pkgVars[k] {
+						shared.chanFile[k] = true
+					}
 				}
 				if _, recvStruct := receiverOf(fd); recvStruct != "" {
 					key := recvStruct + "." + fd.Name.Name
-					if !info.retMethods[key] {
+					if returnsFileIn(fd.Body, fst, info, imp) && !info.retMethods[key] {
 						info.retMethods[key] = true
 						added++
 					}
-				} else if !info.retFuncs[fd.Name.Name] {
-					info.retFuncs[fd.Name.Name] = true
-					added++
+					if returnsFuncFileIn(fd.Body, fst, info, imp) && !info.retMethodFiles[key] {
+						info.retMethodFiles[key] = true
+						added++
+					}
+				} else {
+					if returnsFileIn(fd.Body, fst, info, imp) && !info.retFuncs[fd.Name.Name] {
+						info.retFuncs[fd.Name.Name] = true
+						added++
+					}
+					if returnsFuncFileIn(fd.Body, fst, info, imp) && !info.retFuncFiles[fd.Name.Name] {
+						info.retFuncFiles[fd.Name.Name] = true
+						added++
+					}
 				}
 			}
 		}
@@ -1108,6 +1229,93 @@ func returnsFileIn(body *ast.BlockStmt, st *taints, info pkgInfo, imports map[st
 		return true
 	})
 	return found
+}
+
+// returnsFuncFileIn reports whether any return statement of the
+// function body (not inside nested closures) yields a func-file value:
+// a function or method value that, when called, produces a *os.File.
+func returnsFuncFileIn(body *ast.BlockStmt, st *taints, info pkgInfo, imports map[string]string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.FuncLit:
+			return false // closure returns do not mark the enclosing func
+		case *ast.ReturnStmt:
+			for _, res := range v.Results {
+				if classify(res, st, info, imports) == kindFuncFile {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// genericParamFilePositions maps type-parameter result positions back
+// to argument positions for a same-package generic call: idf(os.Stdin)
+// with idf[T any](f T) T binds T to *os.File, so the result position
+// carrying T is a file position.
+func genericParamFilePositions(call *ast.CallExpr, info pkgInfo, st *taints, imports map[string]string) []int {
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	tps := info.funcTypeParams[id.Name]
+	if len(tps) == 0 {
+		return nil
+	}
+	params := info.funcParams[id.Name]
+	var pos []int
+	for ri, rt := range info.funcs[id.Name] {
+		for _, tp := range tps {
+			if rt != tp {
+				continue
+			}
+			for ai, pt := range params {
+				if pt == tp && ai < len(call.Args) && isFileOrContainer(call.Args[ai], st, info, imports) {
+					pos = append(pos, ri)
+					break
+				}
+			}
+		}
+	}
+	if len(pos) == 0 {
+		return nil
+	}
+	return pos
+}
+
+// genericResultFuncFile reports a same-package generic call whose
+// result is a type parameter bound to a func-file argument:
+// idf(getDef3) with idf[T any](f T) T yields a funcFile.
+func genericResultFuncFile(call *ast.CallExpr, st *taints, info pkgInfo, imports map[string]string) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	tps := info.funcTypeParams[id.Name]
+	if len(tps) == 0 {
+		return false
+	}
+	params := info.funcParams[id.Name]
+	for _, rt := range info.funcs[id.Name] {
+		for _, tp := range tps {
+			if rt != tp {
+				continue
+			}
+			for ai, pt := range params {
+				if pt == tp && ai < len(call.Args) && classify(call.Args[ai], st, info, imports) == kindFuncFile {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // resolveStruct resolves the struct type name of an instance expression:
