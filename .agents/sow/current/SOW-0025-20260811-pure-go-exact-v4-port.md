@@ -8,7 +8,7 @@ Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
 253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh
 independent audit; all five P2 classes were fixed at HEAD ca30026: the
 implemented NetworkEnrichmentV1Location surface (value + HasLocation,
-recorded as open decision 5A awaiting user ratification), implicit semantic validation removed from
+recorded as open decision 5A awaiting user ratification, ratified later on 2026-08-13), implicit semantic validation removed from
 structured lookup, hot-path decodes cut to one page-header decode per
 visited page with membership word reads served from the lookup-time record
 decode, the contradictory closure records corrected, and Mapping.File

@@ -575,13 +575,13 @@ type NetworkEnrichmentV1Location struct {
 
 // NetworkEnrichmentV1 is one decoded network_enrichment_v1 payload.
 //
-// The approved parity matrix writes Location *NetworkEnrichmentV1Location;
-// with decision 4A's zero-allocation lookup contract a pointer inside a
-// by-value result cannot reference stable storage without a per-call
-// allocation, so the Rust Option<NetworkEnrichmentV1Location> is mirrored
-// as the value Location plus the presence flag HasLocation (decision 5A,
-// ratified 2026-08-13; SOW decision log). Names and fields
-// match the matrix and the Rust authority.
+// The approved parity matrix records the optional location as the value
+// Location plus the presence flag HasLocation (decision 5A, ratified
+// 2026-08-13; SOW decision log): with decision 4A's zero-allocation
+// lookup contract a pointer inside a by-value result cannot reference
+// stable storage without a per-call allocation, so Rust's
+// Option<NetworkEnrichmentV1Location> is mirrored as a by-value struct.
+// Names and fields match the matrix and the Rust authority.
 type NetworkEnrichmentV1 struct {
 	ASN         uint32
 	CountryID   uint32
