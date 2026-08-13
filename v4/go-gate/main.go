@@ -143,6 +143,7 @@ var remoteMethods = map[string][]string{}
 var remoteMethodFull = map[string]string{}
 var remoteEmbedded = map[string][]string{}
 var remoteRecvTypeParams = map[string][]string{}
+var remoteIfaceParams = map[string][]string{}
 
 type pkgInfo struct {
 	structs        map[string]map[string]string
@@ -160,6 +161,7 @@ type pkgInfo struct {
 	pkgVars        map[string]bool     // package-level variable names
 	definedTo      map[string]string   // defined type (type a b) -> underlying type name
 	embedded       map[string][]string // struct name -> embedded (promoted) type names
+	ifaceParams    map[string][]string // generic interface name -> type parameter names
 	varTypes       map[string]string   // variable name -> declared type text
 }
 
@@ -239,7 +241,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, recvTypeParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, varTypes: map[string]string{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, methodFull: map[string]string{}, recvTypeParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}, ifaceParams: map[string][]string{}, varTypes: map[string]string{}}
 	// Cross-package struct and method metadata collected from
 	// previously parsed directories resolves generic type arguments
 	// that spell a struct with an import qualifier (mm.S28): the
@@ -268,6 +270,11 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 	for k, v := range remoteRecvTypeParams {
 		if _, exists := info.recvTypeParams[k]; !exists {
 			info.recvTypeParams[k] = v
+		}
+	}
+	for k, v := range remoteIfaceParams {
+		if _, exists := info.ifaceParams[k]; !exists {
+			info.ifaceParams[k] = v
 		}
 	}
 	srcs := map[string][]byte{}
@@ -399,6 +406,11 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 							ifaceTps = append(ifaceTps, n.Name)
 						}
 					}
+				}
+				if len(ifaceTps) > 0 {
+					info.ifaceParams[ts.Name.Name] = ifaceTps
+					remoteIfaceParams[ts.Name.Name] = ifaceTps
+					remoteIfaceParams[f.Name.Name+"."+ts.Name.Name] = ifaceTps
 				}
 				fields := map[string]string{}
 				for _, m := range it.Methods.List {
@@ -1196,11 +1208,18 @@ func resolveStructName(name string, info pkgInfo) string {
 }
 
 // methodMeta resolves method metadata on a struct, walking promoted
-// (embedded) fields when the direct key misses.
+// (embedded) fields when the direct key misses. Generic parameters are
+// threaded down the embedding chain: each frame substitutes its own
+// instantiation into the next embedded type text, and the frame that
+// declares the method applies its accumulated type arguments to the
+// declared results, so a multi-level chain (type InnerL[T] interface{
+// Get() T }; type IBaseGL[T] interface{ InnerL[T] }; type IEmb
+// interface{ IBaseGL[func() *os.File] }) keeps the substituted file
+// shapes instead of leaking the raw type parameter.
 func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 	seen := map[string]bool{}
-	var walk func(string) ([]string, bool)
-	walk = func(s string) ([]string, bool) {
+	var walk func(string, []string, []string) ([]string, bool)
+	walk = func(s string, tps, args []string) ([]string, bool) {
 		base := resolveStructName(s, info)
 		if base == "" || seen[base] {
 			return nil, false
@@ -1209,42 +1228,54 @@ func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 		mres := info.methods[base+"."+method]
 		ret := info.retMethods[base+"."+method]
 		if mres != nil || ret {
+			if len(args) > 0 && len(tps) > 0 {
+				out := make([]string, len(mres))
+				for i, res := range mres {
+					out[i] = substituteTypeParams(res, tps, args, info)
+				}
+				return out, ret
+			}
 			return mres, ret
 		}
 		for _, emb := range info.embedded[base] {
-			embBase := resolveStructName(emb, info)
-			// The embedded text may name a defined type over an
+			// Substitute the frame's own instantiation into the
+			// embedded text before recursing: for a frame whose entry
+			// instantiates a generic interface embedding another
+			// generic interface (IBaseGL[T] embeds InnerL[T]), the
+			// inner entry must read InnerL[func() *os.File] when the
+			// outer frame binds func() *os.File.
+			subEmb := emb
+			if len(args) > 0 && len(tps) > 0 {
+				subEmb = substituteTypeParams(emb, tps, args, info)
+			}
+			embBase := resolveStructName(subEmb, info)
+			// The embedded entry may name a defined type over an
 			// instantiated generic interface (type D IBaseG[func() *os.File];
 			// type IEmb interface{ D }): the brackets live in the defined
 			// chain, not in the spelling, so resolve the text before
 			// extracting the type arguments.
-			args := parseBracketArgs(resolveTaintType(emb, info))
-			if mm, r := walk(embBase); r {
+			nextArgs := parseBracketArgs(resolveTaintType(subEmb, info))
+			var nextTps []string
+			if ftps, okT := info.ifaceParams[embBase]; okT {
+				nextTps = ftps
+			} else if len(nextArgs) > 0 {
+				// Generic struct frames register receiver parameters
+				// per method.
+				nextTps = info.recvTypeParams[embBase+"."+method]
+			}
+			if mm, r := walk(embBase, nextTps, nextArgs); r {
 				return mm, r
 			} else if len(mm) > 0 {
 				// Declared results on a promoted embedded type are authoritative
 				// even when the embedded method body was never marked as a file
 				// producer: ok only records body-marked claims, so dropping mm
 				// here would blind the whole embedding chain.
-				if len(args) > 0 {
-					// An instantiated embedded type (IBaseGN[func() *os.File],
-					// gS[func() *os.File]) promotes the method with its type
-					// parameters substituted; without this the raw parameter
-					// text ("T") never matches the file shapes.
-					if tps, okT := info.recvTypeParams[embBase+"."+method]; okT && len(tps) == len(args) {
-						out := make([]string, len(mm))
-						for i, res := range mm {
-							out[i] = substituteTypeParams(res, tps, args, info)
-						}
-						return out, false
-					}
-				}
 				return mm, false
 			}
 		}
 		return nil, false
 	}
-	return walk(structName)
+	return walk(structName, nil, nil)
 }
 
 // typeSwitchSwitched returns the switched expression of a type-switch
@@ -2325,19 +2356,58 @@ func genericMethodResults(sel *ast.SelectorExpr, st *taints, info pkgInfo) ([]st
 		}
 		return out, true
 	}
+	// Embedded promotion: the embedded field may instantiate a generic
+	// receiver (gS[func() *os.File]) or a generic interface at any depth
+	// of the embedding chain; walk the chain substituting each frame's
+	// arguments into the next frame's type text, exactly like methodMeta.
+	seen := map[string]bool{}
+	var walk func(string, []string, []string) ([]string, bool)
+	walk = func(s string, tps, args []string) ([]string, bool) {
+		embBase := resolveStructName(s, info)
+		if embBase == "" || seen[embBase] {
+			return nil, false
+		}
+		seen[embBase] = true
+		var ftps []string
+		if tps != nil {
+			ftps = tps
+		} else if ft, ok := info.ifaceParams[embBase]; ok {
+			ftps = ft
+		} else {
+			ftps = info.recvTypeParams[embBase+"."+sel.Sel.Name]
+		}
+		if mres := info.methods[embBase+"."+sel.Sel.Name]; mres != nil {
+			if len(args) > 0 && len(ftps) > 0 {
+				if len(args) != len(ftps) {
+					return nil, false
+				}
+				out := make([]string, len(mres))
+				for i, r := range mres {
+					out[i] = substituteTypeParams(r, ftps, args, info)
+				}
+				return out, true
+			}
+			return mres, true
+		}
+		for _, emb := range info.embedded[embBase] {
+			subEmb := emb
+			if len(args) > 0 && len(ftps) > 0 {
+				subEmb = substituteTypeParams(emb, ftps, args, info)
+			}
+			nextArgs := parseBracketArgs(resolveTaintType(subEmb, info))
+			if mm, ok := walk(subEmb, nil, nextArgs); ok {
+				return mm, true
+			}
+		}
+		return nil, false
+	}
 	for _, emb := range info.embedded[base] {
-		embBase := resolveStructName(emb, info)
-		if tps, ok2 := info.recvTypeParams[embBase+"."+sel.Sel.Name]; ok2 {
-			args := parseBracketArgs(resolveTaintType(emb, info))
-			if len(args) < len(tps) {
-				continue
-			}
-			results := info.methods[embBase+"."+sel.Sel.Name]
-			out := make([]string, len(results))
-			for i, r := range results {
-				out[i] = substituteTypeParams(r, tps, args, info)
-			}
-			return out, true
+		// The argument list parsed here is the instantiation carried by
+		// the embedded entry itself; it must reach the declaring frame
+		// through the walk (the direct-hit substitution applies it).
+		nextArgs := parseBracketArgs(resolveTaintType(emb, info))
+		if mm, ok := walk(emb, nil, nextArgs); ok {
+			return mm, true
 		}
 	}
 	return nil, false
