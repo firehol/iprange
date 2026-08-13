@@ -791,6 +791,23 @@ func resolveDefinedType(text string, info pkgInfo) string {
 	return text
 }
 
+// resolveTaintType reduces a type text through alias and defined-type
+// chains until stable, so taint comparisons after generic substitution
+// use the underlying spelling: a type argument written as an alias
+// (type zfA = *os.File; gR[zfA]{}) must compare as *os.File, and a
+// container result ([]zfA) must compare as []*os.File.
+func resolveTaintType(text string, info pkgInfo) string {
+	for i := 0; i < 8; i++ {
+		before := text
+		text = resolveTypeText(text, info)
+		text = resolveDefinedType(text, info)
+		if text == before {
+			break
+		}
+	}
+	return text
+}
+
 // resolveStructName reduces any receiver or instance type spelling to the
 // underlying struct name: type aliases, defined-type chains, pointer
 // prefixes, and generic instantiations all resolve to the base name. The
@@ -1672,10 +1689,12 @@ func explicitGenericCall(fun ast.Expr) (string, []string, bool) {
 // declared type text with the explicit instantiation argument at the
 // same position: mkGen[*gsG]() binds []T to []*gsG before recording.
 // Token boundaries are respected so T2 is never touched when T is the
-// parameter.
-func substituteTypeParams(text string, tps, args []string) string {
+// parameter. Type arguments and the final result are reduced through
+// alias/defined-type chains, so an argument spelled as an alias
+// (type zfA = *os.File; gR[zfA]{}) still binds the file spelling.
+func substituteTypeParams(text string, tps, args []string, info pkgInfo) string {
 	if len(args) == 0 {
-		return text
+		return resolveTaintType(text, info)
 	}
 	var b strings.Builder
 	start := 0
@@ -1685,7 +1704,7 @@ func substituteTypeParams(text string, tps, args []string) string {
 				tok := text[start:i]
 				for pi, tp := range tps {
 					if tok == tp && pi < len(args) {
-						tok = args[pi]
+						tok = resolveTaintType(args[pi], info)
 						break
 					}
 				}
@@ -1697,7 +1716,7 @@ func substituteTypeParams(text string, tps, args []string) string {
 			start = i + 1
 		}
 	}
-	return b.String()
+	return resolveTaintType(b.String(), info)
 }
 
 // genericSubstitutedResults returns the declared result types of an
@@ -1718,7 +1737,7 @@ func genericSubstitutedResults(fun ast.Expr, info pkgInfo) []string {
 	}
 	out := make([]string, len(results))
 	for i, r := range results {
-		out[i] = substituteTypeParams(r, tps, args)
+		out[i] = substituteTypeParams(r, tps, args, info)
 	}
 	return out
 }
@@ -1775,7 +1794,7 @@ func genericMethodResults(sel *ast.SelectorExpr, st *taints, info pkgInfo) ([]st
 		results := info.methods[base+"."+sel.Sel.Name]
 		out := make([]string, len(results))
 		for i, r := range results {
-			out[i] = substituteTypeParams(r, tps, args)
+			out[i] = substituteTypeParams(r, tps, args, info)
 		}
 		return out, true
 	}
@@ -1789,7 +1808,7 @@ func genericMethodResults(sel *ast.SelectorExpr, st *taints, info pkgInfo) ([]st
 			results := info.methods[embBase+"."+sel.Sel.Name]
 			out := make([]string, len(results))
 			for i, r := range results {
-				out[i] = substituteTypeParams(r, tps, args)
+				out[i] = substituteTypeParams(r, tps, args, info)
 			}
 			return out, true
 		}
@@ -1894,7 +1913,7 @@ func genericCallResults(call *ast.CallExpr, st *taints, info pkgInfo) ([]string,
 	}
 	out := make([]string, len(results))
 	for i, r := range results {
-		out[i] = substituteTypeParams(r, tps, args)
+		out[i] = substituteTypeParams(r, tps, args, info)
 	}
 	return out, true
 }
