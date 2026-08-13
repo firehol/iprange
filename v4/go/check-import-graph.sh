@@ -3951,6 +3951,138 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta136.orig" internal/reader/metadata.go
 
+	# --- 137: type-switch bound struct receiver ----------------------------
+	# switch v := iv.(type) { case *gs: v.get() }: the bound variable
+	# must register as an instance of the case struct.
+	cat > internal/reader/gatemut_typeswitch.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsTS137 struct{}
+
+func (gsTS137) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var iv137 interface{} = &gsTS137{}
+
+func tsGet137() io.ReadCloser {
+	switch v := iv137.(type) {
+	case *gsTS137:
+		return v.get()
+	}
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_typeswitch.go
+	cp internal/reader/metadata.go "$self_tree/meta137.orig"
+	INS='zr = tsGet137()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta137.new" && mv "$self_tree/meta137.new" internal/reader/metadata.go
+	if grep -Fq 'zr = tsGet137()' internal/reader/metadata.go; then
+		run_mut "type-switch bound struct receiver"
+	else
+		echo "self-test ERROR: form 137 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta137.orig" internal/reader/metadata.go
+
+	# --- 138: multi-assign call result index receiver --------------------
+	# a, _ := mk2(); a[0].get(): the second lhs must record the call's
+	# declared result type at its index so it can be an indexed base.
+	cat > internal/reader/gatemut_multiasgn.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsMA138 struct{}
+
+func (gsMA138) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+func mk2_138() ([]*gsMA138, error) { return []*gsMA138{}, nil }
+
+func maGet138() io.ReadCloser {
+	a, _ := mk2_138()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_multiasgn.go
+	cp internal/reader/metadata.go "$self_tree/meta138.orig"
+	INS='zr = maGet138()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta138.new" && mv "$self_tree/meta138.new" internal/reader/metadata.go
+	if grep -Fq 'zr = maGet138()' internal/reader/metadata.go; then
+		run_mut "multi-assign call result index receiver"
+	else
+		echo "self-test ERROR: form 138 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta138.orig" internal/reader/metadata.go
+
+	# --- 139: benign type-switch bound receiver must pass -----------------
+	# Same type-switch shape as form 137 with a bytes-only payload.
+	cat > internal/reader/gatemut_bents.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv139 struct{ *bytes.Reader }
+
+func (w *rcv139) Close() error { return nil }
+
+type gsBT139 struct{}
+
+func (gsBT139) get() io.ReadCloser { return &rcv139{bytes.NewReader(nil)} }
+
+var ivB139 interface{} = &gsBT139{}
+
+func tsGetB139() io.ReadCloser {
+	switch v := ivB139.(type) {
+	case *gsBT139:
+		return v.get()
+	}
+	return nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_bents.go
+	cp internal/reader/metadata.go "$self_tree/meta139.orig"
+	INS='zr = tsGetB139()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta139.new" && mv "$self_tree/meta139.new" internal/reader/metadata.go
+	if grep -Fq 'zr = tsGetB139()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign type-switch bound receiver passes the gate"
+		else
+			echo "self-test MISS: benign type-switch bound receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 139 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta139.orig" internal/reader/metadata.go
+
+
 
 
 
@@ -4010,7 +4142,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 113 mutation forms rejected)"
+	echo "import-graph self-test passed (all 115 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
