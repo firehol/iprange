@@ -249,6 +249,27 @@ a full fixpoint loop for the per-directory alias/defined closure
 with self-hop guards; pinned as self-test forms 207-210 (rejects)
 and 211-212 (benign bytes controls). The durable rejection
 set is now one hundred sixty-nine mutation forms. The records
+of this pass complete the trail up to this re-review. The round-29
+gate re-review then found the remote-interface and generic-
+instantiation class: (1) a renamed import qualifier on a cross-
+package interface embedded in a reader interface or struct (type
+IEmb interface{ mm.IMapBase }) reduced to no registered key because
+only structs (not interfaces) registered the qualifier self-entry,
+so the promoted file method lost its taint; (2) a generic interface
+instantiated at an embedding site (type IEmbGN interface{
+IBaseGN[func() *os.File] }) promoted the raw type parameter without
+substitution, so Get() T never matched the file shapes (both the
+func-file and chan-of-func variants); the adjacent remote shapes (a
+renamed generic interface instantiation and a cross-package generic
+struct receiver) carried the same gap. Fixed by registering the
+qualified self-entry for interface names exactly like structs,
+recording generic interface type parameters in the receiver-parameter
+registry with process-wide mirrors, and substituting the embedding's
+type arguments in the promoted-method walk; the round's P2 (a
+non-compiling benign form-212 twin) was fixed by removing its unused
+import. Pinned as self-test forms 213-217 (rejects) and 218-221
+(benign bytes controls). The durable rejection
+set is now one hundred seventy-four mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -1679,7 +1700,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 169-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 174-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2421,7 +2442,37 @@ execution record; the closing result is appended there when it completes.
   rejects (embedded interface single, embedded interface mixed,
   cross-package struct method, nine-hop qualified chain); forms
   211-212 pin the benign bytes controls.
+- Ampere round 29 found two adjacent escape classes at HEAD
+  8385134/fffc4dc: (1) a renamed import qualifier on a cross-package
+  interface embedded in a reader interface or struct (type IEmb
+  interface{ mm.IMapBase }) never reduced to a registered key: the
+  interface branch mirrored structs/methods/embedded chains but - 
+  unlike the struct branch - registered no qualifier self-entry, so
+  the promoted file method resolved nothing and x.Get()() reached the
+  io.ReadFull exemption with gate exit 0; the clause-name spelling
+  passed because the clause-qualified mirror key happened to match;
+  (2) a generic interface instantiated at the embedding site
+  (type IEmbGN interface{ IBaseGN[func() *os.File] }) promoted the
+  declared results with the raw type parameter unsubstituted, so
+  Get() T never matched the file shapes; the same gap covered the
+  chan-of-func variant, a renamed generic interface instantiation,
+  and a cross-package generic struct receiver. Fixed by registering
+  the qualified self-entry for interface names exactly like structs
+  (pkgAliasesByDir + qualifiedAliases), recording generic interface
+  type parameters in recvTypeParams (with a process-wide mirror
+  seeded per parseDir, closing the remote generic-receiver gap), and
+  substituting the embedding's type arguments in methodMeta's
+  promoted-method walk (args from parseBracketArgs, substitution via
+  substituteTypeParams). The round's P2 - benign self-test form 212
+  did not compile (unused "bytes" import in the reader file) - was
+  fixed by removing the import; the self-test never type-checks, so
+  the missing check is documented in the form comment. Forms 213-217
+  pin the five rejects (renamed-qualifier interface embedding,
+  generic-interface instantiation with func-file argument, same with
+  chan-of-func argument, renamed-qualified generic interface
+  instantiation, cross-package generic struct method); forms 218-221
+  pin the benign bytes controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 169-form self-test, ten cross-compiles,
+  import graph with the 174-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).

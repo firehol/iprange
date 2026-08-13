@@ -101,9 +101,10 @@ renamed-qualified alias class (forms 179-182), and the
 func-typed generic-method class (forms 185-189), the
 mixed result and qualified-defined class (forms 191-196), the
 interface-method and method-result class (forms 199-205), the
-embedded-interface and cross-package chain class (forms 207-210);
+embedded-interface and cross-package chain class (forms 207-210), the
+remote-interface and generic-instantiation class (forms 213-217);
 the
-self-test now durably rejects one hundred sixty-nine
+self-test now durably rejects one hundred seventy-four
 mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
@@ -1118,8 +1119,14 @@ in the promoted-method walk, cross-package defined structs were
 invisible as generic type arguments, and nine-hop qualified defined
 chains exceeded the single-pass fixpoint budget in map iteration
 order), fixed in the round-28 gate pass recorded in the active SOW
+exec log; and the round-29 remote-interface and generic-
+instantiation class (forms 213-217: renamed-qualifier cross-package
+interface embedding, generic-interface instantiation at the
+embedding site with func-file and chan-of-func arguments, and the
+adjacent renamed generic interface and cross-package generic struct
+shapes), fixed in the round-29 gate pass recorded in the active SOW
 exec log; the
-self-test now durably rejects one hundred sixty-nine mutation forms. Decision 5A remains the single open item and
+self-test now durably rejects one hundred seventy-four mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
