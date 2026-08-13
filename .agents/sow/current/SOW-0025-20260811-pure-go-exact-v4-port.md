@@ -146,9 +146,10 @@ class (forms 113-114), the receiver-resolution
 class (forms 116-119), the pointer-defined-type
 class (forms 121), the indexed-receiver
 class (forms 123-125), the element-receiver
-class (forms 127-132), and the range-literal-receiver
-class (forms 134-135); the durable rejection set is
-now one hundred thirteen mutation forms. The records
+class (forms 127-132), the range-literal-receiver
+class (forms 134-135), and the bound-receiver
+class (forms 137-138); the durable rejection set is
+now one hundred fifteen mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -440,9 +441,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   class (forms 116-119), the pointer-defined-type
   class (forms 121), the indexed-receiver
   class (forms 123-125), the element-receiver
-  class (forms 127-132), and the range-literal-receiver
-  class (forms 134-135);
-  the self-test now durably rejects one hundred thirteen mutation forms. The
+  class (forms 127-132), the range-literal-receiver
+  class (forms 134-135), and the bound-receiver
+  class (forms 137-138);
+  the self-test now durably rejects one hundred fifteen mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1567,7 +1569,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 113-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 115-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2123,7 +2125,16 @@ execution record; the closing result is appended there when it completes.
   element type for range bindings and adding the CompositeLit case to
   typeOfBase. Forms 134-135 pin the two escapes; form 136 pins the
   benign composite-literal indexed receiver control.
+- Ampere round 18 found the bound-receiver class (HEAD 3cfe554):
+  type-switch bound variables (case *gs: v.get()) never registered as
+  struct instances, and multi-assignment call results (a, _ := f())
+  never recorded their declared result type, so both were blind as
+  receivers or index bases. Fixed by registering case structs and case
+  type texts for type-switch bindings and recording the declared
+  result type per index in applyLHSMulti. Forms 137-138 pin the two
+  escapes; form 139 pins the benign type-switch bound receiver
+  control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 113-form self-test, nine cross-compiles,
+  import graph with the 115-form self-test, nine cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
