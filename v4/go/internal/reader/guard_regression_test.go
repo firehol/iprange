@@ -303,6 +303,20 @@ func TestSidecarPresence(t *testing.T) {
 			t.Fatalf("sidecar present: code %v want 11", err)
 		}
 	})
+	t.Run("missing-main-sidecar-present", func(t *testing.T) {
+		// Parity with Rust open_immutable: require_sidecar_absent runs
+		// before open_read_only, so a live database whose main file is
+		// missing/renamed but whose .readers sidecar remains refuses with
+		// the WrongState class (code 11), never an IO stat failure (31).
+		dir := t.TempDir()
+		db := filepath.Join(dir, "db.iprdb")
+		if err := os.WriteFile(db+".readers", []byte("sidecar"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenImmutable(db); mustCode(err) != format.CodeWrongState {
+			t.Fatalf("missing main + present sidecar: code %v want 11", err)
+		}
+	})
 	t.Run("dangling-symlink", func(t *testing.T) {
 		dir := t.TempDir()
 		raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))

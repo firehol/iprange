@@ -46,6 +46,16 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	if err := namespaceChecks(path); err != nil {
 		return nil, err
 	}
+	// Pre-open sidecar refusal before the main file is even stat'ed,
+	// mirroring Rust open_immutable (require_sidecar_absent before
+	// open_read_only): a live database whose main file is
+	// missing/renamed but whose .readers sidecar remains must refuse
+	// with the WrongState class, not an IO stat failure. The
+	// under-lock sidecar check inside the mapping open stays
+	// authoritative.
+	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+		return nil, err
+	}
 	m, err := mapping.OpenImmutable(path, sidecarAbsentUnderLock)
 	if err != nil {
 		if ferr, ok := err.(*format.Error); ok {
@@ -61,8 +71,10 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	return r, nil
 }
 
-// sidecarAbsentUnderLock runs after the shared lifetime lock is held and
-// refuses the immutable open when the canonical external sidecar exists.
+// sidecarAbsentUnderLock refuses the immutable open when the canonical
+// external sidecar exists. It runs both before the main file is touched
+// (Rust's pre-open require_sidecar_absent error class) and again after the
+// shared lifetime lock is held (the authoritative re-check).
 // Absence is the only accepted answer: an unreadable sidecar path is a
 // refused open, not a silently ignored error. The check is symlink-aware
 // (os.Lstat), mirroring Rust's fs::symlink_metadata: a dangling .readers
