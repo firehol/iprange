@@ -109,6 +109,13 @@ var approvedFileMethods = map[string]bool{
 // structs maps, per package directory, type name -> field name -> type
 // text. funcs maps same-package function names to their result type
 // texts. Both are collected syntactically.
+// qualifiedAliases keys cross-package alias spellings
+// ("mapping.MappingFile" -> "*os.File") collected from every scanned
+// directory. The scanner builds one pkgInfo per directory, so a type
+// argument declared as an alias in another package must resolve
+// through this process-wide registry.
+var qualifiedAliases = map[string]string{}
+
 type pkgInfo struct {
 	structs        map[string]map[string]string
 	funcs          map[string][]string
@@ -239,8 +246,12 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 			}
 			if ts.Assign.IsValid() {
 				// type X = T: record the alias so file-taint checks
-				// resolve it instead of being blind to the name.
+				// resolve it instead of being blind to the name. The
+				// qualified key (package clause name) also resolves
+				// cross-package spellings (mapping.MappingFile) used
+				// as generic type arguments or declared types.
 				info.aliases[ts.Name.Name] = exprText(ts.Type)
+				qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = exprText(ts.Type)
 				continue
 			}
 			if it, ok := ts.Type.(*ast.InterfaceType); ok {
@@ -773,6 +784,10 @@ func resolveTypeText(text string, info pkgInfo) string {
 			text = strings.Repeat("*", len(text)-len(stripped)) + a
 			continue
 		}
+		if a, ok := qualifiedAliases[stripped]; ok {
+			text = strings.Repeat("*", len(text)-len(stripped)) + a
+			continue
+		}
 		break
 	}
 	return text
@@ -976,6 +991,45 @@ func elementTypeText(text string) string {
 	return ""
 }
 
+// chanCarrier reports whether e names a channel whose elements are
+// files or func-files: an identifier registered as a chan carrier, or
+// an expression classifying as a chan carrier. classify maps carrier
+// identifiers to kindFile (the call-through semantic), so the
+// registries are checked before classify.
+func chanCarrier(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) bool {
+	if id, ok := e.(*ast.Ident); ok {
+		return st.chanFile[id.Name] || st.chanFuncFile[id.Name]
+	}
+	k := classify(e, st, info, imports)
+	return k == kindChanFile || k == kindChanFuncFile
+}
+
+// elementReadKind returns the element kind of an index read over base:
+// the base's declared type (call result, alias-spelled binding, or a
+// deref/star wrapper) is resolved, then the container element shape is
+// mapped ([]*os.File and map[K]*os.File elements are files).
+func elementReadKind(base ast.Expr, st *taints, info pkgInfo) kind {
+	bt, ok := typeOfBase(base, st, info)
+	if !ok || bt == "" {
+		return kindNone
+	}
+	rt := resolveTaintType(bt, info)
+	if strings.HasPrefix(rt, "*") {
+		if strings.TrimPrefix(rt, "*") == "*os.File" {
+			return kindFile
+		}
+		return kindNone
+	}
+	return elementKindShape(rt, info)
+}
+
+// methodMetaResults returns the declared result types of a method on a
+// resolved receiver struct, or nil when the method is unknown.
+func methodMetaResults(structName, method string, info pkgInfo) []string {
+	res, _ := methodMeta(structName, method, info)
+	return res
+}
+
 // elementKindShape maps a container type text to its element kind.
 func elementKindShape(text string, info pkgInfo) kind {
 	el := elementTypeText(text)
@@ -1079,8 +1133,19 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if isContainerExpr(v.X, st, info) {
 			return kindFile
 		}
+		if k := elementReadKind(v.X, st, info); k != kindNone {
+			return k
+		}
 		return classify(v.X, st, info, imports)
 	case *ast.StarExpr:
+		// *p: a deref of a pointer whose resolved base type is a file
+		// alias (*zfA where zfA = *os.File) yields a file value even
+		// when the pointer binding itself was never tainted.
+		if bt, ok := typeOfBase(v.X, st, info); ok && bt != "" {
+			if strings.TrimPrefix(resolveTaintType(bt, info), "*") == "*os.File" {
+				return kindFile
+			}
+		}
 		return classify(v.X, st, info, imports)
 	case *ast.ParenExpr:
 		return classify(v.X, st, info, imports)
@@ -1149,6 +1214,19 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 			if st.chanFuncFile[id.Name] {
 				return kindChanFuncFile
 			}
+			// A same-package function whose declared result is a
+			// channel (mkC() chan *os.File) yields the carrier; the
+			// binding must register as chan-tainted so a later
+			// receive stays tainted.
+			for _, r := range info.funcs[id.Name] {
+				rt := resolveTypeText(r, info)
+				if chanElemFile(rt, info) {
+					return kindChanFile
+				}
+				if chanElemFuncFile(rt, info) {
+					return kindChanFuncFile
+				}
+			}
 		}
 		if sel, ok2 := v.Fun.(*ast.SelectorExpr); ok2 {
 			if structName, ok3 := resolveStruct(sel.X, st, info); ok3 {
@@ -1161,9 +1239,31 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				if mresG, okG := genericMethodResults(sel, st, info); okG {
 					for _, r := range mresG {
 						rt := resolveTypeText(r, info)
-						if funcTextFile(rt) || chanElemFile(rt, info) || chanElemFuncFile(rt, info) {
+						if funcTextFile(rt) {
 							return kindFuncFile
 						}
+						if chanElemFile(rt, info) {
+							return kindChanFile
+						}
+						if chanElemFuncFile(rt, info) {
+							return kindChanFuncFile
+						}
+					}
+				}
+				// A method call whose declared result is a channel
+				// (h.ch() chan *os.File) yields the channel itself;
+				// the binding must register as a chan carrier so a
+				// later receive taints the value.
+				for _, r := range methodMetaResults(structName, sel.Sel.Name, info) {
+					rt := resolveTypeText(r, info)
+					if funcTextFile(rt) {
+						return kindFuncFile
+					}
+					if chanElemFile(rt, info) {
+						return kindChanFile
+					}
+					if chanElemFuncFile(rt, info) {
+						return kindChanFuncFile
 					}
 				}
 			}
@@ -1232,8 +1332,14 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				}
 				for _, r := range mresG {
 					rt := resolveTypeText(r, info)
-					if funcTextFile(rt) || chanElemFile(rt, info) || chanElemFuncFile(rt, info) {
+					if funcTextFile(rt) {
 						return kindFuncFile
+					}
+					if chanElemFile(rt, info) {
+						return kindChanFile
+					}
+					if chanElemFuncFile(rt, info) {
+						return kindChanFuncFile
 					}
 				}
 			}
@@ -1468,8 +1574,19 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 		}
 		return isFileExpr(v.X, st, info, imports)
 	case *ast.IndexExpr:
-		return isContainerExpr(v.X, st, info)
+		if isContainerExpr(v.X, st, info) {
+			return true
+		}
+		if k := elementReadKind(v.X, st, info); k == kindFile || k == kindContainer {
+			return true
+		}
+		return false
 	case *ast.StarExpr:
+		if bt, ok := typeOfBase(v.X, st, info); ok && bt != "" {
+			if strings.TrimPrefix(resolveTaintType(bt, info), "*") == "*os.File" {
+				return true
+			}
+		}
 		return isFileExpr(v.X, st, info, imports)
 	case *ast.ParenExpr:
 		return isFileExpr(v.X, st, info, imports)
@@ -1524,11 +1641,24 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 		_, _, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.UnaryExpr:
+		if v.Op == token.ARROW {
+			// <-c: the received value of a chan-of-file carrier is
+			// itself a file, even in return/argument positions.
+			if chanCarrier(v.X, st, info, imports) {
+				return true
+			}
+		}
 		return isFileOrContainer(v.X, st, info, imports)
 	case *ast.ParenExpr:
 		return isFileOrContainer(v.X, st, info, imports)
 	case *ast.IndexExpr:
-		return isContainerExpr(v.X, st, info) || isFileOrContainer(v.X, st, info, imports)
+		if isContainerExpr(v.X, st, info) || isFileOrContainer(v.X, st, info, imports) {
+			return true
+		}
+		if k := elementReadKind(v.X, st, info); k == kindFile || k == kindContainer {
+			return true
+		}
+		return false
 	case *ast.TypeAssertExpr:
 		if resolveTypeText(exprText(v.Type), info) == "*os.File" {
 			return true
@@ -2023,6 +2153,27 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 				n := strings.TrimPrefix(r, "*")
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
+				}
+			}
+		}
+		// A generic or plain method call whose declared result names a
+		// struct (rr.mk() with T bound to wS) registers the result as
+		// an instance so later field reads (r.f) resolve taint.
+		if sel, okS := v.Fun.(*ast.SelectorExpr); okS {
+			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
+				if mres, okM := genericMethodResults(sel, st, info); okM {
+					for _, r := range mres {
+						n := strings.TrimPrefix(r, "*")
+						if _, isStruct := info.structs[n]; isStruct {
+							return n, true
+						}
+					}
+				}
+				for _, r := range methodMetaResults(sn, sel.Sel.Name, info) {
+					n := strings.TrimPrefix(r, "*")
+					if _, isStruct := info.structs[n]; isStruct {
+						return n, true
+					}
 				}
 			}
 		}
@@ -2559,6 +2710,24 @@ func classifyStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 				n := strings.TrimPrefix(r, "*")
 				if _, isStruct := info.structs[n]; isStruct {
 					return n, true
+				}
+			}
+		}
+		if sel, okS := v.Fun.(*ast.SelectorExpr); okS {
+			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
+				if mres, okM := genericMethodResults(sel, st, info); okM {
+					for _, r := range mres {
+						n := strings.TrimPrefix(r, "*")
+						if _, isStruct := info.structs[n]; isStruct {
+							return n, true
+						}
+					}
+				}
+				for _, r := range methodMetaResults(sn, sel.Sel.Name, info) {
+					n := strings.TrimPrefix(r, "*")
+					if _, isStruct := info.structs[n]; isStruct {
+						return n, true
+					}
 				}
 			}
 		}
