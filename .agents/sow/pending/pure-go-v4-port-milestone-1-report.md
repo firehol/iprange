@@ -90,9 +90,10 @@ class (forms 116-119), the pointer-defined-type
 class (forms 121), the indexed-receiver
 class (forms 123-125), the element-receiver
 class (forms 127-132), the range-literal-receiver
-class (forms 134-135), and the bound-receiver
-class (forms 137-138); the self-test now durably
-rejects one hundred fifteen mutation forms (details in the
+class (forms 134-135), the bound-receiver
+class (forms 137-138), and the call-result-binding
+class (forms 140-143); the self-test now durably
+rejects one hundred nineteen mutation forms (details in the
 close-out narrative). Decision 5A remains open
 for user ratification. Milestone
 2 must not start until a new independent final review passes.
@@ -1089,9 +1090,10 @@ class (forms 98-100), the container-element class
 (forms 121), the indexed-receiver class
 (forms 123-125), the element-receiver class
 (forms 127-132), the range-literal-receiver class
-(forms 134-135), and the bound-receiver class
-(forms 137-138); the
-self-test now durably rejects one hundred fifteen mutation forms. Decision 5A remains the single open item and
+(forms 134-135), the bound-receiver class
+(forms 137-138), and the call-result-binding class
+(forms 140-143); the
+self-test now durably rejects one hundred nineteen mutation forms. Decision 5A remains the single open item and
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
