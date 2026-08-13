@@ -1325,6 +1325,15 @@ The user adopted the external re-review's decisions after the reopening:
   arithmetic and the duplicated public/internal error-code tables were
   centralized - internal/format is the single authority and v4/go/types.go
   + v4/go/errors.go re-export aliases, so the copies can no longer drift.
+- Decision 5A (NetworkEnrichmentV1 location representation) = A, recorded
+  2026-08-13: the user delegated the choice to the implementing agent with
+  the long-term-best and minimal-complete mandate and did not select an
+  option; option A was adopted - `Location NetworkEnrichmentV1Location`
+  plus `HasLocation` is the documented zero-allocation equivalent of
+  Rust's `Option<NetworkEnrichmentV1Location>` (a pointer field would
+  force a per-call heap allocation or unsafe pointers into the mapping).
+  The parity matrix row 26 records the ratified spelling and the
+  v4/go/reader_public.go doc comment aligns.
 
 ### 2026-08-12 - decisions 1A-4A implemented (hot-path contract)
 
@@ -2385,8 +2394,9 @@ Reviewer findings:
   reviewers at PASS (360130c); the sixth final review (sol round 14)
   failed with five P2 findings in the mmap gate and the records, all
   fixed in this pass with the AST gate rewrite (v4/go-gate), the
-  temp-copy self-test, and the completed records; decision 5A remains an
-  open user decision.
+  temp-copy self-test, and the completed records; decision 5A was later
+  ratified (option A, 2026-08-13) after the user delegated the choice to
+  the implementing agent.
   The round-44 re-verification then completed with all six narrow
   reviewers at PASS (e5fea20); the round-45 final review failed with
   three P2 mmap-gate findings (os.CopyFS, os.OpenInRoot/os.OpenRoot
@@ -2685,8 +2695,9 @@ pre-fix-failing regression pins, and the round-11 final-review findings
 at HEAD 2fd6cae; the round-12 gate findings were fixed at HEAD 4fdc671
 (whole-tree selector scan, dot-import and bufio bans, durable gate
 self-test, runtime strace evidence). Decision 5A was entered in the
-decision log for the user's ratification and remains the only open
-product decision. The complete re-review trail is recorded in the Gate
+decision log for the user's ratification; it was ratified on
+2026-08-13 (option A) after the user delegated the choice to the
+implementing agent. The complete re-review trail is recorded in the Gate
 execution record; the closing result is appended there when it completes.
 
 ### 2026-08-13 - sixth-sweep gate rewrite (AST scanner) (HEAD c42325a)
