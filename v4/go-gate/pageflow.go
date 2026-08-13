@@ -749,6 +749,19 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		return pf.analyzeFuncLitCall(st, lit, call.Args)
 	}
 	obj := calleeObject(pf.pc, call)
+	// Calls through a function-typed variable whose package-level
+	// initializer is a func literal: analyze the literal body here with
+	// the call-site arguments bound to its parameters, so a complete-page
+	// sink inside the literal is visible (the literal's own file position
+	// is scanned by the rules pass; the taint must be supplied at the
+	// call). Variables without a literal initializer have no scanable body.
+	if v, ok := obj.(*types.Var); ok && !pf.pc.reassignedVars[v] {
+		if lit, ok2 := pf.pc.varInits[v]; ok2 {
+			if fl, ok3 := unparen(lit).(*ast.FuncLit); ok3 {
+				return pf.analyzeFuncLitCall(st, fl, call.Args)
+			}
+		}
+	}
 	fn, ok := obj.(*types.Func)
 	if !ok || fn.Pkg() == nil {
 		// Builtins (copy/append/len/delete) and type conversions never

@@ -103,13 +103,14 @@ func buildContext(cfg osConfig) *build.Context {
 
 // packageCheck is the typed result of one package under one OS config.
 type packageCheck struct {
-	pkg      *types.Package
-	info     *types.Info
-	fset     *token.FileSet
-	loader   *loader
-	files    []*parsedFile
-	pf       *pageFlow
-	varInits map[*types.Var]ast.Expr
+	pkg            *types.Package
+	info           *types.Info
+	fset           *token.FileSet
+	loader         *loader
+	files          []*parsedFile
+	pf             *pageFlow
+	varInits       map[*types.Var]ast.Expr
+	reassignedVars map[*types.Var]bool
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -138,8 +139,10 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	}
 	// Package-level variable initializers keyed by their resolved object.
 	// Function-typed variables are approved call targets only when their
-	// initializer provably binds a function whose body is scanned here.
+	// initializer provably binds a function whose body is scanned here,
+	// and only when the variable is never reassigned.
 	varInits := map[*types.Var]ast.Expr{}
+	reassigned := map[*types.Var]bool{}
 	for _, f := range asts {
 		ast.Inspect(f, func(n ast.Node) bool {
 			vs, ok := n.(*ast.ValueSpec)
@@ -158,7 +161,28 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 			return true
 		})
 	}
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits}, nil
+	for _, f := range asts {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range v.Lhs {
+					if id, ok := unparen(lhs).(*ast.Ident); ok {
+						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
+							reassigned[obj] = true
+						}
+					}
+				}
+			case *ast.IncDecStmt:
+				if id, ok := unparen(v.X).(*ast.Ident); ok {
+					if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
+						reassigned[obj] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -445,6 +469,12 @@ func (w *fileRules) visit(n ast.Node) bool {
 // unlisted callees (stdlib functions, method values) are never approved.
 func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
 	if v == nil || depth > 2 {
+		return false
+	}
+	// A variable that is reassigned anywhere may hold a callee whose body
+	// is not scanned (e.g. a later assignment of bytes.Clone), so only
+	// never-reassigned variables keep their initializer as proof.
+	if w.pc.reassignedVars[v] {
 		return false
 	}
 	init, ok := w.pc.varInits[v]

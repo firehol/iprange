@@ -66,4 +66,16 @@ var batteryPageCases = []batteryCase{
 	{name: "P15: benign same-package function bound into a var with a page", desc: "var f = samePkgFn; f(page) stays legal (body scanned)", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_pkgvar.go", content: "package reader\n\nfunc pagePassThrough(page []byte) []byte { return page }\n\nvar passThrough = pagePassThrough\n\nfunc pkgVarProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn passThrough(page), nil\n}"},
 	}},
+
+	{name: "P16: full page through a func-literal variable", desc: "var f = func(p){ copy(out,p) }; f(page) in the reader core", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fnlitvar.go", content: "package reader\n\nvar cloneLit = func(page []byte) []byte {\n\tout := make([]byte, len(page))\n\tcopy(out, page)\n\treturn out\n}\n\nfunc fnLitVarProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneLit(page), nil\n}"},
+	}},
+
+	{name: "P17: benign func-literal variable with a bounded slice", desc: "var f = func(p){ copy(out,p) }; f(page[48:112]) stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fnlitvarok.go", content: "package reader\n\nvar cloneLitB = func(page []byte) []byte {\n\tout := make([]byte, len(page))\n\tcopy(out, page)\n\treturn out\n}\n\nfunc fnLitVarProbeB(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneLitB(page[48:112]), nil\n}"},
+	}},
+
+	{name: "P18: reassigned func-literal variable with a page", desc: "var f = func(p){ return p }; f = bytes.Clone; f(page) rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_reassignfn.go", content: "package reader\n\nimport \"bytes\"\n\nvar cloneLitR = func(page []byte) []byte {\n\treturn page\n}\n\nfunc fnLitVarProbeR(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tcloneLitR = bytes.Clone\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneLitR(page), nil\n}"},
+	}},
 }

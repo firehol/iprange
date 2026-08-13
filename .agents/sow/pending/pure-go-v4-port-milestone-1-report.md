@@ -159,9 +159,9 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(4,432 lines) plus a trimmed shell harness (552 lines) whose 297-case
+(4,487 lines) plus a trimmed shell harness (552 lines) whose 300-case
 durable battery includes the complete-page ownership forms and the
-function-variable and closure-body bypass pins, and compact
+function-variable, closure-body, and func-literal-variable bypass pins, and compact
 records with the history preserved in the SOW appendix. Independent
 review outcome: section 14.
 
@@ -1272,13 +1272,13 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 297 cases (282 source-transfer forms + 15
-  complete-page forms; 241 rejections, 56 benign acceptances). The shell
+  data inside the tool: 300 cases (282 source-transfer forms + 18
+  complete-page forms; 243 rejections, 57 benign acceptances). The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 4,432 (tool) + 552 (shell) = 4,984
+  unlistable module). Gate totals: 4,487 (tool) + 552 (shell) = 5,039
   lines against module production 5,052 / tests 5,180.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
@@ -1293,9 +1293,26 @@ Fixes (one commit; HEAD recorded in the review entry below):
   moved to the shell self-test.
 - Validation at the rework commit: go test ./... (both tag sets),
   -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
-  gate --self-test 297/297 + 9 shell mutations exit 0, production scan
+  gate --self-test 300/300 + 9 shell mutations exit 0, production scan
   across all five target configs exit 0, cross-compilation, Rust
   conformance corpus cross-open, SOW audit green.
+
+- Lead adversarial pass after round 2 (2026-08-14): one more hole in the
+  same class was found and fixed before the round closed - a
+  never-reassigned function-typed variable initialized with a func
+  literal (var f = func(p []byte){ copy(out, p) }; f(page)) approved the
+  call but analyzed the literal body at the declaration with the
+  parameter unbound, so the complete-page sink inside stayed invisible.
+  Calls through such variables now bind the call-site arguments and
+  re-analyze the literal body at each call; package-level variables that
+  are reassigned anywhere no longer count as approved (a var later bound
+  to bytes.Clone is a transfer). Pinned as battery forms P16 (reject),
+  P17 (benign bounded slice through the same literal) and P18 (reject,
+  reassigned var).
+- Validation at the final round-2 commit: production scan clean, gate
+  --self-test 300/300 (243 rejections, 57 benign) + 9 shell mutations
+  exit 0, go test ./... (both tag sets), -race, vet, gofmt zero diffs,
+  SOW audit green.
 
 - Follow-up swarm round (2026-08-14): five residents passed the rework
   commit; two P1 gate-bypass classes were then verified live and closed:

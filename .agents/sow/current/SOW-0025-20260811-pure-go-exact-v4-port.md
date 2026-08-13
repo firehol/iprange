@@ -8,12 +8,13 @@ Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
 (six-resident swarm, then sol - decision 5A). All three review findings
 are fixed: the hot path has one authoritative key-only search primitive
 with test-only necessary-work counters and benchmarks; the mmap gate is a
-4,984-line typed scanner (4,432-line go/types module plus the 552-line
+5,039-line typed scanner (4,487-line go/types module plus the 552-line
 shell boundary/self-test harness, down from 14,519) that detects
-complete-page ownership; a follow-up swarm round closed two more
-bypass classes (function-variable callees and closure/defer/go bodies)
-with durable battery pins; the Status is compact with the full history in
-the appendix. The durable battery is 297 cases (241 rejections, 56 benign
+complete-page ownership; follow-up swarm rounds closed four more
+bypass classes (function-variable callees, closure/defer/go bodies,
+func-literal variables, reassigned function variables) with durable
+battery pins; the Status is compact with the full history in
+the appendix. The durable battery is 300 cases (243 rejections, 57 benign
 acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -33,7 +34,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (297
+  The durable mutation battery moved into the tool as table data (300
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -48,10 +49,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 297-case battery, and the SOW audit.
+the import-graph gate with its 300-case battery, and the SOW audit.
 Module production 5,052 raw lines (reader core 1,897 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 4,984 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 5,039 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1094,8 +1095,8 @@ HEAD recorded in the first review entry below):
   interprocedural through per-package symbolic summaries (pageflow.go);
   bounded slices carry their constant span (page[48:112] is a 64-byte
   view, page[0:4096] is a complete page). The 9,781-line shell battery
-  was replaced by 297 table cases inside the tool (282 source-transfer
-  cases + 15 complete-page forms: 241 rejections, 56 benign acceptances),
+  was replaced by 300 table cases inside the tool (282 source-transfer
+  cases + 18 complete-page forms: 243 rejections, 57 benign acceptances),
   and the shell harness shrank to 552 lines (import boundaries per
   target, module graph, x/sys checksum pins, and 9 environment mutations:
   internal-import boundary, x/sys outside the mapping owner, assembly
@@ -1104,8 +1105,8 @@ HEAD recorded in the first review entry below):
   into [4096]byte, append(page...), View(0, PageSize) copy,
   [4096]byte(page), string(page), and r.page(pgno) copy all produce
   rule-specific violations; the bounded copy and the decoded metadata
-  chunk append stay accepted. Gate totals: 4,432 lines (go-gate) + 552
-  lines (shell) = 4,984, against module production 5,052 and tests
+  chunk append stay accepted. Gate totals: 4,487 lines (go-gate) + 552
+  lines (shell) = 5,039, against module production 5,052 and tests
   5,180.
 - Swarm round 1 of the rework review (2026-08-14, at the rework
   commit) returned five passes plus two P1 gate-bypass classes, both
@@ -1129,6 +1130,20 @@ HEAD recorded in the first review entry below):
   moved into membershipLeafFind at the actual record-decode point (it no
   longer fires on a clean miss), matching the range/catalog/blob leaf
   helpers.
+- Swarm round 2 (2026-08-14, at the round-1 fix commit) re-verified the
+  delta and the lead's own adversarial pass then closed one more hole in
+  the same class, fixed in a follow-up commit:
+  - a function-typed variable initialized with a func literal and never
+    reassigned (var f = func(p []byte){ copy(out, p) }; f(page)) was
+    approved, but the literal body was analyzed only at the declaration
+    with the parameter unbound, so the complete-page sink stayed
+    invisible. Calls through such variables now analyze the literal body
+    with the call-site arguments bound (pageflow), and package-level
+    variables that are reassigned anywhere lose their initializer proof
+    (rules.go reassignedVars), so a var later bound to bytes.Clone is
+    treated as a transfer. Pinned as battery forms P16 (reject), P17
+    (benign bounded slice through the same literal) and P18 (reject,
+    reassigned var).
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
@@ -1142,7 +1157,7 @@ HEAD recorded in the first review entry below):
   module-graph cases moved to the shell self-test (the boundary loop
   already enforced them per target).
 - Validation: go test ./... (both tag sets), -race, checkptr, go vet,
-  gofmt zero diffs, the full import-graph gate and its --self-test (297
+  gofmt zero diffs, the full import-graph gate and its --self-test (300
   + 9 shell mutations, exit 0), production scan across all 5 target
   configs, cross-compilation, Rust conformance corpus cross-open, and the
   SOW audit - all green at the closing commit.
