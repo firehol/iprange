@@ -77,8 +77,8 @@ closed, two pin forms were added, and a startup sweep removes stale
 gatemut_* artifacts from interrupted self-test runs. The self-test now
 durably rejects thirty mutation forms. The records were completed in
 the same pass; decision 5A remains the single open user decision and
-blocks milestone close. Repository counts: production 4,780 raw lines /
-tests 4,863 raw lines. Milestone 2 must not start until a new
+blocks milestone close. Repository counts: production 4,792 raw lines /
+tests 4,877 raw lines. Milestone 2 must not start until a new
 independent final review passes.
 
 The sixth final review then failed with five P2 findings, all in the mmap
@@ -361,7 +361,7 @@ x/sys source is the module-cache checkout, and scanning hidden
 directories (only .git is skipped), pinned as self-test forms 243-244,
 raising the set to one hundred ninety-four mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
-production 4,780 raw lines / tests 4,863 raw lines (the metadata fix
+production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
 new independent final review passes; decision 5A remains the single open
 user decision.
@@ -2625,7 +2625,18 @@ execution record; the closing result is appended there when it completes.
   embedded-entry argument list. Forms 225-226 pin the two rejects
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
+- Round-41 narrow re-review found a sidecar error-class
+  divergence at HEAD 550d107: Go's immutable open stat'ed the main
+  file before checking the canonical .readers sidecar, so a live
+  database whose main file was missing/renamed but whose sidecar
+  remained returned Io (31) while Rust's open_immutable refuses
+  with WrongMode (11) because require_sidecar_absent runs before
+  open_read_only. Fixed at the reader level: OpenImmutable now
+  applies the same sidecarAbsentUnderLock check before the main
+  file is touched (the under-lock re-check inside the mapping open
+  stays authoritative), pinned by the pre-fix-failing test
+  TestSidecarPresence/missing-main-sidecar-present.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
   import graph with the 194-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, and round-39/40 rejects 241-244 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, and hidden dot-directories), ten cross-compiles,
-  SOW audit - all green. Counts: production 4,780 raw lines / tests
-  4,863 raw lines (gate scanner lives outside the module).
+  SOW audit - all green. Counts: production 4,792 raw lines / tests
+  4,877 raw lines (gate scanner lives outside the module).
