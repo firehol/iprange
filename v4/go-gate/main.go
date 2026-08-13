@@ -142,6 +142,7 @@ var remoteStructs = map[string]map[string]string{}
 var remoteMethods = map[string][]string{}
 var remoteMethodFull = map[string]string{}
 var remoteEmbedded = map[string][]string{}
+var remoteRecvTypeParams = map[string][]string{}
 
 type pkgInfo struct {
 	structs        map[string]map[string]string
@@ -262,6 +263,11 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 	for k, v := range remoteEmbedded {
 		if _, exists := info.embedded[k]; !exists {
 			info.embedded[k] = v
+		}
+	}
+	for k, v := range remoteRecvTypeParams {
+		if _, exists := info.recvTypeParams[k]; !exists {
+			info.recvTypeParams[k] = v
 		}
 	}
 	srcs := map[string][]byte{}
@@ -386,6 +392,14 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				// clause, a constructor return, a struct field - so
 				// v.get() classifies when the declared signature is a
 				// file producer (get() *os.File, get() func() *os.File).
+				var ifaceTps []string
+				if ts.TypeParams != nil {
+					for _, fld := range ts.TypeParams.List {
+						for _, n := range fld.Names {
+							ifaceTps = append(ifaceTps, n.Name)
+						}
+					}
+				}
 				fields := map[string]string{}
 				for _, m := range it.Methods.List {
 					if len(m.Names) == 0 {
@@ -403,16 +417,43 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 						fields[name.Name] = t
 						if ft, ok2 := m.Type.(*ast.FuncType); ok2 {
 							info.methods[ts.Name.Name+"."+name.Name] = collectResults(ft)
+							// A generic interface instantiated at an
+							// embedding site (IBaseGN[func() *os.File])
+							// promotes the method with the type
+							// parameter substituted; record the
+							// interface's own type parameters under
+							// the same key space genericMethodResults
+							// uses for generic receivers.
+							if len(ifaceTps) > 0 {
+								info.recvTypeParams[ts.Name.Name+"."+name.Name] = ifaceTps
+							}
 						}
 					}
 				}
 				info.structs[ts.Name.Name] = fields
 				remoteStructs[ts.Name.Name] = fields
 				remoteStructs[f.Name.Name+"."+ts.Name.Name] = fields
+				// A renamed-import qualifier (mm.IMapBase) must reduce
+				// to the bare interface name before method lookup: the
+				// clause-qualified mirror only matches the unrenamed
+				// package clause, so register the self-entry exactly
+				// like the struct branch does.
+				if pkgDir != "" {
+					if pkgAliasesByDir[pkgDir] == nil {
+						pkgAliasesByDir[pkgDir] = map[string]string{}
+					}
+					pkgAliasesByDir[pkgDir][ts.Name.Name] = ts.Name.Name
+				}
+				qualifiedAliases[f.Name.Name+"."+ts.Name.Name] = ts.Name.Name
 				for mname, mres := range info.methods {
 					if strings.HasPrefix(mname, ts.Name.Name+".") {
 						remoteMethods[mname] = mres
 						remoteMethods[f.Name.Name+"."+mname] = mres
+						if tps, okT := info.recvTypeParams[mname]; okT {
+							remoteRecvTypeParams[mname] = tps
+							full := f.Name.Name + "." + mname
+							remoteRecvTypeParams[full] = tps
+						}
 					}
 				}
 				for _, emb := range info.embedded[ts.Name.Name] {
@@ -533,6 +574,8 @@ func collectPkgInfo(path string, f *ast.File, info *pkgInfo) {
 				// the instantiation into the raw results.
 				if tps := parseBracketArgs(exprText(fd.Recv.List[0].Type)); tps != nil {
 					info.recvTypeParams[mkey] = tps
+					remoteRecvTypeParams[mkey] = tps
+					remoteRecvTypeParams[f.Name.Name+"."+mkey] = tps
 				}
 				if res := resolveTypeText(recvStruct, *info); res != recvStruct {
 					info.methods[res+"."+fd.Name.Name] = collectResults(fd.Type)
@@ -1169,13 +1212,28 @@ func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
 			return mres, ret
 		}
 		for _, emb := range info.embedded[base] {
-			if mm, r := walk(emb); r {
+			embBase := resolveStructName(emb, info)
+			args := parseBracketArgs(emb)
+			if mm, r := walk(embBase); r {
 				return mm, r
 			} else if len(mm) > 0 {
 				// Declared results on a promoted embedded type are authoritative
 				// even when the embedded method body was never marked as a file
 				// producer: ok only records body-marked claims, so dropping mm
 				// here would blind the whole embedding chain.
+				if len(args) > 0 {
+					// An instantiated embedded type (IBaseGN[func() *os.File],
+					// gS[func() *os.File]) promotes the method with its type
+					// parameters substituted; without this the raw parameter
+					// text ("T") never matches the file shapes.
+					if tps, okT := info.recvTypeParams[embBase+"."+method]; okT && len(tps) == len(args) {
+						out := make([]string, len(mm))
+						for i, res := range mm {
+							out[i] = substituteTypeParams(res, tps, args, info)
+						}
+						return out, false
+					}
+				}
 				return mm, false
 			}
 		}
