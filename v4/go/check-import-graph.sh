@@ -8584,12 +8584,52 @@ MUTEOF
 	add_mut internal/mapping/gatemut_tee_linux.go
 	run_mut "unix.Tee descriptor copy"
 
+	# --- 252: os.Root laundered through a struct field -------------------
+	# Form 250 pinned the direct OpenInRoot producer, but a *os.Root
+	# handle stored in a struct field and opened through the field
+	# (h.r.Open(name)) dropped the file taint: the returned *os.File
+	# reached flate.NewReader untainted and the stream was consumed
+	# through the exact inflater exemption shape (live, gate exit 0).
+	# *os.Root now resolves as a file-bearing type everywhere *os.File
+	# does, so field, parameter, helper-return, and type-asserted Root
+	# handles are tainted and every Root method outside the approved
+	# lifecycle surface fails closed.
+	cat > internal/mapping/gatemut_rootfield_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+type gateRootField252 struct {
+	r *os.Root
+}
+
+func gateRootFieldOpen252(dir, name string) (io.ReadCloser, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	h := gateRootField252{r: root}
+	f, err := h.r.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_rootfield_linux.go
+	run_mut "os.Root laundered through a struct field"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 201 mutation forms rejected)"
+	echo "import-graph self-test passed (all 202 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

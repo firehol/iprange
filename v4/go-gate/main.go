@@ -1096,7 +1096,7 @@ func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 	}
 	for _, r := range results {
 		rt := resolveTypeText(r, info)
-		if !strings.HasPrefix(rt, "func(") || !strings.Contains(rt, "*os.File") {
+		if !strings.HasPrefix(rt, "func(") || !mentionsFileType(rt) {
 			return false
 		}
 	}
@@ -1234,7 +1234,7 @@ func chanElemFileDepth(text string, info pkgInfo, depth int) bool {
 	for _, p := range []string{"chan<- ", "<-chan ", "chan "} {
 		if strings.HasPrefix(text, p) {
 			el := resolveTypeText(strings.TrimSpace(strings.TrimPrefix(text, p)), info)
-			if el == "*os.File" {
+			if isFileTyped(el) {
 				return true
 			}
 			return chanElemFileDepth(el, info, depth+1)
@@ -1246,7 +1246,7 @@ func chanElemFileDepth(text string, info pkgInfo, depth int) bool {
 // funcTextFile reports whether a resolved type text is a func type
 // returning *os.File in any position.
 func funcTextFile(text string) bool {
-	return strings.HasPrefix(text, "func(") && strings.Contains(text, "*os.File")
+	return strings.HasPrefix(text, "func(") && mentionsFileType(text)
 }
 
 // chanElemFuncFile reports whether a type text is a channel whose
@@ -1482,7 +1482,7 @@ func ifaceImplProducer(structName, method string, info pkgInfo) bool {
 		mres, _ := methodMeta(base, method, info)
 		for _, r := range mres {
 			rt := resolveTypeText(r, info)
-			if rt == "*os.File" || funcTextFile(rt) || chanElemFile(rt, info) || chanElemFuncFile(rt, info) {
+			if isFileTyped(rt) || funcTextFile(rt) || chanElemFile(rt, info) || chanElemFuncFile(rt, info) {
 				return true
 			}
 		}
@@ -1515,14 +1515,14 @@ func typeSwitchBound(assign ast.Stmt) string {
 // textual alias expansion first.
 func funcTypeResultsFile(e ast.Expr, info pkgInfo) bool {
 	txt := resolveTypeText(exprText(e), info)
-	if strings.HasPrefix(txt, "func(") && strings.Contains(txt, "*os.File") {
+	if strings.HasPrefix(txt, "func(") && mentionsFileType(txt) {
 		return true
 	}
 	switch t := e.(type) {
 	case *ast.FuncType:
-		return len(positionsOf("*os.File", collectResults(t))) > 0
+		return len(fileResultPositions(collectResults(t))) > 0
 	case *ast.FuncLit:
-		return len(positionsOf("*os.File", collectResults(t.Type))) > 0
+		return len(fileResultPositions(collectResults(t.Type))) > 0
 	}
 	return false
 }
@@ -1582,7 +1582,7 @@ func elementReadKind(base ast.Expr, st *taints, info pkgInfo) kind {
 	}
 	rt := resolveTaintType(bt, info)
 	if strings.HasPrefix(rt, "*") {
-		if strings.TrimPrefix(rt, "*") == "*os.File" {
+		if isFileTyped(strings.TrimPrefix(rt, "*")) {
 			return kindFile
 		}
 		return kindNone
@@ -1605,7 +1605,7 @@ func elementKindShape(text string, info pkgInfo) kind {
 	}
 	rt := resolveTypeText(el, info)
 	switch {
-	case rt == "*os.File":
+	case isFileTyped(rt):
 		return kindFile
 	case funcTextFile(rt):
 		return kindFuncFile
@@ -1613,7 +1613,7 @@ func elementKindShape(text string, info pkgInfo) kind {
 		return kindChanFuncFile
 	case chanElemFile(rt, info):
 		return kindChanFile
-	case strings.Contains(rt, "*os.File"):
+	case mentionsFileType(rt):
 		return kindContainer
 	}
 	return kindNone
@@ -1636,7 +1636,7 @@ func containerElementKindExpr(e ast.Expr, st *taints, info pkgInfo) kind {
 // classifyType maps a declared type expression to file/container taint.
 func classifyType(t ast.Expr, info pkgInfo) kind {
 	text := resolveTypeText(exprText(t), info)
-	if text == "*os.File" {
+	if isFileTyped(text) {
 		return kindFile
 	}
 	if chanElemFile(text, info) {
@@ -1648,7 +1648,7 @@ func classifyType(t ast.Expr, info pkgInfo) kind {
 	if funcTextFile(text) {
 		return kindFuncFile
 	}
-	if strings.Contains(text, "*os.File") {
+	if mentionsFileType(text) {
 		return kindContainer
 	}
 	return kindNone
@@ -1679,7 +1679,7 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		}
 	case *ast.TypeAssertExpr:
 		rt := resolveTypeText(exprText(v.Type), info)
-		if rt == "*os.File" {
+		if isFileTyped(rt) {
 			return kindFile
 		}
 		if funcTextFile(rt) {
@@ -1709,7 +1709,7 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		// alias (*zfA where zfA = *os.File) yields a file value even
 		// when the pointer binding itself was never tainted.
 		if bt, ok := typeOfBase(v.X, st, info); ok && bt != "" {
-			if strings.TrimPrefix(resolveTaintType(bt, info), "*") == "*os.File" {
+			if isFileTyped(strings.TrimPrefix(resolveTaintType(bt, info), "*")) {
 				return kindFile
 			}
 		}
@@ -1847,7 +1847,7 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
-		if strings.Contains(text, "*os.File") {
+		if mentionsFileType(text) {
 			return kindContainer
 		}
 		// A struct built with a file element (ProcAttr{Files: []*os.File{...}})
@@ -1894,14 +1894,14 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				}
 			}
 			mres, retM := methodMeta(structName, v.Sel.Name, info)
-			if positionsOf("*os.File", mres) != nil || retM {
+			if fileResultPositions(mres) != nil || retM {
 				return kindFuncFile
 			}
 			if ifaceImplProducer(structName, v.Sel.Name, info) {
 				return kindFuncFile
 			}
 			if mresG, okG := genericMethodResults(v, st, info); okG {
-				if positionsOf("*os.File", mresG) != nil {
+				if fileResultPositions(mresG) != nil {
 					return kindFuncFile
 				}
 				for _, r := range mresG {
@@ -1985,7 +1985,7 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		// whose body returns a tainted value behind an interface.
 		if structName, found := resolveStruct(sel.X, st, info); found {
 			mres, retM := methodMeta(structName, sel.Sel.Name, info)
-			if pos := positionsOf("*os.File", mres); pos != nil {
+			if pos := fileResultPositions(mres); pos != nil {
 				return call, pos, true
 			}
 			if retM {
@@ -2026,14 +2026,14 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 				// here as a file position made the invocation lose
 				// the taint and let a file-backed zr slip through
 				// the io.ReadFull exemption.
-				if pos := positionsOf("*os.File", mresG); pos != nil {
+				if pos := fileResultPositions(mresG); pos != nil {
 					return call, pos, true
 				}
 			}
 		}
 	}
 	if id, ok := fun.(*ast.Ident); ok {
-		if pos := positionsOf("*os.File", info.funcs[id.Name]); pos != nil {
+		if pos := fileResultPositions(info.funcs[id.Name]); pos != nil {
 			return call, pos, true
 		}
 		if info.retFuncs[id.Name] {
@@ -2044,7 +2044,7 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		}
 		// A single-argument conversion through a type alias of *os.File
 		// (type zr = *os.File; zr(f)) keeps the file taint.
-		if len(call.Args) == 1 && resolveTypeText(id.Name, info) == "*os.File" {
+		if len(call.Args) == 1 && isFileTyped(resolveTypeText(id.Name, info)) {
 			return call, []int{0}, true
 		}
 		// A generic instantiation (idf[T any](f T) T called with a
@@ -2057,7 +2057,7 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		// Explicit instantiations and inferred generic calls: a
 		// type-parameter result bound to *os.File is a producer
 		// (mkT[*os.File](), mkT2(&gsG{}) after substitution).
-		if pos := positionsOf("*os.File", gcr); pos != nil {
+		if pos := fileResultPositions(gcr); pos != nil {
 			return call, pos, true
 		}
 	}
@@ -2102,7 +2102,7 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		}
 	}
 	if fl, ok := fun.(*ast.FuncLit); ok {
-		if pos := positionsOf("*os.File", collectResults(fl.Type)); pos != nil {
+		if pos := fileResultPositions(collectResults(fl.Type)); pos != nil {
 			return call, pos, true
 		}
 		// A closure whose declared result type hides the file behind an
@@ -2130,6 +2130,32 @@ func positionsOf(want string, results []string) []int {
 	return pos
 }
 
+// isFileTyped reports whether a value type text is a file-bearing
+// handle: *os.File, or *os.Root whose Open/OpenFile/Create methods
+// produce files. Root handles carry the same taint as files, so every
+// Root method outside the approved lifecycle surface fails closed.
+func isFileTyped(t string) bool {
+	return t == "*os.File" || t == "*os.Root"
+}
+
+// mentionsFileType reports whether a type text mentions a file-bearing
+// handle spelling (struct fields, containers, func/chan element types).
+func mentionsFileType(t string) bool {
+	return strings.Contains(t, "*os.File") || strings.Contains(t, "*os.Root")
+}
+
+// fileResultPositions returns the result positions whose resolved type
+// is a file-bearing handle (*os.File or *os.Root).
+func fileResultPositions(results []string) []int {
+	var pos []int
+	for i, r := range results {
+		if isFileTyped(r) {
+			pos = append(pos, i)
+		}
+	}
+	return pos
+}
+
 // isFileExpr reports whether expr names a *os.File value: a tainted
 // identifier, a struct-field access whose field is *os.File, or a
 // producer call.
@@ -2151,12 +2177,12 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 		if !ok {
 			return false
 		}
-		return resolveTypeText(info.structs[structName][v.Sel.Name], info) == "*os.File"
+		return isFileTyped(resolveTypeText(info.structs[structName][v.Sel.Name], info))
 	case *ast.CallExpr:
 		_, _, ok := producerCall(v, st, info, imports)
 		return ok
 	case *ast.TypeAssertExpr:
-		if resolveTypeText(exprText(v.Type), info) == "*os.File" {
+		if isFileTyped(resolveTypeText(exprText(v.Type), info)) {
 			return true
 		}
 		return isFileExpr(v.X, st, info, imports)
@@ -2170,7 +2196,7 @@ func isFileExpr(e ast.Expr, st *taints, info pkgInfo, imports map[string]string)
 		return false
 	case *ast.StarExpr:
 		if bt, ok := typeOfBase(v.X, st, info); ok && bt != "" {
-			if strings.TrimPrefix(resolveTaintType(bt, info), "*") == "*os.File" {
+			if isFileTyped(strings.TrimPrefix(resolveTaintType(bt, info), "*")) {
 				return true
 			}
 		}
@@ -2193,9 +2219,9 @@ func isContainerExpr(e ast.Expr, st *taints, info pkgInfo) bool {
 		if !ok {
 			return false
 		}
-		return strings.Contains(resolveTypeText(info.structs[structName][v.Sel.Name], info), "*os.File")
+		return mentionsFileType(resolveTypeText(info.structs[structName][v.Sel.Name], info))
 	case *ast.CompositeLit:
-		return strings.Contains(exprText(v.Type), "*os.File")
+		return mentionsFileType(exprText(v.Type))
 	case *ast.StarExpr:
 		return isContainerExpr(v.X, st, info)
 	case *ast.ParenExpr:
@@ -2213,7 +2239,7 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 	}
 	switch v := e.(type) {
 	case *ast.CompositeLit:
-		if strings.Contains(exprText(v.Type), "*os.File") {
+		if mentionsFileType(exprText(v.Type)) {
 			return true
 		}
 		for _, el := range v.Elts {
@@ -2247,7 +2273,7 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 		}
 		return false
 	case *ast.TypeAssertExpr:
-		if resolveTypeText(exprText(v.Type), info) == "*os.File" {
+		if isFileTyped(resolveTypeText(exprText(v.Type), info)) {
 			return true
 		}
 		return isFileOrContainer(v.X, st, info, imports)
@@ -3033,7 +3059,7 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 		t := resolveTypeText(exprText(field.Type), info)
 		for _, name := range field.Names {
 			switch {
-			case t == "*os.File":
+			case isFileTyped(t):
 				st.file[name.Name] = true
 			case funcTypeResultsFile(field.Type, info):
 				st.funcFile[name.Name] = true
@@ -3041,7 +3067,7 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 				st.chanFuncFile[name.Name] = true
 			case chanElemFile(t, info):
 				st.chanFile[name.Name] = true
-			case strings.Contains(t, "*os.File"):
+			case mentionsFileType(t):
 				st.container[name.Name] = true
 			}
 			if k := elementKindShape(t, info); k != kindNone {
@@ -3280,9 +3306,9 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 						for _, ce := range cs.List {
 							ct := resolveTypeText(exprText(ce), info)
 							switch {
-							case ct == "*os.File":
+							case isFileTyped(ct):
 								st.file[bound] = true
-							case strings.HasPrefix(ct, "func(") && strings.Contains(ct, "*os.File"):
+							case strings.HasPrefix(ct, "func(") && mentionsFileType(ct):
 								st.funcFile[bound] = true
 							}
 							// case *gs: the bound variable is an
