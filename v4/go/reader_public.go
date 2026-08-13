@@ -577,7 +577,7 @@ type NetworkEnrichmentV1Location struct {
 // by-value result cannot reference stable storage without a per-call
 // allocation, so the Rust Option<NetworkEnrichmentV1Location> is mirrored
 // as the value Location plus the presence flag HasLocation (decision 5A,
-// SOW decision log, recorded for user ratification). Names and fields
+// ratified 2026-08-13; SOW decision log). Names and fields
 // match the matrix and the Rust authority.
 type NetworkEnrichmentV1 struct {
 	ASN         uint32
