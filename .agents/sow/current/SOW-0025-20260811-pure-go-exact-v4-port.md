@@ -198,7 +198,10 @@ the continuation class of the same round (elided inner composite
 literals in slice, map, nested-container, and channel elements,
 pointer composite literals, and func-valued arguments to explicitly
 instantiated generics), forms 283-288, raising the set to two
-hundred thirty-eight mutation forms);
+hundred thirty-eight mutation forms; round-53 closed the embed
+import and //go:embed directive classes (compile-time database
+copies), forms 289-290, raising the set to two hundred forty
+mutation forms);
 round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -2301,13 +2304,36 @@ Use these sections in this order:
   raising the rejection set to two hundred thirty-eight
   mutation forms. Vacuity proof: the round-51 scanner misses exactly
   the eleven new forms (and forms 245-246 were vacuous before the
-  env fix), the fixed scanner rejects all 238. Gates: go test ./...
-  incl -race, go vet, gofmt, import graph (self-test, all 238 forms
-  rejected), the real tree gate, CGO_ENABLED=0 build and test, ten
-  cross-compiles, SOW audit — all green. Counts unchanged at this
-  commit: production 4,792 raw lines / tests 4,877 raw lines.
-  Decision 5A remains open for user ratification; Milestone 2
-  remains blocked until the final review passes.
+### 2026-08-13 - round-53 final review reopened the gate: embed and //go:embed compile-time database copies closed (HEAD 2e0e3667db3c)
+
+- The round-53 final review failed with two P2 findings: (1) the mmap-only
+  gate accepted //go:embed database content - a production source embedding
+  an 8,192-byte database into a []byte passed check-import-graph.sh,
+  because the embed package was absent from the banned import set and the
+  directive scan rejected only //go:linkname; (2) the
+  NetworkEnrichmentV1Location pointer-vs-value parity deviation, which is
+  the already-open decision 5A awaiting user ratification, not a new code
+  defect.
+- P2-1 closed at 2e0e3667db3c: the embed import is banned (a blank
+  `_ "embed"` import alone would bypass it, so the directive is also
+  rejected), and every production //go:embed directive now fails the AST
+  scan as a compile-time content copy. Pinned as pre-fix-failing forms
+  289 (non-blank embed import) and 290 (blank embed import with an
+  embedded probe.db under a //go:embed directive). The pre-fix scanner
+  misses exactly the two new forms; the fixed scanner rejects all two
+  hundred forty mutation forms (round-52: two hundred thirty-eight).
+- Vacuity against the round-51 scanner: exactly thirteen MISSes, forms
+  278-290 (the eleven round-52 forms plus the two round-53 forms).
+- P2-2 remains the open decision 5A: the approved parity matrix writes
+  Location *NetworkEnrichmentV1Location while the implementation exposes
+  a value plus HasLocation; user ratification of the value-plus-flag
+  representation (or a conforming redesign) is required before the
+  milestone gate can close.
+- Gates at this commit: go test ./... incl -race, go vet, gofmt,
+  import graph (self-test, all 240 forms rejected), the real tree gate,
+  CGO_ENABLED=0 build and test, ten cross-compiles, SOW audit - all
+  green. Counts unchanged: production 4,792 raw lines / tests 4,877
+  raw lines (gate scanner lives outside the module).
 
 ## Validation
 
@@ -2328,7 +2354,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 238-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 240-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
   amd64/arm64, freebsd amd64, windows amd64/arm64 (the gate's
@@ -2419,6 +2445,19 @@ Reviewer findings:
   prefixing env in run_mut; the pre-fix scanner misses exactly the
   eleven new forms, the fixed scanner rejects all two hundred
   thirty-eight.
+  The round-53 final review then failed with two P2 findings: the
+  embed package and the //go:embed directive copy database bytes
+  into the binary at compile time, bypassing the mmap-only contract
+  (the AST gate banned neither the embed import - blank `_ "embed"`
+  imports are skipped as name-less - nor the directive, which was
+  scanned only for //go:linkname); closed at 2e0e3667db3c by banning the
+  embed import and rejecting every //go:embed directive in the
+  production scan, pinned as pre-fix-failing forms 289 (non-blank
+  embed import) and 290 (blank import with an embedded probe.db);
+  the pre-fix scanner misses exactly the two new forms, the fixed
+  scanner rejects all two hundred forty; the
+  NetworkEnrichmentV1Location pointer-vs-value deviation remains the
+  open decision 5A awaiting user ratification.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -3248,7 +3287,7 @@ execution record; the closing result is appended there when it completes.
   same-module cross-package producer vars (forms 257-260), raising
   the set to two hundred ten mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 238-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  import graph with the 240-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
   rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
   descriptor-transfer primitives, *os.Root laundering through struct
@@ -3271,6 +3310,8 @@ execution record; the closing result is appended there when it completes.
   var-bound generic-instantiation results, anonymous struct-literal
   positional elements, elided container-element fields, pointer
   composite literals, and explicit-instantiation callee closures),
+  and round-53 rejects 289-290 cover the embed import and the
+  //go:embed directive (compile-time database copies),
   ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
