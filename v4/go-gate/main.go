@@ -518,10 +518,10 @@ func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 	case *ast.Ident:
 		results = info.funcs[f.Name]
 	case *ast.SelectorExpr:
-		if recv, ok := f.X.(*ast.Ident); ok {
-			if structName, ok2 := resolveStruct(recv, st, info); ok2 {
-				results = info.methods[structName+"."+f.Sel.Name]
-			}
+		// The receiver may be a nested field chain (mhv.inner.mk()),
+		// not just a plain identifier; resolveStruct walks the chain.
+		if structName, ok2 := resolveStruct(unwrapParen(f.X), st, info); ok2 {
+			results = info.methods[structName+"."+f.Sel.Name]
 		}
 	}
 	if len(results) == 0 {
@@ -551,10 +551,8 @@ func callResultsChanFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 	case *ast.Ident:
 		results = info.funcs[f.Name]
 	case *ast.SelectorExpr:
-		if recv, ok := f.X.(*ast.Ident); ok {
-			if structName, ok2 := resolveStruct(recv, st, info); ok2 {
-				results = info.methods[structName+"."+f.Sel.Name]
-			}
+		if structName, ok2 := resolveStruct(unwrapParen(f.X), st, info); ok2 {
+			results = info.methods[structName+"."+f.Sel.Name]
 		}
 	}
 	if len(results) == 0 {
