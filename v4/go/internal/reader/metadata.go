@@ -44,6 +44,14 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 		if h.Lower != 48+chunk.ChunkLen || h.Upper != format.PageSize {
 			return nil, false, corrupt("metadata chunk geometry")
 		}
+		// Bytes after the chunk must be zero (binary-format-v4.md:1051);
+		// Rust rejects the page on the read path (metadata.rs:274) and as
+		// PageReservedNonzero on validation.
+		for _, b := range page[48+int(chunk.ChunkLen):] {
+			if b != 0 {
+				return nil, false, corrupt("metadata chunk tail nonzero")
+			}
+		}
 		if chunk.LogicalOffset != offset {
 			return nil, false, corrupt("metadata offset %d expected %d", chunk.LogicalOffset, offset)
 		}

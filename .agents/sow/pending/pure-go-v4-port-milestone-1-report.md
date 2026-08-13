@@ -185,9 +185,9 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,772 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 4,780 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,832 raw lines. The earlier
+tree): 4,863 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -1146,4 +1146,8 @@ self-test now durably rejects one hundred eighty-nine mutation forms (forms 236-
 awaits user ratification. Milestone 1 is reopened and Milestone 2 is
 blocked pending the independent re-review and the user's decision 5A.
 The worker boundary decision remains scheduled for its later milestone
-per 2A.
+per 2A. The round-37 narrow re-review found and fixed one P2 (metadata
+chunk tail-zero parity: ReadMetadataJSON accepted nonzero bytes after a
+metadata chunk; Rust rejects the page as corrupt; fixed with an explicit
+tail-zero check in internal/reader/metadata.go and the pre-fix-failing
+regression pin TestMetadataChunkTailNonzeroRejected).

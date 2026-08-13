@@ -110,6 +110,37 @@ func TestMetadataTrailingBytesRejected(t *testing.T) {
 	}
 }
 
+// auditMetadataChunkTailZero: bytes after each metadata chunk must be
+// zero (binary-format-v4.md:1051). Rust rejects the page as corrupt on the
+// read path (metadata.rs:274) and as PageReservedNonzero on validation;
+// Go must reject it too instead of accepting the nonzero tail.
+func TestMetadataChunkTailNonzeroRejected(t *testing.T) {
+	path := copyFixture(t, "membership-ipv6.iprdb", "meta-tailnz.iprdb")
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	// Chunk page 9 holds the single 1039-byte stream; make the first
+	// post-data byte nonzero without touching any declared length.
+	const chunkPage = 9
+	chunkLen := format.U16(mustRead(t, file, chunkPage, 36, 2))
+	if chunkLen != 1039 {
+		t.Fatalf("unexpected fixture chunk length %d", chunkLen)
+	}
+	if _, err := file.WriteAt([]byte{0xaa}, int64(chunkPage*format.PageSize+48+int(chunkLen))); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, _, err := r.ReadMetadataJSON(); err == nil || !isFormatError(err, format.CodeFormatInvalid) {
+		t.Fatalf("metadata accepted with nonzero chunk tail: %v", err)
+	}
+}
+
 // auditStructuredPayloadDecodedAtLookup: the payload is decoded at lookup
 // time, not at Value() time (Rust parity: structured_value/view.rs decodes
 // during the lookup), and normal lookup performs no implicit semantic
