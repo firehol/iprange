@@ -359,6 +359,20 @@ func exprText(e ast.Expr) string {
 			return "<-chan " + exprText(t.Value)
 		}
 		return "chan " + exprText(t.Value)
+	case *ast.MapType:
+		return "map[" + exprText(t.Key) + "]" + exprText(t.Value)
+	case *ast.Ellipsis:
+		return "..." + exprText(t.Elt)
+	case *ast.ParenExpr:
+		return "(" + exprText(t.X) + ")"
+	case *ast.IndexExpr:
+		return exprText(t.X) + "[" + exprText(t.Index) + "]"
+	case *ast.IndexListExpr:
+		parts := []string{}
+		for _, ix := range t.Indices {
+			parts = append(parts, exprText(ix))
+		}
+		return exprText(t.X) + "[" + strings.Join(parts, ", ") + "]"
 	case *ast.FuncType:
 		parts := []string{}
 		if t.Params != nil {
@@ -386,13 +400,14 @@ type taints struct {
 	struc        map[string]string  // identifiers holding a same-package struct value: name -> type name
 	chanFile     map[string]bool    // identifiers holding chan *os.File (make, declared, or send-marked)
 	chanFuncFile map[string]bool    // identifiers holding chan of func() *os.File
-	fieldTaint   map[string]kind    // expr.field = file/container from an assignment of a tainted value
+	fieldTaint   map[string]kind    // expr.field = value kind from an assignment of a tainted value
+	elementTaint map[string]kind    // container expr -> element kind (map/slice element reads and writes)
 	funcFile     map[string]bool    // identifiers holding func() *os.File (closures and declared func types)
 	retFile      map[token.Pos]bool // closure/function nodes whose body returns a file-tainted value
 }
 
 func newTaints() *taints {
-	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, chanFuncFile: map[string]bool{}, fieldTaint: map[string]kind{}, funcFile: map[string]bool{}, retFile: map[token.Pos]bool{}}
+	return &taints{file: map[string]bool{}, container: map[string]bool{}, struc: map[string]string{}, chanFile: map[string]bool{}, chanFuncFile: map[string]bool{}, fieldTaint: map[string]kind{}, elementTaint: map[string]kind{}, funcFile: map[string]bool{}, retFile: map[token.Pos]bool{}}
 }
 
 func cloneTaints(t *taints) *taints {
@@ -414,6 +429,9 @@ func cloneTaints(t *taints) *taints {
 	}
 	for k, v := range t.fieldTaint {
 		c.fieldTaint[k] = v
+	}
+	for k, v := range t.elementTaint {
+		c.elementTaint[k] = v
 	}
 	for k, v := range t.funcFile {
 		c.funcFile[k] = v
@@ -454,6 +472,15 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 			var cls kind
 			if vs.Type != nil {
 				cls = classifyType(vs.Type, info)
+			}
+			if vs.Type != nil {
+				if k := elementKindShape(exprText(vs.Type), info); k != kindNone {
+					for _, n := range vs.Names {
+						if n.Name != "_" {
+							pkg.elementTaint[n.Name] = k
+						}
+					}
+				}
 			}
 			for i, name := range vs.Names {
 				if len(vs.Values) > i {
@@ -745,6 +772,63 @@ func structBase(t ast.Expr, info pkgInfo) (string, bool) {
 	return "", false
 }
 
+// elementTypeText strips a map/slice/array wrapper, returning the
+// element type text. "" when the type is not a container.
+func elementTypeText(text string) string {
+	if strings.HasPrefix(text, "map[") {
+		if i := strings.LastIndex(text, "]"); i >= 0 && i+1 < len(text) {
+			return text[i+1:]
+		}
+		return ""
+	}
+	if strings.HasPrefix(text, "[]") {
+		return text[2:]
+	}
+	if strings.HasPrefix(text, "[") {
+		if i := strings.Index(text, "]"); i >= 0 && i+1 < len(text) {
+			return text[i+1:]
+		}
+		return ""
+	}
+	return ""
+}
+
+// elementKindShape maps a container type text to its element kind.
+func elementKindShape(text string, info pkgInfo) kind {
+	el := elementTypeText(text)
+	if el == "" {
+		return kindNone
+	}
+	rt := resolveTypeText(el, info)
+	switch {
+	case rt == "*os.File":
+		return kindFile
+	case funcTextFile(rt):
+		return kindFuncFile
+	case chanElemFuncFile(rt, info):
+		return kindChanFuncFile
+	case chanElemFile(rt, info):
+		return kindChanFile
+	case strings.Contains(rt, "*os.File"):
+		return kindContainer
+	}
+	return kindNone
+}
+
+// containerElementKindExpr resolves the declared element kind of a
+// struct-field container (fb.m of type map[string]F -> kindFuncFile).
+func containerElementKindExpr(e ast.Expr, st *taints, info pkgInfo) kind {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return kindNone
+	}
+	structName, ok := resolveStruct(sel.X, st, info)
+	if !ok {
+		return kindNone
+	}
+	return elementKindShape(resolveTypeText(info.structs[structName][sel.Sel.Name], info), info)
+}
+
 // classifyType maps a declared type expression to file/container taint.
 func classifyType(t ast.Expr, info pkgInfo) kind {
 	text := resolveTypeText(exprText(t), info)
@@ -799,7 +883,16 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		}
 		return classify(v.X, st, info, imports)
 	case *ast.IndexExpr:
-		// An element read from a file container is itself a file.
+		// A map/slice element read: the element kind comes from a
+		// recorded write (m[k] = fn), from the declared element shape
+		// of the container (map[string]fileFn), or from a file
+		// container ([]*os.File element = file).
+		if k := st.elementTaint[exprText(v.X)]; k != kindNone {
+			return k
+		}
+		if k := containerElementKindExpr(v.X, st, info); k != kindNone {
+			return k
+		}
 		if isContainerExpr(v.X, st, info) {
 			return kindFile
 		}
@@ -1026,6 +1119,13 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			return call, pos, true
 		}
 	}
+	if ix, ok := fun.(*ast.IndexExpr); ok {
+		// m[k]() and s[0](): a map/slice element that is a func-file
+		// value; calling it yields the file.
+		if classify(ix, st, info, imports) == kindFuncFile {
+			return call, []int{0}, true
+		}
+	}
 	if inner, ok := fun.(*ast.CallExpr); ok {
 		// zb.mk()() and useDef(getDef2)(): the callee is itself a call
 		// whose value is a func returning *os.File; invoking it yields
@@ -1230,6 +1330,11 @@ func prescanFileProducers(list []string, parsed map[string]*ast.File, shared *ta
 				for k, kv := range fst.fieldTaint {
 					if pkgVarRoot(k, info) {
 						shared.fieldTaint[k] = kv
+					}
+				}
+				for k, kv := range fst.elementTaint {
+					if pkgVarRoot(k, info) {
+						shared.elementTaint[k] = kv
 					}
 				}
 				if _, recvStruct := receiverOf(fd); recvStruct != "" {
@@ -1478,6 +1583,9 @@ func addSignatureTaints(st *taints, fields *ast.FieldList, info pkgInfo) {
 			case strings.Contains(t, "*os.File"):
 				st.container[name.Name] = true
 			}
+			if k := elementKindShape(t, info); k != kindNone {
+				st.elementTaint[name.Name] = k
+			}
 			base := strings.TrimPrefix(t, "*")
 			if _, isStruct := info.structs[base]; isStruct {
 				st.struc[name.Name] = base
@@ -1714,7 +1822,7 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 // even when the field's declared type hides the taint (any, io.Reader,
 // func() io.ReadCloser). Every producer kind is recorded: file,
 // container, func-file, and channel carriers.
-func applyLHSField(lhs ast.Expr, cls kind, st *taints) {
+func applyLHSField(lhs, rhs ast.Expr, cls kind, st *taints, info pkgInfo, imports map[string]string) {
 	sel, ok := lhs.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -1723,11 +1831,30 @@ func applyLHSField(lhs ast.Expr, cls kind, st *taints) {
 	case kindFile, kindContainer, kindFuncFile, kindChanFile, kindChanFuncFile:
 		st.fieldTaint[exprText(sel.X)+"."+sel.Sel.Name] = cls
 	}
+	// A container literal assigned to the field (map[string]F{...})
+	// records its element kind so later m[k] reads resolve.
+	if cl, ok := rhs.(*ast.CompositeLit); ok {
+		for _, el := range cl.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok {
+				el = kv.Value
+			}
+			if k := classify(el, st, info, imports); k != kindNone {
+				st.elementTaint[exprText(sel.X)+"."+sel.Sel.Name] = k
+				break
+			}
+		}
+	}
 }
 
 func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]string) {
+	if ix, ok := lhs.(*ast.IndexExpr); ok {
+		// m[k] = v records the element kind for later element reads.
+		if k := classify(rhs, st, info, imports); k != kindNone {
+			st.elementTaint[exprText(ix.X)] = k
+		}
+	}
 	if _, ok := lhs.(*ast.SelectorExpr); ok {
-		applyLHSField(lhs, classify(rhs, st, info, imports), st)
+		applyLHSField(lhs, rhs, classify(rhs, st, info, imports), st, info, imports)
 	}
 	id, ok := lhs.(*ast.Ident)
 	if !ok || id.Name == "_" {
@@ -1763,7 +1890,7 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 	if _, pos, isProducer := producerCall(rhs, st, info, imports); isProducer {
 		for _, p := range pos {
 			if p == index {
-				applyLHSField(lhs, kindFile, st)
+				applyLHSField(lhs, nil, kindFile, st, info, imports)
 				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
 					st.file[id.Name] = true
 				}
@@ -1774,7 +1901,7 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 	}
 	cls := classify(rhs, st, info, imports)
 	if cls != kindNone {
-		applyLHSField(lhs, cls, st)
+		applyLHSField(lhs, rhs, cls, st, info, imports)
 		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
 			applyKind(st, id.Name, cls)
 		}
