@@ -1246,12 +1246,14 @@ Open-source reference evidence:
 
 Open decisions:
 
-- Decision 5A (NetworkEnrichmentV1 location representation) is open and
-  awaits user ratification: the approved parity matrix specifies
-  `Location *NetworkEnrichmentV1Location`, while the zero-allocation
-  lookup contract (decision 4A) is implemented as `Location
-  NetworkEnrichmentV1Location` plus `HasLocation`. The Go implementation
-  stays as recorded until the user decides. Every other product and
+- Decision 5A (NetworkEnrichmentV1 location representation) was
+  ratified on 2026-08-13 (option A, long-term-best): the parity matrix
+  now records `Location NetworkEnrichmentV1Location` plus
+  `HasLocation` as the zero-allocation equivalent of Rust's
+  `Option<NetworkEnrichmentV1Location>` (the decision-4A lookup
+  contract wins over the earlier pointer spelling; a pointer field
+  would force a heap allocation per lookup or unsafe pointers into
+  the mapping). Every other product and
   format decision is closed; the current specifications and accepted
   Rust semantics are frozen for this port.
 - The obsolete Go deletion set from Milestone 0 was resolved by decision 1A
@@ -2324,11 +2326,11 @@ Use these sections in this order:
   hundred forty mutation forms (round-52: two hundred thirty-eight).
 - Vacuity against the round-51 scanner: exactly thirteen MISSes, forms
   278-290 (the eleven round-52 forms plus the two round-53 forms).
-- P2-2 remains the open decision 5A: the approved parity matrix writes
-  Location *NetworkEnrichmentV1Location while the implementation exposes
-  a value plus HasLocation; user ratification of the value-plus-flag
-  representation (or a conforming redesign) is required before the
-  milestone gate can close.
+- P2-2 resolved by decision 5A (ratified 2026-08-13, option A): the
+  value-plus-HasLocation representation is the approved zero-allocation
+  equivalent of Rust's Option<NetworkEnrichmentV1Location>; the parity
+  matrix now records the ratification, so the milestone gate no longer
+  depends on this item.
 - Gates at this commit: go test ./... incl -race, go vet, gofmt,
   import graph (self-test, all 240 forms rejected), the real tree gate,
   CGO_ENABLED=0 build and test, ten cross-compiles, SOW audit - all
@@ -2456,8 +2458,9 @@ Reviewer findings:
   embed import) and 290 (blank import with an embedded probe.db);
   the pre-fix scanner misses exactly the two new forms, the fixed
   scanner rejects all two hundred forty; the
-  NetworkEnrichmentV1Location pointer-vs-value deviation remains the
-  open decision 5A awaiting user ratification.
+  NetworkEnrichmentV1Location pointer-vs-value deviation was ratified
+  as decision 5A (option A): value-plus-HasLocation is the documented
+  zero-allocation equivalent of Rust's Option<NetworkEnrichmentV1Location>.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 

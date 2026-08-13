@@ -145,9 +145,10 @@ wrapper), and forms 283-288 pin the round-52 continuation class
 (elided slice/map and nested container-element fields, pointer
 composite literals, and func-valued arguments to explicitly
 instantiated generics); details in the
-close-out narrative). Decision 5A remains open
-for user ratification. Milestone
-2 must not start until a new independent final review passes.
+close-out narrative). Decision 5A was ratified (option A, 2026-08-13):
+value-plus-HasLocation is the zero-allocation equivalent of Rust's
+Option<NetworkEnrichmentV1Location>, recorded in the parity matrix.
+Milestone 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
@@ -1078,11 +1079,12 @@ mime/quotedprintable) join the import ban, the method-value and
 CopyFileRange forms compile, the nested-node probe is documented as an
 intentional textual tripwire, and a startup sweep removes stale
 gatemut_* artifacts from interrupted self-test runs.
-Decision 5A remains the single open item and awaits user ratification.
+Decision 5A was ratified (option A, 2026-08-13): value-plus-HasLocation
+is the zero-allocation equivalent of Rust's Option<NetworkEnrichmentV1Location>,
+recorded in the parity matrix.
 Milestone 1 is reopened
-and Milestone 2 is blocked pending the independent re-review and the
-user's decision 5A. The worker boundary decision remains scheduled for
-its later milestone per 2A.
+and Milestone 2 is blocked pending the independent final review.
+The worker boundary decision remains scheduled for its later milestone per 2A.
 
 The sixth final review then failed with five P2 findings, all in the mmap
 gate and the records: (1) selector splitting after the dot - `file.\n
@@ -1187,9 +1189,11 @@ forms 253-256. The round-48 re-review then closed two further gate classes (boun
 on file-bearing receiver types, form-local and package-level, and same-module cross-package
 package-level producer vars such as format.OpenRoot/format.Open), pinned as forms 257-260; the
 round-48 exec-log entry in the owning SOW cites the exact round-45/46/47 chain HEADs (14c0698,
-70dcc42, 262756c, e1410eb, 5ff9116, 8c6cc44). Decision 5A remains the single open item and
-awaits user ratification. Milestone 1 is reopened and Milestone 2 is
-blocked pending the independent re-review and the user's decision 5A.
+70dcc42, 262756c, e1410eb, 5ff9116, 8c6cc44). Decision 5A was ratified
+(option A, 2026-08-13): value-plus-HasLocation is the zero-allocation
+equivalent of Rust's Option<NetworkEnrichmentV1Location>, recorded in the
+parity matrix. Milestone 1 is reopened and Milestone 2 is
+blocked pending the independent final review.
 The worker boundary decision remains scheduled for its later milestone
 per 2A. The round-37 narrow re-review found and fixed one P2 (metadata
 chunk tail-zero parity: ReadMetadataJSON accepted nonzero bytes after a
