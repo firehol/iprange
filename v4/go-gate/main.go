@@ -986,7 +986,8 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 			}
 		}
 		if id, ok := v.Type.(*ast.Ident); ok {
-			if _, isStruct := info.structs[id.Name]; isStruct {
+			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
+			if _, isStruct := info.structs[base]; isStruct {
 				return kindNone // struct value; field taint is resolved on access
 			}
 		}
@@ -1539,8 +1540,11 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 		}
 	case *ast.CompositeLit:
 		if id, ok := v.Type.(*ast.Ident); ok {
-			if _, isStruct := info.structs[id.Name]; isStruct {
-				return id.Name, true
+			// Alias names (type f = s; f{}) must resolve to the
+			// underlying struct before the method lookup.
+			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
+			if _, isStruct := info.structs[base]; isStruct {
+				return base, true
 			}
 		}
 	case *ast.SelectorExpr:
@@ -1798,8 +1802,9 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 	switch v := e.(type) {
 	case *ast.CompositeLit:
 		if id, ok := v.Type.(*ast.Ident); ok {
-			if _, isStruct := info.structs[id.Name]; isStruct {
-				return id.Name, true
+			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
+			if _, isStruct := info.structs[base]; isStruct {
+				return base, true
 			}
 		}
 	case *ast.UnaryExpr:
@@ -1992,6 +1997,12 @@ func receiverOf(fd *ast.FuncDecl, info pkgInfo) (name, structName string) {
 	structName = strings.TrimPrefix(t, "*")
 	if i := strings.IndexByte(structName, '['); i >= 0 {
 		structName = structName[:i]
+	}
+	// Alias receivers (type a = s; func (a) m()) must key under the
+	// underlying struct: call sites resolve the receiver type through
+	// structBase, so a raw alias key would never be consulted.
+	if res := resolveTypeText(structName, info); res != structName {
+		structName = res
 	}
 	return name, structName
 }
