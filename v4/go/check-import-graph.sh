@@ -8516,12 +8516,80 @@ MUTEOF
 	add_mut internal/mapping/gatemut_broken.go
 	run_mut "module that cannot be listed or built"
 
+	# --- 249: os.CopyFS directory copy -----------------------------------
+	# os.CopyFS streams a whole fs.FS tree into the filesystem; as a
+	# package-level os function it sat outside both the producer table
+	# and the io-family bans, so an artifact tree could be copied byte
+	# for byte without any banned selector.
+	mkdir -p gatemut_copyfs
+	add_mut gatemut_copyfs
+	cat > gatemut_copyfs/mut.go <<'MUTEOF'
+package gatemut_copyfs
+
+import (
+	"io/fs"
+	"os"
+)
+
+func Fetch(dst string, tree fs.FS) error {
+	return os.CopyFS(dst, tree)
+}
+MUTEOF
+	run_mut "os.CopyFS directory copy"
+
+	# --- 250: os.OpenInRoot handle reaching a flate reader ---------------
+	# os.OpenInRoot returns a database-descriptor handle (a *os.File on
+	# current toolchains, a *os.Root on older ones) and was absent from
+	# the producer table, so the handle reached flate.NewReader untainted
+	# and streamed file bytes; any os.OpenRoot/OpenInRoot result is now
+	# file-tainted and every Root method outside the approved lifecycle
+	# surface fails the gate.
+	cat > internal/mapping/gatemut_openroot_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateOpenInflated250(dir, name string) (io.ReadCloser, error) {
+	f, err := os.OpenInRoot(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_openroot_linux.go
+	run_mut "os.OpenInRoot handle reaching a flate reader"
+
+	# --- 251: unix.Tee descriptor-to-descriptor copy ---------------------
+	# Tee/Vmsplice are the remaining Linux descriptor-transfer family
+	# members (CopyFileRange/Sendfile/Splice were already banned) and
+	# Clonefile/Clonefileat/IoctlFileClone* are their Darwin/Linux
+	# siblings; they transfer bytes without ever naming a Go reader or
+	# writer.
+	cat > internal/mapping/gatemut_tee_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import "golang.org/x/sys/unix"
+
+func gateTee251(src, dst, length int) (int64, error) {
+	return unix.Tee(src, dst, length, 0)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_tee_linux.go
+	run_mut "unix.Tee descriptor copy"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 198 mutation forms rejected)"
+	echo "import-graph self-test passed (all 201 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
