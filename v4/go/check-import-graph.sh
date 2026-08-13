@@ -8871,12 +8871,201 @@ MUTEOF
 	add_mut internal/mapping/gatemut_p15f.go
 	run_mut "same-module cross-package producer var (os.Open)"
 
+	# --- 261: doubly-parenthesized method expression ---------------------
+	# (((*os.Root)).Open) wraps the receiver in nested parens; the
+	# receiver resolution stripped exactly one paren layer, so the
+	# leftover parens hid the type from the method-expression
+	# capability check while Go still compiled and invoked the bound
+	# open (live, gate exit 0). The receiver resolution now strips
+	# parens to a fixpoint.
+	cat > internal/mapping/gatemut_dp_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateDoubleParen261(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	open := ((*os.Root)).Open
+	f, _ := open(root, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_dp_linux.go
+	run_mut "doubly-parenthesized method expression on os.Root"
+
+	# --- 262: renamed-import method expression ---------------------------
+	# import o "os" changes the qualifier spelling; the capability
+	# surface resolved only os.Root, so (*o.Root).Open escaped the
+	# method-expression check (live, gate exit 0). Receiver type texts
+	# now translate renamed stdlib imports back to the canonical
+	# spelling before the surface check.
+	cat > internal/mapping/gatemut_renimp_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	o "os"
+)
+
+func gateRenamedImp262(dir, name string) io.ReadCloser {
+	root, _ := o.OpenRoot(dir)
+	open := (*o.Root).Open
+	f, _ := open(root, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_renimp_linux.go
+	run_mut "renamed-import method expression on os.Root"
+
+	# --- 263: alias over a renamed stdlib import -------------------------
+	# type RR = o.Root composes the previous two dodges: the alias
+	# registry resolved RR to o.Root, but the renamed qualifier was not
+	# re-translated, so (*RR).Open stayed invisible to the surface
+	# check while compiling and invoking the bound open (live, gate
+	# exit 0). The receiver resolution chases the alias chain and then
+	# translates the renamed import spelling.
+	cat > internal/mapping/gatemut_renalias_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	o "os"
+)
+
+type RR = o.Root
+
+func gateRenamedAlias263(dir, name string) io.ReadCloser {
+	root, _ := o.OpenRoot(dir)
+	open := (*RR).Open
+	f, _ := open(root, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_renalias_linux.go
+	run_mut "alias-over-renamed method expression on os.Root"
+
+	# --- 264: wrapper struct promoting *os.Root methods ------------------
+	# type WE struct{ *os.Root } promotes Open/OpenFile/Create into its
+	# method set; (*WE).Open is a valid method expression whose
+	# receiver text names only the wrapper, so the surface check saw no
+	# os.Root and the bound open reached a flate reader (live, gate
+	# exit 0). The receiver resolution walks defined-struct embedding
+	# chains and treats a pointer-embedded file handle as the
+	# capability source.
+	cat > internal/mapping/gatemut_wrap_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+type WE struct{ *os.Root }
+
+func gateWrapper264(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	we := &WE{Root: root}
+	open := (*WE).Open
+	f, _ := open(we, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_wrap_linux.go
+	run_mut "wrapper-promoted method expression on os.Root"
+
+	# --- 265: cross-package producer var bound as a value ----------------
+	# Form 260 pinned the direct call format.Open(name); binding the
+	# producer into a local value (open := format.Open) and invoking
+	# the binding dropped the func-file taint, so f reached
+	# flate.NewReader untainted (live, gate exit 0). Value-position
+	# bindings of same-module producer vars now resolve through the
+	# process-wide producer registry exactly like direct calls.
+	cat > internal/format/gatemut_p15v.go <<'MUTEOF'
+//go:build linux
+
+package format
+
+import "os"
+
+var Open = os.Open
+MUTEOF
+	add_mut internal/format/gatemut_p15v.go
+	cat > internal/mapping/gatemut_p15v.go <<'MUTEOF'
+//go:build linux
+
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+)
+
+func gateBoundValue265(name string) io.ReadCloser {
+	open := format.Open
+	f, _ := open(name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_p15v.go
+	run_mut "cross-package producer var bound as a value"
+
+	# --- 266: file value laundered through an interface conversion -------
+	# zr := gateZR(f) converts a live *os.File into a fresh named
+	# interface; the conversion call resolved as a function call, so zr
+	# carried no taint and io.ReadFull consumed file bytes untainted,
+	# including through the exact inflater exemption shape in
+	# metadata.go (live, gate exit 0). Type conversions of file-tainted
+	# values now keep the file taint, so the binding fails the callee
+	# check and the metadata.go exemption no longer shields it.
+	cat > internal/reader/gatemut_zr_linux.go <<'MUTEOF'
+//go:build linux
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gateZR interface {
+	Read([]byte) (int, error)
+}
+
+func gateLaunder266(name string) ([]byte, bool, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, false, err
+	}
+	zr := gateZR(f)
+	meta := struct{ MetadataUncompressed int }{4096}
+	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+		return nil, false, err
+	}
+	return out[:int(meta.MetadataUncompressed)], true, nil
+}
+MUTEOF
+	add_mut internal/reader/gatemut_zr_linux.go
+	run_mut "file value laundered through an interface conversion"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 210 mutation forms rejected)"
+	echo "import-graph self-test passed (all 216 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

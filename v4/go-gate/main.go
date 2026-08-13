@@ -1004,6 +1004,9 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo, dir string) {
 								pkg.funcFile[name.Name] = true
 							}
 						}
+						if producerVarSelector(sel, imports) {
+							pkg.funcFile[name.Name] = true
+						}
 					}
 				} else if vs.Type != nil {
 					// type-only package var: register struct instances so
@@ -1905,6 +1908,14 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		if genericResultFuncFile(v, st, info, imports) {
 			return kindFuncFile
 		}
+		// A type conversion of a file-tainted value (zr := gateZR(f)
+		// where gateZR is a declared interface or struct type) must
+		// keep the taint: otherwise the binding launders the file
+		// behind a fresh untainted type and any later consumer (the
+		// metadata inflater call shape, io.ReadFull) passes.
+		if t := typeConversionFile(v, st, info, imports); t != "" {
+			return kindFile
+		}
 	case *ast.CompositeLit:
 		text := exprText(v.Type)
 		if mentionsFileType(text) {
@@ -1989,6 +2000,13 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 					return kindChanFuncFile
 				}
 			}
+		}
+		// A same-module cross-package producer var bound as a value
+		// (f := format.OpenRoot) is a func-file: the declaring
+		// directory registers it process-wide, and the call-site
+		// qualifier resolves through the import map.
+		if producerVarSelector(v, imports) {
+			return kindFuncFile
 		}
 	}
 	return kindNone
@@ -2215,20 +2233,181 @@ func positionsOf(want string, results []string) []int {
 // method as a value and takes the receiver as an explicit first
 // argument; the receiver node is a type expression, so it never carries
 // value taint and the value-position checks cannot see it.
-func methodExprFileType(e ast.Expr, info pkgInfo) string {
+func methodExprFileType(e ast.Expr, info pkgInfo, imports map[string]string) string {
 	sel, ok := e.(*ast.SelectorExpr)
 	if !ok {
 		return ""
 	}
 	x := sel.X
-	if p, ok := x.(*ast.ParenExpr); ok {
+	for {
+		p, ok := x.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
 		x = p.X
 	}
-	resolved := resolveTypeText(exprText(x), info)
+	return fileCapableReceiverType(x, info, imports)
+}
+
+// fileHandleTypeText resolves a type text to the canonical *os.File or
+// *os.Root spelling when it denotes a file-bearing handle: the stdlib
+// spellings themselves, alias chains to them (same-package or
+// qualified through the alias registries), and the renamed-stdlib
+// import spellings (import o "os" -> o.Root, kept through an alias
+// hop such as type RR = o.Root).
+func fileHandleTypeText(text string, info pkgInfo, imports map[string]string) string {
+	resolved := resolveTypeText(text, info)
 	if isFileTyped(resolved) {
 		return resolved
 	}
+	stars := ""
+	base := resolved
+	for strings.HasPrefix(base, "*") {
+		stars += "*"
+		base = base[1:]
+	}
+	translated := base
+	if i := strings.IndexByte(translated, '.'); i > 0 && i < len(translated)-1 {
+		q, rest := translated[:i], translated[i+1:]
+		if imports[q] == "os" && (rest == "Root" || rest == "File") {
+			translated = "os." + rest
+		}
+	}
+	if isFileTyped(stars + translated) {
+		return stars + translated
+	}
 	return ""
+}
+
+// fileCapableReceiverType resolves a paren-stripped method-expression
+// receiver to a file-bearing handle text: the handle itself (under any
+// import rename or alias chain), or a defined struct type whose
+// promoted method set includes a pointer-embedded file-bearing handle
+// (type WE struct{ *os.Root } promotes Open/OpenFile/Create). The
+// embedding chain is walked a bounded number of hops so nested
+// wrappers cannot hide the capability one level deep.
+func fileCapableReceiverType(x ast.Expr, info pkgInfo, imports map[string]string) string {
+	text := exprText(x)
+	if rt := fileHandleTypeText(text, info, imports); rt != "" {
+		return rt
+	}
+	base := strings.TrimPrefix(text, "*")
+	base = resolveTypeText(base, info)
+	base = resolveDefinedType(base, info)
+	for depth := 0; depth < 4 && base != ""; depth++ {
+		if _, isStruct := info.structs[base]; !isStruct {
+			return ""
+		}
+		for _, emb := range info.embedded[base] {
+			if rt := fileHandleTypeText(emb, info, imports); rt != "" && strings.HasPrefix(rt, "*") {
+				return text
+			}
+		}
+		next := ""
+		for _, emb := range info.embedded[base] {
+			if fileHandleTypeText(emb, info, imports) != "" {
+				continue
+			}
+			cand := strings.TrimPrefix(emb, "*")
+			cand = resolveTypeText(cand, info)
+			cand = resolveDefinedType(cand, info)
+			if _, isStruct := info.structs[cand]; isStruct {
+				next = cand
+				break
+			}
+		}
+		if next == "" || next == base {
+			return ""
+		}
+		base = next
+	}
+	return ""
+}
+
+// typeConversionCallee reports whether fun names a declared type (a
+// conversion target) and returns that type's resolved text. Bare
+// identifiers resolve same-package types and exclude functions and
+// builtins; qualified selectors resolve through the alias registries
+// (mm.XRoot = *os.Root) and the merged per-directory struct mirrors
+// (an interface in another package). A non-file conversion target
+// would bind a tainted argument behind a fresh, untainted interface,
+// so tainted arguments are only allowed when the target resolves to a
+// file-bearing handle.
+func typeConversionCallee(fun ast.Expr, info pkgInfo, imports map[string]string) string {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		name := f.Name
+		if _, isFunc := info.funcs[name]; isFunc {
+			return ""
+		}
+		if _, isStruct := info.structs[name]; isStruct {
+			return resolveTaintType(name, info)
+		}
+		if _, isAlias := info.aliases[name]; isAlias {
+			return resolveTaintType(name, info)
+		}
+		if _, isDefined := info.definedTo[name]; isDefined {
+			return resolveTaintType(name, info)
+		}
+	case *ast.SelectorExpr:
+		text := exprText(fun)
+		if a, ok := aliasLookup(text, info); ok {
+			return resolveTaintType(a, info)
+		}
+		if _, isStruct := info.structs[text]; isStruct {
+			return resolveTaintType(text, info)
+		}
+	default:
+		// Composite callees ([]byte, *os.File, interface{...}, chan T)
+		// are conversion targets: a function call never uses that
+		// syntax in callee position. Parentheses recurse to the inner
+		// expression. An explicitly instantiated callee (gT[P](x)) is
+		// a conversion only when its base names a declared type; a
+		// same-package generic function, an unknown cross-package
+		// instantiation, an immediately-invoked literal, or a call
+		// result ((f())(x)) is a function call, not a conversion.
+		switch cv := f.(type) {
+		case *ast.ParenExpr:
+			return typeConversionCallee(cv.X, info, imports)
+		case *ast.IndexExpr:
+			base := exprText(cv.X)
+			if _, isF := info.funcs[base]; isF {
+				return ""
+			}
+			if _, isS := info.structs[base]; !isS {
+				if _, isA := info.aliases[base]; !isA {
+					if _, isD := info.definedTo[base]; !isD {
+						return ""
+					}
+				}
+			}
+		case *ast.StarExpr, *ast.ArrayType, *ast.ChanType, *ast.InterfaceType, *ast.MapType:
+		default:
+			return ""
+		}
+		txt := exprText(fun)
+		if txt == "" {
+			return ""
+		}
+		return resolveTaintType(txt, info)
+	}
+	return ""
+}
+
+// typeConversionFile reports whether e is a type conversion applied to
+// a file-tainted value and returns the resolved target type text. A
+// conversion to a non-file type (an interface or plain struct) launders
+// the taint; a conversion to a file-bearing type keeps it. Either way
+// the binding must keep the file taint so later consumers fail.
+func typeConversionFile(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) string {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return ""
+	}
+	if !isFileOrContainer(call.Args[0], st, info, imports) {
+		return ""
+	}
+	return typeConversionCallee(unwrapParen(call.Fun), info, imports)
 }
 
 // producerVarByImportPath resolves a same-module package-level
@@ -2246,6 +2425,28 @@ func producerVarByImportPath(spec, name string) bool {
 		}
 	}
 	return false
+}
+
+// producerVarSelector reports whether e is a package-qualified selector
+// naming a same-module package-level functional producer var (var
+// OpenRoot = os.OpenRoot in internal/format), resolved through the
+// file's import map and the process-wide producer registries. A renamed
+// import translates through the map to the declaring directory; a plain
+// import keys the full module path, so the clause-qualified registry is
+// the fallback there.
+func producerVarSelector(e ast.Expr, imports map[string]string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if path := imports[pkg.Name]; path != "" {
+		return producerVarByImportPath(path, sel.Sel.Name)
+	}
+	return qualifiedProducerVars[pkg.Name+"."+sel.Sel.Name]
 }
 
 func isFileTyped(t string) bool {
@@ -2366,7 +2567,12 @@ func isFileOrContainer(e ast.Expr, st *taints, info pkgInfo, imports map[string]
 		}
 	case *ast.CallExpr:
 		_, _, ok := producerCall(v, st, info, imports)
-		return ok
+		if ok {
+			return true
+		}
+		// A type conversion of a file value (zr := gateZR(f)) keeps
+		// the taint; direct argument use then fails the callee check.
+		return typeConversionFile(v, st, info, imports) != ""
 	case *ast.UnaryExpr:
 		if v.Op == token.ARROW {
 			// <-c: the received value of a chan-of-file carrier is
@@ -3287,6 +3493,9 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 											st.funcFile[name.Name] = true
 										}
 									}
+									if producerVarSelector(sel, imports) {
+										st.funcFile[name.Name] = true
+									}
 								}
 							} else if vs.Type != nil {
 								// type-only `var t T`: register the struct
@@ -3592,6 +3801,13 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 				st.funcFile[id.Name] = true
 			}
 		}
+		// A same-module cross-package producer var bound as a value
+		// (f := format.OpenRoot) is a func-file: invoking it yields a
+		// file even though the declaring package's taint is invisible
+		// from this file's scanner state.
+		if producerVarSelector(rhs, imports) {
+			st.funcFile[id.Name] = true
+		}
 	}
 	if callResultsChanFuncFile(rhs, st, info) {
 		st.chanFuncFile[id.Name] = true
@@ -3879,7 +4095,7 @@ func rulesWalk(scope string, body *ast.BlockStmt, st *taints, exempts map[token.
 			// carries value taint (isFileExpr above cannot see it), so
 			// the bound name would invoke the open untainted; the type
 			// spelling alone triggers the capability surface.
-			if rt := methodExprFileType(v, info); rt != "" && !approvedFileMethods[v.Sel.Name] {
+			if rt := methodExprFileType(v, info, imports); rt != "" && !approvedFileMethods[v.Sel.Name] {
 				reporter.failf("%s: %s method expression on %s outside the approved capability surface", scope, v.Sel.Name, rt)
 			}
 		case *ast.CallExpr:
@@ -3944,7 +4160,7 @@ func walkRulesNode(node ast.Node, st *taints, _ map[token.Pos]bool, imports map[
 			if isFileExpr(v.X, st, info, imports) && !approvedFileMethods[v.Sel.Name] {
 				reporter.failf("init: %s on an *os.File value outside the approved capability surface", v.Sel.Name)
 			}
-			if rt := methodExprFileType(v, info); rt != "" && !approvedFileMethods[v.Sel.Name] {
+			if rt := methodExprFileType(v, info, imports); rt != "" && !approvedFileMethods[v.Sel.Name] {
 				reporter.failf("init: %s method expression on %s outside the approved capability surface", v.Sel.Name, rt)
 			}
 		case *ast.CallExpr:
