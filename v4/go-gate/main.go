@@ -33,7 +33,9 @@
 // Known residual: a *os.File value exported by a third-party package
 // (other than the os std handles enumerated above) is not visible to
 // the taint unless the code mentions *os.File textually or moves the
-// value through an already-tainted route.
+// value through an already-tainted route. Same-module package-level
+// producer vars are resolved through the process-wide producer-var
+// registry collected from every scanned directory.
 package main
 
 import (
@@ -144,6 +146,23 @@ var qualifiedAliases = map[string]string{}
 // ".../internal/mapping"; mm.MappingFile) resolves through the
 // importing file's own import map.
 var pkgAliasesByDir = map[string]map[string]string{}
+
+// qualifiedProducerVars keys clause-qualified package-level variables
+// whose value is a func-file producer ("format.OpenRoot" for a
+// package-level var OpenRoot = os.OpenRoot, a declared func type with
+// file-bearing results, or a closure returning files). The per-package
+// taint registry is visible only inside the declaring directory; an
+// importing same-module package resolves the producer claim through
+// this process-wide registry instead of re-deriving it from source it
+// cannot see.
+var qualifiedProducerVars = map[string]bool{}
+
+// pkgProducerVarsByDir keys directory-relative package paths
+// ("internal/format") to the producer-var names that directory
+// declares, so a call under a renamed import qualifier (import fm
+// ".../internal/format"; fm.OpenRoot) resolves through the importing
+// file's own import map, mirroring pkgAliasesByDir.
+var pkgProducerVarsByDir = map[string]map[string]bool{}
 
 // currentImports snapshots the import map of the file being analyzed.
 // The scanner is single-threaded and processes one file at a time;
@@ -348,7 +367,7 @@ func main() {
 		// directory before running any file.
 		shared := newTaints()
 		for _, f := range list {
-			collectPkgTaints(parsed[f], shared, info)
+			collectPkgTaints(parsed[f], shared, info, dir)
 		}
 		// Pre-scan every named function and method: a body whose return
 		// statement yields a file-tainted value is a file producer even
@@ -920,7 +939,7 @@ func cloneTaints(t *taints) *taints {
 // collectPkgTaints registers package-level var declarations (type-only
 // struct instances, chan *os.File vars, and producer-bound values) into a
 // shared package taint so every file of the package sees them.
-func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
+func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo, dir string) {
 	imports := map[string]string{}
 	currentImports = imports
 	for _, imp := range f.Imports {
@@ -998,9 +1017,32 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 					}
 				}
 				applyKind(pkg, name.Name, cls)
+				// A package-level producer var is visible to every file
+				// of the declaring directory through pkg.funcFile; a
+				// caller in another package of the module has no view
+				// of that taint, so the same registration is mirrored
+				// process-wide.
+				if pkg.funcFile[name.Name] {
+					registerPkgProducerVar(f.Name.Name, dir, name.Name)
+				}
 			}
 		}
 	}
+}
+
+// registerPkgProducerVar records a package-level func-file var under
+// the declaring clause name and directory, so a same-module caller
+// (format.OpenRoot, or fm.OpenRoot under a renamed import) resolves
+// the producer claim through producerCall's process-wide registry.
+func registerPkgProducerVar(clause, dir, name string) {
+	if clause == "" {
+		return
+	}
+	qualifiedProducerVars[clause+"."+name] = true
+	if pkgProducerVarsByDir[dir] == nil {
+		pkgProducerVarsByDir[dir] = map[string]bool{}
+	}
+	pkgProducerVarsByDir[dir][name] = true
 }
 
 // runFile applies the rules to one production file.
@@ -1991,6 +2033,20 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 			if pos, found := fileProducers[pkg.Name+"."+sel.Sel.Name]; found {
 				return call, pos, true
 			}
+			// A package-level func-file var exported by a same-module
+			// package (var OpenRoot = os.OpenRoot in internal/format,
+			// invoked as format.OpenRoot from internal/mapping): the
+			// declaring directory's taint registry is invisible here, so
+			// the process-wide producer-var registry resolves the claim.
+			// A renamed qualifier translates through the import map to
+			// the exact declaring directory; a plain import keys the
+			// full module path rather than the bare clause, so the
+			// clause-qualified registry is the fallback there (clause
+			// names are unique across the scanned module).
+			if producerVarByImportPath(path, sel.Sel.Name) ||
+				(path == "" && qualifiedProducerVars[pkg.Name+"."+sel.Sel.Name]) {
+				return call, []int{0}, true
+			}
 		}
 		// A struct field whose runtime value is a func-file (assigned
 		// through a tainted closure or method value) is a producer
@@ -2152,6 +2208,46 @@ func positionsOf(want string, results []string) []int {
 // handle: *os.File, or *os.Root whose Open/OpenFile/Create methods
 // produce files. Root handles carry the same taint as files, so every
 // Root method outside the approved lifecycle surface fails closed.
+// methodExprFileType reports whether e is a method expression whose
+// receiver type is a file-bearing handle: (T).M, (*T).M, or T.M where T
+// resolves — through same-package, qualified, and renamed-import alias
+// registries — to *os.File or *os.Root. A method expression binds the
+// method as a value and takes the receiver as an explicit first
+// argument; the receiver node is a type expression, so it never carries
+// value taint and the value-position checks cannot see it.
+func methodExprFileType(e ast.Expr, info pkgInfo) string {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	x := sel.X
+	if p, ok := x.(*ast.ParenExpr); ok {
+		x = p.X
+	}
+	resolved := resolveTypeText(exprText(x), info)
+	if isFileTyped(resolved) {
+		return resolved
+	}
+	return ""
+}
+
+// producerVarByImportPath resolves a same-module package-level
+// producer var by the import path of its declaring directory. The
+// directory registry is keyed by the scanner's relative directory
+// ("internal/format"); the call-site qualifier is translated through
+// the file's import map first, so a renamed import still resolves.
+func producerVarByImportPath(spec, name string) bool {
+	for dir, vars := range pkgProducerVarsByDir {
+		if !strings.HasSuffix(spec, "/"+dir) && spec != dir {
+			continue
+		}
+		if vars[name] {
+			return true
+		}
+	}
+	return false
+}
+
 func isFileTyped(t string) bool {
 	return t == "*os.File" || t == "*os.Root"
 }
@@ -3776,6 +3872,16 @@ func rulesWalk(scope string, body *ast.BlockStmt, st *taints, exempts map[token.
 			if isFileExpr(v.X, st, info, imports) && !approvedFileMethods[v.Sel.Name] {
 				reporter.failf("%s: %s on an *os.File value outside the approved capability surface", scope, v.Sel.Name)
 			}
+			// A bound method expression on a file-bearing receiver type
+			// ((*os.Root).Open, or a same-package alias of one) binds the
+			// method as a value with the receiver as an explicit first
+			// argument. The receiver is a type expression, which never
+			// carries value taint (isFileExpr above cannot see it), so
+			// the bound name would invoke the open untainted; the type
+			// spelling alone triggers the capability surface.
+			if rt := methodExprFileType(v, info); rt != "" && !approvedFileMethods[v.Sel.Name] {
+				reporter.failf("%s: %s method expression on %s outside the approved capability surface", scope, v.Sel.Name, rt)
+			}
 		case *ast.CallExpr:
 			fun := unwrapParen(v.Fun)
 			if sel, ok := fun.(*ast.SelectorExpr); ok && !exempts[sel.Pos()] {
@@ -3837,6 +3943,9 @@ func walkRulesNode(node ast.Node, st *taints, _ map[token.Pos]bool, imports map[
 			}
 			if isFileExpr(v.X, st, info, imports) && !approvedFileMethods[v.Sel.Name] {
 				reporter.failf("init: %s on an *os.File value outside the approved capability surface", v.Sel.Name)
+			}
+			if rt := methodExprFileType(v, info); rt != "" && !approvedFileMethods[v.Sel.Name] {
+				reporter.failf("init: %s method expression on %s outside the approved capability surface", v.Sel.Name, rt)
 			}
 		case *ast.CallExpr:
 			if sel, ok := v.Fun.(*ast.SelectorExpr); ok {

@@ -8743,12 +8743,140 @@ MUTEOF
 	add_mut internal/mapping/gatemut_plain_linux.go
 	run_mut "plain assignment of a stdlib producer value"
 
+	# --- 257: bound method expression on os.Root -------------------------
+	# open := (*os.Root).Open binds the Open method with the receiver
+	# as an explicit first argument. The receiver node is a type
+	# expression, not a value, so the value-position selector check
+	# could not see it and the bound name invoked the open untainted
+	# (live, gate exit 0). Method expressions on a file-bearing
+	# receiver type now fail unless the method is on the approved
+	# lifecycle surface.
+	cat > internal/mapping/gatemut_me_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateMethodExpr257(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	open := (*os.Root).Open
+	f, _ := open(root, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_me_linux.go
+	run_mut "bound method expression on os.Root"
+
+	# --- 258: package-level method-expression var ------------------------
+	# The same escape lifted to a package-level initializer
+	# (var openRootPkg = (*os.Root).Open): walkRulesNode applied only
+	# the value-position check, and a type-expression receiver escaped
+	# both it and the func-file registration (live, gate exit 0). The
+	# package-level method-expression check closes the init path.
+	cat > internal/mapping/gatemut_me_pkg_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+var openRootPkg = (*os.Root).Open
+
+func gatePkgMethodExpr258(dir, name string) io.ReadCloser {
+	root, _ := os.OpenRoot(dir)
+	f, _ := openRootPkg(root, name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_me_pkg_linux.go
+	run_mut "package-level method expression on os.Root"
+
+	# --- 259: same-module cross-package producer var (os.OpenRoot) -------
+	# var OpenRoot = os.OpenRoot in internal/format registers as a
+	# func-file only in the declaring directory's taint; internal/mapping
+	# has no view of that registry, so format.OpenRoot(dir) was untainted
+	# and its *os.Root reached a flate reader (live, gate exit 0).
+	# Package-level producer vars are now registered process-wide per
+	# declaring directory and resolved through the call-site import path.
+	cat > internal/format/gatemut_p15.go <<'MUTEOF'
+//go:build linux
+
+package format
+
+import "os"
+
+var OpenRoot = os.OpenRoot
+MUTEOF
+	add_mut internal/format/gatemut_p15.go
+	cat > internal/mapping/gatemut_p15.go <<'MUTEOF'
+//go:build linux
+
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+)
+
+func gateCrossPkgVar259(dir, name string) io.ReadCloser {
+	root, _ := format.OpenRoot(dir)
+	f, _ := root.Open(name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_p15.go
+	run_mut "same-module cross-package producer var (os.OpenRoot)"
+
+	# --- 260: same-module cross-package producer var (os.Open) -----------
+	# The pre-existing *os.File sibling of form 259 (var Open = os.Open
+	# in internal/format, invoked from internal/mapping as
+	# format.Open(name)) had the same invisible-registry gap; the
+	# process-wide registry closes both forms.
+	cat > internal/format/gatemut_p15f.go <<'MUTEOF'
+//go:build linux
+
+package format
+
+import "os"
+
+var Open = os.Open
+MUTEOF
+	add_mut internal/format/gatemut_p15f.go
+	cat > internal/mapping/gatemut_p15f.go <<'MUTEOF'
+//go:build linux
+
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+)
+
+func gateCrossPkgFile260(name string) io.ReadCloser {
+	f, _ := format.Open(name)
+	return flate.NewReader(f)
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_p15f.go
+	run_mut "same-module cross-package producer var (os.Open)"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 206 mutation forms rejected)"
+	echo "import-graph self-test passed (all 210 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
