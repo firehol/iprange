@@ -164,8 +164,8 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred one
-mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, and the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, forms 249-251; round-36 closed the dup/exec subprocess escape and the
+231); the durable rejection set is now two hundred two
+mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, and *os.Root laundering through fields/params/helpers, forms 249-252; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
 238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
@@ -388,8 +388,13 @@ DedupeRange, darwin unix.Clonefile/Clonefileat). Fixed at HEAD 14c0698: CopyFS, 
 IoctlFileClone* and Clonefile* join the banned selector set (CopyFileRange/Sendfile/Splice were already
 banned); os.OpenInRoot and os.OpenRoot join the file-producer table as position-0 file taints, so every Root
 method outside the approved lifecycle surface fails closed; all three live reproducers plus the
-OpenRoot/ReadAll and darwin Clonefile variants are rejected by the hardened gate. Pinned as self-test forms
-249-251, raising the durable rejection set to two hundred one mutation forms. The records
+OpenRoot/ReadAll and darwin Clonefile variants are rejected by the hardened gate. The adversarial re-review
+of that fix then found a P0 in the same class: a *os.Root handle stored in a struct field (h :=
+gateRootField{r: root}; h.r.Open(name)) dropped the file taint, so the returned *os.File reached
+flate.NewReader untainted and the stream was consumed through the exact inflater exemption shape with gate
+exit 0; *os.Root now resolves as a file-bearing type everywhere *os.File does (fields, parameters,
+helper returns, type assertions, func/chan elements, results), so every laundering route fails closed.
+Pinned as self-test forms 249-252, raising the durable rejection set to two hundred two mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -742,7 +747,11 @@ sidecars, live coordination, and publication remain Milestone 4.
   gate exit 0 on every vector); CopyFS and the x/sys primitives join the
   banned selector set, os.OpenInRoot/os.OpenRoot join the file-producer
   table so Root methods fail closed, pinned as self-test forms 249-251,
-  raising the set to two hundred one mutation forms. The
+  raising the set to two hundred one mutation forms; the
+  same-class P0 (Root laundered through a struct field, gate exit
+  0) was then closed by resolving *os.Root as a file-bearing type
+  everywhere *os.File does, pinned as form 252, raising the set to
+  two hundred two mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1869,7 +1878,18 @@ Use these sections in this order:
   the approved lifecycle surface fails closed; all three live reproducers
   plus the OpenRoot/ReadAll and darwin Clonefile variants are rejected.
 - Pinned as self-test forms 249-251; the durable rejection set is now two
-  hundred one mutation forms. Gates: go test ./... incl -race, go vet,
+  hundred one mutation forms. The adversarial re-review of this fix
+  then proved a P0 in the same class: a *os.Root stored in a struct
+  field (h := gateRootField{r: root}; h.r.Open(name)) dropped the
+  file taint, so the returned *os.File reached flate.NewReader
+  untainted and the stream was consumed through the exact inflater
+  exemption shape (gate exit 0, /tmp reproducer); the type model now
+  resolves *os.Root as a file-bearing type everywhere *os.File does
+  (struct fields, parameters, helper returns, type assertions,
+  func/chan elements, method results), pinned as self-test form 252,
+  raising the durable rejection set to two hundred two mutation forms.
+- The P0 closure landed at HEAD 262756c on top of the round-45 gate fix
+  (14c0698); the record trail and counts above reflect both commits. Gates: go test ./... incl -race, go vet,
   gofmt, import graph (self-test, all 201 forms rejected), CGO_ENABLED=0
   build and test, four cross-compiles, SOW audit — all green.
 - Counts unchanged at this commit: production 4,792 raw lines / tests
@@ -1896,7 +1916,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 201-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 202-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1930,8 +1950,9 @@ Reviewer findings:
   reviewers at PASS (e5fea20); the round-45 final review failed with
   three P2 mmap-gate findings (os.CopyFS, os.OpenInRoot/os.OpenRoot
   handles, x/sys descriptor-transfer primitives), all fixed at the next
-  HEAD with self-test forms 249-251 and the rejection set at two hundred
-  one mutation forms; re-verification is pending.
+  HEAD with self-test forms 249-251, the same-class Root-laundering P0 closed
+  with form 252, and the rejection set at two hundred two mutation
+  forms; re-verification is pending.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -2748,11 +2769,16 @@ execution record; the closing result is appended there when it completes.
   exit 0); CopyFS and the x/sys primitives join the banned selector set,
   os.OpenInRoot/os.OpenRoot join the file-producer table so Root methods
   fail closed, pinned as self-test forms 249-251, raising the set to two
-  hundred one mutation forms.
+  hundred one mutation forms; the same-class P0 (Root laundered
+  through a struct field: h.r.Open(name) after h := struct{r
+  *os.Root}, gate exit 0) was then closed by resolving *os.Root as a
+  file-bearing type everywhere *os.File does, pinned as form 252,
+  raising the set to two hundred two mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 201-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
-  rejects 249-251 cover os.CopyFS directory copies, os.OpenInRoot/
-  os.OpenRoot handles reaching stream wrappers, and the x/sys
-  descriptor-transfer primitives), ten cross-compiles,
+  import graph with the 202-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  rejects 249-252 cover os.CopyFS directory copies, os.OpenInRoot/
+  os.OpenRoot handles reaching stream wrappers, the x/sys
+  descriptor-transfer primitives, and *os.Root laundering through
+  struct fields), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
