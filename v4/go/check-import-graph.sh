@@ -5269,11 +5269,501 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta166.orig" internal/reader/metadata.go
 
+	# --- 167: container element read of a generic result ----------------
+	# rr := gR[[]zfA]{}; a := rr.mk(); a[0]: the element type of a
+	# container-shaped generic result must taint the index read even
+	# when the binding itself is not a marked container.
+	cat > internal/reader/gatemut_elemgen.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA167 = *os.File
+
+type gR167[T any] struct{}
+
+func (r gR167[T]) mk() T { var z T; return z }
+
+func gb167() io.ReadCloser {
+	rr := gR167[[]zfA167]{}
+	a := rr.mk()
+	return a[0]
+}
+MUTEOF
+	add_mut internal/reader/gatemut_elemgen.go
+	cp internal/reader/metadata.go "$self_tree/meta167.orig"
+	INS='zr = gb167()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta167.new" && mv "$self_tree/meta167.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb167()' internal/reader/metadata.go; then
+		run_mut "container element read of a generic result"
+	else
+		echo "self-test ERROR: form 167 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta167.orig" internal/reader/metadata.go
+
+	# --- 168: map element read of a generic result ----------------------
+	cat > internal/reader/gatemut_mapgen.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA168 = *os.File
+
+type gR168[T any] struct{}
+
+func (r gR168[T]) mk() T { var z T; return z }
+
+func gb168() io.ReadCloser {
+	rr := gR168[map[string]zfA168]{}
+	m := rr.mk()
+	return m["k"]
+}
+MUTEOF
+	add_mut internal/reader/gatemut_mapgen.go
+	cp internal/reader/metadata.go "$self_tree/meta168.orig"
+	INS='zr = gb168()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta168.new" && mv "$self_tree/meta168.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb168()' internal/reader/metadata.go; then
+		run_mut "map element read of a generic result"
+	else
+		echo "self-test ERROR: form 168 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta168.orig" internal/reader/metadata.go
+
+	# --- 169: pointer deref of a generic result -------------------------
+	cat > internal/reader/gatemut_derefgen.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA169 = *os.File
+
+type gR169[T any] struct{}
+
+func (r gR169[T]) mk() T { var z T; return z }
+
+func gb169() io.ReadCloser {
+	rr := gR169[*zfA169]{}
+	p := rr.mk()
+	return *p
+}
+MUTEOF
+	add_mut internal/reader/gatemut_derefgen.go
+	cp internal/reader/metadata.go "$self_tree/meta169.orig"
+	INS='zr = gb169()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta169.new" && mv "$self_tree/meta169.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb169()' internal/reader/metadata.go; then
+		run_mut "pointer deref of a generic result"
+	else
+		echo "self-test ERROR: form 169 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta169.orig" internal/reader/metadata.go
+
+	# --- 170: chan-of-file receive in return position -------------------
+	# var c chan *os.File; return <-c: the receive feeds the exempted
+	# io.ReadFull node through a function result, so the producer
+	# marking must classify receives in return positions.
+	cat > internal/reader/gatemut_chanret.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func gb170() io.ReadCloser {
+	var c chan *os.File
+	return <-c
+}
+MUTEOF
+	add_mut internal/reader/gatemut_chanret.go
+	cp internal/reader/metadata.go "$self_tree/meta170.orig"
+	INS='zr = gb170()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta170.new" && mv "$self_tree/meta170.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb170()' internal/reader/metadata.go; then
+		run_mut "chan-of-file receive in return position"
+	else
+		echo "self-test ERROR: form 170 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta170.orig" internal/reader/metadata.go
+
+	# --- 171: method call yielding chan of files -------------------------
+	cat > internal/reader/gatemut_methchan.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type hM171 struct{}
+
+func (h hM171) ch() chan *os.File { return nil }
+
+func gb171() io.ReadCloser {
+	h := hM171{}
+	c := h.ch()
+	return <-c
+}
+MUTEOF
+	add_mut internal/reader/gatemut_methchan.go
+	cp internal/reader/metadata.go "$self_tree/meta171.orig"
+	INS='zr = gb171()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta171.new" && mv "$self_tree/meta171.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb171()' internal/reader/metadata.go; then
+		run_mut "method call yielding chan of files"
+	else
+		echo "self-test ERROR: form 171 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta171.orig" internal/reader/metadata.go
+
+	# --- 172: generic func result chan of files --------------------------
+	cat > internal/reader/gatemut_genchan.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+func mkC172[T any]() chan T { return nil }
+
+func gb172() io.ReadCloser {
+	c := mkC172[*os.File]()
+	return <-c
+}
+MUTEOF
+	add_mut internal/reader/gatemut_genchan.go
+	cp internal/reader/metadata.go "$self_tree/meta172.orig"
+	INS='zr = gb172()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta172.new" && mv "$self_tree/meta172.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb172()' internal/reader/metadata.go; then
+		run_mut "generic func result chan of files"
+	else
+		echo "self-test ERROR: form 172 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta172.orig" internal/reader/metadata.go
+
+	# --- 173: cross-package alias generic type argument ------------------
+	# type MappingFile = *os.File in internal/mapping, then
+	# gR[mapping.MappingFile]{}: the qualified alias must resolve
+	# through the process-wide registry across directory boundaries.
+	cat > internal/mapping/gatemut_qalias.go <<'MUTEOF'
+package mapping
+
+import "os"
+
+type MappingFile = *os.File
+MUTEOF
+	add_mut internal/mapping/gatemut_qalias.go
+	cat > internal/reader/gatemut_qalias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	"github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gR173[T any] struct{}
+
+func (r gR173[T]) mk() T { var z T; return z }
+
+func gb173() io.ReadCloser {
+	rr := gR173[mapping.MappingFile]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_qalias.go
+	cp internal/reader/metadata.go "$self_tree/meta173.orig"
+	INS='zr = gb173()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta173.new" && mv "$self_tree/meta173.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb173()' internal/reader/metadata.go; then
+		run_mut "cross-package alias generic type argument"
+	else
+		echo "self-test ERROR: form 173 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta173.orig" internal/reader/metadata.go
+
+	# --- 174: generic method result as struct receiver -------------------
+	# r := rr.mk() with T bound to wS { f zfA }; r.f: the generic
+	# method result must register as a struct instance so the field
+	# read resolves the file taint.
+	cat > internal/reader/gatemut_structgen.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type zfA174 = *os.File
+
+type wS174 struct{ f zfA174 }
+
+type gR174[T any] struct{}
+
+func (r gR174[T]) mk() T { var z T; return z }
+
+func gb174() io.ReadCloser {
+	rr := gR174[wS174]{}
+	r := rr.mk()
+	return r.f
+}
+MUTEOF
+	add_mut internal/reader/gatemut_structgen.go
+	cp internal/reader/metadata.go "$self_tree/meta174.orig"
+	INS='zr = gb174()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta174.new" && mv "$self_tree/meta174.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gb174()' internal/reader/metadata.go; then
+		run_mut "generic method result as struct receiver"
+	else
+		echo "self-test ERROR: form 174 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta174.orig" internal/reader/metadata.go
+
+	# --- 175: benign container element read must pass --------------------
+	# Same shape as forms 167-169 with a bytes-backed element struct:
+	# the element read must not taint a non-file element.
+	cat > internal/reader/gatemut_benelem.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv175 struct{ *bytes.Reader }
+
+func (w *rcv175) Close() error { return nil }
+
+type gsGB175 struct{}
+
+func (gsGB175) get() io.ReadCloser { return &rcv175{bytes.NewReader(nil)} }
+
+type gRB175[T any] struct{}
+
+func (r gRB175[T]) mk() T { var z T; return z }
+
+func gbb175() io.ReadCloser {
+	rr := gRB175[[]*gsGB175]{}
+	a := rr.mk()
+	return a[0].get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benelem.go
+	cp internal/reader/metadata.go "$self_tree/meta175.orig"
+	INS='zr = gbb175()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta175.new" && mv "$self_tree/meta175.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb175()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign container element read passes the gate"
+		else
+			echo "self-test MISS: benign container element read failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 175 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta175.orig" internal/reader/metadata.go
+
+	# --- 176: benign method chan must pass -------------------------------
+	cat > internal/reader/gatemut_benmethchan.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv176 struct{ *bytes.Reader }
+
+func (w *rcv176) Close() error { return nil }
+
+type gsGB176 struct{}
+
+func (gsGB176) get() io.ReadCloser { return &rcv176{bytes.NewReader(nil)} }
+
+type hM176 struct{}
+
+func (h hM176) ch() chan *gsGB176 { return nil }
+
+func gbb176() io.ReadCloser {
+	h := hM176{}
+	c := h.ch()
+	return (<-c).get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benmethchan.go
+	cp internal/reader/metadata.go "$self_tree/meta176.orig"
+	INS='zr = gbb176()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta176.new" && mv "$self_tree/meta176.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb176()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign method chan passes the gate"
+		else
+			echo "self-test MISS: benign method chan failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 176 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta176.orig" internal/reader/metadata.go
+
+	# --- 177: benign cross-package alias must pass -----------------------
+	cat > internal/mapping/gatemut_benqalias.go <<'MUTEOF'
+package mapping
+
+import "bytes"
+
+type mrc177 struct{ *bytes.Reader }
+
+func (w *mrc177) Close() error { return nil }
+
+type MappingRC177 = *mrc177
+MUTEOF
+	add_mut internal/mapping/gatemut_benqalias.go
+	cat > internal/reader/gatemut_benqalias.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+
+	"github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+type gRB177[T any] struct{}
+
+func (r gRB177[T]) mk() T { var z T; return z }
+
+func gbb177() io.ReadCloser {
+	rr := gRB177[mapping.MappingRC177]{}
+	return rr.mk()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benqalias.go
+	cp internal/reader/metadata.go "$self_tree/meta177.orig"
+	INS='zr = gbb177()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta177.new" && mv "$self_tree/meta177.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb177()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign cross-package alias passes the gate"
+		else
+			echo "self-test MISS: benign cross-package alias failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 177 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta177.orig" internal/reader/metadata.go
+
+	# --- 178: benign generic struct result must pass ---------------------
+	cat > internal/reader/gatemut_benstruct.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcv178 struct{ *bytes.Reader }
+
+func (w *rcv178) Close() error { return nil }
+
+type gsGB178 struct{}
+
+func (gsGB178) get() io.ReadCloser { return &rcv178{bytes.NewReader(nil)} }
+
+type wSB178 struct{ f *gsGB178 }
+
+type gRB178[T any] struct{}
+
+func (r gRB178[T]) mk() T { var z T; return z }
+
+func gbb178() io.ReadCloser {
+	rr := gRB178[wSB178]{}
+	r := rr.mk()
+	return r.f.get()
+}
+MUTEOF
+	add_mut internal/reader/gatemut_benstruct.go
+	cp internal/reader/metadata.go "$self_tree/meta178.orig"
+	INS='zr = gbb178()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta178.new" && mv "$self_tree/meta178.new" internal/reader/metadata.go
+	if grep -Fq 'zr = gbb178()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign generic struct result passes the gate"
+		else
+			echo "self-test MISS: benign generic struct result failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 178 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta178.orig" internal/reader/metadata.go
+
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 135 mutation forms rejected)"
+	echo "import-graph self-test passed (all 143 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
