@@ -173,7 +173,7 @@ primitive, form 240; round-39 closed the out-of-tree module-graph
 escape (go.mod replace and go.work can attach code the walk never
 scans; the graph is validated to exactly this module plus x/sys with
 no workspace, forms 241-242; round-40 closed the x/sys source
-replacement and hidden dot-directory vectors, forms 243-244; round-42 closed the x/sys source-content gap, forms 245-247). The round-24 gate re-review then found the import-renamed qualified
+replacement and hidden dot-directory vectors, forms 243-244; round-42 closed the x/sys source-content gap, forms 245-247; round-43 closed the fail-open listing gap, form 248). The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -368,7 +368,15 @@ nothing pinned the module content); the gate now pins the exact version,
 the module-cache path, the extracted-tree content hash, and the module
 zip/go.mod sums to the official v0.35.0 values, and the assembly-object
 rejection is case-insensitive, pinned as self-test forms 245-247,
-raising the set to one hundred ninety-seven mutation forms. The records
+raising the set to one hundred ninety-seven mutation forms. The round-43
+gate re-review then found the fail-open listing gap: the per-target go
+list ./... loop swallowed listing failures (2>/dev/null), so a module
+the go toolchain cannot list - symlinked package files or parse errors -
+passed with an empty package list and no import checks (reproduced with
+a symlinked smuggled file in internal/mapping); the package checks now
+fail closed on every listing error and the per-package import listing
+fails closed too, pinned as self-test form 248, raising the set to one
+hundred ninety-eight mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -708,6 +716,12 @@ sidecars, live coordination, and publication remain Milestone 4.
   hash, and the module zip/go.mod sums to the official v0.35.0 values,
   and rejects assembly objects case-insensitively, pinned as forms
   245-247, raising the set to one hundred ninety-seven mutation forms. The
+  round-43 re-review then closed the fail-open listing gap: the target
+  loop ran go list ./... with 2>/dev/null, so a module the toolchain
+  cannot list (symlinked package files, parse errors) passed with no
+  package checks at all; go list failures now set fail=1 per target and
+  pkg_imports fails closed, pinned as form 248, raising the set to one
+  hundred ninety-eight mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1832,7 +1846,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 197-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 198-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2663,8 +2677,14 @@ execution record; the closing result is appended there when it completes.
   content hash, and the module zip/go.mod sums to the official v0.35.0
   values, and the assembly-object rejection is case-insensitive, pinned
   as self-test forms 245-247, raising the set to one hundred
-  ninety-seven mutation forms.
+  ninety-seven mutation forms. The round-43 gate re-review then found
+  the fail-open listing gap: the per-target go list ./... loop swallowed
+  listing failures, so a module the go toolchain cannot list (symlinked
+  package files, parse errors) passed with an empty package list and no
+  import checks; go list failures now fail the gate per target and the
+  per-package import listing fails closed too, pinned as form 248,
+  raising the set to one hundred ninety-eight mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 197-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, and round-42 rejects 245-247 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), and case-variant assembly objects), ten cross-compiles,
+  import graph with the 198-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).

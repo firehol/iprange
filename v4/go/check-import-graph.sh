@@ -84,15 +84,24 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # per-package import list (every import on its own line; the first import is
-# NOT swallowed — a join without the ImportPath prefix)
+# NOT swallowed — a join without the ImportPath prefix). A package the go
+# toolchain cannot list is a failed gate, not an empty import set: the
+# callers fail closed on listing errors.
 pkg_imports() {
-	go list -f '{{join .Imports "\n"}}' "$1" 2>/dev/null
+	if ! out=$(go list -f '{{join .Imports "\n"}}' "$1" 2>/dev/null); then
+		return 1
+	fi
+	printf '%s\n' "$out"
 }
 
 check() {
 	pkg=$1
 	allowed_prefix=$2
-	content=$(pkg_imports "$pkg")
+	content=$(pkg_imports "$pkg") || {
+		echo "boundary violation: $pkg cannot be listed by the go toolchain"
+		fail=1
+		return
+	}
 	if [ -n "$content" ]; then
 		for imp in $content; do
 			case "$imp" in
@@ -236,8 +245,17 @@ targets="linux/amd64 linux/386 linux/arm linux/arm64 linux/loong64 \
 	darwin/amd64 darwin/arm64 freebsd/amd64 windows/amd64 windows/arm64"
 for target in $targets; do
 	GOOS=${target%/*} GOARCH=${target#*/} export GOOS GOARCH
-	for pkg in $(go list ./... 2>/dev/null); do
-		imps=$(pkg_imports "$pkg")
+	target_pkgs=$(go list ./... 2>/dev/null) || {
+		echo "boundary violation: go list ./... failed under $GOOS/$GOARCH; a module that cannot be listed must not pass the gate"
+		fail=1
+		target_pkgs=""
+	}
+	for pkg in $target_pkgs; do
+		imps=$(pkg_imports "$pkg") || {
+			echo "boundary violation: $pkg (target $target) cannot be listed by the go toolchain"
+			fail=1
+			imps=""
+		}
 		case "$pkg" in
 		"github.com/firehol/iprange/v4/go/internal/mapping")
 			# the mapping owner is the syscall authority
@@ -8486,12 +8504,24 @@ MUTEOF
 	add_mut internal/mapping/gatemut_evil.S
 	run_mut "uppercase .S assembly object"
 
+	# --- 248: module that cannot be listed or built ----------------------
+	# A broken package silently empties the per-target go list loop and
+	# the package checks; a module the go toolchain cannot list must fail
+	# closed, not pass vacuously.
+	cat > internal/mapping/gatemut_broken.go <<'MUTEOF'
+package mapping
+
+var GateMutBroken int =
+MUTEOF
+	add_mut internal/mapping/gatemut_broken.go
+	run_mut "module that cannot be listed or built"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 197 mutation forms rejected)"
+	echo "import-graph self-test passed (all 198 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
