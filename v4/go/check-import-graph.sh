@@ -3029,6 +3029,119 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta112.orig" internal/reader/metadata.go
 
+	# --- 113: alias receiver with an interface-hidden result --------------
+	# type a = s; func (a) m() io.ReadCloser { os.Pipe... }; var v a; v.m().
+	# The receiver alias must resolve to the underlying struct or the
+	# call-site lookup never finds the retMethods key.
+	cat > internal/reader/gatemut_aliasrecv.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsT struct{}
+
+type rT = gsT
+
+func (rT) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var al rT
+MUTEOF
+	add_mut internal/reader/gatemut_aliasrecv.go
+	cp internal/reader/metadata.go "$self_tree/meta113.orig"
+	INS='zr = al.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta113.new" && mv "$self_tree/meta113.new" internal/reader/metadata.go
+	if grep -Fq 'zr = al.get()' internal/reader/metadata.go; then
+		run_mut "alias-receiver method with an interface-hidden file"
+	else
+		echo "self-test ERROR: form 113 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta113.orig" internal/reader/metadata.go
+
+	# --- 114: alias-named composite literal receiver returning a file -----
+	# type f = s; f{}.getf() where getf returns *os.File: the composite
+	# literal type name is an alias and must resolve to the struct for the
+	# method lookup.
+	cat > internal/reader/gatemut_aliaslit.go <<'MUTEOF'
+package reader
+
+import "os"
+
+type gsF struct{}
+
+type rF = gsF
+
+func (rF) getf() *os.File {
+	f, _ := os.Open("/dev/null")
+	return f
+}
+MUTEOF
+	add_mut internal/reader/gatemut_aliaslit.go
+	cp internal/reader/metadata.go "$self_tree/meta114.orig"
+	INS='zr = rF{}.getf()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta114.new" && mv "$self_tree/meta114.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rF{}.getf()' internal/reader/metadata.go; then
+		run_mut "alias-named composite literal receiver returning a file"
+	else
+		echo "self-test ERROR: form 114 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta114.orig" internal/reader/metadata.go
+
+	# --- 115: benign alias receiver must pass ------------------------------
+	# Same alias-receiver syntax as 113-114 but the payload never touches
+	# the filesystem: the scanner must not flag it.
+	cat > internal/reader/gatemut_benignalias.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcb115 struct{ *bytes.Reader }
+
+func (w *rcb115) Close() error { return nil }
+
+type gsBn115 struct{}
+
+type rBn115 = gsBn115
+
+func (rBn115) get() io.ReadCloser { return &rcb115{bytes.NewReader(nil)} }
+MUTEOF
+	add_mut internal/reader/gatemut_benignalias.go
+	cp internal/reader/metadata.go "$self_tree/meta115.orig"
+	INS='zr = rBn115{}.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta115.new" && mv "$self_tree/meta115.new" internal/reader/metadata.go
+	if grep -Fq 'zr = rBn115{}.get()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign alias receiver passes the gate"
+		else
+			echo "self-test MISS: benign alias receiver failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 115 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta115.orig" internal/reader/metadata.go
+
+
 
 	# --- 49: benign same-shaped control must pass (no false positive) ----
 	# Identical in shape to form 47 but with an int field: the scanner
@@ -3082,7 +3195,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 95 mutation forms rejected)"
+	echo "import-graph self-test passed (all 97 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
