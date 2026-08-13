@@ -8624,12 +8624,131 @@ MUTEOF
 	add_mut internal/mapping/gatemut_rootfield_linux.go
 	run_mut "os.Root laundered through a struct field"
 
+	# --- 253: file method value bound then invoked -----------------------
+	# open := root.Open puts a Root method in value position; the
+	# capability-surface ban only checked call receivers, so the bound
+	# method reached flate.NewReader through its invocation untainted
+	# (live, gate exit 0). The value-position selector check and the
+	# func-file registration both close this route.
+	cat > internal/mapping/gatemut_mv_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateMethodValue253(dir, name string) (io.ReadCloser, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	open := root.Open
+	f, err := open(name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_mv_linux.go
+	run_mut "file method value bound then invoked"
+
+	# --- 254: func-typed var with an initializer (os.Root result) --------
+	# var newRoot func(string) (*os.Root, error) = os.OpenRoot declared a
+	# file-producing result, but the declared type was only consulted for
+	# type-only vars; with an initializer the value was classified from
+	# the RHS spelling alone and the declared producer type was lost
+	# (live, gate exit 0). The declared type now registers as a
+	# func-file whenever it mentions file-bearing results.
+	cat > internal/mapping/gatemut_ftv_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateFuncTypedVar254(dir, name string) (io.ReadCloser, error) {
+	var newRoot func(string) (*os.Root, error) = os.OpenRoot
+	root, err := newRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_ftv_linux.go
+	run_mut "func-typed var with an initializer producing a Root"
+
+	# --- 255: func-typed var with an initializer (*os.File result) -------
+	# The same declared-type gap existed for *os.File before the Root
+	# work (var openPath func(string) (*os.File, error) = os.Open,
+	# live, gate exit 0), so the declared-type registration closes the
+	# pre-existing class too.
+	cat > internal/mapping/gatemut_ftf_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gateFuncTypedFile255(name string) (io.ReadCloser, error) {
+	var openPath func(string) (*os.File, error) = os.Open
+	f, err := openPath(name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_ftf_linux.go
+	run_mut "func-typed var with an initializer producing a File"
+
+	# --- 256: plain assignment of a stdlib producer value ----------------
+	# openPath := os.Open has no declared type in source; the stdlib
+	# signature is invisible to the scanner, but os.Open is a known
+	# file producer, so the bound value is a func-file whose invocation
+	# yields a file.
+	cat > internal/mapping/gatemut_plain_linux.go <<'MUTEOF'
+//go:build linux
+package mapping
+
+import (
+	"compress/flate"
+	"io"
+	"os"
+)
+
+func gatePlainOpen256(name string) (io.ReadCloser, error) {
+	openPath := os.Open
+	f, err := openPath(name)
+	if err != nil {
+		return nil, err
+	}
+	return flate.NewReader(f), nil
+}
+MUTEOF
+	add_mut internal/mapping/gatemut_plain_linux.go
+	run_mut "plain assignment of a stdlib producer value"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 202 mutation forms rejected)"
+	echo "import-graph self-test passed (all 206 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

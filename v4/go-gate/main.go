@@ -968,6 +968,24 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 					if funcTypeResultsFile(vs.Values[i], info) {
 						pkg.funcFile[name.Name] = true
 					}
+					// A declared func type whose results are files is a
+					// producer even when the variable has an initializer
+					// (var f func(string) (*os.File, error) = os.Open):
+					// the declared result type is the stable contract and
+					// the initializer may be an untracked stdlib value.
+					if vs.Type != nil && funcTypeResultsFile(vs.Type, info) {
+						pkg.funcFile[name.Name] = true
+					}
+					// A stdlib producer bound as a value (var f = os.Open)
+					// is a func-file: invoking it yields a file even though
+					// the stdlib signature is invisible to the scanner.
+					if sel, ok := vs.Values[i].(*ast.SelectorExpr); ok {
+						if selp, ok2 := sel.X.(*ast.Ident); ok2 && imports[selp.Name] == "os" {
+							if _, found := fileProducers["os."+sel.Sel.Name]; found {
+								pkg.funcFile[name.Name] = true
+							}
+						}
+					}
 				} else if vs.Type != nil {
 					// type-only package var: register struct instances so
 					// field reads in any file resolve the taint, and
@@ -3159,6 +3177,21 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 								if c, ok := classifyStruct(vs.Values[i], st, info); ok {
 									st.struc[name.Name] = c
 								}
+								// Declared file-producing result types keep
+								// the producer taint with an initializer
+								// (var f func(string) (*os.File, error) = os.Open).
+								if vs.Type != nil && funcTypeResultsFile(vs.Type, info) {
+									st.funcFile[name.Name] = true
+								}
+								// A stdlib producer bound as a value is a
+								// func-file (f := os.Open).
+								if sel, ok := vs.Values[i].(*ast.SelectorExpr); ok {
+									if selp, ok2 := sel.X.(*ast.Ident); ok2 && imports[selp.Name] == "os" {
+										if _, found := fileProducers["os."+sel.Sel.Name]; found {
+											st.funcFile[name.Name] = true
+										}
+									}
+								}
 							} else if vs.Type != nil {
 								// type-only `var t T`: register the struct
 								// instance so t.field file reads resolve.
@@ -3454,6 +3487,16 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	if funcTypeResultsFile(rhs, info) || callResultsFuncFile(rhs, st, info) {
 		st.funcFile[id.Name] = true
 	}
+	// A stdlib producer bound as a value (open := os.Open) is a
+	// func-file: invoking it yields a file even though the stdlib
+	// signature is invisible to the scanner.
+	if sel, ok := rhs.(*ast.SelectorExpr); ok {
+		if selp, ok2 := sel.X.(*ast.Ident); ok2 && imports[selp.Name] == "os" {
+			if _, found := fileProducers["os."+sel.Sel.Name]; found {
+				st.funcFile[id.Name] = true
+			}
+		}
+	}
 	if callResultsChanFuncFile(rhs, st, info) {
 		st.chanFuncFile[id.Name] = true
 	}
@@ -3727,6 +3770,12 @@ func rulesWalk(scope string, body *ast.BlockStmt, st *taints, exempts map[token.
 			if bannedSelectors[v.Sel.Name] {
 				reporter.failf("%s: banned content-transfer selector .%s", scope, v.Sel.Name)
 			}
+			// A file method used in value position (open := root.Open)
+			// keeps the file capability: the approved surface applies to
+			// the method name itself, not only to call receivers.
+			if isFileExpr(v.X, st, info, imports) && !approvedFileMethods[v.Sel.Name] {
+				reporter.failf("%s: %s on an *os.File value outside the approved capability surface", scope, v.Sel.Name)
+			}
 		case *ast.CallExpr:
 			fun := unwrapParen(v.Fun)
 			if sel, ok := fun.(*ast.SelectorExpr); ok && !exempts[sel.Pos()] {
@@ -3785,6 +3834,9 @@ func walkRulesNode(node ast.Node, st *taints, _ map[token.Pos]bool, imports map[
 		case *ast.SelectorExpr:
 			if bannedSelectors[v.Sel.Name] {
 				reporter.failf("init: banned content-transfer selector .%s", v.Sel.Name)
+			}
+			if isFileExpr(v.X, st, info, imports) && !approvedFileMethods[v.Sel.Name] {
+				reporter.failf("init: %s on an *os.File value outside the approved capability surface", v.Sel.Name)
 			}
 		case *ast.CallExpr:
 			if sel, ok := v.Fun.(*ast.SelectorExpr); ok {
