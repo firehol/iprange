@@ -3332,6 +3332,88 @@ MUTEOF
 	cleanup_muts
 	cp "$self_tree/meta120.orig" internal/reader/metadata.go
 
+	# --- 121: pointer to a defined type without an initializer -----------
+	# var p *d with type d gs (defined type) and no value: the pointer
+	# spelling must resolve through the defined-type chain to the base
+	# struct for both the receiver key and the instance registration.
+	cat > internal/reader/gatemut_ptrdef.go <<'MUTEOF'
+package reader
+
+import (
+	"io"
+	"os"
+)
+
+type gsN121 struct{}
+
+type dN121 gsN121
+
+func (dN121) get() io.ReadCloser {
+	w, _, _ := os.Pipe()
+	return w
+}
+
+var pn121 *dN121
+MUTEOF
+	add_mut internal/reader/gatemut_ptrdef.go
+	cp internal/reader/metadata.go "$self_tree/meta121.orig"
+	INS='zr = pn121.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta121.new" && mv "$self_tree/meta121.new" internal/reader/metadata.go
+	if grep -Fq 'zr = pn121.get()' internal/reader/metadata.go; then
+		run_mut "pointer to a defined type without an initializer"
+	else
+		echo "self-test ERROR: form 121 insert did not take"
+		mutfail=1
+		cleanup_muts
+	fi
+	unset INS
+	cp "$self_tree/meta121.orig" internal/reader/metadata.go
+
+	# --- 122: benign pointer to a defined type must pass ------------------
+	# Same pointer-to-defined-type shape as form 121 but the payload
+	# never touches the filesystem: the scanner must not flag it.
+	cat > internal/reader/gatemut_benptrdef.go <<'MUTEOF'
+package reader
+
+import (
+	"bytes"
+	"io"
+)
+
+type rcN122 struct{ *bytes.Reader }
+
+func (w *rcN122) Close() error { return nil }
+
+type gsBN122 struct{}
+
+type dBN122 gsBN122
+
+func (dBN122) get() io.ReadCloser { return &rcN122{bytes.NewReader(nil)} }
+
+var pbn122 *dBN122
+MUTEOF
+	add_mut internal/reader/gatemut_benptrdef.go
+	cp internal/reader/metadata.go "$self_tree/meta122.orig"
+	INS='zr = pbn122.get()'
+	export INS
+	awk '{ if (index($0, "zr := flate.NewReader(cr)")) { print; print "\t" ENVIRON["INS"]; next } print }' internal/reader/metadata.go > "$self_tree/meta122.new" && mv "$self_tree/meta122.new" internal/reader/metadata.go
+	if grep -Fq 'zr = pbn122.get()' internal/reader/metadata.go; then
+		if GATE_SCANNER_BIN="$scanner_bin" ./check-import-graph.sh >/dev/null 2>&1; then
+			echo "self-test OK: benign pointer-to-defined-type method passes the gate"
+		else
+			echo "self-test MISS: benign pointer-to-defined-type method failed the gate (false positive)"
+			mutfail=1
+		fi
+	else
+		echo "self-test ERROR: form 122 insert did not take"
+		mutfail=1
+	fi
+	unset INS
+	cleanup_muts
+	cp "$self_tree/meta122.orig" internal/reader/metadata.go
+
+
 
 
 
@@ -3387,7 +3469,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 101 mutation forms rejected)"
+	echo "import-graph self-test passed (all 102 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
