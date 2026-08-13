@@ -148,9 +148,11 @@ class (forms 121), the indexed-receiver
 class (forms 123-125), the element-receiver
 class (forms 127-132), the range-literal-receiver
 class (forms 134-135), the bound-receiver
-class (forms 137-138), and the call-result-binding
-class (forms 140-143); the durable rejection set is
-now one hundred nineteen mutation forms. The records
+class (forms 137-138), the call-result-binding
+class (forms 140-143), the explicit-instantiation and
+interface-binding class (forms 145-148); the durable
+rejection set is now one hundred twenty-three mutation
+forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -444,9 +446,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   class (forms 123-125), the element-receiver
   class (forms 127-132), the range-literal-receiver
   class (forms 134-135), the bound-receiver
-  class (forms 137-138), and the call-result-binding
-  class (forms 140-143);
-  the self-test now durably rejects one hundred nineteen mutation forms. The
+  class (forms 137-138), the call-result-binding
+  class (forms 140-143), the explicit-instantiation and
+  interface-binding class (forms 145-148);
+  the self-test now durably rejects one hundred twenty-three mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1571,7 +1574,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 119-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 123-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2149,7 +2152,20 @@ execution record; the closing result is appended there when it completes.
   registration from the switched expression in the type-switch
   handler. Forms 140-143 pin the four escapes; form 144 pins the
   benign single-LHS call-result index control.
+- Ampere round 20 found the interface-and-channel binding class
+  (HEAD 2b3006a): explicit generic instantiations (a := mkGen[*gsG]())
+  never substituted the call's type arguments into the result type,
+  type-switch default clauses over interface-valued expressions
+  (mkIf().(type), sd.f.(type)) never resolved the interface to its
+  signature-identical implementations, and multi-assign from a channel
+  receive ((<-chS), 0) recorded no element type. Fixed by substituting
+  explicit type arguments in applyLHS/applyLHSMulti via
+  genericSubstitutedResults, registering interface method signatures as
+  pseudo-structs (with methodFull text matching), an ifaceImplProducer
+  union over signature-identical implementations, and a typeOfBase
+  UnaryExpr ARROW case. Forms 145-148 pin the four escapes; forms
+  149-150 pin the benign generic and interface-default controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 119-form self-test, ten cross-compiles,
+  import graph with the 123-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
