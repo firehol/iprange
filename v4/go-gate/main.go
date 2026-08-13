@@ -121,6 +121,8 @@ type pkgInfo struct {
 	funcTypeParams map[string][]string // generic func name -> type-parameter names
 	funcParams     map[string][]string // generic func name -> parameter type texts
 	pkgVars        map[string]bool     // package-level variable names
+	definedTo      map[string]string   // defined type (type a b) -> underlying type name
+	embedded       map[string][]string // struct name -> embedded (promoted) type names
 }
 
 func main() {
@@ -199,7 +201,7 @@ func sortStrings(s []string) {
 }
 
 func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.FileSet, map[string]*ast.File) {
-	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}}
+	info := pkgInfo{structs: map[string]map[string]string{}, funcs: map[string][]string{}, methods: map[string][]string{}, aliases: map[string]string{}, retFuncs: map[string]bool{}, retMethods: map[string]bool{}, retFuncFiles: map[string]bool{}, retMethodFiles: map[string]bool{}, funcTypeParams: map[string][]string{}, funcParams: map[string][]string{}, pkgVars: map[string]bool{}, definedTo: map[string]string{}, embedded: map[string][]string{}}
 	srcs := map[string][]byte{}
 	fses := map[string]*token.FileSet{}
 	parsed := map[string]*ast.File{}
@@ -246,13 +248,21 @@ func collectPkgInfo(f *ast.File, info *pkgInfo) {
 				// resolveTypeText expand it.
 				if ft, ok := ts.Type.(*ast.FuncType); ok {
 					info.aliases[ts.Name.Name] = exprText(ft)
+				} else if id, ok := ts.Type.(*ast.Ident); ok {
+					// A defined type (type b a) chains to its underlying
+					// name so receivers and instances resolve to the
+					// base struct.
+					info.definedTo[ts.Name.Name] = id.Name
 				}
 				continue
 			}
 			fields := map[string]string{}
 			for _, field := range st.Fields.List {
 				if len(field.Names) == 0 {
-					continue // embedded field
+					// Embedded field: record the promoted type so method
+					// resolution can walk the embedding chain.
+					info.embedded[ts.Name.Name] = append(info.embedded[ts.Name.Name], exprText(field.Type))
+					continue
 				}
 				t := exprText(field.Type)
 				for _, name := range field.Names {
@@ -607,7 +617,7 @@ func callResultsFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 		// The receiver may be a nested field chain (mhv.inner.mk()),
 		// not just a plain identifier; resolveStruct walks the chain.
 		if structName, ok2 := resolveStruct(unwrapParen(f.X), st, info); ok2 {
-			results = info.methods[structName+"."+f.Sel.Name]
+			results, _ = methodMeta(structName, f.Sel.Name, info)
 		}
 	}
 	if len(results) == 0 {
@@ -638,7 +648,7 @@ func callResultsChanFuncFile(e ast.Expr, st *taints, info pkgInfo) bool {
 		results = info.funcs[f.Name]
 	case *ast.SelectorExpr:
 		if structName, ok2 := resolveStruct(unwrapParen(f.X), st, info); ok2 {
-			results = info.methods[structName+"."+f.Sel.Name]
+			results, _ = methodMeta(structName, f.Sel.Name, info)
 		}
 	}
 	if len(results) == 0 {
@@ -731,6 +741,58 @@ func resolveTypeText(text string, info pkgInfo) string {
 	return text
 }
 
+// resolveDefinedType follows defined-type chains (type b a) to the
+// underlying type name.
+func resolveDefinedType(text string, info pkgInfo) string {
+	for i := 0; i < 8; i++ {
+		if n, ok := info.definedTo[text]; ok {
+			text = n
+			continue
+		}
+		break
+	}
+	return text
+}
+
+// resolveStructName reduces any receiver or instance type spelling to the
+// underlying struct name: type aliases, defined-type chains, pointer
+// prefixes, and generic instantiations all resolve to the base name.
+func resolveStructName(name string, info pkgInfo) string {
+	text := resolveTypeText(name, info)
+	text = resolveDefinedType(text, info)
+	text = strings.TrimPrefix(text, "*")
+	if i := strings.IndexByte(text, '['); i >= 0 {
+		text = text[:i]
+	}
+	return text
+}
+
+// methodMeta resolves method metadata on a struct, walking promoted
+// (embedded) fields when the direct key misses.
+func methodMeta(structName, method string, info pkgInfo) ([]string, bool) {
+	seen := map[string]bool{}
+	var walk func(string) ([]string, bool)
+	walk = func(s string) ([]string, bool) {
+		base := resolveStructName(s, info)
+		if base == "" || seen[base] {
+			return nil, false
+		}
+		seen[base] = true
+		mres := info.methods[base+"."+method]
+		ret := info.retMethods[base+"."+method]
+		if mres != nil || ret {
+			return mres, ret
+		}
+		for _, emb := range info.embedded[base] {
+			if mm, r := walk(emb); r {
+				return mm, r
+			}
+		}
+		return nil, false
+	}
+	return walk(structName)
+}
+
 // typeSwitchBound returns the identifier bound by a type-switch guard
 // (switch zv := x.(type)) or the empty string.
 func typeSwitchBound(assign ast.Stmt) string {
@@ -771,8 +833,7 @@ func funcTypeResultsFile(e ast.Expr, info pkgInfo) bool {
 // structBase returns the same-package struct type name behind a declared
 // type expression (T, *T), resolving type aliases.
 func structBase(t ast.Expr, info pkgInfo) (string, bool) {
-	text := resolveTypeText(exprText(t), info)
-	base := strings.TrimPrefix(text, "*")
+	base := resolveStructName(exprText(t), info)
 	if _, isStruct := info.structs[base]; isStruct {
 		return base, true
 	}
@@ -985,11 +1046,9 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 				return kindContainer
 			}
 		}
-		if id, ok := v.Type.(*ast.Ident); ok {
-			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
-			if _, isStruct := info.structs[base]; isStruct {
-				return kindNone // struct value; field taint is resolved on access
-			}
+		base := resolveStructName(exprText(v.Type), info)
+		if _, isStruct := info.structs[base]; isStruct {
+			return kindNone // struct value; field taint is resolved on access
 		}
 	case *ast.SelectorExpr:
 		switch st.fieldTaint[exprText(v.X)+"."+v.Sel.Name] {
@@ -1020,9 +1079,8 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 					return kindFuncFile
 				}
 			}
-			mkey := structName + "." + v.Sel.Name
-			mres := info.methods[mkey]
-			if positionsOf("*os.File", mres) != nil || info.retMethods[mkey] {
+			mres, retM := methodMeta(structName, v.Sel.Name, info)
+			if positionsOf("*os.File", mres) != nil || retM {
 				return kindFuncFile
 			}
 			for _, r := range mres {
@@ -1092,10 +1150,11 @@ func producerCall(e ast.Expr, st *taints, info pkgInfo, imports map[string]strin
 		// Same-package method returning *os.File (e.g. an accessor), or
 		// whose body returns a tainted value behind an interface.
 		if structName, found := resolveStruct(sel.X, st, info); found {
-			if pos := positionsOf("*os.File", info.methods[structName+"."+sel.Sel.Name]); pos != nil {
+			mres, retM := methodMeta(structName, sel.Sel.Name, info)
+			if pos := positionsOf("*os.File", mres); pos != nil {
 				return call, pos, true
 			}
-			if info.retMethods[structName+"."+sel.Sel.Name] {
+			if retM {
 				return call, []int{0}, true
 			}
 			// hb.fn() where the struct field type is func() *os.File.
@@ -1539,13 +1598,12 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 			}
 		}
 	case *ast.CompositeLit:
-		if id, ok := v.Type.(*ast.Ident); ok {
-			// Alias names (type f = s; f{}) must resolve to the
-			// underlying struct before the method lookup.
-			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
-			if _, isStruct := info.structs[base]; isStruct {
-				return base, true
-			}
+		// Alias and defined names (type f = s; f{}), pointer spellings,
+		// and generic instantiations (gsG[int]{}) all resolve to the
+		// underlying struct before the method lookup.
+		base := resolveStructName(exprText(v.Type), info)
+		if _, isStruct := info.structs[base]; isStruct {
+			return base, true
 		}
 	case *ast.SelectorExpr:
 		// h.inner.fn: resolve the root instance, then walk the field
@@ -1801,11 +1859,9 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 	switch v := e.(type) {
 	case *ast.CompositeLit:
-		if id, ok := v.Type.(*ast.Ident); ok {
-			base := strings.TrimPrefix(resolveTypeText(id.Name, info), "*")
-			if _, isStruct := info.structs[base]; isStruct {
-				return base, true
-			}
+		base := resolveStructName(exprText(v.Type), info)
+		if _, isStruct := info.structs[base]; isStruct {
+			return base, true
 		}
 	case *ast.UnaryExpr:
 		return classifyStruct(v.X, info)
@@ -1998,12 +2054,11 @@ func receiverOf(fd *ast.FuncDecl, info pkgInfo) (name, structName string) {
 	if i := strings.IndexByte(structName, '['); i >= 0 {
 		structName = structName[:i]
 	}
-	// Alias receivers (type a = s; func (a) m()) must key under the
-	// underlying struct: call sites resolve the receiver type through
-	// structBase, so a raw alias key would never be consulted.
-	if res := resolveTypeText(structName, info); res != structName {
-		structName = res
-	}
+	// Alias and defined receivers (type a = s; type b s; func (a) m())
+	// must key under the underlying struct: call sites resolve the
+	// receiver type through structBase, so a raw alias key would never
+	// be consulted. Pointer aliases (type p = *s) also reduce here.
+	structName = resolveStructName(structName, info)
 	return name, structName
 }
 
