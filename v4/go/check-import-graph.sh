@@ -9731,6 +9731,38 @@ func gateForm288main(name string) ([]byte, bool, error) {
 MUTEOF
 	run_mut "nested and channel elided container elements"
 
+	# --- 289: embed import (compile-time database copy) -----------------
+	# The embed package copies a file's bytes into the binary at compile
+	# time; a database embedded this way is a heap copy, not a mapping,
+	# and the mirror of every banned read/write transfer. The blank
+	# import "_ embed" is the canonical //go:embed pattern, so the AST
+	# import ban (non-blank) and the directive ban (below) are separate
+	# forms: either alone must fail the gate.
+	mkdir -p gatemut_embedimp
+	add_mut gatemut_embedimp
+	cat > gatemut_embedimp/mut.go <<'MUTEOF'
+package gatemut_embedimp
+
+import "embed"
+
+var _ embed.FS
+MUTEOF
+	run_mut "embed import (compile-time database copy)"
+
+	# --- 290: //go:embed directive with blank embed import --------------
+	mkdir -p gatemut_embdir
+	add_mut gatemut_embdir
+	printf 'ipr4-embed-probe-0000000000000000000000000\n' > gatemut_embdir/probe.db
+	cat > gatemut_embdir/mut.go <<'MUTEOF'
+package gatemut_embdir
+
+import _ "embed"
+
+//go:embed probe.db
+var gatemutDB []byte
+MUTEOF
+	run_mut "go:embed directive with blank embed import"
+
 
 
 
@@ -9739,7 +9771,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 238 mutation forms rejected)"
+	echo "import-graph self-test passed (all 240 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then

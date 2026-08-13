@@ -68,6 +68,7 @@ var bannedImports = map[string]bool{
 	"compress/lzw": true, "compress/zlib": true,
 	"debug/buildinfo": true, "debug/elf": true, "debug/macho": true,
 	"debug/pe": true, "debug/plan9obj": true,
+	"embed":            true, // compile-time file copy violates the mmap-only contract
 	"encoding/ascii85": true, "encoding/base64": true, "encoding/csv": true,
 	"encoding/gob": true, "encoding/json": true, "encoding/xml": true,
 	"go/parser": true, "go/scanner": true,
@@ -466,6 +467,10 @@ func parseDir(paths []string) (pkgInfo, map[string][]byte, map[string]*token.Fil
 		}
 		if bytes.Contains(src, []byte("//go:linkname")) {
 			fmt.Fprintf(os.Stderr, "gatescan: %s uses //go:linkname (raw-symbol aliasing bypasses the import and selector bans)\n", p)
+			os.Exit(1)
+		}
+		if bytes.Contains(src, []byte("//go:embed")) {
+			fmt.Fprintf(os.Stderr, "gatescan: %s uses //go:embed (compile-time content copy violates the mmap-only contract)\n", p)
 			os.Exit(1)
 		}
 		fset := token.NewFileSet()
