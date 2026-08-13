@@ -14,6 +14,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // MetaSelection reports how the selected meta was derived (section 4.2).
@@ -234,10 +235,15 @@ func (r *ImmutableReader) Meta() format.Meta { return r.meta }
 func (r *ImmutableReader) Selection() MetaSelection { return r.selection }
 
 // page returns a checked full-page view after validating that the page is a
-// non-meta page below the selected committed count.
+// non-meta page below the selected committed count. Every reader hot path
+// visits a page through this owner and decodes exactly one page header
+// (OpenSlottedHeader never re-decodes), so the page-visit and page-parse
+// counters move together; the tests pin both.
 func (r *ImmutableReader) page(pgno uint32) ([]byte, error) {
 	if !format.PageNumberValid(pgno, r.meta.PageCount) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "page number out of range"}
 	}
+	work.PageVisit(1)
+	work.PageParse(1)
 	return r.m.Page(pgno)
 }

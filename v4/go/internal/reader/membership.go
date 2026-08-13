@@ -2,6 +2,7 @@ package reader
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Membership dictionary access (binary-format-v4.md section 9).
@@ -101,6 +102,7 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 		}
 		data := v.leaf.Inline[byteOff : byteOff+byteLen]
 		for i := range output {
+			work.WordRead(1)
 			output[i] = format.U64(data[i*8:])
 		}
 	case format.MembershipStorageBlob:
@@ -125,6 +127,7 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 				return corrupt("membership blob cannot advance by a complete word")
 			}
 			for i := 0; i < count; i++ {
+				work.WordRead(1)
 				output[written+i] = format.U64(leafData[local+uint64(i)*8:])
 			}
 			written += count
@@ -197,6 +200,7 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 	if root == 0 {
 		return MembershipView{}, corrupt("membership dictionary empty")
 	}
+	work.TreeLookup(1)
 	cur := root
 	level := uint16(0)
 	first := true
@@ -234,9 +238,14 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 				// (mirroring membership_view.rs).
 				return MembershipView{}, corrupt("range names an absent membership ID")
 			}
+			work.TreeDescent(1)
 			cur, level = child, level-1
 		case format.PageTypeMembershipIDLeaf:
 			_, leaf, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
+			if err != nil {
+				return MembershipView{}, err
+			}
+			work.LeafValidation(1)
 			if err != nil {
 				return MembershipView{}, err
 			}
@@ -259,33 +268,29 @@ func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) 
 }
 
 // membershipBranchChild finds the greatest branch entry with first_id <= id.
+// Probes read only the first_id key; the selected entry is decoded once and
+// its child validated.
 func membershipBranchChild(sl format.SlottedPage, id uint32, pageCount uint64) (uint32, error) {
-	probe := func(i int) (format.MembershipIDBranchRecord, error) {
+	cmp := func(i int) (int, error) {
 		b, err := sl.Record(i)
-		if err != nil {
-			return format.MembershipIDBranchRecord{}, err
-		}
-		return format.DecodeMembershipIDBranch(b)
-	}
-	lo, hi := 0, int(sl.Header.ItemCount)
-	best := -1
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		rec, err := probe(mid)
 		if err != nil {
 			return 0, err
 		}
-		if rec.FirstID <= id {
-			best = mid
-			lo = mid + 1
-		} else {
-			hi = mid
+		first, err := format.MembershipIDBranchKey(b)
+		if err != nil {
+			return 0, err
 		}
+		return cmpU32(first, id), nil
 	}
-	if best < 0 {
-		return 0, nil // no entry qualifies: absent from the ID tree
+	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
+	if err != nil || best < 0 {
+		return 0, err
 	}
-	rec, err := probe(best)
+	b, err := sl.Record(best)
+	if err != nil {
+		return 0, err
+	}
+	rec, err := format.DecodeMembershipIDBranch(b)
 	if err != nil || !format.PageNumberValid(rec.Child, pageCount) {
 		return 0, corrupt("membership child out of range")
 	}
@@ -293,56 +298,60 @@ func membershipBranchChild(sl format.SlottedPage, id uint32, pageCount uint64) (
 }
 
 // membershipLeafFind finds the record with the exact membership ID and
-// returns its slot number and decoded record. Every probed record is
-// validated against the generation limits, mirroring
-// membership_tree.rs require_record_fields: an id outside the namespace,
-// a zero refcount, an oversized word count, or an out-of-range blob root is
-// corruption.
+// returns its slot number and decoded record. Probes read the id key only
+// (mirroring membership_dictionary/codec.rs read_key at level 0); the
+// selected record alone is decoded and validated against the generation
+// limits (mirroring membership_tree.rs require_record_fields: an id
+// outside the namespace, a zero refcount, an oversized word count, or an
+// out-of-range blob root is corruption). A miss never decodes a record.
 func membershipLeafFind(sl format.SlottedPage, id uint32, idLimit, feedIndexLimit uint64, pageCount uint64) (uint16, format.MembershipIDLeaf, bool, error) {
 	maxWords := feedIndexLimit / 64
 	if feedIndexLimit%64 != 0 {
 		maxWords++
 	}
-	probe := func(i int) (format.MembershipIDLeaf, error) {
+	cmp := func(i int) (int, error) {
 		b, err := sl.Record(i)
 		if err != nil {
-			return format.MembershipIDLeaf{}, err
+			return 0, err
 		}
-		rec, err := format.DecodeMembershipIDLeaf(b)
+		key, err := format.MembershipIDLeafKey(b)
 		if err != nil {
-			return format.MembershipIDLeaf{}, err
+			return 0, err
 		}
-		if rec.MembershipID == 0 || uint64(rec.MembershipID) >= idLimit {
-			return format.MembershipIDLeaf{}, corrupt("membership ID is outside the declared namespace")
-		}
-		if rec.OwnerRef == 0 {
-			return format.MembershipIDLeaf{}, corrupt("membership dictionary record is malformed")
-		}
-		if uint64(rec.WordCount) > maxWords {
-			return format.MembershipIDLeaf{}, corrupt("membership word count beyond limit")
-		}
-		if rec.Storage == format.MembershipStorageBlob && !format.PageNumberValid(rec.BlobRoot, pageCount) {
-			return format.MembershipIDLeaf{}, corrupt("membership blob root out of range")
-		}
-		return rec, nil
+		return cmpU32(key, id), nil
 	}
-	lo, hi := 0, int(sl.Header.ItemCount)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		rec, err := probe(mid)
-		if err != nil {
-			return 0, format.MembershipIDLeaf{}, false, err
-		}
-		switch {
-		case rec.MembershipID == id:
-			return uint16(mid), rec, true, nil
-		case rec.MembershipID < id:
-			lo = mid + 1
-		default:
-			hi = mid
-		}
+	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
+	if err != nil || best < 0 {
+		return 0, format.MembershipIDLeaf{}, false, err
 	}
-	return 0, format.MembershipIDLeaf{}, false, nil
+	b, err := sl.Record(best)
+	if err != nil {
+		return 0, format.MembershipIDLeaf{}, false, err
+	}
+	key, err := format.MembershipIDLeafKey(b)
+	if err != nil {
+		return 0, format.MembershipIDLeaf{}, false, err
+	}
+	if key != id {
+		return 0, format.MembershipIDLeaf{}, false, nil // clean miss, no decode
+	}
+	rec, err := format.DecodeMembershipIDLeaf(b)
+	if err != nil {
+		return 0, format.MembershipIDLeaf{}, false, err
+	}
+	if rec.MembershipID == 0 || uint64(rec.MembershipID) >= idLimit {
+		return 0, format.MembershipIDLeaf{}, false, corrupt("membership ID is outside the declared namespace")
+	}
+	if rec.OwnerRef == 0 {
+		return 0, format.MembershipIDLeaf{}, false, corrupt("membership dictionary record is malformed")
+	}
+	if uint64(rec.WordCount) > maxWords {
+		return 0, format.MembershipIDLeaf{}, false, corrupt("membership word count beyond limit")
+	}
+	if rec.Storage == format.MembershipStorageBlob && !format.PageNumberValid(rec.BlobRoot, pageCount) {
+		return 0, format.MembershipIDLeaf{}, false, corrupt("membership blob root out of range")
+	}
+	return uint16(best), rec, true, nil
 }
 
 // blobRead returns the mapped bytes of [off, off+len) inside one blob tree
@@ -376,6 +385,7 @@ func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, 
 	if off >= totalBytes {
 		return nil, 0, corrupt("membership blob request exceeds its length")
 	}
+	work.TreeLookup(1)
 	cur := root
 	expectedStart := uint64(0)
 	// Value pair instead of an escaping pointer: the walk must stay
@@ -402,6 +412,7 @@ func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, 
 			if h.ItemCount != 1 {
 				return nil, 0, corrupt("blob leaf item count %d", h.ItemCount)
 			}
+			work.LeafValidation(1)
 			leaf, err := format.DecodeBlobLeaf(page)
 			if err != nil {
 				return nil, 0, err
@@ -457,6 +468,7 @@ func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, 
 		if err != nil {
 			return nil, 0, err
 		}
+		work.TreeDescent(1)
 		cur = child
 		expectedStart = offset
 		expected = h.Level - 1
@@ -466,43 +478,36 @@ func (r *ImmutableReader) blobLeaf(root uint32, kind uint32, totalBytes uint64, 
 }
 
 // blobBranchChild finds the greatest branch entry with logical_offset <= off
-// by binary search over the fixed 16-byte slotted records, returning the
-// selected child and its first logical offset (the expected start of the
-// next level, blob_tree.rs select_branch + find_leaf).
+// over the fixed 16-byte slotted records, returning the selected child and
+// its first logical offset (the expected start of the next level,
+// blob_tree.rs select_branch + find_leaf). Every probed record is decoded
+// and its child validated: a malformed probe aborts the walk (pinned by
+// TestBlobBranchProbedChildValidation; Rust branch_record validates every
+// probed record here too, unlike the fixed key-only trees).
 func blobBranchChild(sl format.SlottedPage, off uint64, pageCount uint64) (uint32, uint64, error) {
-	probe := func(i int) (format.BlobBranchRecord, error) {
+	cmp := func(i int) (int, error) {
 		b, err := sl.Record(i)
 		if err != nil {
-			return format.BlobBranchRecord{}, err
+			return 0, err
 		}
 		rec, err := format.DecodeBlobBranch(b)
 		if err != nil {
-			return format.BlobBranchRecord{}, err
+			return 0, err
 		}
 		if !format.PageNumberValid(rec.Child, pageCount) {
-			return format.BlobBranchRecord{}, corrupt("blob branch child out of range")
+			return 0, corrupt("blob branch child out of range")
 		}
-		return rec, nil
+		return cmpU64(rec.LogicalOffset, off), nil
 	}
-	lo, hi := 0, int(sl.Header.ItemCount)
-	best := -1
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		rec, err := probe(mid)
-		if err != nil {
-			return 0, 0, err
-		}
-		if rec.LogicalOffset <= off {
-			best = mid
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
+	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
+	if err != nil || best < 0 {
+		return 0, 0, err
 	}
-	if best < 0 {
-		return 0, 0, corrupt("blob branch has no qualifying child")
+	b, err := sl.Record(best)
+	if err != nil {
+		return 0, 0, err
 	}
-	rec, err := probe(best)
+	rec, err := format.DecodeBlobBranch(b)
 	if err != nil {
 		return 0, 0, err
 	}

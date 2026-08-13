@@ -18,7 +18,7 @@ import (
 
 const multilevelRecordCount = 900
 
-func buildMultiLevelDatabase(t *testing.T) string {
+func buildMultiLevelDatabase(t testing.TB) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "conformance", "rust", "direct-ipv4.iprdb"))
 	if err != nil {

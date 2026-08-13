@@ -152,6 +152,18 @@ Milestone 2 must not start until a new independent final review passes.
 Owning SOW: `.agents/sow/current/SOW-0025-20260811-pure-go-exact-v4-port.md`
 (Status: in-progress).
 
+2026-08-14: an independent external review PASS-failed the milestone-1
+close with three findings (hot-path binary searches decode full records
+per probe and re-decode the selected record; the mmap enforcement
+machinery is 14,519 lines and misses the complete-page ownership rule;
+the SOW Status grew unmaintainable). The rework is recorded in section 14
+below: one authoritative key-only search primitive with test-only
+necessary-work counters and benchmarks, a type-aware go/types gate
+(4,227 lines) plus a trimmed shell harness (552 lines) whose 289-case
+durable battery includes the complete-page ownership forms, and compact
+records with the history preserved in the SOW appendix. Independent
+review outcome: section 14.
+
 ## 1. TL;DR
 
 - The pure-Go portable immutable reader is implemented, mmap-only, with the
@@ -1200,3 +1212,89 @@ chunk tail-zero parity: ReadMetadataJSON accepted nonzero bytes after a
 metadata chunk; Rust rejects the page as corrupt; fixed with an explicit
 tail-zero check in internal/reader/metadata.go and the pre-fix-failing
 regression pin TestMetadataChunkTailNonzeroRejected).
+
+## 14. External-review rework (2026-08-14)
+
+The independent external review at HEAD b230bd1 PASS-failed milestone
+close with three findings, all reproduced by the lead before change:
+
+1. P1 hot path: nine separately written binary-search loops decoded every
+   probed record (including fields the comparison does not need) and
+   decoded the selected record a second time; Rust probes key-only and
+   decodes the selected record once. Go had no benchmarks, no
+   necessary-work counters, and no profiles, so the timing impact was
+   unmeasured while the wasted work was proven.
+2. P1 enforcement: the gate totaled 14,519 lines (4,738-line type-light
+   AST scanner + 9,781-line shell self-test) against a 4,789-line reader,
+   and it missed the complete-page rule (binary-format-v4.md:108): a
+   production function copying a mapped page into an owned [4096]byte
+   compiled and passed the gate.
+3. P2 records: the SOW Status had grown to 463 lines of round-by-round
+   history.
+
+Fixes (one commit; HEAD recorded in the review entry below):
+
+- Search authority: internal/reader/search.go adds greatestLE, the single
+  fixed-tree lower-bound primitive (key-only probes, last-probe reuse,
+  one selected-record decode). Range branch/leaf, catalog feed,
+  membership ID, and blob branch lookups all route through it; the
+  format key readers (RangeEntryKeyV4/V6, RangeRecordKeyV4/V6) read only
+  the key bytes per probe. The blob branch keeps its per-probe child
+  validation (TestBlobBranchProbedChildValidation) and catalog name
+  probes keep full-shape validation because the name is the record
+  payload (decision 1A).
+- Necessary work made visible: internal/work behind -tags v4work pins
+  tree lookups, descents, page visits/parses, key probes, selected-leaf
+  validations, word reads, and structure decodes; the production build
+  compiles the counters to inlineable no-ops (Enabled const false,
+  TestWorkCountersDisabled). Pins: TestWorkRangeLookupMultiLevel,
+  TestWorkMembershipBlobWords, TestWorkStructureLookup.
+- Benchmarks/profiles: bench_test.go on committed fixtures plus the
+  synthetic multi-level databases. i9-12900K, 200k iterations:
+  LookupDirect4MultiLevel 158.8 ns/op, LookupDirect4MissMultiLevel
+  72.05 ns/op, LookupDirect6 68.56 ns/op, LookupFeed 227.7 ns/op,
+  MembershipLookupWord 94.81 ns/op, StructuredLookup 120.1 ns/op,
+  ScanDirect4 41.4 ns/op - all 0 B/op, 0 allocs/op. CPU profile:
+  the dominant LookupFeed cost is the intentional catalog name
+  validation (FeedNameValidString, 48% of that benchmark); the
+  range/membership probe paths show only slot-offset checks and key
+  reads - no full-record decode.
+- Gate replacement: v4/go-gate is a type-aware scanner over go/types
+  (stdlib-only, module-local source loader per OS config, pinned x/sys
+  checkout), keeping the text bans, the *os.File/*os.Root capability
+  surface, the interface-erasure rules (including named interfaces such
+  as io.Reader), and adding the complete-page ownership rule with a
+  symbolic interprocedural page flow (pageflow.go): constant slice
+  spans carry their bound, so page[48:112] is a 64-byte view and
+  page[0:4096] is a full page. Reviewer reproduction now fails the gate
+  with rule-specific violations: copy of m.Page(0) into [4096]byte,
+  append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
+  string(page), copy of r.page(pgno); the bounded record copy and the
+  decoded metadata-chunk append stay legal. The durable battery is table
+  data inside the tool: 289 cases (282 source-transfer forms + 7
+  complete-page forms; 237 rejections, 52 benign acceptances). The shell
+  harness shrank from 9,781 to 552 lines (import boundaries per target,
+  module graph, x/sys checksum pins) plus 9 environment mutations
+  (internal-import boundary, x/sys outside the mapping owner, assembly
+  object, go.mod replace, go.work, poisoned x/sys cache/proxy,
+  unlistable module). Gate totals: 4,227 (tool) + 552 (shell) = 4,779
+  lines against module production 5,052 / tests 5,180.
+- Battery repair during the replacement: the extractor had dropped
+  multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
+  and copied shell-only module-graph forms (18/238/243/248); benign
+  forms 49/59/63/67/81/83/90 referenced undefined types or
+  non-compiling assignments that only the old syntax-only scanner could
+  analyze. Each was repaired to a compilable equivalent preserving the
+  tested rule, the battery harness now restores multi-op case files in
+  LIFO order (the metadata.go double-op restore bug), hidden
+  dot-directories are scanned (go/build ignores dot-prefixed files;
+  both scan paths now include them), and the four module-graph forms
+  moved to the shell self-test.
+- Validation at the rework commit: go test ./... (both tag sets),
+  -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
+  gate --self-test 289/289 + 9 shell mutations exit 0, production scan
+  across all five target configs exit 0, cross-compilation, Rust
+  conformance corpus cross-open, SOW audit green.
+
+Review outcome (six-resident swarm, then sol, per the user's review
+process): recorded after the entry below when the review completes.

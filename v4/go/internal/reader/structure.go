@@ -2,6 +2,7 @@ package reader
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Structured-value lookup (binary-format-v4.md section 9A). The
@@ -91,6 +92,7 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 	if !ok {
 		return NetworkEnrichmentV1View{}, false, corrupt("structure root level overflow")
 	}
+	work.TreeLookup(1)
 	cur := root
 	for level > 0 {
 		page, err := r.page(cur)
@@ -108,6 +110,7 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 		if child == 0 {
 			return NetworkEnrichmentV1View{}, false, nil // empty child: clean miss
 		}
+		work.TreeDescent(1)
 		cur, level = child, level-1
 	}
 	page, err := r.page(cur)
@@ -122,6 +125,7 @@ func (r *ImmutableReader) lookupStructureID(id uint32) (NetworkEnrichmentV1View,
 	if err != nil || !found {
 		return NetworkEnrichmentV1View{}, false, err
 	}
+	work.StructureDecode(1)
 	value, err := format.DecodeNetworkEnrichmentV1(rec.Payload)
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, corrupt("structure payload: %v", err)

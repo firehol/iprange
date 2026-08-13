@@ -19,7 +19,7 @@ import (
 // are intentionally absent: ordinary access never verifies them (only meta
 // CRCs are checked at bootstrap, and those are recomputed here).
 
-func buildBlobDatabase(t *testing.T) string {
+func buildBlobDatabase(t testing.TB) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "conformance", "rust", "direct-ipv4.iprdb"))
 	if err != nil {

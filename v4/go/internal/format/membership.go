@@ -110,3 +110,24 @@ func DecodeMembershipIDBranch(b []byte) (MembershipIDBranchRecord, error) {
 	}
 	return r, nil
 }
+
+// Key-only membership codecs (search.go): probes read the id key only; the
+// selected record is decoded and validated once by the caller.
+
+// MembershipIDBranchKey reads the first_id key of one ID-branch entry.
+func MembershipIDBranchKey(b []byte) (uint32, error) {
+	if len(b) < MembershipIDBranchSize {
+		return 0, headerErr("short id branch %d", len(b))
+	}
+	return U32(b[0:4]), nil
+}
+
+// MembershipIDLeafKey reads the membership id key of one ID-leaf record.
+// The fixed base length is enforced so the key offset is always inside the
+// checked record slice.
+func MembershipIDLeafKey(b []byte) (uint32, error) {
+	if len(b) < membershipLeafFixed {
+		return 0, headerErr("short membership leaf record %d", len(b))
+	}
+	return U32(b[4:8]), nil
+}

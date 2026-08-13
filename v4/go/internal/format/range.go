@@ -73,3 +73,43 @@ func DecodeRangeEntryV6(b []byte) (firstFromHi, firstFromLo uint64, child uint32
 	}
 	return hi, lo, child, nil
 }
+
+// Key-only codecs for the fixed-tree search primitive (search.go). Each
+// probe reads exactly the key fields of one record, never the payload or
+// the child; the selected record is decoded once by the caller after the
+// search, mirroring fixed_tree/page.rs read_key + branch_child. The length
+// guard keeps the key offset inside the checked record slice.
+
+// RangeEntryKeyV4 reads the first_from key of one IPv4 branch entry.
+func RangeEntryKeyV4(b []byte) (uint32, error) {
+	if len(b) < RangeEntryV4Size {
+		return 0, headerErr("short range entry %d", len(b))
+	}
+	return U32(b[0:4]), nil
+}
+
+// RangeEntryKeyV6 reads the first_from key of one IPv6 branch entry.
+func RangeEntryKeyV6(b []byte) (uint64, uint64, error) {
+	if len(b) < RangeEntryV6Size {
+		return 0, 0, headerErr("short range entry %d", len(b))
+	}
+	hi, lo := U128(b[0:16])
+	return hi, lo, nil
+}
+
+// RangeRecordKeyV4 reads the from key of one IPv4 range record.
+func RangeRecordKeyV4(b []byte) (uint32, error) {
+	if len(b) < RangeRecordV4Size {
+		return 0, headerErr("short range record %d", len(b))
+	}
+	return U32(b[0:4]), nil
+}
+
+// RangeRecordKeyV6 reads the from key of one IPv6 range record.
+func RangeRecordKeyV6(b []byte) (uint64, uint64, error) {
+	if len(b) < RangeRecordV6Size {
+		return 0, 0, headerErr("short range record %d", len(b))
+	}
+	hi, lo := U128(b[0:16])
+	return hi, lo, nil
+}

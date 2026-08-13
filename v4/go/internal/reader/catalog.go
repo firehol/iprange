@@ -2,6 +2,7 @@ package reader
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Feed catalog access (binary-format-v4.md section 8). Lookup allocates no
@@ -15,6 +16,7 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 	if r.meta.CatalogNameRoot == 0 {
 		return FeedEntry{}, false, nil
 	}
+	work.TreeLookup(1)
 	if !format.FeedNameValidString(name) {
 		return FeedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 	}
@@ -52,6 +54,7 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 			if child == 0 {
 				return FeedEntry{}, false, nil // no entry qualifies: absent
 			}
+			work.TreeDescent(1)
 			cur, level = child, level-1
 		case format.PageTypeCatalogNameLeaf:
 			entry, found, err := nameLeafLookup(sl, name, r.meta.FeedIndexLimit)
@@ -98,73 +101,72 @@ func cmpName(mapped []byte, name string) int {
 }
 
 // nameBranchChild finds the greatest branch entry whose first name is
-// lexicographically <= target, comparing unsigned name bytes.
+// lexicographically <= target, comparing unsigned name bytes. Probes
+// validate the record shape and name grammar (the name is the key) but do
+// not touch the child; the selected entry is decoded once and its child
+// validated. The child field of a non-selected entry is never read.
 func nameBranchChild(sl format.SlottedPage, target string, pageCount uint64) (uint32, error) {
-	probe := func(i int) (format.CatalogNameBranchRecord, error) {
+	cmp := func(i int) (int, error) {
 		b, err := sl.Record(i)
-		if err != nil {
-			return format.CatalogNameBranchRecord{}, err
-		}
-		return format.DecodeCatalogNameBranch(b)
-	}
-	lo, hi := 0, int(sl.Header.ItemCount)
-	best := -1
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		rec, err := probe(mid)
 		if err != nil {
 			return 0, err
 		}
-		if cmpName(rec.FirstName, target) <= 0 {
-			best = mid
-			lo = mid + 1
-		} else {
-			hi = mid
+		name, err := format.CatalogNameBranchKey(b)
+		if err != nil {
+			return 0, err
 		}
+		return cmpName(name, target), nil
 	}
-	if best < 0 {
-		return 0, nil // no entry qualifies: the name is absent
+	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
+	if err != nil || best < 0 {
+		return 0, err
 	}
-	rec, err := probe(best)
+	b, err := sl.Record(best)
+	if err != nil {
+		return 0, err
+	}
+	rec, err := format.DecodeCatalogNameBranch(b)
 	if err != nil || !format.PageNumberValid(rec.Child, pageCount) {
 		return 0, corrupt("name child out of range")
 	}
 	return rec.Child, nil
 }
 
-// nameLeafLookup finds the exact name in one name leaf. Every probed record
-// is validated against feedIndexLimit: a record whose index is at or above
-// the committed limit is corruption (feed_catalog.rs decode_leaf).
+// nameLeafLookup finds the exact name in one name leaf. Probes decode the
+// record shape and compare the name; only the selected record is checked
+// against feedIndexLimit (mirroring feed_catalog.rs read_key + decode_leaf:
+// the limit is validated on the served entry, never on non-selected
+// records).
 func nameLeafLookup(sl format.SlottedPage, target string, feedIndexLimit uint64) (FeedEntry, bool, error) {
-	probe := func(i int) (format.CatalogNameRecord, error) {
+	cmp := func(i int) (int, error) {
 		b, err := sl.Record(i)
 		if err != nil {
-			return format.CatalogNameRecord{}, err
+			return 0, err
 		}
 		rec, err := format.DecodeCatalogNameRecord(b)
 		if err != nil {
-			return format.CatalogNameRecord{}, err
+			return 0, err
 		}
-		if uint64(rec.FeedIndex) >= feedIndexLimit {
-			return format.CatalogNameRecord{}, corrupt("catalog feed index %d beyond limit %d", rec.FeedIndex, feedIndexLimit)
-		}
-		return rec, nil
+		return cmpName(rec.Name, target), nil
 	}
-	lo, hi := 0, int(sl.Header.ItemCount)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		rec, err := probe(mid)
-		if err != nil {
-			return FeedEntry{}, false, err
-		}
-		switch cmpName(rec.Name, target) {
-		case 0:
-			return FeedEntry{FeedIndex: rec.FeedIndex, Name: rec.Name}, true, nil
-		case -1:
-			lo = mid + 1
-		case 1:
-			hi = mid
-		}
+	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
+	if err != nil || best < 0 {
+		return FeedEntry{}, false, err
 	}
-	return FeedEntry{}, false, nil
+	work.LeafValidation(1)
+	b, err := sl.Record(best)
+	if err != nil {
+		return FeedEntry{}, false, err
+	}
+	rec, err := format.DecodeCatalogNameRecord(b)
+	if err != nil {
+		return FeedEntry{}, false, err
+	}
+	if cmpName(rec.Name, target) != 0 {
+		return FeedEntry{}, false, nil // exact match required
+	}
+	if uint64(rec.FeedIndex) >= feedIndexLimit {
+		return FeedEntry{}, false, corrupt("catalog feed index %d beyond limit %d", rec.FeedIndex, feedIndexLimit)
+	}
+	return FeedEntry{FeedIndex: rec.FeedIndex, Name: rec.Name}, true, nil
 }

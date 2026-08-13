@@ -8,7 +8,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-func fixture(t *testing.T, name string) string {
+func fixture(t testing.TB, name string) string {
 	t.Helper()
 	path := filepath.Join("..", "..", "..", "conformance", "rust", name)
 	if _, err := os.Stat(path); err != nil {
@@ -17,7 +17,7 @@ func fixture(t *testing.T, name string) string {
 	return path
 }
 
-func fixtureDir(t *testing.T) string {
+func fixtureDir(t testing.TB) string {
 	t.Helper()
 	path := filepath.Join("..", "..", "..", "conformance", "rust")
 	if _, err := os.Stat(path); err != nil {
@@ -51,7 +51,7 @@ func isFormatError(err error, code format.ErrorCode) bool {
 	return false
 }
 
-func copyFixture(t *testing.T, name, destName string) string {
+func copyFixture(t testing.TB, name, destName string) string {
 	t.Helper()
 	raw, err := os.ReadFile(fixture(t, name))
 	if err != nil {

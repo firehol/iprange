@@ -125,3 +125,32 @@ func DecodeCatalogIndexBranch(b []byte) (CatalogIndexBranchRecord, error) {
 	}
 	return r, nil
 }
+
+// CatalogNameBranchKey decodes the first name of one name-branch record
+// without touching (or validating) the child field. The record shape and
+// name grammar are the key: they are validated on every probe, mirroring
+// feed_catalog.rs read_key = decode_entry; the child is read and validated
+// only when the record is selected.
+func CatalogNameBranchKey(b []byte) ([]byte, error) {
+	if len(b) < nameRecordFixed+1 {
+		return nil, headerErr("short catalog branch %d", len(b))
+	}
+	recordLen := U16(b[0:2])
+	if U16(b[2:4]) != 0 {
+		return nil, headerErr("catalog branch flags nonzero")
+	}
+	if int(recordLen) < nameRecordFixed+1 || int(recordLen) > len(b) {
+		return nil, headerErr("catalog branch length %d", recordLen)
+	}
+	nameLen := int(b[8])
+	if b[9] != 0 || b[10] != 0 || b[11] != 0 {
+		return nil, headerErr("catalog branch reserved bytes")
+	}
+	if int(recordLen) != nameRecordFixed+nameLen {
+		return nil, headerErr("catalog branch name mismatch")
+	}
+	if !FeedNameValid(b[12 : 12+nameLen]) {
+		return nil, headerErr("invalid catalog branch name")
+	}
+	return b[12 : 12+nameLen], nil
+}

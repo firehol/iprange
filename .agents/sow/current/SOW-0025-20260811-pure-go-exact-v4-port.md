@@ -1,468 +1,60 @@
 # SOW-0025 - Pure-Go Exact v4 Semantic Port
 
 ## Status
-
 Status: in-progress
 
-Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
-253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh
-independent audit; all five P2 classes were fixed at HEAD ca30026: the
-implemented NetworkEnrichmentV1Location surface (value + HasLocation,
-recorded as open decision 5A awaiting user ratification, ratified later on 2026-08-13), implicit semantic validation removed from
-structured lookup, hot-path decodes cut to one page-header decode per
-visited page with membership word reads served from the lookup-time record
-decode, the contradictory closure records corrected, and Mapping.File
-removed with the content-I/O source gate extended to io.ReadAll/io.Copy.
-Regression pins: plausible-corruption decode acceptance, record-geometry
-rejection at lookup, and the vector codec. The round-11 final review then
-found one P1 (pin variable reassignment retargets the view guard and a
-word read segfaults on released memory) and three P2 (decision 5A
-unratified; mmap gate bypassable plus a Windows Mapping.File escape; stale
-close-out records), all fixed at HEAD 2fd6cae with the cross-reader
-reassignment regression test, or recorded for the user's decision (5A).
-The round-12 final review then confirmed the lifetime fix but found two
-remaining P2: decision 5A still unratified, and the mmap source gate still
-bypassable (x/sys descriptor reads, bufio wrappers, dot imports, and
-build-tagged packages). Fixed at HEAD 4fdc671: the gate is now a
-whole-tree selector scan (find across all build tags) with dot-import and
-bufio import bans, a self-test mode, and the runtime half of the
-mmap-only evidence (strace of an open/read/close session: openat, OFD
-lock, mmap, munmap, unlock, close with no read/pread/readv/lseek on the
-database descriptor) recorded in the report. The round-13 final review
-then failed with three P2: decision 5A still unratified; the gate still
-accepted indirect content-transfer forms (fmt.Fscan/Fscanf, io.CopyN/
-CopyBuffer, reflection MethodByName, raw unix.Syscall(SYS_READ),
-unix.CopyFileRange, Sendfile/Splice), its line-level tolerated-call
-exemption could hide a forbidden transfer on the same line, and a
-windows-tagged package could still import internal packages unseen by a
-linux-only go list boundary check; plus two P3 comment corrections.
-All fixed at HEAD dbdf2b7: tolerated calls are blanked as exact call
-nodes instead of whole lines, the selector set covers every indirect
-form, gzip and compress/zlib wrapper imports are banned, the boundary
-check runs per target over ten GOOS/GOARCH pairs, and the self-test
-durably rejects eighteen mutation forms. The narrow re-review of that
-fix then found the decoder/encoder family still open (encoding/json,
-xml, gob NewDecoder(f).Decode, image/archive wrappers), os.File.WriteString,
-a nested-paren blanking shadow, and reflect.Value.Method(i);
-the gate now also bans the reader-consumer packages, covers
-WriteString/WriteRune/NewDecoder/Decode/Encode/Method selectors, blanks
-only paren-free tolerated call nodes, and its self-test durably rejects
-twenty-two mutation forms. The re-review of that fix found io.ReadFull/
-io.ReadAtLeast over a file still open, the writer-consumer packages
-(log, text/template, html/template, os/exec, net/http, flate.NewWriter)
-uncovered, and three self-test mutations that did not compile; all fixed
-at HEAD bf33f2a (selectors ReadFull/ReadAtLeast/Print/Printf/Println/
-Scan/Scanln/Scanf/NewWriter; the five writer packages join the import
-ban; the two in-memory inflater io.ReadFull(zr, ...) nodes are exempted
-exactly; the method-value and CopyFileRange forms compile, and the
-nested-node probe stays an intentional textual tripwire), and the
-self-test now durably rejects twenty-six mutation forms. The re-review
-of that fix found the io.ReadFull exemption itself paren-crossing (a
-nested transfer could still be swallowed; a file-backed flate reader
-named zr was exempted by name), the reflection Call invocation
-unguarded (FieldByName("Read").Call), and the reader-constructor
-packages (debug/elf and the debug/* family, go/parser, go/scanner,
-text/scanner, text/tabwriter, mime/quotedprintable) unlocked; all fixed
-at HEAD 149a200 (the io.ReadFull exemption is shape-bounded to the two
-real nodes io.ReadFull(zr, out[...]), Call/CallSlice join the
-selectors, the constructor packages join the import ban), and the
-self-test now durably rejects twenty-eight mutation forms. The re-review
-of that fix found the exemptions still name-keyed (a file-backed flate
-reader named zr with a buffer named out, and a receiver field r, could
-reproduce the tolerated shapes), so at HEAD c03e40c the exemptions are
-exact literals and nothing else: c.r.Read(p), c.r.ReadByte(), and the
-two io.ReadFull(zr, out[...int(meta.MetadataUncompressed)]) inflater
-reads; same-named file-backed readers and other index shapes now fail
-closed, two pin forms were added, and a startup sweep removes stale
-gatemut_* artifacts from interrupted self-test runs. The self-test now
-durably rejects thirty mutation forms. The records were completed in
-the same pass; decision 5A remains the single open user decision and
-blocks milestone close. Repository counts: production 4,792 raw lines /
-tests 4,877 raw lines. Milestone 2 must not start until a new
-independent final review passes.
+Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
+(2026-08-14); milestone close is pending the independent review process
+(six-resident swarm, then sol - decision 5A). All three review findings
+are fixed: the hot path has one authoritative key-only search primitive
+with test-only necessary-work counters and benchmarks; the mmap gate is a
+4,779-line typed scanner (4,227-line go/types module plus the 552-line
+shell boundary/self-test harness, down from 14,519) that detects
+complete-page ownership; the Status is compact with the full history in
+the appendix. The durable battery is 289 cases (237 rejections, 52 benign
+acceptances) plus 9 shell environment mutations and passes end to end.
+Milestone 2 (writer) remains blocked until the review passes and the user
+authorizes it.
 
-The sixth final review then failed with five P2 findings, all in the mmap
-gate and the records: selector splitting after the dot (`file.\nRead(p)`
-and `io.\nReadAll(f)` compile and bypass a line scan); type-blind
-exact-literal exemptions (a struct whose `c.r` is `*os.File` using exactly
-`c.r.Read(p)`, and a function whose `zr` is `*os.File` using exactly
-`io.ReadFull(zr, out[:int(meta.MetadataUncompressed)])`, both pass); an
-open-ended stdlib denylist (the gzip regex never matches `compress/gzip`;
-`log/slog.NewTextHandler`, `runtime/trace.Start`, and `os.StartProcess`
-with `ProcAttr{Files: []*os.File}` consume a file unseen); a destructive
-startup sweep (every path named `gatemut_*` is deleted before scanning,
-so a committed `gatemut_hidden_linux.go` violation is removed and the
-gate reports PASS, and untracked user work can be destroyed); and
-acceptance records claiming completion while the six-reviewer PASS at
-HEAD 360130c was not recorded and round-12 wording said decision 5A was
-"fixed". Fixed at HEAD c42325a: the line-oriented text scan is replaced by
-an AST, type-light scanner (v4/go-gate/main.go, stdlib only) that parses
-every production file - build tags, line wrapping, comments, aliases,
-and file names are irrelevant to the token stream - syntactically taints
-`*os.File` values (declarations, parameters, os.Open*/os.Create
-producers, same-package constructors, struct fields), bans 37
-content-transfer imports and 56 selector families, permits `*os.File`
-values only into the mapping-lifecycle methods
-(Fd/Close/Name/Stat/Sync/Truncate/Chmod/Chown) and
-same-package/module-internal/x-sys consumers, and exempts the three
-exact in-memory inflater nodes only when their receiver/arguments are
-not file-tainted. The self-test now copies the module into a private
-temporary directory: it never touches the reviewed tree, reserves no
-file name, proves an innocent `gatemut_`-named file is not deleted, and
-durably rejects forty mutation forms including all nine independent
-reproducers of the sixth review; the startup sweep is gone. HEAD
-81ca524 then pinned the aliased-os producer form as the forty-first;
-HEAD 6b05801 tainted `*os.File` results returned by same-package
-accessor methods. The seventh-sweep hardening (HEAD e2dc7e0) closed
-the type-alias conversion and parameter classes, separately built
-`os.ProcAttr{Files}` containers, and the `os.Pipe` producer class,
-renumbered the self-test forms, and raised the durable rejection set to
-forty-five mutation forms. The eighth sweep (HEAD c4b1b52) closed the
-struct-field-storage and channel-transport classes behind the inflater
-exemptions (shared per-package taint state, struct-field write taint,
-chan *os.File taint including send/recv/range, new(T) instances,
-container index reads) and pinned them as self-test forms 47-48. The
-ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
-two-hop-channel, and single-variable-channel-range escape classes
-(forms 50-53, with the benign control at form 49); the durable
-rejection set is now fifty-one mutation forms. The tenth sweep
-(HEAD 5c88ba3) closed the parenthesized-producer,
-parenthesized-closure, interface-typed-closure,
-alias-typed-function-variable, and type-switch-bound escape classes
-(forms 54-58, with the parenthesized benign control at form 59); the
-durable rejection set is now fifty-six mutation forms. While
-stress-testing the round-4 fixes during the round-5 gate re-review,
-the defined-func-type family and its method/nested-callee variants
-were closed (self-test forms 60-67), the round-5 struct-field/
-chan-of-func/asserted-func/os-std-handle family (forms 68-72), and
-the round-6 nested-field/named-helper/chan-pass family, the
-named-method extension, the nested-method-receiver extension, the
-method-value family, the generic pass-through family, the
-generic-element family, the chan-result method-value class, and the
-field-assignment class, the channel-consumer class, the
-container-element class (forms 73-107), the anonymous-receiver
-method class (forms 108-111), the alias-receiver method
-class (forms 113-114), the receiver-resolution
-class (forms 116-119), the pointer-defined-type
-class (forms 121), the indexed-receiver
-class (forms 123-125), the element-receiver
-class (forms 127-132), the range-literal-receiver
-class (forms 134-135), the bound-receiver
-class (forms 137-138), the call-result-binding
-class (forms 140-143), the explicit-instantiation and
-interface-binding class (forms 145-148), the
-generic-receiver-binding class (forms 151-156), the
-alias-spelled generic binding class (forms 159-164), and the
-reader-shape binding class (forms 167-174), and the renamed-qualified alias
-  class (forms 179-182), and the func-typed
-generic-method class (forms 185-189), the mixed result and
-qualified-defined class (forms 191-196), the
-interface-method and method-result class (forms 199-205), the
-embedded-interface and cross-package chain class (forms 207-210), the
-remote-interface and generic-instantiation class (forms 213-217), the
-defined-hop instantiation class (forms 222-223), the nested generic-
-instantiation class (forms 225-226), and the cgo-import,
-raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
-(forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred thirty-eight
-mutation forms (round-48 closed the bound method-expression and
-same-module cross-package producer-var class, forms 257-260;
-round-49 closed the nested-parenthesized, renamed-import,
-alias-over-renamed, wrapper-promoted method-expression,
-value-bound cross-package producer-var, and
-interface-conversion-launder class, forms 261-266;
-round-50 closed the generic interface-erasure, composite-literal
-field-launder, generic-wrapper method-expression, and deep
-embedding-chain class, forms 267-270, note that forms 267-268 were
-initially vacuous (separate-file launders rejected by the
-unconditional selector ban) and were converted to exemption-shape
-appends in round 51);
-round-51 closed the file-bound generic result-erasure class
-(all declared result positions of a generic call with a file-typed
-argument binding a type parameter stay tainted: renamed-qualifier
-interfaces, other-stdlib interfaces, slice/array/map/chan/func
-wrappers) and the positional composite-literal field-launder class
-(unkeyed elements resolve through the struct's declared field
-order, including an os.Root opener hidden behind a positional
-field), forms 271-277 plus the converted 267-268, raising the set
-to two hundred twenty-seven mutation forms);
-round-52 closed the embedded and anonymous struct-literal launder
-classes (embedded fields are named by type name, not qualifier
-spelling, so positional io.Reader and positional/keyed *os.Root
-wrapper literals no longer leave a live promoted handle; variables
-bound to explicit generic instantiations keep the base generic's
-substituted results; anonymous struct literals resolve positional
-order from their own fields, and anonymous structs embedding
-*os.File/*os.Root escalate like named wrappers), forms 278-282, and
-the continuation class of the same round (elided inner composite
-literals in slice, map, nested-container, and channel elements,
-pointer composite literals, and func-valued arguments to explicitly
-instantiated generics), forms 283-288, raising the set to two
-hundred thirty-eight mutation forms; round-53 closed the embed
-import and //go:embed directive classes (compile-time database
-copies), forms 289-290, raising the set to two hundred forty
-mutation forms);
-round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
-bodyless assembly-stub class, forms 236-237; its follow-up closed the
-x/sys-owner boundary for every package plus assembly-object files, forms
-238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
-primitive, form 240; round-39 closed the out-of-tree module-graph
-escape (go.mod replace and go.work can attach code the walk never
-scans; the graph is validated to exactly this module plus x/sys with
-no workspace, forms 241-242; round-40 closed the x/sys source
-replacement and hidden dot-directory vectors, forms 243-244; round-42 closed the x/sys source-content gap, forms 245-247; round-43 closed the fail-open listing gap, form 248). The round-24 gate re-review then found the import-renamed qualified
-alias class: an import mm ".../internal/mapping" local qualifier was
-never translated back to a package path, so mm.MappingFile generic type
-arguments, local alias chains of renamed imports, element spellings,
-declared variables, and type assertions all escaped with gate exit 0.
-Fixed in the go-gate scanner with per-directory alias registration
-(pkgAliasesByDir), a per-file import snapshot (currentImports), and
-qualifier translation in aliasLookup; pinned as self-test forms
-179-182 (rejects) and 183-184 (benign controls). The durable rejection
-set is now one hundred forty-seven mutation forms. The records
-of this pass complete the trail up to this re-review. The round-25
-gate re-review then found the func-typed generic-method class: a
-generic method whose type argument binds a func type producing
-*os.File (gRZ[func() *os.File]{}.mk() bound to f, then f()) was
-claimed by producerCall as a direct file result, so the binding was
-recorded as a file instead of a func-file and invoking it lost the
-taint - a file-backed zr again slipped through the io.ReadFull
-exemption with gate exit 0. Fixed by removing the funcTextFile claim
-from producerCall's generic-method branch so classify's own generic
-method loop yields kindFuncFile and applyKind records the func-file
-binding; pinned as self-test forms 185-189 (rejects) and 190 (benign
-bytes control). The durable rejection
-set is now one hundred fifty-two mutation forms. The records
-of this pass complete the trail up to this re-review. The round-26
-gate re-review then found the mixed-result and qualified-defined
-class: (1) callResultsFuncFile required every declared result of a
-non-generic function to be a func-file, so mixed multi-result calls
-(getFn() (func() *os.File, error)) lost the func-file taint at the
-exact func-typed position and f() reached the io.ReadFull exemption
-with gate exit 0; (2) a defined type over a qualified or complex
-underlying (type x mm.A, type x []*os.File) registered nothing, so
-the chain never expanded, and cross-package defined func types
-(type F func() *os.File in mapping) were invisible to qualified
-references. Fixed with per-position result-kind resolution
-(callResults/callResultKinds/callResultKindAt routed through
-generic and declared signatures), per-position carrier registration
-in applyLHSMulti for call RHS, definedTo registration for every
-non-func non-ident underlying, and qualified registration of defined
-func types; pinned as self-test forms 191-196 (rejects) and 197-198
-(benign bytes controls). The durable rejection
-set is now one hundred fifty-eight mutation forms. The records
-of this pass complete the trail up to this re-review. The round-27
-gate re-review then found the interface-method and method-result
-class: (1) a generic receiver bound to an interface whose method
-declares mixed results (Get() (func() *os.File, error)) lost the
-func-file position because producerCall claimed the interface method
-signature (stored as a pseudo-field) as a raw file position, so the
-binding was recorded as a file and invoking it lost the taint;
-(2) callResults dropped every declared result of a non-generic method
-because methodMeta's ok flag reports body-marked producers, not
-whether the method exists - mixed method results (mk() (func() *os.File,
-error)) bound with gate exit 0; (3) defined types over aliases and
-aliases over defined func types (type D A with A = func() *os.File;
-type E = D2) were invisible to cross-package spellings because only
-aliases and defined func types entered the qualified registries, and a
-first-hop name from another directory could not resolve further.
-Fixed with declared-result precedence in classify and per-position
-kind preference in applyLHSMulti (func-file/chan carriers keep their
-invoke-able kind), method-existence detection in producerCall's
-field-type claim (a declared method is not a func field),
-non-nil-results acceptance in callResults for ordinary methods, and
-defined-type registration plus a per-directory fixpoint in the
-qualified registries (finalizeDirAliases); pinned as self-test forms
-199-205 (rejects covering both mixed positions, the chan-of-func
-variant, the defined-over-alias and alias-over-defined hops, and both
-method-result positions) and 206 (benign interface-typed bytes
-control). The durable rejection
-set is now one hundred sixty-five mutation forms. The records
-of this pass complete the trail up to this re-review. The round-28
-gate re-review then found the embedded-interface and cross-package
-chain class: (1) an interface embedding a file-producing interface
-(type IEmb interface{ IBase } with IBase.Get() func() *os.File)
-resolved no promoted method because methodMeta's embedded walk
-propagated only body-marked producers and dropped declared results,
-so x.Get()() on an interface-typed generic result reached the
-io.ReadFull exemption with gate exit 0 (both the single-result and
-the mixed multi-result shapes); (2) a defined struct in another
-package used as a generic type argument (gRZ[mm.S28]{}, s.Get())
-was invisible to the reader's local package info; (3) a qualified
-defined chain of nine named hops (mm.J28 after alias A and hops
-B..I) exceeded the single-pass fixpoint budget and was map-order
-dependent. Fixed by propagating promoted declared results in
-methodMeta's embedding walk, process-wide mirrors of remote
-structs/methods/embedded chains with a parse-time seed-merge,
-self-entries for struct spellings in the qualified registries, and
-a full fixpoint loop for the per-directory alias/defined closure
-with self-hop guards; pinned as self-test forms 207-210 (rejects)
-and 211-212 (benign bytes controls). The durable rejection
-set is now one hundred sixty-nine mutation forms. The records
-of this pass complete the trail up to this re-review. The round-29
-gate re-review then found the remote-interface and generic-
-instantiation class: (1) a renamed import qualifier on a cross-
-package interface embedded in a reader interface or struct (type
-IEmb interface{ mm.IMapBase }) reduced to no registered key because
-only structs (not interfaces) registered the qualifier self-entry,
-so the promoted file method lost its taint; (2) a generic interface
-instantiated at an embedding site (type IEmbGN interface{
-IBaseGN[func() *os.File] }) promoted the raw type parameter without
-substitution, so Get() T never matched the file shapes (both the
-func-file and chan-of-func variants); the adjacent remote shapes (a
-renamed generic interface instantiation and a cross-package generic
-struct receiver) carried the same gap. Fixed by registering the
-qualified self-entry for interface names exactly like structs,
-recording generic interface type parameters in the receiver-parameter
-registry with process-wide mirrors, and substituting the embedding's
-type arguments in the promoted-method walk; the round's P2 (a
-non-compiling benign form-212 twin) was fixed by removing its unused
-import. Pinned as self-test forms 213-217 (rejects) and 218-221
-(benign bytes controls). The durable rejection
-set is now one hundred seventy-four mutation forms. The records
-of this pass complete the trail up to this re-review. The round-30
-gate re-review then found the defined-hop instantiation class: a
-defined type over an instantiated generic interface embedded in an
-interface (type D IBaseG[func() *os.File]; type IEmb interface{ D })
-lost the instantiation at the embedding walk because the brackets
-live in the defined chain's target text, not in the raw embedded
-spelling, so the promoted method results propagated the raw type
-parameter and Get() T never matched the file shapes (both the
-reader-local and the renamed-qualified cross-package shapes). Fixed
-by extracting the embedding's type arguments from the resolved
-defined/alias text (resolveTaintType then parseBracketArgs) in both
-the promoted-method walk and the generic receiver-substitution walk;
-pinned as self-test forms 222-223 (rejects) and 224 (benign bytes
-control). The durable rejection
-set is now one hundred seventy-six mutation forms. The records
-of this pass complete the trail up to this re-review. The round-31
-gate re-review then found the nested generic-instantiation class:
-a multi-level generic-interface embedding (type InnerL[T]
-interface{ Get() T }; type IBaseGL[T] interface{ InnerL[T] };
-type IEmb interface{ IBaseGL[func() *os.File] }) substituted only
-at the frame owning the brackets, so the frame declaring the method
-returned the raw type parameter and Get() T reached the io.ReadFull
-exemption (three-level and chan-of-func variants included). Fixed by
-threading type parameters and arguments down the embedding chain:
-each frame substitutes its own instantiation into the next embedded
-type text, the declaring frame applies the accumulated arguments,
-and a frame-level interface-parameter registry (ifaceParams, mirrored
-process-wide) carries generic interface parameters across packages;
-the receiver-substitution walk gained the same threading and the
-embedded-entry argument list. Pinned as self-test forms 225-226
-(rejects) and 227 (benign bytes control); forms 228-230 and 232-235 pin the
-round-32 cgo-import, raw-syscall, linkname, no-error syscall, and
-preadv2/pwritev2 rejects with form 231 the benign lifecycle
-control. The durable rejection set is now one hundred eighty-five
-mutation forms. The round-36 gate re-review then found the
-subprocess-escape class: dup'ing the database descriptor onto stdin and
-exec'ing a reader (unix.Dup2 + unix.Exec, /bin/cat) streams file content
-out with no banned read call, and a bodyless Go declaration attaches an
-assembly syscall body the AST scan cannot see. Fixed by banning the
-Dup/Dup2/Dup3/Exec/ForkExec selectors and rejecting bodyless
-declarations outright; pinned as self-test forms 236-237. The durable
-rejection set is now one hundred eighty-seven mutation forms. The round-36
-follow-up re-review then closed the remaining owner-boundary gaps: a new
-package could import golang.org/x/sys unseen by the per-target loop
-(only the four known packages were checked), and a .s/.syso assembly
-object was never scanned (the bodyless-declaration ban was the only link
-guard). Fixed by moving the x/sys owner rule into the per-target loop
-for every package except internal/mapping and rejecting assembly objects
-outright in the scanner walk; pinned as self-test forms 238-239. The
-round-37 narrow re-review then found a metadata parity gap: ReadMetadataJSON
-accepted a metadata chunk page whose post-data tail bytes were nonzero,
-while Rust rejects it as corrupt (metadata.rs:274) and the spec requires
-zero tails (binary-format-v4.md:1051). Fixed with an explicit tail-zero
-check in internal/reader/metadata.go and the pre-fix-failing regression
-pin TestMetadataChunkTailNonzeroRejected. The round-38 re-review then
-closed the fcntl F_DUPFD duplication primitive: unix.FcntlInt(fd,
-F_DUPFD, 0) can duplicate the descriptor onto stdin like dup, unseen by
-the dup-name bans; FcntlInt joins the banned selector set (FcntlFlock,
-the mapping owner's lock path, is a different function and stays
-allowed), pinned as self-test form 240, raising the set to one hundred
-ninety mutation forms. The round-39 re-review then found the
-module-graph escape: a go.mod replace directive or a go.work workspace
-can attach an out-of-tree module whose files the scanner walk never
-visits, letting a wrapper call unix.Pread on the database descriptor
-unseen (both vectors exited 0). Fixed by validating the module graph
-itself - go list -m all must be exactly this module plus
-golang.org/x/sys, and no workspace may be active - pinned as self-test
-forms 241-242, raising the set to one hundred ninety-two mutation
-forms. The round-40 re-review then found the path-only allowlist gap:
-replace golang.org/x/sys => <evil dir> keeps the allowed path in the
-graph while loading attacker-controlled code the walk never scans
-(proven live with unix.Pread2 reading the database), and the walk
-skipped every hidden dot-directory, hiding in-tree replacements. Fixed
-by banning all replace/exclude directives, verifying the resolved
-x/sys source is the module-cache checkout, and scanning hidden
-directories (only .git is skipped), pinned as self-test forms 243-244,
-raising the set to one hundred ninety-four mutation forms. The round-42
-gate re-review then closed the x/sys source-content gap: the path-only
-allowlist accepted a poisoned GOMODCACHE checkout or a file proxy
-serving an evil x/sys with a self-consistent forged go.sum (both proven
-live with a smuggled unix.Pread2 the ban list cannot know, because
-nothing pinned the module content); the gate now pins the exact version,
-the module-cache path, the extracted-tree content hash, and the module
-zip/go.mod sums to the official v0.35.0 values, and the assembly-object
-rejection is case-insensitive, pinned as self-test forms 245-247,
-raising the set to one hundred ninety-seven mutation forms. The round-43
-gate re-review then found the fail-open listing gap: the per-target go
-list ./... loop swallowed listing failures (2>/dev/null), so a module
-the go toolchain cannot list - symlinked package files or parse errors -
-passed with an empty package list and no import checks (reproduced with
-a symlinked smuggled file in internal/mapping); the package checks now
-fail closed on every listing error and the per-package import listing
-fails closed too, pinned as self-test form 248, raising the set to one
-hundred ninety-eight mutation forms. The six-reviewer
-pass for that fix completed with all six narrow reviewers at PASS (HEAD e5fea20).
-The round-45 final review then failed with three P2 findings, all in the mmap source gate: os.CopyFS was absent
-from the selector ban (a directory copy streams artifact bytes with no banned selector; the live reproducer
-exited 0), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File,
-or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes, and
-Root.Open/Create/OpenFile also produce files), and the blanket-approved x/sys surface still carried
-descriptor-transfer primitives unseen by the denylist (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/
-DedupeRange, darwin unix.Clonefile/Clonefileat). Fixed at HEAD 14c0698: CopyFS, Tee, Vmsplice,
-IoctlFileClone* and Clonefile* join the banned selector set (CopyFileRange/Sendfile/Splice were already
-banned); os.OpenInRoot and os.OpenRoot join the file-producer table as position-0 file taints, so every Root
-method outside the approved lifecycle surface fails closed; all three live reproducers plus the
-OpenRoot/ReadAll and darwin Clonefile variants are rejected by the hardened gate. The adversarial re-review
-of that fix then found a P0 in the same class: a *os.Root handle stored in a struct field (h :=
-gateRootField{r: root}; h.r.Open(name)) dropped the file taint, so the returned *os.File reached
-flate.NewReader untainted and the stream was consumed through the exact inflater exemption shape with gate
-exit 0; *os.Root now resolves as a file-bearing type everywhere *os.File does (fields, parameters,
-helper returns, type assertions, func/chan elements, results), so every laundering route fails closed.
-Pinned as self-test forms 249-252, raising the durable rejection set to two hundred two mutation forms. The
-adversarial re-review of that closure then found three P0 escapes in the same producer-value class, all
-proven live with full metadata-exemption chains at gate exit 0: (1) a file method value (open := root.Open;
-open(name)) escaped the call-receiver ban and the bound method produced an untainted *os.File; (2) a
-func-typed variable with an initializer (var newRoot func(string) (*os.Root, error) = os.OpenRoot) lost
-its declared file-bearing result type because the type was only consulted for type-only vars; (3) the same
-declared-type gap predated the Root work for *os.File (var openPath func(string) (*os.File, error) =
-os.Open). Fixed by checking the file method in value position against the approved surface, registering the
-declared result type of initialized func-typed variables, and registering stdlib producer values (os.Open
-and friends) as func-files wherever bound; pinned as self-test forms 253-256, raising the durable rejection
-set to two hundred six mutation forms. The round-48 re-review then
-closed bound method expressions on file-bearing receiver types and
-same-module cross-package producer vars (forms 257-260, two hundred
-ten mutation forms); the round-49 re-review closed nested-
-parenthesized, renamed-import, alias-over-renamed, and
-wrapper-promoted method expressions, value-bound cross-package
-producer vars, and interface-conversion laundering of a file into
-the metadata inflater exemption (forms 261-266, two hundred sixteen
-mutation forms); the round-50 re-review closed the generic
-identity-with-interface-result erasure, the composite-literal field
-launder, the instantiated-generic-wrapper method expression, and
-the deep embedding-chain method expression (forms 267-270, two
-hundred twenty mutation forms). The records
-of this pass complete the trail up to this re-review. Repository counts:
-production 4,789 raw lines / tests 4,887 raw lines (the round-54
-dead-state removal and zero-Pin test account for the latest delta; the gate
-scanner lives outside the module). Milestone 2 must not start until a
-new independent final review passes; decision 5A was ratified (option A,
-2026-08-13); no open user decision remains.
-The approved later scope remains unchanged: Milestone 2 is the writer;
-sidecars, live coordination, and publication remain Milestone 4.
+Rework outcome per finding:
 
+- P1 hot path - fixed: one authoritative search primitive
+  (internal/reader/search.go greatestLE) with key-only probes and a single
+  decode of the selected record now drives every range/catalog/membership/
+  blob lookup (decisions 1A-5A below; implementation record 2026-08-14).
+  Test-only necessary-work counters (internal/work behind -tags v4work,
+  const false no-op in production) pin probes/visits/descends/decodes;
+  reader benchmarks on committed fixtures and a CPU profile were added and
+  are recorded in the implementation record.
+- P1 enforcement - fixed: the type-light 4,738-line AST taint engine and
+  the 9,781-line shell battery were replaced by a type-aware go/types
+  scanner (v4/go-gate) with the complete-page ownership rule
+  (copy/append/array-conversion sinks at or above PageSize, spec
+  binary-format-v4.md:108) plus the file-capability and text-ban families.
+  The durable mutation battery moved into the tool as table data (289
+  cases); the shell harness keeps only the import-boundary, module-graph,
+  x/sys-ownership and environment checks (552 lines) and the self-test
+  invocation. A production function that copies a mapped page into an
+  owned [4096]byte now fails the gate with a specific rule violation
+  (probe matrix recorded below).
+- P2 records - fixed: this Status is compact; the round-by-round history
+  is preserved verbatim in "## Status History (appendix)" at the end.
+
+Current state: the pure-Go immutable reader implements the exact Phase-1
+wire contract, opens all six Rust-produced conformance fixtures with exact
+semantics, rejects the three invalid corpus mutations with the typed
+FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
+holds the mapping owner in internal/mapping (mmap-only access), and passes
+go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
+the import-graph gate with its 289-case battery, and the SOW audit.
+Module production 5,052 raw lines (reader core 1,897 incl. search.go and
+the work stubs; the 5k directional goal is met), module tests 5,180 raw
+lines; gate tooling 4,779 raw lines total. Hot-path benchmarks on the
+synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
+membership word 95 ns/op, all 0 allocs/op (full table in the
+implementation record below).
+
+## Review Process (user decision, 2026-08-12)
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
@@ -1410,6 +1002,129 @@ The user adopted the external re-review's decisions after the reopening:
   gofmt, import graph, 9-target cross-compile matrix, SOW audit - all
   green. Milestone 1 (immutable reader) review gate: CLOSED.
 
+### 2026-08-14 - external-review rework (milestone 1 re-open, verified findings)
+
+- An independently run external review PASS-failed milestone 1 with three
+  findings at HEAD b230bd1, all reproduced by the lead before any change:
+  1. P1 - nine separately written binary-search loops decode full records per
+     probe and re-decode the selected record; the Rust fixed-tree layer reads
+     key-only during search and decodes the selected record once.
+  2. P1 - the mmap enforcement machinery totals 14,519 lines (4,738-line
+     type-light scanner + 9,781-line shell self-test) versus a 4,789-line
+     reader, and the gate misses the complete-page rule: a production
+     function copying a mapped page into an owned [4096]byte compiles and
+     passes the gate (spec binary-format-v4.md:108).
+  3. P2 - the SOW Status had grown to 463 lines of round-by-round scanner
+     history, hurting auditability.
+- Resolved decisions (direction 1-5 of the review, accepted):
+  1A. Add one authoritative fixed-tree search primitive (key-only probes,
+      single decode of the selected record) in internal/reader and refactor
+      every range/catalog/membership/blob lookup onto it. The blob branch
+      keeps per-probe child validation (pinned by
+      TestBlobBranchProbedChildValidation; Rust blob select_branch does the
+      same). Catalog name probes keep full record-shape validation because
+      the name IS the record payload (Rust read_key decodes the entry);
+      their feed-index-limit check moves to the selected record only,
+      mirroring feed_catalog.rs decode_leaf.
+  2A. Add test-only necessary-work counters in internal/reader (build-tag
+      `v4work`; zero-cost no-op otherwise) pinning tree lookups, descents,
+      page visits/parses, key probes, selected-leaf validations, membership
+      word reads, and structure decodes, plus reader benchmarks on the
+      committed conformance fixtures and profile evidence in the report.
+  3A. Replace the type-light AST taint engine with a type-aware scanner
+      built on go/types (stdlib-only, module-aware gc export importer),
+      keeping the import/selector/.s/.syso/embed/linkname bans and the
+      *os.File capability surface, and add the complete-page ownership rule
+      (copy/append/array-conversion sinks at or above PageSize, and
+      append/copy of mapped-page-sourced values), with the metadata
+      inflation nodes exempted by exact shape. The 240-form durable battery
+      moves into the Go tool as table data; the shell harness shrinks to the
+      boundary/module-graph/x-sys checks and the self-test invocation.
+  4A. Compact the Status and move the round-by-round history into the
+      verbatim appendix at the end of this file.
+  5A. Repeat the independent review: six-resident swarm, then sol, before
+      milestone 1 closes and Milestone 2 starts.
+
+### 2026-08-14 - external-review rework implemented
+
+Implementation record for the reopened milestone (all three findings
+reproduced first at HEAD b230bd1; the rework landed as one commit at
+HEAD recorded in the first review entry below):
+
+- Finding 1 (hot path): internal/reader/search.go adds the single
+  authoritative greatestLE primitive (key-only probes, last-probe reuse,
+  one decode of the selected record), mirroring v4/rust/iprange-livedb/
+  src/fixed_tree/page.rs lower_bound semantics. Range branch/leaf
+  lookups (range.go), catalog feed lookups (catalog.go), membership ID
+  lookups (membership.go) and the blob branch selection (blob.go) all
+  route through it. The four format key readers (RangeEntryKeyV4/V6,
+  RangeRecordKeyV4/V6) make the probe cost a 4-byte (or 16-byte) read plus
+  the slot-offset check. The blob branch keeps per-probe child validation
+  (pinned by TestBlobBranchProbedChildValidation); catalog name probes
+  keep full-shape validation because the name is the record payload
+  (decision 1A). Test-only necessary-work counters live in
+  internal/work (build tag v4work; const false no-op stubs otherwise, so
+  production binaries carry zero counter state - pinned
+  by TestWorkCountersDisabled). Pins: TestWorkRangeLookupMultiLevel,
+  TestWorkMembershipBlobWords, TestWorkStructureLookup, plus
+  bench_test.go on the committed fixtures and the synthetic multi-level
+  databases. Benchmarks (i9-12900K, 200k iterations, -benchtime=200000x):
+  LookupDirect4MultiLevel 158.8 ns/op, LookupDirect4MissMultiLevel
+  72.05 ns/op, LookupDirect6 68.56 ns/op, LookupFeed 227.7 ns/op,
+  MembershipLookupWord 94.81 ns/op, StructuredLookup 120.1 ns/op - all
+  0 B/op, 0 allocs/op. CPU profile of Lookup* (reader_cpu.prof in the
+  session evidence): dominant costs are SlottedPage.Record slot checks
+  (26%), the intentional catalog name validation FeedNameValidString
+  (48% of LookupFeed), DecodeCatalogNameRecord, greatestLE dispatch; no
+  full-record decode appears on the range/membership probe paths.
+- Finding 2 (enforcement): v4/go-gate is now a type-aware scanner over
+  go/types (stdlib-only, module-local loader with source type-checking
+  per OS config and the pinned x/sys checkout), keeping the text bans
+  (banned imports/selectors, .s/.syso, //go:embed, //go:linkname, dot
+  imports), the *os.File/*os.Root capability surface (approved lifecycle
+  methods, same-package/module-internal callees, x/sys owner), the
+  interface-erasure and generic-result rules (including named interfaces
+  such as io.Reader), and the complete-page ownership rule: copy/append/
+  array-conversion/string sinks that move a mapped page view at or above
+  PageSize into owned memory fail with a specific violation; bounded
+  record decodes below PageSize and the metadata inflater nodes
+  (exempted by exact shape) stay legal. The page-taint flow is
+  interprocedural through per-package symbolic summaries (pageflow.go);
+  bounded slices carry their constant span (page[48:112] is a 64-byte
+  view, page[0:4096] is a complete page). The 9,781-line shell battery
+  was replaced by 289 table cases inside the tool (282 source-transfer
+  cases + 7 complete-page forms: 237 rejections, 52 benign acceptances),
+  and the shell harness shrank to 552 lines (import boundaries per
+  target, module graph, x/sys checksum pins, and 9 environment mutations:
+  internal-import boundary, x/sys outside the mapping owner, assembly
+  object, go.mod replace, go.work, poisoned x/sys cache/proxy, unlistable
+  module). Reviewer reproduction now fails the gate: copy of m.Page(0)
+  into [4096]byte, append(page...), View(0, PageSize) copy,
+  [4096]byte(page), string(page), and r.page(pgno) copy all produce
+  rule-specific violations; the bounded copy and the decoded metadata
+  chunk append stay accepted. Gate totals: 4,227 lines (go-gate) + 552
+  lines (shell) = 4,779, against module production 5,052 and tests
+  5,180.
+- Finding 3 (records): this Status is the compact record; the pre-rework
+  history is preserved verbatim in ## Status History (appendix).
+- Battery repair during replacement (recorded for the record): the
+  extractor of the shell battery had lost multi-line inserts, broken
+  string escaping (case 107), and copied shell-only module-graph cases
+  (18, 238, 243, 248); benign cases 49/59/63/67/81/83/90 referenced
+  undefined types or non-compiling assignments valid only for the old
+  syntax-only scanner. All were repaired to compilable equivalents that
+  preserve each tested rule (cleanup order of multi-op case files is now
+  LIFO so metadata.go double ops restore the original), and the four
+  module-graph cases moved to the shell self-test (the boundary loop
+  already enforced them per target).
+- Validation: go test ./... (both tag sets), -race, checkptr, go vet,
+  gofmt zero diffs, the full import-graph gate and its --self-test (289
+  + 9 shell mutations, exit 0), production scan across all 5 target
+  configs, cross-compilation, Rust conformance corpus cross-open, and the
+  SOW audit - all green at the closing commit.
+- Review process: six-resident swarm (k3, glm, mimo, minimax, qwen,
+  luna) then sol per the user's review decision; outcome recorded in the
+  Execution Log below.
 ## Implications And Decisions
 
 1. **Long-term-best: semantic peer, not incremental compatibility.**
@@ -3348,3 +3063,474 @@ execution record; the closing result is appended there when it completes.
   ten cross-compiles,
   SOW audit - all green. Counts: production 4,789 raw lines / tests
   4,887 raw lines (gate scanner lives outside the module).
+
+
+## Status History (appendix, 2026-08-11 .. 2026-08-13)
+
+This appendix preserves the full pre-2026-08-14 Status narrative, moved
+verbatim when the Status was compacted on 2026-08-14. It is historical
+review detail: rounds 1-54 of the gate hardening, the milestone-1 review
+history, and the close-out attempts that were later invalidated. Current
+truth lives in ## Status; this appendix is context, not authority.
+
+Status: in-progress
+
+Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
+253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh
+independent audit; all five P2 classes were fixed at HEAD ca30026: the
+implemented NetworkEnrichmentV1Location surface (value + HasLocation,
+recorded as open decision 5A awaiting user ratification, ratified later on 2026-08-13), implicit semantic validation removed from
+structured lookup, hot-path decodes cut to one page-header decode per
+visited page with membership word reads served from the lookup-time record
+decode, the contradictory closure records corrected, and Mapping.File
+removed with the content-I/O source gate extended to io.ReadAll/io.Copy.
+Regression pins: plausible-corruption decode acceptance, record-geometry
+rejection at lookup, and the vector codec. The round-11 final review then
+found one P1 (pin variable reassignment retargets the view guard and a
+word read segfaults on released memory) and three P2 (decision 5A
+unratified; mmap gate bypassable plus a Windows Mapping.File escape; stale
+close-out records), all fixed at HEAD 2fd6cae with the cross-reader
+reassignment regression test, or recorded for the user's decision (5A).
+The round-12 final review then confirmed the lifetime fix but found two
+remaining P2: decision 5A still unratified, and the mmap source gate still
+bypassable (x/sys descriptor reads, bufio wrappers, dot imports, and
+build-tagged packages). Fixed at HEAD 4fdc671: the gate is now a
+whole-tree selector scan (find across all build tags) with dot-import and
+bufio import bans, a self-test mode, and the runtime half of the
+mmap-only evidence (strace of an open/read/close session: openat, OFD
+lock, mmap, munmap, unlock, close with no read/pread/readv/lseek on the
+database descriptor) recorded in the report. The round-13 final review
+then failed with three P2: decision 5A still unratified; the gate still
+accepted indirect content-transfer forms (fmt.Fscan/Fscanf, io.CopyN/
+CopyBuffer, reflection MethodByName, raw unix.Syscall(SYS_READ),
+unix.CopyFileRange, Sendfile/Splice), its line-level tolerated-call
+exemption could hide a forbidden transfer on the same line, and a
+windows-tagged package could still import internal packages unseen by a
+linux-only go list boundary check; plus two P3 comment corrections.
+All fixed at HEAD dbdf2b7: tolerated calls are blanked as exact call
+nodes instead of whole lines, the selector set covers every indirect
+form, gzip and compress/zlib wrapper imports are banned, the boundary
+check runs per target over ten GOOS/GOARCH pairs, and the self-test
+durably rejects eighteen mutation forms. The narrow re-review of that
+fix then found the decoder/encoder family still open (encoding/json,
+xml, gob NewDecoder(f).Decode, image/archive wrappers), os.File.WriteString,
+a nested-paren blanking shadow, and reflect.Value.Method(i);
+the gate now also bans the reader-consumer packages, covers
+WriteString/WriteRune/NewDecoder/Decode/Encode/Method selectors, blanks
+only paren-free tolerated call nodes, and its self-test durably rejects
+twenty-two mutation forms. The re-review of that fix found io.ReadFull/
+io.ReadAtLeast over a file still open, the writer-consumer packages
+(log, text/template, html/template, os/exec, net/http, flate.NewWriter)
+uncovered, and three self-test mutations that did not compile; all fixed
+at HEAD bf33f2a (selectors ReadFull/ReadAtLeast/Print/Printf/Println/
+Scan/Scanln/Scanf/NewWriter; the five writer packages join the import
+ban; the two in-memory inflater io.ReadFull(zr, ...) nodes are exempted
+exactly; the method-value and CopyFileRange forms compile, and the
+nested-node probe stays an intentional textual tripwire), and the
+self-test now durably rejects twenty-six mutation forms. The re-review
+of that fix found the io.ReadFull exemption itself paren-crossing (a
+nested transfer could still be swallowed; a file-backed flate reader
+named zr was exempted by name), the reflection Call invocation
+unguarded (FieldByName("Read").Call), and the reader-constructor
+packages (debug/elf and the debug/* family, go/parser, go/scanner,
+text/scanner, text/tabwriter, mime/quotedprintable) unlocked; all fixed
+at HEAD 149a200 (the io.ReadFull exemption is shape-bounded to the two
+real nodes io.ReadFull(zr, out[...]), Call/CallSlice join the
+selectors, the constructor packages join the import ban), and the
+self-test now durably rejects twenty-eight mutation forms. The re-review
+of that fix found the exemptions still name-keyed (a file-backed flate
+reader named zr with a buffer named out, and a receiver field r, could
+reproduce the tolerated shapes), so at HEAD c03e40c the exemptions are
+exact literals and nothing else: c.r.Read(p), c.r.ReadByte(), and the
+two io.ReadFull(zr, out[...int(meta.MetadataUncompressed)]) inflater
+reads; same-named file-backed readers and other index shapes now fail
+closed, two pin forms were added, and a startup sweep removes stale
+gatemut_* artifacts from interrupted self-test runs. The self-test now
+durably rejects thirty mutation forms. The records were completed in
+the same pass; decision 5A remains the single open user decision and
+blocks milestone close. Repository counts: production 4,792 raw lines /
+tests 4,877 raw lines. Milestone 2 must not start until a new
+independent final review passes.
+
+The sixth final review then failed with five P2 findings, all in the mmap
+gate and the records: selector splitting after the dot (`file.\nRead(p)`
+and `io.\nReadAll(f)` compile and bypass a line scan); type-blind
+exact-literal exemptions (a struct whose `c.r` is `*os.File` using exactly
+`c.r.Read(p)`, and a function whose `zr` is `*os.File` using exactly
+`io.ReadFull(zr, out[:int(meta.MetadataUncompressed)])`, both pass); an
+open-ended stdlib denylist (the gzip regex never matches `compress/gzip`;
+`log/slog.NewTextHandler`, `runtime/trace.Start`, and `os.StartProcess`
+with `ProcAttr{Files: []*os.File}` consume a file unseen); a destructive
+startup sweep (every path named `gatemut_*` is deleted before scanning,
+so a committed `gatemut_hidden_linux.go` violation is removed and the
+gate reports PASS, and untracked user work can be destroyed); and
+acceptance records claiming completion while the six-reviewer PASS at
+HEAD 360130c was not recorded and round-12 wording said decision 5A was
+"fixed". Fixed at HEAD c42325a: the line-oriented text scan is replaced by
+an AST, type-light scanner (v4/go-gate/main.go, stdlib only) that parses
+every production file - build tags, line wrapping, comments, aliases,
+and file names are irrelevant to the token stream - syntactically taints
+`*os.File` values (declarations, parameters, os.Open*/os.Create
+producers, same-package constructors, struct fields), bans 37
+content-transfer imports and 56 selector families, permits `*os.File`
+values only into the mapping-lifecycle methods
+(Fd/Close/Name/Stat/Sync/Truncate/Chmod/Chown) and
+same-package/module-internal/x-sys consumers, and exempts the three
+exact in-memory inflater nodes only when their receiver/arguments are
+not file-tainted. The self-test now copies the module into a private
+temporary directory: it never touches the reviewed tree, reserves no
+file name, proves an innocent `gatemut_`-named file is not deleted, and
+durably rejects forty mutation forms including all nine independent
+reproducers of the sixth review; the startup sweep is gone. HEAD
+81ca524 then pinned the aliased-os producer form as the forty-first;
+HEAD 6b05801 tainted `*os.File` results returned by same-package
+accessor methods. The seventh-sweep hardening (HEAD e2dc7e0) closed
+the type-alias conversion and parameter classes, separately built
+`os.ProcAttr{Files}` containers, and the `os.Pipe` producer class,
+renumbered the self-test forms, and raised the durable rejection set to
+forty-five mutation forms. The eighth sweep (HEAD c4b1b52) closed the
+struct-field-storage and channel-transport classes behind the inflater
+exemptions (shared per-package taint state, struct-field write taint,
+chan *os.File taint including send/recv/range, new(T) instances,
+container index reads) and pinned them as self-test forms 47-48. The
+ninth sweep (HEAD ddc5f9c) closed the inline-FuncLit, type-assertion,
+two-hop-channel, and single-variable-channel-range escape classes
+(forms 50-53, with the benign control at form 49); the durable
+rejection set is now fifty-one mutation forms. The tenth sweep
+(HEAD 5c88ba3) closed the parenthesized-producer,
+parenthesized-closure, interface-typed-closure,
+alias-typed-function-variable, and type-switch-bound escape classes
+(forms 54-58, with the parenthesized benign control at form 59); the
+durable rejection set is now fifty-six mutation forms. While
+stress-testing the round-4 fixes during the round-5 gate re-review,
+the defined-func-type family and its method/nested-callee variants
+were closed (self-test forms 60-67), the round-5 struct-field/
+chan-of-func/asserted-func/os-std-handle family (forms 68-72), and
+the round-6 nested-field/named-helper/chan-pass family, the
+named-method extension, the nested-method-receiver extension, the
+method-value family, the generic pass-through family, the
+generic-element family, the chan-result method-value class, and the
+field-assignment class, the channel-consumer class, the
+container-element class (forms 73-107), the anonymous-receiver
+method class (forms 108-111), the alias-receiver method
+class (forms 113-114), the receiver-resolution
+class (forms 116-119), the pointer-defined-type
+class (forms 121), the indexed-receiver
+class (forms 123-125), the element-receiver
+class (forms 127-132), the range-literal-receiver
+class (forms 134-135), the bound-receiver
+class (forms 137-138), the call-result-binding
+class (forms 140-143), the explicit-instantiation and
+interface-binding class (forms 145-148), the
+generic-receiver-binding class (forms 151-156), the
+alias-spelled generic binding class (forms 159-164), and the
+reader-shape binding class (forms 167-174), and the renamed-qualified alias
+  class (forms 179-182), and the func-typed
+generic-method class (forms 185-189), the mixed result and
+qualified-defined class (forms 191-196), the
+interface-method and method-result class (forms 199-205), the
+embedded-interface and cross-package chain class (forms 207-210), the
+remote-interface and generic-instantiation class (forms 213-217), the
+defined-hop instantiation class (forms 222-223), the nested generic-
+instantiation class (forms 225-226), and the cgo-import,
+raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
+(forms 228-230, 232-235) with the benign lifecycle control (form
+231); the durable rejection set is now two hundred thirty-eight
+mutation forms (round-48 closed the bound method-expression and
+same-module cross-package producer-var class, forms 257-260;
+round-49 closed the nested-parenthesized, renamed-import,
+alias-over-renamed, wrapper-promoted method-expression,
+value-bound cross-package producer-var, and
+interface-conversion-launder class, forms 261-266;
+round-50 closed the generic interface-erasure, composite-literal
+field-launder, generic-wrapper method-expression, and deep
+embedding-chain class, forms 267-270, note that forms 267-268 were
+initially vacuous (separate-file launders rejected by the
+unconditional selector ban) and were converted to exemption-shape
+appends in round 51);
+round-51 closed the file-bound generic result-erasure class
+(all declared result positions of a generic call with a file-typed
+argument binding a type parameter stay tainted: renamed-qualifier
+interfaces, other-stdlib interfaces, slice/array/map/chan/func
+wrappers) and the positional composite-literal field-launder class
+(unkeyed elements resolve through the struct's declared field
+order, including an os.Root opener hidden behind a positional
+field), forms 271-277 plus the converted 267-268, raising the set
+to two hundred twenty-seven mutation forms);
+round-52 closed the embedded and anonymous struct-literal launder
+classes (embedded fields are named by type name, not qualifier
+spelling, so positional io.Reader and positional/keyed *os.Root
+wrapper literals no longer leave a live promoted handle; variables
+bound to explicit generic instantiations keep the base generic's
+substituted results; anonymous struct literals resolve positional
+order from their own fields, and anonymous structs embedding
+*os.File/*os.Root escalate like named wrappers), forms 278-282, and
+the continuation class of the same round (elided inner composite
+literals in slice, map, nested-container, and channel elements,
+pointer composite literals, and func-valued arguments to explicitly
+instantiated generics), forms 283-288, raising the set to two
+hundred thirty-eight mutation forms; round-53 closed the embed
+import and //go:embed directive classes (compile-time database
+copies), forms 289-290, raising the set to two hundred forty
+mutation forms);
+round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
+bodyless assembly-stub class, forms 236-237; its follow-up closed the
+x/sys-owner boundary for every package plus assembly-object files, forms
+238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
+primitive, form 240; round-39 closed the out-of-tree module-graph
+escape (go.mod replace and go.work can attach code the walk never
+scans; the graph is validated to exactly this module plus x/sys with
+no workspace, forms 241-242; round-40 closed the x/sys source
+replacement and hidden dot-directory vectors, forms 243-244; round-42 closed the x/sys source-content gap, forms 245-247; round-43 closed the fail-open listing gap, form 248). The round-24 gate re-review then found the import-renamed qualified
+alias class: an import mm ".../internal/mapping" local qualifier was
+never translated back to a package path, so mm.MappingFile generic type
+arguments, local alias chains of renamed imports, element spellings,
+declared variables, and type assertions all escaped with gate exit 0.
+Fixed in the go-gate scanner with per-directory alias registration
+(pkgAliasesByDir), a per-file import snapshot (currentImports), and
+qualifier translation in aliasLookup; pinned as self-test forms
+179-182 (rejects) and 183-184 (benign controls). The durable rejection
+set is now one hundred forty-seven mutation forms. The records
+of this pass complete the trail up to this re-review. The round-25
+gate re-review then found the func-typed generic-method class: a
+generic method whose type argument binds a func type producing
+*os.File (gRZ[func() *os.File]{}.mk() bound to f, then f()) was
+claimed by producerCall as a direct file result, so the binding was
+recorded as a file instead of a func-file and invoking it lost the
+taint - a file-backed zr again slipped through the io.ReadFull
+exemption with gate exit 0. Fixed by removing the funcTextFile claim
+from producerCall's generic-method branch so classify's own generic
+method loop yields kindFuncFile and applyKind records the func-file
+binding; pinned as self-test forms 185-189 (rejects) and 190 (benign
+bytes control). The durable rejection
+set is now one hundred fifty-two mutation forms. The records
+of this pass complete the trail up to this re-review. The round-26
+gate re-review then found the mixed-result and qualified-defined
+class: (1) callResultsFuncFile required every declared result of a
+non-generic function to be a func-file, so mixed multi-result calls
+(getFn() (func() *os.File, error)) lost the func-file taint at the
+exact func-typed position and f() reached the io.ReadFull exemption
+with gate exit 0; (2) a defined type over a qualified or complex
+underlying (type x mm.A, type x []*os.File) registered nothing, so
+the chain never expanded, and cross-package defined func types
+(type F func() *os.File in mapping) were invisible to qualified
+references. Fixed with per-position result-kind resolution
+(callResults/callResultKinds/callResultKindAt routed through
+generic and declared signatures), per-position carrier registration
+in applyLHSMulti for call RHS, definedTo registration for every
+non-func non-ident underlying, and qualified registration of defined
+func types; pinned as self-test forms 191-196 (rejects) and 197-198
+(benign bytes controls). The durable rejection
+set is now one hundred fifty-eight mutation forms. The records
+of this pass complete the trail up to this re-review. The round-27
+gate re-review then found the interface-method and method-result
+class: (1) a generic receiver bound to an interface whose method
+declares mixed results (Get() (func() *os.File, error)) lost the
+func-file position because producerCall claimed the interface method
+signature (stored as a pseudo-field) as a raw file position, so the
+binding was recorded as a file and invoking it lost the taint;
+(2) callResults dropped every declared result of a non-generic method
+because methodMeta's ok flag reports body-marked producers, not
+whether the method exists - mixed method results (mk() (func() *os.File,
+error)) bound with gate exit 0; (3) defined types over aliases and
+aliases over defined func types (type D A with A = func() *os.File;
+type E = D2) were invisible to cross-package spellings because only
+aliases and defined func types entered the qualified registries, and a
+first-hop name from another directory could not resolve further.
+Fixed with declared-result precedence in classify and per-position
+kind preference in applyLHSMulti (func-file/chan carriers keep their
+invoke-able kind), method-existence detection in producerCall's
+field-type claim (a declared method is not a func field),
+non-nil-results acceptance in callResults for ordinary methods, and
+defined-type registration plus a per-directory fixpoint in the
+qualified registries (finalizeDirAliases); pinned as self-test forms
+199-205 (rejects covering both mixed positions, the chan-of-func
+variant, the defined-over-alias and alias-over-defined hops, and both
+method-result positions) and 206 (benign interface-typed bytes
+control). The durable rejection
+set is now one hundred sixty-five mutation forms. The records
+of this pass complete the trail up to this re-review. The round-28
+gate re-review then found the embedded-interface and cross-package
+chain class: (1) an interface embedding a file-producing interface
+(type IEmb interface{ IBase } with IBase.Get() func() *os.File)
+resolved no promoted method because methodMeta's embedded walk
+propagated only body-marked producers and dropped declared results,
+so x.Get()() on an interface-typed generic result reached the
+io.ReadFull exemption with gate exit 0 (both the single-result and
+the mixed multi-result shapes); (2) a defined struct in another
+package used as a generic type argument (gRZ[mm.S28]{}, s.Get())
+was invisible to the reader's local package info; (3) a qualified
+defined chain of nine named hops (mm.J28 after alias A and hops
+B..I) exceeded the single-pass fixpoint budget and was map-order
+dependent. Fixed by propagating promoted declared results in
+methodMeta's embedding walk, process-wide mirrors of remote
+structs/methods/embedded chains with a parse-time seed-merge,
+self-entries for struct spellings in the qualified registries, and
+a full fixpoint loop for the per-directory alias/defined closure
+with self-hop guards; pinned as self-test forms 207-210 (rejects)
+and 211-212 (benign bytes controls). The durable rejection
+set is now one hundred sixty-nine mutation forms. The records
+of this pass complete the trail up to this re-review. The round-29
+gate re-review then found the remote-interface and generic-
+instantiation class: (1) a renamed import qualifier on a cross-
+package interface embedded in a reader interface or struct (type
+IEmb interface{ mm.IMapBase }) reduced to no registered key because
+only structs (not interfaces) registered the qualifier self-entry,
+so the promoted file method lost its taint; (2) a generic interface
+instantiated at an embedding site (type IEmbGN interface{
+IBaseGN[func() *os.File] }) promoted the raw type parameter without
+substitution, so Get() T never matched the file shapes (both the
+func-file and chan-of-func variants); the adjacent remote shapes (a
+renamed generic interface instantiation and a cross-package generic
+struct receiver) carried the same gap. Fixed by registering the
+qualified self-entry for interface names exactly like structs,
+recording generic interface type parameters in the receiver-parameter
+registry with process-wide mirrors, and substituting the embedding's
+type arguments in the promoted-method walk; the round's P2 (a
+non-compiling benign form-212 twin) was fixed by removing its unused
+import. Pinned as self-test forms 213-217 (rejects) and 218-221
+(benign bytes controls). The durable rejection
+set is now one hundred seventy-four mutation forms. The records
+of this pass complete the trail up to this re-review. The round-30
+gate re-review then found the defined-hop instantiation class: a
+defined type over an instantiated generic interface embedded in an
+interface (type D IBaseG[func() *os.File]; type IEmb interface{ D })
+lost the instantiation at the embedding walk because the brackets
+live in the defined chain's target text, not in the raw embedded
+spelling, so the promoted method results propagated the raw type
+parameter and Get() T never matched the file shapes (both the
+reader-local and the renamed-qualified cross-package shapes). Fixed
+by extracting the embedding's type arguments from the resolved
+defined/alias text (resolveTaintType then parseBracketArgs) in both
+the promoted-method walk and the generic receiver-substitution walk;
+pinned as self-test forms 222-223 (rejects) and 224 (benign bytes
+control). The durable rejection
+set is now one hundred seventy-six mutation forms. The records
+of this pass complete the trail up to this re-review. The round-31
+gate re-review then found the nested generic-instantiation class:
+a multi-level generic-interface embedding (type InnerL[T]
+interface{ Get() T }; type IBaseGL[T] interface{ InnerL[T] };
+type IEmb interface{ IBaseGL[func() *os.File] }) substituted only
+at the frame owning the brackets, so the frame declaring the method
+returned the raw type parameter and Get() T reached the io.ReadFull
+exemption (three-level and chan-of-func variants included). Fixed by
+threading type parameters and arguments down the embedding chain:
+each frame substitutes its own instantiation into the next embedded
+type text, the declaring frame applies the accumulated arguments,
+and a frame-level interface-parameter registry (ifaceParams, mirrored
+process-wide) carries generic interface parameters across packages;
+the receiver-substitution walk gained the same threading and the
+embedded-entry argument list. Pinned as self-test forms 225-226
+(rejects) and 227 (benign bytes control); forms 228-230 and 232-235 pin the
+round-32 cgo-import, raw-syscall, linkname, no-error syscall, and
+preadv2/pwritev2 rejects with form 231 the benign lifecycle
+control. The durable rejection set is now one hundred eighty-five
+mutation forms. The round-36 gate re-review then found the
+subprocess-escape class: dup'ing the database descriptor onto stdin and
+exec'ing a reader (unix.Dup2 + unix.Exec, /bin/cat) streams file content
+out with no banned read call, and a bodyless Go declaration attaches an
+assembly syscall body the AST scan cannot see. Fixed by banning the
+Dup/Dup2/Dup3/Exec/ForkExec selectors and rejecting bodyless
+declarations outright; pinned as self-test forms 236-237. The durable
+rejection set is now one hundred eighty-seven mutation forms. The round-36
+follow-up re-review then closed the remaining owner-boundary gaps: a new
+package could import golang.org/x/sys unseen by the per-target loop
+(only the four known packages were checked), and a .s/.syso assembly
+object was never scanned (the bodyless-declaration ban was the only link
+guard). Fixed by moving the x/sys owner rule into the per-target loop
+for every package except internal/mapping and rejecting assembly objects
+outright in the scanner walk; pinned as self-test forms 238-239. The
+round-37 narrow re-review then found a metadata parity gap: ReadMetadataJSON
+accepted a metadata chunk page whose post-data tail bytes were nonzero,
+while Rust rejects it as corrupt (metadata.rs:274) and the spec requires
+zero tails (binary-format-v4.md:1051). Fixed with an explicit tail-zero
+check in internal/reader/metadata.go and the pre-fix-failing regression
+pin TestMetadataChunkTailNonzeroRejected. The round-38 re-review then
+closed the fcntl F_DUPFD duplication primitive: unix.FcntlInt(fd,
+F_DUPFD, 0) can duplicate the descriptor onto stdin like dup, unseen by
+the dup-name bans; FcntlInt joins the banned selector set (FcntlFlock,
+the mapping owner's lock path, is a different function and stays
+allowed), pinned as self-test form 240, raising the set to one hundred
+ninety mutation forms. The round-39 re-review then found the
+module-graph escape: a go.mod replace directive or a go.work workspace
+can attach an out-of-tree module whose files the scanner walk never
+visits, letting a wrapper call unix.Pread on the database descriptor
+unseen (both vectors exited 0). Fixed by validating the module graph
+itself - go list -m all must be exactly this module plus
+golang.org/x/sys, and no workspace may be active - pinned as self-test
+forms 241-242, raising the set to one hundred ninety-two mutation
+forms. The round-40 re-review then found the path-only allowlist gap:
+replace golang.org/x/sys => <evil dir> keeps the allowed path in the
+graph while loading attacker-controlled code the walk never scans
+(proven live with unix.Pread2 reading the database), and the walk
+skipped every hidden dot-directory, hiding in-tree replacements. Fixed
+by banning all replace/exclude directives, verifying the resolved
+x/sys source is the module-cache checkout, and scanning hidden
+directories (only .git is skipped), pinned as self-test forms 243-244,
+raising the set to one hundred ninety-four mutation forms. The round-42
+gate re-review then closed the x/sys source-content gap: the path-only
+allowlist accepted a poisoned GOMODCACHE checkout or a file proxy
+serving an evil x/sys with a self-consistent forged go.sum (both proven
+live with a smuggled unix.Pread2 the ban list cannot know, because
+nothing pinned the module content); the gate now pins the exact version,
+the module-cache path, the extracted-tree content hash, and the module
+zip/go.mod sums to the official v0.35.0 values, and the assembly-object
+rejection is case-insensitive, pinned as self-test forms 245-247,
+raising the set to one hundred ninety-seven mutation forms. The round-43
+gate re-review then found the fail-open listing gap: the per-target go
+list ./... loop swallowed listing failures (2>/dev/null), so a module
+the go toolchain cannot list - symlinked package files or parse errors -
+passed with an empty package list and no import checks (reproduced with
+a symlinked smuggled file in internal/mapping); the package checks now
+fail closed on every listing error and the per-package import listing
+fails closed too, pinned as self-test form 248, raising the set to one
+hundred ninety-eight mutation forms. The six-reviewer
+pass for that fix completed with all six narrow reviewers at PASS (HEAD e5fea20).
+The round-45 final review then failed with three P2 findings, all in the mmap source gate: os.CopyFS was absent
+from the selector ban (a directory copy streams artifact bytes with no banned selector; the live reproducer
+exited 0), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File,
+or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes, and
+Root.Open/Create/OpenFile also produce files), and the blanket-approved x/sys surface still carried
+descriptor-transfer primitives unseen by the denylist (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/
+DedupeRange, darwin unix.Clonefile/Clonefileat). Fixed at HEAD 14c0698: CopyFS, Tee, Vmsplice,
+IoctlFileClone* and Clonefile* join the banned selector set (CopyFileRange/Sendfile/Splice were already
+banned); os.OpenInRoot and os.OpenRoot join the file-producer table as position-0 file taints, so every Root
+method outside the approved lifecycle surface fails closed; all three live reproducers plus the
+OpenRoot/ReadAll and darwin Clonefile variants are rejected by the hardened gate. The adversarial re-review
+of that fix then found a P0 in the same class: a *os.Root handle stored in a struct field (h :=
+gateRootField{r: root}; h.r.Open(name)) dropped the file taint, so the returned *os.File reached
+flate.NewReader untainted and the stream was consumed through the exact inflater exemption shape with gate
+exit 0; *os.Root now resolves as a file-bearing type everywhere *os.File does (fields, parameters,
+helper returns, type assertions, func/chan elements, results), so every laundering route fails closed.
+Pinned as self-test forms 249-252, raising the durable rejection set to two hundred two mutation forms. The
+adversarial re-review of that closure then found three P0 escapes in the same producer-value class, all
+proven live with full metadata-exemption chains at gate exit 0: (1) a file method value (open := root.Open;
+open(name)) escaped the call-receiver ban and the bound method produced an untainted *os.File; (2) a
+func-typed variable with an initializer (var newRoot func(string) (*os.Root, error) = os.OpenRoot) lost
+its declared file-bearing result type because the type was only consulted for type-only vars; (3) the same
+declared-type gap predated the Root work for *os.File (var openPath func(string) (*os.File, error) =
+os.Open). Fixed by checking the file method in value position against the approved surface, registering the
+declared result type of initialized func-typed variables, and registering stdlib producer values (os.Open
+and friends) as func-files wherever bound; pinned as self-test forms 253-256, raising the durable rejection
+set to two hundred six mutation forms. The round-48 re-review then
+closed bound method expressions on file-bearing receiver types and
+same-module cross-package producer vars (forms 257-260, two hundred
+ten mutation forms); the round-49 re-review closed nested-
+parenthesized, renamed-import, alias-over-renamed, and
+wrapper-promoted method expressions, value-bound cross-package
+producer vars, and interface-conversion laundering of a file into
+the metadata inflater exemption (forms 261-266, two hundred sixteen
+mutation forms); the round-50 re-review closed the generic
+identity-with-interface-result erasure, the composite-literal field
+launder, the instantiated-generic-wrapper method expression, and
+the deep embedding-chain method expression (forms 267-270, two
+hundred twenty mutation forms). The records
+of this pass complete the trail up to this re-review. Repository counts:
+production 4,789 raw lines / tests 4,887 raw lines (the round-54
+dead-state removal and zero-Pin test account for the latest delta; the gate
+scanner lives outside the module). Milestone 2 must not start until a
+new independent final review passes; decision 5A was ratified (option A,
+2026-08-13); no open user decision remains.
+The approved later scope remains unchanged: Milestone 2 is the writer;
+sidecars, live coordination, and publication remain Milestone 4.
+
