@@ -164,12 +164,15 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now one hundred ninety
+231); the durable rejection set is now one hundred ninety-two
 mutation forms (round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
 238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
-primitive, form 240). The round-24 gate re-review then found the import-renamed qualified
+primitive, form 240; round-39 closed the out-of-tree module-graph
+escape (go.mod replace and go.work can attach code the walk never
+scans; the graph is validated to exactly this module plus x/sys with
+no workspace, forms 241-242). The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
 arguments, local alias chains of renamed imports, element spellings,
@@ -328,18 +331,26 @@ object was never scanned (the bodyless-declaration ban was the only link
 guard). Fixed by moving the x/sys owner rule into the per-target loop
 for every package except internal/mapping and rejecting assembly objects
 outright in the scanner walk; pinned as self-test forms 238-239. The
-round-38 re-review then closed the fcntl F_DUPFD duplication primitive:
-unix.FcntlInt(fd, F_DUPFD, 0) can duplicate the descriptor onto stdin
-like dup, unseen by the dup-name bans; FcntlInt joins the banned
-selector set (FcntlFlock, the mapping owner's lock path, is a different
-function and stays allowed), pinned as self-test form 240. The durable
-rejection set is now one hundred ninety mutation forms. The round-37
-narrow re-review then found a metadata parity gap: ReadMetadataJSON accepted
-a metadata chunk page whose post-data tail bytes were nonzero, while Rust
-rejects it as corrupt (metadata.rs:274) and the spec requires zero tails
-(binary-format-v4.md:1051). Fixed with an explicit tail-zero check in
-internal/reader/metadata.go and the pre-fix-failing regression pin
-TestMetadataChunkTailNonzeroRejected. The records
+round-37 narrow re-review then found a metadata parity gap: ReadMetadataJSON
+accepted a metadata chunk page whose post-data tail bytes were nonzero,
+while Rust rejects it as corrupt (metadata.rs:274) and the spec requires
+zero tails (binary-format-v4.md:1051). Fixed with an explicit tail-zero
+check in internal/reader/metadata.go and the pre-fix-failing regression
+pin TestMetadataChunkTailNonzeroRejected. The round-38 re-review then
+closed the fcntl F_DUPFD duplication primitive: unix.FcntlInt(fd,
+F_DUPFD, 0) can duplicate the descriptor onto stdin like dup, unseen by
+the dup-name bans; FcntlInt joins the banned selector set (FcntlFlock,
+the mapping owner's lock path, is a different function and stays
+allowed), pinned as self-test form 240, raising the set to one hundred
+ninety mutation forms. The round-39 re-review then found the
+module-graph escape: a go.mod replace directive or a go.work workspace
+can attach an out-of-tree module whose files the scanner walk never
+visits, letting a wrapper call unix.Pread on the database descriptor
+unseen (both vectors exited 0). Fixed by validating the module graph
+itself - go list -m all must be exactly this module plus
+golang.org/x/sys, and no workspace may be active - pinned as self-test
+forms 241-242, raising the set to one hundred ninety-two mutation
+forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,780 raw lines / tests 4,863 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -648,15 +659,21 @@ sidecars, live coordination, and publication remain Milestone 4.
   the remote-interface and generic-instantiation class (forms
   213-217), the defined-hop instantiation class (forms 222-223), and
   the nested generic-instantiation class (forms 225-226);
-  the self-test now durably rejects one hundred eighty-five mutation forms (round-32 rejects 228-235, benign control 231); the round-36 re-review then closed the dup/exec subprocess-escape and bodyless assembly-stub classes as forms 236-237, bringing the set to one hundred eighty-seven mutation forms; the follow-up then closed the x/sys-owner boundary for new packages and rejected assembly-object files (forms 238-239), raising the set to one hundred eighty-nine mutation forms. The round-38
-  re-review then closed the fcntl F_DUPFD duplication primitive
-  (unix.FcntlInt; form 240), raising the set to one hundred ninety
-  mutation forms. The round-37
+  the self-test now durably rejects one hundred eighty-five mutation forms (round-32 rejects 228-235, benign control 231); the round-36 re-review then closed the dup/exec subprocess-escape and bodyless assembly-stub classes as forms 236-237, bringing the set to one hundred eighty-seven mutation forms; the follow-up then closed the x/sys-owner boundary for new packages and rejected assembly-object files (forms 238-239), raising the set to one hundred eighty-nine mutation forms. The round-37
   re-review then found one P2 in the metadata/bootstrap aspect: nonzero
   bytes after a metadata chunk were accepted by ReadMetadataJSON (Rust
   rejects them as corrupt; spec binary-format-v4.md:1051 requires zero
   tails). Fixed with the tail-zero check and the pre-fix-failing pin
-  TestMetadataChunkTailNonzeroRejected. The
+  TestMetadataChunkTailNonzeroRejected. The round-38
+  re-review then closed the fcntl F_DUPFD duplication primitive
+  (unix.FcntlInt; form 240), raising the set to one hundred ninety
+  mutation forms. The round-39
+  re-review then closed the out-of-tree module-graph escape: go.mod
+  replace and go.work workspaces attach modules the scan never walks
+  (reproduced with a wrapper calling unix.Pread, gate exit 0 on both
+  vectors); the graph is now validated to exactly this module plus
+  golang.org/x/sys with no workspace active, pinned as forms 241-242,
+  raising the set to one hundred ninety-two mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1781,7 +1798,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 190-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 192-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2592,6 +2609,6 @@ execution record; the closing result is appended there when it completes.
   (two-level and three-level/chan variants); form 227 pins the
   benign bytes control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 190-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, and round-38 reject 240 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, and fcntl F_DUPFD descriptor duplication), ten cross-compiles,
+  import graph with the 192-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, and round-39 rejects 241-242 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, and out-of-tree module-graph attach via replace/go.work), ten cross-compiles,
   SOW audit - all green. Counts: production 4,780 raw lines / tests
   4,863 raw lines (gate scanner lives outside the module).

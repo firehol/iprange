@@ -148,6 +148,31 @@ if ! "$scanner_bin" .; then
 	fail=1
 fi
 
+# The module graph is a capability surface: a go.mod require/replace or a
+# go.work workspace can attach out-of-tree code whose files this scan never
+# walks. The graph must be exactly this module plus golang.org/x/sys, with
+# no workspace active; any other module, or a graph that cannot be
+# resolved, fails closed.
+gowork=$(go env GOWORK 2>/dev/null)
+if [ -n "$gowork" ] && [ "$gowork" != "off" ]; then
+	echo "boundary violation: a go.work workspace is active ($gowork); the gate validates only the module's own tree"
+	fail=1
+fi
+mods=$(go list -m -f '{{.Path}}' all 2>/dev/null) || {
+	echo "boundary violation: the module graph cannot be resolved (go list -m all failed)"
+	fail=1
+}
+for m in $mods; do
+	case "$m" in
+	"github.com/firehol/iprange/v4/go"|"golang.org/x/sys")
+		;;
+	*)
+		echo "boundary violation: module graph contains $m (only golang.org/x/sys may join the module)"
+		fail=1
+		;;
+	esac
+done
+
 # Only the reader may hold the mapping, and only the reader core may be
 # consumed by the facade. The check runs under every supported target so a
 # build-tagged package that exists only on one GOOS/GOARCH cannot import
@@ -8248,12 +8273,46 @@ MUTEOF
 	add_mut internal/mapping/gatemut_fcntldup_linux.go
 	run_mut "fcntl F_DUPFD descriptor duplication"
 
+	# --- 241: go.mod replace attaching an out-of-tree module -------------
+	# A replace directive can point the import graph at a directory the
+	# scanner never walks; the module graph itself must fail closed.
+	mkdir -p gatemut_wrap
+	cat > gatemut_wrap/go.mod <<'MUTEOF'
+module wrapper
+
+go 1.23.0
+MUTEOF
+	cat > gatemut_wrap/wrap.go <<'MUTEOF'
+package wrapper
+
+import "golang.org/x/sys/unix"
+
+func Fetch(fd int) error { return unix.Close(fd) }
+MUTEOF
+	add_mut gatemut_wrap
+	cp go.mod "$self_tree/gomod.sav"
+	printf '\nrequire wrapper v0.0.0\nreplace wrapper => ./gatemut_wrap\n' >> go.mod
+	run_mut "go.mod replace to an out-of-tree module"
+	cp "$self_tree/gomod.sav" go.mod
+	rm "$self_tree/gomod.sav"
+
+	# --- 242: go.work workspace attaching an out-of-tree module ----------
+	# A workspace can import modules by directory without touching go.mod;
+	# any active workspace fails closed.
+	cat > go.work <<'MUTEOF'
+go 1.23.0
+
+use .
+MUTEOF
+	add_mut go.work
+	run_mut "go.work workspace"
+
 
 	if [ "$mutfail" -ne 0 ]; then
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 190 mutation forms rejected)"
+	echo "import-graph self-test passed (all 192 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
