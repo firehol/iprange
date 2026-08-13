@@ -810,9 +810,14 @@ func classify(e ast.Expr, st *taints, info pkgInfo, imports map[string]string) k
 		return classify(v.X, st, info, imports)
 	case *ast.UnaryExpr:
 		if v.Op == token.ARROW {
-			// <-ch: a receive from a chan of funcs yields a func.
-			if classify(v.X, st, info, imports) == kindChanFuncFile {
+			// <-ch: a receive from a chan of files yields a file;
+			// from a chan of funcs it yields a func-file.
+			k := classify(v.X, st, info, imports)
+			if k == kindChanFuncFile {
 				return kindFuncFile
+			}
+			if k == kindChanFile {
+				return kindFile
 			}
 		}
 		return classify(v.X, st, info, imports)
@@ -1573,30 +1578,44 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			// Ranging over a container yields *os.File elements in the
 			// Value position; ranging over a file channel yields them in
 			// the Value position, or in the Key position for the
-			// single-variable form (for z := range ch).
+			// single-variable form (for z := range ch). The ranged
+			// expression is classified whole, so struct-field channels
+			// and method values resolve through the same rules.
+			rk := classify(v.X, st, info, imports)
+			bind := func(k *ast.Ident) {
+				if k == nil || k.Name == "_" {
+					return
+				}
+				switch rk {
+				case kindFile, kindContainer, kindChanFile:
+					st.file[k.Name] = true
+				case kindChanFuncFile, kindFuncFile:
+					st.funcFile[k.Name] = true
+				}
+			}
 			if v.Value != nil {
 				if k, ok := v.Value.(*ast.Ident); ok {
-					if isContainerExpr(v.X, st, info) {
-						st.file[k.Name] = true
-					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFile[id.Name] {
-						st.file[k.Name] = true
-					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFuncFile[id.Name] {
-						st.funcFile[k.Name] = true
-					}
+					bind(k)
 				}
-			} else if v.Key != nil {
-				if k, ok := v.Key.(*ast.Ident); ok && k.Name != "_" {
-					if id, ok := v.X.(*ast.Ident); ok && st.chanFile[id.Name] {
-						st.file[k.Name] = true
-					} else if id, ok := v.X.(*ast.Ident); ok && st.chanFuncFile[id.Name] {
-						st.funcFile[k.Name] = true
-					}
+			} else {
+				if k, ok := v.Key.(*ast.Ident); ok {
+					bind(k)
 				}
 			}
 			prepassStmts(v.Body.List, st, info, imports)
 		case *ast.SendStmt:
 			// `ch <- f` with a file value: mark the channel as carrying
 			// files so a later receive (or loop) taints the value.
+			// Selector-typed channels (fb.ch) record the same taint on
+			// the field.
+			markSend := func(key string) {
+				if isFileOrContainer(v.Value, st, info, imports) {
+					st.fieldTaint[key] = kindChanFile
+				}
+				if classify(v.Value, st, info, imports) == kindFuncFile {
+					st.fieldTaint[key] = kindChanFuncFile
+				}
+			}
 			if id, ok := v.Chan.(*ast.Ident); ok {
 				if isFileOrContainer(v.Value, st, info, imports) {
 					st.chanFile[id.Name] = true
@@ -1604,6 +1623,8 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 				if classify(v.Value, st, info, imports) == kindFuncFile {
 					st.chanFuncFile[id.Name] = true
 				}
+			} else if sel, ok := v.Chan.(*ast.SelectorExpr); ok {
+				markSend(exprText(sel.X) + "." + sel.Sel.Name)
 			}
 		case *ast.SwitchStmt:
 			if v.Init != nil {
