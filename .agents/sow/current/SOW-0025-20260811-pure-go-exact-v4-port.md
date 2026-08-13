@@ -158,8 +158,9 @@ reader-shape binding class (forms 167-174), and the renamed-qualified alias
 generic-method class (forms 185-189), the mixed result and
 qualified-defined class (forms 191-196), the
 interface-method and method-result class (forms 199-205), the
-embedded-interface and cross-package chain class (forms 207-210); the durable
-rejection set is now one hundred sixty-nine mutation
+embedded-interface and cross-package chain class (forms 207-210), the
+remote-interface and generic-instantiation class (forms 213-217); the durable
+rejection set is now one hundred seventy-four mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -574,8 +575,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   (forms 185-189), the mixed result and
   qualified-defined class (forms 191-196), the
   interface-method and method-result class (forms 199-205), and the
-  embedded-interface and cross-package chain class (forms 207-210);
-  the self-test now durably rejects one hundred sixty-nine mutation forms. The
+  embedded-interface and cross-package chain class (forms 207-210),
+  and the remote-interface and generic-instantiation class (forms
+  213-217);
+  the self-test now durably rejects one hundred seventy-four mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
