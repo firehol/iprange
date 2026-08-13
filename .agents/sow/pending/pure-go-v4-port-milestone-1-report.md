@@ -221,9 +221,9 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,792 raw lines, including
-blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,877 raw lines. The earlier
+doc.go, errors.go, reader_public.go, types.go): 4,789 raw lines, including
+blanks; new-tree tests (`find . -name .*_test.go. | sort | xargs cat | wc -l` over the same
+tree): 4,887 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 

@@ -455,8 +455,9 @@ launder, the instantiated-generic-wrapper method expression, and
 the deep embedding-chain method expression (forms 267-270, two
 hundred twenty mutation forms). The records
 of this pass complete the trail up to this re-review. Repository counts:
-production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
-accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
+production 4,789 raw lines / tests 4,887 raw lines (the round-54
+dead-state removal and zero-Pin test account for the latest delta; the gate
+scanner lives outside the module). Milestone 2 must not start until a
 new independent final review passes; decision 5A was ratified (option A,
 2026-08-13); no open user decision remains.
 The approved later scope remains unchanged: Milestone 2 is the writer;
@@ -2360,9 +2361,9 @@ Use these sections in this order:
   mechanism, //go:embed, is separately rejected as a directive.
 - Gates at this commit: go test ./... incl -race, go vet, gofmt,
   import graph (self-test, all 240 forms rejected), the real tree gate,
-  ten cross-compiles, SOW audit - all green. Counts unchanged:
-  production 4,792 raw lines / tests 4,877 raw lines (gate scanner
-  lives outside the module).
+  ten cross-compiles, SOW audit - all green. Counts: production 4,789 raw lines / tests
+  4,887 raw lines (the dead-state removal and zero-Pin test account for
+  the delta; the gate scanner lives outside the module).
 
 ## Validation
 
@@ -3345,5 +3346,5 @@ execution record; the closing result is appended there when it completes.
   and round-53 rejects 289-290 cover the embed import and the
   //go:embed directive (compile-time database copies),
   ten cross-compiles,
-  SOW audit - all green. Counts: production 4,792 raw lines / tests
-  4,877 raw lines (gate scanner lives outside the module).
+  SOW audit - all green. Counts: production 4,789 raw lines / tests
+  4,887 raw lines (gate scanner lives outside the module).
