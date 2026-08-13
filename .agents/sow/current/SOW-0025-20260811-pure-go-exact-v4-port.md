@@ -2067,6 +2067,10 @@ Use these sections in this order:
   instantiated generic wrapper, P2 embedding chain deeper than the
   bounded walk), and records (stale round-48 count prose in the
   Status opening summary, fixed in this pass).
+- P2 (records) - the Status opening summary still carried pre-round-48
+  count prose (two hundred six forms) and the exec-log label for it
+  misattributed the staleness to round-48; the current-state prose is
+  unified on the round-50 count and this entry drops the stale label.
 - P0 - generic interface erasure: `func probeWrapR[T io.Reader](v T)
   io.Reader { return v }` binds a file argument to a type parameter
   and returns an interface-typed result; the generic result
@@ -2100,11 +2104,11 @@ Use these sections in this order:
   conversion), and the four new probes are rejected; the benign
   controls still pass. Gates: go test ./... incl -race, go vet,
   gofmt, import graph (self-test, all 220 forms rejected),
-  CGO_ENABLED=0 build and test, four cross-compiles, SOW audit — all
-  green. Counts unchanged at this commit: production 4,792 raw lines /
-  tests 4,877 raw lines. Decision 5A remains open for user
-  ratification; Milestone 2 remains blocked until the final review
-  passes.
+  CGO_ENABLED=0 build and test, ten cross-compiles across the
+  per-target listing matrix, SOW audit — all green. Counts unchanged
+  at this commit: production 4,792 raw lines / tests 4,877 raw lines.
+  Decision 5A remains open for user ratification; Milestone 2 remains
+  blocked until the final review passes.
 
 ## Validation
 
@@ -2127,8 +2131,9 @@ Tests or equivalent validation:
   `*os.File` capability surface, with the three in-memory inflater nodes
   exempted as exact, file-taint-verified shapes; the 220-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
-- Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
-  windows/amd64+arm64+386, linux/386+arm64 — all build.
+- Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
+  amd64/arm64, freebsd amd64, windows amd64/arm64 (the gate's
+  per-target listing matrix) — all build.
 - Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3 invalid
   mutations rejected with code 32; structured absence probes added.
 - `.agents/sow/audit.sh` — clean.
