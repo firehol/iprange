@@ -154,8 +154,9 @@ interface-binding class (forms 145-148), the
 generic-receiver-binding class (forms 151-156), the
 alias-spelled generic binding class (forms 159-164), and the
 reader-shape binding class (forms 167-174), and the renamed-qualified alias
-  class (forms 179-182); the durable
-rejection set is now one hundred forty-seven mutation
+  class (forms 179-182), and the func-typed
+generic-method class (forms 185-189); the durable
+rejection set is now one hundred fifty-two mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -165,7 +166,20 @@ Fixed in the go-gate scanner with per-directory alias registration
 (pkgAliasesByDir), a per-file import snapshot (currentImports), and
 qualifier translation in aliasLookup; pinned as self-test forms
 179-182 (rejects) and 183-184 (benign controls). The durable rejection
-set is now one hundred forty-seven mutation forms. The records
+set is now one hundred fifty-two mutation forms. The records
+of this pass complete the trail up to this re-review. The round-25
+gate re-review then found the func-typed generic-method class: a
+generic method whose type argument binds a func type producing
+*os.File (gRZ[func() *os.File]{}.mk() bound to f, then f()) was
+claimed by producerCall as a direct file result, so the binding was
+recorded as a file instead of a func-file and invoking it lost the
+taint - a file-backed zr again slipped through the io.ReadFull
+exemption with gate exit 0. Fixed by removing the funcTextFile claim
+from producerCall's generic-method branch so classify's own generic
+method loop yields kindFuncFile and applyKind records the func-file
+binding; pinned as self-test forms 185-189 (rejects) and 190 (benign
+bytes control). The durable rejection set is now one hundred
+fifty-two mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -465,8 +479,9 @@ sidecars, live coordination, and publication remain Milestone 4.
   generic-receiver-binding class (forms 151-156), the
   alias-spelled generic binding class (forms 159-164), and the
   reader-shape binding class (forms 167-174), and the
-  renamed-qualified alias class (forms 179-182);
-  the self-test now durably rejects one hundred forty-seven mutation forms. The
+  renamed-qualified alias class (forms 179-182), and the
+  func-typed generic-method class (forms 185-189);
+  the self-test now durably rejects one hundred fifty-two mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1591,7 +1606,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 147-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 152-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2243,7 +2258,22 @@ execution record; the closing result is appended there when it completes.
   and resolveStructName all route through aliasLookup. Forms 179-182
   pin the four rejects; forms 183-184 pin the benign renamed-qualified
   bytes controls.
+- Ampere round 25 found the func-typed generic-method class
+  (HEAD 21b5742): producerCall's generic-method branch claimed a
+  func-typed result (mresG of func() *os.File after the direct
+  *os.File position check missed) as a direct file position, so
+  applyLHS recorded the binding via st.file instead of st.funcFile
+  and calling the bound func lost the taint - gRZ[func() *os.File]
+  {}.mk()() reached the io.ReadFull exemption with gate exit 0.
+  Fixed by removing the funcTextFile producer claim so classify's
+  existing generic-method loop yields kindFuncFile and applyKind
+  registers the func-file; the non-generic method control was
+  already caught, proving the shape is right and only the generic
+  registration was blind. Forms 185-189 pin the five rejects
+  (direct, embedded promotion, local alias, renamed-import func
+  alias, unapproved method on the invoked result); form 190 pins
+  the benign bytes-backed func control.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 147-form self-test, ten cross-compiles,
+  import graph with the 152-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).
