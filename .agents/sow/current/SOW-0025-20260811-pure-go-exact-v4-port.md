@@ -164,13 +164,16 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now two hundred sixteen
+231); the durable rejection set is now two hundred twenty
 mutation forms (round-48 closed the bound method-expression and
 same-module cross-package producer-var class, forms 257-260;
 round-49 closed the nested-parenthesized, renamed-import,
 alias-over-renamed, wrapper-promoted method-expression,
 value-bound cross-package producer-var, and
-interface-conversion-launder class, forms 261-266);
+interface-conversion-launder class, forms 261-266;
+round-50 closed the generic interface-erasure, composite-literal
+field-launder, generic-wrapper method-expression, and deep
+embedding-chain class, forms 267-270);
 round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, *os.Root laundering through fields/params/helpers, file-method values, and func-typed variables with file-bearing declared results or stdlib producer initializers, forms 249-256; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
@@ -418,7 +421,11 @@ parenthesized, renamed-import, alias-over-renamed, and
 wrapper-promoted method expressions, value-bound cross-package
 producer vars, and interface-conversion laundering of a file into
 the metadata inflater exemption (forms 261-266, two hundred sixteen
-mutation forms). The records
+mutation forms); the round-50 re-review closed the generic
+identity-with-interface-result erasure, the composite-literal field
+launder, the instantiated-generic-wrapper method expression, and
+the deep embedding-chain method expression (forms 267-270, two
+hundred twenty mutation forms). The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -2049,6 +2056,56 @@ Use these sections in this order:
   Decision 5A remains open for user ratification; Milestone 2 remains
   blocked until the final review passes.
 
+### 2026-08-13 - round-50 gate re-review closed generic interface erasure, composite-literal and generic-wrapper launders, and deep embedding chains (HEAD 04f4271e3c5f)
+
+- The round-50 adversarial re-review (six narrow reviewers: codecs,
+  membership/zero-alloc, mapping/pin/gate, metadata/bootstrap, records,
+  gate hunting) passed membership/zero-alloc and metadata, and failed
+  with four live gate escapes: codecs (P0 generic identity erasing
+  file taint into an interface result), mapping/pin/gate (P1
+  composite-literal field launder, P1 method expression on an
+  instantiated generic wrapper, P2 embedding chain deeper than the
+  bounded walk), and records (stale round-48 count prose in the
+  Status opening summary, fixed in this pass).
+- P0 - generic interface erasure: `func probeWrapR[T io.Reader](v T)
+  io.Reader { return v }` binds a file argument to a type parameter
+  and returns an interface-typed result; the generic result
+  propagation only tracked exact type-parameter results, so
+  `zr := probeWrapR(f)` erased the taint and the exempted inflater
+  shape consumed file bytes (live, gate exit 0).
+- P1 - composite-literal field launder: `s := gateLaunderS{r: f}`
+  followed by `zr := s.r` dropped the taint because field taint was
+  registered only for selector writes (live, gate exit 0).
+- P1 - instantiated generic wrapper: `type gW[T any] struct{ *os.Root }`
+  with `open := (*gW[byte]).Open` hid the promoted method behind the
+  generic instantiation spelling (live, gate exit 0).
+- P2 - deep embedding chain: a five-level wrapper chain
+  (gDE5 -> ... -> *os.Root) exceeded the four-hop embedding walk
+  budget; `(*gDE5).Open` bound the method untainted (live, gate exit 0).
+- Fixed at HEAD 04f4271e3c5f: generic results that can only compile as
+  interface-erased carriers (any, error, anonymous interface, io.*
+  interfaces, bare same-package declared results) keep the file taint
+  when a type-parameter-bound argument is file-tainted
+  (interfaceErasedResult); composite-literal bindings register
+  named-element field taint, including nested literals and selector
+  field assignments (registerCompositeFieldTaints); method-expression
+  receivers strip generic instantiation suffixes before the struct and
+  embedding registry lookups (genericBase); the embedding walk tracks
+  visited types and runs to a fixpoint instead of a fixed four-hop
+  budget; pinned as self-test forms 267-270, raising the durable
+  rejection set to two hundred twenty mutation forms.
+- Replayed at the new gate: all round-47 (R1-R14) and round-48 (P1-P15)
+  probes, the round-49 probe families (nested-paren, renamed-import,
+  alias-over-renamed, wrapper, value-bound producer, interface
+  conversion), and the four new probes are rejected; the benign
+  controls still pass. Gates: go test ./... incl -race, go vet,
+  gofmt, import graph (self-test, all 220 forms rejected),
+  CGO_ENABLED=0 build and test, four cross-compiles, SOW audit — all
+  green. Counts unchanged at this commit: production 4,792 raw lines /
+  tests 4,877 raw lines. Decision 5A remains open for user
+  ratification; Milestone 2 remains blocked until the final review
+  passes.
+
 ## Validation
 
 Acceptance criteria evidence:
@@ -2068,7 +2125,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 216-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 220-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2112,8 +2169,12 @@ Reviewer findings:
   method expressions, value-bound cross-package producer vars, and
   interface-conversion laundering of a file into the metadata
   inflater exemption (forms 261-266, two hundred sixteen forms);
-  re-verification at the round-49 HEAD passed the full replay and
-  gate suites.
+  the round-50 gate re-review then closed the generic
+  identity-with-interface-result erasure, the composite-literal
+  field launder, the instantiated-generic-wrapper method
+  expression, and the deep embedding-chain method expression
+  (forms 267-270, two hundred twenty forms); re-verification at the
+  round-50 HEAD passed the full replay and gate suites.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -2943,7 +3004,7 @@ execution record; the closing result is appended there when it completes.
   same-module cross-package producer vars (forms 257-260), raising
   the set to two hundred ten mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 216-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  import graph with the 220-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
   rejects 249-256 cover os.CopyFS directory copies, os.OpenInRoot/
   os.OpenRoot handles reaching stream wrappers, the x/sys
   descriptor-transfer primitives, *os.Root laundering through struct
@@ -2954,7 +3015,11 @@ execution record; the closing result is appended there when it completes.
   cross-package producer vars, and round-49 rejects 261-266 cover
   doubly-parenthesized, renamed-import, alias-over-renamed, and
   wrapper-promoted method expressions, value-bound cross-package
-  producer vars, and interface conversions laundering file values),
-  ten cross-compiles,
+  producer vars, and interface conversions laundering file values,
+  and round-50 rejects 267-270 cover generic identity functions
+  erasing a file taint into an interface result, composite-literal
+  field laundering, method expressions on instantiated generic
+  wrappers, and embedding chains deeper than the original walk
+  budget), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
