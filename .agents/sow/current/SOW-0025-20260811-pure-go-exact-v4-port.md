@@ -164,8 +164,8 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), and the cgo-import,
 raw-syscall, linkname, no-error syscall and preadv2/pwritev2 classes
 (forms 228-230, 232-235) with the benign lifecycle control (form
-231); the durable rejection set is now one hundred ninety-eight
-mutation forms (round-36 closed the dup/exec subprocess escape and the
+231); the durable rejection set is now two hundred one
+mutation forms; round-45 closed the mmap-gate denylist gaps (os.CopyFS directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, and the x/sys descriptor-transfer primitives Tee/Vmsplice/IoctlFileClone*/Clonefile*, forms 249-251; round-36 closed the dup/exec subprocess escape and the
 bodyless assembly-stub class, forms 236-237; its follow-up closed the
 x/sys-owner boundary for every package plus assembly-object files, forms
 238-239; round-38 closed the fcntl F_DUPFD descriptor duplication
@@ -376,7 +376,20 @@ passed with an empty package list and no import checks (reproduced with
 a symlinked smuggled file in internal/mapping); the package checks now
 fail closed on every listing error and the per-package import listing
 fails closed too, pinned as self-test form 248, raising the set to one
-hundred ninety-eight mutation forms. The records
+hundred ninety-eight mutation forms. The six-reviewer
+pass for that fix completed with all six narrow reviewers at PASS (HEAD e5fea20).
+The round-45 final review then failed with three P2 findings, all in the mmap source gate: os.CopyFS was absent
+from the selector ban (a directory copy streams artifact bytes with no banned selector; the live reproducer
+exited 0), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File,
+or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes, and
+Root.Open/Create/OpenFile also produce files), and the blanket-approved x/sys surface still carried
+descriptor-transfer primitives unseen by the denylist (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/
+DedupeRange, darwin unix.Clonefile/Clonefileat). Fixed at HEAD 14c0698: CopyFS, Tee, Vmsplice,
+IoctlFileClone* and Clonefile* join the banned selector set (CopyFileRange/Sendfile/Splice were already
+banned); os.OpenInRoot and os.OpenRoot join the file-producer table as position-0 file taints, so every Root
+method outside the approved lifecycle surface fails closed; all three live reproducers plus the
+OpenRoot/ReadAll and darwin Clonefile variants are rejected by the hardened gate. Pinned as self-test forms
+249-251, raising the durable rejection set to two hundred one mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,792 raw lines / tests 4,877 raw lines (the metadata fix
 accounts for the delta; the gate scanner lives outside the module). Milestone 2 must not start until a
@@ -721,7 +734,15 @@ sidecars, live coordination, and publication remain Milestone 4.
   cannot list (symlinked package files, parse errors) passed with no
   package checks at all; go list failures now set fail=1 per target and
   pkg_imports fails closed, pinned as form 248, raising the set to one
-  hundred ninety-eight mutation forms. The
+  hundred ninety-eight mutation forms. The round-45
+  re-review then found the mmap-gate denylist gaps: os.CopyFS directory
+  copies, os.OpenInRoot/os.OpenRoot handles reaching stream wrappers, and
+  the x/sys descriptor-transfer primitives (unix.Tee/Vmsplice/
+  IoctlFileClone*, darwin Clonefile*) all bypassed the scan (proven live,
+  gate exit 0 on every vector); CopyFS and the x/sys primitives join the
+  banned selector set, os.OpenInRoot/os.OpenRoot join the file-producer
+  table so Root methods fail closed, pinned as self-test forms 249-251,
+  raising the set to two hundred one mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1827,6 +1848,35 @@ Use these sections in this order:
   gofmt, import graph — all green. Gates at HEAD: go test ./... incl -race,
   go vet, gofmt, import graph — all green.
 
+### 2026-08-13 - round-45 final review mmap-gate denylist gaps closed (HEAD 14c0698)
+
+- The round-44 re-verification completed with all six narrow reviewers at
+  PASS (HEAD e5fea20). The round-45 full-scope final review then failed
+  with three P2 findings, all in the mmap source gate: os.CopyFS was
+  absent from the selector ban (a directory copy streams artifact bytes
+  with no banned selector; the live reproducer exited 0);
+  os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a
+  Go 1.26 OpenInRoot *os.File, or an older-toolchain *os.Root handle,
+  reached flate.NewReader untainted and streamed file bytes, and
+  Root.Open/Create/OpenFile also produce files); and the blanket-approved
+  x/sys surface still carried descriptor-transfer primitives
+  (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/DedupeRange,
+  darwin unix.Clonefile/Clonefileat).
+- Fixed at HEAD 14c0698: CopyFS, Tee, Vmsplice, IoctlFileClone* and
+  Clonefile* join the banned selector set (CopyFileRange/Sendfile/Splice
+  were already banned); os.OpenInRoot and os.OpenRoot join the file
+  producer table as position-0 file taints, so every Root method outside
+  the approved lifecycle surface fails closed; all three live reproducers
+  plus the OpenRoot/ReadAll and darwin Clonefile variants are rejected.
+- Pinned as self-test forms 249-251; the durable rejection set is now two
+  hundred one mutation forms. Gates: go test ./... incl -race, go vet,
+  gofmt, import graph (self-test, all 201 forms rejected), CGO_ENABLED=0
+  build and test, four cross-compiles, SOW audit — all green.
+- Counts unchanged at this commit: production 4,792 raw lines / tests
+  4,877 raw lines (the gate scanner lives outside the module). Decision
+  5A remains open for user ratification; Milestone 2 remains blocked
+  until the re-review passes.
+
 ## Validation
 
 Acceptance criteria evidence:
@@ -1846,7 +1896,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 198-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 201-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -1876,6 +1926,12 @@ Reviewer findings:
   fixed in this pass with the AST gate rewrite (v4/go-gate), the
   temp-copy self-test, and the completed records; decision 5A remains an
   open user decision.
+  The round-44 re-verification then completed with all six narrow
+  reviewers at PASS (e5fea20); the round-45 final review failed with
+  three P2 mmap-gate findings (os.CopyFS, os.OpenInRoot/os.OpenRoot
+  handles, x/sys descriptor-transfer primitives), all fixed at the next
+  HEAD with self-test forms 249-251 and the rejection set at two hundred
+  one mutation forms; re-verification is pending.
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
@@ -2683,8 +2739,20 @@ execution record; the closing result is appended there when it completes.
   package files, parse errors) passed with an empty package list and no
   import checks; go list failures now fail the gate per target and the
   per-package import listing fails closed too, pinned as form 248,
-  raising the set to one hundred ninety-eight mutation forms.
+  raising the set to one hundred ninety-eight mutation forms. The round-45
+  gate re-review then found the mmap-gate denylist gaps: os.CopyFS
+  directory copies, os.OpenInRoot/os.OpenRoot handles reaching stream
+  wrappers, and the x/sys descriptor-transfer primitives (unix.Tee,
+  unix.Vmsplice, unix.IoctlFileClone/CloneRange/DedupeRange, darwin
+  unix.Clonefile/Clonefileat) bypassed the scan (all proven live, gate
+  exit 0); CopyFS and the x/sys primitives join the banned selector set,
+  os.OpenInRoot/os.OpenRoot join the file-producer table so Root methods
+  fail closed, pinned as self-test forms 249-251, raising the set to two
+  hundred one mutation forms.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 198-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules), ten cross-compiles,
+  import graph with the 201-form self-test (round-32 rejects cover cgo, raw and no-error syscalls, linkname, preadv2/pwritev2; round-36 rejects 236-237, follow-up rejects 238-239, round-38 reject 240, round-39/40 rejects 241-244, round-42 rejects 245-247, and round-43 reject 248 cover the dup/exec subprocess escape, bodyless assembly stubs, the x/sys owner boundary, assembly objects, fcntl F_DUPFD duplication, out-of-tree module-graph attach, x/sys source replacement, hidden dot-directories, x/sys source-content spoofing (poisoned cache and file proxy with forged go.sum), case-variant assembly objects, and unlistable modules, and round-45
+  rejects 249-251 cover os.CopyFS directory copies, os.OpenInRoot/
+  os.OpenRoot handles reaching stream wrappers, and the x/sys
+  descriptor-transfer primitives), ten cross-compiles,
   SOW audit - all green. Counts: production 4,792 raw lines / tests
   4,877 raw lines (gate scanner lives outside the module).
