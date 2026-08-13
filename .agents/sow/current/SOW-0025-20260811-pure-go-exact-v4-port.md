@@ -157,8 +157,9 @@ reader-shape binding class (forms 167-174), and the renamed-qualified alias
   class (forms 179-182), and the func-typed
 generic-method class (forms 185-189), the mixed result and
 qualified-defined class (forms 191-196), the
-interface-method and method-result class (forms 199-205); the durable
-rejection set is now one hundred sixty-five mutation
+interface-method and method-result class (forms 199-205), the
+embedded-interface and cross-package chain class (forms 207-210); the durable
+rejection set is now one hundred sixty-nine mutation
 forms. The round-24 gate re-review then found the import-renamed qualified
 alias class: an import mm ".../internal/mapping" local qualifier was
 never translated back to a package path, so mm.MappingFile generic type
@@ -247,7 +248,7 @@ self-entries for struct spellings in the qualified registries, and
 a full fixpoint loop for the per-directory alias/defined closure
 with self-hop guards; pinned as self-test forms 207-210 (rejects)
 and 211-212 (benign bytes controls). The durable rejection
-set is now one hundred seventy-one mutation forms. The records
+set is now one hundred sixty-nine mutation forms. The records
 of this pass complete the trail up to this re-review. Repository counts:
 production 4,772 raw lines / tests 4,832 raw lines (unchanged: the gate
 scanner lives outside the module). Milestone 2 must not start until a
@@ -550,9 +551,10 @@ sidecars, live coordination, and publication remain Milestone 4.
   renamed-qualified alias class (forms 179-182), and the
   func-typed generic-method class
   (forms 185-189), the mixed result and
-  qualified-defined class (forms 191-196), and the
-  interface-method and method-result class (forms 199-205);
-  the self-test now durably rejects one hundred sixty-five mutation forms. The
+  qualified-defined class (forms 191-196), the
+  interface-method and method-result class (forms 199-205), and the
+  embedded-interface and cross-package chain class (forms 207-210);
+  the self-test now durably rejects one hundred sixty-nine mutation forms. The
   records
   of this entry complete the trail up to this re-review. Decision 5A
   remains open for user ratification and is the only remaining P2
@@ -1677,7 +1679,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the three in-memory inflater nodes
-  exempted as exact, file-taint-verified shapes; the 171-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 169-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: darwin/amd64+arm64, freebsd/amd64+arm64,
   windows/amd64+arm64+386, linux/386+arm64 — all build.
@@ -2420,6 +2422,6 @@ execution record; the closing result is appended there when it completes.
   cross-package struct method, nine-hop qualified chain); forms
   211-212 pin the benign bytes controls.
 - Gates at current HEAD: go test ./... incl -race, go vet, gofmt,
-  import graph with the 171-form self-test, ten cross-compiles,
+  import graph with the 169-form self-test, ten cross-compiles,
   SOW audit - all green. Counts: production 4,772 raw lines / tests
   4,832 raw lines (gate scanner lives outside the module).

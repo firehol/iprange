@@ -7267,7 +7267,7 @@ MUTEOF
 		echo "import-graph self-test FAILED"
 		exit 1
 	fi
-	echo "import-graph self-test passed (all 171 mutation forms rejected)"
+	echo "import-graph self-test passed (all 169 mutation forms rejected)"
 fi
 
 if [ "$fail" -ne 0 ]; then
