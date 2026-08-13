@@ -193,7 +193,7 @@ wrapper literals no longer leave a live promoted handle; variables
 bound to explicit generic instantiations keep the base generic's
 substituted results; anonymous struct literals resolve positional
 order from their own fields, and anonymous structs embedding
-*os.File/*os.Root escalate like named wrappers), forms 278-281, and
+*os.File/*os.Root escalate like named wrappers), forms 278-282, and
 the continuation class of the same round (elided inner composite
 literals in slice, map, nested-container, and channel elements,
 pointer composite literals, and func-valued arguments to explicitly
@@ -2187,7 +2187,7 @@ Use these sections in this order:
   raw lines. Decision 5A remains open for user ratification; Milestone
   2 remains blocked until the final review passes.
 
-### 2026-08-13 - round-52 gate re-review closed embedded, var-bound, anonymous struct-literal, container-element, pointer-literal, and explicit-instantiation launders (HEAD 5acd2a6)
+### 2026-08-13 - round-52 gate re-review closed embedded, var-bound, anonymous struct-literal, container-element, pointer-literal, and explicit-instantiation launders (HEAD 5acd2a6; records 6470f21)
 
 - The round-52 adversarial gate hunt (six narrow reviewers:
   validation runner, reader endpoint, records, self-test integrity,
@@ -2256,9 +2256,16 @@ Use these sections in this order:
   sum was also computed with the wrong format. The evil tree's
   go.mod is byte-identical to the official v0.35.0 go.mod, so the
   correct self-consistent forge pins the official /go.mod sum and
-  the evil module/tree hash; with that, go list resolves the
-  poisoned module and the gate's own checkout content-hash
-  boundary violation fires for real in both forms.
+  the evil module/tree hash. The continuation harness review then
+  proved the fix still incomplete on go1.26: Go only treats a module
+  as downloaded (go list -m resolves a Dir) after the zip is
+  verified and the .ziphash marker written, so a manually-seeded
+  cache rejected via the fail-closed listing fallback and the
+  content pin still never ran. Both forms now pre-verify the seeded
+  cache/proxy with go mod download under the poisoned environment
+  (the forged go.sum makes the evil zip self-consistent, so the
+  toolchain writes the marker), after which the gate's own checkout
+  content-hash boundary violation fires for real in both forms.
 - Fixed at HEAD: embedded struct fields register by type name
   (embeddedFieldName strips pointer, package qualifier, and generic
   instantiation), so positional and keyed embedded elements share
@@ -2284,13 +2291,14 @@ Use these sections in this order:
   genericMethodResults claims every declared result position when
   any call argument bears a file, covering closures surfaced through
   erased generic bodies.
-- Pinned as durable exemption-shape appends: forms 278-281 (embedded
-  *os.Root wrapper literal, var-bound generic instantiation,
-  anonymous positional element, anonymous embedded handle) and
-  forms 283-288 (explicit single and variadic instantiation with a
-  func-file argument, elided slice element, map elided element,
-  pointer composite literal, nested and channel elided container
-  elements), raising the rejection set to two hundred thirty-eight
+- Pinned as durable exemption-shape appends: forms 278-282 (embedded
+  *os.Root wrapper literal, var-bound generic instantiation with
+  fixed file arguments and the erase-to-interface twin, anonymous
+  positional element, anonymous embedded handle) and forms 283-288
+  (explicit single and variadic instantiation with a func-file
+  argument, elided slice element, map elided element, pointer
+  composite literal, nested and channel elided container elements),
+  raising the rejection set to two hundred thirty-eight
   mutation forms. Vacuity proof: the round-51 scanner misses exactly
   the eleven new forms (and forms 245-246 were vacuous before the
   env fix), the fixed scanner rejects all 238. Gates: go test ./...

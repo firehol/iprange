@@ -8318,7 +8318,9 @@ MUTEOF
 	cat > internal/mapping/gatemut_asmread_linux.s <<'MUTEOF'
 //go:build linux
 
-TEXT ·gateAsmRead237(SB),NOSPLIT,$0
+#include "textflag.h"
+
+TEXT ·gateAsmRead237(SB),NOSPLIT,$0-56
 	MOVQ $0, AX
 	SYSCALL
 	RET
@@ -8373,7 +8375,7 @@ package mapping
 import "golang.org/x/sys/unix"
 
 func gateFcntlDup240(fd uintptr) (int, error) {
-	return unix.FcntlInt(int(fd), unix.F_DUPFD, 0)
+	return unix.FcntlInt(fd, unix.F_DUPFD, 0)
 }
 MUTEOF
 	add_mut internal/mapping/gatemut_fcntldup_linux.go
@@ -8499,6 +8501,12 @@ MUTEOF
 	cp go.sum "$self_tree/gosum.sav"
 	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
 	mut_env="GOMODCACHE=$PWD/gatemut_cache GOPROXY=off GOSUMDB=off"
+	# Pre-verify the seeded cache exactly as the toolchain does: Go only
+	# treats a module as downloaded (go list -m resolves a Dir) after the
+	# zip is verified and the .ziphash marker is written. Without this the
+	# form rejected via the fail-closed listing fallback and the content
+	# pin never ran; with it, the checkout content-hash boundary fires.
+	env $mut_env go mod download golang.org/x/sys
 	run_mut "poisoned module cache with an evil x/sys checkout"
 	mut_env=""
 	cp "$self_tree/gosum.sav" go.sum
@@ -8518,6 +8526,11 @@ MUTEOF
 	cp go.sum "$self_tree/gosum.sav"
 	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
 	mut_env="GOMODCACHE=$PWD/gatemut_proxycache GOPROXY=file://$PWD/gatemut_proxy GOSUMDB=off"
+	# Same pre-verification as form 245: the proxy zip is fetched and
+	# verified against the forged go.sum, writing the .ziphash marker so
+	# the resolved checkout reaches the content-hash boundary instead of
+	# dying in the listing fallback.
+	env $mut_env go mod download golang.org/x/sys
 	run_mut "file proxy serving an evil x/sys with a forged go.sum"
 	mut_env=""
 	cp "$self_tree/gosum.sav" go.sum
@@ -8534,13 +8547,15 @@ MUTEOF
 	run_mut "uppercase .S assembly object"
 
 	# --- 248: module that cannot be listed or built ----------------------
-	# A broken package silently empties the per-target go list loop and
-	# the package checks; a module the go toolchain cannot list must fail
-	# closed, not pass vacuously.
+	# A module the go toolchain cannot list must fail closed, not pass
+	# vacuously. A bare parse error is tolerated by go list (the package
+	# still lists and the scanner rejects it for the wrong reason); a
+	# directory holding two package names makes go list ./... fail, which
+	# trips the gate's per-target listing boundary.
 	cat > internal/mapping/gatemut_broken.go <<'MUTEOF'
-package mapping
+package mapping2
 
-var GateMutBroken int =
+var GateMutBroken int = 1
 MUTEOF
 	add_mut internal/mapping/gatemut_broken.go
 	run_mut "module that cannot be listed or built"
