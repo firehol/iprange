@@ -506,7 +506,7 @@ func collectPkgTaints(f *ast.File, pkg *taints, info pkgInfo) {
 			for i, name := range vs.Names {
 				if len(vs.Values) > i {
 					cls = classify(vs.Values[i], pkg, info, imports)
-					if c, ok := classifyStruct(vs.Values[i], info); ok {
+					if c, ok := classifyStruct(vs.Values[i], pkg, info); ok {
 						pkg.struc[name.Name] = c
 					}
 					if funcTypeResultsFile(vs.Values[i], info) {
@@ -1620,7 +1620,7 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 			return base, true
 		}
 	case *ast.IndexExpr:
-		return containerElementStruct(v, info)
+		return containerElementStruct(v, st, info)
 	case *ast.SelectorExpr:
 		// h.inner.fn: resolve the root instance, then walk the field
 		// chain until the final field's type is a struct.
@@ -1642,17 +1642,107 @@ func resolveStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 	case *ast.ParenExpr:
 		return resolveStruct(v.X, st, info)
 	case *ast.UnaryExpr:
+		if v.Op == token.ARROW {
+			// <-ch: the channel's element type names the struct.
+			if sn, ok := exprElemStruct(v.X, st, info); ok {
+				return sn, true
+			}
+		}
 		return resolveStruct(v.X, st, info)
 	}
 	return "", false
 }
 
+// typeOfBase resolves the declared type text of a base expression: a
+// variable (varTypes), a struct-instance field, a same-package call
+// result, or a deref/parsed wrapper of those.
+func typeOfBase(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
+	switch v := e.(type) {
+	case *ast.Ident:
+		tt, ok := info.varTypes[v.Name]
+		return tt, ok
+	case *ast.ParenExpr:
+		return typeOfBase(v.X, st, info)
+	case *ast.StarExpr:
+		t, ok := typeOfBase(v.X, st, info)
+		if !ok {
+			return "", false
+		}
+		return strings.TrimPrefix(t, "*"), true
+	case *ast.SelectorExpr:
+		if sn, ok := resolveStruct(v.X, st, info); ok {
+			if ft, ok := info.structs[sn][v.Sel.Name]; ok {
+				return resolveTypeText(ft, info), true
+			}
+		}
+		return "", false
+	case *ast.CallExpr:
+		fun := unwrapParen(v.Fun)
+		if id, ok := fun.(*ast.Ident); ok {
+			if rs := info.funcs[id.Name]; len(rs) > 0 {
+				return resolveTypeText(rs[0], info), true
+			}
+		}
+		if sel, ok := fun.(*ast.SelectorExpr); ok {
+			if sn, ok2 := resolveStruct(sel.X, st, info); ok2 {
+				if mres, _ := methodMeta(sn, sel.Sel.Name, info); len(mres) > 0 {
+					return resolveTypeText(mres[0], info), true
+				}
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// stripElemType removes every container and channel wrapper from a
+// declared type text, leaving the element type spelling.
+func stripElemType(t string) string {
+	for i := 0; i < 8; i++ {
+		prev := t
+		if n := elementTypeText(t); n != "" {
+			t = n
+		} else if strings.HasPrefix(t, "chan ") {
+			t = strings.TrimPrefix(t, "chan ")
+		} else if strings.HasPrefix(t, "<-chan ") {
+			t = strings.TrimPrefix(t, "<-chan ")
+		}
+		if t == prev {
+			break
+		}
+	}
+	return t
+}
+
+// exprElemStruct returns the base struct name of the element type of e
+// (a container or channel expression, or the struct type itself).
+func exprElemStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
+	tt, ok := typeOfBase(e, st, info)
+	if !ok || tt == "" {
+		return "", false
+	}
+	baseName := resolveStructName(stripElemType(tt), info)
+	if _, isStruct := info.structs[baseName]; isStruct {
+		return baseName, true
+	}
+	return "", false
+}
+
+// exprIsChan reports whether e's declared type is a channel.
+func exprIsChan(e ast.Expr, st *taints, info pkgInfo) bool {
+	tt, ok := typeOfBase(e, st, info)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(tt, "chan ") || strings.HasPrefix(tt, "<-chan")
+}
+
 // containerElementStruct resolves the struct name behind a container
-// variable's element access (arr[1], mm["k"]): the variable's declared
-// type is stripped of every container wrapper, then the element type is
-// resolved to the base struct name.
-func containerElementStruct(v *ast.IndexExpr, info pkgInfo) (string, bool) {
-	base := v.X
+// element access (arr[1], mm["k"], s.f[1], call()[0], (*p)[0]): the
+// base expression's declared type is stripped of every container
+// wrapper, then the element type is resolved to the base struct name.
+func containerElementStruct(v *ast.IndexExpr, st *taints, info pkgInfo) (string, bool) {
+	base := ast.Expr(v)
 	for {
 		ix, ok := base.(*ast.IndexExpr)
 		if !ok {
@@ -1660,23 +1750,11 @@ func containerElementStruct(v *ast.IndexExpr, info pkgInfo) (string, bool) {
 		}
 		base = ix.X
 	}
-	id, ok := base.(*ast.Ident)
-	if !ok {
-		return "", false
-	}
-	tt, ok := info.varTypes[id.Name]
+	tt, ok := typeOfBase(base, st, info)
 	if !ok || tt == "" {
 		return "", false
 	}
-	elem := tt
-	for {
-		nxt := elementTypeText(elem)
-		if nxt == "" {
-			break
-		}
-		elem = nxt
-	}
-	baseName := resolveStructName(elem, info)
+	baseName := resolveStructName(stripElemType(tt), info)
 	if _, isStruct := info.structs[baseName]; isStruct {
 		return baseName, true
 	}
@@ -1761,8 +1839,15 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 				applyLHS(lhs, v.Rhs[i], st, info, imports)
 				if v.Tok == token.DEFINE && len(v.Lhs) == 1 {
 					if id, ok := lhs.(*ast.Ident); ok {
-						if cl, ok := v.Rhs[i].(*ast.CompositeLit); ok {
-							info.varTypes[id.Name] = exprText(cl.Type)
+						switch r := v.Rhs[i].(type) {
+						case *ast.CompositeLit:
+							info.varTypes[id.Name] = exprText(r.Type)
+						case *ast.CallExpr:
+							// mm := make(map[string]*gs): the first make
+							// argument names the declared container.
+							if f, ok := r.Fun.(*ast.Ident); ok && f.Name == "make" && len(r.Args) >= 1 {
+								info.varTypes[id.Name] = exprText(r.Args[0])
+							}
 						}
 					}
 				}
@@ -1783,7 +1868,7 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 						for i, name := range vs.Names {
 							if len(vs.Values) > i {
 								cls = classify(vs.Values[i], st, info, imports)
-								if c, ok := classifyStruct(vs.Values[i], info); ok {
+								if c, ok := classifyStruct(vs.Values[i], st, info); ok {
 									st.struc[name.Name] = c
 								}
 							} else if vs.Type != nil {
@@ -1841,6 +1926,22 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 			} else {
 				if k, ok := v.Key.(*ast.Ident); ok {
 					bind(k)
+				}
+			}
+			// Register the bound variable as a struct instance when the
+			// ranged element type is a struct: the two-variable form
+			// binds the element in Value; a channel's single-variable
+			// form binds it in Key (a container's single-variable form
+			// binds the index, never a struct element).
+			if esn, esnOK := exprElemStruct(v.X, st, info); esnOK {
+				if v.Value != nil {
+					if k, ok := v.Value.(*ast.Ident); ok && k.Name != "_" {
+						st.struc[k.Name] = esn
+					}
+				} else if exprIsChan(v.X, st, info) {
+					if k, ok := v.Key.(*ast.Ident); ok && k.Name != "_" {
+						st.struc[k.Name] = esn
+					}
 				}
 			}
 			prepassStmts(v.Body.List, st, info, imports)
@@ -1920,7 +2021,7 @@ func prepassStmts(list []ast.Stmt, st *taints, info pkgInfo, imports map[string]
 	}
 }
 
-func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
+func classifyStruct(e ast.Expr, st *taints, info pkgInfo) (string, bool) {
 	switch v := e.(type) {
 	case *ast.CompositeLit:
 		base := resolveStructName(exprText(v.Type), info)
@@ -1928,7 +2029,12 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 			return base, true
 		}
 	case *ast.UnaryExpr:
-		return classifyStruct(v.X, info)
+		if v.Op == token.ARROW {
+			if sn, ok := exprElemStruct(v.X, st, info); ok {
+				return sn, true
+			}
+		}
+		return classifyStruct(v.X, st, info)
 	case *ast.CallExpr:
 		if id, ok := v.Fun.(*ast.Ident); ok {
 			if id.Name == "new" && len(v.Args) == 1 {
@@ -1947,7 +2053,7 @@ func classifyStruct(e ast.Expr, info pkgInfo) (string, bool) {
 			}
 		}
 	case *ast.IndexExpr:
-		return containerElementStruct(v, info)
+		return containerElementStruct(v, st, info)
 	}
 	return "", false
 }
@@ -2006,7 +2112,7 @@ func applyLHS(lhs, rhs ast.Expr, st *taints, info pkgInfo, imports map[string]st
 	if fl, ok := rhs.(*ast.FuncLit); ok && st.retFile[fl.Pos()] {
 		st.funcFile[id.Name] = true
 	}
-	if c, ok := classifyStruct(rhs, info); ok {
+	if c, ok := classifyStruct(rhs, st, info); ok {
 		st.struc[id.Name] = c
 	}
 	if sel, ok := rhs.(*ast.SelectorExpr); ok {
@@ -2041,7 +2147,7 @@ func applyLHSMulti(lhs, rhs ast.Expr, index int, st *taints, info pkgInfo, impor
 			applyKind(st, id.Name, cls)
 		}
 	}
-	if c, ok := classifyStruct(rhs, info); ok {
+	if c, ok := classifyStruct(rhs, st, info); ok {
 		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
 			st.struc[id.Name] = c
 		}
