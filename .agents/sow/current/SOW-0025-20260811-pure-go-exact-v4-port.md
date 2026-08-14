@@ -24,18 +24,19 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,555-line typed toolchain (9,003-line go/types module
+mmap gate is a 9,672-line typed toolchain (9,120-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
-seventeen bypass classes (function-variable callees, closure/defer/go
+nineteen bypass classes (function-variable callees, closure/defer/go
 bodies, func-literal variables, reassigned function variables,
 multi-hop function-variable chains, range-rebound variables,
 address-taken variables, helper-summary parameter flow, local closures
 and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
-conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, and round-17
+conversion sinks, file-capability laundering, interface-typed
+parameter assertions, and multi-dim index chains) plus the round-5,
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, and round-18
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -74,7 +75,13 @@ further escapes in the same family (struct-valued BINDINGS from
 call-produced and selector sources lost field provenance, and nested
 call-produced selector chains never resolved), all probe-verified
 before any fix and pinned P166-P170 in the round-17 entry below. The
-durable battery is 452 cases (384 rejections, 68 benign acceptances)
+round-18 same-failure sweep covered the interface-type-assertion
+family (returned asserted interface-param structs, two-value asserted
+reads, and explicit conversion argument flow) and the multi-dim index
+family (field reads and element bindings through multi-level index
+chains and forced literal element extraction), all probe-verified
+before any fix and pinned P171-P176 in the round-18 entry below. The
+durable battery is 458 cases (390 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -109,10 +116,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 452-case battery, and the SOW audit.
+the import-graph gate with its 458-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,555 raw lines total (9,003 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,672 raw lines total (9,120 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1621,6 +1628,55 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 18 (lead same-failure sweep over the round-17 fixes): the
+  interface-type-assertion family had three real escapes on a fresh
+  HEAD build before any fix (probes /tmp/probe-l19): P171 a returned
+  asserted interface-param struct lost caller provenance (func as(v
+  any) box { return v.(box) } with x := as(any(box{Data: page})):
+  propagateStructResult only handled literals, indexes, and
+  parameters, so a returned type assertion over an interface
+  parameter carried no leaves and the explicit any() conversion
+  dropped the argument's fields; the return case now joins the
+  asserted type's leaves with the parameter source, and single-arg
+  type conversions keep the converted argument's field provenance);
+  P172 a two-value asserted read inside a helper lost caller
+  provenance (if b, ok := v.(box); ok { return b.Data } with v any:
+  two-value assertions type the expression node as the (T, bool)
+  tuple, so every assertion site must read the asserted type from the
+  assertion's TYPE EXPRESSION, not from the expression node's type;
+  the evalExpr direct-read, argFlowOf helper-binding, and
+  propagateStructResult return paths now materialize the asserted
+  type's leaves for interface-typed parameters, fixing both the
+  helper-side binding and the direct v.(T).Data read). The same sweep
+  then verified the IndexListExpr family on a clean self-contained
+  tree after the earlier probe tree proved poisoned: P173 a field read
+  through a multi-level index of a literal-bound matrix escaped (m :=
+  [1][1]box{{{Data: page}}}; append(..., m[0][0].Data...): evalExpr's
+  selector index branch and argFlowOf's IndexExpr binding resolved
+  only ONE trailing index, so the root container's element-field
+  taints were unreachable at depth two); P174 the same one-level gap
+  for element bindings (x := m[0][0] then take(x)); P175 a forced
+  element extraction from a literal escaped the bind path (x :=
+  []box{{Data: page}}[0]: argFlowOf's IndexExpr case had no
+  composite-literal root handling at all, unlike the read path);
+  P176 a multi-level index of a call result stayed rejectable only
+  through an unrelated path and is now resolved explicitly by the
+  same root unwrap. A shared indexChainRoot walk now unwraps every
+  trailing index level to the root expression, and the read and bind
+  sites dispatch the root through the same literal/ident/call
+  resolution the one-level cases used. Battery 452 -> 458 (384 -> 390
+  rejections, 68 benign). Gate tooling 9,003 -> 9,120 go-gate lines
+  (+552 shell = 9,672 total).
+  Validation at the closing commit: gate --self-test 458/458 (390
+  rejections, 68 benign) + 9 shell environment mutations exit 0,
+  production scan clean on every scanned target, all round-18 probe
+  shapes reject (l19 type-assertion trees, multi-dim index trees, and
+  forced literal extraction) and every prior probe tree keeps its
+  verdict (l17b, l16, luna15, f2only2, luna2, p16 reject; luna5 stays
+  accepted), go test ./... (both tag sets), -race, vet (go and
+  go-gate), gofmt zero diffs, cross-builds for every shell-harness
+  target, the import-graph gate with the 458-case battery, and the SOW
+  audit all pass.
 - Round 17 (lead same-failure search over the round-16 fixes): the
   round-16 call-base fallbacks covered direct argument positions only;
   the lead verified five escape families on a fresh HEAD build before
