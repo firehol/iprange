@@ -3254,17 +3254,23 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 		// A dereferenced argument (*p): the pointed-to struct's fields
 		// resolve through the pointer binding (p := &b), the parameter
 		// leaves of a struct-pointer parameter, or recorded state on
-		// the pointer name itself.
+		// the pointer name itself. A call-produced pointee
+		// (*makePtr(page)) keeps the callee's recorded fields.
 		if o := pf.derefTarget(st, v.X, 0); o != nil {
 			fields = pf.fieldTaintsOf(st, o)
+		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
+			fields = pf.callFields[call]
 		}
 	case *ast.IndexExpr:
 		// An element-carrying argument (xs[0], m[k]): a local container
-		// keeps its element field taints on the variable, and a
-		// container parameter contributes the element's declared leaves
-		// through the same parameter fallback.
+		// keeps its element field taints on the variable, a container
+		// parameter contributes the element's declared leaves through
+		// the same parameter fallback, and a call-produced container
+		// (makeList(page)[0]) keeps the callee's element fields.
 		if o := objOf(st, v.X); o != nil {
 			fields = pf.fieldTaintsOf(st, o)
+		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
+			fields = pf.callFields[call]
 		}
 	case *ast.TypeAssertExpr:
 		// An asserted argument (v.(T)): the asserted value keeps the
@@ -3317,6 +3323,39 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 							}
 							fields[k[len(prefix):]] = fv
 						}
+					}
+				}
+			}
+		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
+			// A struct value produced by a call (take(makeBox(page).B)):
+			// the callee's flattened field taints carry the selector
+			// prefix, and the argument flow renames them the same way
+			// the recorded-base path does. Nested chains
+			// (makeBox(page).A.B) build the full dotted prefix.
+			chain := ""
+			for cur := v.X; ; {
+				sel, isSel := unparen(cur).(*ast.SelectorExpr)
+				if !isSel {
+					break
+				}
+				if chain == "" {
+					chain = sel.Sel.Name
+				} else {
+					chain = sel.Sel.Name + "." + chain
+				}
+				cur = sel.X
+			}
+			prefix := ""
+			if chain != "" {
+				prefix = chain + "."
+			}
+			if cf := pf.callFields[call]; len(cf) > 0 {
+				for k, fv := range cf {
+					if fv.tainted && strings.HasPrefix(k, prefix) {
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[k[len(prefix):]] = fv
 					}
 				}
 			}
@@ -3384,16 +3423,35 @@ func (pf *pageFlow) fieldTaintsOf(st *stmtState, obj types.Object) map[string]pa
 	if obj == nil {
 		return nil
 	}
+	var out map[string]pageValue
 	if m, ok := st.structs[obj]; ok && len(m) > 0 {
-		return m
+		out = map[string]pageValue{}
+		for k, fv := range m {
+			out[k] = fv
+		}
+	} else if gm, ok := st.pkgStructs[obj]; ok && len(gm) > 0 {
+		out = map[string]pageValue{}
+		for k, fv := range gm {
+			out[k] = fv
+		}
 	}
-	if gm, ok := st.pkgStructs[obj]; ok && len(gm) > 0 {
-		return gm
-	}
+	// A partial local record must not suppress the untouched declared
+	// leaves of a struct parameter (o.Other = 1 must not hide a
+	// caller-supplied o.Data): the parameter fallback joins for every
+	// path the local state never recorded, the same policy
+	// materializeStructFields applies to copies.
 	if idx, ok := st.params[obj]; ok {
-		return pf.paramFieldFallback(st, obj, idx)
+		for path, fv := range pf.paramFieldFallback(st, obj, idx) {
+			if _, recorded := out[path]; recorded {
+				continue
+			}
+			if out == nil {
+				out = map[string]pageValue{}
+			}
+			out[path] = fv
+		}
 	}
-	return nil
+	return out
 }
 
 // derefTarget resolves the object a dereference expression names
@@ -3615,6 +3673,41 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 					}
 				}
 			}
+			if gm, ok := st.pkgStructs[obj]; ok {
+				for k, fv := range gm {
+					if fv.tainted {
+						fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+			// A returned struct PARAMETER (func id(b box) box { return
+			// b }) and a returned container element (return xs[0], with
+			// xs a container parameter) carry the caller's field taints
+			// through the declared leaf sources: the local state never
+			// records the untouched fields, so without the fallback the
+			// summary loses them and id(box{Data: page}).Data goes clean.
+			if idx, ok := st.params[obj]; ok {
+				for path, fv := range pf.paramFieldFallback(st, obj, idx) {
+					fs.fields[path] = joinFieldTaint(fs.fields[path], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
+		}
+		return
+	}
+	if ix, ok := unparen(expr).(*ast.IndexExpr); ok {
+		if o := objOf(st, ix.X); o != nil {
+			if m, ok := st.structs[o]; ok {
+				for k, fv := range m {
+					if fv.tainted {
+						fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+			if idx, ok := st.params[o]; ok {
+				for path, fv := range pf.paramFieldFallback(st, o, idx) {
+					fs.fields[path] = joinFieldTaint(fs.fields[path], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
 		}
 		return
 	}
@@ -3829,6 +3922,16 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 			}
 			if _, isSt := derefStruct(f.Type()); isSt {
 				walk(f.Type(), p)
+				if f.Anonymous() {
+					// Promoted leaves of an embedded struct also bind
+					// without the type-name segment (o.Data with Data
+					// declared on an embedded inner struct, through any
+					// number of embedding levels): the callee's
+					// paramField sources name the promoted path the
+					// field read resolved, so the fallback must expose
+					// the alias or take(o) loses the caller's taint.
+					walk(f.Type(), prefix)
+				}
 			} else if paramCanCarryPage(f.Type()) {
 				out[p] = f.Type()
 			}

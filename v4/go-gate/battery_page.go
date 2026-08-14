@@ -578,4 +578,20 @@ var batteryPageCases = []batteryCase{
 	{name: "P161: container parameter keeps indexed argument provenance", desc: "take(xs[0]) inside a helper with xs []box: caller element field taint reaches the callee param through the declared element leaves", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_08.go", content: "package reader\n\ntype lboxL1508 struct{ Data []byte }\n\nfunc takeL1508(o lboxL1508) []byte { return o.Data }\n\nfunc idxParamCallHelperL1508(xs []lboxL1508) []byte { return takeL1508(xs[0]) }\n\nfunc idxParamCallProbeL1508(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\txs := []lboxL1508{{Data: page}}\n\treturn append([]byte{}, idxParamCallHelperL1508(xs)...), nil\n}"},
 	}},
+
+	{name: "P162: partial local record does not suppress parameter leaves", desc: "o.Other = 1 inside a helper must not hide a caller-supplied o.Data when o is passed on", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l16_01.go", content: "package reader\n\ntype lboxL1601 struct{ Data []byte; Other int }\n\nfunc takeL1601(o lboxL1601) []byte { return o.Data }\n\nfunc suppressHelperL1601(o lboxL1601) []byte {\n\to.Other = 1\n\treturn takeL1601(o)\n}\n\nfunc suppressProbeL1601(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, suppressHelperL1601(lboxL1601{Data: page})...), nil\n}"},
+	}},
+
+	{name: "P163: call-produced container keeps element field provenance", desc: "take(makeList(page)[0]) with makeList returning []box{{Data: page}}: the callee's element fields bind at the index", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l16_02.go", content: "package reader\n\ntype lboxL1602 struct{ Data []byte }\n\nfunc takeL1602(o lboxL1602) []byte { return o.Data }\n\nfunc makeListL1602(p []byte) []lboxL1602 { return []lboxL1602{{Data: p}} }\n\nfunc idxCallProbeL1602(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, takeL1602(makeListL1602(page)[0])...), nil\n}"},
+	}},
+
+	{name: "P164: returned struct parameter keeps caller field provenance", desc: "func id(b box) box { return b }; x := id(box{Data: page}); take(x) keeps Data through the identity return", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l16_03.go", content: "package reader\n\ntype lboxL1603 struct{ Data []byte }\n\nfunc takeL1603(o lboxL1603) []byte { return o.Data }\n\nfunc idL1603(o lboxL1603) lboxL1603 { return o }\n\nfunc paramRetProbeL1603(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := idL1603(lboxL1603{Data: page})\n\treturn append([]byte{}, takeL1603(x)...), nil\n}"},
+	}},
+
+	{name: "P165: promoted embedded leaves bind in parameter fallback", desc: "wrap(outer{inner{Data: page}}) with a helper taking outer and reading o.Data through the embedded inner struct", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l16_04.go", content: "package reader\n\ntype linnerL1604 struct{ Data []byte }\n\ntype louterL1604 struct{ linnerL1604 }\n\nfunc takeL1604(o louterL1604) []byte { return o.Data }\n\nfunc wrapL1604(o louterL1604) []byte { return takeL1604(o) }\n\nfunc promotedProbeL1604(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := louterL1604{linnerL1604{Data: page}}\n\treturn append([]byte{}, wrapL1604(b)...), nil\n}"},
+	}},
 }

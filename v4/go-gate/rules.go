@@ -1015,6 +1015,17 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 				}
 			}
 		}
+		// A method VALUE called through its variable (get := b.String;
+		// get()) hides the receiver at the call site: the captured
+		// receiver expression is only visible through the flow-pass
+		// resolution, so the same full-page receiver transfer applies
+		// there. Scanned method values are approved callees and never
+		// reach this branch; external method bodies are unprovable.
+		if mvr, ok := w.methodValueCallee(v); ok {
+			if pv := w.pageValue(mvr.recv); pv.tainted && pageFull(pv) {
+				w.fail(v.Pos(), "mapped page view passed to %s on an unprovable receiver (complete page into owned memory)", calleeText(v.Fun))
+			}
+		}
 	}
 	// A call whose RESULT is a live descriptor is itself a capacity mint:
 	// closures and function variables can materialize a file (os.Stdout,
