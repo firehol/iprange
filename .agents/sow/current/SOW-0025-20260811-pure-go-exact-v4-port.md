@@ -24,8 +24,8 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 8,097-line typed scanner (go/types module plus the
-552-line shell boundary/self-test harness, down from 14,519)
+mmap gate is a 9,161-line typed toolchain (8,609-line go/types module
+plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
 bodies, func-literal variables, reassigned function variables,
@@ -35,10 +35,17 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, and round-13
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, and round-14
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
-full history in the appendix. The durable battery is 431 cases (364
-rejections, 67 benign acceptances) plus 9 shell environment mutations
+full history in the appendix. The round at HEAD f478278 returned six
+further gate findings (Luna): one-sided branch joins trusted an
+unproven local callable, selector-valued arguments lost struct-field
+provenance, promoted embedded struct fields bypassed parameter-field
+resolution, variable-held map keys lost container field provenance,
+bounded param-field flow collapsed to unknown, and stale Status
+metrics; all probe-verified and fixed with durable battery pins in the
+round-14 entry below. The durable battery is 436 cases (368
+rejections, 68 benign acceptances) plus 9 shell environment mutations
 and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -73,15 +80,14 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 422-case battery, and the SOW audit.
+the import-graph gate with its 436-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,027 raw lines total (8,475 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,161 raw lines total (8,609 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
 
-## Review Process (user decision, 2026-08-12)
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
@@ -1479,6 +1485,58 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero diffs,
   cross-builds for every shell-harness target, the import-graph gate
   with the 431-case battery, and the SOW audit all pass.
+- Round 14 (delta re-review): luna failed the round-13 delta with six
+  findings, all probe-verified by the lead on a fresh HEAD build before
+  any fix (probes /tmp/probe-luna2, /tmp/probe-p16, /tmp/probe-luna5):
+  P150 one-sided branch joins trusted an unproven local callable
+  (g := f with f an opaque parameter, then g = func() body on one
+  branch only; the old merge re-seeded the literal binding after the
+  join so a later g() resolved a callee the other path may not hold;
+  joinWith now marks one-sided local callable bindings ambiguous and
+  calls through them fail closed); P151 struct-field provenance lost
+  for selector-valued arguments (take(h.Box) with h.Box.Data assigned a
+  page resolved only the whole-value taint; argFlowOf now flattens a
+  selector base's recorded field taints, dropping the base path prefix,
+  and falls back to parameter-derived leaf sources); P152 promoted
+  embedded struct fields bypassed parameter-field resolution (take(o)
+  returning o.Data with Data embedded through an anonymous inner
+  struct; leafPathType and paramFieldType now resolve through
+  types.LookupFieldOrMethod exactly like go/types selection, and the
+  lookup package is passed because go/types hides unexported fields
+  from a nil-package lookup - holder.data reads regressed without it);
+  P153 container field provenance only for direct struct literals
+  (m[b] = 1 with b.Data a page, plus the whole-value m[box{Data: page}]
+  form: indexed stores now derive the key's field taints through the
+  argument flow instead of the literal-only path; luna's original
+  map[lbox]int shape was invalid Go, so the valid map[any] variant is
+  the pinned form); P154 bounded param-field flow collapsed to unknown
+  (b := box{Data: page[48:112]}; take(b) over-flagged after the
+  round-13 param-field source because the paramField symbol case had no
+  length resolution; eval/evalResults now resolve the field length from
+  the call-site argument flow, keeping bounded flows legal); P155
+  (records) the Status metrics were stale and contradicted the source
+  (battery 431 and go-gate 8,475 were already committed at the
+  round-13 close in f478278 while the Status still carried the
+  round-12 values); the Status now reports battery 436 (368
+  rejections, 68 benign) and go-gate 8,611 lines (+552 shell = 9,163
+  total), with this entry completing the trail. The lead's first
+  joinWith rewrite (the P150 fix) regressed three battery cases (P16
+  full page through a package func-literal variable, P19 the two-hop
+  chain, P140 package method values): the merge treated identical
+  package initializer seeds as divergent (func-literal bindings have no
+  stable text for the equality check) and let branch-local invalidation
+  erase package-scope proofs; the merge now keeps identical nodes and
+  exempts package-scope callables (their binding is proven by the
+  package initializer and reassignment is policed by reassignedVars).
+  Battery 431 -> 436 (368 rejections, 68 benign). Gate tooling 8,475 ->
+  8,611 go-gate lines (+552 shell = 9,163 total).
+  Validation at the closing commit: gate --self-test 436/436 (368
+  rejections, 68 benign) + 9 shell mutations exit 0, production scan
+  clean on every scanned target, all round-14 probe files reject (or
+  stay accepted for the bounded form) on every scanned target, go test
+  ./... (both tag sets), -race, vet (go and go-gate), gofmt zero diffs,
+  cross-builds for every shell-harness target, the import-graph gate
+  with the 436-case battery, and the SOW audit all pass.
 - Round 11 (delta re-review): luna failed the round-10 delta with twelve
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P112 branch-local
