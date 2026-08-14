@@ -19,7 +19,7 @@ close is pending the completion of that round (six-resident swarm, then
 sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,458-line typed scanner (5,906-line go/types module
+mmap gate is a 6,781-line typed scanner (6,229-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -30,10 +30,11 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, and round-7 classes recorded in the entries below, all with
-durable battery pins; the Status is compact with the full history in the
-appendix. The durable battery is 357 cases (291 rejections, 66 benign
-acceptances) plus 9 shell environment mutations and passes end to end.
+round-6, round-7, and round-8 classes recorded in the entries below, all
+with durable battery pins; the Status is compact with the full history
+in the appendix. The durable battery is 364 cases (298 rejections, 66
+benign acceptances) plus 9 shell environment mutations and passes end to
+end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -67,10 +68,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 357-case battery, and the SOW audit.
+the import-graph gate with its 364-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,458 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,781 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1368,6 +1369,33 @@ HEAD recorded in the first review entry below):
   348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
   5,712 -> 5,906 go-gate lines (+552 shell = 6,458 total).
   Validation at the closing commit: gate --self-test 357/357 (291
+  rejections, 66 benign) + 9 shell mutations exit 0, production scan
+  clean on all five targets, go test ./... (both tag sets), -race, vet,
+  gofmt zero diffs, cross-compilation, audit - all green.
+- Round 8 (delta re-review): luna failed the round-7 delta with seven
+  further findings, all probe-verified by the lead: P76 func-literal
+  multi-named results with naked returns (scanner panic, index out of
+  range in analyzeFuncLitCall), P77 helper parameters converted to owned
+  strings inside the callee (string(p) in the summary is caller-bound,
+  so the call site fails closed), P78 stale call results across summary
+  fixpoints (expression caches were per-package accumulations; every
+  fixpoint pass now clears them and a final accumulation sweep replays
+  all expressions against the stabilized summaries for the rule pass),
+  P79 struct-field flow through dereferenced writes ((*b).Data = p) and
+  indexed composite reads ([]B{{Data: p}}[0].Data), P80 package-global
+  stores joining bounds instead of last-writer replace (setFull/setBound
+  keep the conservative full bound), P81 []any and nested map/chan /
+  slice-of-interface parameters as carriers (the fmt-spread exemption
+  moved to the call-site rule, not the carrier type), and P82 interface
+  method calls (s.Apply(page)) plus call-produced dynamic callees
+  (factory()(page)) as unproven indirections. The round also surfaced a
+  variantable regression in the lead's own wiring (rules-side lookups
+  lost the per-pass values; fixed by the accumulation sweep) and a
+  summaryDup gap that would have kept the fixpoint loop running forever;
+  both are covered by the final sweep design. Battery 357 -> 364 (291 ->
+  298 rejections, 66 benign); gate tooling 5,906 -> 6,229 go-gate lines
+  (+552 shell = 6,781 total).
+  Validation at the closing commit: gate --self-test 364/364 (298
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, audit - all green.
