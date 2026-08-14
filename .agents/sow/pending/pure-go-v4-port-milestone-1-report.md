@@ -218,7 +218,8 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 240/240 mutation forms rejected (plus 50 benign controls)
+GOOS/GOARCH pairs): 474/474 mutation forms rejected (406 rejections, 68
+benign acceptances)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
   zero read/pread64/readv/preadv/lseek on the database descriptor
@@ -235,9 +236,9 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 4,789 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 5,049 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 4,887 raw lines. The earlier
+tree): 5,180 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 

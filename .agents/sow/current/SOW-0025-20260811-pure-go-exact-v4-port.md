@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,786-line typed toolchain (9,234-line go/types module
+mmap gate is a 10,049-line typed toolchain (9,497-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -37,7 +37,7 @@ assignment slots and struct-result field taint, named array/string
 conversion sinks, file-capability laundering, interface-typed
 parameter assertions, multi-dim index chains, and selector chains
 over indexed bases) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, and round-18
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, and round-18, and round-19
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -81,8 +81,26 @@ family (returned asserted interface-param structs, two-value asserted
 reads, and explicit conversion argument flow) and the multi-dim index
 family (field reads and element bindings through multi-level index
 chains and forced literal element extraction), all probe-verified
-before any fix and pinned P171-P182 in the round-18 entry below. The
-durable battery is 464 cases (396 rejections, 68 benign acceptances)
+before any fix and pinned P171-P182 in the round-18 entry below. The round-19 delta
+returned twelve further gate findings (Luna) on the round-18 fixes; the
+lead reproduced eight real escape classes on a fresh HEAD build before
+any fix: an EMPTY default (default:) discarded the pre-switch state
+(P183), returned selected fields of call results (P184) and returned
+elements of inline literal indexes (P185) lost provenance in the return
+summary, a container PARAMETER under range never bound its declared
+element leaves (P186), a nested selector read after an interface
+assertion resolved only the asserted type's direct leaf (P187), an
+asserted struct VALUE bound to an argument lost its asserted leaves
+(P188), a NAMED container type (type matrix [1][1]box) unwrapped no
+underlying chain (P189), and a map-key parameter kept no key leaves for
+a key-only range (P190); the lead's same-failure sweep over those fixes
+proved two further escapes on the same HEAD build, the variable-element
+container literal (P191) and the map composite-literal key (P192), and
+pinned all ten. The remaining findings were verified not real: one pair
+of intentionally accepted shapes stays accepted (recorded as a known
+open question) and three reports were false positives or dead code; the
+stale-record report is closed by this record sync. The
+durable battery is 474 cases (406 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -117,10 +135,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 464-case battery, and the SOW audit.
+the import-graph gate with its 474-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,786 raw lines total (9,234 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 10,049 raw lines total (9,497 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1629,6 +1647,72 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 19 (delta re-review): luna failed the round-18 delta with
+  twelve findings; the lead reproduced eight real escape classes on a
+  fresh HEAD build before any fix (probes /tmp/probe-luna2/4a/4b/5/6/7/
+  8b/8c/9): P183 an EMPTY default (default:) discarded the pre-switch
+  state (the old code joined only when no default existed, so a switch
+  with a no-op default lost the page held before the statement);
+  P184 a returned selected field of a call lost provenance (func
+  retSel(p []byte) inner { return makeBox(p).Inner }: the return
+  summary resolved only whole values, so the call-site read x :=
+  retSel(page); x.Data was unsourced; propagateStructResult now strips
+  the selection prefix from the base's recorded fields, parameter
+  leaves, or callee flattening); P185 a returned element of an INLINE
+  literal index lost provenance (return []box{{Data: p}}[0]: the
+  index-return branch had no composite-literal root handling, now
+  resolved through the literal's element-field union); P186 a
+  container PARAMETER under range never bound its declared element
+  leaves (for _, x := range xs with xs []box: the range path resolved
+  only recorded local containers and inline literals, so the loop
+  value carried no parameter-sourced fields; the range branch now
+  applies paramFieldFallback to a parameter container); P187 a nested
+  selector read after an interface assertion resolved only the
+  asserted type's DIRECT leaf (v.(outer).Inner.Data leaked: the
+  assertion branch read the recorded map by the single field name;
+  typeAssertBaseOf now unwraps the full dotted chain and assertLeafType
+  resolves the path against the asserted type's leaves, including
+  container element leaves); P188 an asserted struct VALUE bound to a
+  take argument lost its asserted leaves (take(v.(outer).Inner)):
+  argFlowOf's selector branch had no assertion-root case; the new
+  branch renames the source leaves to the selected value's direct
+  field names exactly like recorded-base arguments); P189 a NAMED
+  container type unwrapped no underlying chain (type matrix [1][1]box:
+  containerElemType looked only at direct alias types, so the matrix
+  parameter exposed no element leaves; the recursive
+  containerElemTypeSeen unwraps named underlying chains with a
+  self-reference guard and paramFieldFallback applies it at every
+  level); P190 a map-key PARAMETER kept no key leaves for a key-only
+  range (for k := range m with m map[*box]int: the key-side leaf
+  fallback existed only for recorded stores; paramFieldFallback now
+  adds the declared key leaves and key container chains). The lead's
+  same-failure sweep over those fixes proved two further escapes on
+  the same HEAD build and pinned them here: P191 a container literal
+  with a VARIABLE element lost the element fields (b := box{Data:
+  page}; xs := []box{b}: compositeFields resolved only literal
+  elements; the new elementFieldsOf resolves variables and parameters
+  through the recorded fields and nested containers through
+  recursion); P192 a map composite-LITERAL key lost its struct fields
+  through the key-only range (m := map[*box]int{{Data: page}: 1}:
+  compositeFields now unions the KEY side exactly like the value
+  side). battery 464 -> 474 (396 -> 406 rejections, 68 benign
+  acceptances). Gate tooling 9,234 -> 9,497 go-gate lines (+552 shell
+  = 10,049 total). The remaining findings were verified not real:
+  luna1b/luna1c (the two-value asserted-container bind and the
+  interface-parameter container element) are intentionally accepted
+  shapes and stay accepted as a known open question, three reports
+  were false positives or dead code, and the stale-record report
+  (pending-report battery/LOC snapshot from mid-work state) is closed
+  by this record sync.
+  Validation at the closing commit: gate --self-test 474/474 (406
+  rejections, 68 benign) + 9 shell environment mutations exit 0,
+  production scan clean on every scanned target, every round-19 probe
+  shape escapes the fresh HEAD build (rc 0) and rejects the closing
+  build (rc 1), the P172 two-value-assertion regression probe stays
+  rejected, l19 and all prior probe trees keep their verdicts
+  (luna1b/luna1c stay accepted), go test ./... (both tag sets), vet
+  (go and go-gate), gofmt zero diffs, the import-graph gate with the
+  474-case battery, and the SOW audit all pass.
 - Round 18 (lead same-failure sweep over the round-17 fixes): the
   interface-type-assertion family had three real escapes on a fresh
   HEAD build before any fix (probes /tmp/probe-l19): P171 a returned
