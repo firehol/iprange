@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 7,704-line typed scanner (go/types module plus the
+mmap gate is an 8,097-line typed scanner (go/types module plus the
 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -35,9 +35,9 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, and round-11 classes
-recorded in the entries below, all with durable battery pins; the Status is compact with the
-full history in the appendix. The durable battery is 407 cases (340
+round-6, round-7, round-8, round-9, round-10, round-11, and round-12
+classes recorded in the entries below, all with durable battery pins; the Status is compact with the
+full history in the appendix. The durable battery is 422 cases (355
 rejections, 67 benign acceptances) plus 9 shell environment mutations
 and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -58,7 +58,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (407
+  The durable mutation battery moved into the tool as table data (422
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -73,10 +73,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 407-case battery, and the SOW audit.
+the import-graph gate with its 422-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 8,256 raw lines total (7,704 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 8,649 raw lines total (8,097 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1377,6 +1377,65 @@ HEAD recorded in the first review entry below):
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, audit - all green.
+- Round 12 (delta re-review): luna failed the round-11 delta with
+  fifteen findings (fourteen real, one rejected false positive), all
+  probe-verified by the lead against a fresh HEAD build before any fix:
+  P127 variadic parameter slots did not join trailing arguments
+  (pick([]byte{1}, page) inside pick(xs ...[]byte) read only the first
+  argument; trailing args now join into the variadic slot in evalCall,
+  summary duplicates carry the variadic slot, and func-literal variadics
+  bind every trailing argument); P128 var-decl struct initializers lost
+  field taints (var b B = B{Data: page}; DeclStmt now records
+  composite/call/index field taints); P129 nested selector stores were
+  invisible (o.Inner.Data = page; assignTarget now records dotted paths
+  through selectorChain); P130 indexed call-result struct fields lost
+  page bounds (makeList(page)[0].Data; propagateStructResult records
+  container-of-structs element fields and the indexed-call selector
+  branch re-evaluates the call before reading its recorded fields);
+  P131 opaque callbacks with field-only page values escaped (cb(b) with
+  b.Data = page; whole-value field promotion now runs on every missed
+  and resolved argument and on the interface-miss receiver); P132
+  unknown-bound views collapsed to zero inside struct fields
+  (B{Data: m.View(0, n)}; evalComposite now propagates maxUnknown field
+  values); P133 string-param field conversion with a local struct var
+  escaped (var b B; b.Data = page; sink(b) where sink stringifies the
+  field; the local store now reaches the string-param call check
+  through whole-value promotion); P134 interface methods with an
+  empty-interface result escaped (m.Make() any on a parameter and
+  mgrVar.Make() any on a package interface variable; the
+  interface-result rule now also fires for any-typed results, and
+  func() any parameters and locals fail closed like opaque package
+  function variables); P135 structs holding a file into an interface
+  formal escaped (sink(H{F: f}) with sink func(any);
+  checkInterfaceErasure now holds struct-with-file arguments); P136
+  structs holding a file into runtime map keys escaped (m[H{F: f}] = 1;
+  checkAssign mirrors the collection-slot rule); P138 else-nested branch
+  reassignment diverged (if c1 ... else { if c2 ... }; joinWith now
+  forwards ambiguous-binding state across both directions); P139
+  package-initializer struct fields were invisible to later stores
+  (var g = B{Data: pageSrc}; the pkg-init loop records struct-literal
+  field taints into the shared package state and replays them); P140
+  package method values resolved to stale initializers (var get =
+  holder.Get; pkgBindings seed statement state, calleeTarget hands
+  method values to resolveMethodValue with the receiver, and reassigned
+  package variables are excluded). F10 (a named function type
+  var f Fn; f(file) already flagged by the file-valued argument rule)
+  was rejected as a duplicate class, not a new finding. One
+  false-positive class found and fixed while validating the battery:
+  whole-value field promotion graduated fail-closed opaque-call struct
+  fields (clean stdlib chains such as io.NopCloser(x.Get()()) over a
+  bytes.Reader-like result were flagged); synthetic fail-closed
+  callFields are now marked and excluded from promotion while field
+  reads keep failing closed. Battery 407 -> 422 (355 rejections, 67
+  benign). Gate tooling 7,704 -> 8,097 go-gate lines (+552 shell =
+  8,649 total).
+  Validation at the closing commit: gate --self-test 422/422 (355
+  rejections, 67 benign) + 9 shell mutations exit 0, production scan
+  clean on every scanned target, all fifteen round-12 probes reject on
+  every scanned target, go test ./... (both tag sets), -race, vet (go
+  and go-gate), gofmt zero diffs, cross-builds for all shell-harness
+  targets (incl. netbsd), the import-graph gate with the 422-case
+  battery, and the SOW audit all pass.
 - Round 11 (delta re-review): luna failed the round-10 delta with twelve
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P112 branch-local
@@ -2536,11 +2595,11 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the AST
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the in-memory inflater call sites
-  exempted as exact, file-taint-verified shapes; the 240-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 422-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
-  amd64/arm64, freebsd amd64, windows amd64/arm64 (the gate's
-  per-target listing matrix) — all build.
+  amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64 (the
+  gate's per-target listing matrix) — all build.
 - Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3 invalid
   mutations rejected with code 32; structured absence probes added.
 - `.agents/sow/audit.sh` — clean.
