@@ -95,4 +95,49 @@ var batteryPageCases = []batteryCase{
 	{name: "P23: benign range rebinding without a page call", desc: "for _, f = range fs { _ = f } without a mapped-page argument stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_rangenocall.go", content: "package reader\n\nvar cloneRangeG = func(p []byte) []byte { return p }\n\nvar cloneRangeGS = []func([]byte) []byte{cloneRangeG}\n\nfunc rangeNoCallProbe() int {\n	n := 0\n	for _, cloneRangeG = range cloneRangeGS {\n		n += len(cloneRangeG(make([]byte, 8)))\n	}\n	return n\n}"},
 	}},
+	{name: "P24: append through a same-package pass-through helper", desc: "append(owned, helper(page)...) must not lose the page taint", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_helperappend.go", content: "package reader\n\nfunc pagePassThrough24(page []byte) []byte { return page }\n\nfunc helperAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, pagePassThrough24(page)...), nil\n}"},
+	}},
+	{name: "P25: append through a local closure", desc: "id := func(p) { return p }; append(owned, id(page)...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_closureappend.go", content: "package reader\n\nfunc closureAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tid := func(p []byte) []byte { return p }\n\treturn append([]byte{}, id(page)...), nil\n}"},
+	}},
+	{name: "P26: append through a package func-alias variable", desc: "var f = samePkgFn; append(owned, f(page)...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_aliasappend.go", content: "package reader\n\nfunc pagePassThrough26(page []byte) []byte { return page }\n\nvar passAlias26 = pagePassThrough26\n\nfunc aliasAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, passAlias26(page)...), nil\n}"},
+	}},
+	{name: "P27: append through element extraction", desc: "firstElem(p[0]) of a page-carrying slice must keep the page taint", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_elemappend.go", content: "package reader\n\nfunc firstElem27(p [][]byte) []byte { return p[0] }\n\nfunc elemAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, firstElem27([][]byte{page})...), nil\n}"},
+	}},
+	{name: "P28: append through a pointer-dereferenced page", desc: "deref(*p) of a page pointer must keep the page taint", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_derefappend.go", content: "package reader\n\nfunc deref28(p *[]byte) []byte { return *p }\n\nfunc derefAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, deref28(&page)...), nil\n}"},
+	}},
+	{name: "P29: append through a generic identity", desc: "gid[T ~[]byte](p) T must keep the page taint", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_genericappend.go", content: "package reader\n\nfunc gid29[T ~[]byte](p T) T { return p }\n\nfunc genericAppendProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, gid29(page)...), nil\n}"},
+	}},
+	{name: "P30: post-loop append after a branch-tainted accumulator", desc: "loop { if i==0 { out = append(out, page...) } }; append(owned, out...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_loopjoinappend.go", content: "package reader\n\nfunc loopJoinProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\ti := 0\n\tfor i < 2 {\n\t\tif i == 0 {\n\t\t\tout = append(out, page...)\n\t\t} else {\n\t\t\tout = nil\n\t\t}\n\t\ti++\n\t}\n\tout2 := append([]byte{}, out...)\n\treturn out2, nil\n}"},
+	}},
+	{name: "P31: multi-result call distributed per slot", desc: "_, p := split(page); append(owned, p...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_multiresultappend.go", content: "package reader\n\nfunc split31(p []byte) ([]byte, []byte) { return p[48:112], p }\n\nfunc multiResultProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\t_, p := split31(page)\n\treturn append([]byte{}, p...), nil\n}"},
+	}},
+	{name: "P32: named array conversion of a full page", desc: "type A [4096]byte; A(page) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedarrconv.go", content: "package reader\n\ntype pageArr32 [4096]byte\n\nfunc namedArrProbe(r *ImmutableReader, pgno uint32) (pageArr32, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn pageArr32{}, err\n\t}\n\treturn pageArr32(page), nil\n}"},
+	}},
+	{name: "P33: named string conversion of a full page", desc: "type S string; S(page) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedstrconv.go", content: "package reader\n\ntype pageStr33 string\n\nfunc namedStrProbe(r *ImmutableReader, pgno uint32) (pageStr33, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\treturn pageStr33(page), nil\n}"},
+	}},
+	{name: "P34: package func-literal variable returning a file", desc: "var f = func() *os.File { return os.Stdout }; f() outside the mapping owner", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fnlitfile.go", content: "package reader\n\nimport \"os\"\n\nvar pkgFile34 = func() *os.File { return os.Stdout }\n\nfunc fnLitFileProbe() *os.File { return pkgFile34() }"},
+	}},
+	{name: "P35: bounded View(0, 64) copy stays legal", desc: "copy(out, m.View(0, 64)) must not be treated as a full page", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_boundedview.go", content: "package reader\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\nfunc boundedViewProbe(m *mapping.Mapping) ([]byte, error) {\n\tv, err := m.View(0, 64)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 64)\n\tcopy(out, v)\n\treturn out, nil\n}"},
+	}},
+	{name: "P36: bounded slice through a local closure stays legal", desc: "id(page[48:112]) appended stays below a complete page", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_closurebounded.go", content: "package reader\n\nfunc closureBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tid := func(p []byte) []byte { return p }\n\treturn append([]byte{}, id(page[48:112])...), nil\n}"},
+	}},
+	{name: "P37: bounded multi-result slot stays legal", desc: "b, _ := split(page); append(owned, b...) with b = page[48:112] stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_multiresultbounded.go", content: "package reader\n\nfunc split37(p []byte) ([]byte, []byte) { return p[48:112], p }\n\nfunc multiResultBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb, _ := split37(page)\n\treturn append([]byte{}, b...), nil\n}"},
+	}},
+	{name: "P38: bounded append through a loop stays legal", desc: "loop { out = append(out, page[48:112]...) }; append(owned, out...) stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_loopbounded.go", content: "package reader\n\nfunc loopBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\tfor i := 0; i < 2; i++ {\n\t\tout = append(out, page[48:112]...)\n\t}\n\treturn append([]byte{}, out...), nil\n}"},
+	}},
 }

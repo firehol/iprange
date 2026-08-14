@@ -525,6 +525,12 @@ func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
 	return false
 }
 
+// isMappingOwnerPath reports whether pkgPath is the mapping owner, the
+// only package allowed to create and destroy live descriptors.
+func isMappingOwnerPath(pkgPath string) bool {
+	return strings.HasSuffix(pkgPath, "/internal/mapping")
+}
+
 // approvedFuncPkg applies the callee package policy: the current package,
 // module-internal packages, and the pinned x/sys syscall surface.
 func (w *fileRules) approvedFuncPkg(fn *types.Func) bool {
@@ -567,6 +573,15 @@ func (w *fileRules) checkSelector(v *ast.SelectorExpr) {
 	}
 	if bannedSelectors[v.Sel.Name] {
 		w.fail(v.Pos(), "banned content-transfer selector .%s", v.Sel.Name)
+	}
+	if obj, ok := w.pc.info.Uses[v.Sel].(*types.Var); ok && obj.Pkg() != nil &&
+		obj.Pkg().Path() == "os" && !isMappingOwnerPath(w.pc.pkg.Path()) {
+		// os.Stdin/os.Stdout/os.Stderr are pre-minted live descriptors:
+		// reading them outside the mapping owner leaks a capability the
+		// source scan cannot trace to an approved producer.
+		if fileValueType(obj.Type(), map[types.Type]bool{}) {
+			w.fail(v.Pos(), "file-bearing os variable %s outside the mapping owner (capability launder)", v.Sel.Name)
+		}
 	}
 	if sel := w.pc.info.Selections[v]; sel != nil {
 		if sel.Kind() == types.FieldVal {
@@ -631,6 +646,35 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	approved := w.approvedCallee(fun)
 	formals := w.callFormals(fun)
 	transfer := !approved && !exempt && resultHoldsBytes(w.typeOf(v))
+	// A call whose RESULT is a live descriptor is itself a capacity mint:
+	// closures and function variables can materialize a file (os.Stdout,
+	// os.Pipe) that no argument rule ever sees, and os functions mint
+	// files by construction. Outside the mapping owner every such shape
+	// is a capability launder. The mapping owner keeps its constructor
+	// surface (os.OpenFile/os.NewFile) and is policed by the receiver
+	// and selector rules instead.
+	if resT := w.typeOf(v); resT != nil && !isMappingOwnerPath(w.pc.pkg.Path()) &&
+		fileValueType(resT, map[types.Type]bool{}) {
+		switch f := fun.(type) {
+		case *ast.FuncLit:
+			w.fail(v.Pos(), "func literal returns a file-bearing value outside the mapping owner (capability launder)")
+		case *ast.Ident:
+			switch obj := w.pc.info.Uses[f].(type) {
+			case *types.Var:
+				w.fail(v.Pos(), "function variable %s returns a file-bearing value outside the mapping owner (capability launder)", f.Name)
+			case *types.Func:
+				if pkg := obj.Pkg(); pkg != nil && pkg.Path() == "os" {
+					w.fail(v.Pos(), "os function %s returns a file-bearing value outside the mapping owner (capability launder)", f.Name)
+				}
+			}
+		case *ast.SelectorExpr:
+			if fn, ok := w.pc.info.Uses[f.Sel].(*types.Func); ok {
+				if pkg := fn.Pkg(); pkg != nil && pkg.Path() == "os" {
+					w.fail(v.Pos(), "os function %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
+				}
+			}
+		}
+	}
 	for _, arg := range v.Args {
 		t := w.typeOf(arg)
 		if t != nil && fileValueType(t, map[types.Type]bool{}) && !approved {
@@ -933,16 +977,33 @@ func (w *fileRules) checkTypeAssert(v *ast.TypeAssertExpr) {
 }
 
 // checkArrayConversionSink flags [N]byte(page) with N >= PageSize and
-// string(page) with a definite full-page bound.
+// string(page) with a definite full-page bound. Defined (named) array and
+// string types are unwrapped so type pageArr [4096]byte and
+// type pageStr string conversions cannot hide the owned copy.
 func (w *fileRules) checkArrayConversionSink(pos token.Pos, dst types.Type, pv pageValue) {
 	if dst == nil {
 		return
 	}
+	dst = unwrapToUnderlying(dst)
 	if arr, ok := dst.(*types.Array); ok && arr.Len() >= pageSize && pv.tainted && pageFull(pv) {
 		w.fail(pos, "array conversion of a mapped page view into an owned [%d]byte", arr.Len())
 	}
-	if _, ok := dst.(*types.Basic); ok && dst.String() == "string" && pv.tainted && pv.maxLen >= pageSize {
+	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && pv.maxLen >= pageSize {
 		w.fail(pos, "string conversion of a definite full-page view")
+	}
+}
+
+// unwrapToUnderlying strips named types and aliases to the underlying
+// type, so conversions to defined array/string types are matched by the
+// conversion sinks.
+func unwrapToUnderlying(t types.Type) types.Type {
+	for {
+		switch v := types.Unalias(t).(type) {
+		case *types.Named:
+			t = v.Underlying()
+		default:
+			return t
+		}
 	}
 }
 
