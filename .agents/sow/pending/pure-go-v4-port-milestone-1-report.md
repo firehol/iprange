@@ -1555,8 +1555,12 @@ Fixes (one commit; HEAD recorded in the review entry below):
   same path still fails.
   Pinned as battery forms P57-P65 (nine rejects); battery 338 -> 347
   (272 -> 281 rejections, 66 benign). Gate tooling 5,474 -> 5,691
-  go-gate lines (+552 shell = 6,243 total).
-  Validation at the closing commit: gate --self-test 347/347 (281
+  go-gate lines (+552 shell = 6,243 total). Round-6 hardening (a
+  literal-bound package func var later rebound to a non-literal has an
+  unknowable callee and must stay fail-closed, not exempt) pinned as
+  P66; battery 347 -> 348 (281 -> 282 rejections, 66 benign), gate
+  tooling 5,691 -> 5,712 go-gate lines (+552 shell = 6,264 total).
+  Validation at the closing commit: gate --self-test 348/348 (282
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, SOW audit green.

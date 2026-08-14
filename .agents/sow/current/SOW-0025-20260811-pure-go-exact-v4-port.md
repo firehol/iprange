@@ -19,7 +19,7 @@ close is pending the completion of that round (six-resident swarm, then
 sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,243-line typed scanner (5,691-line go/types module
+mmap gate is a 6,264-line typed scanner (5,712-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -32,7 +32,7 @@ assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5
 classes recorded in the round-5 and round-6 entries below, all with
 durable battery pins; the Status is compact with the full history in the
-appendix. The durable battery is 347 cases (281 rejections, 66 benign
+appendix. The durable battery is 348 cases (282 rejections, 66 benign
 acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -52,7 +52,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (347
+  The durable mutation battery moved into the tool as table data (348
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -67,10 +67,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 347-case battery, and the SOW audit.
+the import-graph gate with its 348-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,243 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,264 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1337,8 +1337,12 @@ HEAD recorded in the first review entry below):
   same path still fails.
   Pinned as battery forms P57-P65 (nine rejects); battery 338 -> 347
   (272 -> 281 rejections, 66 benign). Gate tooling 5,474 -> 5,691
-  go-gate lines (+552 shell = 6,243 total).
-  Validation at the closing commit: gate --self-test 347/347 (281
+  go-gate lines (+552 shell = 6,243 total). Round-6 hardening (a
+  literal-bound package func var later rebound to a non-literal has an
+  unknowable callee and must stay fail-closed, not exempt) pinned as
+  P66; battery 347 -> 348 (281 -> 282 rejections, 66 benign), gate
+  tooling 5,691 -> 5,712 go-gate lines (+552 shell = 6,264 total).
+  Validation at the closing commit: gate --self-test 348/348 (282
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation - all green.
