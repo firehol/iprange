@@ -659,4 +659,44 @@ var batteryPageCases = []batteryCase{
 	{name: "P182: nested struct read through multi-dim indexed call result keeps provenance", desc: "append(..., makeMatrix(page)[0][0].Inner.Data...): a nested selection over a multi-level index of a call result reads the callee's flattened dotted paths", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l21_04.go", content: "package reader\n\ntype linnerL2104 struct{ Data []byte }\n\ntype louterL2104 struct{ Inner linnerL2104 }\n\nfunc makeMatrixL2104(p []byte) [1][1]louterL2104 { return [1][1]louterL2104{{{Inner: linnerL2104{Data: p}}}} }\n\nfunc idxSelCallProbeL2104(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, makeMatrixL2104(page)[0][0].Inner.Data...), nil\n}"},
 	}},
+
+	{name: "P183: empty default switch keeps the pre-switch state reachable", desc: "switch { case 0: b = []byte{1}; default: } with b := page: an EMPTY default still executes, so the page held before the switch survives into the append", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_01.go", content: "package reader\n\nfunc emptyDefaultProbeL2201(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := page\n\tswitch pgno {\n\tcase 0:\n\t\tb = []byte{1}\n\tdefault:\n\t}\n\treturn append([]byte{}, b...), nil\n}"},
+	}},
+
+	{name: "P184: returned selected field of a call keeps provenance", desc: "func retSel(p []byte) inner { return makeBox(p).Inner }; x := retSel(page); append(..., x.Data...): a returned selected field resolves the callee's flattened paths with the selection prefix stripped", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_02.go", content: "package reader\n\ntype linnerL2202 struct{ Data []byte }\ntype louterL2202 struct{ Inner linnerL2202 }\n\nfunc makeBoxL2202(p []byte) louterL2202 { return louterL2202{Inner: linnerL2202{Data: p}} }\n\nfunc retSelL2202(p []byte) linnerL2202 { return makeBoxL2202(p).Inner }\n\nfunc retSelProbeL2202(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := retSelL2202(page)\n\treturn append([]byte{}, x.Data...), nil\n}"},
+	}},
+
+	{name: "P185: returned element of an inline literal index keeps provenance", desc: "func retLitIdx(p []byte) box { return []box{{Data: p}}[0] }; x := retLitIdx(page); append(..., x.Data...): the literal's element-field union carries the returned element", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_03.go", content: "package reader\n\ntype lboxL2203 struct{ Data []byte }\n\nfunc retLitIdxL2203(p []byte) lboxL2203 { return []lboxL2203{{Data: p}}[0] }\n\nfunc retLitIdxProbeL2203(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := retLitIdxL2203(page)\n\treturn append([]byte{}, x.Data...), nil\n}"},
+	}},
+
+	{name: "P186: range over a container parameter binds the element fields", desc: "for _, x := range xs with xs []box parameter: the declared element leaves carry the caller's fields into the loop value, so x.Data after rangeParamHelper([]box{{Data: page}}) stays sourced", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_04.go", content: "package reader\n\ntype lboxL2204 struct{ Data []byte }\n\nfunc rangeParamHelperL2204(xs []lboxL2204) []byte {\n\tfor _, x := range xs {\n\t\treturn x.Data\n\t}\n\treturn nil\n}\n\nfunc rangeParamProbeL2204(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, rangeParamHelperL2204([]lboxL2204{{Data: page}})...), nil\n}"},
+	}},
+
+	{name: "P187: nested selector read after an interface assertion keeps provenance", desc: "func f(v any) []byte { return v.(outer).Inner.Data }: an interface-param asserted to a concrete struct keeps the parameter source through the asserted type's leaf at the full dotted path", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_05.go", content: "package reader\n\ntype linnerL2205 struct{ Data []byte }\ntype louterL2205 struct{ Inner linnerL2205 }\n\nfunc assertNestedReadL2205(v any) []byte {\n\treturn v.(louterL2205).Inner.Data\n}\n\nfunc assertNestedReadProbeL2205(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, assertNestedReadL2205(any(louterL2205{Inner: linnerL2205{Data: page}}))...), nil\n}"},
+	}},
+
+	{name: "P188: nested asserted value bound to a take argument keeps provenance", desc: "take(v.(outer).Inner) with v any: the asserted struct VALUE keeps the asserted type's leaves renamed to the selected value's direct field names", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_06.go", content: "package reader\n\ntype linnerL2206 struct{ Data []byte }\ntype louterL2206 struct{ Inner linnerL2206 }\n\nfunc takeInnerL2206(o linnerL2206) []byte { return o.Data }\n\nfunc assertNestedBindL2206(v any) []byte {\n\treturn takeInnerL2206(v.(louterL2206).Inner)\n}\n\nfunc assertNestedBindProbeL2206(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, assertNestedBindL2206(any(louterL2206{Inner: linnerL2206{Data: page}}))...), nil\n}"},
+	}},
+
+	{name: "P189: named container types keep element provenance", desc: "type matrix [1][1]box; func retNamed(m matrix) box { return m[0][0] }: a NAMED container parameter unwraps to its underlying chain, so the declared element leaves stay bound", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_07.go", content: "package reader\n\ntype lboxL2207 struct{ Data []byte }\n\ntype matrixL2207 [1][1]lboxL2207\n\nfunc retNamedL2207(m matrixL2207) lboxL2207 { return m[0][0] }\n\nfunc namedProbeL2207(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := retNamedL2207(matrixL2207{{{Data: page}}})\n\treturn append([]byte{}, x.Data...), nil\n}"},
+	}},
+
+	{name: "P190: map-key parameter range keeps key provenance", desc: "for k := range m with m map[*box]int parameter: a key-only range binds the KEY's declared leaves, so k.Data after mapKeyRangeHelper(map[*box]int{{Data: page}: 1}) stays sourced", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_08.go", content: "package reader\n\ntype lboxL2208 struct{ Data []byte }\n\nfunc mapKeyRangeHelperL2208(m map[*lboxL2208]int) []byte {\n\tfor k := range m {\n\t\treturn k.Data\n\t}\n\treturn nil\n}\n\nfunc mapKeyRangeProbeL2208(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, mapKeyRangeHelperL2208(map[*lboxL2208]int{{Data: page}: 1})...), nil\n}"},
+	}},
+
+	{name: "P191: container literal with a variable element keeps element provenance", desc: "b := box{Data: page}; xs := []box{b}; append(..., xs[0].Data...): a VARIABLE element inside a container literal contributes its recorded fields exactly like a literal element", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_09.go", content: "package reader\n\ntype lboxL2209 struct{ Data []byte }\n\nfunc varElemProbeL2209(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL2209{Data: page}\n\txs := []lboxL2209{b}\n\treturn append([]byte{}, xs[0].Data...), nil\n}"},
+	}},
+
+	{name: "P192: map composite-literal key struct fields through a key range", desc: "m := map[*box]int{{Data: page}: 1}; for k := range m { k.Data }: a composite-literal map KEY contributes its flattened fields to the key-only range exactly like the parameter form", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l22_10.go", content: "package reader\n\ntype lboxL2210 struct{ Data []byte }\n\nfunc mapKeyLitProbeL2210(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tm := map[*lboxL2210]int{{Data: page}: 1}\n\tfor k := range m {\n\t\treturn append([]byte{}, k.Data...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
 }

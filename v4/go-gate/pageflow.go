@@ -1138,40 +1138,48 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			if v.X != nil {
 				// A container of struct elements keeps its element field
 				// taints on the range value (for _, x := range []box8{
-				// {Data: page}} binds x.Data), like the indexed read
-				// path.
+				// {Data: page}} binds x.Data), like the indexed read path. The
+				// element fields resolve from four roots: a recorded local
+				// container, a struct-element container PARAMETER (declared
+				// element leaves with the parameter source), an inline
+				// container literal (per-element union), and a call-produced
+				// container (re-evaluated callee fields).
 				valObj := objOf(st, v.Value)
 				keyObj := objOf(st, v.Key)
+				var elemFields map[string]pageValue
 				if obj := objOf(st, v.X); obj != nil {
-					if elemFields, ok := st.structs[obj]; ok && len(elemFields) > 0 {
-						// A key-only range of a map (for k := range m)
-						// pulls the container's key-field taints out
-						// through the key variable; a two-variable range
-						// binds them to the value.
-						tgt := valObj
-						if tgt == nil {
-							tgt = keyObj
-						}
-						if tgt != nil {
-							if st.structs[tgt] == nil {
-								st.structs[tgt] = map[string]pageValue{}
-							}
-							for k, fv := range elemFields {
-								st.structs[tgt][k] = fv
-							}
-						}
+					if m, ok := st.structs[obj]; ok && len(m) > 0 {
+						elemFields = m
+					} else if idx, ok := st.params[obj]; ok {
+						// A container PARAMETER of struct elements exposes the
+						// declared element leaves: the loop value binds the element
+						// fields with the parameter source, exactly like the indexed
+						// read path.
+						elemFields = pf.paramFieldFallback(st, obj, idx)
 					}
-				} else if cl, ok := unparen(v.X).(*ast.CompositeLit); ok && valObj != nil {
-					// The container is an inline literal of struct
-					// values: the range value is one element, so the
-					// literal's per-element field taints bind the loop
-					// variable (for _, x := range []B{{Data: p}}).
-					if m := pf.compositeFields(st, cl); len(m) > 0 {
-						if st.structs[valObj] == nil {
-							st.structs[valObj] = map[string]pageValue{}
+				} else if cl, ok := unparen(v.X).(*ast.CompositeLit); ok {
+					elemFields = pf.compositeFields(st, cl)
+				} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
+					// The call must be re-evaluated: a cached result from an
+					// earlier fixpoint pass may predate callee stabilization.
+					delete(pf.values, call)
+					pf.evalExpr(st, call)
+					elemFields = pf.callFields[call]
+				}
+				if len(elemFields) > 0 {
+					// A key-only range of a map (for k := range m) pulls the
+					// container's key-field taints out through the key variable;
+					// a two-variable range binds them to the value.
+					tgt := valObj
+					if tgt == nil {
+						tgt = keyObj
+					}
+					if tgt != nil {
+						if st.structs[tgt] == nil {
+							st.structs[tgt] = map[string]pageValue{}
 						}
-						for k, fv := range m {
-							st.structs[valObj][k] = fv
+						for k, fv := range elemFields {
+							st.structs[tgt][k] = fv
 						}
 					}
 				}
@@ -1259,6 +1267,7 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 	pre := st.clone()
 	first := true
 	hasDefault := false
+	emptyDefault := false
 	var fallState *stmtState
 	for _, c := range body {
 		cc, ok := c.(*ast.CaseClause)
@@ -1270,6 +1279,9 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 		// can skip every case and fall out with the state unchanged.
 		if cc.List == nil {
 			hasDefault = true
+			if len(cc.Body) == 0 {
+				emptyDefault = true
+			}
 		}
 		if len(cc.Body) == 0 {
 			continue
@@ -1301,11 +1313,14 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 			fallState = nil
 		}
 	}
-	if !hasDefault {
+	if !hasDefault || emptyDefault {
 		// A switch with no default can match no case: the pre-switch
 		// state (an unproven callable, a page held in a variable) stays
 		// reachable after the statement, so it must join the same way
-		// the zero-iteration path joins a loop.
+		// the zero-iteration path joins a loop. An EMPTY default (default:)
+		// also keeps the pre-switch state reachable: its body is a no-op,
+		// so the fall-out state is the pre-switch state joined with every
+		// non-empty case body.
 		st.joinWith(pre)
 	}
 }
@@ -1976,26 +1991,27 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 					out = pv
 				}
 			}
-		} else if ta, ok := unparen(v.X).(*ast.TypeAssertExpr); ok {
-			// v.(B).Data with v an interface variable holding a struct
-			// literal: the assertion keeps the recorded field taints.
+		} else if ta := typeAssertBaseOf(v); ta != nil {
+			// v.(B).Data and v.(T).Inner.Data with v an interface variable
+			// or parameter holding a struct: the assertion keeps the
+			// recorded field taints on the full dotted path. An
+			// INTERFACE-TYPED parameter asserted to a struct has no
+			// recorded local store and no declared leaves of its own: the
+			// read keeps the parameter source through the asserted type's
+			// leaf, the same way a struct parameter's leaf reads do, and
+			// an asserted CONTAINER (v.([]B)[0].Data) reads the element
+			// leaves because the extraction names an element.
+			fullPath, _ := selectorIndexChain(v)
 			if obj := objOf(st, ta.X); obj != nil {
 				if m, ok := st.structs[obj]; ok {
-					if pv, ok := m[v.Sel.Name]; ok {
+					if pv, ok := m[fullPath]; ok {
 						out = pv
 					}
 				}
-				// An INTERFACE-TYPED parameter asserted to a struct has
-				// no recorded local store and no declared leaves of its
-				// own: the read keeps the parameter source through the
-				// asserted type's leaf, the same way a struct
-				// parameter's leaf reads do.
 				if !out.tainted {
 					if idx, ok := st.params[obj]; ok && isInterfaceType(obj.Type()) {
-						if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
-							if ft := leafPathType(st.pf.pc.pkg, stt, v.Sel.Name); ft != nil && paramCanCarryPage(ft) {
-								out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
-							}
+						if ft := assertLeafType(st.pf.pc.pkg, pf.pc.info.Types[ta.Type].Type, fullPath); ft != nil && paramCanCarryPage(ft) {
+							out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: fullPath, hasSrc: true}
 						}
 					}
 				}
@@ -2034,26 +2050,18 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			if lit := structLitOf(root); lit != nil {
 				var m map[string]pageValue
 				for _, el := range lit.Elts {
-					var val ast.Expr
-					if kv, ok := el.(*ast.KeyValueExpr); ok {
-						val = kv.Value
-					} else {
-						val = el
-					}
-					elLit := structLitOf(val)
-					if elLit == nil {
+					fm := pf.elementFieldsOf(st, el)
+					if fm == nil {
 						continue
 					}
-					if fm := pf.compositeFields(st, elLit); fm != nil {
-						for k, fv := range fm {
-							if prev, ok := m[k]; ok {
-								m[k] = joinPageValue(prev, fv)
-							} else {
-								if m == nil {
-									m = map[string]pageValue{}
-								}
-								m[k] = fv
+					for k, fv := range fm {
+						if prev, ok := m[k]; ok {
+							m[k] = joinPageValue(prev, fv)
+						} else {
+							if m == nil {
+								m = map[string]pageValue{}
 							}
+							m[k] = fv
 						}
 					}
 				}
@@ -2330,6 +2338,33 @@ func (pf *pageFlow) evalComposite(st *stmtState, v *ast.CompositeLit) pageValue 
 	return pageValue{tainted: true, maxLen: maxLen}
 }
 
+// elementFieldsOf resolves the struct-field taints one container
+// ELEMENT contributes: a composite literal contributes its flattened
+// fields, and a variable or parameter element contributes its recorded
+// fields and declared leaves, so xs := []B{b} keeps b's fields on the
+// container exactly like xs := []B{{Data: page}} does.
+func (pf *pageFlow) elementFieldsOf(st *stmtState, el ast.Expr) map[string]pageValue {
+	var val ast.Expr
+	if kv, ok := el.(*ast.KeyValueExpr); ok {
+		val = kv.Value
+	} else {
+		val = el
+	}
+	if lit := structLitOf(val); lit != nil {
+		return pf.compositeFields(st, lit)
+	}
+	if cl, ok := unparen(val).(*ast.CompositeLit); ok {
+		// A NESTED container literal element ([1]box{{Data: page}} inside
+		// [1][1]box): recurse so the innermost struct fields surface on
+		// every enclosing container level.
+		return pf.compositeFields(st, cl)
+	}
+	if o := objOf(st, val); o != nil {
+		return pf.fieldTaintsOf(st, o)
+	}
+	return nil
+}
+
 // compositeFields returns the per-field taint of a struct composite
 // literal, used to bind struct-valued arguments at call sites.
 func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[string]pageValue {
@@ -2345,29 +2380,35 @@ func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[stri
 		// stay tainted (the index itself is not a page-carrying value,
 		// box8 is a struct). Map and array elements join the same way.
 		var out map[string]pageValue
-		for _, el := range v.Elts {
-			var val ast.Expr
-			if kv, ok := el.(*ast.KeyValueExpr); ok {
-				val = kv.Value
-			} else {
-				val = el
+		_, isMap := types.Unalias(typ).(*types.Map)
+		unionInto := func(fm map[string]pageValue) {
+			if fm == nil {
+				return
 			}
-			if l := structLitOf(val); l != nil {
-				if fm := pf.compositeFields(st, l); fm != nil {
-					for k, fv := range fm {
-						if fv.tainted {
-							if prev, ok := out[k]; ok {
-								out[k] = joinPageValue(prev, fv)
-							} else {
-								if out == nil {
-									out = map[string]pageValue{}
-								}
-								out[k] = fv
-							}
+			for k, fv := range fm {
+				if fv.tainted {
+					if prev, ok := out[k]; ok {
+						out[k] = joinPageValue(prev, fv)
+					} else {
+						if out == nil {
+							out = map[string]pageValue{}
 						}
+						out[k] = fv
 					}
 				}
 			}
+		}
+		for _, el := range v.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok {
+				// Map KEYS can carry the page too (map[*box]int{&box{
+				// Data: page}: 1} then for k := range m: k.Data): a key held
+				// as a composite literal or variable contributes the same
+				// flattened fields the container records.
+				if isMap {
+					unionInto(pf.elementFieldsOf(st, kv.Key))
+				}
+			}
+			unionInto(pf.elementFieldsOf(st, el))
 		}
 		return out
 	}
@@ -2487,6 +2528,27 @@ func stripFieldPrefix(m map[string]pageValue, prefix string) map[string]pageValu
 		}
 	}
 	return out
+}
+
+// typeAssertBaseOf returns the type assertion at the base of a
+// dotted selector/index chain (v.(T).Inner.Data names the
+// assertion), or nil when the chain does not start from one.
+func typeAssertBaseOf(e ast.Expr) *ast.TypeAssertExpr {
+	cur := unparen(e)
+	for {
+		switch n := unparen(cur).(type) {
+		case *ast.SelectorExpr:
+			cur = n.X
+		case *ast.IndexExpr:
+			cur = n.X
+		default:
+			ta, ok := n.(*ast.TypeAssertExpr)
+			if !ok {
+				return nil
+			}
+			return ta
+		}
+	}
 }
 
 // selectorChain resolves a (possibly nested) selector expression to its
@@ -3535,6 +3597,47 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 			} else {
 				fields = stripFieldPrefix(pf.compositeFields(st, structLitOf(root)), parts+".")
 			}
+		} else if ta := typeAssertBaseOf(v); ta != nil {
+			// v.(T).Inner / v.(T)[k].Inner: an asserted struct VALUE read
+			// off an interface variable or parameter keeps the source
+			// through the asserted type's leaves, renamed to the selected
+			// value's direct field names, so the callee's paramField
+			// sources bind at the call site. Recorded interface-variable
+			// state keeps the flattened dotted paths (the same rename
+			// recorded-base arguments receive).
+			chain, _ := selectorIndexChain(v)
+			prefix := chain + "."
+			if obj := objOf(st, ta.X); obj != nil {
+				base := st.structs[obj]
+				if len(base) == 0 {
+					if gm, ok := st.pkgStructs[obj]; ok {
+						base = gm
+					}
+				}
+				for k2, fv := range base {
+					if fv.tainted && strings.HasPrefix(k2, prefix) {
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[k2[len(prefix):]] = fv
+					}
+				}
+				if fields == nil {
+					if idx, ok := st.params[obj]; ok && isInterfaceType(obj.Type()) {
+						if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+							for path, ft := range paramLeafPaths(stt) {
+								if !paramCanCarryPage(ft) || !strings.HasPrefix(path, prefix) {
+									continue
+								}
+								if fields == nil {
+									fields = map[string]pageValue{}
+								}
+								fields[path[len(prefix):]] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
+							}
+						}
+					}
+				}
+			}
 		} else {
 			// A struct value produced by a call (take(makeBox(page).B),
 			// take(makeBox(page).A.B)): the callee's flattened field
@@ -3566,22 +3669,8 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 // paths.
 func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int) map[string]pageValue {
 	out := map[string]pageValue{}
-	for path, ft := range paramLeafPaths(obj.Type()) {
-		if !paramCanCarryPage(ft) {
-			continue
-		}
-		out[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
-	}
-	// A container parameter of struct elements ([]box, map[K]box, ...)
-	// exposes the element fields through element extraction (xs[0],
-	// m[k]): materialize the element's declared leaves with the same
-	// parameter source so take(xs[0]) at a call site binds the callee's
-	// param fields even when the container arrives as a parameter.
-	// Nested containers ([1][1]box, map[K][]box) expose the same leaf
-	// paths at every depth: each trailing index names an element of
-	// the same root, so every container level must contribute.
-	for et := containerElemType(obj.Type()); et != nil; et = containerElemType(et) {
-		for path, ft := range paramLeafPaths(et) {
+	addLeaves := func(t2 types.Type) {
+		for path, ft := range paramLeafPaths(t2) {
 			if _, has := out[path]; has {
 				continue
 			}
@@ -3591,6 +3680,33 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 			out[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
 		}
 	}
+	addLeaves(obj.Type())
+	// A container parameter of struct elements ([]box, map[K]box, ...)
+	// exposes the element fields through element extraction (xs[0],
+	// m[k]): materialize the element's declared leaves with the same
+	// parameter source so take(xs[0]) at a call site binds the callee's
+	// param fields even when the container arrives as a parameter.
+	// Nested containers ([1][1]box, map[K][]box) expose the same leaf
+	// paths at every depth: each trailing index names an element of
+	// the same root, so every container level must contribute. The seen
+	// set stops a self-referential named container (type R []R).
+	seen := map[types.Type]bool{}
+	for et := containerElemType(obj.Type()); et != nil && !seen[et]; et = containerElemType(et) {
+		seen[et] = true
+		addLeaves(et)
+	}
+	// A map parameter exposes the KEY's fields to a key-only range
+	// (for k := range m with m map[*box]int keeps k.Data caller
+	// sourced): the declared key leaves and key container chains bind
+	// exactly like the value side.
+	if mtyp, ok := types.Unalias(obj.Type()).(*types.Map); ok {
+		addLeaves(mtyp.Key())
+		seenKey := map[types.Type]bool{}
+		for et := containerElemType(mtyp.Key()); et != nil && !seenKey[et]; et = containerElemType(et) {
+			seenKey[et] = true
+			addLeaves(et)
+		}
+	}
 	return out
 }
 
@@ -3598,6 +3714,14 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 // map value, channel element) and returns the element type, or nil when
 // the type is not a direct container.
 func containerElemType(t types.Type) types.Type {
+	return containerElemTypeSeen(t, map[types.Type]bool{})
+}
+
+// containerElemTypeSeen is the recursive core: a named container
+// (type matrix [1][1]box) unwraps through its underlying chain; a
+// self-referential named container (type R []R) stops at the
+// revisiting type instead of recursing forever.
+func containerElemTypeSeen(t types.Type, seen map[types.Type]bool) types.Type {
 	switch v := types.Unalias(t).(type) {
 	case *types.Slice:
 		return v.Elem()
@@ -3607,6 +3731,12 @@ func containerElemType(t types.Type) types.Type {
 		return v.Elem()
 	case *types.Chan:
 		return v.Elem()
+	case *types.Named:
+		if seen[v] {
+			return nil
+		}
+		seen[v] = true
+		return containerElemTypeSeen(v.Underlying(), seen)
 	}
 	return nil
 }
@@ -3890,6 +4020,54 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		}
 		return
 	}
+	if sel, ok := unparen(expr).(*ast.SelectorExpr); ok {
+		// A returned selected field (return makeBox(p).Inner, return
+		// b.Inner): the selected value's direct field taints resolve
+		// from the base's recorded fields, parameter leaves, or the
+		// callee's flattened summary, with the selection prefix
+		// stripped, so a call-site read of the returned value's fields
+		// (x := f(page); x.Data) keeps the caller's source. A param-held
+		// base keeps the paramField source on the ORIGINAL leaf path so
+		// the call-site argument binding matches its flattened record.
+		var fields map[string]pageValue
+		if obj, path := selectorChain(st, sel); obj != nil {
+			prefix := path + "."
+			if idx, ok := st.params[obj]; ok {
+				for k, fv := range pf.paramFieldFallback(st, obj, idx) {
+					if strings.HasPrefix(k, prefix) {
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[k[len(prefix):]] = fv
+					}
+				}
+			}
+			base := st.structs[obj]
+			if len(base) == 0 {
+				if gm, ok := st.pkgStructs[obj]; ok {
+					base = gm
+				}
+			}
+			for k, fv := range base {
+				if fv.tainted && strings.HasPrefix(k, prefix) {
+					if fields == nil {
+						fields = map[string]pageValue{}
+					}
+					fields[k[len(prefix):]] = fv
+				}
+			}
+		} else {
+			fields = pf.callProducedFields(st, sel)
+		}
+		if len(fields) > 0 {
+			for k, fv := range fields {
+				if fv.tainted {
+					fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
+		}
+		return
+	}
 	if _, ok := unparen(expr).(*ast.IndexExpr); ok {
 		// A returned container element (returns xs[0], m[0][0]): every
 		// trailing index names an element of the same root container,
@@ -3908,6 +4086,32 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 			if idx, ok := st.params[o]; ok {
 				for path, fv := range pf.paramFieldFallback(st, o, idx) {
 					fs.fields[path] = joinFieldTaint(fs.fields[path], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
+		} else if lit := structLitOf(root); lit != nil {
+			// A returned element of an INLINE container literal
+			// (return []box{{Data: p}}[0]): the literal's element-field
+			// union carries the result exactly like a whole-literal
+			// return of the same container.
+			if fm := pf.compositeFields(st, lit); len(fm) > 0 {
+				for k, fv := range fm {
+					if fv.tainted {
+						fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+		} else if call, ok := unparen(root).(*ast.CallExpr); ok {
+			// A returned element of a CALL-produced container
+			// (return makeList(page)[0]): re-evaluate the call (a cached
+			// result may predate callee stabilization) and record the
+			// callee's element fields.
+			delete(pf.values, call)
+			pf.evalExpr(st, call)
+			if m, ok := pf.callFields[call]; ok {
+				for k, fv := range m {
+					if fv.tainted {
+						fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
 				}
 			}
 		}
@@ -4174,6 +4378,25 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 	}
 	walk(t, "")
 	return out
+}
+
+// assertLeafType resolves a dotted field path against a TYPE
+// ASSERTION's asserted type: the struct's own leaves first, then
+// the leaves of a container's struct ELEMENTS (v.([]box)[0].Data
+// reads the element leaves because the extraction names an
+// element). A seen set stops self-referential named containers.
+func assertLeafType(pkg *types.Package, t types.Type, path string) types.Type {
+	if ft := leafPathType(pkg, t, path); ft != nil {
+		return ft
+	}
+	seen := map[types.Type]bool{}
+	for et := containerElemType(t); et != nil && !seen[et]; et = containerElemType(et) {
+		seen[et] = true
+		if ft := leafPathType(pkg, et, path); ft != nil {
+			return ft
+		}
+	}
+	return nil
 }
 
 // paramFieldType returns the static type of a named field of the struct
