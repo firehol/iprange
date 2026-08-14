@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,200-line typed toolchain (10,648-line go/types module
+mmap gate is an 11,247-line typed toolchain (10,695-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -154,7 +154,16 @@ and the l23-5 function-call variant (set(xs[0], page)) is invalid Go:
 an indexed element is not addressable without an ampersand, so only the
 method form is a real class; the five real classes are fixed with
 durable battery pins P219-P223 in the round-23 entry below. The
-durable battery is 505 cases (436 rejections, 69 benign acceptances)
+same re-review then returned two further verified findings (Qwen): a
+two-value type assertion or map index (b, ok := v.([]byte), b, ok :=
+m[k]) types the expression node as the (T, bool) tuple, so the
+whole-value carrier test dropped the page taint of every comma-ok
+byte read (probe-verified escape, pinned P224), and the unguarded
+named-pointer recursion (type P *P) through derefStruct/mapUnderlying
+hung the scanner on an unproven callee returning the self-pointer type
+(probe-verified 90s timeout, pinned P225); both fixed in the round-23
+entry below. The
+durable battery is 507 cases (437 rejections, 70 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -175,7 +184,7 @@ Rework outcome per finding:
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
   The durable mutation battery moved into the tool as table data
-  (505 cases: 436 rejections, 69 benign); the shell harness keeps only the import-boundary, module-graph,
+  (507 cases: 437 rejections, 70 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -189,10 +198,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 505-case battery, and the SOW audit.
+the import-graph gate with its 507-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 11,200 raw lines total (10,648 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 11,247 raw lines total (10,695 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1743,15 +1752,36 @@ HEAD recorded in the first review entry below):
   shell = 11,200 total). Five real escape classes fixed; two false
   positives documented with probe evidence; one invalid-Go variant
   recorded; none dismissed.
-  Validation at the closing commit: gate --self-test 505/505 (436
+  The same round's full-scope pass then returned two further verified
+  findings (Qwen), both probe-verified before any fix:
+  P224 a two-value type assertion or map index (b, ok := v.([]byte), b,
+  ok := m[k]) types the expression node as the (T, bool) tuple, and the
+  whole-value carrier test (evalExpr TypeAssertExpr/IndexExpr/
+  IndexListExpr) read typeCanCarryPage(tuple) as false, laundering the
+  page taint of every comma-ok byte read into the bound variable
+  (probe /tmp/probe-l23-q1 exited 0 pre-fix; valueCarrierType now
+  unwraps the value slot of a 2-tuple before the carrier test);
+  P225 a self-referential named pointer (type P *P) routed through the
+  unproven-callee result walk hung the scanner: derefStruct's Named
+  unwrap loop and mapUnderlying's pointer unwrap (added for the l23-7
+  fix) had no seen guard, so failClosedCallFields(P) recursed forever
+  (probe /tmp/probe-l23-q2 timed out at 90s pre-fix; both walkers now
+  stop at the revisiting named type, mirroring containerElemTypeSeen).
+  battery 505 -> 507 (436 -> 437 rejections, 69 -> 70 benign
+  acceptances). Gate tooling 10,648 -> 10,695 go-gate lines (+552
+  shell = 11,247 total).
+  Validation at the closing commit: gate --self-test 507/507 (437
   rejections, 69 benign) + 9 shell environment mutations exit 0,
   production scan of v4/go clean (rc 0), all sixteen l23 probe trees
   reject (rc 1) on the closing build, all 125 prior probe trees
   re-scanned with the closing build: 119 reject and the five recorded
   benigns stay accepted (probe-l18m, probe-r10-base, probe-r11-base,
-  luna1b/luna1c), go test ./... (both tag sets) including -race
-  -count=1, vet (go and go-gate), gofmt zero diffs, ten cross-builds,
-  the import-graph gate, and the SOW audit all pass.
+  luna1b/luna1c), the q1/q2 verification probes reject or complete as
+  pinned (q1 two-value assert rc 1, q1b two-value map index rc 1, q2
+  self-pointer rc 0 without hang, q2b func-param form rc 0), go test
+  ./... (both tag sets) including -race -count=1, vet (go and go-gate),
+  gofmt zero diffs, ten cross-builds, the import-graph gate, and the
+  SOW audit all pass.
 - Round 22 (delta re-review, 113867a): luna failed the round-21
   delta with nine findings; the lead probe-verified all nine on the
   true round-21 build (git archive HEAD, probes /tmp/probe-l22-1..9):
