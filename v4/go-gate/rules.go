@@ -559,6 +559,55 @@ func (w *fileRules) visit(n ast.Node) bool {
 	return true
 }
 
+// fmtCallee reports whether fun names a formatting function in the fmt
+// package (the diagnostics spread exemption in checkCall).
+func (w *fileRules) fmtCallee(fun ast.Expr) bool {
+	sel, ok := unparen(fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
+	if !ok {
+		return false
+	}
+	return fn.Pkg() != nil && fn.Pkg().Path() == "fmt"
+}
+
+// checkStringParamCalls flags module-function calls that pass a full
+// mapped view to a parameter the callee converts into an owned string
+// (return string(p) recorded as stringParams in the callee summary): the
+// owned copy happens inside the scanned helper, where the parameter
+// bound is unknowable, so the call site must fail closed.
+func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
+	if w.pc.pf == nil || w.pc.pf.store == nil || fn.Pkg() == nil {
+		return
+	}
+	sums := w.pc.pf.summaries
+	pkgPath := fn.Pkg().Path()
+	if pkgPath != w.pc.pkg.Path() {
+		sums = w.pc.pf.store.pkgs[pkgPath]
+	}
+	if sums == nil {
+		return
+	}
+	key := fn.Name()
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+		key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+	}
+	fs, ok := sums[key]
+	if !ok || len(fs.stringParams) == 0 {
+		return
+	}
+	for pi := range fs.stringParams {
+		if pi < 0 || pi >= len(v.Args) {
+			continue
+		}
+		if pv := w.pageValue(v.Args[pi]); pv.tainted && pageFull(pv) {
+			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
+		}
+	}
+}
+
 // approvedFuncVar approves a call through a function-typed variable only
 // when the variable's package-level initializer provably names a function
 // whose body is scanned in this tree: a func literal, a direct reference
@@ -746,12 +795,19 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			}
 		}
 	case *ast.SelectorExpr:
-		// h.cb(page) with cb a function-typed field of a struct or an
-		// interface method: the callee is not statically visible, so the
-		// call is an unproven indirection like a function variable.
-		// Plain method calls (Sel resolves to a *types.Func) keep their
-		// visible bodies and pass through approvedCallee below.
-		if _, ok := w.pc.info.Uses[f.Sel].(*types.Func); !ok {
+		switch obj := w.pc.info.Uses[f.Sel].(type) {
+		case *types.Func:
+			// A concrete method on a value type has a scanned body, but
+			// an interface method dispatches to an unknowable
+			// implementation: c.Apply(page) on a CB interface can copy
+			// the full page inside an unscanned method body.
+			if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+				varIndirect = true
+			}
+		default:
+			// h.cb(page) with cb a function-typed field of a struct: the
+			// callee is not statically visible, so the call is an
+			// unproven indirection like a function variable.
 			varIndirect = true
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
@@ -761,6 +817,10 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	case *ast.StarExpr:
 		// (*p)(page): a call through a dereferenced function pointer has
 		// an unknowable callee body.
+		varIndirect = true
+	case *ast.CallExpr, *ast.TypeAssertExpr:
+		// factory()(page) and x.(func([]byte) int)(page): the callee is
+		// produced by an expression the scan cannot resolve to a body.
 		varIndirect = true
 	}
 	transfer := !approved && !exempt && (resultHoldsBytes(w.typeOf(v)) || voidVarCall)
@@ -786,6 +846,16 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			interfaceVarResult = isInterfaceType(resT)
 		}
 	}
+	// An interface-method call returning an interface (c.Codec() any) can
+	// materialize a file-backed value through an unscanned implementation
+	// body: outside the mapping owner the same fail-closed rule applies.
+	if sel, ok := fun.(*ast.SelectorExpr); ok {
+		if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok {
+			if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+				interfaceVarResult = isInterfaceType(resT)
+			}
+		}
+	}
 	if resT != nil && !isMappingOwnerPath(w.pc.pkg.Path()) &&
 		(fileValueType(resT, map[types.Type]bool{}) || interfaceVarResult) {
 		switch f := fun.(type) {
@@ -808,10 +878,19 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			}
 		}
 	}
-	for _, arg := range v.Args {
+	for i, arg := range v.Args {
 		t := w.typeOf(arg)
 		if t != nil && fileValueType(t, map[types.Type]bool{}) && !approved {
 			w.fail(v.Pos(), "*os.File-bearing value passed to %s", calleeText(fun))
+		}
+		// The fmt spread exemption: variadic []any diagnostics helpers
+		// (corrupt, headerErr) pass their argument slice straight into
+		// fmt.Sprintf for bounded error text; the spread itself is not
+		// an owned byte-copy sink. The callee's own parameter stays a
+		// carrier, so element extraction out of it is still policed.
+		spread := v.Ellipsis.IsValid() && i == len(v.Args)-1 && w.fmtCallee(fun)
+		if spread {
+			continue
 		}
 		pageArg := w.pageValue(arg)
 		if pageArg.tainted && pageFull(pageArg) && (transfer || varIndirect) {
@@ -828,6 +907,28 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		}
 	}
 	w.checkInterfaceErasure(v, formals)
+	// A module helper that converts one of its parameters into an owned
+	// string (string(p) recorded in its summary) copies the caller's
+	// bytes; the conversion inside the callee cannot see that the bound
+	// is a full mapped page, so the call site fails closed.
+	if fn := callCalleeFunc(w.pc.info, fun); fn != nil {
+		w.checkStringParamCalls(v, fn)
+	}
+}
+
+// callCalleeFunc resolves the statically visible callee of an ordinary
+// function or method call; nil means the callee is an indirect shape
+// (variable, index, call, type-assert) with no body to summarize.
+func callCalleeFunc(info *types.Info, fun ast.Expr) *types.Func {
+	switch f := unparen(fun).(type) {
+	case *ast.Ident:
+		fn, _ := info.Uses[f].(*types.Func)
+		return fn
+	case *ast.SelectorExpr:
+		fn, _ := info.Uses[f.Sel].(*types.Func)
+		return fn
+	}
+	return nil
 }
 
 // collectPkgFuncVars records package-level function-typed variables
