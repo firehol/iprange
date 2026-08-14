@@ -21,6 +21,7 @@ const xsysImport = "golang.org/x/sys/unix"
 var bannedImports = map[string]bool{
 	"C":           true, // cgo: C.pread etc. would bypass every Go selector ban
 	"unsafe":      true, // unsafe.Slice over a mapped descriptor would mint page views the type layer cannot trace
+	"reflect":     true, // reflect.Value.Bytes/Slice/String hand out the underlying mapped bytes without the selector layer seeing them
 	"archive/tar": true, "archive/zip": true,
 	"bufio": true, "compress/bzip2": true, "compress/gzip": true,
 	"compress/lzw": true, "compress/zlib": true,
@@ -728,8 +729,10 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// length lookup cannot move the bytes into owned storage.
 	voidVarCall := false
 	varIndirect := false
-	if id, ok := fun.(*ast.Ident); ok {
-		if varObj, isVar := w.pc.info.Uses[id].(*types.Var); isVar {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		switch obj := w.pc.info.Uses[f].(type) {
+		case *types.Var:
 			if rt := w.typeOf(v); rt == nil || isVoidTuple(rt) {
 				voidVarCall = true
 			}
@@ -738,10 +741,27 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// scan cannot follow: even a scalar result (func([]byte) int)
 			// can copy a full mapped view into owned memory inside that
 			// body, so such calls are transfers when they receive a page.
-			if !w.approvedFuncVar(varObj, 0) {
+			if !w.approvedFuncVar(obj, 0) {
 				varIndirect = true
 			}
 		}
+	case *ast.SelectorExpr:
+		// h.cb(page) with cb a function-typed field of a struct or an
+		// interface method: the callee is not statically visible, so the
+		// call is an unproven indirection like a function variable.
+		// Plain method calls (Sel resolves to a *types.Func) keep their
+		// visible bodies and pass through approvedCallee below.
+		if _, ok := w.pc.info.Uses[f.Sel].(*types.Func); !ok {
+			varIndirect = true
+		}
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		// fs[0](page): a call through a slice/array element or map
+		// lookup has an unknowable callee body.
+		varIndirect = true
+	case *ast.StarExpr:
+		// (*p)(page): a call through a dereferenced function pointer has
+		// an unknowable callee body.
+		varIndirect = true
 	}
 	transfer := !approved && !exempt && (resultHoldsBytes(w.typeOf(v)) || voidVarCall)
 	// A call whose RESULT is a live descriptor is itself a capacity mint:
@@ -1212,19 +1232,33 @@ func (w *fileRules) checkArrayConversionSink(pos token.Pos, dst types.Type, pv p
 	if arr, ok := dst.(*types.Array); ok && arr.Len() >= pageSize && pv.tainted && pageFull(pv) {
 		w.fail(pos, "array conversion of a mapped page view into an owned [%d]byte", arr.Len())
 	}
-	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && definitePageSpan(pv) {
+	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && !pv.hasSrc && !definiteSubPage(pv) {
 		w.fail(pos, "string conversion of a full-page view")
 	}
 }
 
+// definiteSubPage reports whether a page-tainted value is statically
+// bounded below a complete page: a definite maxLen or a constant
+// symbolic slice bound under pageSize. Every other tainted value is
+// treated as possibly spanning a complete page, because string
+// conversion copies exactly the value's runtime length into owned
+// memory and an unknown bound may be 4096 at runtime. Untainted values
+// (plain []byte parameters and locally owned buffers) never reach this
+// test: only page-provenance views do.
+func definiteSubPage(pv pageValue) bool {
+	if pv.hasSym {
+		if c, ok := pv.sym.isConst(); ok {
+			return c >= 0 && c < pageSize
+		}
+		return false
+	}
+	return pv.maxLen >= 0 && pv.maxLen < pageSize
+}
+
 // definitePageSpan reports whether a tainted value's length is statically
 // known to span at least one complete page: a constant maxLen or a
-// constant symbolic slice bound. Unknown-length values (a []byte
-// parameter that the caller may bind to a record) are excluded: string
-// conversion copies exactly the value's length, and bounded records stay
-// legal (FeedNameValid converts its byte parameter this way). The
-// copy/append sinks stay fail-closed on unknown lengths because Go copies
-// whatever the source actually is at runtime.
+// constant symbolic slice bound. Used by the array conversion and
+// owned-capacity sinks.
 func definitePageSpan(pv pageValue) bool {
 	if pv.maxLen >= pageSize {
 		return true

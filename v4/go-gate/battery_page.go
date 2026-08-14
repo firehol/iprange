@@ -205,6 +205,34 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_relit.go", content: "package reader\n\nvar fRelit = func() any { return nil }\nvar fOther = func() any { return nil }\n\nfunc relitProbe() {\n\tfRelit = fOther\n\t_ = fRelit()\n}\n"},
 	}},
 
+	{name: "P67: opaque function-field callee receiving a full page", desc: "h.cb(page) with cb a function-typed struct field has an unknowable body and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fieldcb.go", content: "package reader\n\ntype cbH67 struct{ cb func([]byte) int }\n\nfunc useCbField67(h cbH67, page []byte) int { return h.cb(page) }\n\nfunc fieldCbProbe67(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useCbField67(cbH67{cb: func(p []byte) int { return len(p) }}, page)\n}"},
+	}},
+	{name: "P68: slice-indexed callee receiving a full page", desc: "fs[0](page) with fs []func([]byte) int has an unknowable body and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_slicecb.go", content: "package reader\n\nfunc useCbSlice68(fs []func([]byte) int, page []byte) int { return fs[0](page) }\n\nfunc sliceCbProbe68(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useCbSlice68([]func([]byte) int{func(p []byte) int { return len(p) }}, page)\n}"},
+	}},
+	{name: "P69: func literal with a named result returned naked", desc: "var f = func(p []byte) (out []byte) { out = p; return }; append(owned, f(page)...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedret.go", content: "package reader\n\nvar fNamed69 = func(p []byte) (out []byte) { out = p; return }\n\nfunc namedRetProbe69(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, fNamed69(page)...), nil\n}"},
+	}},
+	{name: "P70: pointer struct literal field taint", desc: "return &B{Data: p} then append(owned, makeB(page).Data...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_ptrstruct.go", content: "package reader\n\ntype pBox70 struct{ Data []byte }\n\nfunc makePB70(p []byte) *pBox70 { return &pBox70{Data: p} }\n\nfunc ptrStructProbe70(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, makePB70(page).Data...), nil\n}"},
+	}},
+	{name: "P71: page through an any container and a type assertion", desc: "map[string]any{\"x\": page} -> x.([]byte) appended must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_typeassert.go", content: "package reader\n\nfunc mapToAny71(m map[string]any) any { return m[\"x\"] }\n\nfunc typeAssertProbe71(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := mapToAny71(map[string]any{\"x\": page})\n\treturn append([]byte{}, x.([]byte)...), nil\n}"},
+	}},
+	{name: "P72: collection literal keeps a definite element bound", desc: "first([][]byte{page[0:4096]}) appended must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_collbound.go", content: "package reader\n\nfunc firstL72(xs [][]byte) []byte { return xs[0] }\n\nfunc collKnownProbe72(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := firstL72([][]byte{page[0:4096]})\n\treturn append([]byte{}, x...), nil\n}"},
+	}},
+	{name: "P73: package global write visible across functions", desc: "a global assigned a page in one function and read by another must stay tainted (summary fixpoint)", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_globalwrite.go", content: "package reader\n\nvar latePage73 []byte\n\nfunc getLateL73() []byte { return latePage73 }\n\nfunc lateInitProbe73(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tlatePage73 = page\n\treturn append([]byte{}, getLateL73()...), nil\n}"},
+	}},
+	{name: "P74: string conversion of a page view with an unknown bound", desc: "string(page[0:n]) with runtime n up to page size must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_stringunk.go", content: "package reader\n\nfunc stringUnknownProbe74(r *ImmutableReader, pgno uint32, n int) (string, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\tv := page[0:n]\n\treturn string(v), nil\n}"},
+	}},
+	{name: "P75: reflect byte extraction over a mapped view", desc: "reflect.ValueOf(page).Bytes() hands out the underlying mapped bytes and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_reflect.go", content: "package reader\n\nimport \"reflect\"\n\nfunc reflectProbe75(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := reflect.ValueOf(page).Bytes()\n\treturn append([]byte{}, b...), nil\n}"},
+	}},
+
 	{name: "P59: map and channel parameters carrying a page", desc: "m[\"x\"] and <-ch return the mapped page through map/chan parameters and must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_mapchan.go", content: "package reader\n\nfunc getM3(m map[string][]byte) []byte { return m[\"x\"] }\n\nfunc recvC3(ch chan []byte) []byte { return <-ch }\n\nfunc mapChanCarrierProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\ta := append([]byte{}, getM3(map[string][]byte{\"x\": page})...)\n\tch := make(chan []byte, 1)\n\tch <- page\n\tb := append([]byte{}, recvC3(ch)...)\n\treturn append(a, b...), nil\n}"},
 	}},
