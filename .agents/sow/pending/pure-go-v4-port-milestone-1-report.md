@@ -159,8 +159,8 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(10,463 lines) plus a trimmed shell harness (552 lines) whose 500-case
-durable battery (431 rejections, 69 benign acceptances) includes the complete-page ownership forms and the
+(10,648 lines) plus a trimmed shell harness (552 lines) whose 505-case
+durable battery (436 rejections, 69 benign acceptances) includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
 records with the history preserved in the SOW appendix. Independent
@@ -218,7 +218,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 500/500 mutation forms rejected (431 rejections, 69
+GOOS/GOARCH pairs): 505/505 mutation forms rejected (436 rejections, 69
 benign acceptances)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
@@ -1274,13 +1274,13 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 500 cases (431 rejections, 69 benign acceptances)
+  data inside the tool: 505 cases (436 rejections, 69 benign acceptances)
   covering source-transfer, complete-page, and file-capability forms. The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 10,463 (tool) + 552 (shell) = 11,015
+  unlistable module). Gate totals: 10,648 (tool) + 552 (shell) = 11,200
   lines against module production 5,049 / tests 5,180.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,

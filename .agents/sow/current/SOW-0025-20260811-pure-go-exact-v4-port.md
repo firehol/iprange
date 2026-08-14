@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,015-line typed toolchain (10,463-line go/types module
+mmap gate is an 11,200-line typed toolchain (10,648-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -138,8 +138,23 @@ containers) and one (l22-4/4b, closure materialization) is a false positive:
 the probe shape carries the page view into append and the gate
 already rejected it; the eight real escapes and the l22-9 false
 rejection are fixed with durable battery pins P210-P218 in the
-round-22 entry below. The
-durable battery is 500 cases (431 rejections, 69 benign acceptances)
+round-22 entry below. The round-23 delta
+re-review returned seven further gate findings (Luna); the lead
+probe-verified all seven on the true round-22 build: five were real
+escape classes (type assertions on func-field any call results and
+type-switch variables from the same base projected no asserted leaves,
+pointer-mutation methods on INDEXED elements never bound the container,
+indexed channel send/receive lost element provenance, and
+pointer-wrapped map parameters lost key-only range leaves), two are
+false positives (foreign exported struct fields skipped by
+failClosedCallFields are unreachable because banned imports and
+unloadable stdlib packages fail the gate closed, and variadic direct
+func-literal argument flow is already rejected in every probe shape),
+and the l23-5 function-call variant (set(xs[0], page)) is invalid Go:
+an indexed element is not addressable without an ampersand, so only the
+method form is a real class; the five real classes are fixed with
+durable battery pins P219-P223 in the round-23 entry below. The
+durable battery is 505 cases (436 rejections, 69 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -160,7 +175,7 @@ Rework outcome per finding:
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
   The durable mutation battery moved into the tool as table data
-  (500 cases: 431 rejections, 69 benign); the shell harness keeps only the import-boundary, module-graph,
+  (505 cases: 436 rejections, 69 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -174,10 +189,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 500-case battery, and the SOW audit.
+the import-graph gate with its 505-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 11,015 raw lines total (10,463 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 11,200 raw lines total (10,648 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1686,6 +1701,57 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 23 (delta re-review, 07081a2): luna failed the round-22
+  delta with seven findings; the lead probe-verified all seven on the
+  true round-22 build (probes /tmp/probe-l23-1..7 with lettered
+  variants): five were real escape classes, two are false positives,
+  and one reported variant is invalid Go. Real classes:
+  P219 type assertions on func-field any call results
+  (h.get().(B).Data with get func() any) projected no asserted leaves:
+  the base's whole-value taint was only projected inside the objOf
+  guard, so a DIRECT call base with no binding object never ran the
+  projection; the projection now runs for every assertion base after
+  the recorded-field and parameter paths;
+  P220 type-switch variables from the same base (switch v :=
+  h.get().(type) { case B: v.Data }) carried no asserted leaves:
+  typeSwitchJoin mirrors the value-switch join and records the
+  page-carrying leaves of every matched case type on the implicit
+  per-case variable (info.Implicits) when the asserted base is
+  whole-tainted;
+  P221 pointer-mutation methods on INDEXED elements (xs[0].Set(page))
+  never bound the container: applySummaryMutations now recognizes
+  chainContainsIndex receivers and binds the root container's element
+  records, under the selected field path when the receiver carries
+  one;
+  P222 indexed channel send/receive (cs[0] <- B{Data: page}; x :=
+  <-cs[0]; x.Data with cs []chan B) lost element provenance:
+  recordChanSendFields and chanRecvFields now record and resolve the
+  indexChainRoot container;
+  P223 pointer-wrapped map parameters (m *map[*B]int under a key-only
+  range) lost the key leaves: mapUnderlying unwraps the pointer layer.
+  False positives, probe-verified already rejected on the pre-fix
+  build (no change): l23-1/1b/1c foreign exported struct fields
+  skipped by failClosedCallFields are unreachable - image is a banned
+  import and net/crypto/x509 fail to type-load (missing vendored
+  x/net), so the gate fails closed on the type-check error; l23-4/4b/
+  4c variadic direct func-literal argument flow is rejected in every
+  probe shape. Invalid-Go variant: the l23-5 function-call form
+  set(xs[0], page) does not type-check (an indexed element is not
+  addressable without &), so only the method form is a real class.
+  battery 500 -> 505 (431 -> 436 rejections, 69 benign acceptances
+  unchanged). Gate tooling 10,463 -> 10,648 go-gate lines (+552
+  shell = 11,200 total). Five real escape classes fixed; two false
+  positives documented with probe evidence; one invalid-Go variant
+  recorded; none dismissed.
+  Validation at the closing commit: gate --self-test 505/505 (436
+  rejections, 69 benign) + 9 shell environment mutations exit 0,
+  production scan of v4/go clean (rc 0), all sixteen l23 probe trees
+  reject (rc 1) on the closing build, all 125 prior probe trees
+  re-scanned with the closing build: 119 reject and the five recorded
+  benigns stay accepted (probe-l18m, probe-r10-base, probe-r11-base,
+  luna1b/luna1c), go test ./... (both tag sets) including -race
+  -count=1, vet (go and go-gate), gofmt zero diffs, ten cross-builds,
+  the import-graph gate, and the SOW audit all pass.
 - Round 22 (delta re-review, 113867a): luna failed the round-21
   delta with nine findings; the lead probe-verified all nine on the
   true round-21 build (git archive HEAD, probes /tmp/probe-l22-1..9):
