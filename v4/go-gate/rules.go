@@ -600,6 +600,8 @@ func (w *fileRules) visit(n ast.Node) bool {
 		w.checkSend(v)
 	case *ast.TypeAssertExpr:
 		w.checkTypeAssert(v)
+	case *ast.TypeSwitchStmt:
+		w.checkTypeSwitch(v)
 	case *ast.CompositeLit:
 		w.checkComposite(v)
 	case *ast.ValueSpec:
@@ -1678,6 +1680,49 @@ func (w *fileRules) checkTypeAssert(v *ast.TypeAssertExpr) {
 	if src != nil && dst != nil && fileValueType(dst, map[types.Type]bool{}) && isInterfaceType(src) &&
 		(types.NewMethodSet(src).Len() == 0 || w.fileImplementableInterface(src)) {
 		w.fail(v.Pos(), "file-bearing value asserted out of an interface value (capability launder)")
+	}
+}
+
+// checkTypeSwitch flags a type switch that RECOVERS a file descriptor
+// from an interface value (switch v := factory().(type) { case *os.File:
+// ... }): like the explicit assertion form, the guarded interface's
+// static type cannot prove the descriptor is absent, and an unscanned
+// producer can mint one, so the case itself fails closed. Benign
+// switches over concrete (non-interface) values and default-only or
+// non-file case lists stay clean.
+func (w *fileRules) checkTypeSwitch(v *ast.TypeSwitchStmt) {
+	var guard ast.Expr
+	switch a := v.Assign.(type) {
+	case *ast.AssignStmt:
+		if len(a.Rhs) == 1 {
+			if ta, ok := unparen(a.Rhs[0]).(*ast.TypeAssertExpr); ok {
+				guard = ta.X
+			}
+		}
+	case *ast.ExprStmt:
+		if ta, ok := unparen(a.X.(*ast.TypeAssertExpr)).(*ast.TypeAssertExpr); ok {
+			guard = ta.X
+		}
+	}
+	if guard == nil {
+		return
+	}
+	src := w.typeOf(guard)
+	if src == nil || !isInterfaceType(src) ||
+		(types.NewMethodSet(src).Len() != 0 && !w.fileImplementableInterface(src)) {
+		return
+	}
+	for _, st := range v.Body.List {
+		cc, ok := st.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, caseExpr := range cc.List {
+			if ct := w.typeOf(caseExpr); ct != nil && fileValueType(ct, map[types.Type]bool{}) {
+				w.fail(v.Pos(), "file-bearing value recovered from an interface value by a type switch (capability launder)")
+				return
+			}
+		}
 	}
 }
 

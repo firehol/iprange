@@ -524,4 +524,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P148: file recovered from a non-empty interface by assertion", desc: "factory().(*os.File) with factory func() io.Reader names the descriptor as a typed file", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_08.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc ifaceAssertProbeR1308(factory func() io.Reader) *os.File {\n\treturn factory().(*os.File)\n}"},
 	}},
+
+	{name: "P149: file recovered from an interface by a type switch", desc: "switch v := factory().(type) { case *os.File: return v } recovers the descriptor like the assertion form", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_09.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc ifaceTypeSwitchProbeR1309(factory func() io.Reader) *os.File {\n\tswitch v := factory().(type) {\n\tcase *os.File:\n\t\treturn v\n\tdefault:\n\t\treturn nil\n\t}\n}"},
+	}},
 }
