@@ -1584,7 +1584,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   literals carry field taints, and package-scope stores write through
   to the shared global state (set-only, monotone fixpoint). Battery
   348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
-  5,712 -> 5,905 go-gate lines (+552 shell = 6,457 total).
+  5,712 -> 5,906 go-gate lines (+552 shell = 6,458 total).
   Validation at the closing commit: gate --self-test 357/357 (291
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,

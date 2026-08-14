@@ -19,7 +19,7 @@ close is pending the completion of that round (six-resident swarm, then
 sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,457-line typed scanner (5,905-line go/types module
+mmap gate is a 6,458-line typed scanner (5,906-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -52,7 +52,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (348
+  The durable mutation battery moved into the tool as table data (357
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -67,10 +67,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 348-case battery, and the SOW audit.
+the import-graph gate with its 357-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,264 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,458 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1366,7 +1366,7 @@ HEAD recorded in the first review entry below):
   literals carry field taints, and package-scope stores write through
   to the shared global state (set-only, monotone fixpoint). Battery
   348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
-  5,712 -> 5,905 go-gate lines (+552 shell = 6,457 total).
+  5,712 -> 5,906 go-gate lines (+552 shell = 6,458 total).
   Validation at the closing commit: gate --self-test 357/357 (291
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
