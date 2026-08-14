@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,487-line typed toolchain (8,935-line go/types module
+mmap gate is a 9,555-line typed toolchain (9,003-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -35,7 +35,7 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, and round-16
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, and round-17
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -69,8 +69,13 @@ fix (durable pins P162-P165) and the external method-value case is
 code-review-verified because the loader cannot resolve net and no
 loadable external concrete method returns a page-bearing value; all
 five are fixed with durable battery pins in the round-16 entry below.
-The durable battery is 447 cases (379 rejections, 68 benign
-acceptances) plus 9 shell environment mutations and passes end to end.
+The lead's same-failure search over the round-16 fixes found five
+further escapes in the same family (struct-valued BINDINGS from
+call-produced and selector sources lost field provenance, and nested
+call-produced selector chains never resolved), all probe-verified
+before any fix and pinned P166-P170 in the round-17 entry below. The
+durable battery is 452 cases (384 rejections, 68 benign acceptances)
+plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -104,10 +109,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 447-case battery, and the SOW audit.
+the import-graph gate with its 452-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,487 raw lines total (8,935 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,555 raw lines total (9,003 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1616,6 +1621,51 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 17 (lead same-failure search over the round-16 fixes): the
+  round-16 call-base fallbacks covered direct argument positions only;
+  the lead verified five escape families on a fresh HEAD build before
+  any fix (probes /tmp/probe-l17b): P166 a struct value bound from a
+  call-produced container element lost the element fields (x :=
+  makeList(page)[0] then take(x): the AssignStmt and DeclStmt field
+  switches resolved only recorded variable bases, while argFlowOf's
+  round-16 fallback applied to direct arguments; both binding sites now
+  resolve non-literal right sides through argFlowOf, the same
+  resolution direct argument flow uses, and materializeStructFields
+  applies the same fallback to closure parameters); P167 a bound
+  selected field of a call-produced struct lost provenance (x :=
+  makeBox(page).Inner: the argFlowOf selector call-branch built its
+  chain from the base only, so the outermost selection was never
+  stripped and the callee's flattened paths never matched; a new
+  callRootChain walk now collects every selector name down to the
+  producing call, and callProducedFields strips the full dotted prefix,
+  shared by argument flow, binding sites, and closure-parameter
+  materialization); P168 the same bound-selection gap for recorded
+  local bases (x := b.Inner with b.Inner.Data a page: the binding sites
+  had no SelectorExpr case at all; the selectorChain rename now
+  applies, with the parameter fallback for parameter-held bases);
+  P169 bound container-parameter elements lost the caller's leaves
+  inside a helper (x := xs[0] with xs a container parameter:
+  fieldTaintsOf's parameter fallback now feeds the binding resolution
+  exactly like direct argument flow); P170 nested call-produced
+  selector chains stayed reachable at every depth (makeBox(page)
+  .Inner.Inner.Data reads, take(makeBox(page).Inner.Inner) arguments,
+  and bound intermediates: propagateStructResult recorded only the
+  top-level field name of a returned struct literal instead of the
+  flattened dotted paths, so every nested selection missed; the
+  returned-literal path now joins compositeFields' flattened records,
+  and the evalExpr selector read resolves the full dotted chain through
+  callRootChain). Battery 447 -> 452 (379 -> 384 rejections, 68
+  benign). Gate tooling 8,935 -> 9,003 go-gate lines (+552 shell =
+  9,555 total).
+  Validation at the closing commit: gate --self-test 452/452 (384
+  rejections, 68 benign) + 9 shell environment mutations exit 0,
+  production scan clean on every scanned target, all round-17 probe
+  shapes reject on every scanned target and every prior probe tree
+  keeps its verdict (l16, luna15, f2only2, luna2, p16 reject; luna5
+  stays accepted), go test ./... (both tag sets), -race, vet (go and
+  go-gate), gofmt zero diffs, cross-builds for every shell-harness
+  target, the import-graph gate with the 452-case battery, and the SOW
+  audit all pass.
 - Round 16 (delta re-review): luna failed the round-15 delta at HEAD
   e03ecba with five findings; the lead reproduced four as real escapes on
   a fresh HEAD build before any fix (probes /tmp/probe-l16) and the fifth
