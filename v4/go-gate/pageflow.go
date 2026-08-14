@@ -1457,7 +1457,21 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			if v.Assign != nil {
 				pf.analyzeStmts(st, []ast.Stmt{v.Assign}, fs)
 			}
-			pf.switchJoin(st, v.Body.List, fs)
+			// The asserted expression's WHOLE-VALUE taint (v := x.(type)
+			// with x an unprovable call result or a page-carrying
+			// interface value) projects the page-carrying leaves of
+			// every matched case type onto the implicit per-case
+			// variable: go/types types the case variable with the case
+			// type (info.Implicits), and its field reads inside the
+			// clause resolve the recorded leaves exactly like a
+			// struct-typed local.
+			baseTainted := false
+			if as, ok := v.Assign.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && len(as.Lhs) == 1 {
+				if ta, ok := unparen(as.Rhs[0]).(*ast.TypeAssertExpr); ok {
+					baseTainted = pf.evalExpr(st, ta.X).tainted
+				}
+			}
+			pf.typeSwitchJoin(st, v.Body.List, fs, baseTainted)
 		case *ast.DeferStmt:
 			pf.evalExpr(st, v.Call)
 		case *ast.GoStmt:
@@ -1580,6 +1594,77 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 		// also keeps the pre-switch state reachable: its body is a no-op,
 		// so the fall-out state is the pre-switch state joined with every
 		// non-empty case body.
+		st.joinWith(pre)
+	}
+}
+
+// typeSwitchJoin mirrors switchJoin for a TYPE switch ("v := x.(type)")
+// and additionally projects the asserted base's whole-value taint onto
+// the page-carrying leaves of each matched case type: when the base is
+// an unprovable call result the concrete value is unknowable, so the
+// implicit per-case variable (info.Implicits) must fail closed on every
+// leaf the case type could carry, the same projection the direct
+// type-assert read applies. Fallthrough and the no-default join behave
+// exactly like the value switch.
+func (pf *pageFlow) typeSwitchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary, baseTainted bool) {
+	pre := st.clone()
+	first := true
+	hasDefault := false
+	emptyDefault := false
+	var fallState *stmtState
+	for _, c := range body {
+		cc, ok := c.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if cc.List == nil {
+			hasDefault = true
+			if len(cc.Body) == 0 {
+				emptyDefault = true
+			}
+		}
+		if len(cc.Body) == 0 {
+			continue
+		}
+		branch := st
+		if !first {
+			branch = pre.clone()
+		}
+		if fallState != nil {
+			branch.joinWith(fallState)
+		}
+		if baseTainted {
+			if cv, ok := pf.pc.info.Implicits[cc]; ok {
+				for path, ft := range paramLeafPaths(cv.Type()) {
+					if !paramCanCarryPage(ft) {
+						continue
+					}
+					if branch.structs[cv] == nil {
+						branch.structs[cv] = map[string]pageValue{}
+					}
+					branch.structs[cv][path] = pageValue{tainted: true, maxLen: maxUnknown}
+				}
+			}
+		}
+		pf.analyzeStmts(branch, cc.Body, fs)
+		if !first {
+			st.joinWith(branch)
+		}
+		first = false
+		falls := false
+		for _, b := range cc.Body {
+			if br, ok := b.(*ast.BranchStmt); ok && br.Tok == token.FALLTHROUGH {
+				falls = true
+				break
+			}
+		}
+		if falls {
+			fallState = branch.clone()
+		} else {
+			fallState = nil
+		}
+	}
+	if !hasDefault || emptyDefault {
 		st.joinWith(pre)
 	}
 }
@@ -1780,6 +1865,17 @@ func (pf *pageFlow) recordChanSendFields(st *stmtState, ch ast.Expr, fields map[
 	if o := objOfDeref(st, ch); o != nil {
 		record(o, "")
 	}
+	// An INDEXED channel (cs[0] <- B{Data: page} with cs []chan B)
+	// names an element of a container the same way an indexed struct
+	// store does: the channel's element records live on the root
+	// container object, and the matching receive resolves the same
+	// root, so the send must record there with no prefix.
+	if root := indexChainRoot(ch); root != ch {
+		if o := objOf(st, root); o != nil {
+			record(o, "")
+			return
+		}
+	}
 	if id, ok := unparen(ch).(*ast.Ident); ok {
 		if obj := pf.pc.info.ObjectOf(id); obj != nil {
 			if bind, ok := st.localBindings[obj]; ok {
@@ -1787,6 +1883,10 @@ func (pf *pageFlow) recordChanSendFields(st *stmtState, ch ast.Expr, fields map[
 					record(o, path+".")
 				} else if bo := objOfDeref(st, bind); bo != nil {
 					record(bo, "")
+				} else if broot := indexChainRoot(bind); broot != bind {
+					if bo := objOf(st, broot); bo != nil {
+						record(bo, "")
+					}
 				}
 			}
 		}
@@ -1827,11 +1927,25 @@ func (pf *pageFlow) chanRecvFields(st *stmtState, ch ast.Expr) map[string]pageVa
 	if o := objOfDeref(st, ch); o != nil {
 		add(o, "", false)
 	}
+	// An INDEXED channel (cs[0]) resolves the same root container the
+	// send recorded on: the received element fields are the root's
+	// element records, exactly like the indexed-store read path.
+	if root := indexChainRoot(ch); root != ch {
+		if o := objOf(st, root); o != nil {
+			add(o, "", false)
+		}
+	}
 	if id, ok := unparen(ch).(*ast.Ident); ok {
 		if obj := pf.pc.info.ObjectOf(id); obj != nil {
 			if bind, ok := st.localBindings[obj]; ok {
 				if o, path := selectorChain(st, bind); o != nil {
 					add(o, path+".", true)
+				} else if bo := objOfDeref(st, bind); bo != nil {
+					add(bo, "", false)
+				} else if broot := indexChainRoot(bind); broot != bind {
+					if bo := objOf(st, broot); bo != nil {
+						add(bo, "", false)
+					}
 				}
 			}
 		}
@@ -2386,6 +2500,25 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 					if idx, ok := st.params[obj]; ok && isInterfaceType(obj.Type()) {
 						if ft := assertLeafType(st.pf.pc.pkg, pf.pc.info.Types[ta.Type].Type, fullPath); ft != nil && paramCanCarryPage(ft) {
 							out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: fullPath, hasSrc: true}
+						}
+					}
+				}
+			}
+			// The asserted base may be an INTERFACE VALUE whose
+			// whole-value taint came from an unprovable callee result (a
+			// struct func field, a func var, or an interface method
+			// returning any) — including a DIRECT call base
+			// (h.get().(B).Data) that has no binding object of its own:
+			// the concrete value is unknowable, so every page-carrying
+			// leaf of the asserted type fails closed, exactly like the
+			// interface-result rule projects the callee's fields. A
+			// clean base contributes nothing, and a locally recorded or
+			// parameter-sourced taint above already wins.
+			if !out.tainted {
+				if basePv := pf.evalExpr(st, ta.X); basePv.tainted {
+					if t := pf.pc.info.Types[ta.Type].Type; t != nil {
+						if ft := assertLeafType(st.pf.pc.pkg, t, fullPath); ft != nil && paramCanCarryPage(ft) {
+							out = pageValue{tainted: true, maxLen: maxUnknown}
 						}
 					}
 				}
@@ -3763,6 +3896,31 @@ func (pf *pageFlow) applySummaryMutations(st *stmtState, call *ast.CallExpr, fs 
 					targets = append(targets, o)
 				}
 			}
+		} else if chainContainsIndex(argExpr) {
+			// xs[0].Set(page) and xs[0].Inner.Set(page): a method call
+			// on an INDEXED element implicitly addresses the element
+			// (the receiver is an addressable container slot), so the
+			// callee's pointer-parameter field mutations bind the root
+			// container's element records exactly like the &xs[0]
+			// argument form — under the selected field path when the
+			// receiver carries one.
+			chPath, root := selectorIndexChain(argExpr)
+			if root == nil {
+				root = indexChainRoot(argExpr)
+			}
+			if root != nil {
+				if o := objOf(st, root); o != nil {
+					targets = append(targets, o)
+					if chPath != "" {
+						prefix = chPath + "."
+					}
+				} else if o := objOfDeref(st, root); o != nil {
+					targets = append(targets, o)
+					if chPath != "" {
+						prefix = chPath + "."
+					}
+				}
+			}
 		}
 		if al := pf.derefTarget(st, argExpr, 0); al != nil {
 			dup := false
@@ -4360,6 +4518,13 @@ func mapUnderlying(t types.Type) *types.Map {
 		return u
 	case *types.Named:
 		return mapUnderlying(u.Underlying())
+	case *types.Pointer:
+		// A pointer-wrapped map parameter or field (m *map[*B]int)
+		// exposes the same key leaves as the map value itself: the
+		// key-only range and key-store rules dereference only map
+		// (and named-map) wrappers, so the pointer must unwrap here
+		// or every key leaf of the pointed-to map is lost.
+		return mapUnderlying(u.Elem())
 	}
 	return nil
 }
