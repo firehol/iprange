@@ -209,17 +209,19 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 
 // fileRules carries one file's rule pass.
 type fileRules struct {
-	rep     *reporter
-	pc      *packageCheck
-	imports map[string]string
-	path    string
-	exempts map[token.Pos]bool
+	rep         *reporter
+	pc          *packageCheck
+	imports     map[string]string
+	path        string
+	exempts     map[token.Pos]bool
+	pkgFuncVars map[types.Object]bool
 }
 
 // runRules applies every rule family to one file of one package.
 func runRules(rep *reporter, f *ast.File, pc *packageCheck, path string) {
 	w := &fileRules{rep: rep, pc: pc, imports: checkImports(rep, f), path: path}
 	w.exempts = findExemptions(w, f, path)
+	w.pkgFuncVars = collectPkgFuncVars(w.pc.info, f)
 	for _, decl := range f.Decls {
 		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body == nil {
 			rep.fail(fd.Pos(), "bodyless function declaration %s (assembly stub)", fd.Name.Name)
@@ -232,14 +234,15 @@ func runRules(rep *reporter, f *ast.File, pc *packageCheck, path string) {
 			if d.Body == nil {
 				continue
 			}
-			results := resultTypes(w, d.Type)
+			// Each ReturnStmt is checked against the result context of
+			// its own enclosing function literal: a nested literal's
+			// context must not leak into the enclosing body's returns
+			// (nor the enclosing context into the literal's).
+			retCtx := map[ast.Node][]types.Type{}
+			mapReturnCtxs(w, d.Body, resultTypes(w, d.Type), retCtx)
 			ast.Inspect(d.Body, func(n ast.Node) bool {
-				if lit, ok := n.(*ast.FuncLit); ok {
-					// result types switch to the literal's own
-					results = resultTypes(w, lit.Type)
-				}
 				if ret, ok := n.(*ast.ReturnStmt); ok {
-					w.checkReturnCtx(ret, results)
+					w.checkReturnCtx(ret, retCtx[ret])
 					return true
 				}
 				return w.visit(n)
@@ -247,6 +250,29 @@ func runRules(rep *reporter, f *ast.File, pc *packageCheck, path string) {
 		default:
 			ast.Inspect(d, w.visit)
 		}
+	}
+}
+
+// mapReturnCtxs records, for every ReturnStmt in n, the result types of
+// the function (literal or declaration) that directly contains it.
+func mapReturnCtxs(w *fileRules, n ast.Node, ctx []types.Type, out map[ast.Node][]types.Type) {
+	switch v := n.(type) {
+	case nil:
+		return
+	case *ast.ReturnStmt:
+		out[v] = ctx
+	case *ast.FuncLit:
+		// Only the literal's body runs in the literal's own context; the
+		// enclosing context resumes for the literal's siblings.
+		mapReturnCtxs(w, v.Body, resultTypes(w, v.Type), out)
+	default:
+		ast.Inspect(n, func(c ast.Node) bool {
+			if c == nil || c == n {
+				return true // descend into the direct children only
+			}
+			mapReturnCtxs(w, c, ctx, out)
+			return false
+		})
 	}
 }
 
@@ -645,7 +671,21 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	}
 	approved := w.approvedCallee(fun)
 	formals := w.callFormals(fun)
-	transfer := !approved && !exempt && resultHoldsBytes(w.typeOf(v))
+	// A call with no result (a void callback or an unproven function
+	// variable) can still copy a full mapped page into owned memory
+	// inside a body the scan cannot follow; the fail-closed contract
+	// treats such calls as transfers when a variable indirection hides
+	// the callee. Calls with a scalar result stay reads: a checksum or
+	// length lookup cannot move the bytes into owned storage.
+	voidVarCall := false
+	if id, ok := fun.(*ast.Ident); ok {
+		if _, isVar := w.pc.info.Uses[id].(*types.Var); isVar {
+			if rt := w.typeOf(v); rt == nil || isVoidTuple(rt) {
+				voidVarCall = true
+			}
+		}
+	}
+	transfer := !approved && !exempt && (resultHoldsBytes(w.typeOf(v)) || voidVarCall)
 	// A call whose RESULT is a live descriptor is itself a capacity mint:
 	// closures and function variables can materialize a file (os.Stdout,
 	// os.Pipe) that no argument rule ever sees, and os functions mint
@@ -653,8 +693,21 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// is a capability launder. The mapping owner keeps its constructor
 	// surface (os.OpenFile/os.NewFile) and is policed by the receiver
 	// and selector rules instead.
-	if resT := w.typeOf(v); resT != nil && !isMappingOwnerPath(w.pc.pkg.Path()) &&
-		fileValueType(resT, map[types.Type]bool{}) {
+	resT := w.typeOf(v)
+	// An unproven function variable whose result is an interface can
+	// materialize a file-backed value (a func() io.Reader factory with an
+	// unscanned body); the interface erasure rules cannot see through it,
+	// so outside the mapping owner it fails closed like a concrete
+	// file-bearing result.
+	interfaceVarResult := false
+	if id, ok := fun.(*ast.Ident); ok {
+		if v, isVar := w.pc.info.Uses[id].(*types.Var); isVar && w.pkgFuncVars[v] &&
+			!w.approvedFuncVar(v, 0) {
+			interfaceVarResult = isInterfaceType(resT)
+		}
+	}
+	if resT != nil && !isMappingOwnerPath(w.pc.pkg.Path()) &&
+		(fileValueType(resT, map[types.Type]bool{}) || interfaceVarResult) {
 		switch f := fun.(type) {
 		case *ast.FuncLit:
 			w.fail(v.Pos(), "func literal returns a file-bearing value outside the mapping owner (capability launder)")
@@ -685,6 +738,45 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		}
 	}
 	w.checkInterfaceErasure(v, formals)
+}
+
+// collectPkgFuncVars records package-level function-typed variables
+// declared in the file (with or without an initializer). The capability
+// rules apply the fail-closed interface-result test to package vars only:
+// local variables are either literal-bound (their body is scanned) or
+// trace back to a package variable or a caller-supplied parameter, both
+// of which are policed at their own boundary.
+func collectPkgFuncVars(info *types.Info, f *ast.File) map[types.Object]bool {
+	out := map[types.Object]bool{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range vs.Names {
+				obj := info.ObjectOf(name)
+				if obj == nil {
+					continue
+				}
+				if _, ok := obj.Type().(*types.Signature); ok {
+					out[obj] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// isVoidTuple reports whether t is the empty multi-result tuple of a
+// call without results.
+func isVoidTuple(t types.Type) bool {
+	tup, ok := t.(*types.Tuple)
+	return ok && tup.Len() == 0
 }
 
 // resultHoldsBytes reports whether the call's result type can carry byte
@@ -856,6 +948,23 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	src := w.pageValue(v.Args[len(v.Args)-1])
 	if src.tainted && pageFull(src) {
 		w.fail(v.Pos(), "append of a mapped page view into an owned buffer (complete page)")
+	}
+	// An append whose destination is a complete mapped page view with no
+	// capacity headroom (a minted Page/View or page[0:4096:4096]) forces
+	// Go to allocate a fresh owned array and copy the whole page into it.
+	// Bounded views and owned buffers stay legal.
+	if dv := w.pageValue(v.Args[0]); dv.tainted {
+		full := false
+		if dv.maxLen == pageSize {
+			full = true
+		} else if dv.hasSym {
+			if c, ok := dv.sym.isConst(); ok && c == pageSize {
+				full = true
+			}
+		}
+		if full {
+			w.fail(v.Pos(), "append into a complete mapped page view (full page reallocated into owned memory)")
+		}
 	}
 }
 

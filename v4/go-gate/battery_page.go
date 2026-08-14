@@ -140,4 +140,55 @@ var batteryPageCases = []batteryCase{
 	{name: "P38: bounded append through a loop stays legal", desc: "loop { out = append(out, page[48:112]...) }; append(owned, out...) stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_loopbounded.go", content: "package reader\n\nfunc loopBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\tfor i := 0; i < 2; i++ {\n\t\tout = append(out, page[48:112]...)\n\t}\n\treturn append([]byte{}, out...), nil\n}"},
 	}},
+	{name: "P39: helper summary keeps any tainted source (choose)", desc: "choose(nil, page, true) returns the page through a two-source summary and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_choose.go", content: "package reader\n\nfunc choose39(a, b []byte, takeB bool) []byte {\n\tif takeB {\n\t\treturn b\n\t}\n\treturn a\n}\n\nfunc chooseProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, choose39(nil, page, true)...), nil\n}"},
+	}},
+	{name: "P40: named result with a naked return carries page taint", desc: "func pass(p []byte) (out []byte) { out = p; return } appended must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedret.go", content: "package reader\n\nfunc pass40(p []byte) (out []byte) {\n\tout = p\n\treturn\n}\n\nfunc namedRetProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, pass40(page)...), nil\n}"},
+	}},
+	{name: "P41: multi-result struct field keeps page taint", desc: "c, err := multi(page); append(owned, c.Data...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_multistruct.go", content: "package reader\n\ntype chunk41 struct{ Data []byte }\n\nfunc multi41(p []byte) (chunk41, error) { return chunk41{Data: p}, nil }\n\nfunc multiStructProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tc, err2 := multi41(page)\n\tif err2 != nil {\n\t\treturn nil, err2\n\t}\n\treturn append([]byte{}, c.Data...), nil\n}"},
+	}},
+	{name: "P42: void unknown callback receiving a full page", desc: "var fn func([]byte); fn(page) with an unproven void callee must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_voidcallback.go", content: "package reader\n\nfunc voidCallbackProbe(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar fn func([]byte)\n\tfn(page)\n\treturn nil\n}"},
+	}},
+	{name: "P43: append into a complete mapped page view", desc: "append(page[0:4096:4096], page[:1]...) reallocates the full page into owned memory and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_appenddest.go", content: "package reader\n\nfunc appendDestProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append(page[0:4096:4096], page[:1]...), nil\n}"},
+	}},
+	{name: "P44: element store into a local container", desc: "slots[0] = page; append(owned, slots[0]...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_indexstore.go", content: "package reader\n\nfunc indexStoreProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tslots := make([][]byte, 1)\n\tslots[0] = page\n\treturn append([]byte{}, slots[0]...), nil\n}"},
+	}},
+	{name: "P45: dereference store into a pointed-to variable", desc: "*h = page; append(owned, *h...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_derefstore.go", content: "package reader\n\nfunc derefStoreProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar holder []byte\n\th := &holder\n\t*h = page\n\treturn append([]byte{}, *h...), nil\n}"},
+	}},
+	{name: "P46: range variable over a page collection", desc: "for _, p := range [][]byte{page} { append(owned, p...) } must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_rangevar.go", content: "package reader\n\nfunc rangeVarProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\tfor _, p := range [][]byte{page} {\n\t\tout = append(out, p...)\n\t}\n\treturn out, nil\n}"},
+	}},
+	{name: "P47: interface boxing conversion keeps page taint", desc: "x := any(page); append(owned, x.([]byte)...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_anyconv.go", content: "package reader\n\nfunc anyConvProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := any(page)\n\treturn append([]byte{}, x.([]byte)...), nil\n}"},
+	}},
+	{name: "P48: interface-typed identity helper keeps page taint", desc: "idAny(page).([]byte) through func idAny(v any) any must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_anyident.go", content: "package reader\n\nfunc idAny48(v any) any { return v }\n\nfunc anyIdentProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, idAny48(page).([]byte)...), nil\n}"},
+	}},
+	{name: "P49: channel round trip keeps page taint", desc: "ch <- page; p := <-ch; append(owned, p...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_chan.go", content: "package reader\n\nfunc chanProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tch := make(chan []byte)\n\tch <- page\n\tp := <-ch\n\treturn append([]byte{}, p...), nil\n}"},
+	}},
+	{name: "P50: switch fallthrough carries the previous case state", desc: "case 0 assigns the page, fallthrough into case 1 appends it; must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fallthrough.go", content: "package reader\n\nfunc fallProbe(r *ImmutableReader, pgno uint32, n int) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\tswitch n {\n\tcase 0:\n\t\tout = page\n\t\tfallthrough\n\tcase 1:\n\t\treturn append([]byte{}, out...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+	{name: "P51: nested func-literal result context must not leak", desc: "func leak(f *os.File) any with an inner func() *os.File returning nil; the outer return f must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_nestedlit.go", content: "package reader\n\nimport \"os\"\n\nfunc leakFile51(f *os.File) any {\n\t_ = func() *os.File { return nil }\n\treturn f\n}"},
+	}},
+	{name: "P52: unproven package func var with an interface result", desc: "var makeR func() io.Reader; makeR() outside the mapping owner must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_ifacereader.go", content: "package reader\n\nimport \"io\"\n\nvar makeR52 func() io.Reader\n\nfunc ifaceReaderProbe() {\n\t_ = makeR52()\n}"},
+	}},
+	{name: "P53: choose with a bounded second source stays legal", desc: "choose(nil, page[48:112], true) appended stays below a complete page", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_choosebounded.go", content: "package reader\n\nfunc chooseB53(a, b []byte, takeB bool) []byte {\n\tif takeB {\n\t\treturn b\n\t}\n\treturn a\n}\n\nfunc chooseBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, chooseB53(nil, page[48:112], true)...), nil\n}"},
+	}},
+	{name: "P54: fallthrough with a bounded assignment stays legal", desc: "case 0 assigns a bounded view, fallthrough into case 1 appends it; stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fallbounded.go", content: "package reader\n\nfunc fallBoundedProbe(r *ImmutableReader, pgno uint32, n int) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar out []byte\n\tswitch n {\n\tcase 0:\n\t\tout = page[48:112]\n\t\tfallthrough\n\tcase 1:\n\t\treturn append([]byte{}, out...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+	{name: "P55: named result with a bounded view stays legal", desc: "func pass(p []byte) (out []byte) { out = p[48:112]; return } appended stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedbounded.go", content: "package reader\n\nfunc passB55(p []byte) (out []byte) {\n\tout = p[48:112]\n\treturn\n}\n\nfunc namedBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, passB55(page)...), nil\n}"},
+	}},
 }

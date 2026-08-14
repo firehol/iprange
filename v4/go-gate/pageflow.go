@@ -115,6 +115,26 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 			return s.constVal
 		case "paramMax":
 			if s.param >= 0 && s.param < len(args) {
+				if a := args[s.param]; a.hasSym {
+					if c, ok := a.sym.isConst(); ok {
+						return c
+					}
+				}
+				return args[s.param].maxLen
+			}
+			return maxUnknown
+		case "param":
+			// A result that is literally a parameter keeps the caller's
+			// argument bound: a bounded slice argument (page[48:112])
+			// stays below a complete page, a full page stays full. The
+			// zero symbol must not be read as constant: only hasSym
+			// values carry a real bound.
+			if s.param >= 0 && s.param < len(args) {
+				if a := args[s.param]; a.hasSym {
+					if c, ok := a.sym.isConst(); ok {
+						return c
+					}
+				}
 				return args[s.param].maxLen
 			}
 			return maxUnknown
@@ -145,18 +165,25 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 	out := pageValue{}
 	var fields map[string]pageValue
 	for _, r := range fs.results {
-		if !r.tainted || !taintOf(r.srcs[0]) {
+		// A result with several recorded sources is tainted when ANY
+		// source is tainted at the call site: a helper choosing between
+		// two parameters (choose(a, b, takeB)) records both, and the
+		// first may be a clean nil while the second carries the page.
+		if !r.tainted || !anyTainted(r.srcs, taintOf) {
 			continue
 		}
 		out.tainted = true
 		for _, s := range r.srcs {
+			if !taintOf(s) {
+				continue
+			}
 			if m := val(s); m == maxUnknown || m > out.maxLen {
 				out.maxLen = m
 			}
 		}
 	}
 	for name, r := range fs.fields {
-		if !r.tainted || !taintOf(r.srcs[0]) {
+		if !r.tainted || !anyTainted(r.srcs, taintOf) {
 			continue
 		}
 		if fields == nil {
@@ -164,13 +191,28 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 		}
 		pv := pageValue{tainted: true, maxLen: maxUnknown}
 		for _, s := range r.srcs {
-			if m := val(s); m == maxUnknown || m > pv.maxLen {
+			if !taintOf(s) {
+				continue
+			}
+			m := val(s)
+			if m == maxUnknown || m > pv.maxLen {
 				pv.maxLen = m
 			}
 		}
 		fields[name] = pv
 	}
 	return out, fields
+}
+
+// anyTainted reports whether at least one source is tainted at the call
+// site; maxLen therefore accumulates only over the tainted sources.
+func anyTainted(srcs []maxSrc, taintOf func(maxSrc) bool) bool {
+	for _, s := range srcs {
+		if taintOf(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // evalResults returns one concrete value per summarized result slot, so a
@@ -183,6 +225,26 @@ func (fs *funcSummary) evalResults(args []pageValue, argVals []symbol, argFlows 
 			return s.constVal
 		case "paramMax":
 			if s.param >= 0 && s.param < len(args) {
+				if a := args[s.param]; a.hasSym {
+					if c, ok := a.sym.isConst(); ok {
+						return c
+					}
+				}
+				return args[s.param].maxLen
+			}
+			return maxUnknown
+		case "param":
+			// A result that is literally a parameter keeps the caller's
+			// argument bound: a bounded slice argument (page[48:112])
+			// stays below a complete page, a full page stays full. The
+			// zero symbol must not be read as constant: only hasSym
+			// values carry a real bound.
+			if s.param >= 0 && s.param < len(args) {
+				if a := args[s.param]; a.hasSym {
+					if c, ok := a.sym.isConst(); ok {
+						return c
+					}
+				}
 				return args[s.param].maxLen
 			}
 			return maxUnknown
@@ -212,11 +274,14 @@ func (fs *funcSummary) evalResults(args []pageValue, argVals []symbol, argFlows 
 	}
 	out := make([]pageValue, len(fs.results))
 	for i, r := range fs.results {
-		if !r.tainted || !taintOf(r.srcs[0]) {
+		if !r.tainted || !anyTainted(r.srcs, taintOf) {
 			continue
 		}
 		pv := pageValue{tainted: true}
 		for _, s := range r.srcs {
+			if !taintOf(s) {
+				continue
+			}
 			if m := val(s); m == maxUnknown || m > pv.maxLen {
 				pv.maxLen = m
 			}
@@ -446,12 +511,38 @@ func objOf(st *stmtState, e ast.Expr) types.Object {
 func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	fs.results = make([]fieldTaint, 0)
 	fs.fields = map[string]fieldTaint{}
+	named := map[types.Object]int{}
 	if st.fd.Type.Results != nil {
-		for range st.fd.Type.Results.List {
-			fs.results = append(fs.results, fieldTaint{})
+		slot := 0
+		for _, r := range st.fd.Type.Results.List {
+			if len(r.Names) == 0 {
+				fs.results = append(fs.results, fieldTaint{})
+				slot++
+				continue
+			}
+			for _, name := range r.Names {
+				fs.results = append(fs.results, fieldTaint{})
+				named[pf.pc.info.ObjectOf(name)] = slot
+				slot++
+			}
 		}
 	}
 	pf.analyzeStmts(st, st.fd.Body.List, fs)
+	// Named results with a naked return: the body's stores to the named
+	// result variables are the function's results. Fields of a named
+	// struct result are recorded the same way.
+	for obj, slot := range named {
+		if pv, ok := st.stmtVars[obj]; ok && pv.tainted {
+			fs.results[slot] = joinFieldTaint(fs.results[slot], fieldTaint{tainted: true, srcs: maxSrcOf(pv)})
+		}
+		if m, ok := st.structs[obj]; ok {
+			for k, fv := range m {
+				if fv.tainted {
+					fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
+		}
+	}
 }
 
 func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary) {
@@ -479,6 +570,21 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 							}
 							pf.bindLocalFunc(st, lhs, nil)
 							assignTarget(st, lhs, pv)
+						}
+						// Struct-result calls also record their field
+						// taints per slot (chunk, err := Decode(page)
+						// keeps chunk.Data page-sourced).
+						if fields, ok := pf.callFields[call]; ok {
+							for _, lhs := range v.Lhs {
+								if obj := objOf(st, lhs); obj != nil {
+									if st.structs[obj] == nil {
+										st.structs[obj] = map[string]pageValue{}
+									}
+									for k, fv := range fields {
+										st.structs[obj][k] = fv
+									}
+								}
+							}
 						}
 						delete(pf.callResults, call)
 						delete(pf.callFields, call)
@@ -548,8 +654,11 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					}
 				}
 			}
-			if len(v.Results) == 1 && len(fs.results) >= 1 {
-				pf.propagateStructResult(st, v.Results[0], fs)
+			// Struct-field results are recorded for every returned
+			// expression, so a multi-result return (chunk, err) keeps the
+			// struct's field taints (chunk.Data) in the summary.
+			for _, rv := range v.Results {
+				pf.propagateStructResult(st, rv, fs)
 			}
 		case *ast.IfStmt:
 			if v.Init != nil {
@@ -581,14 +690,32 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			}
 			st.joinWith(pre) // zero iterations stay possible
 		case *ast.RangeStmt:
+			// Range variables are bound from the container's element
+			// taint: a page collection ranged over (for _, p := range
+			// [][]byte{page}) must taint the loop value, or appends of
+			// it inside the body lose the source.
 			if v.X != nil {
-				pf.evalExpr(st, v.X)
+				if xpv := pf.evalExpr(st, v.X); xpv.tainted {
+					for _, rv := range []ast.Expr{v.Key, v.Value} {
+						if rv == nil {
+							continue
+						}
+						if obj := objOf(st, rv); obj != nil && typeCanCarryPage(obj.Type()) {
+							st.stmtVars[obj] = derivedPageValue(xpv)
+						}
+					}
+				}
 			}
 			pre := st.clone()
 			pf.analyzeStmts(st, v.Body.List, fs)
 			st.joinWith(pre) // zero iterations stay possible
 		case *ast.ExprStmt:
 			pf.evalExpr(st, v.X)
+		case *ast.SendStmt:
+			// A send of a page view taints the channel variable; a later
+			// receive (p := <-ch) derives the taint from it.
+			pv := pf.evalExpr(st, v.Value)
+			assignTarget(st, v.Chan, pv)
 		case *ast.SwitchStmt:
 			if v.Init != nil {
 				pf.analyzeStmts(st, []ast.Stmt{v.Init}, fs)
@@ -623,12 +750,12 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 				switch comm := cc.Comm.(type) {
 				case *ast.SendStmt:
-					pf.evalExpr(branch, comm.Chan)
-					pf.evalExpr(branch, comm.Value)
+					pv := pf.evalExpr(branch, comm.Value)
+					assignTarget(branch, comm.Chan, pv)
 				case *ast.AssignStmt:
-					for _, rhs := range comm.Rhs {
-						pf.evalExpr(branch, rhs)
-					}
+					// Receive form (p := <-ch): reuses the normal
+					// assignment path including the ARROW receive taint.
+					pf.analyzeStmts(branch, []ast.Stmt{comm}, fs)
 				case *ast.ExprStmt:
 					pf.evalExpr(branch, comm.X)
 				}
@@ -651,6 +778,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) {
 	pre := st.clone()
 	first := true
+	var fallState *stmtState
 	for _, c := range body {
 		cc, ok := c.(*ast.CaseClause)
 		if !ok || len(cc.Body) == 0 {
@@ -660,11 +788,28 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 		if !first {
 			branch = pre.clone()
 		}
+		if fallState != nil {
+			// The previous case ends with fallthrough: its end state is
+			// visible in this case's body.
+			branch.joinWith(fallState)
+		}
 		pf.analyzeStmts(branch, cc.Body, fs)
 		if !first {
 			st.joinWith(branch)
 		}
 		first = false
+		falls := false
+		for _, b := range cc.Body {
+			if br, ok := b.(*ast.BranchStmt); ok && br.Tok == token.FALLTHROUGH {
+				falls = true
+				break
+			}
+		}
+		if falls {
+			fallState = branch.clone()
+		} else {
+			fallState = nil
+		}
 	}
 }
 
@@ -730,6 +875,16 @@ func assignTarget(st *stmtState, lhs ast.Expr, pv pageValue) {
 				delete(m, v.Sel.Name)
 			}
 		}
+	case *ast.IndexExpr:
+		// An element store (slots[0] = page, m[k] = page) makes the
+		// container itself page-carrying; element reads derive the taint.
+		assignTarget(st, v.X, pv)
+	case *ast.IndexListExpr:
+		assignTarget(st, v.X, pv)
+	case *ast.StarExpr:
+		// A dereference store (*holder = page) marks the pointed-to
+		// variable; dereference reads propagate it.
+		assignTarget(st, v.X, pv)
 	}
 }
 
@@ -842,7 +997,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 		if obj := st.pf.pc.info.ObjectOf(v); obj != nil {
 			if pv, ok := st.stmtVars[obj]; ok {
 				out = pv
-			} else if idx, ok := st.params[obj]; ok && typeCanCarryPage(obj.Type()) {
+			} else if idx, ok := st.params[obj]; ok && paramCanCarryPage(obj.Type()) {
 				out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, hasSrc: true}
 			}
 		} else if pv, ok := st.pkgVars[v.Name]; ok {
@@ -854,7 +1009,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 				if pv, ok := m[v.Sel.Name]; ok {
 					out = pv
 				}
-			} else if idx, ok := st.params[obj]; ok && typeCanCarryPage(paramFieldType(obj, v.Sel.Name)) {
+			} else if idx, ok := st.params[obj]; ok && paramCanCarryPage(paramFieldType(obj, v.Sel.Name)) {
 				out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
 			}
 		}
@@ -876,6 +1031,11 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 	case *ast.UnaryExpr:
 		switch v.Op {
 		case token.AND, token.MUL:
+			out = pf.evalExpr(st, v.X)
+		case token.ARROW:
+			// A receive takes the channel's element taint: a page sent
+			// on the channel earlier (SendStmt) stays tainted on the
+			// receiving side.
 			out = pf.evalExpr(st, v.X)
 		}
 	case *ast.StarExpr:
@@ -1140,6 +1300,12 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		for _, a := range call.Args {
 			pf.evalExpr(st, a)
 		}
+		// Type conversions (any(page), []byte(x), string(x), [N]byte(x))
+		// keep the bytes' taint: boxing into an interface or converting
+		// between byte shapes does not launder a mapped view.
+		if len(call.Args) == 1 && pf.pc.info.Types[call.Fun].IsType() {
+			return pf.evalExpr(st, call.Args[0])
+		}
 		if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "append" && len(call.Args) >= 2 {
 			// append's result owns the appended source bytes: the
 			// statement state must carry the taint so a later append of
@@ -1228,11 +1394,16 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	}
 	rv, fields := fs.eval(args, argVals, argFlows)
 	pf.callResults[call] = fs.evalResults(args, argVals, argFlows)
+	// Struct fields are recorded even when the whole result slot is
+	// tainted: (chunk, err) helpers hand the page out through chunk.Data,
+	// and the statement state reads that field when the append sink runs.
+	if len(fields) > 0 {
+		pf.callFields[call] = fields
+	}
 	if rv.tainted {
 		return rv
 	}
 	if len(fields) > 0 {
-		pf.callFields[call] = fields
 		return pageValue{tainted: true, maxLen: maxUnknown}
 	}
 	return pageValue{}
@@ -1256,11 +1427,23 @@ func (pf *pageFlow) evalLitResults(fs *funcSummary, bound []pageValue, _ *ast.Fu
 				m = src.constVal
 			case "param":
 				if src.param >= 0 && src.param < len(bound) {
-					m = bound[src.param].maxLen
+					b := bound[src.param]
+					m = b.maxLen
+					if b.hasSym {
+						if c, ok := b.sym.isConst(); ok {
+							m = c
+						}
+					}
 				}
 			case "paramMax":
 				if src.param >= 0 && src.param < len(bound) {
-					m = bound[src.param].maxLen
+					b := bound[src.param]
+					m = b.maxLen
+					if b.hasSym {
+						if c, ok := b.sym.isConst(); ok {
+							m = c
+						}
+					}
 				}
 			}
 			if m == maxUnknown || m > pv.maxLen {
@@ -1436,7 +1619,9 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		}
 		pv := pf.evalExpr(st, val)
 		if pv.tainted {
-			fs.fields[field.Name()] = fieldTaint{tainted: true, srcs: maxSrcOf(pv)}
+			if _, exists := fs.fields[field.Name()]; !exists {
+				fs.fields[field.Name()] = fieldTaint{tainted: true, srcs: maxSrcOf(pv)}
+			}
 		}
 	}
 }
@@ -1483,6 +1668,22 @@ func typeCanCarryPage(t types.Type) bool {
 func isByteElem(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.Uint8
+}
+
+// paramCanCarryPage reports whether a function parameter can receive a
+// mapped page view: concrete byte-carrying types (typeCanCarryPage) plus
+// directly interface-typed parameters (func idAny(v any) any { return v }
+// keeps the caller's taint through the summary). Variadic ([]T) and
+// []interface{} parameters are deliberately excluded: production
+// formatting helpers (corrupt, headerErr) spread such slices into
+// fmt.Sprintf, and minting them would flag the spread at every helper
+// definition regardless of callers. The taint stays call-site-sensitive:
+// a clean argument never taints.
+func paramCanCarryPage(t types.Type) bool {
+	if typeCanCarryPage(t) {
+		return true
+	}
+	return isInterfaceType(t)
 }
 
 // paramFieldType returns the static type of a named field of the struct
