@@ -159,7 +159,7 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(4,548 lines) plus a trimmed shell harness (552 lines) whose 305-case
+(5,104 lines) plus a trimmed shell harness (552 lines) whose 320-case
 durable battery includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
@@ -1273,13 +1273,13 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 305 cases (282 source-transfer forms + 23
-  complete-page forms; 246 rejections, 59 benign acceptances). The shell
+  data inside the tool: 320 cases (257 rejections, 63 benign acceptances)
+  covering source-transfer, complete-page, and file-capability forms. The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 4,548 (tool) + 552 (shell) = 5,100
+  unlistable module). Gate totals: 5,104 (tool) + 552 (shell) = 5,656
   lines against module production 5,049 / tests 5,180.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
@@ -1294,7 +1294,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   moved to the shell self-test.
 - Validation at the rework commit: go test ./... (both tag sets),
   -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
-  gate --self-test 305/305 + 9 shell mutations exit 0, production scan
+  gate --self-test 320/320 + 9 shell mutations exit 0, production scan
   across all five target configs exit 0, cross-compilation, Rust
   conformance corpus cross-open, SOW audit green.
 
@@ -1389,6 +1389,51 @@ Fixes (one commit; HEAD recorded in the review entry below):
   shell mutations exit 0, production scan clean on all five targets,
   go test ./... (both tag sets), -race, vet, gofmt zero diffs, SOW
   audit green.
+
+- Swarm round at HEAD 2ad4001 (2026-08-14): the independent round
+  review returned nine gate findings (Luna resident), all reproduced by
+  the lead against the tree (exact mutation probes, gate exit 0):
+  1. helper summaries lost page taint through parameter flow (maxLen
+     accumulated from 0, so maxUnknown -1 never registered);
+  2. direct function aliases and local closures lost page taint at the
+     call site;
+  3. container element extraction (xs[0]) was unmodeled;
+  4. pointer and generic byte parameters were not page-tainted, and
+     expression-position pointer dereference was unmodeled;
+  5. branch and loop states overwrote instead of joined, and append
+     results dropped source taint (post-loop append of a
+     branch-tainted accumulator passed);
+  6. multi-result calls mapped one RHS to the first LHS slot only;
+  7. named array/string conversion sinks ([4096]byte(page), string(page)
+     through named types) were unrecognized;
+  8. file-capability laundering through nested or package-level func
+     literals and os.Stdin/Stdout/Stderr aliases passed outside the
+     mapping owner;
+  9. the Mapping.View mint expected three arguments while the method
+     takes two.
+  Fix (HEAD f96d13d, v4/go-gate): summary joins treat maxUnknown as at
+  least the summary max; local funcs are bound and calleeTarget chains
+  resolve local plus package-level aliases with call-site-bound literal
+  analysis; IndexExpr/IndexListExpr derive element page values while
+  preserving the parameter source (generic xs[0] stays caller-dependent);
+  typeCanCarryPage recurses through pointers and accepts type
+  parameters, and StarExpr is modeled; If/Switch/TypeSwitch/Select and
+  For/Range clone-and-join states, and append results carry source
+  taint; multi-result assignments consume fresh per-slot callResults;
+  the array/string sink check unwraps Named/Alias types; os stream
+  selectors and file-bearing call results fail outside the mapping
+  owner; the View mint now takes the length from Args[1].
+  Pinned as battery forms P24-P38 (eleven rejects: same-package helper,
+  local closure, package func-alias var, element extraction, pointer
+  deref, generic identity, post-loop append, multi-result slot, named
+  array conversion, named string conversion, func-lit file return;
+  four accepts: bounded View copy, bounded slice through local closure,
+  bounded multi-result slot, bounded loop append); battery 305 -> 320
+  (246 -> 257 rejections, 59 -> 63 benign).
+  Validation at HEAD f96d13d: gate --self-test 320/320 + 9 shell
+  mutations exit 0, production scan clean on all five targets, go test
+  ./... (both tag sets), -race, vet, gofmt zero diffs,
+  cross-compilation (windows/darwin/freebsd), SOW audit green.
 
 Review outcome (six-resident swarm, then sol, per the user's review
 process): recorded after the entry below when the review completes.

@@ -4,20 +4,27 @@
 Status: in-progress
 
 Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
-(2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; milestone
-close is pending the sol final gate (user review decision: six-resident
-swarm, then sol). All three review findings are fixed: the hot path has
-one authoritative key-only search primitive with test-only
-necessary-work counters and benchmarks; the mmap gate is a 5,100-line
-typed scanner (4,548-line go/types module plus the 552-line
-shell boundary/self-test harness, down from 14,519) that detects
-complete-page ownership; follow-up swarm rounds closed seven bypass
-classes (function-variable callees, closure/defer/go bodies,
-func-literal variables, reassigned function variables, multi-hop
-function-variable chains, range-rebound variables, address-taken
-variables) with durable battery pins; the Status is compact with the full history in
-the appendix. The durable battery is 305 cases (246 rejections, 59 benign
-acceptances) plus 9 shell environment mutations and passes end to end.
+(2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; the next
+swarm round at HEAD 2ad4001 returned nine gate findings, all reproduced
+by the lead and fixed at HEAD f96d13d with battery pins; milestone
+close is pending the next swarm round and the sol final gate (user
+review decision: six-resident swarm, then sol). All three review
+findings are fixed: the hot path has one authoritative key-only search
+primitive with test-only necessary-work counters and benchmarks; the
+mmap gate is a 5,656-line typed scanner (5,104-line go/types module
+plus the 552-line shell boundary/self-test harness, down from 14,519)
+that detects complete-page ownership; follow-up swarm rounds closed
+fifteen bypass classes (function-variable callees, closure/defer/go
+bodies, func-literal variables, reassigned function variables,
+multi-hop function-variable chains, range-rebound variables,
+address-taken variables, helper-summary parameter flow, local closures
+and function aliases, container element extraction, pointer and
+type-parameter page taint, branch/loop state joins, multi-result
+assignment slots, named array/string conversion sinks, and
+file-capability laundering) with durable battery pins; the Status is
+compact with the full history in the appendix. The durable battery is
+320 cases (257 rejections, 63 benign acceptances) plus 9 shell
+environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -36,7 +43,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (305
+  The durable mutation battery moved into the tool as table data (320
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -51,10 +58,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 305-case battery, and the SOW audit.
+the import-graph gate with its 320-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 5,100 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 5,656 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1097,8 +1104,9 @@ HEAD recorded in the first review entry below):
   interprocedural through per-package symbolic summaries (pageflow.go);
   bounded slices carry their constant span (page[48:112] is a 64-byte
   view, page[0:4096] is a complete page). The 9,781-line shell battery
-  was replaced by 305 table cases inside the tool (282 source-transfer
-  cases + 23 complete-page forms: 246 rejections, 59 benign acceptances),
+  was replaced by 320 table cases inside the tool (257 rejections, 63
+  benign acceptances) covering source-transfer, complete-page, and
+  file-capability forms,
   and the shell harness shrank to 552 lines (import boundaries per
   target, module graph, x/sys checksum pins, and 9 environment mutations:
   internal-import boundary, x/sys outside the mapping owner, assembly
@@ -1107,8 +1115,8 @@ HEAD recorded in the first review entry below):
   into [4096]byte, append(page...), View(0, PageSize) copy,
   [4096]byte(page), string(page), and r.page(pgno) copy all produce
   rule-specific violations; the bounded copy and the decoded metadata
-  chunk append stay accepted. Gate totals: 4,548 lines (go-gate) + 552
-  lines (shell) = 5,100, against module production 5,049 and tests
+  chunk append stay accepted. Gate totals: 5,104 lines (go-gate) + 552
+  lines (shell) = 5,656, against module production 5,049 and tests
   5,180.
 - Swarm round 1 of the rework review (2026-08-14, at the rework
   commit) returned five passes plus two P1 gate-bypass classes, both
@@ -1160,6 +1168,46 @@ HEAD recorded in the first review entry below):
   Also fixed from reviewer P3s: the SOW Status production-LOC figure was
   corrected to the measured 5,049 (reader core 1,894) after the
   membership.go counter cleanup.
+- Swarm round 4 (2026-08-14, at HEAD 2ad4001): the independent round
+  review returned nine gate findings; every one was reproduced by the
+  lead against the tree (exact mutation probes, gate exit 0) and closed
+  in one commit at HEAD f96d13d:
+  - helper-summary parameter flow lost page taint (maxLen accumulated
+    from 0, so maxUnknown -1 never registered): fs.eval and evalResults
+    now treat maxUnknown as at least the summary max;
+  - direct function aliases and local closures lost page taint: local
+    funcs are bound (st.localFuncs) and calleeTarget resolves local and
+    package-level chains so calls through them analyze the literal body
+    with call-site arguments bound;
+  - container element extraction was unmodeled: IndexExpr/IndexListExpr
+    now derive element page values while preserving the parameter source
+    (generic xs[0] stays caller-dependent);
+  - pointer and type-parameter byte params were not page-tainted:
+    typeCanCarryPage recurses through *types.Pointer and accepts
+    *types.TypeParam, and the expression-position StarExpr case is now
+    modeled;
+  - branch/loop states overwrote instead of joining: If branches,
+    Switch/TypeSwitch/Select, and For/Range (zero-iteration join) now
+    clone-and-join, and append results carry source taint so
+    post-loop append(owned, out...) is caught;
+  - multi-result calls mapped one RHS to the first LHS only: fresh
+    callResults per assignment slot, with the stale cache deleted before
+    re-evaluation;
+  - named array/string conversion sinks were unrecognized: the sink
+    check unwraps Named/Alias to the underlying type for both
+    [N]byte(page) and string(page);
+  - file-capability laundering through nested or package-level func
+    literals: os.Stdin/Stdout/Stderr access and any call whose result
+    type is file-bearing now fail outside the mapping owner (the mapping
+    owner keeps its legit os use);
+  - Mapping.View was minted expecting three arguments while the method
+    takes two: the mint now uses Args[1] for the view length.
+  Pinned as battery forms P24-P38 (eleven rejects, four accepts);
+  battery 305 -> 320 (246 -> 257 rejections, 59 -> 63 benign).
+  Validation at HEAD f96d13d: gate --self-test 320/320 (257 rejections,
+  63 benign) + 9 shell mutations exit 0, production scan clean on all
+  five targets, go test ./... (both tag sets), -race, vet, gofmt zero
+  diffs, cross-compilation - all green.
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
@@ -1173,7 +1221,7 @@ HEAD recorded in the first review entry below):
   module-graph cases moved to the shell self-test (the boundary loop
   already enforced them per target).
 - Validation: go test ./... (both tag sets), -race, checkptr, go vet,
-  gofmt zero diffs, the full import-graph gate and its --self-test (305
+  gofmt zero diffs, the full import-graph gate and its --self-test (320
   + 9 shell mutations, exit 0), production scan across all 5 target
   configs, cross-compilation, Rust conformance corpus cross-open, and the
   SOW audit - all green at the closing commit.
