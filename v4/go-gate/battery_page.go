@@ -637,4 +637,11 @@ var batteryPageCases = []batteryCase{
 	{name: "P176: multi-index call-result read keeps provenance", desc: "append(..., makeMatrix(page)[0][0].Data...): a field select on a multi-level index of a call result reads the callee's recorded element fields", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l19_04.go", content: "package reader\n\ntype lboxL1904 struct{ Data []byte }\n\nfunc makeMatrixL1904(p []byte) [1][1]lboxL1904 { return [1][1]lboxL1904{{{Data: p}}} }\n\nfunc idxCallProbeL1904(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, makeMatrixL1904(page)[0][0].Data...), nil\n}"},
 	}},
+	{name: "P177: returned multi-dim element keeps provenance", desc: "func retElem(m [1][1]box) box { return m[0][0] }; append(..., retElem([1][1]box{{{Data: page}}}).Data...): a returned container element through a multi-level index resolves the root's recorded fields and the parameter's declared element leaves", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l20_01.go", content: "package reader\n\ntype lboxL2001 struct{ Data []byte }\n\nfunc retElemL2001(m [1][1]lboxL2001) lboxL2001 { return m[0][0] }\n\nfunc retReadProbeL2001(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, retElemL2001([1][1]lboxL2001{{{Data: page}}}).Data...), nil\n}"},
+	}},
+
+	{name: "P178: bound returned multi-dim element keeps provenance", desc: "x := retElem([1][1]box{{{Data: page}}}); take(x): the bound value of a helper returning a multi-dim container element keeps the element fields", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l20_02.go", content: "package reader\n\ntype lboxL2002 struct{ Data []byte }\n\nfunc takeL2002(o lboxL2002) []byte { return o.Data }\n\nfunc retElemL2002(m [1][1]lboxL2002) lboxL2002 { return m[0][0] }\n\nfunc retBindProbeL2002(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tx := retElemL2002([1][1]lboxL2002{{{Data: page}}})\n\treturn append([]byte{}, takeL2002(x)...), nil\n}"},
+	}},
 }

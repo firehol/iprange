@@ -3494,7 +3494,10 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 	// m[k]): materialize the element's declared leaves with the same
 	// parameter source so take(xs[0]) at a call site binds the callee's
 	// param fields even when the container arrives as a parameter.
-	if et := containerElemType(obj.Type()); et != nil {
+	// Nested containers ([1][1]box, map[K][]box) expose the same leaf
+	// paths at every depth: each trailing index names an element of
+	// the same root, so every container level must contribute.
+	for et := containerElemType(obj.Type()); et != nil; et = containerElemType(et) {
 		for path, ft := range paramLeafPaths(et) {
 			if _, has := out[path]; has {
 				continue
@@ -3804,8 +3807,14 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		}
 		return
 	}
-	if ix, ok := unparen(expr).(*ast.IndexExpr); ok {
-		if o := objOf(st, ix.X); o != nil {
+	if _, ok := unparen(expr).(*ast.IndexExpr); ok {
+		// A returned container element (returns xs[0], m[0][0]): every
+		// trailing index names an element of the same root container,
+		// so the recorded element-field taints resolve from the root
+		// expression, the same unwrap argument flow and field reads
+		// use.
+		root := indexChainRoot(expr)
+		if o := objOf(st, root); o != nil {
 			if m, ok := st.structs[o]; ok {
 				for k, fv := range m {
 					if fv.tainted {
