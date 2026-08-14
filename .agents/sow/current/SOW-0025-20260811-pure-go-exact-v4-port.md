@@ -134,10 +134,11 @@ address-of selected-field and indexed-element mutation arguments,
 directly called func-literal pointer-parameter mutations, struct-field
 channel send/receive and select-send provenance, dereferenced indexed
 whole-struct stores, and runtime map-key stores through field
-containers) and one (l22-4, closure materialization) is a fail-closed
-conservative rejection kept by design; all fixed or documented with
-durable battery pins P210-P218 in the round-22 entry below (the
-bounded struct-field helper copy false rejection also fixed). The
+containers) and one (l22-4/4b, closure materialization) is a false positive:
+the probe shape carries the page view into append and the gate
+already rejected it; the eight real escapes and the l22-9 false
+rejection are fixed with durable battery pins P210-P218 in the
+round-22 entry below. The
 durable battery is 500 cases (431 rejections, 69 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -1688,11 +1689,13 @@ HEAD recorded in the first review entry below):
 - Round 22 (delta re-review, 113867a): luna failed the round-21
   delta with nine findings; the lead probe-verified all nine on the
   true round-21 build (git archive HEAD, probes /tmp/probe-l22-1..9):
-  eight were real gate escapes and one (l22-4/4b, func-literal
-  closure materialization of a call argument) is a fail-closed
-  conservative rejection the lead kept by design with probe evidence
-  (the scanner cannot prove the materialized closure drops the
-  binding; reject stays). Fixed with durable pins P210-P218:
+  eight were real gate escapes, one (l22-4/4b, func-literal closure
+  materialization of a call argument) is a false positive: the probes
+  carry the page view through the literal parameter to its result and
+  then into append, a real complete-page copy the gate correctly
+  rejects (rc 1 on both the pre-fix and closing builds), and one
+  (l22-9) is a real false rejection fixed below. Fixed with durable
+  pins P210-P218:
   P210 nested opaque carriers (x.Outer().Items[0].Data with Outer
   returning an unscanned interface result whose container FIELDS
   expose element leaves): containerElemTypeSeen and leafNameSet now
@@ -1719,8 +1722,9 @@ HEAD recorded in the first review entry below):
   private fields (bytes.Reader.src) never taint benign copies.
   battery 491 -> 500 (423 -> 431 rejections, 68 -> 69 benign
   acceptances). Gate tooling 10,045 -> 10,463 go-gate lines (+552
-  shell = 11,015 total). Eight real escapes, one fail-closed false
-  rejection documented with probe evidence, none dismissed.
+  shell = 11,015 total). Eight real escapes fixed; the l22-4/4b
+  false positive documented with probe evidence (no change needed);
+  the l22-9 false rejection fixed; none dismissed.
   Validation at the closing commit: gate --self-test 500/500 (431
   rejections, 69 benign) + 9 shell environment mutations exit 0,
   production scan of v4/go clean (rc 0), all nine l22 probes behave
