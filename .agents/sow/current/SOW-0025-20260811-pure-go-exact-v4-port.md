@@ -17,12 +17,15 @@ returned nine further gate findings (Luna), all reproduced by the lead
 and fixed with durable battery pins (round-6 entry below); the round-8
 re-review returned thirteen further gate findings (Luna), all
 probe-verified and fixed with durable battery pins (round-9 entry
-below); milestone close is pending the completion of that round
-(six-resident swarm, then sol, per the user review decision). All three review
+below); the round-9 re-review returned fourteen further gate findings
+(Luna), all probe-verified and fixed with durable battery pins
+(round-10 entry below); milestone close is pending completion of that
+round (six-resident swarm re-approval, then sol, per the user review
+decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,781-line typed scanner (6,229-line go/types module
-plus the 552-line shell boundary/self-test harness, down from 14,519)
+mmap gate is a 7,282-line typed scanner (go/types module plus the
+552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
 bodies, func-literal variables, reassigned function variables,
@@ -32,9 +35,9 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, and round-9 classes recorded in the entries
-below, all with durable battery pins; the Status is compact with the
-full history in the appendix. The durable battery is 378 cases (311
+round-6, round-7, round-8, round-9, and round-10 classes recorded in
+the entries below, all with durable battery pins; the Status is compact with the
+full history in the appendix. The durable battery is 393 cases (326
 rejections, 67 benign acceptances) plus 9 shell environment mutations
 and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -55,7 +58,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (357
+  The durable mutation battery moved into the tool as table data (393
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -70,10 +73,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 378-case battery, and the SOW audit.
+the import-graph gate with its 393-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 7,236 raw lines total (6,684 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 7,834 raw lines total (7,282 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1374,6 +1377,51 @@ HEAD recorded in the first review entry below):
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, audit - all green.
+- Round 10 (delta re-review): luna failed the round-9 delta with
+  fourteen further findings, all probe-verified by the lead (each
+  reproduced as a real escape on a fresh HEAD build before any fix):
+  P97 a conditional clean store deleted the whole field taint at the
+  join (if c { b.Data = []byte{1} }; return b.Data ran clean — forward
+  and reverse join passes now delete only unasserted clean markers and
+  keep any branch taint); P98-P100 local struct copies (c := b),
+  pointer aliases (q := &b), and range over an inline struct literal
+  (for _, x := range []box{{Data: p}}) dropped the argument field
+  unions (materializeStructFields and the inline-composite range rule);
+  P101 method-expression aliases misbound the receiver (get := box.Get;
+  get(b) treated b as the receiver and the summary lookup missed — the
+  alias now resolves to the bare function and the call binds the
+  explicit first argument as slot 0); P102 closure struct results lost
+  their fields (f := func() box { return box{Data: page} }; f().Data
+  ran clean — func-literal struct results now record their field
+  unions); P103 unprovable callees with page-carrying results failed
+  open (interface methods, function-typed struct fields, and
+  call-produced callees with an unknown body whose result shape can
+  hold a full page now fail closed, while struct-wrapped reader results
+  stay benign); P104 interface method-expression bindings (var put =
+  sink.Put; put(s, page)) bypassed the approved-callee rules; P105
+  method receiver string conversions missed the owned-string check
+  (the receiver is argument slot 0 for method values and Args[0] for
+  method expressions); P106 a user helper spreading a page collection
+  into fmt.Sprintf laundered the page (param-sourced fmt spreads are
+  now recorded in summaries and flagged at the call site); P107 a
+  struct holding an *os.File placed into an interface slot laundered
+  the descriptor; P108 file-bearing map keys; P109 append of a file
+  into a non-file-bearing []any element slot; P110 range of file
+  values into an any (new checkRange); P111 io.ReadFull(bytes.NewReader
+  (page), out) slipped through the reader-arg exemption, which now
+  applies only to variable-shaped arguments (bytes.NewReader of a
+  mapped view is a complete-page copy); and the shell harness never
+  listed netbsd/amd64 (the targets matrix now includes it). Battery
+  378 -> 393 (311 -> 326 rejections; the 67 benign forms are
+  unchanged). Gate tooling 6,684 -> 7,282 go-gate lines (+552 shell =
+  7,834 total).
+  Validation at the closing commit: gate --self-test 393/393 (326
+  rejections, 67 benign) + 9 shell mutations exit 0, production scan
+  clean, all fifteen luna probes (gatemut_r10_1 through gatemut_r10_13
+  plus the 2a/2b/2c shapes) reject on every scanned target, go test
+  ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
+  diffs, cross-builds for all eleven shell-harness targets, and the
+  SOW audit all pass.
 - Round 9 (delta re-review): luna failed the round-8 delta with thirteen
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P83 method values
