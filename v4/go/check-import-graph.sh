@@ -244,7 +244,7 @@ fi
 # build-tagged package that exists only on one GOOS/GOARCH cannot import
 # internal packages unseen.
 targets="linux/amd64 linux/386 linux/arm linux/arm64 linux/loong64 \
-	darwin/amd64 darwin/arm64 freebsd/amd64 windows/amd64 windows/arm64"
+	darwin/amd64 darwin/arm64 freebsd/amd64 netbsd/amd64 windows/amd64 windows/arm64"
 for target in $targets; do
 	GOOS=${target%/*} GOARCH=${target#*/} export GOOS GOARCH
 	target_pkgs=$(go list ./... 2>/dev/null) || {

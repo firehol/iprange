@@ -461,6 +461,46 @@ func fileValueType(t types.Type, seen map[types.Type]bool) bool {
 	return false
 }
 
+// structContainsFile reports whether a VALUE of type t holds a
+// file-bearing field somewhere inside a struct: fileValueType
+// deliberately excludes structs (owner types stay usable), but when the
+// struct crosses into an interface slot its typed fields disappear from
+// the capability walk, so the crossing itself is the launder.
+func structContainsFile(t types.Type, seen map[types.Type]bool) bool {
+	if t == nil || t == types.Typ[types.Invalid] {
+		return false
+	}
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch u := types.Unalias(t).(type) {
+	case *types.Pointer:
+		return structContainsFile(u.Elem(), seen)
+	case *types.Alias:
+		return structContainsFile(types.Unalias(u), seen)
+	case *types.Named:
+		return structContainsFile(u.Underlying(), seen)
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			ft := u.Field(i).Type()
+			if fileValueType(ft, map[types.Type]bool{}) || structContainsFile(ft, seen) {
+				return true
+			}
+		}
+		return false
+	case *types.Slice:
+		return structContainsFile(u.Elem(), seen)
+	case *types.Array:
+		return structContainsFile(u.Elem(), seen)
+	case *types.Chan:
+		return structContainsFile(u.Elem(), seen)
+	case *types.Map:
+		return structContainsFile(u.Key(), seen) || structContainsFile(u.Elem(), seen)
+	}
+	return false
+}
+
 // isInterfaceType reports whether t is an interface type, including a
 // named interface (io.Reader is *types.Named over an interface; the type
 // erasure rule must see both spellings).
@@ -529,7 +569,12 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 		}
 		if pkg := fn.Pkg(); pkg != nil {
 			p := pkg.Path()
-			return p == w.pc.pkg.Path() || strings.HasPrefix(p, moduleInternalPrefix) || p == xsysImport
+			if p == w.pc.pkg.Path() || strings.HasPrefix(p, moduleInternalPrefix) || p == xsysImport {
+				if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+					return false
+				}
+				return true
+			}
 		}
 	}
 	return false
@@ -555,8 +600,45 @@ func (w *fileRules) visit(n ast.Node) bool {
 				w.checkLaunderValue(v.Pos(), val, w.typeOf(v.Names[i]))
 			}
 		}
+	case *ast.RangeStmt:
+		w.checkRange(v)
 	}
 	return true
+}
+
+// checkRange flags range statements whose key/value targets are
+// interface-typed variables: a file-bearing element bound into an any
+// slot erases the descriptor from the capability walk (var x any;
+// for _, x = range files { return x }).
+func (w *fileRules) checkRange(v *ast.RangeStmt) {
+	xt := w.typeOf(v.X)
+	if xt == nil {
+		return
+	}
+	keyT := collectionKeyType(xt)
+	valT := collectionElementType(xt)
+	for _, tgt := range []struct {
+		expr ast.Expr
+		slot types.Type
+	}{{v.Key, keyT}, {v.Value, valT}} {
+		if tgt.expr == nil || tgt.slot == nil {
+			continue
+		}
+		tt := w.typeOf(tgt.expr)
+		if tt == nil {
+			continue
+		}
+		bears := fileValueType(tgt.slot, map[types.Type]bool{})
+		holds := !bears && isInterfaceType(tgt.slot) && structContainsFile(tgt.slot, map[types.Type]bool{})
+		if !bears && !holds {
+			continue
+		}
+		// The target must keep the descriptor visible: an
+		// interface-typed variable erases it.
+		if isInterfaceType(tt) && !fileValueType(tt, map[types.Type]bool{}) {
+			w.fail(v.Pos(), "file-bearing range value bound into an interface variable (launder)")
+		}
+	}
 }
 
 // fmtCallee reports whether fun names a formatting function in the fmt
@@ -597,21 +679,47 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 		receiverSlot = true
 	}
 	fs, ok := sums[key]
-	if !ok || len(fs.stringParams) == 0 {
+	if !ok || (len(fs.stringParams) == 0 && len(fs.fmtSpreadParams) == 0) {
 		return
 	}
-	for pi := range fs.stringParams {
-		// Method summaries count the receiver as parameter slot 0; the
-		// explicit call arguments start at 1.
-		ai := pi
-		if receiverSlot {
-			ai = pi - 1
+	// Method summaries count the receiver as parameter slot 0. A method
+	// VALUE call carries the receiver as the selector expression; a
+	// method-EXPRESSION call (or an alias of one) carries it as the
+	// first explicit argument.
+	recvOffset := 0
+	var recvExpr ast.Expr
+	if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
+		if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+			recvExpr = sel.X
+			recvOffset = 1
 		}
+	}
+	argAt := func(slot int) (ast.Expr, bool) {
+		if receiverSlot && slot == 0 && recvExpr != nil {
+			return recvExpr, true
+		}
+		ai := slot - recvOffset
 		if ai < 0 || ai >= len(v.Args) {
+			return nil, false
+		}
+		return v.Args[ai], true
+	}
+	for pi := range fs.stringParams {
+		arg, ok := argAt(pi)
+		if !ok {
 			continue
 		}
-		if pv := w.pageValue(v.Args[ai]); pv.tainted && pageFull(pv) {
-			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), ai+1)
+		if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
+			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
+		}
+	}
+	for pi := range fs.fmtSpreadParams {
+		arg, ok := argAt(pi)
+		if !ok {
+			continue
+		}
+		if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
+			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is spread into fmt inside the callee (complete page into owned memory)", calleeText(v.Fun), pi+1)
 		}
 	}
 }
@@ -651,6 +759,13 @@ func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
 	case *ast.SelectorExpr:
 		fn, ok := w.pc.info.Uses[i.Sel].(*types.Func)
 		if !ok {
+			return false
+		}
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+			// An interface method expression has no scanned body: the
+			// implementation dispatches dynamically, so a call through
+			// the alias is an unproven indirection no matter how the
+			// alias itself is spelled.
 			return false
 		}
 		return w.approvedFuncPkg(fn)
@@ -1276,6 +1391,25 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	if dv := w.pageValue(v.Args[0]); dv.tainted && pageFull(dv) {
 		w.fail(v.Pos(), "append into a complete mapped page view (full page reallocated into owned memory)")
 	}
+	// A file-bearing argument appended into a non-file-bearing element
+	// slot erases the descriptor (append([]any{}, f)); struct values
+	// holding a file field launder the same way into interface element
+	// types.
+	elemT := collectionElementType(w.typeOf(v.Args[0]))
+	for _, a := range v.Args[1:] {
+		at := w.typeOf(a)
+		if at == nil || elemT == nil {
+			continue
+		}
+		bears := fileValueType(at, map[types.Type]bool{})
+		holds := !bears && isInterfaceType(elemT) && structContainsFile(at, map[types.Type]bool{})
+		if !bears && !holds {
+			continue
+		}
+		if !fileValueType(elemT, map[types.Type]bool{}) {
+			w.fail(v.Pos(), "file-bearing value appended into a non-file-bearing collection (launder)")
+		}
+	}
 }
 
 // ownedCap returns the definite byte capacity of an owned destination
@@ -1496,30 +1630,54 @@ func (w *fileRules) checkComposite(v *ast.CompositeLit) {
 		}
 		return
 	}
-	// Slice/array/map literals: an element whose static type is
-	// file-bearing must stay in a file-bearing element slot. Hiding one
-	// inside an interface-valued collection ([]any{f}) erases the
-	// descriptor from the capability walk, so the element slot must
+	// Slice/array/map literals: an element (and a map key) whose static
+	// type is file-bearing must stay in a file-bearing slot. Hiding one
+	// inside an interface-valued collection ([]any{f}, map[any]int{f:1})
+	// erases the descriptor from the capability walk, so the slot must
 	// itself bear files.
 	elemT := collectionElementType(typ)
+	keyT := collectionKeyType(typ)
 	for _, el := range v.Elts {
-		var val ast.Expr
 		if kv, ok := el.(*ast.KeyValueExpr); ok {
-			val = kv.Value
-		} else {
-			val = el
-		}
-		if val == nil {
+			if keyT != nil {
+				w.checkCollectionSlot(kv.Key.Pos(), kv.Key, keyT, "map key")
+			}
+			w.checkCollectionSlot(kv.Value.Pos(), kv.Value, elemT, "collection element")
 			continue
 		}
-		stv := w.typeOf(val)
-		if stv == nil || !fileValueType(stv, map[types.Type]bool{}) {
-			continue
-		}
-		if elemT == nil || !fileValueType(elemT, map[types.Type]bool{}) {
-			w.fail(val.Pos(), "file-bearing value stored into a non-file-bearing collection element (launder)")
-		}
+		w.checkCollectionSlot(el.Pos(), el, elemT, "collection element")
 	}
+}
+
+// checkCollectionSlot flags a file-bearing value (or a struct holding a
+// file field, when the slot is an interface) placed into a collection
+// slot whose type loses the descriptor.
+func (w *fileRules) checkCollectionSlot(pos token.Pos, val ast.Expr, slotT types.Type, what string) {
+	stv := w.typeOf(val)
+	if stv == nil || slotT == nil {
+		return
+	}
+	bears := fileValueType(stv, map[types.Type]bool{})
+	holds := !bears && isInterfaceType(slotT) && structContainsFile(stv, map[types.Type]bool{})
+	if !bears && !holds {
+		return
+	}
+	if !fileValueType(slotT, map[types.Type]bool{}) {
+		w.fail(pos, "file-bearing value stored into a non-file-bearing %s (launder)", what)
+	}
+}
+
+// collectionKeyType returns the key type of a map type (through defined
+// types and pointers), or nil for non-map types.
+func collectionKeyType(t types.Type) types.Type {
+	u := unwrapToUnderlying(t)
+	switch v := u.(type) {
+	case *types.Map:
+		return v.Key()
+	case *types.Pointer:
+		return collectionKeyType(v.Elem())
+	}
+	return nil
 }
 
 // collectionElementType returns the element type of a slice, array, or
@@ -1548,6 +1706,14 @@ func (w *fileRules) checkLaunderValue(pos token.Pos, val ast.Expr, dstType types
 	}
 	if fileValueType(stv, map[types.Type]bool{}) && !fileValueType(dstType, map[types.Type]bool{}) {
 		w.fail(pos, "file-bearing value assigned into a non-file-bearing slot (launder)")
+	}
+	// A struct holding a file field keeps the descriptor reachable and
+	// typed while the struct type survives; an interface slot erases it
+	// (return H{F: f} as any), so the crossing into an interface is the
+	// launder.
+	if !fileValueType(dstType, map[types.Type]bool{}) && isInterfaceType(dstType) &&
+		structContainsFile(stv, map[types.Type]bool{}) {
+		w.fail(pos, "struct holding a file-bearing field placed into an interface slot (launder)")
 	}
 	if pv := w.pageValue(val); pv.tainted {
 		w.checkArrayConversionSink(pos, dstType, pv)
@@ -1619,25 +1785,49 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 		}
 		if sel.Sel.Name == "ReadFull" && len(call.Args) == 2 {
 			if id, ok := unparen(sel.X).(*ast.Ident); ok && id.Name == "io" {
-				a0 := w.typeOf(call.Args[0])
-				pv := w.pageValue(call.Args[0])
-				if (a0 == nil || !fileValueType(a0, map[types.Type]bool{})) && !pv.tainted {
+				a0 := call.Args[0]
+				// Only the exact variable-shaped stream argument (zr)
+				// is exempt: a freshly constructed reader over a mapped
+				// page (bytes.NewReader(page)) copies the complete page
+				// into the owned output inside ReadFull and must not
+				// inherit the exemption.
+				a0t := w.typeOf(a0)
+				pv := w.pageValue(a0)
+				if isVariableRef(a0) && (a0t == nil || !fileValueType(a0t, map[types.Type]bool{})) && !pv.tainted {
 					exempts[sel.Pos()] = true
 				}
 			}
 		}
 		if (sel.Sel.Name == "Read" || sel.Sel.Name == "ReadByte") && len(call.Args) <= 2 {
-			recv := w.typeOf(sel.X)
-			if recv != nil {
-				name := concreteTypeName(recv)
-				if inMemoryReaders[name] {
-					exempts[sel.Pos()] = true
+			// Only variable-shaped receivers (cr.r) are exempt: a
+			// receiver the call itself constructs (bytes.NewReader(page))
+			// can wrap a mapped view, and reading from it into owned
+			// memory is a complete-page copy. A tainted receiver (a
+			// local holding a page-wrapping reader) fails the same way.
+			if isVariableRef(sel.X) && !w.pageValue(sel.X).tainted {
+				recv := w.typeOf(sel.X)
+				if recv != nil {
+					name := concreteTypeName(recv)
+					if inMemoryReaders[name] {
+						exempts[sel.Pos()] = true
+					}
 				}
 			}
 		}
 		return true
 	})
 	return exempts
+}
+
+// isVariableRef reports whether e names an existing variable (an
+// identifier, a field selection, or a dereference) rather than
+// constructing a fresh value.
+func isVariableRef(e ast.Expr) bool {
+	switch unparen(e).(type) {
+	case *ast.Ident, *ast.SelectorExpr, *ast.StarExpr:
+		return true
+	}
+	return false
 }
 
 // concreteTypeName renders a concrete (non-interface) receiver type as
