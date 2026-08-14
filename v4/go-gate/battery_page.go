@@ -528,4 +528,25 @@ var batteryPageCases = []batteryCase{
 	{name: "P149: file recovered from an interface by a type switch", desc: "switch v := factory().(type) { case *os.File: return v } recovers the descriptor like the assertion form", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_09.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc ifaceTypeSwitchProbeR1309(factory func() io.Reader) *os.File {\n\tswitch v := factory().(type) {\n\tcase *os.File:\n\t\treturn v\n\tdefault:\n\t\treturn nil\n\t}\n}"},
 	}},
+
+	{name: "P150: one-sided branch join of a local callable", desc: "g := f (an unproven parameter), g = func() on one branch only; g() after the join may run the unproven callee", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_01.go", content: "package reader\n\nfunc branchJoinProbeL1401(r *ImmutableReader, pgno uint32, f func() []byte) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tg := f\n\tif page != nil {\n\t\tg = func() []byte { return []byte{1} }\n\t}\n\t_ = page\n\treturn append([]byte{}, g()...), nil\n}"},
+	}},
+
+	{name: "P151: struct-field provenance for selector-valued arguments", desc: "take(h.Box) with h.Box.Data recorded a page keeps the field taint through the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_02.go", content: "package reader\n\ntype lboxL1402 struct{ Data []byte }\n\ntype lholdL1402 struct{ Box lboxL1402 }\n\nfunc takeL1402(o lboxL1402) []byte { return o.Data }\n\nfunc selArgProbeL1402(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\th := lholdL1402{Box: lboxL1402{Data: page}}\n\treturn append([]byte{}, takeL1402(h.Box)...), nil\n}"},
+	}},
+
+	{name: "P152: promoted embedded struct fields keep page taint", desc: "take(o) with o's embedded inner struct holding a page resolves o.Data through the promoted path", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_03.go", content: "package reader\n\ntype linnerL1403 struct{ Data []byte }\n\ntype louterL1403 struct{ linnerL1403 }\n\nfunc takeL1403(o louterL1403) []byte { return o.Data }\n\nfunc embedPromoProbeL1403(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, takeL1403(louterL1403{linnerL1403: linnerL1403{Data: page}})...), nil\n}"},
+	}},
+
+	{name: "P153: container field provenance for variable-held map keys", desc: "m[b] = 1 with b.Data a page (and m[box{Data: page}] = 1 whole-value forms) keep the field taint through the key range", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_04.go", content: "package reader\n\ntype lboxL1404 struct{ Data []byte }\n\nfunc varKeyStoreProbeL1404(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1404{}\n\tb.Data = page\n\tm := make(map[any]int)\n\tm[b] = 1\n\tfor k := range m {\n\t\treturn append([]byte{}, k.(lboxL1404).Data...), nil\n\t}\n\treturn nil, nil\n}"},
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_05.go", content: "package reader\n\ntype lboxL1405 struct{ Data []byte }\n\nfunc varKeyWholeProbeL1405(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1405{Data: page}\n\tm := make(map[any]int)\n\tm[b] = 1\n\tfor k := range m {\n\t\treturn append([]byte{}, k.(lboxL1405).Data...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+
+	{name: "P154: bounded param-field slice keeps the flow legal", desc: "b := box{Data: page[48:112]}; take(b) stays below a complete page and must not fail the gate", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_06.go", content: "package reader\n\ntype lboxL1406 struct{ Data []byte }\n\nfunc takeL1406(o lboxL1406) []byte { return o.Data }\n\nfunc boundedParamFieldProbeL1406(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1406{Data: page[48:112]}\n\treturn append([]byte{}, takeL1406(b)...), nil\n}"},
+	}},
 }

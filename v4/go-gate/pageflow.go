@@ -163,6 +163,13 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 				}
 			}
 			return maxUnknown
+		case "paramField":
+			if s.param >= 0 && s.param < len(argFlows) {
+				if fv, ok := argFlows[s.param].fields[s.field]; ok {
+					return fv.maxLen
+				}
+			}
+			return maxUnknown
 		}
 		return maxUnknown
 	}
@@ -270,6 +277,13 @@ func (fs *funcSummary) evalResults(args []pageValue, argVals []symbol, argFlows 
 			if s.param >= 0 && s.param < len(argVals) {
 				if c, ok := argVals[s.param].isConst(); ok {
 					return c
+				}
+			}
+			return maxUnknown
+		case "paramField":
+			if s.param >= 0 && s.param < len(argFlows) {
+				if fv, ok := argFlows[s.param].fields[s.field]; ok {
+					return fv.maxLen
 				}
 			}
 			return maxUnknown
@@ -948,21 +962,22 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 				// A struct-valued map key (or slice index) keeps its
 				// element field taints on the container: m[S{Data:
-				// page}] = 1 followed by for k := range m { k.(S).Data }
-				// must stay tainted, because the range visits every key.
+				// page}] = 1 and m[b] = 1 with b.Data assigned a page
+				// both must stay tainted through for k := range m {
+				// k.(S).Data }, because the range visits every key. The
+				// argument flow covers literals, variables, selectors,
+				// and parameter-held sources.
 				if ix, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
 					if cobj := objOf(st, ix.X); cobj != nil {
-						if kl := structLitOf(ix.Index); kl != nil {
-							if kf := pf.compositeFields(st, kl); len(kf) > 0 {
-								if st.structs[cobj] == nil {
-									st.structs[cobj] = map[string]pageValue{}
-								}
-								for k, fv := range kf {
-									if prev, ok := st.structs[cobj][k]; ok {
-										st.structs[cobj][k] = joinPageValue(prev, fv)
-									} else {
-										st.structs[cobj][k] = fv
-									}
+						if kf := pf.argFlowOf(st, ix.Index).fields; len(kf) > 0 {
+							if st.structs[cobj] == nil {
+								st.structs[cobj] = map[string]pageValue{}
+							}
+							for k, fv := range kf {
+								if prev, ok := st.structs[cobj][k]; ok {
+									st.structs[cobj][k] = joinPageValue(prev, fv)
+								} else {
+									st.structs[cobj][k] = fv
 								}
 							}
 						}
@@ -1373,17 +1388,14 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 	// another field only) still arrive from the caller, so a partial
 	// local record must not suppress the taint of the untouched fields.
 	if idx, ok := st.params[srcObj]; ok {
-		for path, ft := range paramLeafPaths(srcObj.Type()) {
-			if !paramCanCarryPage(ft) {
-				continue
-			}
+		for path, fv := range pf.paramFieldFallback(st, srcObj, idx) {
 			if _, recorded := fields[path]; recorded {
 				continue
 			}
 			if fields == nil {
 				fields = map[string]pageValue{}
 			}
-			fields[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
+			fields[path] = fv
 		}
 	}
 	if len(fields) == 0 {
@@ -1718,44 +1730,103 @@ func (st *stmtState) joinWith(other *stmtState) {
 			}
 		}
 	}
-	for k, v := range other.localFuncs {
-		if st.ambigBind[k] {
-			continue
-		}
-		if cur, ok := st.localFuncs[k]; ok && cur != v {
-			// Divergent literal bindings on alternative paths: the call
-			// through this variable has no single provable callee. The
-			// ambiguity is sticky: a later branch that re-binds the
-			// same variable to its pre-branch literal must not
-			// re-establish a provable callee (the page-returning branch
-			// is still possible).
-			st.ambigBind[k] = true
-			delete(st.localFuncs, k)
-			continue
-		}
-		st.localFuncs[k] = v
+	// A callable binding must survive a join only when BOTH branches
+	// bound the same provable value. A binding present on exactly one
+	// path is not provable at runtime: the other path may hold an
+	// unproven callable (a parameter, an opaque value), so the variable
+	// becomes ambiguous and calls through it fail closed.
+	funcs := map[types.Object]bool{}
+	for k := range st.localFuncs {
+		funcs[k] = true
 	}
-	for k, v := range other.localBindings {
+	for k := range other.localFuncs {
+		funcs[k] = true
+	}
+	for k := range funcs {
 		if st.ambigBind[k] {
 			continue
 		}
-		if cur, ok := st.localBindings[k]; ok && cur != v {
+		cur, okCur := st.localFuncs[k]
+		ov, okOth := other.localFuncs[k]
+		if okCur && okOth {
+			if cur != ov {
+				// Divergent literal bindings on alternative paths: the
+				// call through this variable has no single provable
+				// callee. The ambiguity is sticky: a later branch that
+				// re-binds the same variable to its pre-branch literal
+				// must not re-establish a provable callee (the
+				// page-returning branch is still possible).
+				st.ambigBind[k] = true
+				delete(st.localFuncs, k)
+			}
+			continue
+		}
+		// A callable binding present on exactly one path is not provable
+		// at runtime for a LOCAL variable: the other path may hold an
+		// unproven callable (a parameter, an opaque value), so the
+		// variable becomes ambiguous and calls through it fail closed.
+		// Package-scope callables are exempt: their binding is proven by
+		// the package initializer (calleeTarget falls back to varInits
+		// and resolveMethodValue to the recorded seed), reassignment is
+		// policed by reassignedVars, and the merge keeps the surviving
+		// side's seed instead of erasing package truth on a branch-local
+		// invalidation.
+		if obj, isVar := k.(*types.Var); isVar && obj.Parent() == st.pf.pc.pkg.Scope() {
+			if okOth && !okCur {
+				st.localFuncs[k] = ov
+			}
+			continue
+		}
+		st.ambigBind[k] = true
+		delete(st.localFuncs, k)
+	}
+	bindings := map[types.Object]bool{}
+	for k := range st.localBindings {
+		bindings[k] = true
+	}
+	for k := range other.localBindings {
+		bindings[k] = true
+	}
+	for k := range bindings {
+		if st.ambigBind[k] {
+			continue
+		}
+		cur, okCur := st.localBindings[k]
+		ov, okOth := other.localBindings[k]
+		if okCur && okOth {
+			if cur == ov {
+				// The same expression node provably bound both paths:
+				// the binding survives unchanged (package initializer
+				// seeds are the same node on every branch).
+				continue
+			}
 			// Divergent bindings on alternative paths: the call through
 			// this variable has no single provable callee. Two
 			// different AST nodes with the same text bind the same
 			// callee and are not divergent.
 			same := false
-			if cur != nil && v != nil {
-				ct, vt := exprText(cur), exprText(v)
+			if cur != nil && ov != nil {
+				ct, vt := exprText(cur), exprText(ov)
 				same = ct != "..." && ct == vt
 			}
 			if !same {
 				st.ambigBind[k] = true
 				delete(st.localBindings, k)
-				continue
 			}
+			continue
 		}
-		st.localBindings[k] = v
+		// One-sided bindings are unproven for LOCAL variables: one path
+		// may hold an unproven callable (a parameter, an opaque value).
+		// Package seeds are package truth and survive the merge (see
+		// the localFuncs join above).
+		if obj, isVar := k.(*types.Var); isVar && obj.Parent() == st.pf.pc.pkg.Scope() {
+			if okOth && !okCur {
+				st.localBindings[k] = ov
+			}
+			continue
+		}
+		st.ambigBind[k] = true
+		delete(st.localBindings, k)
 	}
 }
 
@@ -1818,7 +1889,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 				}
 			}
 			if !found {
-				if idx, ok := st.params[obj]; ok && paramCanCarryPage(paramFieldType(obj, v.Sel.Name)) {
+				if idx, ok := st.params[obj]; ok && paramCanCarryPage(paramFieldType(st.pf.pc.pkg, obj, v.Sel.Name)) {
 					out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
 				}
 			}
@@ -1871,7 +1942,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			// field reads do.
 			if !out.tainted {
 				if idx, ok := st.params[obj]; ok {
-					if ft := leafPathType(obj.Type(), path); ft != nil && paramCanCarryPage(ft) {
+					if ft := leafPathType(st.pf.pc.pkg, obj.Type(), path); ft != nil && paramCanCarryPage(ft) {
 						out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
 					}
 				}
@@ -3146,12 +3217,67 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 				}
 			}
 		}
+	case *ast.SelectorExpr:
+		// A struct VALUE read off a field (take(h.Box) with h.Box.Data
+		// a recorded page): the base's flattened field taints carry the
+		// selector path prefix, and the argument's own field names drop
+		// it ("Box.Data" becomes the argument's "Data"), so the
+		// summary's paramField sources bind at the call site.
+		if obj, path := selectorChain(st, v); obj != nil {
+			base := st.structs[obj]
+			if len(base) == 0 {
+				if gm, ok := st.pkgStructs[obj]; ok {
+					base = gm
+				}
+			}
+			prefix := path + "."
+			if len(base) > 0 {
+				for k, fv := range base {
+					if fv.tainted && strings.HasPrefix(k, prefix) {
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[k[len(prefix):]] = fv
+					}
+				}
+			}
+			// A parameter-held base contributes its declared leaves the
+			// same way: the parameter source stays attached to the
+			// full dotted path, and the argument flow renames it for
+			// the summary's direct field names.
+			if fields == nil {
+				if idx, ok := st.params[obj]; ok {
+					for k, fv := range pf.paramFieldFallback(st, obj, idx) {
+						if strings.HasPrefix(k, prefix) {
+							if fields == nil {
+								fields = map[string]pageValue{}
+							}
+							fields[k[len(prefix):]] = fv
+						}
+					}
+				}
+			}
+		}
 	case *ast.CompositeLit:
 		fields = pf.compositeFields(st, v)
 	case *ast.CallExpr:
 		fields = pf.callFields[v]
 	}
 	return argFlow{pv: pv, fields: fields}
+}
+
+// paramFieldFallback materializes the declared leaf field sources of a
+// struct parameter, shared by the argument-flow and materialization
+// paths.
+func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int) map[string]pageValue {
+	out := map[string]pageValue{}
+	for path, ft := range paramLeafPaths(obj.Type()) {
+		if !paramCanCarryPage(ft) {
+			continue
+		}
+		out[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
+	}
+	return out
 }
 
 // promoteFullPageFields records whole-value page taint on an expression
@@ -3502,24 +3628,23 @@ func paramCanCarryPageSeen(t types.Type, seen map[types.Type]bool) bool {
 // type down to its leaf type, or nil when the path does not name a field
 // path. Pointer and named struct fields are dereferenced like the
 // selector read does, so o.Inner.Data on a value or pointer receiver
-// resolves the same way.
-func leafPathType(t types.Type, path string) types.Type {
+// resolves the same way. The lookup package is required: go/types
+// refuses to resolve UNEXPORTED field names when pkg is nil, and
+// production records (holder.data) legitimately use unexported fields.
+func leafPathType(pkg *types.Package, t types.Type, path string) types.Type {
 	for _, part := range strings.Split(path, ".") {
-		st, ok := derefStruct(t)
+		if _, ok := derefStruct(t); !ok {
+			return nil
+		}
+		// Embedded fields promote their fields and leaves, exactly like
+		// go/types resolves o.Data through an embedded struct: direct
+		// name lookup alone would miss the promoted path.
+		f, _, _ := types.LookupFieldOrMethod(t, true, pkg, part)
+		fv, ok := f.(*types.Var)
 		if !ok {
 			return nil
 		}
-		var f *types.Var
-		for i := 0; i < st.NumFields(); i++ {
-			if st.Field(i).Name() == part {
-				f = st.Field(i)
-				break
-			}
-		}
-		if f == nil {
-			return nil
-		}
-		t = f.Type()
+		t = fv.Type()
 	}
 	return t
 }
@@ -3561,18 +3686,8 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 
 // paramFieldType returns the static type of a named field of the struct
 // type of parameter object obj, or nil when obj is not a struct parameter.
-func paramFieldType(obj types.Object, name string) types.Type {
-	stt, ok := derefStruct(obj.Type())
-	if !ok {
-		return nil
-	}
-	for i := 0; i < stt.NumFields(); i++ {
-		f := stt.Field(i)
-		if f.Name() == name {
-			return f.Type()
-		}
-	}
-	return nil
+func paramFieldType(pkg *types.Package, obj types.Object, name string) types.Type {
+	return leafPathType(pkg, obj.Type(), name)
 }
 
 // symbolOf computes the symbolic integer value of an expression: integer
