@@ -191,4 +191,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P55: named result with a bounded view stays legal", desc: "func pass(p []byte) (out []byte) { out = p[48:112]; return } appended stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_namedbounded.go", content: "package reader\n\nfunc passB55(p []byte) (out []byte) {\n\tout = p[48:112]\n\treturn\n}\n\nfunc namedBoundedProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, passB55(page)...), nil\n}"},
 	}},
+	{name: "P56: cross-file package func var with an interface result", desc: "var factory func() any declared in one file and called from another file of the same package outside the mapping owner must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_xfvar.go", content: "package reader\n\nvar factoryXF56 func() any\n"},
+		batteryOp{kind: "create", path: "internal/reader/gatemut_xfuse.go", content: "package reader\n\nfunc crossFileProbe56(r *ImmutableReader, pgno uint32) error {\n\t_ = factoryXF56()\n\treturn nil\n}"},
+	}},
 }

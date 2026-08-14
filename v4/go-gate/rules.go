@@ -221,7 +221,7 @@ type fileRules struct {
 func runRules(rep *reporter, f *ast.File, pc *packageCheck, path string) {
 	w := &fileRules{rep: rep, pc: pc, imports: checkImports(rep, f), path: path}
 	w.exempts = findExemptions(w, f, path)
-	w.pkgFuncVars = collectPkgFuncVars(w.pc.info, f)
+	w.pkgFuncVars = collectPkgFuncVars(w.pc.info, w.pc.files)
 	for _, decl := range f.Decls {
 		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body == nil {
 			rep.fail(fd.Pos(), "bodyless function declaration %s (assembly stub)", fd.Name.Name)
@@ -741,30 +741,35 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 }
 
 // collectPkgFuncVars records package-level function-typed variables
-// declared in the file (with or without an initializer). The capability
-// rules apply the fail-closed interface-result test to package vars only:
-// local variables are either literal-bound (their body is scanned) or
-// trace back to a package variable or a caller-supplied parameter, both
-// of which are policed at their own boundary.
-func collectPkgFuncVars(info *types.Info, f *ast.File) map[types.Object]bool {
+// declared anywhere in the package (with or without an initializer). The
+// capability rules apply the fail-closed interface-result test to package
+// vars only: local variables are either literal-bound (their body is
+// scanned) or trace back to a package variable or a caller-supplied
+// parameter, both of which are policed at their own boundary. Collecting
+// from every package file keeps the rule independent of the file the
+// call site lives in (a factory declared in a.go and called from b.go
+// must not escape the rule).
+func collectPkgFuncVars(info *types.Info, files []*parsedFile) map[types.Object]bool {
 	out := map[types.Object]bool{}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
+	for _, pf := range files {
+		for _, decl := range pf.ast.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
 				continue
 			}
-			for _, name := range vs.Names {
-				obj := info.ObjectOf(name)
-				if obj == nil {
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				if _, ok := obj.Type().(*types.Signature); ok {
-					out[obj] = true
+				for _, name := range vs.Names {
+					obj := info.ObjectOf(name)
+					if obj == nil {
+						continue
+					}
+					if _, ok := obj.Type().(*types.Signature); ok {
+						out[obj] = true
+					}
 				}
 			}
 		}
