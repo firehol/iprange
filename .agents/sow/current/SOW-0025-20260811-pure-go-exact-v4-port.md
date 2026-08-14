@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,672-line typed toolchain (9,120-line go/types module
+mmap gate is a 9,688-line typed toolchain (9,136-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -80,8 +80,8 @@ family (returned asserted interface-param structs, two-value asserted
 reads, and explicit conversion argument flow) and the multi-dim index
 family (field reads and element bindings through multi-level index
 chains and forced literal element extraction), all probe-verified
-before any fix and pinned P171-P176 in the round-18 entry below. The
-durable battery is 458 cases (390 rejections, 68 benign acceptances)
+before any fix and pinned P171-P178 in the round-18 entry below. The
+durable battery is 460 cases (392 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -116,10 +116,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 458-case battery, and the SOW audit.
+the import-graph gate with its 460-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,672 raw lines total (9,120 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,688 raw lines total (9,136 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1662,21 +1662,35 @@ HEAD recorded in the first review entry below):
   P176 a multi-level index of a call result stayed rejectable only
   through an unrelated path and is now resolved explicitly by the
   same root unwrap. A shared indexChainRoot walk now unwraps every
-  trailing index level to the root expression, and the read and bind
-  sites dispatch the root through the same literal/ident/call
-  resolution the one-level cases used. Battery 452 -> 458 (384 -> 390
-  rejections, 68 benign). Gate tooling 9,003 -> 9,120 go-gate lines
-  (+552 shell = 9,672 total).
-  Validation at the closing commit: gate --self-test 458/458 (390
+  trailing index level to the root expression, and the read, bind,
+  and return sites dispatch the root through the same
+  literal/ident/call resolution the one-level cases used. The same
+  sweep then found the return-path half of the class: P177 a returned
+  matrix element lost provenance (func retElem(m [1][1]box) box {
+  return m[0][0] } with append(..., retElem([1][1]box{{{Data:
+  page}}}).Data...): propagateStructResult's IndexExpr return branch
+  resolved only ONE trailing index, so the root's recorded fields and
+  parameter leaves were unreachable; the return branch now unwraps
+  the full index chain) and P178 the bound form (x :=
+  retElem([1][1]box{{{Data: page}}}); take(x)). Closing P177 required
+  the declared-leaf fallback to unwrap every container depth:
+  paramFieldFallback materialized element leaves for only ONE
+  container level ([]box worked, [1][1]box exposed nothing), so the
+  matrix parameter lost its caller fields even after the return
+  branch could name the root; the fallback now loops over every
+  container level of the parameter type. Battery 452 -> 460 (384 ->
+  392 rejections, 68 benign). Gate tooling 9,003 -> 9,136 go-gate
+  lines (+552 shell = 9,688 total).
+  Validation at the closing commit: gate --self-test 460/460 (392
   rejections, 68 benign) + 9 shell environment mutations exit 0,
   production scan clean on every scanned target, all round-18 probe
-  shapes reject (l19 type-assertion trees, multi-dim index trees, and
-  forced literal extraction) and every prior probe tree keeps its
-  verdict (l17b, l16, luna15, f2only2, luna2, p16 reject; luna5 stays
-  accepted), go test ./... (both tag sets), -race, vet (go and
-  go-gate), gofmt zero diffs, cross-builds for every shell-harness
-  target, the import-graph gate with the 458-case battery, and the SOW
-  audit all pass.
+  shapes reject (l19 type-assertion trees, multi-dim index read/bind/
+  return trees, and forced literal extraction) and every prior probe
+  tree keeps its verdict (l17b, l16, luna15, f2only2, luna2, p16
+  reject; luna5 stays accepted), go test ./... (both tag sets), -race,
+  vet (go and go-gate), gofmt zero diffs, cross-builds for every
+  shell-harness target, the import-graph gate with the 460-case
+  battery, and the SOW audit all pass.
 - Round 17 (lead same-failure search over the round-16 fixes): the
   round-16 call-base fallbacks covered direct argument positions only;
   the lead verified five escape families on a fresh HEAD build before
