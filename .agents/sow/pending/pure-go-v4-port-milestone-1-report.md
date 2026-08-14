@@ -1486,6 +1486,20 @@ Fixes (one commit; HEAD recorded in the review entry below):
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
   diffs, cross-compilation (windows/darwin/freebsd/netbsd), SOW audit
   green.
+  Round re-review at HEAD 2f5f71a: Qwen reported the cross-file package
+  func-var scope hole - collectPkgFuncVars collected only the file
+  under check, so var factory func() any declared in one file and
+  called from another file of the same package skipped the
+  interface-result fail-closed rule (reproduced by the lead: two-file
+  probe, gate exit 0; same-file control rejects). Fixed at HEAD
+  0d007a8: the map is built from every parsed file of the package.
+  Pinned as battery form P56 (reject, two create ops); battery 337 ->
+  338 (271 -> 272 rejections, 66 benign); gate tooling 5,465 -> 5,474
+  go-gate lines (+552 shell = 6,026 total). Validation at HEAD
+  0d007a8: gate --self-test 338/338 + 9 shell mutations exit 0,
+  production scan clean on all five targets, go test ./... (both tag
+  sets), -race, vet, gofmt zero diffs, cross-compilation, SOW audit
+  green.
 
 Review outcome (six-resident swarm, then sol, per the user's review
 process): recorded after the entry below when the review completes.

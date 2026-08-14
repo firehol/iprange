@@ -9,12 +9,15 @@ round at HEAD 2ad4001 returned nine gate findings, all reproduced by
 the lead and fixed at HEAD f96d13d with battery pins; the round at HEAD
 57522e8 returned ten further gate findings (Luna) plus a multi-result
 struct-field taint gap (MiniMax P2), all reproduced by the lead and
-fixed at HEAD 65ca62a with battery pins; milestone close is pending the
+fixed at HEAD 65ca62a with battery pins; the round re-review at HEAD 2f5f71a added Qwen's cross-file
+package func-var gap (var factory func() any declared in one file,
+called from another, escaped the interface-result rule), reproduced by
+the lead (gate exit 0) and fixed at HEAD 0d007a8 with battery pin; milestone close is pending the
 completion of that round (six-resident swarm, then sol, per the user
 review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,017-line typed scanner (5,465-line go/types module
+mmap gate is a 6,026-line typed scanner (5,474-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -27,7 +30,7 @@ assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5
 classes recorded in the round-5 entry below, all with durable battery
 pins; the Status is compact with the full history in the appendix. The
-durable battery is 337 cases (271 rejections, 66 benign acceptances)
+durable battery is 338 cases (272 rejections, 66 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -47,7 +50,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (337
+  The durable mutation battery moved into the tool as table data (338
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -62,10 +65,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 337-case battery, and the SOW audit.
+the import-graph gate with its 338-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,017 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,026 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1262,6 +1265,22 @@ HEAD recorded in the first review entry below):
   66 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
   diffs, cross-compilation (windows/darwin/freebsd/netbsd) - all green.
+  Round re-review (HEAD 2f5f71a): GLM reported a 4-line gate LOC drift
+  (records said 5,469, measured 5,465; the debug strip after measuring
+  removed four lines) - corrected in the records at 361d4c1 (5,465 go-gate
+  + 552 shell = 6,017). Qwen then reported the cross-file package
+  func-var scope hole: collectPkgFuncVars collected only the file under
+  check, so var factory func() any declared in a.go and called from
+  b.go of the same package skipped the interface-result fail-closed
+  rule; reproduced by the lead (two-file probe, gate exit 0; same-file
+  control rejects). Fixed at HEAD 0d007a8: the map is now built from
+  every parsed file of the package. Pinned as battery form P56 (reject,
+  two create ops); battery 337 -> 338 (271 -> 272 rejections, 66 benign).
+  Gate tooling 5,465 -> 5,474 go-gate lines (+552 shell = 6,026 total).
+  Validation at HEAD 0d007a8: gate --self-test 338/338 (272 rejections,
+  66 benign) + 9 shell mutations exit 0, production scan clean on all
+  five targets, go test ./... (both tag sets), -race, vet, gofmt zero
+  diffs, cross-compilation - all green.
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
