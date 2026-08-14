@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 10,049-line typed toolchain (9,497-line go/types module
+mmap gate is a 10,200-line typed toolchain (9,648-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -99,8 +99,22 @@ container literal (P191) and the map composite-literal key (P192), and
 pinned all ten. The remaining findings were verified not real: one pair
 of intentionally accepted shapes stays accepted (recorded as a known
 open question) and three reports were false positives or dead code; the
-stale-record report is closed by this record sync. The
-durable battery is 474 cases (406 rejections, 68 benign acceptances)
+stale-record report is closed by this record sync. The round-20
+delta re-review returned six further gate findings (Luna): unproven
+scalar indirect calls hiding page copies, selector-valued containers
+losing element provenance under range, selector-valued arguments losing
+partial field provenance after a clean sibling store, named map types
+losing key provenance, append-built struct containers losing element
+fields, and dereferenced struct stores losing field provenance. The
+lead probe-verified three real escape families on the round-19 build
+before any fix (selector-held container elements under range/indexed
+read/take argument, named map key-only range, dereference struct
+stores) and fixed them with durable battery pins P193-P199 in the
+round-20 entry below; the other three findings were probe-verified
+false positives (every scalar indirect-call shape, every clean
+sibling-store shape, and every append-built container shape already
+rejects). The
+durable battery is 481 cases (413 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -135,10 +149,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 474-case battery, and the SOW audit.
+the import-graph gate with its 481-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 10,049 raw lines total (9,497 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 10,200 raw lines total (9,648 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1647,6 +1661,47 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 20 (delta re-review, 64c8c13): luna failed the round-19
+  delta with six findings; the lead probe-verified three real escape
+  families on the round-19 build before any fix and pinned them:
+  (a) selector-held container elements lost provenance in five shapes
+  (for _, x := range h.Items, h.Items[0].Data, take(h.Items[0]),
+  for _, x := range m[0].Items with m [1]holder, and a struct-field
+  MAP key-only range for k := range h.Keyed): the range path now
+  resolves selector/index/assert/star container roots through
+  argFlowOf, compositeFields records container-field element fields
+  under the "Field." prefix, paramLeafPaths emits the prefixed element
+  leaves at every container depth plus map KEY leaves, and argFlowOf's
+  index branch resolves selector/assert roots through the renamed
+  fields - pinned P193-P197; (b) NAMED map types lost key provenance
+  (type M map[*box]int; for k := range m with m M): types.Unalias
+  does not unwrap named types, so the new mapUnderlying helper unwraps
+  the named underlying chain and compositeFields/paramFieldFallback
+  use it for the key-side leaves and literal key unions - pinned P198;
+  (c) a dereference struct store lost field provenance (*p = B{Data:
+  page} then p.Data and (*p).Data): the AssignStmt StarExpr branch
+  now records the struct's field taints on the pointed-to object
+  (including the package-level join) instead of only whole-value
+  stores - pinned P199 with two create ops. The other three findings
+  were probe-verified false positives: (1) unproven scalar indirect
+  calls (func-field, interface-method, local func variable, and
+  package-captured callable shapes) all reject on the round-19 build;
+  (3) selector-valued arguments after a clean sibling store (clean
+  sibling struct, clean container field, pointer parameter, and
+  call-produced shapes) all reject; (5) append-built struct containers
+  (literal plus variable append, indexed store, and parameter-sourced
+  append shapes) all reject. battery 474 -> 481 (406 -> 413
+  rejections, 68 benign acceptances). Gate tooling 9,497 -> 9,648
+  go-gate lines (+552 shell = 10,200 total).
+  Validation at the closing commit: gate --self-test 481/481 (413
+  rejections, 68 benign) + 9 shell environment mutations exit 0
+  (battery log /tmp/battery-r20c.log), production scan clean on every
+  scanned target, every round-19 and round-20 probe shape escapes the
+  fresh HEAD build (rc 0) and rejects the closing build (rc 1; 30/30
+  probe trees), luna1b/luna1c stay accepted as the recorded known open
+  question, go test ./... (both tag sets) including -race -count=1,
+  vet (go and go-gate), gofmt zero diffs, the import-graph gate, and
+  the SOW audit all pass.
 - Round 19 (delta re-review): luna failed the round-18 delta with
   twelve findings; the lead reproduced eight real escape classes on a
   fresh HEAD build before any fix (probes /tmp/probe-luna2/4a/4b/5/6/7/

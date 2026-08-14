@@ -218,7 +218,7 @@ gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
 check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 474/474 mutation forms rejected (406 rejections, 68
+GOOS/GOARCH pairs): 481/481 mutation forms rejected (413 rejections, 68
 benign acceptances)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
