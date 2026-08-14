@@ -117,13 +117,19 @@ func buildContext(cfg osConfig) *build.Context {
 
 // packageCheck is the typed result of one package under one OS config.
 type packageCheck struct {
-	pkg             *types.Package
-	info            *types.Info
-	fset            *token.FileSet
-	loader          *loader
-	files           []*parsedFile
-	pf              *pageFlow
-	varInits        map[*types.Var]ast.Expr
+	pkg      *types.Package
+	info     *types.Info
+	fset     *token.FileSet
+	loader   *loader
+	files    []*parsedFile
+	pf       *pageFlow
+	varInits map[*types.Var]ast.Expr
+	// pkgBindings records the package-scope initializer expression of
+	// every variable, keyed by the variable's object. The per-function
+	// statement state seeds its local binding map from it, so a
+	// package-level method value (var get = holder.Get) keeps its
+	// receiver when called from any function.
+	pkgBindings     map[*types.Var]ast.Expr
 	reassignedVars  map[*types.Var]bool
 	pkgFuncLitBound map[*types.Var]bool
 	// pkgFuncNonLitBound records package-scope function variables that
@@ -163,6 +169,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	// initializer provably binds a function whose body is scanned here,
 	// and only when the variable is never reassigned.
 	varInits := map[*types.Var]ast.Expr{}
+	pkgBindings := map[*types.Var]ast.Expr{}
 	// pkgFuncLitBound records package-scope function variables that are
 	// bound to a func literal anywhere in the package (declaration
 	// initializer or assignment). Such a variable's possible values all
@@ -189,6 +196,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 				obj, ok := info.Defs[name].(*types.Var)
 				if ok && obj.Parent() == pkg.Scope() {
 					varInits[obj] = vs.Values[i]
+					pkgBindings[obj] = vs.Values[i]
 					if _, isLit := unparen(vs.Values[i]).(*ast.FuncLit); isLit {
 						pkgFuncLitBound[obj] = true
 					} else {
@@ -254,7 +262,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 			return true
 		})
 	}
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound, pkgFuncNonLitBound: pkgFuncNonLitBound}, nil
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, pkgBindings: pkgBindings, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound, pkgFuncNonLitBound: pkgFuncNonLitBound}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -985,9 +993,17 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// policed at their own sites, so the call itself stays benign.
 	interfaceVarResult := false
 	if id, ok := fun.(*ast.Ident); ok {
-		if v, isVar := w.pc.info.Uses[id].(*types.Var); isVar && w.pkgFuncVars[v] &&
-			!w.approvedFuncVar(v, 0) && (!w.pc.pkgFuncLitBound[v] || w.pc.pkgFuncNonLitBound[v]) {
-			interfaceVarResult = isInterfaceType(resT)
+		if v, isVar := w.pc.info.Uses[id].(*types.Var); isVar {
+			if w.pkgFuncVars[v] && !w.approvedFuncVar(v, 0) && (!w.pc.pkgFuncLitBound[v] || w.pc.pkgFuncNonLitBound[v]) {
+				interfaceVarResult = isInterfaceType(resT)
+			} else if !w.pkgFuncVars[v] && resT != nil && isInterfaceType(resT) && types.NewMethodSet(resT).Len() == 0 {
+				// A parameter or local function value returning an
+				// EMPTY interface (func() any) is fully opaque: the
+				// body is not scanned here and the result can hold
+				// anything, so the call fails closed like an opaque
+				// package function variable.
+				interfaceVarResult = true
+			}
 		}
 	}
 	// An interface-method call returning an interface (c.Codec() any) can
@@ -1025,14 +1041,18 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 				if pkg := obj.Pkg(); pkg != nil && pkg.Path() == "os" {
 					w.fail(v.Pos(), "os function %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
 				} else if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
-					fileValueType(resT, map[types.Type]bool{}) {
+					(fileValueType(resT, map[types.Type]bool{}) || (resT != nil && isInterfaceType(resT) && types.NewMethodSet(resT).Len() == 0)) {
 					// An interface method with a CONCRETE file-bearing
 					// result dispatches to implementations the call site
 					// cannot prove benign (a nil factory is not proof):
 					// the capability fails closed here, while the
 					// concrete method bodies stay policed at their own
-					// sites. Interface results like io.ReadCloser are
-					// content-transfer concerns, not capability mints.
+					// sites. An EMPTY-interface result is equally
+					// opaque: the implementation body is not scanned,
+					// and an any result can materialize a file-backed
+					// value the rules below can never see. Interface
+					// results like io.ReadCloser are content-transfer
+					// concerns, not capability mints.
 					w.fail(v.Pos(), "interface method %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
 				}
 			} else {
@@ -1364,7 +1384,16 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 			break
 		}
 		at := w.typeOf(arg)
-		if at == nil || !fileValueType(at, map[types.Type]bool{}) {
+		if at == nil {
+			continue
+		}
+		bears := fileValueType(at, map[types.Type]bool{})
+		// A struct holding a file field passed into an interface
+		// formal erases the struct type: the descriptor inside the
+		// field becomes invisible to the launder checks downstream, so
+		// it fails closed like a directly file-bearing argument.
+		holds := !bears && isInterfaceType(formals[i]) && structContainsFile(at, map[types.Type]bool{})
+		if !bears && !holds {
 			continue
 		}
 		if isInterfaceType(formals[i]) {
@@ -1532,9 +1561,16 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		if ix, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
 			if mt := w.typeOf(ix.X); mt != nil {
 				if kt := collectionKeyType(mt); kt != nil {
-					if it := w.typeOf(ix.Index); it != nil && fileValueType(it, map[types.Type]bool{}) &&
-						!fileValueType(kt, map[types.Type]bool{}) {
-						w.fail(v.Lhs[i].Pos(), "file-bearing value stored into a non-file-bearing map key (launder)")
+					if it := w.typeOf(ix.Index); it != nil {
+						bears := fileValueType(it, map[types.Type]bool{})
+						// A struct holding a file field stored into an
+						// interface-typed map key erases the key type;
+						// mirror the collection-slot rule so
+						// m[H{F: f}] = 1 fails like m[f] = 1.
+						holds := !bears && isInterfaceType(kt) && structContainsFile(it, map[types.Type]bool{})
+						if (bears || holds) && !fileValueType(kt, map[types.Type]bool{}) {
+							w.fail(v.Lhs[i].Pos(), "file-bearing value stored into a non-file-bearing map key (launder)")
+						}
 					}
 				}
 			}
