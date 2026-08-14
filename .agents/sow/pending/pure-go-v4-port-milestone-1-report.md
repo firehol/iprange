@@ -1564,6 +1564,31 @@ Fixes (one commit; HEAD recorded in the review entry below):
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, SOW audit green.
+- Round 7 (independent full-pass re-review): five residents passed the
+  round-6 delta; the sixth returned a fresh fail with nine static-gate
+  bypass classes outside the round-5/6 delta. All nine were probe-
+  verified and fixed: P67 opaque function-field callees (h.cb(page)),
+  P68 slice-indexed callees (fs[0](page)), P69 func-literal named
+  results with naked returns, P70 pointer struct literals
+  (&B{Data: page}).Data, P71 page boxing through any containers plus
+  type assertions, P72 collection literals dropping definite element
+  bounds, P73 package-global stores invisible to cross-function
+  summaries, P74 string conversion of page views with unknown bounds
+  (the sink moved from definite-span to tainted-and-not-provably-
+  sub-page; plain []byte parameters and minted record fields stay
+  legal), P75 reflect byte extraction (reflect added to the banned
+  import set). Model work: interface values are page carriers,
+  derivedPageValue keeps definite bounds, slice expressions carry an
+  honest bound, container literals aggregate element bounds, func-
+  literal summaries get the named-result pass, &-wrapped composite
+  literals carry field taints, and package-scope stores write through
+  to the shared global state (set-only, monotone fixpoint). Battery
+  348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
+  5,712 -> 5,905 go-gate lines (+552 shell = 6,457 total).
+  Validation at the closing commit: gate --self-test 357/357 (291
+  rejections, 66 benign) + 9 shell mutations exit 0, production scan
+  clean on all five targets, go test ./... (both tag sets), -race, vet,
+  gofmt zero diffs, cross-compilation, SOW audit - all green.
 
 Review outcome (six-resident swarm, then sol, per the user's review
 process): recorded after the entry below when the review completes.

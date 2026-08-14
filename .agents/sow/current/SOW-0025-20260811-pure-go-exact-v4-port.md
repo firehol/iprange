@@ -19,7 +19,7 @@ close is pending the completion of that round (six-resident swarm, then
 sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,264-line typed scanner (5,712-line go/types module
+mmap gate is a 6,457-line typed scanner (5,905-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -29,10 +29,10 @@ address-taken variables, helper-summary parameter flow, local closures
 and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
-conversion sinks, and file-capability laundering) plus the round-5
-classes recorded in the round-5 and round-6 entries below, all with
+conversion sinks, and file-capability laundering) plus the round-5,
+round-6, and round-7 classes recorded in the entries below, all with
 durable battery pins; the Status is compact with the full history in the
-appendix. The durable battery is 348 cases (282 rejections, 66 benign
+appendix. The durable battery is 357 cases (291 rejections, 66 benign
 acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -1346,6 +1346,31 @@ HEAD recorded in the first review entry below):
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation - all green.
+- Round 7 (independent full-pass re-review): five residents passed the
+  round-6 delta; the sixth returned a fresh fail with nine static-gate
+  bypass classes outside the round-5/6 delta. All nine were probe-
+  verified and fixed: P67 opaque function-field callees (h.cb(page)),
+  P68 slice-indexed callees (fs[0](page)), P69 func-literal named
+  results with naked returns, P70 pointer struct literals
+  (&B{Data: page}).Data, P71 page boxing through any containers plus
+  type assertions, P72 collection literals dropping definite element
+  bounds, P73 package-global stores invisible to cross-function
+  summaries, P74 string conversion of page views with unknown bounds
+  (the sink moved from definite-span to tainted-and-not-provably-
+  sub-page; plain []byte parameters and minted record fields stay
+  legal), P75 reflect byte extraction (reflect added to the banned
+  import set). Model work: interface values are page carriers,
+  derivedPageValue keeps definite bounds, slice expressions carry an
+  honest bound, container literals aggregate element bounds, func-
+  literal summaries get the named-result pass, &-wrapped composite
+  literals carry field taints, and package-scope stores write through
+  to the shared global state (set-only, monotone fixpoint). Battery
+  348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
+  5,712 -> 5,905 go-gate lines (+552 shell = 6,457 total).
+  Validation at the closing commit: gate --self-test 357/357 (291
+  rejections, 66 benign) + 9 shell mutations exit 0, production scan
+  clean on all five targets, go test ./... (both tag sets), -race, vet,
+  gofmt zero diffs, cross-compilation, audit - all green.
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
