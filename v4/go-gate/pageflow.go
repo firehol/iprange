@@ -950,6 +950,38 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						}
 					}
 				}
+				// A dereference store of a struct value keeps the
+				// field taints on the pointed-to variable: *p = B{Data:
+				// page} followed by p.Data (or (*p).Data) resolves the
+				// same record the whole-value store marks, so the
+				// selected read keeps the caller's source.
+				if star, ok := unparen(v.Lhs[i]).(*ast.StarExpr); ok && len(fields) > 0 {
+					if pobj := objOfDeref(st, star.X); pobj != nil {
+						if st.structs[pobj] == nil {
+							st.structs[pobj] = map[string]pageValue{}
+						}
+						for k, fv := range fields {
+							st.structs[pobj][k] = fv
+						}
+						if pobj.Parent() == st.pf.pc.pkg.Scope() && st.pkgStructs != nil {
+							gm := st.pkgStructs[pobj]
+							if gm == nil {
+								gm = map[string]pageValue{}
+								st.pkgStructs[pobj] = gm
+							}
+							for k, fv := range fields {
+								if !fv.tainted {
+									continue
+								}
+								if prev, ok := gm[k]; ok && prev.tainted {
+									gm[k] = joinPageValue(prev, fv)
+								} else {
+									gm[k] = fv
+								}
+							}
+						}
+					}
+				}
 				// A struct-valued map key (or slice index) keeps its
 				// element field taints on the container: m[S{Data:
 				// page}] = 1 and m[b] = 1 with b.Data assigned a page
@@ -1165,6 +1197,19 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					delete(pf.values, call)
 					pf.evalExpr(st, call)
 					elemFields = pf.callFields[call]
+				} else {
+					// A container reached through a FIELD, an INDEX chain,
+					// an interface assertion, or a pointer dereference
+					// (h.Items, m[0].Items, v.(holder).Items, p.Items):
+					// the element fields resolve exactly like argument
+					// flow renames them, so the loop value binds the
+					// same recorded leaves and declared parameter paths.
+					switch unparen(v.X).(type) {
+					case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr, *ast.TypeAssertExpr, *ast.StarExpr:
+						if af := pf.argFlowOf(st, v.X).fields; len(af) > 0 {
+							elemFields = af
+						}
+					}
 				}
 				if len(elemFields) > 0 {
 					// A key-only range of a map (for k := range m) pulls the
@@ -2380,7 +2425,7 @@ func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[stri
 		// stay tainted (the index itself is not a page-carrying value,
 		// box8 is a struct). Map and array elements join the same way.
 		var out map[string]pageValue
-		_, isMap := types.Unalias(typ).(*types.Map)
+		isMap := mapUnderlying(typ) != nil
 		unionInto := func(fm map[string]pageValue) {
 			if fm == nil {
 				return
@@ -2449,6 +2494,20 @@ func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[stri
 							out[k] = fv
 						}
 					}
+				}
+			}
+			// A CONTAINER-typed field keeps its element-field taints
+			// reachable under the "Field." prefix: h.Items[0].Data,
+			// take(h.Items[0]), and for _, x := range h.Items resolve
+			// through the flattened "Items.Data" path exactly like
+			// nested struct values, because the field holds a slice,
+			// map, or array of structs rather than one struct.
+			if cfm := pf.elementFieldsOf(st, val); len(cfm) > 0 {
+				for k, fv := range cfm {
+					if !fv.tainted {
+						continue
+					}
+					out[field.Name()+"."+k] = fv
 				}
 			}
 		}
@@ -3504,7 +3563,18 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 		} else if lit := structLitOf(root); lit != nil {
 			fields = pf.compositeFields(st, lit)
 		} else {
-			fields = pf.callProducedFields(st, root)
+			switch unparen(root).(type) {
+			case *ast.SelectorExpr, *ast.TypeAssertExpr:
+				// A container element reached through a FIELD or an
+				// interface assertion (h.Items[0], v.(holder).Items[0]):
+				// the container's element fields resolve through the
+				// selector's argument flow, which renames recorded
+				// paths, parameter leaves, and call-produced prefixes
+				// to the container's own direct field names.
+				fields = pf.argFlowOf(st, root).fields
+			default:
+				fields = pf.callProducedFields(st, root)
+			}
 		}
 	case *ast.TypeAssertExpr:
 		// An asserted argument (v.(T)): the asserted value keeps the
@@ -3699,7 +3769,7 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 	// (for k := range m with m map[*box]int keeps k.Data caller
 	// sourced): the declared key leaves and key container chains bind
 	// exactly like the value side.
-	if mtyp, ok := types.Unalias(obj.Type()).(*types.Map); ok {
+	if mtyp := mapUnderlying(obj.Type()); mtyp != nil {
 		addLeaves(mtyp.Key())
 		seenKey := map[types.Type]bool{}
 		for et := containerElemType(mtyp.Key()); et != nil && !seenKey[et]; et = containerElemType(et) {
@@ -3715,6 +3785,20 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 // the type is not a direct container.
 func containerElemType(t types.Type) types.Type {
 	return containerElemTypeSeen(t, map[types.Type]bool{})
+}
+
+// mapUnderlying returns the map type behind an alias or a NAMED map
+// (type M map[*B]int): the named wrapper must unwrap to its underlying
+// map, or the key-side leaves and the literal key unions are lost
+// (types.Unalias does not unwrap named types).
+func mapUnderlying(t types.Type) *types.Map {
+	switch u := types.Unalias(t).(type) {
+	case *types.Map:
+		return u
+	case *types.Named:
+		return mapUnderlying(u.Underlying())
+	}
+	return nil
 }
 
 // containerElemTypeSeen is the recursive core: a named container
@@ -4372,6 +4456,44 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 				}
 			} else if paramCanCarryPage(f.Type()) {
 				out[p] = f.Type()
+			}
+			// A CONTAINER-typed field keeps its ELEMENT leaves under the
+			// field prefix: h.Items with holder.Items []box exposes
+			// "Items.Data" so h.Items[0].Data, take(h.Items[0]), and
+			// for _, x := range h.Items resolve the same parameter
+			// source as a container parameter's own elements. Every
+			// container depth of the field contributes, element structs
+			// recurse for their own container fields, and a MAP field
+			// also exposes its KEY leaves for key-only ranges. The seen
+			// set is per field so repeated element types on sibling
+			// fields keep their prefixed paths.
+			fieldSeen := map[types.Type]bool{}
+			for et := containerElemType(f.Type()); et != nil && !fieldSeen[et]; et = containerElemType(et) {
+				fieldSeen[et] = true
+				for path, ft := range paramLeafPaths(et) {
+					if !paramCanCarryPage(ft) {
+						continue
+					}
+					out[p+"."+path] = ft
+				}
+			}
+			if mft := mapUnderlying(f.Type()); mft != nil {
+				keySeen := map[types.Type]bool{}
+				for path, ft := range paramLeafPaths(mft.Key()) {
+					if !paramCanCarryPage(ft) {
+						continue
+					}
+					out[p+"."+path] = ft
+				}
+				for et := containerElemType(mft.Key()); et != nil && !keySeen[et]; et = containerElemType(et) {
+					keySeen[et] = true
+					for path, ft := range paramLeafPaths(et) {
+						if !paramCanCarryPage(ft) {
+							continue
+						}
+						out[p+"."+path] = ft
+					}
+				}
 			}
 		}
 		walkSeen[st] = false
