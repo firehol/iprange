@@ -159,7 +159,7 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(4,517 lines) plus a trimmed shell harness (552 lines) whose 302-case
+(4,548 lines) plus a trimmed shell harness (552 lines) whose 305-case
 durable battery includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
@@ -1273,13 +1273,13 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 302 cases (282 source-transfer forms + 20
-  complete-page forms; 244 rejections, 58 benign acceptances). The shell
+  data inside the tool: 305 cases (282 source-transfer forms + 23
+  complete-page forms; 246 rejections, 59 benign acceptances). The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 4,517 (tool) + 552 (shell) = 5,069
+  unlistable module). Gate totals: 4,548 (tool) + 552 (shell) = 5,100
   lines against module production 5,049 / tests 5,180.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
@@ -1294,7 +1294,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   moved to the shell self-test.
 - Validation at the rework commit: go test ./... (both tag sets),
   -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
-  gate --self-test 302/302 + 9 shell mutations exit 0, production scan
+  gate --self-test 305/305 + 9 shell mutations exit 0, production scan
   across all five target configs exit 0, cross-compilation, Rust
   conformance corpus cross-open, SOW audit green.
 
@@ -1348,6 +1348,47 @@ Fixes (one commit; HEAD recorded in the review entry below):
   --self-test 297/297 (241 rejections, 56 benign) + 9 shell mutations
   exit 0, go test ./... (both tag sets), -race, vet, gofmt zero diffs,
   SOW audit green.
+
+- Swarm round at HEAD 8c8ca39 (2026-08-14): six residents reviewed the
+  rework plus the follow-up hardening (function-variable callees,
+  closures, func-literal variables, reassigned variables, bounded
+  function-variable chains). GLM and MiMo PASSed; MiMo reported one P3
+  class, verified live by the lead and upgraded: RangeStmt rebinding
+  (for _, f = range fs over a slice holding bytes.Clone) and
+  address-taken stores (p := &f; *p = bytes.Clone) both kept the gate at
+  exit 0 while f(page) then copied a complete mapped page into owned
+  memory; the pointer form and the range form were each reproduced
+  before the change (exact mutations, gate 0).
+- Fix (HEAD 93b0f07): the function-variable reassignment walk in
+  v4/go-gate/rules.go now also marks package-level variables rebound by
+  RangeStmt (Key and Value idents resolved through info.Uses) and
+  variables whose address is taken anywhere (UnaryExpr AND on a
+  package-level var), because either permits a runtime rebind to an
+  unproven callee; both approvedFuncVar and funclitOf consult the same
+  map, so both rule passes fail closed. Battery pins P21 (range
+  rebinding, reject), P22 (address-taken store, reject), P23 (benign
+  range rebinding without a page call, accept); battery is now 305
+  cases (246 rejections, 59 benign acceptances). Production scan across
+  all five targets stayed clean: the read-only tree takes the address of
+  no package-level variable and range-rebinds none, so the conservative
+  over-approximation produces zero false positives (verified by K3's
+  tree-wide grep).
+- Swarm round at HEAD 93b0f07 (2026-08-14): all six residents PASS on
+  the delta (GLM, MiMo, K3, MiniMax, Qwen, Luna). Independent
+  cross-checks confirmed RangeStmt Key/Value handling (define-form
+  ranges stay untouched via the Defs/Uses split), the address-taken
+  over-approximation is fail-closed and false-positive-free on the
+  production tree, the remaining theoretical rebinding paths (closure
+  stores through non-Ident LHS, reflection, unsafe) are already covered
+  or blocked by the import/selector bans, and the battery totals match
+  the tree. Luna additionally flagged stale current-state record counts
+  (SOW still claimed 302 cases / 5,069 tooling lines at HEAD 93b0f07);
+  the records were synced to 305 / 5,100 (4,548 go-gate + 552 shell) in
+  a follow-up commit and re-audited.
+- Validation at the round-close commit: gate --self-test 305/305 + 9
+  shell mutations exit 0, production scan clean on all five targets,
+  go test ./... (both tag sets), -race, vet, gofmt zero diffs, SOW
+  audit green.
 
 Review outcome (six-resident swarm, then sol, per the user's review
 process): recorded after the entry below when the review completes.

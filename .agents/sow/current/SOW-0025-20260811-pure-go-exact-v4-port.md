@@ -4,17 +4,19 @@
 Status: in-progress
 
 Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
-(2026-08-14); milestone close is pending the independent review process
-(six-resident swarm, then sol - decision 5A). All three review findings
-are fixed: the hot path has one authoritative key-only search primitive
-with test-only necessary-work counters and benchmarks; the mmap gate is a
-5,069-line typed scanner (4,517-line go/types module plus the 552-line
+(2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; milestone
+close is pending the sol final gate (user review decision: six-resident
+swarm, then sol). All three review findings are fixed: the hot path has
+one authoritative key-only search primitive with test-only
+necessary-work counters and benchmarks; the mmap gate is a 5,100-line
+typed scanner (4,548-line go/types module plus the 552-line
 shell boundary/self-test harness, down from 14,519) that detects
-complete-page ownership; follow-up swarm rounds closed five more
-bypass classes (function-variable callees, closure/defer/go bodies,
+complete-page ownership; follow-up swarm rounds closed seven bypass
+classes (function-variable callees, closure/defer/go bodies,
 func-literal variables, reassigned function variables, multi-hop
-function-variable chains) with durable battery pins; the Status is compact with the full history in
-the appendix. The durable battery is 302 cases (244 rejections, 58 benign
+function-variable chains, range-rebound variables, address-taken
+variables) with durable battery pins; the Status is compact with the full history in
+the appendix. The durable battery is 305 cases (246 rejections, 59 benign
 acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -34,7 +36,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (302
+  The durable mutation battery moved into the tool as table data (305
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -49,10 +51,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 302-case battery, and the SOW audit.
+the import-graph gate with its 305-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 5,069 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 5,100 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1095,8 +1097,8 @@ HEAD recorded in the first review entry below):
   interprocedural through per-package symbolic summaries (pageflow.go);
   bounded slices carry their constant span (page[48:112] is a 64-byte
   view, page[0:4096] is a complete page). The 9,781-line shell battery
-  was replaced by 302 table cases inside the tool (282 source-transfer
-  cases + 20 complete-page forms: 244 rejections, 58 benign acceptances),
+  was replaced by 305 table cases inside the tool (282 source-transfer
+  cases + 23 complete-page forms: 246 rejections, 59 benign acceptances),
   and the shell harness shrank to 552 lines (import boundaries per
   target, module graph, x/sys checksum pins, and 9 environment mutations:
   internal-import boundary, x/sys outside the mapping owner, assembly
@@ -1105,8 +1107,8 @@ HEAD recorded in the first review entry below):
   into [4096]byte, append(page...), View(0, PageSize) copy,
   [4096]byte(page), string(page), and r.page(pgno) copy all produce
   rule-specific violations; the bounded copy and the decoded metadata
-  chunk append stay accepted. Gate totals: 4,517 lines (go-gate) + 552
-  lines (shell) = 5,069, against module production 5,049 and tests
+  chunk append stay accepted. Gate totals: 4,548 lines (go-gate) + 552
+  lines (shell) = 5,100, against module production 5,049 and tests
   5,180.
 - Swarm round 1 of the rework review (2026-08-14, at the rework
   commit) returned five passes plus two P1 gate-bypass classes, both
@@ -1171,7 +1173,7 @@ HEAD recorded in the first review entry below):
   module-graph cases moved to the shell self-test (the boundary loop
   already enforced them per target).
 - Validation: go test ./... (both tag sets), -race, checkptr, go vet,
-  gofmt zero diffs, the full import-graph gate and its --self-test (302
+  gofmt zero diffs, the full import-graph gate and its --self-test (305
   + 9 shell mutations, exit 0), production scan across all 5 target
   configs, cross-compilation, Rust conformance corpus cross-open, and the
   SOW audit - all green at the closing commit.
