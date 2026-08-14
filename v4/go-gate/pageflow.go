@@ -1985,6 +1985,20 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 						out = pv
 					}
 				}
+				// An INTERFACE-TYPED parameter asserted to a struct has
+				// no recorded local store and no declared leaves of its
+				// own: the read keeps the parameter source through the
+				// asserted type's leaf, the same way a struct
+				// parameter's leaf reads do.
+				if !out.tainted {
+					if idx, ok := st.params[obj]; ok && isInterfaceType(obj.Type()) {
+						if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+							if ft := leafPathType(st.pf.pc.pkg, stt, v.Sel.Name); ft != nil && paramCanCarryPage(ft) {
+								out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
+							}
+						}
+					}
+				}
 			}
 		} else if obj, path := selectorChain(st, v); obj != nil {
 			// o.Inner.Data and deeper chains resolve through the
@@ -2006,11 +2020,17 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 					}
 				}
 			}
-		} else if ix, ok := unparen(v.X).(*ast.IndexExpr); ok {
-			// []B{{Data: page}}[0].Data: a field select on an indexed
-			// composite literal reads the union of the elements' field
-			// taints (the extraction may name any element).
-			if lit := structLitOf(ix.X); lit != nil {
+		} else if _, ok := unparen(v.X).(*ast.IndexExpr); ok {
+			// xs[0].Data and m[0][0].Data: a field select on an indexed
+			// value reads the container's element-field taints no matter
+			// how many index levels the expression has, because every
+			// level names an element of the same root container. The
+			// root may be a composite literal (the union of the
+			// elements' field taints, since the extraction may name any
+			// element), a bound local or parameter container, or a call
+			// result.
+			root := indexChainRoot(v.X)
+			if lit := structLitOf(root); lit != nil {
 				var m map[string]pageValue
 				for _, el := range lit.Elts {
 					var val ast.Expr
@@ -2039,7 +2059,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 				if pv, ok := m[v.Sel.Name]; ok {
 					out = pv
 				}
-			} else if obj := objOf(st, ix.X); obj != nil {
+			} else if obj := objOf(st, root); obj != nil {
 				// xs[0].Data with xs a bound container: the container's
 				// element-field taints were recorded when the slice
 				// literal was assigned (xs := []box8{{Data: page}}).
@@ -2048,7 +2068,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 						out = pv
 					}
 				}
-			} else if call, ok := unparen(ix.X).(*ast.CallExpr); ok {
+			} else if call, ok := unparen(root).(*ast.CallExpr); ok {
 				// makeList(page)[0].Data: a field select on an indexed
 				// call result reads the container field taints the
 				// summary recorded for the call. The call must be
@@ -2381,6 +2401,21 @@ func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[stri
 		}
 	}
 	return out
+}
+
+// indexChainRoot unwraps the trailing index expressions of a container
+// value (m[0][0] -> m): every index level names an element of the same
+// root container, so the element-field taints live on the root
+// expression's record, not on the intermediate index nodes.
+func indexChainRoot(e ast.Expr) ast.Expr {
+	cur := unparen(e)
+	for {
+		ix, ok := cur.(*ast.IndexExpr)
+		if !ok {
+			return cur
+		}
+		cur = unparen(ix.X)
+	}
 }
 
 // selectorChain resolves a (possibly nested) selector expression to its
@@ -3322,15 +3357,21 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 			fields = pf.callProducedFields(st, v.X)
 		}
 	case *ast.IndexExpr:
-		// An element-carrying argument (xs[0], m[k]): a local container
-		// keeps its element field taints on the variable, a container
-		// parameter contributes the element's declared leaves through
-		// the same parameter fallback, and a call-produced container
-		// (makeList(page)[0]) keeps the callee's element fields.
-		if o := objOf(st, v.X); o != nil {
+		// An element-carrying argument (xs[0], m[k], m[0][k]): every
+		// trailing index names an element of the same root container,
+		// so the element-field taints resolve from the root: a local or
+		// parameter container keeps them on the variable (parameters
+		// through the declared leaves), a composite literal keeps the
+		// union of its element struct fields, and a call-produced
+		// container (makeList(page)[0]) keeps the callee's element
+		// fields.
+		root := indexChainRoot(v)
+		if o := objOf(st, root); o != nil {
 			fields = pf.fieldTaintsOf(st, o)
+		} else if lit := structLitOf(root); lit != nil {
+			fields = pf.compositeFields(st, lit)
 		} else {
-			fields = pf.callProducedFields(st, v.X)
+			fields = pf.callProducedFields(st, root)
 		}
 	case *ast.TypeAssertExpr:
 		// An asserted argument (v.(T)): the asserted value keeps the
@@ -3345,6 +3386,31 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 			}
 		case *ast.CallExpr:
 			fields = pf.callFields[e]
+		}
+		// An INTERFACE-TYPED parameter asserted to a concrete struct
+		// type exposes the asserted type's leaves with the parameter
+		// source: the param has no declared leaves of its own, but a
+		// helper reading v.(T).Data must keep the caller's field taint
+		// bound exactly like a struct parameter's declared leaves do.
+		// The asserted leaf names match the caller's concrete argument
+		// fields, so the summary's paramField sources bind at the
+		// call site. The asserted type is read from the assertion's
+		// type EXPRESSION: a two-value assertion (b, ok := v.(T))
+		// types the expression node as the (T, bool) tuple.
+		if o := objOf(st, v.X); o != nil {
+			if idx, ok := st.params[o]; ok && isInterfaceType(o.Type()) {
+				if stt, ok := derefStruct(pf.pc.info.Types[v.Type].Type); ok {
+					for path, ft := range paramLeafPaths(stt) {
+						if !paramCanCarryPage(ft) {
+							continue
+						}
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
+					}
+				}
+			}
 		}
 	case *ast.SelectorExpr:
 		// A struct VALUE read off a field (take(h.Box) with h.Box.Data
@@ -3398,7 +3464,16 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 	case *ast.CompositeLit:
 		fields = pf.compositeFields(st, v)
 	case *ast.CallExpr:
-		fields = pf.callFields[v]
+		if len(v.Args) == 1 && pf.pc.info.Types[v.Fun].IsType() {
+			// Type conversions (any(x), T(x)) keep the converted
+			// argument's field provenance: boxing a struct into an
+			// interface, or converting between named byte shapes, does
+			// not flatten the leaves a callee reads after the
+			// assertion.
+			fields = pf.argFlowOf(st, v.Args[0]).fields
+		} else {
+			fields = pf.callFields[v]
+		}
 	}
 	return argFlow{pv: pv, fields: fields}
 }
@@ -3741,6 +3816,25 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 			if idx, ok := st.params[o]; ok {
 				for path, fv := range pf.paramFieldFallback(st, o, idx) {
 					fs.fields[path] = joinFieldTaint(fs.fields[path], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+				}
+			}
+		}
+		return
+	}
+	if ta, ok := unparen(expr).(*ast.TypeAssertExpr); ok {
+		// A returned asserted value (return v.(T) with v an
+		// interface-typed parameter): the asserted type's leaves carry
+		// the parameter source, so an identity helper over an
+		// interface keeps the caller's field taints bound.
+		if o := objOf(st, ta.X); o != nil {
+			if idx, ok := st.params[o]; ok && isInterfaceType(o.Type()) {
+				if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+					for path, ft := range paramLeafPaths(stt) {
+						if !paramCanCarryPage(ft) {
+							continue
+						}
+						fs.fields[path] = joinFieldTaint(fs.fields[path], fieldTaint{tainted: true, srcs: maxSrcOf(pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true})})
+					}
 				}
 			}
 		}
