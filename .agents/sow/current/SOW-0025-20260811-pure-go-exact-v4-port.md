@@ -4,27 +4,31 @@
 Status: in-progress
 
 Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
-(2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; the next
-swarm round at HEAD 2ad4001 returned nine gate findings, all reproduced
-by the lead and fixed at HEAD f96d13d with battery pins; milestone
-close is pending the next swarm round and the sol final gate (user
-review decision: six-resident swarm, then sol). All three review
+(2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; the swarm
+round at HEAD 2ad4001 returned nine gate findings, all reproduced by
+the lead and fixed at HEAD f96d13d with battery pins; the round at HEAD
+57522e8 returned ten further gate findings (Luna) plus a multi-result
+struct-field taint gap (MiniMax P2), all reproduced by the lead and
+fixed at HEAD 65ca62a with battery pins; milestone close is pending the
+completion of that round (six-resident swarm, then sol, per the user
+review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 5,656-line typed scanner (5,104-line go/types module
+mmap gate is a 6,021-line typed scanner (5,469-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
-fifteen bypass classes (function-variable callees, closure/defer/go
+seventeen bypass classes (function-variable callees, closure/defer/go
 bodies, func-literal variables, reassigned function variables,
 multi-hop function-variable chains, range-rebound variables,
 address-taken variables, helper-summary parameter flow, local closures
 and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
-assignment slots, named array/string conversion sinks, and
-file-capability laundering) with durable battery pins; the Status is
-compact with the full history in the appendix. The durable battery is
-320 cases (257 rejections, 63 benign acceptances) plus 9 shell
-environment mutations and passes end to end.
+assignment slots and struct-result field taint, named array/string
+conversion sinks, and file-capability laundering) plus the round-5
+classes recorded in the round-5 entry below, all with durable battery
+pins; the Status is compact with the full history in the appendix. The
+durable battery is 337 cases (271 rejections, 66 benign acceptances)
+plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -43,7 +47,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (320
+  The durable mutation battery moved into the tool as table data (337
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -58,10 +62,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 320-case battery, and the SOW audit.
+the import-graph gate with its 337-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 5,656 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,021 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1208,6 +1212,56 @@ HEAD recorded in the first review entry below):
   63 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
   diffs, cross-compilation - all green.
+- Swarm round 5 (2026-08-14, at HEAD 57522e8): the independent round
+  review returned ten gate findings (Luna resident) plus one
+  multi-result struct-field taint gap (MiniMax P2), every one
+  reproduced by the lead against the tree (exact mutation probes, gate
+  exit 0 on the misses) and closed in one commit at HEAD 65ca62a:
+  - helper summaries tested only the first source: choose(nil, page,
+    true) lost the page taint; fs.eval/evalResults now taint when ANY
+    recorded source is tainted and accumulate maxLen only over tainted
+    sources;
+  - named/naked returns were not summarized: analyzeFunc records
+    named-result slots and feeds stores to them back into results and
+    struct fields after the body;
+  - void unknown function-variable calls were not transfers: an
+    unproven var func([]byte) called with a page was invisible; such
+    calls now transfer (scalar-result calls stay reads);
+  - append(dest, src...) checked only the source: a complete mapped
+    page view as the destination (append(page[0:4096:4096], ...))
+    reallocates the full page into owned memory and is now rejected;
+  - index and dereference stores were untracked: slots[0] = page and
+    *h = page now bind the container/pointed-to variable;
+  - range variables were never bound: range over [][]byte{page} now
+    derives the loop value from the container taint;
+  - interface/map/channel carriers were missing: any(page) keeps the
+    argument taint, direct interface parameters carry page values
+    (variadic and stdlib-form interfaces stay exempt), and channel
+    send/receive round trips are modeled;
+  - switch fallthrough dropped the previous case state: each case body
+    now joins the falling-through case end state;
+  - nested func-literal return context leaked: every ReturnStmt is now
+    checked against its own enclosing function (literal or
+    declaration) result types;
+  - unproven package func vars with interface results failed open: a
+    var func() io.Reader outside the mapping owner is now a capability
+    launder (restricted to never-reassigned package-level func vars so
+    stdlib callbacks stay clean);
+  - multi-result struct-field taint (MiniMax P2): (chunk, err) helpers
+    lost field taint on the struct slot; every returned expression now
+    propagates composite-literal struct fields (first slot wins on
+    name collisions) and evalCall records struct fields even when the
+    whole result slot is tainted; parameter-sourced summary bounds now
+    resolve the caller's constant slice symbol (page[48:112] stays a
+    64-byte view) instead of reading the zero symbol as constant.
+  Pinned as battery forms P39-P55 (fourteen rejects, three benigns:
+  P39-P52 reject, P53-P55 benign); battery 320 -> 337 (257 -> 271
+  rejections, 63 -> 66 benign). Gate tooling 5,104 -> 5,469 go-gate
+  lines (+552 shell = 6,021 total).
+  Validation at HEAD 65ca62a: gate --self-test 337/337 (271 rejections,
+  66 benign) + 9 shell mutations exit 0, production scan clean on all
+  five targets, go test ./... (both tag sets), -race, vet, gofmt zero
+  diffs, cross-compilation (windows/darwin/freebsd/netbsd) - all green.
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
