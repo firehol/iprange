@@ -1147,10 +1147,11 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 }
 
 // derivedPageValue returns the taint of a value derived from a tainted
-// base (element extraction, type assertion): the concrete bound is lost,
-// but a parameter-sourced base keeps its source so summaries of
-// param-derived results stay caller-dependent instead of reporting
-// "always tainted".
+// base (element extraction, type assertion). The base's definite bound
+// is carried (a type assertion returns exactly the asserted value; an
+// extraction may return the bound-carrying element), and a
+// parameter-sourced base keeps its source so summaries of param-derived
+// results stay caller-dependent instead of reporting "always tainted".
 func derivedPageValue(base pageValue) pageValue {
 	out := pageValue{tainted: true, maxLen: base.maxLen, hasSym: base.hasSym, sym: base.sym}
 	if base.hasSrc {
