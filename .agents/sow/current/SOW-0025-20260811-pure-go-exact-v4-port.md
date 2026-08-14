@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,357-line typed toolchain (8,805-line go/types module
+mmap gate is a 9,487-line typed toolchain (8,935-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -35,7 +35,7 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, and round-15
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, and round-16
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -56,9 +56,21 @@ file descriptor outside the mapping owner; the channel finding was a
 false positive (every channel probe shape was already rejected) and
 the map-literal variant is invalid Go (a []byte field makes the key
 non-comparable); all verified real findings were probe-verified and
-fixed with durable battery pins in the round-15 entry below. The
-durable battery is 443 cases (375 rejections, 68 benign acceptances)
-plus 9 shell environment mutations and passes end to end.
+fixed with durable battery pins in the round-15 entry below. The round
+at HEAD e03ecba returned five further gate findings (Luna): external
+method-value receivers hid a page-bearing receiver from the transfer
+check, partial local struct records suppressed parameter leaf taints,
+call-produced containers and struct values lost element/field
+provenance in argument flow, returned struct parameters and container
+elements lost caller field provenance through identity helpers, and
+promoted embedded leaves were absent from the parameter leaf
+fallback; four were reproduced by the lead as real escapes before any
+fix (durable pins P162-P165) and the external method-value case is
+code-review-verified because the loader cannot resolve net and no
+loadable external concrete method returns a page-bearing value; all
+five are fixed with durable battery pins in the round-16 entry below.
+The durable battery is 447 cases (379 rejections, 68 benign
+acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -92,10 +104,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 443-case battery, and the SOW audit.
+the import-graph gate with its 447-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,357 raw lines total (8,805 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,487 raw lines total (8,935 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1604,6 +1616,55 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 16 (delta re-review): luna failed the round-15 delta at HEAD
+  e03ecba with five findings; the lead reproduced four as real escapes on
+  a fresh HEAD build before any fix (probes /tmp/probe-l16) and the fifth
+  is code-review-verified (the loader cannot resolve net, no loadable
+  external concrete method returns a page-bearing value, and scanned
+  method values are approved callees): external method-value
+  receivers bypassed the unprovable-receiver transfer check (get :=
+  b.String; get() with String() converting a page-bearing b.Data: the
+  checkCall selector branch only covers direct SelectorExpr calls, so a
+  captured method value hid the full-page receiver; checkCall now
+  resolves the method-value receiver through the flow pass and fails
+  closed on a complete page); P162 partial local struct records
+  suppressed parameter leaves (o.Other = 1 inside a helper erased the
+  caller-supplied o.Data on the way out: fieldTaintsOf returned the
+  partial local record for a struct parameter without joining the
+  declared leaf sources, the same suppression materializeStructFields
+  already avoided; fieldTaintsOf now copies local/package records and
+  joins paramFieldFallback for every unrecorded path); P163
+  call-produced containers and structs lost element/field provenance in
+  argument flow (take(makeList(page)[0]) and take(makeBox(page).B)
+  resolved only recorded variable bases: the IndexExpr and StarExpr
+  cases now fall back to the callee's callFields, and selector bases
+  build the dotted prefix across nested selector chains and rename the
+  callee fields onto the selected argument); P164 returned struct
+  parameters and container elements lost caller field provenance
+  (func id(b box) box { return b } with x := id(box{Data: page}) read
+  clean: propagateStructResult only propagated the returned object's
+  local/package records, so an identity helper erased the caller's
+  field taints; the return case now joins the package struct records,
+  the paramFieldFallback leaves of the returned parameter, and the
+  IndexExpr-returned local/parameter container element fields); P165
+  promoted embedded leaves were absent from the parameter leaf fallback
+  (wrap(louter{linner{Data: page}}) read clean because paramLeafPaths
+  recorded only linner.Data, while the field read resolves the promoted
+  alias o.Data; the anonymous-embedding walk now repeats with the
+  parent's prefix so every promoted path binds). Battery 443 -> 447
+  (375 -> 379 rejections, 68 benign). Gate tooling 8,805 -> 8,935
+  go-gate lines (+552 shell = 9,487 total).
+  Validation at the closing commit: gate --self-test 447/447 (379
+  rejections, 68 benign) + 9 shell environment mutations exit 0,
+  production scan clean on every scanned target, all round-16 probe
+  files reject on every scanned target together with the round-15
+  probe trees (/tmp/probe-luna15, /tmp/probe-luna14) and the previous
+  round trees (/tmp/probe-f2only2, /tmp/probe-luna2, /tmp/probe-p16,
+  /tmp/probe-luna5) returning the same verdicts as a clean HEAD build,
+  go test ./... (both tag sets), -race, vet (go and go-gate), gofmt
+  zero diffs, cross-builds for every shell-harness target, the
+  import-graph gate with the 447-case battery, and the SOW audit all
+  pass.
 - Round 11 (delta re-review): luna failed the round-10 delta with twelve
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P112 branch-local
