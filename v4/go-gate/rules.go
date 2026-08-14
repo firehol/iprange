@@ -178,6 +178,28 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 						reassigned[obj] = true
 					}
 				}
+			case *ast.RangeStmt:
+				// for x = range ... and for _, x = range ... both rebind
+				// the loop variables; neither is an AssignStmt, so count
+				// them as reassignments when they name package-level vars.
+				for _, e := range []ast.Expr{v.Key, v.Value} {
+					if id, ok := unparen(e).(*ast.Ident); ok {
+						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
+							reassigned[obj] = true
+						}
+					}
+				}
+			case *ast.UnaryExpr:
+				// Taking a package-level variable's address permits a
+				// store through that pointer (p := &f; *p = bytes.Clone),
+				// so the initializer is no longer proof of the callee.
+				if v.Op == token.AND {
+					if id, ok := unparen(v.X).(*ast.Ident); ok {
+						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
+							reassigned[obj] = true
+						}
+					}
+				}
 			}
 			return true
 		})

@@ -86,4 +86,13 @@ var batteryPageCases = []batteryCase{
 	{name: "P20: benign two-hop chain with a bounded slice", desc: "var a = func(p){ copy(out,p) }; var b = a; b(page[48:112]) stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_chainfnok.go", content: "package reader\n\nvar cloneChainC = func(page []byte) []byte {\n\tout := make([]byte, len(page))\n\tcopy(out, page)\n\treturn out\n}\n\nvar cloneChainD = cloneChainC\n\nfunc chainFnOkProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn cloneChainD(page[48:112]), nil\n}"},
 	}},
+	{name: "P21: range reassignment of a func-literal variable with a page", desc: "for _, f = range fs; f(page) with fs={bytes.Clone} rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_rangereassign.go", content: "package reader\n\nimport \"bytes\"\n\nvar cloneRangeF = func(p []byte) []byte { return p }\n\nvar cloneRangeFS = []func([]byte) []byte{bytes.Clone}\n\nfunc rangeReassignProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n	page, err := r.page(pgno)\n	if err != nil {\n		return nil, err\n	}\n	var out []byte\n	for _, cloneRangeF = range cloneRangeFS {\n		out = cloneRangeF(page)\n	}\n	return out, nil\n}"},
+	}},
+	{name: "P22: address-taken store rebinds a func-literal variable", desc: "p := &f; *p = bytes.Clone; f(page) rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_ptrreassign.go", content: "package reader\n\nimport \"bytes\"\n\nvar clonePtrF = func(p []byte) []byte { return p }\n\nfunc ptrReassignProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n	p := &clonePtrF\n	*p = bytes.Clone\n	page, err := r.page(pgno)\n	if err != nil {\n		return nil, err\n	}\n	return clonePtrF(page), nil\n}"},
+	}},
+	{name: "P23: benign range rebinding without a page call", desc: "for _, f = range fs { _ = f } without a mapped-page argument stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_rangenocall.go", content: "package reader\n\nvar cloneRangeG = func(p []byte) []byte { return p }\n\nvar cloneRangeGS = []func([]byte) []byte{cloneRangeG}\n\nfunc rangeNoCallProbe() int {\n	n := 0\n	for _, cloneRangeG = range cloneRangeGS {\n		n += len(cloneRangeG(make([]byte, 8)))\n	}\n	return n\n}"},
+	}},
 }
