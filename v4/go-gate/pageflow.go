@@ -2020,16 +2020,17 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 					}
 				}
 			}
-		} else if _, ok := unparen(v.X).(*ast.IndexExpr); ok {
-			// xs[0].Data and m[0][0].Data: a field select on an indexed
-			// value reads the container's element-field taints no matter
-			// how many index levels the expression has, because every
-			// level names an element of the same root container. The
-			// root may be a composite literal (the union of the
-			// elements' field taints, since the extraction may name any
-			// element), a bound local or parameter container, or a call
-			// result.
-			root := indexChainRoot(v.X)
+		} else if chainContainsIndex(v.X) {
+			// xs[0].Data, m[0][0].Data and m[0][0].Inner.Data: a field
+			// select on an indexed value reads the container's
+			// element-field taints no matter how many trailing
+			// selectors and index levels the expression has, because
+			// every level names an element or field path of the same
+			// root container. The root may be a composite literal (the
+			// union of the elements' field taints, since the extraction
+			// may name any element), a bound local or parameter
+			// container, or a call result.
+			fullPath, root := selectorIndexChain(v)
 			if lit := structLitOf(root); lit != nil {
 				var m map[string]pageValue
 				for _, el := range lit.Elts {
@@ -2056,7 +2057,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 						}
 					}
 				}
-				if pv, ok := m[v.Sel.Name]; ok {
+				if pv, ok := m[fullPath]; ok {
 					out = pv
 				}
 			} else if obj := objOf(st, root); obj != nil {
@@ -2064,8 +2065,19 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 				// element-field taints were recorded when the slice
 				// literal was assigned (xs := []box8{{Data: page}}).
 				if m, ok := st.structs[obj]; ok {
-					if pv, ok := m[v.Sel.Name]; ok {
+					if pv, ok := m[fullPath]; ok {
 						out = pv
+					}
+				}
+				// xs[0].Data with xs a container PARAMETER: the
+				// declared element leaves carry the caller's fields
+				// through the parameter source, the same fallback the
+				// binding sites use.
+				if !out.tainted {
+					if idx, ok := st.params[obj]; ok {
+						if pv, ok := pf.paramFieldFallback(st, obj, idx)[fullPath]; ok {
+							out = pv
+						}
 					}
 				}
 			} else if call, ok := unparen(root).(*ast.CallExpr); ok {
@@ -2080,7 +2092,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 				delete(pf.values, call)
 				pf.evalExpr(st, call)
 				if m, ok := pf.callFields[call]; ok {
-					if pv, ok := m[v.Sel.Name]; ok {
+					if pv, ok := m[fullPath]; ok {
 						out = pv
 					}
 				}
@@ -2416,6 +2428,65 @@ func indexChainRoot(e ast.Expr) ast.Expr {
 		}
 		cur = unparen(ix.X)
 	}
+}
+
+// chainContainsIndex reports whether an expression chain carries an
+// index anywhere below the outermost selector (xs[0].Data and
+// m[0][0].Inner.Data qualify, b.Inner.Data does not).
+func chainContainsIndex(e ast.Expr) bool {
+	cur := unparen(e)
+	for {
+		switch n := cur.(type) {
+		case *ast.SelectorExpr:
+			cur = unparen(n.X)
+		case *ast.IndexExpr:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// selectorIndexChain collects the dotted field names of a selector
+// expression whose base is an indexed value, unwrapping every trailing
+// index level: m[0][0].Inner.Data yields ("Inner.Data", the root
+// expression) and makeM(page)[0][0].Inner yields ("Inner", the call).
+// Selector names before and between index levels keep their order; the
+// caller has already established that at least one selector exists.
+func selectorIndexChain(e ast.Expr) (string, ast.Expr) {
+	parts := []string{}
+	cur := unparen(e)
+	for {
+		switch n := unparen(cur).(type) {
+		case *ast.SelectorExpr:
+			parts = append([]string{n.Sel.Name}, parts...)
+			cur = unparen(n.X)
+		case *ast.IndexExpr:
+			cur = unparen(n.X)
+		default:
+			if len(parts) == 0 {
+				return "", nil
+			}
+			return strings.Join(parts, "."), cur
+		}
+	}
+}
+
+// stripFieldPrefix renames recorded element/struct fields under one
+// selected path onto the direct field names of the selected value:
+// {"Inner.Data": tainted} with prefix "Inner." becomes {"Data":
+// tainted}, the same rename recorded-base arguments receive.
+func stripFieldPrefix(m map[string]pageValue, prefix string) map[string]pageValue {
+	var out map[string]pageValue
+	for k, fv := range m {
+		if fv.tainted && strings.HasPrefix(k, prefix) {
+			if out == nil {
+				out = map[string]pageValue{}
+			}
+			out[k[len(prefix):]] = fv
+		}
+	}
+	return out
 }
 
 // selectorChain resolves a (possibly nested) selector expression to its
@@ -3451,6 +3522,18 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 						}
 					}
 				}
+			}
+		} else if parts, root := selectorIndexChain(v); root != nil && (objOf(st, root) != nil || structLitOf(root) != nil) {
+			// A selected field of an indexed base (m[0][0].Inner,
+			// xs[0].B, []box{{Data: page}}[0].B): the root container's
+			// recorded element fields, parameter leaves, or literal
+			// element union carry the full dotted selection; stripping
+			// it binds the selected value's direct field names, the
+			// same rename recorded-base arguments receive.
+			if objOf(st, root) != nil {
+				fields = stripFieldPrefix(pf.fieldTaintsOf(st, objOf(st, root)), parts+".")
+			} else {
+				fields = stripFieldPrefix(pf.compositeFields(st, structLitOf(root)), parts+".")
 			}
 		} else {
 			// A struct value produced by a call (take(makeBox(page).B),
