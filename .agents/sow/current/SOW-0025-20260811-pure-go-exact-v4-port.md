@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 10,200-line typed toolchain (9,648-line go/types module
+mmap gate is a 10,597-line typed toolchain (10,045-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -113,8 +113,20 @@ stores) and fixed them with durable battery pins P193-P199 in the
 round-20 entry below; the other three findings were probe-verified
 false positives (every scalar indirect-call shape, every clean
 sibling-store shape, and every append-built container shape already
-rejects). The
-durable battery is 481 cases (413 rejections, 68 benign acceptances)
+rejects). The round-21 delta
+re-review returned eight further gate findings (Luna); the lead
+probe-verified all eight as real escapes on the round-20 build and
+fixed them with durable battery pins P200-P209 in the round-21 entry
+below: two-variable map ranges bound the key fields to the value
+variable, container literal elements produced by calls or addresses
+lost their fields, indexed whole-struct stores into field containers
+and dereference stores through aliased pointers missed the record,
+pointer-receiver method mutations never reached the caller's variable,
+struct field provenance died at channel sends, address-of arguments
+lost the variable's fields, interface calls returning containers
+failed open on element fields, and ranges over type-converted
+containers lost the element leaves. The
+durable battery is 491 cases (423 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -149,10 +161,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 481-case battery, and the SOW audit.
+the import-graph gate with its 491-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 10,200 raw lines total (9,648 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 10,597 raw lines total (10,045 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1661,6 +1673,61 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 21 (delta re-review, d5d5be9): luna failed the round-20
+  delta with eight findings; the lead probe-verified all eight as real
+  escapes on the round-20 build before any fix (probes /tmp/probe-l20-
+  1/2/3/4/5/6/7/8) and fixed them with durable pins:
+  P200 a TWO-variable map range bound the key fields to the VALUE
+  variable (for k, v := range m with m map[*box]int lost k.Data); the
+  range branch now detects map ranges and splits the recorded entry
+  fields between the key and the value variable by the declared leaf
+  names of the map key and element types;
+  P201 a container literal element produced by a CALL lost its fields
+  (xs := []box{makeBox(p)}; xs[0].Data) and P202 an element that is
+  the ADDRESS of a variable lost them ([]*box{&b}); elementFieldsOf
+  now falls back to argument-flow renaming, and argFlowOf resolves
+  &b through the pointed-to variable's recorded fields;
+  P203 an indexed whole-struct store into a FIELD container lost its
+  element provenance (h.Items[0] = B{Data: p}): the store now records
+  under the "Items.Data" flattened path on the base object, the same
+  path the read resolves;
+  P204 a dereference store through an ALIASED pointer lost the original
+  variable (q := &b; *q = B{Data: page}; b.Data): the StarExpr store
+  and the selector-field store now also record on the derefTarget
+  alias, so reads under either name stay sourced;
+  P205 pointer-receiver METHOD mutations never reached the caller
+  (b.Set(p) writing b.Data = p; b.Data): funcSummary gained a
+  mutFields map exported from the callee's final pointer-parameter
+  field records (tainted stores only, value params excluded);
+  applySummaryMutations re-binds the recorded sources to the actual
+  argument values at every resolved call site, including receivers,
+  address-of arguments, and field-chain receivers;
+  P206 struct field provenance died at a channel send/receive (ch <-
+  B{Data: page}; x := <-ch; x.Data): the send records the sent
+  value's fields on the channel variable (tainted sends join; clean
+  sends never erase), and argFlowOf's receive case binds them to the
+  received variable;
+  P207 an address-of argument lost the variable's fields (takePtr(&b)):
+  argFlowOf resolves the & operand through the recorded fields;
+  P208 an interface method call returning a CONTAINER failed open on
+  element fields (x.Boxes()[0].Data): both unprovable-callee paths
+  now fail closed on the page-carrying element and key leaves of
+  container results (failClosedCallFields), matching the existing
+  direct-struct-field policy;
+  P209 a range over a TYPE-CONVERTED container lost the element leaves
+  (for _, x := range []B(h.Items)): the range call branch detects
+  conversions and resolves the operand's element fields.
+  battery 481 -> 491 (413 -> 423 rejections, 68 benign acceptances).
+  Gate tooling 9,648 -> 10,045 go-gate lines (+552 shell = 10,597
+  total). All eight were real; no finding was dismissed.
+  Validation at the closing commit: gate --self-test 491/491 (423
+  rejections, 68 benign) + 9 shell environment mutations exit 0
+  (battery log /tmp/battery-r21b.log), production scan clean, all 38
+  probe trees reject (rc 1; the 30 round-19/20 shapes and the eight
+  round-21 shapes), luna1b/luna1c stay accepted as the recorded known
+  open question, go test ./... (both tag sets) including -race
+  -count=1, vet (go and go-gate), gofmt zero diffs, the import-graph
+  gate, and the SOW audit all pass.
 - Round 20 (delta re-review, 64c8c13): luna failed the round-19
   delta with six findings; the lead probe-verified three real escape
   families on the round-19 build before any fix and pinned them:
