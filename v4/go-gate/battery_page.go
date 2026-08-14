@@ -493,4 +493,35 @@ var batteryPageCases = []batteryCase{
 	{name: "P140: package method-value bindings keep receiver state", desc: "var get = holder.Get after set(page) must carry the page into the append sink", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r12_14.go", content: "package reader\n\ntype holderR1214 struct{ data []byte }\n\nvar holderVarR1214 holderR1214\n\nfunc (h *holderR1214) Get() []byte { return h.data }\n\nfunc setR1214(page []byte) { holderVarR1214.data = page }\n\nvar getR1214 = holderVarR1214.Get\n\nfunc pkgMethValProbeR1214(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tsetR1214(page)\n\treturn append([]byte{}, getR1214()...), nil\n}"},
 	}},
+	{name: "P141: variadic ...any interface erasure", desc: "sink(nil, file) with sink(xs ...any) drops the file into a trailing variadic element slot", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_01.go", content: "package reader\n\nimport \"os\"\n\nvar fileVarR1301 *os.File\n\nfunc sinkR1301(xs ...any) {}\n\nfunc variadicAnyFileProbeR1301() { sinkR1301(nil, fileVarR1301) }"},
+	}},
+
+	{name: "P142: variadic string-conversion copy", desc: "sink([]byte{1}, page) with sink(xs ...[]byte){ _ = string(xs[1]) } copies a trailing variadic element", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_02.go", content: "package reader\n\nfunc sinkR1302(xs ...[]byte) { _ = string(xs[1]) }\n\nfunc variadicStrProbeR1302(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tsinkR1302([]byte{1}, page)\n\treturn nil\n}"},
+	}},
+
+	{name: "P143: range rebinding of a function binding", desc: "for _, f = range fs rebinds f; a later f() may call the page-returning element", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_03.go", content: "package reader\n\nfunc rangeRebindProbeR1303(r *ImmutableReader, pgno uint32, fs []func() []byte) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tf := func() []byte { return []byte{1} }\n\tfor _, f = range fs {\n\t\t_ = page\n\t}\n\treturn append([]byte{}, f()...), nil\n}"},
+	}},
+
+	{name: "P144: pointer-store rebinding of a function binding", desc: "*p = func() []byte { return page } rebinds f through p := &f", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_04.go", content: "package reader\n\nfunc ptrRebindProbeR1304(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tf := func() []byte { return []byte{1} }\n\tp := &f\n\t*p = func() []byte { return page }\n\treturn append([]byte{}, f()...), nil\n}"},
+	}},
+
+	{name: "P145: nested struct parameter fields", desc: "take(o) returning o.Inner.Data with a caller-supplied nested page field", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_05.go", content: "package reader\n\ntype innerR1305 struct{ Data []byte }\n\ntype outerR1305 struct{ Inner innerR1305 }\n\nfunc takeR1305(o outerR1305) []byte { return o.Inner.Data }\n\nfunc nestedParamProbeR1305(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, takeR1305(outerR1305{Inner: innerR1305{Data: page}})...), nil\n}"},
+	}},
+
+	{name: "P146: map-key struct fields through a key range", desc: "m[box{Data: page}] = 1 then for k := range m { k.(box).Data }", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_06.go", content: "package reader\n\ntype boxR1306 struct{ Data []byte }\n\nfunc mapKeyRangeProbeR1306(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tm := make(map[any]int)\n\tm[boxR1306{Data: page}] = 1\n\tfor k := range m {\n\t\treturn append([]byte{}, k.(boxR1306).Data...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+
+	{name: "P147: method-value receiver string conversion", desc: "get := b.String; get() with String() converting b.Data to an owned string", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_07.go", content: "package reader\n\ntype boxR1307 struct{ Data []byte }\n\nfunc (b boxR1307) String() string { return string(b.Data) }\n\nfunc methValStrProbeR1307(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tb := boxR1307{Data: page}\n\tget := b.String\n\t_ = get()\n\treturn nil\n}"},
+	}},
+
+	{name: "P148: file recovered from a non-empty interface by assertion", desc: "factory().(*os.File) with factory func() io.Reader names the descriptor as a typed file", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r13_08.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc ifaceAssertProbeR1308(factory func() io.Reader) *os.File {\n\treturn factory().(*os.File)\n}"},
+	}},
 }

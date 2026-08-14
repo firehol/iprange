@@ -682,9 +682,13 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 	}
 	key := fn.Name()
 	receiverSlot := false
-	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
-		key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
-		receiverSlot = true
+	var sig *types.Signature
+	if s, ok := fn.Type().(*types.Signature); ok {
+		sig = s
+		if sig.Recv() != nil {
+			key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+			receiverSlot = true
+		}
 	}
 	fs, ok := sums[key]
 	if !ok || (len(fs.stringParams) == 0 && len(fs.fmtSpreadParams) == 0) {
@@ -693,10 +697,14 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 	// Method summaries count the receiver as parameter slot 0. A method
 	// VALUE call carries the receiver as the selector expression; a
 	// method-EXPRESSION call (or an alias of one) carries it as the
-	// first explicit argument.
+	// first explicit argument. A method value stored in a local
+	// (get := b.String; get()) carries the receiver as the binding's
+	// capture, resolved by the flow pass into callMethodValues.
 	recvOffset := 0
 	var recvExpr ast.Expr
-	if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
+	if mvr, ok := w.methodValueCallee(v); ok {
+		recvExpr = mvr.recv
+	} else if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
 		if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
 			recvExpr = sel.X
 			recvOffset = 1
@@ -712,24 +720,54 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 		}
 		return v.Args[ai], true
 	}
-	for pi := range fs.stringParams {
-		arg, ok := argAt(pi)
-		if !ok {
-			continue
+	// A variadic parameter slot receives EVERY trailing argument: the
+	// summary records one union slot for the whole element collection,
+	// so each trailing argument must be checked against the conversion
+	// (sink([]byte{1}, page) with sink(xs ...[]byte) converts xs[1]).
+	variadicSlot := -1
+	if sig != nil && sig.Variadic() && sig.Params().Len() > 0 {
+		variadicSlot = sig.Params().Len() - 1
+		if receiverSlot {
+			variadicSlot++
 		}
-		if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
-			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
+	}
+	slotArgs := func(pi int) []ast.Expr {
+		if pi == variadicSlot {
+			var out []ast.Expr
+			for ai := pi - recvOffset; ai < len(v.Args); ai++ {
+				out = append(out, v.Args[ai])
+			}
+			return out
+		}
+		if arg, ok := argAt(pi); ok {
+			return []ast.Expr{arg}
+		}
+		return nil
+	}
+	for pi := range fs.stringParams {
+		for _, arg := range slotArgs(pi) {
+			if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
+				w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
+			}
 		}
 	}
 	for pi := range fs.fmtSpreadParams {
-		arg, ok := argAt(pi)
-		if !ok {
-			continue
-		}
-		if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
-			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is spread into fmt inside the callee (complete page into owned memory)", calleeText(v.Fun), pi+1)
+		for _, arg := range slotArgs(pi) {
+			if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
+				w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is spread into fmt inside the callee (complete page into owned memory)", calleeText(v.Fun), pi+1)
+			}
 		}
 	}
+}
+
+// methodValueCallee returns the flow-pass resolution of a method-value
+// call (get := b.String; get()): the method and the captured receiver.
+func (w *fileRules) methodValueCallee(v *ast.CallExpr) (methodValueCall, bool) {
+	if w.pc.pf == nil {
+		return methodValueCall{}, false
+	}
+	mvr, ok := w.pc.pf.callMethodValues[v]
+	return mvr, ok
 }
 
 // approvedFuncVar approves a call through a function-typed variable only
@@ -1107,7 +1145,16 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// string (string(p) recorded in its summary) copies the caller's
 	// bytes; the conversion inside the callee cannot see that the bound
 	// is a full mapped page, so the call site fails closed.
-	if fn := callCalleeFuncOrVar(w, fun); fn != nil {
+	fn := callCalleeFuncOrVar(w, fun)
+	if fn == nil {
+		// A method value stored in a local is not a statically visible
+		// callee; the flow pass resolved it, and the string-parameter
+		// rule needs the captured receiver to check the call site.
+		if mvr, ok := w.methodValueCallee(v); ok {
+			fn = mvr.fn
+		}
+	}
+	if fn != nil {
 		w.checkStringParamCalls(v, fn)
 	}
 }
@@ -1380,8 +1427,19 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 	resT := w.typeOf(v)
 	resBears := resT != nil && fileValueType(resT, map[types.Type]bool{})
 	for i, arg := range v.Args {
-		if i >= len(formals) {
-			break
+		ft := types.Type(nil)
+		if i < len(formals) {
+			ft = formals[i]
+		} else if sl, ok := types.Unalias(formals[len(formals)-1]).(*types.Slice); ok {
+			// Trailing arguments past the last formal land in a
+			// variadic element slot: the erasure check applies to the
+			// element type (…any erases like any, …T like T).
+			ft = sl.Elem()
+		} else {
+			break // extra arguments cannot type-check against a non-variadic callee
+		}
+		if ft == nil {
+			continue
 		}
 		at := w.typeOf(arg)
 		if at == nil {
@@ -1392,13 +1450,13 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 		// formal erases the struct type: the descriptor inside the
 		// field becomes invisible to the launder checks downstream, so
 		// it fails closed like a directly file-bearing argument.
-		holds := !bears && isInterfaceType(formals[i]) && structContainsFile(at, map[types.Type]bool{})
+		holds := !bears && isInterfaceType(ft) && structContainsFile(at, map[types.Type]bool{})
 		if !bears && !holds {
 			continue
 		}
-		if isInterfaceType(formals[i]) {
+		if isInterfaceType(ft) {
 			w.fail(v.Pos(), "file-bearing argument laundered into an interface parameter (type erasure)")
-		} else if _, ok := formals[i].(*types.TypeParam); ok {
+		} else if _, ok := ft.(*types.TypeParam); ok {
 			if !resBears {
 				w.fail(v.Pos(), "file-bearing argument through a generic callee erased into a non-file-bearing result (type erasure)")
 			}
@@ -1609,6 +1667,18 @@ func (w *fileRules) checkTypeAssert(v *ast.TypeAssertExpr) {
 		!fileValueType(dst, map[types.Type]bool{}) {
 		w.fail(v.Pos(), "file-bearing value asserted into a non-file-bearing type (launder)")
 	}
+	// A type assertion that RECOVERS a file descriptor from an
+	// interface value (factory().(*os.File) with factory func()
+	// io.Reader) names the descriptor as a typed file the capability
+	// walk can see downstream. The interface's static type cannot
+	// prove the descriptor is absent (os.File satisfies io.Reader),
+	// and an unscanned producer can mint one, so the recovery itself
+	// fails closed; only a method-set interface that *os.File does
+	// not implement stays benign.
+	if src != nil && dst != nil && fileValueType(dst, map[types.Type]bool{}) && isInterfaceType(src) &&
+		(types.NewMethodSet(src).Len() == 0 || w.fileImplementableInterface(src)) {
+		w.fail(v.Pos(), "file-bearing value asserted out of an interface value (capability launder)")
+	}
 }
 
 // checkArrayConversionSink flags [N]byte(page) with N >= PageSize and
@@ -1626,6 +1696,36 @@ func (w *fileRules) checkArrayConversionSink(pos token.Pos, dst types.Type, pv p
 	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && !pv.hasSrc && !definiteSubPage(pv) {
 		w.fail(pos, "string conversion of a full-page view")
 	}
+}
+
+// fileImplementableInterface reports whether a value of interface type
+// t can itself BE a *os.File at runtime: os.File's method set satisfies
+// the interface's method set. An unproven call returning such an
+// interface can mint the mapping owner's descriptor, so the capability
+// check treats it like an empty-interface result. Interfaces with a
+// union type set are not a single concrete shape: the precise method-set
+// subset test only applies to plain method-set interfaces.
+func (w *fileRules) fileImplementableInterface(t types.Type) bool {
+	if t == nil || !isInterfaceType(t) {
+		return false
+	}
+	iface, ok := types.Unalias(t).Underlying().(*types.Interface)
+	if !ok || !iface.IsMethodSet() {
+		return false
+	}
+	var osFile *types.Named
+	for _, imp := range w.pc.pkg.Imports() {
+		if imp.Path() != "os" {
+			continue
+		}
+		if tn, ok := imp.Scope().Lookup("File").(*types.TypeName); ok {
+			osFile, _ = tn.Type().(*types.Named)
+		}
+	}
+	if osFile == nil {
+		return false
+	}
+	return types.Implements(types.NewPointer(osFile), iface)
 }
 
 // definiteSubPage reports whether a page-tainted value is statically
