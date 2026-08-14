@@ -1042,6 +1042,49 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 			}
 		case *ast.ReturnStmt:
+			// A naked return of one multi-valued call (return f(p) where
+			// the function and f return several values) forwards every
+			// result: distributing only the first slot would drop the
+			// taint of a later page-carrying result (the common
+			// (error, []byte) shape has the page in slot 1).
+			if len(v.Results) == 1 {
+				if call, ok := unparen(v.Results[0]).(*ast.CallExpr); ok {
+					// Re-evaluate in the current statement state: a
+					// cached result from an earlier fixpoint pass is
+					// stale once callee summaries stabilized.
+					delete(pf.values, call)
+					pf.evalExpr(st, call)
+					handled := false
+					if res, ok := pf.callResults[call]; ok {
+						for i := range fs.results {
+							if i < len(res) && res[i].tainted {
+								fs.results[i] = joinFieldTaint(fs.results[i], fieldTaint{tainted: true, srcs: maxSrcOf(res[i])})
+							}
+						}
+						handled = true
+					}
+					if fields, ok := pf.callFields[call]; ok && len(fields) > 0 {
+						for k, fv := range fields {
+							if fv.tainted {
+								fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+							}
+						}
+						handled = true
+					}
+					delete(pf.callResults, call)
+					delete(pf.callFields, call)
+					// A naked return of one call expression is only
+					// fully handled when the call resolved to concrete
+					// per-result values; a mint or other early-return
+					// specialization (r.m.Page(pgno)) records no
+					// callResults, so fall through to the per-result
+					// loop, whose evaluation still carries the taint of
+					// the whole call into the first result slot.
+					if handled {
+						break
+					}
+				}
+			}
 			for i, rv := range v.Results {
 				pv := pf.evalExpr(st, rv)
 				if i < len(fs.results) {
@@ -1230,10 +1273,20 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) {
 	pre := st.clone()
 	first := true
+	hasDefault := false
 	var fallState *stmtState
 	for _, c := range body {
 		cc, ok := c.(*ast.CaseClause)
-		if !ok || len(cc.Body) == 0 {
+		if !ok {
+			continue
+		}
+		// The default clause (no expression list) makes the pre-switch
+		// state unreachable after the statement; without it the switch
+		// can skip every case and fall out with the state unchanged.
+		if cc.List == nil {
+			hasDefault = true
+		}
+		if len(cc.Body) == 0 {
 			continue
 		}
 		branch := st
@@ -1262,6 +1315,13 @@ func (pf *pageFlow) switchJoin(st *stmtState, body []ast.Stmt, fs *funcSummary) 
 		} else {
 			fallState = nil
 		}
+	}
+	if !hasDefault {
+		// A switch with no default can match no case: the pre-switch
+		// state (an unproven callable, a page held in a variable) stays
+		// reachable after the statement, so it must join the same way
+		// the zero-iteration path joins a loop.
+		st.joinWith(pre)
 	}
 }
 
@@ -3186,36 +3246,39 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 	}
 	switch v := unparen(a).(type) {
 	case *ast.Ident:
-		obj := st.pf.pc.info.ObjectOf(v)
-		fields = st.structs[obj]
-		if len(fields) == 0 {
-			// Package-scope struct variables keep their field taints in
-			// the shared map: a method called on a package-global
-			// holder (var get = holder.Get after set(page)) must see the
-			// field state another function stored.
-			if gm, ok := st.pkgStructs[obj]; ok {
-				fields = gm
-			}
+		// A plain struct variable: its recorded field taints arrive from
+		// the local state, a package-level holder, or the declared
+		// parameter leaves (see fieldTaintsOf for the sources).
+		fields = pf.fieldTaintsOf(st, st.pf.pc.info.ObjectOf(v))
+	case *ast.StarExpr:
+		// A dereferenced argument (*p): the pointed-to struct's fields
+		// resolve through the pointer binding (p := &b), the parameter
+		// leaves of a struct-pointer parameter, or recorded state on
+		// the pointer name itself.
+		if o := pf.derefTarget(st, v.X, 0); o != nil {
+			fields = pf.fieldTaintsOf(st, o)
 		}
-		if len(fields) == 0 {
-			// A struct parameter (or a parameter carrying one): its
-			// field taints arrive from the caller through the summary's
-			// paramField sources, so the argument flow materializes the
-			// declared byte-carrying fields the same way the receiver
-			// and field reads use them. Without this, a method
-			// expression or method summary called on a struct parameter
-			// receiver never sees the field taint the caller stored.
-			if idx, ok := st.params[obj]; ok {
-				for path, ft := range paramLeafPaths(obj.Type()) {
-					if !paramCanCarryPage(ft) {
-						continue
-					}
-					if fields == nil {
-						fields = map[string]pageValue{}
-					}
-					fields[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
-				}
+	case *ast.IndexExpr:
+		// An element-carrying argument (xs[0], m[k]): a local container
+		// keeps its element field taints on the variable, and a
+		// container parameter contributes the element's declared leaves
+		// through the same parameter fallback.
+		if o := objOf(st, v.X); o != nil {
+			fields = pf.fieldTaintsOf(st, o)
+		}
+	case *ast.TypeAssertExpr:
+		// An asserted argument (v.(T)): the asserted value keeps the
+		// fields recorded on the base (a local interface variable, a
+		// call result, or a dereference).
+		switch e := unparen(v.X).(type) {
+		case *ast.Ident:
+			fields = pf.fieldTaintsOf(st, st.pf.pc.info.ObjectOf(e))
+		case *ast.StarExpr:
+			if o := pf.derefTarget(st, e, 0); o != nil {
+				fields = pf.fieldTaintsOf(st, o)
 			}
+		case *ast.CallExpr:
+			fields = pf.callFields[e]
 		}
 	case *ast.SelectorExpr:
 		// A struct VALUE read off a field (take(h.Box) with h.Box.Data
@@ -3277,7 +3340,99 @@ func (pf *pageFlow) paramFieldFallback(st *stmtState, obj types.Object, idx int)
 		}
 		out[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
 	}
+	// A container parameter of struct elements ([]box, map[K]box, ...)
+	// exposes the element fields through element extraction (xs[0],
+	// m[k]): materialize the element's declared leaves with the same
+	// parameter source so take(xs[0]) at a call site binds the callee's
+	// param fields even when the container arrives as a parameter.
+	if et := containerElemType(obj.Type()); et != nil {
+		for path, ft := range paramLeafPaths(et) {
+			if _, has := out[path]; has {
+				continue
+			}
+			if !paramCanCarryPage(ft) {
+				continue
+			}
+			out[path] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
+		}
+	}
 	return out
+}
+
+// containerElemType unwraps one container level of a type (slice, array,
+// map value, channel element) and returns the element type, or nil when
+// the type is not a direct container.
+func containerElemType(t types.Type) types.Type {
+	switch v := types.Unalias(t).(type) {
+	case *types.Slice:
+		return v.Elem()
+	case *types.Array:
+		return v.Elem()
+	case *types.Map:
+		return v.Elem()
+	case *types.Chan:
+		return v.Elem()
+	}
+	return nil
+}
+
+// fieldTaintsOf returns the recorded struct-field taints of one local,
+// package-scope, or parameter object: recorded local struct state first,
+// then package-level field maps, then the declared leaf sources of a
+// struct holding, pointer, or container parameter.
+func (pf *pageFlow) fieldTaintsOf(st *stmtState, obj types.Object) map[string]pageValue {
+	if obj == nil {
+		return nil
+	}
+	if m, ok := st.structs[obj]; ok && len(m) > 0 {
+		return m
+	}
+	if gm, ok := st.pkgStructs[obj]; ok && len(gm) > 0 {
+		return gm
+	}
+	if idx, ok := st.params[obj]; ok {
+		return pf.paramFieldFallback(st, obj, idx)
+	}
+	return nil
+}
+
+// derefTarget resolves the object a dereference expression names
+// through recorded pointer bindings: *p with p := &b names b, and plain
+// aliases are followed with a depth cap (p := q; q := &b). When nothing
+// is bound the identifier itself is returned, so a struct-pointer
+// parameter contributes its declared leaves through the parameter
+// fallback.
+func (pf *pageFlow) derefTarget(st *stmtState, e ast.Expr, depth int) types.Object {
+	if st == nil || e == nil || depth > 4 {
+		return nil
+	}
+	id := identOf(unparen(e))
+	if id == nil {
+		return nil
+	}
+	obj := pf.pc.info.ObjectOf(id)
+	if obj == nil {
+		return nil
+	}
+	b, ok := st.localBindings[obj]
+	if !ok {
+		return obj
+	}
+	switch u := unparen(b).(type) {
+	case *ast.UnaryExpr:
+		if u.Op == token.AND {
+			if t := identOf(u.X); t != nil {
+				if tgt := pf.pc.info.ObjectOf(t); tgt != nil {
+					return tgt
+				}
+			}
+		}
+		return obj
+	case *ast.Ident:
+		return pf.derefTarget(st, u, depth+1)
+	default:
+		return obj
+	}
 }
 
 // promoteFullPageFields records whole-value page taint on an expression

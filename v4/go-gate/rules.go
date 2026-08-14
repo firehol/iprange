@@ -1094,6 +1094,16 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 					// results like io.ReadCloser are content-transfer
 					// concerns, not capability mints.
 					w.fail(v.Pos(), "interface method %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
+				} else if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && !isInterfaceType(sig.Recv().Type()) && !w.approvedFuncPkg(obj) {
+					// A concrete method on a type declared OUTSIDE the
+					// scanned module (net.TCPListener.File, a third-party
+					// wrapper) has an unscanned body that can mint a real
+					// descriptor: the os-only selector check also missed
+					// this class, so it fails closed like the interface
+					// dispatch case. Methods on scanned receiver types
+					// keep their policed bodies; the x/sys surface is
+					// the pinned external syscall authority.
+					w.fail(v.Pos(), "external method %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
 				}
 			} else {
 				w.fail(v.Pos(), "%s returns a file-bearing value outside the mapping owner (capability launder)", calleeText(fun))

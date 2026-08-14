@@ -549,4 +549,33 @@ var batteryPageCases = []batteryCase{
 	{name: "P154: bounded param-field slice keeps the flow legal", desc: "b := box{Data: page[48:112]}; take(b) stays below a complete page and must not fail the gate", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l14_06.go", content: "package reader\n\ntype lboxL1406 struct{ Data []byte }\n\nfunc takeL1406(o lboxL1406) []byte { return o.Data }\n\nfunc boundedParamFieldProbeL1406(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1406{Data: page[48:112]}\n\treturn append([]byte{}, takeL1406(b)...), nil\n}"},
 	}},
+
+	{name: "P155: switch without default keeps the pre-switch callable reachable", desc: "g := f (an unproven parameter); one case rebinds g to a closure but no default exists, so g() after the switch may still run the unproven callee", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_01.go", content: "package reader\n\nfunc switchNoDefaultProbeL1501(r *ImmutableReader, pgno uint32, f func() []byte) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tg := f\n\tswitch page != nil {\n\tcase true:\n\t\tg = func() []byte { return []byte{1} }\n\t}\n\t_ = page\n\treturn append([]byte{}, g()...), nil\n}"},
+	}},
+
+	{name: "P156: dereferenced argument provenance", desc: "p := &b with b.Data a mapped page; take(*p) keeps the pointed-to struct field taint through the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_02.go", content: "package reader\n\ntype lboxL1502 struct{ Data []byte }\n\nfunc takeL1502(o lboxL1502) []byte { return o.Data }\n\nfunc derefArgProbeL1502(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1502{Data: page}\n\tp := &b\n\treturn append([]byte{}, takeL1502(*p)...), nil\n}"},
+	}},
+
+	{name: "P157: indexed argument provenance", desc: "xs := []box{{Data: page}}; take(xs[0]) keeps the container element field taint through the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_03.go", content: "package reader\n\ntype lboxL1503 struct{ Data []byte }\n\nfunc takeL1503(o lboxL1503) []byte { return o.Data }\n\nfunc idxArgProbeL1503(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\txs := []lboxL1503{{Data: page}}\n\treturn append([]byte{}, takeL1503(xs[0])...), nil\n}"},
+	}},
+
+	{name: "P158: type-asserted argument provenance", desc: "v any = box{Data: page}; take(v.(box)) keeps the asserted struct field taint through the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_04.go", content: "package reader\n\ntype lboxL1504 struct{ Data []byte }\n\nfunc takeL1504(o lboxL1504) []byte { return o.Data }\n\nfunc assertArgProbeL1504(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar v any = lboxL1504{Data: page}\n\treturn append([]byte{}, takeL1504(v.(lboxL1504))...), nil\n}"},
+	}},
+
+	{name: "P159: naked multi-result return forwarding", desc: "return f(p) with f returning several values forwards EVERY result slot: a page in a later slot of the wrapper must stay visible to _, b := wrap(page); append", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_05.go", content: "package reader\n\nfunc sourceL1505(p []byte) (error, []byte) { return nil, p }\n\nfunc wrapL1505(p []byte) (error, []byte) {\n\treturn sourceL1505(p)\n}\n\nfunc multiForwardProbeL1505(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\t_, b := wrapL1505(page)\n\treturn append([]byte{}, b...), nil\n}"},
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_06.go", content: "package reader\n\nfunc pairSrcL1506(p []byte) ([]byte, error) { return p, nil }\n\nfunc pairWrapL1506(p []byte) ([]byte, error) {\n\treturn pairSrcL1506(p)\n}\n\nfunc pairForwardProbeL1506(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb, err2 := pairWrapL1506(page)\n\t_ = err2\n\treturn append([]byte{}, b...), nil\n}"},
+	}},
+
+	{name: "P160: struct-pointer parameter keeps dereferenced argument provenance", desc: "take(*p) inside a helper with p *box: the caller's box field taint reaches the callee param through the declared pointer leaves", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_07.go", content: "package reader\n\ntype lboxL1507 struct{ Data []byte }\n\nfunc takeL1507(o lboxL1507) []byte { return o.Data }\n\nfunc derefParamCallHelperL1507(p *lboxL1507) []byte { return takeL1507(*p) }\n\nfunc derefParamCallProbeL1507(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := lboxL1507{Data: page}\n\treturn append([]byte{}, derefParamCallHelperL1507(&b)...), nil\n}"},
+	}},
+
+	{name: "P161: container parameter keeps indexed argument provenance", desc: "take(xs[0]) inside a helper with xs []box: caller element field taint reaches the callee param through the declared element leaves", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l15_08.go", content: "package reader\n\ntype lboxL1508 struct{ Data []byte }\n\nfunc takeL1508(o lboxL1508) []byte { return o.Data }\n\nfunc idxParamCallHelperL1508(xs []lboxL1508) []byte { return takeL1508(xs[0]) }\n\nfunc idxParamCallProbeL1508(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\txs := []lboxL1508{{Data: page}}\n\treturn append([]byte{}, idxParamCallHelperL1508(xs)...), nil\n}"},
+	}},
 }
