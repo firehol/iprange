@@ -883,28 +883,18 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					break
 				}
 				pv := pf.evalExpr(st, rhs)
+				// A struct-valued right side keeps its field provenance
+				// on the bound variable exactly like direct argument
+				// flow: composite literals flatten their fields, calls
+				// carry the callee's recorded fields, and indexed,
+				// dereferenced, or selected values (xs[0], *p, b.Inner,
+				// makeList(p)[0], *makePtr(p), makeBox(p).Inner) bind
+				// the element/pointee/selected field names.
 				var fields map[string]pageValue
 				if lit := structLitOf(rhs); lit != nil {
 					fields = pf.compositeFields(st, lit)
 				} else {
-					switch r := unparen(rhs).(type) {
-					case *ast.CallExpr:
-						fields = pf.callFields[r]
-					case *ast.CompositeLit:
-						fields = pf.compositeFields(st, r)
-					case *ast.IndexExpr:
-						// x0 := xs[0] with xs a container of struct
-						// elements keeps the element field taints on x0.
-						if o := objOf(st, r.X); o != nil {
-							if em, ok := st.structs[o]; ok {
-								m := map[string]pageValue{}
-								for k, fv := range em {
-									m[k] = fv
-								}
-								fields = m
-							}
-						}
-					}
+					fields = pf.argFlowOf(st, rhs).fields
 				}
 				var lit *ast.FuncLit
 				if l, ok := unparen(rhs).(*ast.FuncLit); ok {
@@ -1015,18 +1005,13 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 								var fields map[string]pageValue
 								if litv := structLitOf(vs.Values[i]); litv != nil {
 									fields = pf.compositeFields(st, litv)
-								} else if call, ok := unparen(vs.Values[i]).(*ast.CallExpr); ok {
-									fields = pf.callFields[call]
-								} else if ix, ok := unparen(vs.Values[i]).(*ast.IndexExpr); ok {
-									if o := objOf(st, ix.X); o != nil {
-										if em, ok := st.structs[o]; ok {
-											m := map[string]pageValue{}
-											for k, fv := range em {
-												m[k] = fv
-											}
-											fields = m
-										}
-									}
+								} else {
+									// Same field provenance as the
+									// assignment form: indexed, selected,
+									// dereferenced and call-produced
+									// init values keep their element or
+									// selected field taints.
+									fields = pf.argFlowOf(st, vs.Values[i]).fields
 								}
 								if obj != nil && len(fields) > 0 {
 									if st.structs[obj] == nil {
@@ -1433,29 +1418,40 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 		return
 	}
 	dstObj := objOf(st, dst)
-	srcObj := pf.pc.info.ObjectOf(id)
-	if dstObj == nil || srcObj == nil {
+	if dstObj == nil {
 		return
 	}
 	var fields map[string]pageValue
-	if m, ok := st.structs[srcObj]; ok {
-		fields = m
-	} else if gm, ok := st.pkgStructs[srcObj]; ok {
-		fields = gm
-	}
-	// Parameter structs keep a full per-field fallback on the copy:
-	// fields the local state never recorded (or recorded clean for
-	// another field only) still arrive from the caller, so a partial
-	// local record must not suppress the taint of the untouched fields.
-	if idx, ok := st.params[srcObj]; ok {
-		for path, fv := range pf.paramFieldFallback(st, srcObj, idx) {
-			if _, recorded := fields[path]; recorded {
-				continue
+	if id == nil {
+		// Indexed, selected, dereferenced-call and call-produced values
+		// (b.Inner, xs[0], *f(p), f(p).Inner) bind the same fields
+		// direct argument flow resolves; closure parameters fed such
+		// arguments carry the selected element fields into the body.
+		fields = pf.argFlowOf(st, src).fields
+	} else {
+		srcObj := pf.pc.info.ObjectOf(id)
+		if srcObj == nil {
+			return
+		}
+		if m, ok := st.structs[srcObj]; ok {
+			fields = m
+		} else if gm, ok := st.pkgStructs[srcObj]; ok {
+			fields = gm
+		}
+		// Parameter structs keep a full per-field fallback on the copy:
+		// fields the local state never recorded (or recorded clean for
+		// another field only) still arrive from the caller, so a partial
+		// local record must not suppress the taint of the untouched fields.
+		if idx, ok := st.params[srcObj]; ok {
+			for path, fv := range pf.paramFieldFallback(st, srcObj, idx) {
+				if _, recorded := fields[path]; recorded {
+					continue
+				}
+				if fields == nil {
+					fields = map[string]pageValue{}
+				}
+				fields[path] = fv
 			}
-			if fields == nil {
-				fields = map[string]pageValue{}
-			}
-			fields[path] = fv
 		}
 	}
 	if len(fields) == 0 {
@@ -1953,18 +1949,21 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 					out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
 				}
 			}
-		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
-			// box5(page).Data: a field select directly on a struct-valued
-			// call result reads the recorded field taints of the call.
-			// The call must be re-evaluated with its cached result dropped:
-			// an earlier fixpoint pass cached the call's result before
-			// the argument taints stabilized, and the cache hit would
-			// return that stale value without refreshing callFields
-			// (evalCall records them only when it runs).
+		} else if call, chain := callRootChain(v); call != nil {
+			// A field select on a call-produced struct value
+			// (box5(page).Data, box5(page).A.Data, box6(page)[0].Data,
+			// (*box7(page)).Data): the callee's flattened field paths
+			// carry the full dotted chain, including the outermost
+			// selection. The call must be re-evaluated with its cached
+			// result dropped: an earlier fixpoint pass cached the call's
+			// result before the argument taints stabilized, and the
+			// cache hit would return that stale value without
+			// refreshing callFields (evalCall records them only when
+			// it runs).
 			delete(pf.values, call)
 			pf.evalExpr(st, call)
 			if m, ok := pf.callFields[call]; ok {
-				if pv, ok := m[v.Sel.Name]; ok {
+				if pv, ok := m[chain]; ok {
 					out = pv
 				}
 			}
@@ -3233,6 +3232,67 @@ func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, call *as
 	return res[0]
 }
 
+// callRootChain walks an expression down to the call that produced
+// it, collecting the dotted selector chain on the way: f(p) yields
+// (call, ""), f(p).A.B yields (call, "A.B"), f(p)[0] and *f(p) yield
+// (call, ""), and a nested selection off an indexed or dereferenced
+// call result keeps the collected names. Any other root yields nil.
+func callRootChain(x ast.Expr) (*ast.CallExpr, string) {
+	chain := ""
+	cur := unparen(x)
+	for {
+		switch e := unparen(cur).(type) {
+		case *ast.SelectorExpr:
+			if chain == "" {
+				chain = e.Sel.Name
+			} else {
+				chain = e.Sel.Name + "." + chain
+			}
+			cur = e.X
+		case *ast.IndexExpr:
+			cur = e.X
+		case *ast.StarExpr:
+			cur = e.X
+		case *ast.CallExpr:
+			return e, chain
+		default:
+			return nil, ""
+		}
+	}
+}
+
+// callProducedFields resolves the struct-field taints an expression
+// derived from a call result: f(p) keeps the callee's recorded fields
+// as-is, f(p)[0] and *f(p) keep the element and pointee fields, and
+// f(p).A.B keeps the SELECTED value's fields (the dotted chain
+// stripped), the same rename recorded-base arguments receive. A call
+// node first reached through here may never have been evaluated in
+// this statement state, so the cached result is dropped and the call
+// re-evaluated like the direct-call argument path does.
+func (pf *pageFlow) callProducedFields(st *stmtState, x ast.Expr) map[string]pageValue {
+	call, chain := callRootChain(x)
+	if call == nil {
+		return nil
+	}
+	delete(pf.values, call)
+	pf.evalExpr(st, call)
+	cf := pf.callFields[call]
+	if len(cf) == 0 {
+		return nil
+	}
+	prefix := ""
+	if chain != "" {
+		prefix = chain + "."
+	}
+	out := map[string]pageValue{}
+	for k, fv := range cf {
+		if fv.tainted && strings.HasPrefix(k, prefix) {
+			out[k[len(prefix):]] = fv
+		}
+	}
+	return out
+}
+
 // argFlowOf binds the value taint and struct-field taints of one call
 // argument: local struct variables, composite literals, and prior call
 // results (whose fields were recorded when the call was evaluated).
@@ -3258,8 +3318,8 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 		// (*makePtr(page)) keeps the callee's recorded fields.
 		if o := pf.derefTarget(st, v.X, 0); o != nil {
 			fields = pf.fieldTaintsOf(st, o)
-		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
-			fields = pf.callFields[call]
+		} else {
+			fields = pf.callProducedFields(st, v.X)
 		}
 	case *ast.IndexExpr:
 		// An element-carrying argument (xs[0], m[k]): a local container
@@ -3269,8 +3329,8 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 		// (makeList(page)[0]) keeps the callee's element fields.
 		if o := objOf(st, v.X); o != nil {
 			fields = pf.fieldTaintsOf(st, o)
-		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
-			fields = pf.callFields[call]
+		} else {
+			fields = pf.callProducedFields(st, v.X)
 		}
 	case *ast.TypeAssertExpr:
 		// An asserted argument (v.(T)): the asserted value keeps the
@@ -3326,39 +3386,14 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 					}
 				}
 			}
-		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
-			// A struct value produced by a call (take(makeBox(page).B)):
-			// the callee's flattened field taints carry the selector
-			// prefix, and the argument flow renames them the same way
-			// the recorded-base path does. Nested chains
-			// (makeBox(page).A.B) build the full dotted prefix.
-			chain := ""
-			for cur := v.X; ; {
-				sel, isSel := unparen(cur).(*ast.SelectorExpr)
-				if !isSel {
-					break
-				}
-				if chain == "" {
-					chain = sel.Sel.Name
-				} else {
-					chain = sel.Sel.Name + "." + chain
-				}
-				cur = sel.X
-			}
-			prefix := ""
-			if chain != "" {
-				prefix = chain + "."
-			}
-			if cf := pf.callFields[call]; len(cf) > 0 {
-				for k, fv := range cf {
-					if fv.tainted && strings.HasPrefix(k, prefix) {
-						if fields == nil {
-							fields = map[string]pageValue{}
-						}
-						fields[k[len(prefix):]] = fv
-					}
-				}
-			}
+		} else {
+			// A struct value produced by a call (take(makeBox(page).B),
+			// take(makeBox(page).A.B)): the callee's flattened field
+			// paths carry the full dotted selection (including the
+			// outermost name), and stripping it binds the selected
+			// value's direct field names, the same rename recorded-base
+			// arguments receive.
+			fields = pf.callProducedFields(st, v)
 		}
 	case *ast.CompositeLit:
 		fields = pf.compositeFields(st, v)
@@ -3756,6 +3791,19 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 			// slot 1 still sees Data tainted (keeping only the first field
 			// dropped the second slot).
 			fs.fields[field.Name()] = joinFieldTaint(fs.fields[field.Name()], fieldTaint{tainted: true, srcs: maxSrcOf(pv)})
+		}
+	}
+	// Nested struct, embedded, and container fields of the literal keep
+	// their flattened dotted paths on the summary (compositeFields
+	// semantics): a call site reading makeBox(page).Inner.Data, or an
+	// argument flow selecting .Inner off the result, resolves the same
+	// paths a locally-bound composite keeps. The whole-field record
+	// above stays for direct whole-value consumers.
+	if fm := pf.compositeFields(st, lit); len(fm) > 0 {
+		for k, fv := range fm {
+			if fv.tainted {
+				fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+			}
 		}
 	}
 }
