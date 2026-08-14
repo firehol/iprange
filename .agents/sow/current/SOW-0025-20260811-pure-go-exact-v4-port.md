@@ -35,9 +35,9 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, and round-12
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, and round-13
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
-full history in the appendix. The durable battery is 422 cases (355
+full history in the appendix. The durable battery is 430 cases (363
 rejections, 67 benign acceptances) plus 9 shell environment mutations
 and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -58,7 +58,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (422
+  The durable mutation battery moved into the tool as table data (430
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -76,7 +76,7 @@ go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 422-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 8,649 raw lines total (8,097 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 8,978 raw lines total (8,426 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1436,6 +1436,45 @@ HEAD recorded in the first review entry below):
   and go-gate), gofmt zero diffs, cross-builds for all shell-harness
   targets (incl. netbsd), the import-graph gate with the 422-case
   battery, and the SOW audit all pass.
+- Round 13 (delta re-review): luna failed the round-12 delta with seven
+  findings, all probe-verified by the lead against a fresh HEAD build
+  before any fix (probes /tmp/probe-r12l2, all exit 0 pre-fix and all
+  reject after): P141 variadic ...any interface erasure escaped
+  (sink(nil, file) with sink(xs ...any) stopped at the first formal;
+  checkInterfaceErasure now evaluates each trailing argument against the
+  variadic element type); P142 variadic string-param conversion escaped
+  (sink([]byte{1}, page) with sink(xs ...[]byte){ string(xs[1]) } read
+  only the first trailing argument; checkStringParamCalls now enumerates
+  every trailing argument of a variadic slot, and noteStringConvs
+  records index reads of parameter-sourced slices); P143 range and
+  pointer rebinding of function bindings escaped (for _, f = range fs
+  and *p = page-returning literal through p := &f left the old binding
+  proof live; RangeStmt and bindLocalFunc now invalidate callable
+  bindings); P144 nested struct-parameter fields escaped (take(o)
+  returning o.Inner.Data with a caller-supplied nested page; the read
+  side resolves dotted param paths through leafPathType and the copy
+  and argument-flow fallbacks materialize every leaf path through
+  paramLeafPaths); P145 map-key struct fields escaped (m[box{Data:
+  page}] = 1 then for k := range m { k.(box).Data }; indexed stores now
+  record struct-literal key fields on the container and key-only ranges
+  bind them to the key variable); P146 method-value receiver
+  string-conversion escaped (get := b.String; get() with String()
+  converting b.Data; evalCall records resolved method values in
+  callMethodValues and checkStringParamCalls reads the captured receiver
+  from it); P147 non-empty interface result type-assert recovered a file
+  (factory().(*os.File) with factory func() io.Reader; the capability
+  launder now fails any assertion that recovers a file-bearing type out
+  of an interface that *os.File itself satisfies, while scanned
+  io.ReadCloser-shaped results stay benign per the content-transfer
+  design). Battery 422 -> 430 (363 rejections, 67 benign). Gate tooling
+  8,097 -> 8,426 go-gate lines (+552 shell = 8,978 total).
+  Validation at the closing commit: gate --self-test 430/430 (363
+  rejections, 67 benign) + 9 shell mutations exit 0, production scan
+  clean on every scanned target, all eight round-13 probe files reject
+  on every scanned target, go test ./... (both tag sets), -race, vet (go
+  and go-gate), gofmt zero diffs, cross-builds for every shell-harness
+  target, the import-graph gate with the 430-case battery, and the SOW
+  audit all pass.
 - Round 11 (delta re-review): luna failed the round-10 delta with twelve
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P112 branch-local
