@@ -14,7 +14,7 @@ completion of that round (six-resident swarm, then sol, per the user
 review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,021-line typed scanner (5,469-line go/types module
+mmap gate is a 6,017-line typed scanner (5,465-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -65,7 +65,7 @@ go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 337-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,021 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,017 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1256,8 +1256,8 @@ HEAD recorded in the first review entry below):
     64-byte view) instead of reading the zero symbol as constant.
   Pinned as battery forms P39-P55 (fourteen rejects, three benigns:
   P39-P52 reject, P53-P55 benign); battery 320 -> 337 (257 -> 271
-  rejections, 63 -> 66 benign). Gate tooling 5,104 -> 5,469 go-gate
-  lines (+552 shell = 6,021 total).
+  rejections, 63 -> 66 benign). Gate tooling 5,104 -> 5,465 go-gate
+  lines (+552 shell = 6,017 total).
   Validation at HEAD 65ca62a: gate --self-test 337/337 (271 rejections,
   66 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero

@@ -1480,7 +1480,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
       returned 0,true and collapsed full pages to len 0).
   Pinned as battery forms P39-P55 (fourteen rejects, three benigns);
   battery 320 -> 337 (257 -> 271 rejections, 63 -> 66 benign). Gate
-  tooling 5,104 -> 5,469 go-gate lines (+552 shell = 6,021 total).
+  tooling 5,104 -> 5,465 go-gate lines (+552 shell = 6,017 total).
   Validation at HEAD 65ca62a: gate --self-test 337/337 (271 rejections,
   66 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
