@@ -12,12 +12,14 @@ struct-field taint gap (MiniMax P2), all reproduced by the lead and
 fixed at HEAD 65ca62a with battery pins; the round re-review at HEAD 2f5f71a added Qwen's cross-file
 package func-var gap (var factory func() any declared in one file,
 called from another, escaped the interface-result rule), reproduced by
-the lead (gate exit 0) and fixed at HEAD 0d007a8 with battery pin; milestone close is pending the
-completion of that round (six-resident swarm, then sol, per the user
-review decision). All three review
+the lead (gate exit 0) and fixed at HEAD 0d007a8 with battery pin; the round re-review at HEAD 83ea65b
+returned nine further gate findings (Luna), all reproduced by the lead
+and fixed with durable battery pins (round-6 entry below); milestone
+close is pending the completion of that round (six-resident swarm, then
+sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 6,026-line typed scanner (5,474-line go/types module
+mmap gate is a 6,243-line typed scanner (5,691-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -28,10 +30,10 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5
-classes recorded in the round-5 entry below, all with durable battery
-pins; the Status is compact with the full history in the appendix. The
-durable battery is 338 cases (272 rejections, 66 benign acceptances)
-plus 9 shell environment mutations and passes end to end.
+classes recorded in the round-5 and round-6 entries below, all with
+durable battery pins; the Status is compact with the full history in the
+appendix. The durable battery is 347 cases (281 rejections, 66 benign
+acceptances) plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -50,7 +52,7 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (338
+  The durable mutation battery moved into the tool as table data (347
   cases); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
@@ -65,10 +67,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 338-case battery, and the SOW audit.
+the import-graph gate with its 347-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,026 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 6,243 raw lines total. Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1281,6 +1283,65 @@ HEAD recorded in the first review entry below):
   66 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
   diffs, cross-compilation - all green.
+- Swarm round 6 (2026-08-14, at HEAD 83ea65b): the independent round
+  review returned nine further gate findings (Luna resident), every one
+  reproduced by the lead against the tree (exact mutation probes, gate
+  exit 0 on the misses) and fixed in one commit:
+  - scalar-result function-variable calls with a page argument were not
+    transfers: an unproven callback var func([]byte) int can copy a full
+    mapped view inside its unscanned body; such calls now transfer
+    (probe f1, pin P57);
+  - named function types hid the signature from the package func-var
+    collection: type factory func() any; var f factory with an unbound
+    body called outside the mapping owner escaped the interface-result
+    fail-closed rule; the collector now unwraps *types.Named to the
+    underlying signature, and the rule stays silent only for variables
+    bound to a func literal somewhere in the package (their bodies are
+    scanned and policed at their own sites - battery case 63 stays
+    benign) (probe f2, pin P58);
+  - map and channel parameters were not page carriers: m["x"] and <-ch
+    through map[string][]byte and chan []byte parameters lost the taint;
+    paramCanCarryPage now unwraps map/chan element and key types (probe
+    f3, pin P59);
+  - same-named fields of different struct-result slots kept only the
+    first source: split5(a,b) (S,S) returning S{Data:a}, S{Data:b}
+    dropped the slot-1 page; propagateStructResult now unions the field
+    sources (probe f5a, pin P60);
+  - returned local struct variables were not summarized: box5(p)
+    { s := S{Data:p}; return s } lost the field taint, and selecting
+    .Data directly on a call result was not evaluated (a fixpoint-pass
+    cache staleness also kept callFields stale: the selector-on-call
+    path now drops the cached call result before re-evaluation); both
+    shapes closed (probes f5b, pin P61);
+  - string conversion of a definite full-page view was pinned only by
+    maxLen: string(page[0:4096]) slipped through; the sink now uses
+    definitePageSpan (constant maxLen or constant sym bound) (probe f6,
+    pin P62);
+  - append into a complete mapped view was checked only for maxLen ==
+    pageSize: append(page[0:8192:8192], ...) slipped through; the
+    destination check now uses pageFull (probe f7, pin P63);
+  - the owned byte-builder family was not a copy sink: bytes.NewBuffer
+    (page) and bytes.Buffer.Write* / strings.Builder.Write* own the
+    bytes with a result type the transfer rule cannot see; a new
+    ownedCopySink rule rejects them (probe f8, pin P64);
+  - import "unsafe" was not banned: unsafe.Slice over a mapped
+    descriptor would mint page views the type layer cannot trace; the
+    import ban now includes unsafe (probe f9, pin P65).
+  The format record decoders' byte fields (FeedEntry.Name and friends)
+  are grammar-bounded below a complete page; once the return-local-
+  struct fix made those bounds visible at the copy sinks, the field caps
+  are minted by value (formatFieldCaps: catalog name records 255, blob
+  leaf data 4048, inline membership bitmaps 4000, structure payloads 32)
+  exactly like the existing DecodeMetadataChunk mint - the production
+  LookupFeedInto copy stays legal while a full page passed through the
+  same path still fails.
+  Pinned as battery forms P57-P65 (nine rejects); battery 338 -> 347
+  (272 -> 281 rejections, 66 benign). Gate tooling 5,474 -> 5,691
+  go-gate lines (+552 shell = 6,243 total).
+  Validation at the closing commit: gate --self-test 347/347 (281
+  rejections, 66 benign) + 9 shell mutations exit 0, production scan
+  clean on all five targets, go test ./... (both tag sets), -race, vet,
+  gofmt zero diffs, cross-compilation - all green.
 - Finding 3 (records): this Status is the compact record; the pre-rework
   history is preserved verbatim in ## Status History (appendix).
 - Battery repair during replacement (recorded for the record): the
