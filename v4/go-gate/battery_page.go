@@ -195,4 +195,31 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_xfvar.go", content: "package reader\n\nvar factoryXF56 func() any\n"},
 		batteryOp{kind: "create", path: "internal/reader/gatemut_xfuse.go", content: "package reader\n\nfunc crossFileProbe56(r *ImmutableReader, pgno uint32) error {\n\t_ = factoryXF56()\n\treturn nil\n}"},
 	}},
+	{name: "P57: scalar-result unproven callback receiving a full page", desc: "useCb1(cb func([]byte) int, page) with an unproven callback must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_scalarcb.go", content: "package reader\n\nfunc useCb1(cb func([]byte) int, page []byte) int {\n\treturn cb(page)\n}\n\nfunc scalarCbProbe(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useCb1(func(p []byte) int { return len(p) }, page)\n}"},
+	}},
+	{name: "P58: named func type with an interface result", desc: "type factoryF2 func() any; var makeF2 factoryF2; makeF2() outside the mapping owner must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_namedfn.go", content: "package reader\n\ntype factoryF2 func() any\n\nvar makeF2 factoryF2\n\nfunc namedFuncVarProbe2() {\n\t_ = makeF2()\n}"},
+	}},
+	{name: "P59: map and channel parameters carrying a page", desc: "m[\"x\"] and <-ch return the mapped page through map/chan parameters and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_mapchan.go", content: "package reader\n\nfunc getM3(m map[string][]byte) []byte { return m[\"x\"] }\n\nfunc recvC3(ch chan []byte) []byte { return <-ch }\n\nfunc mapChanCarrierProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\ta := append([]byte{}, getM3(map[string][]byte{\"x\": page})...)\n\tch := make(chan []byte, 1)\n\tch <- page\n\tb := append([]byte{}, recvC3(ch)...)\n\treturn append(a, b...), nil\n}"},
+	}},
+	{name: "P60: second struct-result slot keeps its field taint", desc: "_, s := split5(nil, page); append(owned, s.Data...) with the page in slot 1 must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_slot1.go", content: "package reader\n\ntype pairS5 struct{ Data []byte }\n\nfunc split5(a, b []byte) (pairS5, pairS5) { return pairS5{Data: a}, pairS5{Data: b} }\n\nfunc slot1StructProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\t_, s := split5(nil, page)\n\treturn append([]byte{}, s.Data...), nil\n}"},
+	}},
+	{name: "P61: returned local struct variable keeps its field taint", desc: "box5(p) returning a local s := S{Data:p}; box5(page).Data appended must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_boxlocal.go", content: "package reader\n\ntype boxS5 struct{ Data []byte }\n\nfunc box5(p []byte) boxS5 {\n\ts := boxS5{Data: p}\n\treturn s\n}\n\nfunc localStructProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, box5(page).Data...), nil\n}"},
+	}},
+	{name: "P62: string conversion of a definite full-page view", desc: "string(page[0:4096]) copies a complete mapped page and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_stringfull.go", content: "package reader\n\nfunc stringFullProbe(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\t_ = string(page[0:4096])\n\treturn nil\n}"},
+	}},
+	{name: "P63: append into a multi-page mapped view", desc: "append(page[0:8192:8192], 1) reallocates the two-page span into owned memory and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_oversizeddest.go", content: "package reader\n\nfunc oversizedDestProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append(page[0:8192:8192], 1), nil\n}"},
+	}},
+	{name: "P64: owned byte-builder sink copies a full page", desc: "bytes.NewBuffer(page).Bytes() owns the mapped bytes and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_bufferlaunder.go", content: "package reader\n\nimport \"bytes\"\n\nfunc bufferLaunderProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tb := bytes.NewBuffer(page)\n\treturn append([]byte{}, b.Bytes()...), nil\n}"},
+	}},
+	{name: "P65: unsafe import anywhere in the module", desc: "import \"unsafe\" in the mapping owner must be rejected (unsafe.Slice over a mapped descriptor escapes the type layer)", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_unsafe.go", content: "package mapping\n\nimport \"unsafe\"\n\nvar _ = unsafe.Pointer(nil)"},
+	}},
 }

@@ -20,6 +20,7 @@ const xsysImport = "golang.org/x/sys/unix"
 // the metadata inflater reads an in-memory payload.
 var bannedImports = map[string]bool{
 	"C":           true, // cgo: C.pread etc. would bypass every Go selector ban
+	"unsafe":      true, // unsafe.Slice over a mapped descriptor would mint page views the type layer cannot trace
 	"archive/tar": true, "archive/zip": true,
 	"bufio": true, "compress/bzip2": true, "compress/gzip": true,
 	"compress/lzw": true, "compress/zlib": true,
@@ -93,6 +94,18 @@ const pageSize = 4096
 // drift warning as pageSize.
 const maxMetadataChunkLen = 4048
 
+// Format record caps mirrored from the format package by value: feed-name
+// records cap at 255 bytes (uint8 length plus grammar), blob leaf data at
+// 4048, inline membership bitmaps at PageSize-96, and structure payloads at
+// the fixed 32. Every decoded record byte field is grammar-bounded below a
+// complete page; the pins keep record flows legal at copy/append sinks.
+const (
+	maxFeedNameLen           = 255
+	maxBlobLeafDataLen       = 4048
+	maxInlineBitmapLen       = 4000 // PageSize - 32 - membershipLeafFixed(64)
+	networkEnrichPayloadSize = 32
+)
+
 func buildContext(cfg osConfig) *build.Context {
 	ctx := build.Default
 	ctx.GOOS = cfg.GOOS
@@ -103,14 +116,15 @@ func buildContext(cfg osConfig) *build.Context {
 
 // packageCheck is the typed result of one package under one OS config.
 type packageCheck struct {
-	pkg            *types.Package
-	info           *types.Info
-	fset           *token.FileSet
-	loader         *loader
-	files          []*parsedFile
-	pf             *pageFlow
-	varInits       map[*types.Var]ast.Expr
-	reassignedVars map[*types.Var]bool
+	pkg             *types.Package
+	info            *types.Info
+	fset            *token.FileSet
+	loader          *loader
+	files           []*parsedFile
+	pf              *pageFlow
+	varInits        map[*types.Var]ast.Expr
+	reassignedVars  map[*types.Var]bool
+	pkgFuncLitBound map[*types.Var]bool
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -142,6 +156,16 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	// initializer provably binds a function whose body is scanned here,
 	// and only when the variable is never reassigned.
 	varInits := map[*types.Var]ast.Expr{}
+	// pkgFuncLitBound records package-scope function variables that are
+	// bound to a func literal anywhere in the package (declaration
+	// initializer or assignment). Such a variable's possible values all
+	// come from scanned code: the literal bodies are visited by the
+	// rules walker and independently policed (an os.Open inside them is
+	// caught at the assignment site), so the fail-closed
+	// interface-result rule must not double-flag calls through them.
+	// Variables with no literal binding anywhere are genuinely opaque
+	// and stay fail-closed.
+	pkgFuncLitBound := map[*types.Var]bool{}
 	reassigned := map[*types.Var]bool{}
 	for _, f := range asts {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -156,6 +180,9 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 				obj, ok := info.Defs[name].(*types.Var)
 				if ok && obj.Parent() == pkg.Scope() {
 					varInits[obj] = vs.Values[i]
+					if _, isLit := unparen(vs.Values[i]).(*ast.FuncLit); isLit {
+						pkgFuncLitBound[obj] = true
+					}
 				}
 			}
 			return true
@@ -165,10 +192,15 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch v := n.(type) {
 			case *ast.AssignStmt:
-				for _, lhs := range v.Lhs {
+				for i, lhs := range v.Lhs {
 					if id, ok := unparen(lhs).(*ast.Ident); ok {
 						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 							reassigned[obj] = true
+							if i < len(v.Rhs) {
+								if _, isLit := unparen(v.Rhs[i]).(*ast.FuncLit); isLit {
+									pkgFuncLitBound[obj] = true
+								}
+							}
 						}
 					}
 				}
@@ -204,7 +236,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 			return true
 		})
 	}
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned}, nil
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -678,10 +710,19 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// the callee. Calls with a scalar result stay reads: a checksum or
 	// length lookup cannot move the bytes into owned storage.
 	voidVarCall := false
+	varIndirect := false
 	if id, ok := fun.(*ast.Ident); ok {
-		if _, isVar := w.pc.info.Uses[id].(*types.Var); isVar {
+		if varObj, isVar := w.pc.info.Uses[id].(*types.Var); isVar {
 			if rt := w.typeOf(v); rt == nil || isVoidTuple(rt) {
 				voidVarCall = true
+			}
+			// A call through an unproven function-typed variable (a
+			// parameter callback, a stdlib-bound value) has a body the
+			// scan cannot follow: even a scalar result (func([]byte) int)
+			// can copy a full mapped view into owned memory inside that
+			// body, so such calls are transfers when they receive a page.
+			if !w.approvedFuncVar(varObj, 0) {
+				varIndirect = true
 			}
 		}
 	}
@@ -698,11 +739,13 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// materialize a file-backed value (a func() io.Reader factory with an
 	// unscanned body); the interface erasure rules cannot see through it,
 	// so outside the mapping owner it fails closed like a concrete
-	// file-bearing result.
+	// file-bearing result. A variable bound to a func literal anywhere in
+	// the package is not opaque: its literal bodies are scanned and
+	// policed at their own sites, so the call itself stays benign.
 	interfaceVarResult := false
 	if id, ok := fun.(*ast.Ident); ok {
 		if v, isVar := w.pc.info.Uses[id].(*types.Var); isVar && w.pkgFuncVars[v] &&
-			!w.approvedFuncVar(v, 0) {
+			!w.approvedFuncVar(v, 0) && !w.pc.pkgFuncLitBound[v] {
 			interfaceVarResult = isInterfaceType(resT)
 		}
 	}
@@ -733,8 +776,18 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		if t != nil && fileValueType(t, map[types.Type]bool{}) && !approved {
 			w.fail(v.Pos(), "*os.File-bearing value passed to %s", calleeText(fun))
 		}
-		if pv := w.pageValue(arg); pv.tainted && pageFull(pv) && transfer {
+		pageArg := w.pageValue(arg)
+		if pageArg.tainted && pageFull(pageArg) && (transfer || varIndirect) {
 			w.fail(v.Pos(), "mapped page view passed to %s (complete page into owned memory)", calleeText(fun))
+		}
+		// The owned byte-builder family copies its argument into an owned
+		// heap buffer: bytes.NewBuffer(v), bytes.Buffer.Write*(v), and
+		// strings.Builder.Write*(v) own the bytes afterward, so a full
+		// mapped view reaching them is the complete-page violation even
+		// though their result types are structs or scalar counts the
+		// transfer rule cannot see.
+		if pageArg.tainted && pageFull(pageArg) && w.ownedCopySink(fun) {
+			w.fail(v.Pos(), "mapped page view copied into an owned byte builder (%s)", calleeText(fun))
 		}
 	}
 	w.checkInterfaceErasure(v, formals)
@@ -767,7 +820,17 @@ func collectPkgFuncVars(info *types.Info, files []*parsedFile) map[types.Object]
 					if obj == nil {
 						continue
 					}
-					if _, ok := obj.Type().(*types.Signature); ok {
+					t := obj.Type()
+					sig, ok := t.(*types.Signature)
+					if !ok {
+						// A named function type (type F func() any; var f F)
+						// hides the signature behind a *types.Named; the
+						// fail-closed interface-result rule must see it.
+						if n, isNamed := types.Unalias(t).(*types.Named); isNamed {
+							sig, _ = n.Underlying().(*types.Signature)
+						}
+					}
+					if sig != nil {
 						out[obj] = true
 					}
 				}
@@ -843,6 +906,45 @@ func byteHoldingContainer(t types.Type, seen map[types.Type]bool) bool {
 
 // isTypeExpr reports whether the call's function position names a type
 // (a conversion) rather than a function or method.
+// ownedCopySink reports whether the callee copies its byte argument into
+// an owned heap buffer whose result type hides the copy from the
+// resultHoldsBytes transfer rule: bytes.NewBuffer, bytes.Buffer.Write*
+// (the buffer owns the appended bytes), and strings.Builder.Write*
+// (the builder owns the appended bytes). bytes.NewReader is deliberately
+// absent: it wraps the input without copying, so the mapped view stays a
+// view and the bounded-record rule applies.
+func (w *fileRules) ownedCopySink(fun ast.Expr) bool {
+	sel, ok := unparen(fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	receiver := w.typeOf(sel.X)
+	if t, ok := receiver.(*types.Pointer); ok {
+		receiver = types.Unalias(t.Elem())
+	}
+	recvName := ""
+	if n, ok := receiver.(*types.Named); ok {
+		recvName = n.Obj().Name()
+	}
+	switch recvName {
+	case "Buffer", "Builder":
+		switch sel.Sel.Name {
+		case "Write", "WriteString", "WriteByte", "WriteRune":
+			return true
+		}
+		return false
+	}
+	// bytes.NewBuffer(page): the package-level constructor of the owned
+	// buffer. Its result is *bytes.Buffer, whose internal []byte the
+	// transfer rule cannot see.
+	if fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok {
+		if pkg := fn.Pkg(); pkg != nil && pkg.Path() == "bytes" && fn.Name() == "NewBuffer" {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *fileRules) isTypeExpr(fun ast.Expr) bool {
 	switch f := unparen(fun).(type) {
 	case *ast.Ident:
@@ -954,22 +1056,13 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	if src.tainted && pageFull(src) {
 		w.fail(v.Pos(), "append of a mapped page view into an owned buffer (complete page)")
 	}
-	// An append whose destination is a complete mapped page view with no
-	// capacity headroom (a minted Page/View or page[0:4096:4096]) forces
-	// Go to allocate a fresh owned array and copy the whole page into it.
-	// Bounded views and owned buffers stay legal.
-	if dv := w.pageValue(v.Args[0]); dv.tainted {
-		full := false
-		if dv.maxLen == pageSize {
-			full = true
-		} else if dv.hasSym {
-			if c, ok := dv.sym.isConst(); ok && c == pageSize {
-				full = true
-			}
-		}
-		if full {
-			w.fail(v.Pos(), "append into a complete mapped page view (full page reallocated into owned memory)")
-		}
+	// An append whose destination is a complete mapped page view (a
+	// minted Page/View, page[0:4096:4096], or a view spanning one or more
+	// full pages such as page[0:8192:8192]) forces Go to allocate a fresh
+	// owned array and copy the whole span into it. Bounded views and
+	// owned buffers stay legal.
+	if dv := w.pageValue(v.Args[0]); dv.tainted && pageFull(dv) {
+		w.fail(v.Pos(), "append into a complete mapped page view (full page reallocated into owned memory)")
 	}
 }
 
@@ -1102,9 +1195,29 @@ func (w *fileRules) checkArrayConversionSink(pos token.Pos, dst types.Type, pv p
 	if arr, ok := dst.(*types.Array); ok && arr.Len() >= pageSize && pv.tainted && pageFull(pv) {
 		w.fail(pos, "array conversion of a mapped page view into an owned [%d]byte", arr.Len())
 	}
-	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && pv.maxLen >= pageSize {
-		w.fail(pos, "string conversion of a definite full-page view")
+	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && definitePageSpan(pv) {
+		w.fail(pos, "string conversion of a full-page view")
 	}
+}
+
+// definitePageSpan reports whether a tainted value's length is statically
+// known to span at least one complete page: a constant maxLen or a
+// constant symbolic slice bound. Unknown-length values (a []byte
+// parameter that the caller may bind to a record) are excluded: string
+// conversion copies exactly the value's length, and bounded records stay
+// legal (FeedNameValid converts its byte parameter this way). The
+// copy/append sinks stay fail-closed on unknown lengths because Go copies
+// whatever the source actually is at runtime.
+func definitePageSpan(pv pageValue) bool {
+	if pv.maxLen >= pageSize {
+		return true
+	}
+	if pv.hasSym {
+		if c, ok := pv.sym.isConst(); ok {
+			return c >= pageSize
+		}
+	}
+	return false
 }
 
 // unwrapToUnderlying strips named types and aliases to the underlying

@@ -1012,6 +1012,29 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			} else if idx, ok := st.params[obj]; ok && paramCanCarryPage(paramFieldType(obj, v.Sel.Name)) {
 				out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
 			}
+		} else if call, ok := unparen(v.X).(*ast.CallExpr); ok {
+			// box5(page).Data: a field select directly on a struct-valued
+			// call result reads the recorded field taints of the call.
+			// The call must be re-evaluated with its cached result dropped:
+			// an earlier fixpoint pass cached the call's result before
+			// the argument taints stabilized, and the cache hit would
+			// return that stale value without refreshing callFields
+			// (evalCall records them only when it runs).
+			delete(pf.values, call)
+			pf.evalExpr(st, call)
+			if m, ok := pf.callFields[call]; ok {
+				if pv, ok := m[v.Sel.Name]; ok {
+					out = pv
+				}
+			}
+		} else if lit, ok := unparen(v.X).(*ast.CompositeLit); ok {
+			// S{Data: page}.Data: a field select on an inline struct
+			// literal reads the literal's field taints.
+			if m := pf.compositeFields(st, lit); m != nil {
+				if pv, ok := m[v.Sel.Name]; ok {
+					out = pv
+				}
+			}
 		}
 	case *ast.SliceExpr:
 		base := pf.evalExpr(st, v.X)
@@ -1264,6 +1287,28 @@ func sliceLenSym(v *ast.SliceExpr, st *stmtState) symbol {
 const mappingImportPath = moduleImportPrefix + "/internal/mapping"
 const formatImportPath = moduleImportPrefix + "/internal/format"
 
+// formatFieldCaps pins the byte-field bound of the format package's
+// record decoders. The record grammar bounds every decoded byte field
+// below a complete page (uint8 name lengths plus validation, blob leaf
+// and inline bitmap caps, fixed structure payloads), so a decoded
+// record view can never span a complete page: pinning the field keeps
+// decode-and-copy flows (FeedEntry.Name reaching LookupFeedInto's copy)
+// legal exactly like the DecodeMetadataChunk mint, instead of
+// collapsing the record to an unknown bound once it round-trips through
+// a local struct box (box5/return s flows). Whole-page views
+// (DecodePageHeader/OpenSlottedHeader .Page) stay full-tainted: they
+// are deliberately not in the table.
+var formatFieldCaps = map[string]struct {
+	field string
+	max   int64
+}{
+	"DecodeCatalogNameRecord": {"Name", maxFeedNameLen},
+	"DecodeCatalogNameBranch": {"FirstName", maxFeedNameLen},
+	"DecodeBlobLeaf":          {"Data", maxBlobLeafDataLen},
+	"DecodeMembershipIDLeaf":  {"Inline", maxInlineBitmapLen},
+	"DecodeStructureIDRecord": {"Payload", networkEnrichPayloadSize},
+}
+
 // evalCall resolves callee summaries and mints.
 func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	// Direct call of a function literal: bind the literal's parameters to
@@ -1365,6 +1410,10 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if pkgPath == formatImportPath && fn.Name() == "DecodeMetadataChunk" {
 		pf.callFields[call] = map[string]pageValue{"Data": {tainted: true, maxLen: maxMetadataChunkLen}}
 		return pageValue{tainted: true, maxLen: maxMetadataChunkLen}
+	}
+	if cap, ok := formatFieldCaps[fn.Name()]; ok && pkgPath == formatImportPath {
+		pf.callFields[call] = map[string]pageValue{cap.field: {tainted: true, maxLen: cap.max}}
+		return pageValue{}
 	}
 	if !strings.HasPrefix(pkgPath, moduleImportPrefix) {
 		return pageValue{}
@@ -1494,7 +1543,7 @@ func (pf *pageFlow) calleeTarget(st *stmtState, v *types.Var, depth int) (*ast.F
 // variables keep their taint; parameters are left unbound (they are
 // assigned at direct-call sites).
 func (pf *pageFlow) analyzeFuncLitBody(st *stmtState, lit *ast.FuncLit) {
-	fs := &funcSummary{}
+	fs := &funcSummary{fields: map[string]fieldTaint{}}
 	pf.analyzeStmts(st, lit.Body.List, fs)
 }
 
@@ -1504,7 +1553,7 @@ func (pf *pageFlow) analyzeFuncLitBody(st *stmtState, lit *ast.FuncLit) {
 // multi-result closure assignment distributes taint per slot.
 func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, call *ast.CallExpr) pageValue {
 	args := call.Args
-	fs := &funcSummary{}
+	fs := &funcSummary{fields: map[string]fieldTaint{}}
 	if lit.Type.Results != nil {
 		for range lit.Type.Results.List {
 			fs.results = append(fs.results, fieldTaint{})
@@ -1587,9 +1636,24 @@ func calleeObject(pc *packageCheck, call *ast.CallExpr) types.Object {
 	return nil
 }
 
-// propagateStructResult records tainted fields of a returned composite
-// literal into the summary.
+// propagateStructResult records tainted fields of a returned struct
+// value into the summary: direct composite literals (S{Data: p}) and
+// returned local struct variables (s := S{Data: p}; return s) whose
+// field taints were recorded by the assignment.
 func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *funcSummary) {
+	// A returned local struct variable carries its recorded field taints.
+	if id, ok := unparen(expr).(*ast.Ident); ok {
+		if obj := pf.pc.info.ObjectOf(id); obj != nil {
+			if m, ok := st.structs[obj]; ok {
+				for k, fv := range m {
+					if fv.tainted {
+						fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+		}
+		return
+	}
 	lit, ok := unparen(expr).(*ast.CompositeLit)
 	if !ok {
 		return
@@ -1619,9 +1683,12 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		}
 		pv := pf.evalExpr(st, val)
 		if pv.tainted {
-			if _, exists := fs.fields[field.Name()]; !exists {
-				fs.fields[field.Name()] = fieldTaint{tainted: true, srcs: maxSrcOf(pv)}
-			}
+			// Same-named fields of different result slots unions their
+			// sources: split5(a, b) (S, S) returning S{Data: a}, S{Data: b}
+			// keeps both parameter sources, so a call site with a page in
+			// slot 1 still sees Data tainted (keeping only the first field
+			// dropped the second slot).
+			fs.fields[field.Name()] = joinFieldTaint(fs.fields[field.Name()], fieldTaint{tainted: true, srcs: maxSrcOf(pv)})
 		}
 	}
 }
@@ -1680,6 +1747,16 @@ func isByteElem(t types.Type) bool {
 // definition regardless of callers. The taint stays call-site-sensitive:
 // a clean argument never taints.
 func paramCanCarryPage(t types.Type) bool {
+	// A map or channel parameter can receive a page view inside its
+	// container (map[string][]byte m: m["x"], chan []byte ch: <-ch):
+	// the summary must keep the taint argument-dependent like a direct
+	// byte slice. Non-byte containers stay clean.
+	switch u := types.Unalias(t).(type) {
+	case *types.Map:
+		return typeCanCarryPage(u.Key()) || typeCanCarryPage(u.Elem())
+	case *types.Chan:
+		return typeCanCarryPage(u.Elem())
+	}
 	if typeCanCarryPage(t) {
 		return true
 	}
