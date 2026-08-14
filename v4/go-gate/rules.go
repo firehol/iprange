@@ -591,19 +591,27 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 		return
 	}
 	key := fn.Name()
+	receiverSlot := false
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 		key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+		receiverSlot = true
 	}
 	fs, ok := sums[key]
 	if !ok || len(fs.stringParams) == 0 {
 		return
 	}
 	for pi := range fs.stringParams {
-		if pi < 0 || pi >= len(v.Args) {
+		// Method summaries count the receiver as parameter slot 0; the
+		// explicit call arguments start at 1.
+		ai := pi
+		if receiverSlot {
+			ai = pi - 1
+		}
+		if ai < 0 || ai >= len(v.Args) {
 			continue
 		}
-		if pv := w.pageValue(v.Args[pi]); pv.tainted && pageFull(pv) {
-			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
+		if pv := w.pageValue(v.Args[ai]); pv.tainted && pageFull(pv) {
+			w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), ai+1)
 		}
 	}
 }
@@ -871,11 +879,34 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 				}
 			}
 		case *ast.SelectorExpr:
-			if fn, ok := w.pc.info.Uses[f.Sel].(*types.Func); ok {
-				if pkg := fn.Pkg(); pkg != nil && pkg.Path() == "os" {
+			// A concrete method on a scanned receiver type has a
+			// policed body; an os function mints by construction; any
+			// other selector binding (a struct function field h.get(),
+			// an interface method dispatch) is an indirect callee whose
+			// body the scan cannot follow, so its file-bearing result
+			// fails closed.
+			if obj, ok := w.pc.info.Uses[f.Sel].(*types.Func); ok {
+				if pkg := obj.Pkg(); pkg != nil && pkg.Path() == "os" {
 					w.fail(v.Pos(), "os function %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
+				} else if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
+					fileValueType(resT, map[types.Type]bool{}) {
+					// An interface method with a CONCRETE file-bearing
+					// result dispatches to implementations the call site
+					// cannot prove benign (a nil factory is not proof):
+					// the capability fails closed here, while the
+					// concrete method bodies stay policed at their own
+					// sites. Interface results like io.ReadCloser are
+					// content-transfer concerns, not capability mints.
+					w.fail(v.Pos(), "interface method %s returns a file-bearing value outside the mapping owner (capability launder)", f.Sel.Name)
 				}
+			} else {
+				w.fail(v.Pos(), "%s returns a file-bearing value outside the mapping owner (capability launder)", calleeText(fun))
 			}
+		default:
+			// Index, call-produced, and type-asserted callees have
+			// unknowable bodies; a file-bearing result from any of them
+			// fails closed.
+			w.fail(v.Pos(), "indirect call returns a file-bearing value outside the mapping owner (capability launder)")
 		}
 	}
 	for i, arg := range v.Args {
@@ -888,8 +919,17 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		// fmt.Sprintf for bounded error text; the spread itself is not
 		// an owned byte-copy sink. The callee's own parameter stays a
 		// carrier, so element extraction out of it is still policed.
+		// The exemption applies only to clean spreads and to the
+		// helper's own param-sourced slice: a CONCRETE collection that
+		// holds a live mapped view (args := []any{page};
+		// fmt.Sprintf("%s", args...)) hands the full page to the owned
+		// formatter and is the same complete-page copy as passing it
+		// directly.
 		spread := v.Ellipsis.IsValid() && i == len(v.Args)-1 && w.fmtCallee(fun)
 		if spread {
+			if pv := w.pageValue(arg); pv.tainted && pageFull(pv) && !pv.hasSrc {
+				w.fail(v.Pos(), "mapped page view spread into %s (complete page into owned memory)", calleeText(fun))
+			}
 			continue
 		}
 		pageArg := w.pageValue(arg)
@@ -911,21 +951,55 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	// string (string(p) recorded in its summary) copies the caller's
 	// bytes; the conversion inside the callee cannot see that the bound
 	// is a full mapped page, so the call site fails closed.
-	if fn := callCalleeFunc(w.pc.info, fun); fn != nil {
+	if fn := callCalleeFuncOrVar(w, fun); fn != nil {
 		w.checkStringParamCalls(v, fn)
 	}
 }
 
-// callCalleeFunc resolves the statically visible callee of an ordinary
-// function or method call; nil means the callee is an indirect shape
+// callCalleeFuncOrVar resolves the statically visible callee of an
+// ordinary function or method call, following approved package-level
+// function-typed variable aliases (var a = f; a(page)) to the function
+// they provably bind; nil means the callee is an indirect shape
 // (variable, index, call, type-assert) with no body to summarize.
-func callCalleeFunc(info *types.Info, fun ast.Expr) *types.Func {
+func callCalleeFuncOrVar(w *fileRules, fun ast.Expr) *types.Func {
 	switch f := unparen(fun).(type) {
 	case *ast.Ident:
-		fn, _ := info.Uses[f].(*types.Func)
-		return fn
+		switch obj := w.pc.info.Uses[f].(type) {
+		case *types.Func:
+			return obj
+		case *types.Var:
+			return w.funcVarCallee(obj, 0)
+		}
 	case *ast.SelectorExpr:
-		fn, _ := info.Uses[f.Sel].(*types.Func)
+		fn, _ := w.pc.info.Uses[f.Sel].(*types.Func)
+		return fn
+	}
+	return nil
+}
+
+// funcVarCallee follows a package-level function-typed variable's
+// initializer chain to a plain function, mirroring approvedFuncVar's
+// proof rules (never-reassigned, same-package initializer, bounded
+// depth). Only plain functions are returned: func literals have no
+// summary entry to consult.
+func (w *fileRules) funcVarCallee(v *types.Var, depth int) *types.Func {
+	if v == nil || depth > 2 || v.Parent() != w.pc.pkg.Scope() || w.pc.reassignedVars[v] {
+		return nil
+	}
+	init, ok := w.pc.varInits[v]
+	if !ok {
+		return nil
+	}
+	switch i := unparen(init).(type) {
+	case *ast.Ident:
+		switch o := w.pc.info.Uses[i].(type) {
+		case *types.Func:
+			return o
+		case *types.Var:
+			return w.funcVarCallee(o, depth+1)
+		}
+	case *ast.SelectorExpr:
+		fn, _ := w.pc.info.Uses[i.Sel].(*types.Func)
 		return fn
 	}
 	return nil
@@ -1422,8 +1496,47 @@ func (w *fileRules) checkComposite(v *ast.CompositeLit) {
 		}
 		return
 	}
-	// Slice/array/map literals: elements are checked by the assignment
-	// and argument rules; nothing extra is needed here.
+	// Slice/array/map literals: an element whose static type is
+	// file-bearing must stay in a file-bearing element slot. Hiding one
+	// inside an interface-valued collection ([]any{f}) erases the
+	// descriptor from the capability walk, so the element slot must
+	// itself bear files.
+	elemT := collectionElementType(typ)
+	for _, el := range v.Elts {
+		var val ast.Expr
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			val = kv.Value
+		} else {
+			val = el
+		}
+		if val == nil {
+			continue
+		}
+		stv := w.typeOf(val)
+		if stv == nil || !fileValueType(stv, map[types.Type]bool{}) {
+			continue
+		}
+		if elemT == nil || !fileValueType(elemT, map[types.Type]bool{}) {
+			w.fail(val.Pos(), "file-bearing value stored into a non-file-bearing collection element (launder)")
+		}
+	}
+}
+
+// collectionElementType returns the element type of a slice, array, or
+// map type (through defined types and pointers), or nil for other types.
+func collectionElementType(t types.Type) types.Type {
+	u := unwrapToUnderlying(t)
+	switch v := u.(type) {
+	case *types.Slice:
+		return v.Elem()
+	case *types.Array:
+		return v.Elem()
+	case *types.Map:
+		return v.Elem()
+	case *types.Pointer:
+		return collectionElementType(v.Elem())
+	}
+	return nil
 }
 
 // checkLaunderValue flags any assignment-like placement of a

@@ -276,4 +276,46 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_ifacecb.go", content: "package reader\n\ntype sink82 interface{ Apply([]byte) int }\n\ntype impl82 struct{}\n\nfunc (impl82) Apply(p []byte) int { return len(p) }\n\nfunc useIface82(s sink82, page []byte) int { return s.Apply(page) }\n\nfunc ifaceMethodProbe82(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useIface82(impl82{}, page)\n}"},
 		batteryOp{kind: "create", path: "internal/reader/gatemut_callcb.go", content: "package reader\n\nfunc factory82() func([]byte) int { return func(p []byte) int { return len(p) } }\n\nfunc callOfCallProbe82(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn factory82()(page)\n}"},
 	}},
+	{name: "P83: method value stored in a local resolves its method summary", desc: "method value get := r.page; get(1) returns the mapped view through the method summary and the copy must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_1.go", content: "package reader\n\nfunc mvProbe83(r *ImmutableReader, pgno uint32) error {\n\tget := r.page\n\tpage, err := get(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar out [4096]byte\n\tcopy(out[:], page)\n\treturn nil\n}"},
+	}},
+	{name: "P84: method receiver field taint flows through the summary", desc: "box{Data: page}.Get() returns the receiver's Data field through the method summary and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_2.go", content: "package reader\n\ntype box84 struct{ Data []byte }\n\nfunc (b box84) Get() []byte { return b.Data }\n\nfunc methRecvProbe84(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, box84{Data: page}.Get()...), nil\n}"},
+	}},
+	{name: "P85: fmt variadic spread of a concrete page collection", desc: "args := []any{page}; fmt.Sprintf(\"%s\", args...) copies the full mapped view into an owned string and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_3.go", content: "package reader\n\nimport \"fmt\"\n\nfunc fmtSpreadProbe85(r *ImmutableReader, pgno uint32) (string, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\targs := []any{page}\n\treturn fmt.Sprintf(\"%s\", args...), nil\n}"},
+	}},
+	{name: "P86: defined string type conversion inside a helper", desc: "type S string; f(p) { return len(S(p)) } records the owned-string copy; a full page at the call site must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_4.go", content: "package reader\n\ntype S86 string\n\nfunc f86(p []byte) int { return len(S86(p)) }\n\nfunc namedStrProbe86(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\t_ = f86(page)\n\treturn nil\n}"},
+	}},
+	{name: "P87: function variable alias of a string-converting helper", desc: "var a = f; a(page) where f converts its parameter to a string inside a void helper must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_5.go", content: "package reader\n\nfunc f87(p []byte) { _ = string(p) }\n\nvar a87 = f87\n\nfunc aliasProbe87(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\ta87(page)\n\treturn nil\n}"},
+	}},
+	{name: "P88: clean store to one struct field must not shadow another field's page", desc: "sink(box{Data: page}) writes b.Other clean and returns b.Data; the caller's append must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_6.go", content: "package reader\n\ntype box88 struct{ Data, Other []byte }\n\nfunc sink88(b box88) []byte { b.Other = []byte{1}; return b.Data }\n\nfunc fieldShadowProbe88(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, sink88(box88{Data: page})...), nil\n}"},
+	}},
+	{name: "P89: clean element store must not erase the container taint", desc: "slots[0] = page; slots[1] = []byte{0}; append(owned, slots[0]...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_7.go", content: "package reader\n\nfunc indexStoreProbe89(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tslots := make([][]byte, 2)\n\tslots[0] = page\n\tslots[1] = []byte{0}\n\treturn append([]byte{}, slots[0]...), nil\n}"},
+	}},
+	{name: "P90: indexed local container of structs keeps element field taint", desc: "xs := []box{{Data: page}}; append(owned, xs[0].Data...) must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_8.go", content: "package reader\n\ntype box90 struct{ Data []byte }\n\nfunc idxNestedProbe90(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\txs := []box90{{Data: page}}\n\treturn append([]byte{}, xs[0].Data...), nil\n}"},
+	}},
+	{name: "P91: returning the address of a local tainted struct keeps its fields", desc: "s := box{Data: p}; return &s; the caller's box(page).Data copy must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_9.go", content: "package reader\n\ntype box91 struct{ Data []byte }\n\nfunc mk91(p []byte) *box91 {\n\ts := box91{Data: p}\n\treturn &s\n}\n\nfunc retAddrProbe91(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, mk91(page).Data...), nil\n}"},
+	}},
+	{name: "P92: page-bearing map composite keys keep the collection taint", desc: "m := map[*[]byte]int{&page: 1}; (*k)... of a range key must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_10.go", content: "package reader\n\nfunc mapKeyProbe92(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tm := map[*[]byte]int{&page: 1}\n\tfor k := range m {\n\t\treturn append([]byte{}, (*k)...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+	{name: "P93: file-bearing value hidden in an interface-valued collection", desc: "func box(f *os.File) []any { return []any{f} } launders the descriptor into a non-file-bearing slot and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_11.go", content: "package reader\n\nimport \"os\"\n\nfunc box93(f *os.File) []any { return []any{f} }\n\nvar fileVar93 *os.File\n\nfunc leak93() { _ = box93(fileVar93) }"},
+	}},
+	{name: "P94: struct function field returning a file fails closed", desc: "type H struct{ get func() *os.File }; leak(h H) *os.File { return h.get() } dispatches to an unknowable body and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_12.go", content: "package reader\n\nimport \"os\"\n\ntype H94 struct{ get func() *os.File }\n\nfunc leak94(h H94) *os.File { return h.get() }"},
+	}},
+	{name: "P95: recursive carrier types terminate the type walk", desc: "type R []R parameters must not recurse the scanner without bound; the page copy in the same package must still be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_13.go", content: "package reader\n\ntype R95 []R95\n\nfunc recCarrier95(r R95, p []byte) []byte {\n\t_ = r\n\treturn append([]byte{}, p...)\n}\n\nfunc recUseProbe95(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn recCarrier95(nil, page), nil\n}"},
+	}},
+	{name: "P96: recursive carrier types without page flow stay accepted", desc: "type R []R, M map[string]M, C chan C, P *P with no page flow must not crash and must pass the gate", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r9_14.go", content: "package reader\n\ntype R96 []R96\ntype M96 map[string]M96\ntype C96 chan C96\ntype P96 *P96\n\nfunc recOk96(r R96, m M96, c C96, p P96) bool {\n\t_ = r\n\t_ = m\n\t_ = c\n\treturn p != nil\n}"},
+	}},
 }
