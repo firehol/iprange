@@ -73,7 +73,7 @@ go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 378-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 7,230 raw lines total (6,678 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 7,236 raw lines total (6,684 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1413,7 +1413,7 @@ HEAD recorded in the first review entry below):
   container cycle is the least fixed point, false, and the scan
   terminates). Battery 364 -> 378 (298 -> 311 rejections, 66 -> 67
   benign; the added benign form pins recursive carrier types with no page
-  flow). Gate tooling 6,229 -> 6,678 go-gate lines (+552 shell = 7,230
+  flow). Gate tooling 6,229 -> 6,684 go-gate lines (+552 shell = 7,236
   total).
   Validation at the closing commit: gate --self-test 378/378 (311
   rejections, 67 benign) + 9 shell mutations exit 0, production scan
