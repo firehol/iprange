@@ -1635,14 +1635,31 @@ func (pf *pageFlow) typeSwitchJoin(st *stmtState, body []ast.Stmt, fs *funcSumma
 		}
 		if baseTainted {
 			if cv, ok := pf.pc.info.Implicits[cc]; ok {
-				for path, ft := range paramLeafPaths(cv.Type()) {
-					if !paramCanCarryPage(ft) {
-						continue
+				// A MULTI-TYPE case (case B, *B) types the implicit
+				// variable with the GUARD's interface type: the
+				// page-carrying leaves of every case type project onto
+				// it, because the concrete value can be any of them and
+				// the type-asserted reads inside the clause resolve the
+				// same records.
+				caseTypes := []types.Type{cv.Type()}
+				if isInterfaceType(cv.Type()) && len(cc.List) > 0 {
+					caseTypes = caseTypes[:0]
+					for _, ce := range cc.List {
+						if ct := pf.pc.info.Types[ce].Type; ct != nil {
+							caseTypes = append(caseTypes, ct)
+						}
 					}
-					if branch.structs[cv] == nil {
-						branch.structs[cv] = map[string]pageValue{}
+				}
+				for _, ct := range caseTypes {
+					for path, ft := range paramLeafPaths(ct) {
+						if !paramCanCarryPage(ft) {
+							continue
+						}
+						if branch.structs[cv] == nil {
+							branch.structs[cv] = map[string]pageValue{}
+						}
+						branch.structs[cv][path] = pageValue{tainted: true, maxLen: maxUnknown}
 					}
-					branch.structs[cv][path] = pageValue{tainted: true, maxLen: maxUnknown}
 				}
 			}
 		}
@@ -1762,6 +1779,11 @@ func (pf *pageFlow) recordBinding(st *stmtState, lhs ast.Expr, rhs ast.Expr) {
 // the parameter's static type; local struct-var and package-level field
 // maps are copied as recorded.
 func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast.Expr) {
+	dstObj := objOf(st, dst)
+	if dstObj == nil {
+		return
+	}
+	var fields map[string]pageValue
 	var id *ast.Ident
 	switch e := unparen(src).(type) {
 	case *ast.Ident:
@@ -1773,21 +1795,7 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 	case *ast.StarExpr:
 		id = identOf(e.X)
 	}
-	if id == nil {
-		return
-	}
-	dstObj := objOf(st, dst)
-	if dstObj == nil {
-		return
-	}
-	var fields map[string]pageValue
-	if id == nil {
-		// Indexed, selected, dereferenced-call and call-produced values
-		// (b.Inner, xs[0], *f(p), f(p).Inner) bind the same fields
-		// direct argument flow resolves; closure parameters fed such
-		// arguments carry the selected element fields into the body.
-		fields = pf.argFlowOf(st, src).fields
-	} else {
+	if id != nil {
 		srcObj := pf.pc.info.ObjectOf(id)
 		if srcObj == nil {
 			return
@@ -1812,6 +1820,17 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 				fields[path] = fv
 			}
 		}
+	} else {
+		// Ident-less sources include COMPOSITE LITERALS besides the
+		// indexed, selected, dereferenced-call and call-produced values
+		// (B{Data: page}, b.Inner, xs[0], *f(p), f(p).Inner): all bind
+		// the same fields direct argument flow resolves, so closure
+		// parameters fed such arguments carry the selected element
+		// fields into the body. Without this fallback a directly called
+		// func-literal parameter (func(x B) { out = x.Data }(B{Data:
+		// page})) loses the field taint and the captured write launders
+		// the page.
+		fields = pf.argFlowOf(st, src).fields
 	}
 	if len(fields) == 0 {
 		return
@@ -1865,12 +1884,20 @@ func (pf *pageFlow) recordChanSendFields(st *stmtState, ch ast.Expr, fields map[
 	if o := objOfDeref(st, ch); o != nil {
 		record(o, "")
 	}
-	// An INDEXED channel (cs[0] <- B{Data: page} with cs []chan B)
-	// names an element of a container the same way an indexed struct
-	// store does: the channel's element records live on the root
-	// container object, and the matching receive resolves the same
-	// root, so the send must record there with no prefix.
+	// An INDEXED channel (cs[0] <- B{Data: page} with cs []chan B, or
+	// h.Chs[0] with h.Chs []chan B) names an element of a container the
+	// same way an indexed struct store does: the channel's element
+	// records live on the root container object — a plain variable with
+	// no prefix, or a selected field under the "Chs." prefix — and the
+	// matching receive resolves the same root, so the send must record
+	// there.
 	if root := indexChainRoot(ch); root != ch {
+		if path, ro := selectorIndexChain(ch); ro != nil {
+			if oo := objOfDeref(st, ro); oo != nil {
+				record(oo, path+".")
+				return
+			}
+		}
 		if o := objOf(st, root); o != nil {
 			record(o, "")
 			return
@@ -1927,10 +1954,18 @@ func (pf *pageFlow) chanRecvFields(st *stmtState, ch ast.Expr) map[string]pageVa
 	if o := objOfDeref(st, ch); o != nil {
 		add(o, "", false)
 	}
-	// An INDEXED channel (cs[0]) resolves the same root container the
-	// send recorded on: the received element fields are the root's
-	// element records, exactly like the indexed-store read path.
+	// An INDEXED channel (cs[0], h.Chs[0]) resolves the same root
+	// container the send recorded on: the received element fields are
+	// the root's element records — a plain variable's records directly,
+	// a selected field's records under the "Chs." prefix, stripped to
+	// the direct element field names — exactly like the indexed-store
+	// read path.
 	if root := indexChainRoot(ch); root != ch {
+		if path, ro := selectorIndexChain(ch); ro != nil {
+			if oo := objOfDeref(st, ro); oo != nil {
+				add(oo, path+".", true)
+			}
+		}
 		if o := objOf(st, root); o != nil {
 			add(o, "", false)
 		}
@@ -3899,6 +3934,16 @@ func (pf *pageFlow) applySummaryMutations(st *stmtState, call *ast.CallExpr, fs 
 					prefix = path + "."
 				}
 			case *ast.IndexExpr:
+				// &h.Items[0] addresses an element of a SELECTED-FIELD
+				// container: the mutation binds the base object under
+				// the "Items." prefix, the same flattened path the
+				// h.Items[0].Data read resolves.
+				if path, ro := selectorIndexChain(op); ro != nil {
+					if oo := objOfDeref(st, ro); oo != nil {
+						targets = append(targets, oo)
+						prefix = path + "."
+					}
+				}
 				root := indexChainRoot(op)
 				if o := objOf(st, root); o != nil {
 					targets = append(targets, o)
@@ -4766,23 +4811,32 @@ func (pf *pageFlow) failClosedCallFields(t types.Type) map[string]pageValue {
 	// reads resolve.
 	var walk func(tt types.Type, prefix string)
 	walkSeen := map[types.Type]bool{}
+	foreign := func(tt types.Type) bool {
+		sp := structDeclPkg(tt)
+		return sp != nil && sp != pf.pc.pkg
+	}
 	walk = func(tt types.Type, prefix string) {
 		stt, ok := derefStruct(tt)
 		if !ok {
-			return
-		}
-		if sp := structDeclPkg(tt); sp != nil && sp != pf.pc.pkg {
-			// A foreign struct's fields are unreachable from this
-			// package's reads; only its page-CARRYING VALUE as a field
-			// of the scanned struct matters, handled by the caller.
 			return
 		}
 		if walkSeen[stt] {
 			return // recursion through a self-referencing pointer field
 		}
 		walkSeen[stt] = true
+		isForeign := foreign(tt)
 		for i := 0; i < stt.NumFields(); i++ {
 			f := stt.Field(i)
+			// A foreign struct's UNEXPORTED fields are unreachable from
+			// this package's reads, but its EXPORTED field graph is
+			// readable and can carry page leaves (encoding/pem.Block
+			// has exported Bytes []byte): an unproven callee returning
+			// such a struct can launder a page through the exported
+			// read, so only the private fields stay untainted (the
+			// bytes.Reader.src shape P218 relies on).
+			if isForeign && !f.Exported() {
+				continue
+			}
 			p := f.Name()
 			if prefix != "" {
 				p = prefix + "." + f.Name()
@@ -5039,11 +5093,35 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		return
 	}
 	if _, ok := unparen(expr).(*ast.IndexExpr); ok {
-		// A returned container element (returns xs[0], m[0][0]): every
-		// trailing index names an element of the same root container,
-		// so the recorded element-field taints resolve from the root
-		// expression, the same unwrap argument flow and field reads
-		// use.
+		// A returned container element (returns xs[0], m[0][0]):
+		// every trailing index names an element of the same root
+		// container, so the recorded element-field taints resolve
+		// from the root expression, the same unwrap argument flow
+		// and field reads use. A SELECTED-FIELD container root
+		// (return h.Items[0]) resolves the base object's
+		// "Items."-prefixed records, stripped to the direct field
+		// names, so the caller's read of the returned value stays
+		// sourced.
+		if path, ro := selectorIndexChain(expr); ro != nil {
+			if obj := objOfDeref(st, ro); obj != nil {
+				prefix := path + "."
+				if m, ok := st.structs[obj]; ok {
+					for k, fv := range m {
+						if fv.tainted && strings.HasPrefix(k, prefix) {
+							fs.fields[k[len(prefix):]] = joinFieldTaint(fs.fields[k[len(prefix):]], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+						}
+					}
+				}
+				if idx, ok := st.params[obj]; ok {
+					for k, fv := range pf.paramFieldFallback(st, obj, idx) {
+						if !fv.tainted || !strings.HasPrefix(k, prefix) {
+							continue
+						}
+						fs.fields[k[len(prefix):]] = joinFieldTaint(fs.fields[k[len(prefix):]], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+		}
 		root := indexChainRoot(expr)
 		if o := objOf(st, root); o != nil {
 			if m, ok := st.structs[o]; ok {
