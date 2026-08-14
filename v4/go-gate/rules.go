@@ -125,6 +125,12 @@ type packageCheck struct {
 	varInits        map[*types.Var]ast.Expr
 	reassignedVars  map[*types.Var]bool
 	pkgFuncLitBound map[*types.Var]bool
+	// pkgFuncNonLitBound records package-scope function variables that
+	// receive a non-literal value anywhere: a reassignment to an
+	// unscanned callee, an address-taken store, or a loop rebind makes
+	// the variable's runtime value unknowable, so the func-literal
+	// exemption below no longer applies.
+	pkgFuncNonLitBound map[*types.Var]bool
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -164,8 +170,10 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	// caught at the assignment site), so the fail-closed
 	// interface-result rule must not double-flag calls through them.
 	// Variables with no literal binding anywhere are genuinely opaque
-	// and stay fail-closed.
+	// and stay fail-closed; variables that ever receive a non-literal
+	// value are equally opaque and stay fail-closed too.
 	pkgFuncLitBound := map[*types.Var]bool{}
+	pkgFuncNonLitBound := map[*types.Var]bool{}
 	reassigned := map[*types.Var]bool{}
 	for _, f := range asts {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -182,6 +190,8 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					varInits[obj] = vs.Values[i]
 					if _, isLit := unparen(vs.Values[i]).(*ast.FuncLit); isLit {
 						pkgFuncLitBound[obj] = true
+					} else {
+						pkgFuncNonLitBound[obj] = true
 					}
 				}
 			}
@@ -199,7 +209,11 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 							if i < len(v.Rhs) {
 								if _, isLit := unparen(v.Rhs[i]).(*ast.FuncLit); isLit {
 									pkgFuncLitBound[obj] = true
+								} else {
+									pkgFuncNonLitBound[obj] = true
 								}
+							} else {
+								pkgFuncNonLitBound[obj] = true
 							}
 						}
 					}
@@ -208,6 +222,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 				if id, ok := unparen(v.X).(*ast.Ident); ok {
 					if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 						reassigned[obj] = true
+						pkgFuncNonLitBound[obj] = true
 					}
 				}
 			case *ast.RangeStmt:
@@ -218,6 +233,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					if id, ok := unparen(e).(*ast.Ident); ok {
 						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 							reassigned[obj] = true
+							pkgFuncNonLitBound[obj] = true
 						}
 					}
 				}
@@ -229,6 +245,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					if id, ok := unparen(v.X).(*ast.Ident); ok {
 						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 							reassigned[obj] = true
+							pkgFuncNonLitBound[obj] = true
 						}
 					}
 				}
@@ -236,7 +253,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 			return true
 		})
 	}
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound}, nil
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: files, pf: nil, varInits: varInits, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound, pkgFuncNonLitBound: pkgFuncNonLitBound}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -745,7 +762,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	interfaceVarResult := false
 	if id, ok := fun.(*ast.Ident); ok {
 		if v, isVar := w.pc.info.Uses[id].(*types.Var); isVar && w.pkgFuncVars[v] &&
-			!w.approvedFuncVar(v, 0) && !w.pc.pkgFuncLitBound[v] {
+			!w.approvedFuncVar(v, 0) && (!w.pc.pkgFuncLitBound[v] || w.pc.pkgFuncNonLitBound[v]) {
 			interfaceVarResult = isInterfaceType(resT)
 		}
 	}

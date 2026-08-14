@@ -201,6 +201,10 @@ var batteryPageCases = []batteryCase{
 	{name: "P58: named func type with an interface result", desc: "type factoryF2 func() any; var makeF2 factoryF2; makeF2() outside the mapping owner must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_namedfn.go", content: "package reader\n\ntype factoryF2 func() any\n\nvar makeF2 factoryF2\n\nfunc namedFuncVarProbe2() {\n\t_ = makeF2()\n}"},
 	}},
+	{name: "P66: literal-bound func var reassigned to a non-literal stays fail-closed", desc: "a package func var bound to a literal and later rebound to another func-typed value has an unknowable callee; its interface-result call must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_relit.go", content: "package reader\n\nvar fRelit = func() any { return nil }\nvar fOther = func() any { return nil }\n\nfunc relitProbe() {\n\tfRelit = fOther\n\t_ = fRelit()\n}\n"},
+	}},
+
 	{name: "P59: map and channel parameters carrying a page", desc: "m[\"x\"] and <-ch return the mapped page through map/chan parameters and must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_mapchan.go", content: "package reader\n\nfunc getM3(m map[string][]byte) []byte { return m[\"x\"] }\n\nfunc recvC3(ch chan []byte) []byte { return <-ch }\n\nfunc mapChanCarrierProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\ta := append([]byte{}, getM3(map[string][]byte{\"x\": page})...)\n\tch := make(chan []byte, 1)\n\tch <- page\n\tb := append([]byte{}, recvC3(ch)...)\n\treturn append(a, b...), nil\n}"},
 	}},
