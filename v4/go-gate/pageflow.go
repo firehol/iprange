@@ -2674,22 +2674,25 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 		// base keeps its source so the summary stays argument-dependent:
 		// a generic xs[0] must not report "always tainted".
 		if base := pf.evalExpr(st, v.X); base.tainted {
-			if t := pf.pc.info.Types[v].Type; t != nil && typeCanCarryPage(t) {
+			if t := valueCarrierType(pf.pc.info.Types[v].Type); t != nil && typeCanCarryPage(t) {
 				out = derivedPageValue(base)
 			}
 		}
 	case *ast.IndexListExpr:
 		if base := pf.evalExpr(st, v.X); base.tainted {
-			if t := pf.pc.info.Types[v].Type; t != nil && typeCanCarryPage(t) {
+			if t := valueCarrierType(pf.pc.info.Types[v].Type); t != nil && typeCanCarryPage(t) {
 				out = derivedPageValue(base)
 			}
 		}
 	case *ast.TypeAssertExpr:
 		// x.([]byte): the asserted value keeps the mapped-view taint when
 		// the asserted type can hold page bytes; asserting to a scalar
-		// stays clean.
+		// stays clean. A TWO-VALUE form (b, ok := v.(T), b, ok := m[k])
+		// types the expression node as the (T, bool) tuple: the carrier
+		// test must use the value slot, or every page-holding assertion
+		// or map read launders the taint into the bound variable.
 		if pv := pf.evalExpr(st, v.X); pv.tainted {
-			if t := pf.pc.info.Types[v].Type; t != nil && typeCanCarryPage(t) {
+			if t := valueCarrierType(pf.pc.info.Types[v].Type); t != nil && typeCanCarryPage(t) {
 				out = derivedPageValue(pv)
 			}
 		}
@@ -3073,6 +3076,17 @@ func stripFieldPrefix(m map[string]pageValue, prefix string) map[string]pageValu
 		}
 	}
 	return out
+}
+
+// valueCarrierType returns the value-carrying slot of an expression
+// result type: a two-value form (b, ok := v.(T), b, ok := m[k]) types
+// the expression node as the (T, bool) tuple, and every whole-value
+// taint test must use the value slot, not the tuple.
+func valueCarrierType(t types.Type) types.Type {
+	if tt, ok := t.(*types.Tuple); ok && tt.Len() == 2 {
+		return tt.At(0).Type()
+	}
+	return t
 }
 
 // typeAssertBaseOf returns the type assertion at the base of a
@@ -4513,18 +4527,34 @@ func containerElemType(t types.Type) types.Type {
 // map, or the key-side leaves and the literal key unions are lost
 // (types.Unalias does not unwrap named types).
 func mapUnderlying(t types.Type) *types.Map {
+	return mapUnderlyingSeen(t, map[types.Type]bool{})
+}
+
+// mapUnderlyingSeen is the recursive core of mapUnderlying. The seen
+// set stops a self-referential pointer chain (type P *P) from unwrapping
+// forever: every recursive edge revisits the named type and the walk
+// reports "no map" at the cycle.
+func mapUnderlyingSeen(t types.Type, seen map[types.Type]bool) *types.Map {
 	switch u := types.Unalias(t).(type) {
 	case *types.Map:
 		return u
 	case *types.Named:
-		return mapUnderlying(u.Underlying())
+		if seen[u] {
+			return nil
+		}
+		seen[u] = true
+		return mapUnderlyingSeen(u.Underlying(), seen)
 	case *types.Pointer:
 		// A pointer-wrapped map parameter or field (m *map[*B]int)
 		// exposes the same key leaves as the map value itself: the
 		// key-only range and key-store rules dereference only map
 		// (and named-map) wrappers, so the pointer must unwrap here
 		// or every key leaf of the pointed-to map is lost.
-		return mapUnderlying(u.Elem())
+		if seen[u] {
+			return nil
+		}
+		seen[u] = true
+		return mapUnderlyingSeen(u.Elem(), seen)
 	}
 	return nil
 }
@@ -5139,11 +5169,20 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 }
 
 func derefStruct(t types.Type) (*types.Struct, bool) {
+	seen := map[types.Type]bool{}
 	for {
 		switch v := t.(type) {
 		case *types.Pointer:
 			t = v.Elem()
 		case *types.Named:
+			// A self-referential named pointer (type P *P) must stop at
+			// the revisiting type instead of unwrapping forever: P has
+			// no struct fields, so reporting "not a struct" terminates
+			// the walk with the correct result.
+			if seen[v] {
+				return nil, false
+			}
+			seen[v] = true
 			t = v.Underlying()
 		default:
 			s, ok := t.(*types.Struct)
