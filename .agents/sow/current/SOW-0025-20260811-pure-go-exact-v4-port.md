@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 10,597-line typed toolchain (10,045-line go/types module
+mmap gate is an 11,015-line typed toolchain (10,463-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -125,8 +125,20 @@ pointer-receiver method mutations never reached the caller's variable,
 struct field provenance died at channel sends, address-of arguments
 lost the variable's fields, interface calls returning containers
 failed open on element fields, and ranges over type-converted
-containers lost the element leaves. The
-durable battery is 491 cases (423 rejections, 68 benign acceptances)
+containers lost the element leaves. The round-22 delta
+re-review returned nine further gate findings (Luna); the lead
+probe-verified all nine on the true round-21 build: eight were real
+escapes (nested opaque interface-result container fields, two-variable
+map ranges over nested container values and pointer-wrapped keys,
+address-of selected-field and indexed-element mutation arguments,
+directly called func-literal pointer-parameter mutations, struct-field
+channel send/receive and select-send provenance, dereferenced indexed
+whole-struct stores, and runtime map-key stores through field
+containers) and one (l22-4, closure materialization) is a fail-closed
+conservative rejection kept by design; all fixed or documented with
+durable battery pins P210-P218 in the round-22 entry below (the
+bounded struct-field helper copy false rejection also fixed). The
+durable battery is 500 cases (431 rejections, 69 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -146,8 +158,8 @@ Rework outcome per finding:
   scanner (v4/go-gate) with the complete-page ownership rule
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
-  The durable mutation battery moved into the tool as table data (431
-  cases); the shell harness keeps only the import-boundary, module-graph,
+  The durable mutation battery moved into the tool as table data
+  (500 cases: 431 rejections, 69 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -161,10 +173,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 491-case battery, and the SOW audit.
+the import-graph gate with its 500-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 10,597 raw lines total (10,045 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 11,015 raw lines total (10,463 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1673,6 +1685,53 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 22 (delta re-review, 113867a): luna failed the round-21
+  delta with nine findings; the lead probe-verified all nine on the
+  true round-21 build (git archive HEAD, probes /tmp/probe-l22-1..9):
+  eight were real gate escapes and one (l22-4/4b, func-literal
+  closure materialization of a call argument) is a fail-closed
+  conservative rejection the lead kept by design with probe evidence
+  (the scanner cannot prove the materialized closure drops the
+  binding; reject stays). Fixed with durable pins P210-P218:
+  P210 nested opaque carriers (x.Outer().Items[0].Data with Outer
+  returning an unscanned interface result whose container FIELDS
+  expose element leaves): containerElemTypeSeen and leafNameSet now
+  unwrap *types.Pointer and recurse container fields at any depth;
+  P211 two-variable map ranges over container VALUES and
+  pointer-wrapped container KEYS keep their element leaves;
+  P212/P213 address-of SELECTED FIELD and INDEXED ELEMENT arguments
+  (&h.Inner, &xs[0]) bind mutation summaries to the base object and
+  the container element fields; P214 directly called func-literal
+  pointer-parameter mutations export their summary and re-bind at
+  the call site, with the literal's recorded sources rebased to its
+  own parameter slots; P215 struct-field channel send/receive and
+  select-clause sends keep the "Ch."-prefixed provenance (selector
+  and alias channel shapes); P216 indexed whole-struct stores through
+  DEREFERENCED containers ((*q)[0] = B{Data: p}) record on the
+  pointer and its alias target; P217 runtime map-key stores through
+  field containers (h.M[&b] = 1) record key fields under the field
+  prefix; P218 benign bounded struct-field helper copies stay legal:
+  applySummaryMutations now skips writes whose recorded sources are
+  all clean and reports tainted only when an argument is actually
+  tainted (the previous over-taint rejected clean arg copies), and
+  failClosedCallFields was rewritten as a package-aware recursive
+  leaf walker that stops at foreign struct declarations so stdlib
+  private fields (bytes.Reader.src) never taint benign copies.
+  battery 491 -> 500 (423 -> 431 rejections, 68 -> 69 benign
+  acceptances). Gate tooling 10,045 -> 10,463 go-gate lines (+552
+  shell = 11,015 total). Eight real escapes, one fail-closed false
+  rejection documented with probe evidence, none dismissed.
+  Validation at the closing commit: gate --self-test 500/500 (431
+  rejections, 69 benign) + 9 shell environment mutations exit 0,
+  production scan of v4/go clean (rc 0), all nine l22 probes behave
+  as pinned (rc 1 for l22-1/2/3/4/4b/5/6/7/8, rc 0 for l22-9 on the
+  closing build; pre-fix the eight escapes exited 0 and l22-9 exited
+  1), all 125 prior probe trees re-scanned with the closing build:
+  119 reject (all round-19/20/21 shapes) and the five recorded
+  benigns stay accepted (probe-l18m, probe-r10-base, probe-r11-base,
+  luna1b/luna1c), go test ./... (both tag sets) including -race
+  -count=1, vet (go and go-gate), gofmt zero diffs, the import-graph
+  gate, and the SOW audit all pass.
 - Round 21 (delta re-review, d5d5be9): luna failed the round-20
   delta with eight findings; the lead probe-verified all eight as real
   escapes on the round-20 build before any fix (probes /tmp/probe-l20-
