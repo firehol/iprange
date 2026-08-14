@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,688-line typed toolchain (9,136-line go/types module
+mmap gate is a 9,786-line typed toolchain (9,234-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -35,7 +35,8 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, file-capability laundering, interface-typed
-parameter assertions, and multi-dim index chains) plus the round-5,
+parameter assertions, multi-dim index chains, and selector chains
+over indexed bases) plus the round-5,
 round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, and round-18
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
@@ -80,8 +81,8 @@ family (returned asserted interface-param structs, two-value asserted
 reads, and explicit conversion argument flow) and the multi-dim index
 family (field reads and element bindings through multi-level index
 chains and forced literal element extraction), all probe-verified
-before any fix and pinned P171-P178 in the round-18 entry below. The
-durable battery is 460 cases (392 rejections, 68 benign acceptances)
+before any fix and pinned P171-P182 in the round-18 entry below. The
+durable battery is 464 cases (396 rejections, 68 benign acceptances)
 plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -116,10 +117,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 460-case battery, and the SOW audit.
+the import-graph gate with its 464-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,688 raw lines total (9,136 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,786 raw lines total (9,234 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1680,17 +1681,35 @@ HEAD recorded in the first review entry below):
   branch could name the root; the fallback now loops over every
   container level of the parameter type. Battery 452 -> 460 (384 ->
   392 rejections, 68 benign). Gate tooling 9,003 -> 9,136 go-gate
-  lines (+552 shell = 9,688 total).
-  Validation at the closing commit: gate --self-test 460/460 (392
+  lines (+552 shell = 9,688 total). The same sweep then closed the
+  selector-over-index half of the family: P179 a nested field read
+  through a multi-dim indexed local escaped (m := [1][1]outer{{{Inner:
+  inner{Data: page}}}}; append(..., m[0][0].Inner.Data...): selectors
+  above the index chain never reached the root record, because the
+  indexed selector branch entered only when the base under the outer
+  field name was directly an IndexExpr); P180 the bound form (x :=
+  m[0][0].Inner then take(x)); P181 the inline literal form
+  ([1][1]outer{{{Inner: inner{Data: page}}}}[0][0].Inner.Data); and
+  P182 pins the nested-selection call-result form (makeMatrix(page)[0]
+  [0].Inner.Data, already rejectable through the call-root branch).
+  selectorIndexChain now collects every selector name above and
+  between index levels, evalExpr reads the full dotted path on the
+  root record (with the declared-leaf fallback for container
+  parameters), and argFlowOf's selector case strips the collected
+  wrapper path onto the selected value's direct field names for
+  recorded, literal, and parameter roots. Battery 460 -> 464 (392 ->
+  396 rejections, 68 benign). Gate tooling 9,136 -> 9,234 go-gate
+  lines (+552 shell = 9,786 total).
+  Validation at the closing commit: gate --self-test 464/464 (396
   rejections, 68 benign) + 9 shell environment mutations exit 0,
   production scan clean on every scanned target, all round-18 probe
   shapes reject (l19 type-assertion trees, multi-dim index read/bind/
-  return trees, and forced literal extraction) and every prior probe
-  tree keeps its verdict (l17b, l16, luna15, f2only2, luna2, p16
-  reject; luna5 stays accepted), go test ./... (both tag sets), -race,
-  vet (go and go-gate), gofmt zero diffs, cross-builds for every
-  shell-harness target, the import-graph gate with the 460-case
-  battery, and the SOW audit all pass.
+  return trees, forced literal extraction, and selector-over-index
+  trees) and every prior probe tree keeps its verdict (l17b, l16,
+  luna15, f2only2, luna2, p16 reject; luna5 stays accepted), go test
+  ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
+  diffs, cross-builds for every shell-harness target, the import-graph
+  gate with the 464-case battery, and the SOW audit all pass.
 - Round 17 (lead same-failure search over the round-16 fixes): the
   round-16 call-base fallbacks covered direct argument positions only;
   the lead verified five escape families on a fresh HEAD build before
