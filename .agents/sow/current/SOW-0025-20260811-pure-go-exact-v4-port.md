@@ -14,9 +14,11 @@ package func-var gap (var factory func() any declared in one file,
 called from another, escaped the interface-result rule), reproduced by
 the lead (gate exit 0) and fixed at HEAD 0d007a8 with battery pin; the round re-review at HEAD 83ea65b
 returned nine further gate findings (Luna), all reproduced by the lead
-and fixed with durable battery pins (round-6 entry below); milestone
-close is pending the completion of that round (six-resident swarm, then
-sol, per the user review decision). All three review
+and fixed with durable battery pins (round-6 entry below); the round-8
+re-review returned thirteen further gate findings (Luna), all
+probe-verified and fixed with durable battery pins (round-9 entry
+below); milestone close is pending the completion of that round
+(six-resident swarm, then sol, per the user review decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
 mmap gate is a 6,781-line typed scanner (6,229-line go/types module
@@ -30,11 +32,11 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, and round-8 classes recorded in the entries below, all
-with durable battery pins; the Status is compact with the full history
-in the appendix. The durable battery is 364 cases (298 rejections, 66
-benign acceptances) plus 9 shell environment mutations and passes end to
-end.
+round-6, round-7, round-8, and round-9 classes recorded in the entries
+below, all with durable battery pins; the Status is compact with the
+full history in the appendix. The durable battery is 378 cases (311
+rejections, 67 benign acceptances) plus 9 shell environment mutations
+and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -68,10 +70,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 364-case battery, and the SOW audit.
+the import-graph gate with its 378-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 6,781 raw lines total. Hot-path benchmarks on the
+lines; gate tooling 7,230 raw lines total (6,678 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1372,6 +1374,54 @@ HEAD recorded in the first review entry below):
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, audit - all green.
+- Round 9 (delta re-review): luna failed the round-8 delta with thirteen
+  further findings, all probe-verified by the lead (each reproduced as a
+  real escape on a fresh HEAD build before any fix): P83 method values
+  stored in locals (get := r.page; get(1)) lost the method summary and
+  the minted page taint; P84 method receivers were absent from summaries
+  (box{Data: page}.Get() returned clean, so the receiver is now
+  parameter slot 0 of every method summary and method calls bind the
+  receiver expression as the first argument); P85 the fmt variadic-spread
+  exemption skipped the page check unconditionally (args := []any{page}
+  spread into fmt.Sprintf is now flagged unless the spread is clean or
+  param-sourced, which keeps the corrupt/headerErr helpers benign); P86
+  defined string types (type S string) escaped the owned-string summary
+  marker (noteStringConvs unwraps named types to the basic string
+  underneath); P87 approved function-variable aliases (var a = f; a(page))
+  bypassed the string-parameter call check (callCalleeFuncOrVar follows
+  package-level var chains with the same proof rules as approvedFuncVar);
+  P88 a clean store to one struct field shadowed the page provenance of
+  other fields (sink6 wrote b.Other and returned b.Data; clean field
+  stores now keep a marker and field reads fall through to the package
+  and parameter sources); P89 a clean indexed store erased the container
+  taint (slots[1] = []byte{0} after slots[0] = page; element stores now
+  join, never delete); P90 local indexed containers of structs lost
+  element field taint (xs := []box{{Data: page}}; xs[0].Data — slice
+  literals now record element field unions on the bound container and
+  indexed reads and range values consult them); P91 returning the address
+  (or dereference) of a local tainted struct lost its fields (return &s
+  propagates the recorded struct fields); P92 map composite keys were
+  never evaluated (map[*[]byte]int{&page: 1} held the page only through
+  its key); P93 file-bearing values hidden in interface-valued collection
+  literals ([]any{f}) laundered the descriptor (the composite rule now
+  requires the element slot type to bear files); P94 dynamic selector and
+  indirect-calld file results missed the fail-closed capability rule
+  (struct function fields h.get() and interface methods returning
+  *os.File now fail outside the mapping owner); and P95 recursive carrier
+  types (type R []R) recursed the type walk into a scanner stack overflow
+  (typeCanCarryPage/paramCanCarryPage now carry a seen set; a recursive
+  container cycle is the least fixed point, false, and the scan
+  terminates). Battery 364 -> 378 (298 -> 311 rejections, 66 -> 67
+  benign; the added benign form pins recursive carrier types with no page
+  flow). Gate tooling 6,229 -> 6,678 go-gate lines (+552 shell = 7,230
+  total).
+  Validation at the closing commit: gate --self-test 378/378 (311
+  rejections, 67 benign) + 9 shell mutations exit 0, production scan
+  clean on all five targets, all twelve luna probes (gatemut_p1-p12 plus
+  p5c/p11b) and the recursive-type probe reject or terminate without a
+  crash, go test ./... (both tag sets), -race, vet (go and go-gate),
+  gofmt, cross-builds for windows/darwin/freebsd/netbsd, and the SOW
+  audit all pass.
 - Round 8 (delta re-review): luna failed the round-7 delta with seven
   further findings, all probe-verified by the lead: P76 func-literal
   multi-named results with naked returns (scanner panic, index out of
