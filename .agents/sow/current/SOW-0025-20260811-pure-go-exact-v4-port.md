@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is a 9,163-line typed toolchain (8,611-line go/types module
+mmap gate is a 9,357-line typed toolchain (8,805-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 seventeen bypass classes (function-variable callees, closure/defer/go
@@ -35,7 +35,7 @@ and function aliases, container element extraction, pointer and
 type-parameter page taint, branch/loop state joins, multi-result
 assignment slots and struct-result field taint, named array/string
 conversion sinks, and file-capability laundering) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, and round-14
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, and round-15
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -46,7 +46,19 @@ bounded param-field flow collapsed to unknown, and stale Status
 metrics; all probe-verified and fixed with durable battery pins in the
 round-14 entry below. The durable battery is 436 cases (368
 rejections, 68 benign acceptances) plus 9 shell environment mutations
-and passes end to end.
+and passes end to end. The round at HEAD 0808c1e returned six further
+gate findings (Luna): a switch without default kept the pre-switch
+callable binding reachable after the join, dereferenced/indexed/
+type-asserted arguments lost struct-field provenance, a naked
+multi-result return forwarded only the first result slot, and a
+concrete method on an externally declared receiver type could mint a
+file descriptor outside the mapping owner; the channel finding was a
+false positive (every channel probe shape was already rejected) and
+the map-literal variant is invalid Go (a []byte field makes the key
+non-comparable); all verified real findings were probe-verified and
+fixed with durable battery pins in the round-15 entry below. The
+durable battery is 443 cases (375 rejections, 68 benign acceptances)
+plus 9 shell environment mutations and passes end to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -80,10 +92,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 436-case battery, and the SOW audit.
+the import-graph gate with its 443-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 9,163 raw lines total (8,611 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 9,357 raw lines total (8,805 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1537,6 +1549,61 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero diffs,
   cross-builds for every shell-harness target, the import-graph gate
   with the 436-case battery, and the SOW audit all pass.
+- Round 15 (delta re-review): luna failed the round-14 delta with six
+  findings, all reproduced by the lead before any fix (probes
+  /tmp/probe-luna14, /tmp/probe-luna15): P155 switch-without-default
+  kept the pre-switch callable binding reachable after the join (g := f
+  with f an unproven parameter, one case rebinds g to a closure, no
+  default: the old switchJoin dropped the pre-switch state so a later
+  g() resolved the closure on every path; switchJoin now tracks the
+  default clause and joins the pre-switch state when none exists, the
+  same path zero-iteration loops take); P156 dereferenced arguments
+  lost struct-field provenance (take(*p) with p := &b and b.Data a
+  page: argFlowOf handled only Ident/Selector/CompositeLit/CallExpr;
+  the StarExpr case now resolves the pointed-to object through recorded
+  pointer bindings and alias chains (derefTarget) and materializes its
+  fields (fieldTaintsOf), with the declared leaves of a struct-pointer
+  parameter as the fallback); P157 indexed arguments lost container
+  element provenance (take(xs[0]) with xs := []box{{Data: page}} and
+  container parameters: the IndexExpr case resolves the container
+  object and reads its element fields, and container parameters
+  ([]box, map[K]box, chan box) expose their element leaves through
+  paramFieldFallback); P158 type-asserted arguments lost provenance
+  (take(v.(box)) with v any holding box{Data: page}: the TypeAssertExpr
+  case unwraps Ident/StarExpr/CallExpr bases and reuses the same field
+  resolution); P159 a naked return of one multi-valued call forwarded
+  only the first result slot (return source6(p) with (error, []byte)
+  and _, b := wrap(page): the per-result loop evaluated the call once
+  and bound only slot 0; the ReturnStmt case now re-evaluates the call
+  in the current state, distributes every callResults slot and the
+  callFields, and falls through to the per-result loop for calls with
+  no per-result records (mints like r.m.Page(pgno), whose early-return
+  specialization records neither)); P160 a concrete method on a type
+  declared OUTSIDE the scanned module could mint a file descriptor
+  (net.TCPListener.File() returns a real *os.File with a net-package
+  receiver, invisible to the os-only selector check: the selector mint
+  branch now fails closed for concrete external-package receiver
+  methods; not probe-pinnable because the loader cannot resolve net
+  and no stdlib external concrete method returns *os.File, so the fix
+  is code-review-verified and the scanned-tree behavior is unchanged -
+  external package bodies were already skipped). The lead disproved
+  the channel finding (all eight f5 channel probe shapes were already
+  rejected, so no gate change was needed for send/receive paths) and
+  the map-literal shape (a []byte field makes the struct key
+  non-comparable, so m[lbox]int is invalid Go; the valid map[any]
+  variants were already pinned as P146/P153). Battery 436 -> 443 (368
+  -> 375 rejections, 68 benign). Gate tooling 8,611 -> 8,805 go-gate
+  lines (+552 shell = 9,357 total).
+  Validation at the closing commit: gate --self-test 443/443 (375
+  rejections, 68 benign) + 9 shell environment mutations exit 0,
+  production scan clean on every scanned target, all round-15 probe
+  files reject (or stay accepted for the bounded form) on every
+  scanned target, the round-14 probe trees (/tmp/probe-luna2,
+  /tmp/probe-p16, /tmp/probe-luna5) return the same verdicts as a
+  clean HEAD build (luna2/p16 rejected, luna5 accepted), go test
+  ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
+  diffs, cross-builds for every shell-harness target, the import-graph
+  gate with the 443-case battery, and the SOW audit all pass.
 - Round 11 (delta re-review): luna failed the round-10 delta with twelve
   further findings, all probe-verified by the lead (each reproduced as a
   real escape on a fresh HEAD build before any fix): P112 branch-local
