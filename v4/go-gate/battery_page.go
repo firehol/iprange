@@ -377,4 +377,60 @@ var batteryPageCases = []batteryCase{
 	{name: "P111: complete-page copy through the reader exemption must still be rejected", desc: "io.ReadFull(bytes.NewReader(page), out) copies the mapped page into an owned buffer despite the reader-arg exemption and must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r10_13.go", content: "package reader\n\nimport (\n\t\"bytes\"\n\t\"io\"\n\n\t\"github.com/firehol/iprange/v4/go/internal/format\"\n)\n\nfunc gateProbeR113(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tout := make([]byte, format.PageSize)\n\t_, err = io.ReadFull(bytes.NewReader(page), out)\n\treturn err\n}"},
 	}},
+
+	{name: "P112: branch-local func-literal binding divergence fails closed", desc: "reassigning a local func literal on one branch must not hide the page-returning binding (bounded probe)", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_1.go", content: "package reader\n\nfunc branchLocalFuncProbeR111(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tf := func() []byte { return []byte{1} }\n\tif page != nil {\n\t\tf = func() []byte { return page }\n\t}\n\treturn append([]byte{}, f()...), nil\n}"},
+	}},
+
+	{name: "P113: partial struct-local field store must not suppress caller field taints", desc: "writing one field clean locally must not erase the page taint of the untouched other field on a copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_2.go", content: "package reader\n\ntype boxR112 struct{ Data, Other []byte }\n\nfunc partialCopyR112(b boxR112) []byte {\n\tb.Data = []byte{1}\n\tc := b\n\treturn c.Other\n}\n\nfunc partialCopyProbeR112(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append([]byte{}, partialCopyR112(boxR112{Data: page, Other: page})...), nil\n}"},
+	}},
+
+	{name: "P114: package-global struct stores keep field taints across functions", desc: "a pkg-global struct assigned a page in one helper must keep Data tainted for the reader function", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_3.go", content: "package reader\n\ntype boxR113 struct{ Data []byte }\n\nvar gR113 boxR113\n\nfunc setR113(page []byte) { gR113 = boxR113{Data: page} }\n\nfunc getR113() []byte { return gR113.Data }\n\nfunc globalStructProbeR113(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tsetR113(page)\n\treturn append([]byte{}, getR113()...), nil\n}"},
+	}},
+
+	{name: "P115: indexed struct stores keep element field taints", desc: "an element write must track the struct field taints onto the container so a later read of that element sees them", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_4.go", content: "package reader\n\ntype boxR114 struct{ Data []byte }\n\nfunc idxStructWriteProbeR114(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\txs := make([]boxR114, 2)\n\txs[0] = boxR114{Data: page}\n\txs[1] = boxR114{Data: []byte{1}}\n\treturn append([]byte{}, xs[0].Data...), nil\n}"},
+	}},
+
+	{name: "P116: nested and promoted struct fields keep page taints", desc: "o.Inner.Data and embedded-field promotion must resolve the flatten field path and stay tainted", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_5.go", content: "package reader\n\ntype innerR115 struct{ Data []byte }\n\ntype outerR115 struct{ Inner innerR115 }\n\nfunc nestedFieldProbeR115(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\to := outerR115{Inner: innerR115{Data: page}}\n\treturn append([]byte{}, o.Inner.Data...), nil\n}\n\ntype embedR115 struct{ innerR115 }\n\nfunc promotedFieldProbeR115(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\to := embedR115{innerR115{Data: page}}\n\treturn append([]byte{}, o.Data...), nil\n}"},
+	}},
+
+	{name: "P117: func-literal parameter struct fields bind from the caller", desc: "a closure parameter whose struct field is page-sourced must keep the taint into the append sink", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_6.go", content: "package reader\n\ntype boxR116 struct{ Data []byte }\n\nfunc litParamProbeR116(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tf := func(x boxR116) []byte { return x.Data }\n\treturn append([]byte{}, f(boxR116{Data: page})...), nil\n}"},
+	}},
+
+	{name: "P118: struct var with a page field passed to a closure fails closed", desc: "a locally stored field (b.Data = page) must reach the closure parameter's field source", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_6b.go", content: "package reader\n\ntype boxR116b struct{ Data []byte }\n\nfunc litParamVarProbeR116b(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tf := func(x boxR116b) []byte { return x.Data }\n\tvar b boxR116b\n\tb.Data = page\n\treturn append([]byte{}, f(b)...), nil\n}"},
+	}},
+
+	{name: "P119: opaque interface method converting a page-carrying receiver fails closed", desc: "an interface method with a string result over a receiver holding a complete page is a transfer at the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_7.go", content: "package reader\n\ntype texterR117 interface{ Text() string }\n\ntype boxR117 struct{ Data []byte }\n\nfunc (b boxR117) Text() string { return string(b.Data) }\n\nfunc opaqueTextProbeR117(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\tvar s texterR117 = boxR117{Data: page}\n\treturn len(s.Text())\n}"},
+	}},
+
+	{name: "P120: dynamic struct results and type-asserted struct fields fail closed", desc: "interface method struct results and v.(box) assertions must keep field taints into the append sink", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_8.go", content: "package reader\n\ntype boxR118 struct{ Data []byte }\n\ntype getterR118 interface{ Get() boxR118 }\n\nfunc dynStructResultProbeR118(g getterR118) []byte {\n\treturn append([]byte{}, g.Get().Data...)\n}\n\nfunc taStructProbeR118(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar v any = boxR118{Data: page}\n\treturn append([]byte{}, v.(boxR118).Data...), nil\n}"},
+	}},
+
+	{name: "P121: string-param conversion through a helper fails closed", desc: "s(box{Data: page}) with the callee converting the field to a string must be rejected at the call", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_9.go", content: "package reader\n\ntype boxR119 struct{ Data []byte }\n\nfunc sR119(b boxR119) { _ = string(b.Data) }\n\nfunc strFieldSlotProbeR119(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tsR119(boxR119{Data: page})\n\treturn nil\n}"},
+	}},
+
+	{name: "P122: string-param conversion through a bound parameter fails closed", desc: "outer(box{Data: page}) delegating into the converting callee keeps the full-page call at the outermost site", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_9b.go", content: "package reader\n\ntype boxR119b struct{ Data []byte }\n\nfunc sR119b(b boxR119b) { _ = string(b.Data) }\n\nfunc outerR119b(b boxR119b) { sR119b(b) }\n\nfunc strFieldBoundProbeR119b(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\touterR119b(boxR119b{Data: page})\n\treturn nil\n}"},
+	}},
+
+	{name: "P123: runtime map key taint stays visible", desc: "m[&page] = 1 must keep the page reachable through the key range and the append sink", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_10.go", content: "package reader\n\nfunc mapIndexKeyProbeR1110(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tm := make(map[*[]byte]int)\n\tm[&page] = 1\n\tfor k := range m {\n\t\treturn append([]byte{}, (*k)...), nil\n\t}\n\treturn nil, nil\n}"},
+	}},
+
+	{name: "P124: struct-with-file into conversion/send/range fails closed", desc: "any(H{F: f}) and ch <- H{F: f} launder the descriptor and must be rejected", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_11.go", content: "package reader\n\nimport \"os\"\n\ntype H1111 struct{ F *os.File }\n\nvar fileVarR1111 *os.File\n\nfunc convLaunderR1111() any { return any(H1111{F: fileVarR1111}) }\n\nfunc sendLaunderR1111() {\n\tch := make(chan any, 1)\n\tch <- H1111{F: fileVarR1111}\n}"},
+	}},
+
+	{name: "P125: runtime map-key file store fails closed", desc: "m[fileKey] = 1 must be rejected like the literal map-key launder", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_r11_12.go", content: "package reader\n\nimport \"os\"\n\nvar fileKeyR1112 *os.File\n\nfunc runtimeMapKeyProbeR1112() {\n\tm := make(map[any]int)\n\tm[fileKeyR1112] = 1\n}"},
+	}},
 }

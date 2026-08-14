@@ -629,7 +629,7 @@ func (w *fileRules) checkRange(v *ast.RangeStmt) {
 			continue
 		}
 		bears := fileValueType(tgt.slot, map[types.Type]bool{})
-		holds := !bears && isInterfaceType(tgt.slot) && structContainsFile(tgt.slot, map[types.Type]bool{})
+		holds := !bears && structContainsFile(tgt.slot, map[types.Type]bool{})
 		if !bears && !holds {
 			continue
 		}
@@ -885,6 +885,13 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 				!fileValueType(dst, map[types.Type]bool{}) {
 				w.fail(v.Pos(), "file-bearing value converted into a non-file-bearing type (launder)")
 			}
+			// any(H{F: f}): a struct holding a file field converted into
+			// an interface erases the descriptor's static type the same
+			// way the interface-slot store does.
+			if src != nil && dst != nil && !fileValueType(dst, map[types.Type]bool{}) &&
+				isInterfaceType(dst) && structContainsFile(src, map[types.Type]bool{}) {
+				w.fail(v.Pos(), "struct holding a file-bearing field converted into an interface type (launder)")
+			}
 			if pv := w.pageValue(v.Args[0]); pv.tainted && pageFull(pv) && dst != nil {
 				w.checkArrayConversionSink(v.Pos(), dst, pv)
 			}
@@ -947,6 +954,20 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		varIndirect = true
 	}
 	transfer := !approved && !exempt && (resultHoldsBytes(w.typeOf(v)) || voidVarCall)
+	// An opaque method-value call whose RECEIVER carries a mapped view
+	// can copy the full page into an owned result (an interface method
+	// with a string/byte result, a struct function field) even when no
+	// explicit argument names the page: the body is unprovable, so the
+	// call itself is the transfer point.
+	if transfer {
+		if sel, ok := fun.(*ast.SelectorExpr); ok {
+			if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+				if pv := w.pageValue(sel.X); pv.tainted && pageFull(pv) {
+					w.fail(v.Pos(), "mapped page view passed to %s on an unprovable receiver (complete page into owned memory)", calleeText(fun))
+				}
+			}
+		}
+	}
 	// A call whose RESULT is a live descriptor is itself a capacity mint:
 	// closures and function variables can materialize a file (os.Stdout,
 	// os.Pipe) that no argument rule ever sees, and os functions mint
@@ -1505,6 +1526,19 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		if pv := w.pageValue(rhs); pv.tainted && pageFull(pv) {
 			w.checkArrayConversionSink(v.Lhs[i].Pos(), lhsTypeForCheck(w, v.Lhs[i]), pv)
 		}
+		// m[f] = 1: a runtime map store launders the descriptor through
+		// the KEY when the map's key slot cannot bear it (composite map
+		// keys are checked at the literal itself).
+		if ix, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
+			if mt := w.typeOf(ix.X); mt != nil {
+				if kt := collectionKeyType(mt); kt != nil {
+					if it := w.typeOf(ix.Index); it != nil && fileValueType(it, map[types.Type]bool{}) &&
+						!fileValueType(kt, map[types.Type]bool{}) {
+						w.fail(v.Lhs[i].Pos(), "file-bearing value stored into a non-file-bearing map key (launder)")
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -1516,6 +1550,18 @@ func (w *fileRules) checkSend(v *ast.SendStmt) {
 		ct := w.typeOf(v.Chan)
 		if ct == nil || !fileValueType(ct, map[types.Type]bool{}) {
 			w.fail(v.Pos(), "file-bearing value sent on a channel that cannot carry it (launder)")
+		}
+	}
+	// ch <- H{F: f}: a struct holding a file field sent on a channel
+	// whose element slot erases the descriptor is the same launder.
+	if t != nil && structContainsFile(t, map[types.Type]bool{}) {
+		ct := w.typeOf(v.Chan)
+		if ct == nil {
+			return
+		}
+		et := collectionElementType(ct)
+		if et == nil || (!fileValueType(et, map[types.Type]bool{}) && (isInterfaceType(et) || !structContainsFile(et, map[types.Type]bool{}))) {
+			w.fail(v.Pos(), "struct holding a file-bearing field sent on a channel that cannot carry it (launder)")
 		}
 	}
 }

@@ -581,6 +581,10 @@ type stmtState struct {
 	// dispatches to the same method summary as r.page(1)); chains of
 	// variable bindings are followed with a depth cap.
 	localBindings map[types.Object]ast.Expr
+	// ambigBind marks local function variables whose binding diverged
+	// across branch paths: no single provable callee exists, so calls
+	// through them fail closed instead of resolving one branch's body.
+	ambigBind map[types.Object]bool
 }
 
 func newStmtState(pf *pageFlow, fd *ast.FuncDecl, pkgVars map[string]pageValue, pkgStructs map[types.Object]map[string]pageValue) *stmtState {
@@ -594,6 +598,7 @@ func newStmtState(pf *pageFlow, fd *ast.FuncDecl, pkgVars map[string]pageValue, 
 		pkgStructs:    pkgStructs,
 		localFuncs:    map[types.Object]*ast.FuncLit{},
 		localBindings: map[types.Object]ast.Expr{},
+		ambigBind:     map[types.Object]bool{},
 	}
 	if fd != nil {
 		idx := 0
@@ -781,6 +786,44 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					}
 					for k, fv := range fields {
 						st.structs[obj][k] = fv
+					}
+					// A whole-struct store to a package-level variable
+					// joins the shared package field state: g = B{Data:
+					// page} in one helper must be visible to field reads
+					// in the other functions of the package.
+					if obj.Parent() == st.pf.pc.pkg.Scope() && st.pkgStructs != nil {
+						gm := st.pkgStructs[obj]
+						if gm == nil {
+							gm = map[string]pageValue{}
+							st.pkgStructs[obj] = gm
+						}
+						for k, fv := range fields {
+							if !fv.tainted {
+								continue
+							}
+							if prev, ok := gm[k]; ok && prev.tainted {
+								gm[k] = joinPageValue(prev, fv)
+							} else {
+								gm[k] = fv
+							}
+						}
+					}
+				}
+				// An indexed store of a struct value keeps the element
+				// field taints on the container: xs[0] = B{Data: page}
+				// followed by xs[0].Data must stay tainted.
+				if ix, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok && len(fields) > 0 {
+					if cobj := objOf(st, ix.X); cobj != nil {
+						if st.structs[cobj] == nil {
+							st.structs[cobj] = map[string]pageValue{}
+						}
+						for k, fv := range fields {
+							if prev, ok := st.structs[cobj][k]; ok {
+								st.structs[cobj][k] = joinPageValue(prev, fv)
+							} else {
+								st.structs[cobj][k] = fv
+							}
+						}
 					}
 				}
 				if call, ok := unparen(rhs).(*ast.CallExpr); ok {
@@ -1075,11 +1118,19 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 		fields = m
 	} else if gm, ok := st.pkgStructs[srcObj]; ok {
 		fields = gm
-	} else if idx, ok := st.params[srcObj]; ok {
+	}
+	// Parameter structs keep a full per-field fallback on the copy:
+	// fields the local state never recorded (or recorded clean for
+	// another field only) still arrive from the caller, so a partial
+	// local record must not suppress the taint of the untouched fields.
+	if idx, ok := st.params[srcObj]; ok {
 		if stt, ok := derefStruct(srcObj.Type()); ok {
 			for i := 0; i < stt.NumFields(); i++ {
 				f := stt.Field(i)
 				if !paramCanCarryPage(f.Type()) {
+					continue
+				}
+				if _, recorded := fields[f.Name()]; recorded {
 					continue
 				}
 				if fields == nil {
@@ -1105,7 +1156,7 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 // with the same receiver expression. Chains of plain variable aliases are
 // followed with a depth cap; anything else is unresolvable.
 func (pf *pageFlow) resolveMethodValue(st *stmtState, v *types.Var, depth int) (*types.Func, ast.Expr) {
-	if v == nil || depth > 3 {
+	if v == nil || depth > 3 || (st != nil && st.ambigBind[v]) {
 		return nil, nil
 	}
 	b, ok := st.localBindings[v]
@@ -1265,6 +1316,12 @@ func assignTarget(st *stmtState, lhs ast.Expr, pv pageValue) {
 		if pv.tainted {
 			assignTarget(st, v.X, pv)
 		}
+		// The store's INDEX is a possible page carrier too: m[&page] = 1
+		// keeps the full view reachable through a later range of the
+		// keys, so a tainted key joins the container value.
+		if kpv := st.pf.evalExpr(st, v.Index); kpv.tainted {
+			assignTarget(st, v.X, kpv)
+		}
 	case *ast.IndexListExpr:
 		if pv.tainted {
 			assignTarget(st, v.X, pv)
@@ -1340,6 +1397,10 @@ func (st *stmtState) clone() *stmtState {
 	for k, v := range st.localBindings {
 		cp.localBindings[k] = v
 	}
+	cp.ambigBind = map[types.Object]bool{}
+	for k := range st.ambigBind {
+		cp.ambigBind[k] = true
+	}
 	return &cp
 }
 
@@ -1397,14 +1458,41 @@ func (st *stmtState) joinWith(other *stmtState) {
 		}
 	}
 	for k, v := range other.localFuncs {
+		if st.ambigBind[k] {
+			continue
+		}
+		if cur, ok := st.localFuncs[k]; ok && cur != v {
+			// Divergent literal bindings on alternative paths: the call
+			// through this variable has no single provable callee. The
+			// ambiguity is sticky: a later branch that re-binds the
+			// same variable to its pre-branch literal must not
+			// re-establish a provable callee (the page-returning branch
+			// is still possible).
+			st.ambigBind[k] = true
+			delete(st.localFuncs, k)
+			continue
+		}
 		st.localFuncs[k] = v
 	}
 	for k, v := range other.localBindings {
+		if st.ambigBind[k] {
+			continue
+		}
 		if cur, ok := st.localBindings[k]; ok && cur != v {
 			// Divergent bindings on alternative paths: the call through
-			// this variable has no single provable callee.
-			delete(st.localBindings, k)
-			continue
+			// this variable has no single provable callee. Two
+			// different AST nodes with the same text bind the same
+			// callee and are not divergent.
+			same := false
+			if cur != nil && v != nil {
+				ct, vt := exprText(cur), exprText(v)
+				same = ct != "..." && ct == vt
+			}
+			if !same {
+				st.ambigBind[k] = true
+				delete(st.localBindings, k)
+				continue
+			}
 		}
 		st.localBindings[k] = v
 	}
@@ -1494,6 +1582,24 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			// taints.
 			if m := pf.compositeFields(st, lit); m != nil {
 				if pv, ok := m[v.Sel.Name]; ok {
+					out = pv
+				}
+			}
+		} else if ta, ok := unparen(v.X).(*ast.TypeAssertExpr); ok {
+			// v.(B).Data with v an interface variable holding a struct
+			// literal: the assertion keeps the recorded field taints.
+			if obj := objOf(st, ta.X); obj != nil {
+				if m, ok := st.structs[obj]; ok {
+					if pv, ok := m[v.Sel.Name]; ok {
+						out = pv
+					}
+				}
+			}
+		} else if obj, path := selectorChain(st, v); obj != nil {
+			// o.Inner.Data and deeper chains resolve through the
+			// flattened path recorded by compositeFields.
+			if m, ok := st.structs[obj]; ok {
+				if pv, ok := m[path]; ok {
 					out = pv
 				}
 			}
@@ -1833,9 +1939,51 @@ func (pf *pageFlow) compositeFields(st *stmtState, v *ast.CompositeLit) map[stri
 				out = map[string]pageValue{}
 			}
 			out[field.Name()] = pv
+			// Nested and embedded struct values keep their field taints
+			// reachable: o.Inner.Data resolves through the flattened
+			// "Inner.Data" path, and an embedded struct's fields are
+			// promoted to plain "Data" names.
+			if inner := structLitOf(val); inner != nil {
+				if fm := pf.compositeFields(st, inner); len(fm) > 0 {
+					for k, fv := range fm {
+						out[field.Name()+"."+k] = fv
+						if field.Anonymous() {
+							out[k] = fv
+						}
+					}
+				}
+			}
 		}
 	}
 	return out
+}
+
+// selectorChain resolves a (possibly nested) selector expression to its
+// base object and the dotted path of the field names: o.Inner.Data
+// yields (o, "Inner.Data").
+func selectorChain(st *stmtState, e ast.Expr) (types.Object, string) {
+	parts := []string{}
+	for {
+		e = unparen(e)
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		parts = append([]string{sel.Sel.Name}, parts...)
+		e = sel.X
+	}
+	if len(parts) == 0 {
+		return nil, ""
+	}
+	obj := objOfDeref(st, unparen(e))
+	if obj == nil {
+		return nil, ""
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += "." + p
+	}
+	return obj, out
 }
 
 // noteStringConvs records parameter indexes converted to owned strings
@@ -1871,6 +2019,7 @@ func (pf *pageFlow) noteStringConvs(st *stmtState, fs *funcSummary, body *ast.Bl
 		}
 		return true
 	})
+	pf.propagateConvertParamSources(st, fs, body, false)
 }
 
 // noteFmtSpreads records parameter indexes that the body spreads into a
@@ -1901,6 +2050,113 @@ func (pf *pageFlow) noteFmtSpreads(st *stmtState, fs *funcSummary, body *ast.Blo
 				fs.fmtSpreadParams = map[int]bool{}
 			}
 			fs.fmtSpreadParams[pv.srcParam] = true
+		}
+		return true
+	})
+	pf.propagateConvertParamSources(st, fs, body, true)
+}
+
+// propagateConvertParamSources records the caller's parameter indexes
+// that reach a callee parameter the callee converts into an owned string
+// (or spreads into fmt): the conversion happens inside the callee's
+// body, so the caller's own summary must carry the marker or a whole
+// chain of helpers would lose the full-page call at the outermost call
+// site (s(b) inside outer must make outer's parameter a converting
+// slot).
+func (pf *pageFlow) propagateConvertParamSources(st *stmtState, fs *funcSummary, body *ast.BlockStmt, spread bool) {
+	if body == nil {
+		return
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || pf.pc.info.Types[call.Fun].IsType() {
+			return true
+		}
+		fn, ok := calleeObject(pf.pc, call).(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return true
+		}
+		pkgPath := fn.Pkg().Path()
+		sums := pf.summaries
+		if pkgPath != pf.path {
+			sums = pf.store.pkgs[pkgPath]
+		}
+		if sums == nil {
+			return true
+		}
+		key := fn.Name()
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+			key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+		}
+		cfs, ok := sums[key]
+		if !ok {
+			return true
+		}
+		var convs map[int]bool
+		if spread {
+			convs = cfs.fmtSpreadParams
+		} else {
+			convs = cfs.stringParams
+		}
+		if len(convs) == 0 {
+			return true
+		}
+		// Method-value calls bind the receiver to callee slot 0 (the
+		// layout of the call-site check); a method-expression call
+		// carries it as the first explicit argument.
+		recvOffset := 0
+		if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+			if selRecv, isSel := pf.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+				recvOffset = 1
+			}
+		}
+		for pi := range convs {
+			var a ast.Expr
+			if pi == 0 && recvOffset == 1 {
+				if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+					a = sel.X
+				}
+			} else {
+				ai := pi - recvOffset
+				if ai < 0 || ai >= len(call.Args) {
+					continue
+				}
+				a = call.Args[ai]
+			}
+			if a == nil {
+				continue
+			}
+			// The argument must be a plain parameter reference (the
+			// parameter itself, or one of its field selections): only
+			// then is the callee's converting slot provably the
+			// caller's parameter. The argument is deliberately NOT
+			// flow-evaluated: evaluating derived expressions here would
+			// warm the shared expression cache with states that differ
+			// from the call-site state and could turn bounded
+			// record-slice arguments into false complete-page flags at
+			// the call-site check.
+			srcIdx := -1
+			if id, ok := unparen(a).(*ast.Ident); ok {
+				if obj := pf.pc.info.ObjectOf(id); obj != nil {
+					if idx, ok := st.params[obj]; ok {
+						srcIdx = idx
+					}
+				}
+			}
+			if srcIdx < 0 {
+				continue
+			}
+			if spread {
+				if fs.fmtSpreadParams == nil {
+					fs.fmtSpreadParams = map[int]bool{}
+				}
+				fs.fmtSpreadParams[srcIdx] = true
+			} else {
+				if fs.stringParams == nil {
+					fs.stringParams = map[int]bool{}
+				}
+				fs.stringParams[srcIdx] = true
+			}
 		}
 		return true
 	})
@@ -2062,8 +2318,22 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		// argument at this call site. Builtins and type conversions
 		// returned above; direct function calls resolve to their
 		// summaries and reach the module path below.
-		if indirectCallee(call.Fun, pf.pc) && resultHoldsPage(pf.pc.info.Types[call].Type) {
-			return pageValue{tainted: true, maxLen: maxUnknown}
+		if indirectCallee(call.Fun, pf.pc) {
+			if stt, ok := derefStruct(pf.pc.info.Types[call].Type); ok {
+				fields := map[string]pageValue{}
+				for i := 0; i < stt.NumFields(); i++ {
+					f := stt.Field(i)
+					if typeCanCarryPage(f.Type()) {
+						fields[f.Name()] = pageValue{tainted: true, maxLen: maxUnknown}
+					}
+				}
+				if len(fields) > 0 {
+					pf.callFields[call] = fields
+				}
+			}
+			if resultHoldsPage(pf.pc.info.Types[call].Type) {
+				return pageValue{tainted: true, maxLen: maxUnknown}
+			}
 		}
 		return pageValue{}
 	}
@@ -2134,8 +2404,51 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		// so a downstream copy stays visible. Concrete methods without a
 		// body are rejected as assembly stubs by the declaration rule.
 		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+			// The receiver is the transfer argument of an unprovable
+			// interface-method call: unlike the explicit-argument loop,
+			// it is never evaluated by the miss path, so a
+			// page-carrying receiver (a mapped view stored whole, or a
+			// struct field the interface variable picked up from a
+			// struct store) would be invisible to the rule pass's
+			// receiver transfer check. Record the receiver's joined
+			// taint (whole value plus struct fields) on its expression
+			// so the call site fails closed as a complete-page
+			// transfer when the receiver carries a full mapped view.
+			if recvExpr != nil {
+				argFlow := pf.argFlowOf(st, recvExpr)
+				pv := argFlow.pv
+				for _, fv := range argFlow.fields {
+					if !fv.tainted {
+						continue
+					}
+					if !pv.tainted {
+						pv = pageValue{tainted: true, maxLen: fv.maxLen}
+					} else if fv.maxLen > pv.maxLen {
+						pv.maxLen = fv.maxLen
+					}
+				}
+				if pv.tainted {
+					pf.values[recvExpr] = pv
+				}
+			}
 			if resultHoldsPage(pf.pc.info.Types[call].Type) {
 				return pageValue{tainted: true, maxLen: maxUnknown}
+			}
+			// A struct result whose byte-bearing fields the
+			// implementation fills from a mapped view is invisible to
+			// this call site; every page-carrying field fails closed so
+			// the caller's field reads and copies stay visible.
+			if stt, ok := derefStruct(pf.pc.info.Types[call].Type); ok {
+				fields := map[string]pageValue{}
+				for i := 0; i < stt.NumFields(); i++ {
+					f := stt.Field(i)
+					if typeCanCarryPage(f.Type()) {
+						fields[f.Name()] = pageValue{tainted: true, maxLen: maxUnknown}
+					}
+				}
+				if len(fields) > 0 {
+					pf.callFields[call] = fields
+				}
 			}
 		}
 		return pageValue{}
@@ -2271,7 +2584,7 @@ func (pf *pageFlow) litResultFields(fs *funcSummary, bound []pageValue) map[stri
 // function. Reassigned variables have no provable binding. Locals bound
 // to non-literals (parameters, stdlib functions) stay unresolved.
 func (pf *pageFlow) calleeTarget(st *stmtState, v *types.Var, depth int) (*ast.FuncLit, *types.Func) {
-	if v == nil || depth > 2 || pf.pc.reassignedVars[v] {
+	if v == nil || depth > 2 || pf.pc.reassignedVars[v] || (st != nil && st.ambigBind[v]) {
 		return nil, nil
 	}
 	if lit, ok := st.localFuncs[v]; ok {
@@ -2347,6 +2660,11 @@ func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, call *as
 					} else {
 						delete(st.stmtVars, obj)
 					}
+					// The closure parameter carries the argument's
+					// struct-field knowledge: f := func(x B) []byte {
+					// return x.Data }; f(b) with b.Data = page must
+					// resolve x.Data through the literal body.
+					pf.materializeStructFields(st, name, args[idx])
 				}
 				idx++
 			}
@@ -2384,7 +2702,9 @@ func (pf *pageFlow) analyzeFuncLitCall(st *stmtState, lit *ast.FuncLit, call *as
 	if lit.Type.Params != nil {
 		for _, f := range lit.Type.Params.List {
 			for _, name := range f.Names {
-				delete(st.stmtVars, pf.pc.info.ObjectOf(name))
+				obj := pf.pc.info.ObjectOf(name)
+				delete(st.stmtVars, obj)
+				delete(st.structs, obj)
 			}
 		}
 	}
