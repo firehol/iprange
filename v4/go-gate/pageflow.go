@@ -1322,19 +1322,25 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			// param-derived source, or writing b.Other after the caller
 			// stored a page into b.Data would launder the read of
 			// b.Data.
+			found := false
 			if m, ok := st.structs[obj]; ok {
 				if pv, ok := m[v.Sel.Name]; ok {
 					out = pv
+					found = true
 				}
 			}
-			if !out.tainted {
+			// A locally recorded field (tainted or a clean-store marker)
+			// wins over the package state and the param source: only a
+			// field that was never stored locally falls back.
+			if !found {
 				if gm, ok := st.pkgStructs[obj]; ok {
 					if pv, ok := gm[v.Sel.Name]; ok {
 						out = pv
+						found = true
 					}
 				}
 			}
-			if !out.tainted {
+			if !found {
 				if idx, ok := st.params[obj]; ok && paramCanCarryPage(paramFieldType(obj, v.Sel.Name)) {
 					out = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: v.Sel.Name, hasSrc: true}
 				}
