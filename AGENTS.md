@@ -26,6 +26,33 @@ live operation, and compact unsigned snapshots that prove SDK reliability and
 performance. Authenticated public snapshots are Phase 2, tracked by pending
 SOW-0017, and must not delay the core SDK.
 
+### Working principles (non-negotiable)
+
+These apply to every decision, design question, and implementation in this
+repository. The user does not want to repeat them.
+
+- **Long-term-best** — always choose the option that is best for the project
+  over years, not the fastest to implement. Surgical short-cuts that create
+  debt are rejected.
+- **Minimal-complete** — the smallest implementation that fully delivers the
+  approved outcome and covers its actual blast radius. No more, no less.
+- **Absolute performance** — maximize what the v4 format can achieve without
+  redesigning it. Hot paths must be optimal; unnecessary work is a defect.
+- **Clean code** — separation of concerns, small files, single-purpose
+  functions, low complexity, descriptive names. Code must read as if the
+  maintainers wrote it.
+- **Zero-copy / mmap-only** — persistent content is mmap-only; no complete
+  page ever exists in a stack buffer, heap buffer, cache, or anonymous
+  mapping.
+- **One authoritative implementation** — every persistent operation has one
+  low-level owner; adapters compose, never reimplement.
+- **Test-only observability** — necessary-work counters, benchmarks, and
+  profiles exist in test builds only; they compile to no-ops in production.
+
+When a design question arises, the answer must satisfy ALL of these
+simultaneously. If two options both satisfy them, prefer the one that matches
+the Rust reference implementation (the authority for v4 semantics).
+
 ### Design authority
 
 During active work, authority is ordered as follows:

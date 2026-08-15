@@ -31,5 +31,13 @@ func (m *Mapping) Page(pgno uint32) ([]byte, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// Remap satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) Remap(committedBytes uint64) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
+// PhysicalSize satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) PhysicalSize() uint64 { return 0 }
+
 // Close satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Close() error { return nil }

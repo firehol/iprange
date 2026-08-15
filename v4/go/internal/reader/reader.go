@@ -69,6 +69,14 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 		m.Close()
 		return nil, err
 	}
+	// Bootstrap proved the meta pair on the 2-page mapping; now grow to
+	// the exact committed extent. For immutable readers committed ==
+	// physical, so the remap covers the whole file — but a huge corrupt
+	// file never got mapped because bootstrap ran on 2 pages only.
+	if err := m.Remap(r.meta.PageCount * format.PageSize); err != nil {
+		m.Close()
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -140,7 +148,7 @@ func (r *ImmutableReader) bootstrap() error {
 	if ok0 && ok1 && !sameIdentity(m0, m1) {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "conflicting meta identity"}
 	}
-	physical := r.m.Size()
+	physical := r.m.PhysicalSize()
 	e0 := validateMeta(m0, ok0, physical)
 	e1 := validateMeta(m1, ok1, physical)
 	valid0 := ok0 && e0 == nil
@@ -155,7 +163,7 @@ func (r *ImmutableReader) bootstrap() error {
 		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
 	}
 	// Immutable open requires the exact physical size (section 3).
-	if r.meta.PageCount*format.PageSize != r.m.Size() {
+	if r.meta.PageCount*format.PageSize != r.m.PhysicalSize() {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "file size does not match meta page count"}
 	}
 	return nil

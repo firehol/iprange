@@ -32,9 +32,10 @@ import (
 
 // Mapping is one read-only file-backed mapping of a committed v4 artifact.
 type Mapping struct {
-	file *os.File
-	data []byte
-	size uint64
+	file     *os.File
+	data     []byte
+	size     uint64 // currently mapped byte length
+	physical uint64 // file size at open (locked extent)
 }
 
 // OpenImmutable opens path as a regular, symlink-free, page-aligned file and
@@ -132,7 +133,10 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
+	// Bootstrap maps exactly the two meta pages (O(1) bootstrap, spec
+	// section 3). The committed extent is mapped by Remap after bootstrap
+	// proves the meta pair, so a huge corrupt tail never costs VA.
+	data, err := unix.Mmap(int(f.Fd()), 0, 2*format.PageSize, unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
 	}
@@ -149,13 +153,46 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: size}
+	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size}
 	cleanup = false
 	return m, nil
 }
 
-// Size returns the mapped committed byte length.
+// Size returns the currently mapped byte length (2 pages during bootstrap,
+// the committed extent after Remap).
 func (m *Mapping) Size() uint64 { return m.size }
+
+// PhysicalSize returns the file size recorded at open (the locked extent).
+func (m *Mapping) PhysicalSize() uint64 { return m.physical }
+
+// Remap resizes the mapping to exactly committedBytes. The file handle and
+// lifetime lock are retained. The initial bootstrap mapping is exactly two
+// meta pages; Remap grows it to the committed extent after bootstrap proves
+// the meta pair. committedBytes must be page-aligned and must not exceed
+// the physical file size recorded at open. Retained slices from the old
+// mapping are invalidated; bootstrap does not retain any, so the caller is
+// safe. On same-size the call is a no-op.
+func (m *Mapping) Remap(committedBytes uint64) error {
+	if m.data == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	if committedBytes%format.PageSize != 0 {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed size not page-aligned"}
+	}
+	if committedBytes > m.physical {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed exceeds physical extent"}
+	}
+	if committedBytes == m.size {
+		return nil
+	}
+	data, err := remapPages(m.file, m.data, m.size, committedBytes)
+	if err != nil {
+		return err
+	}
+	m.data = data
+	m.size = committedBytes
+	return nil
+}
 
 // View returns a checked view of [off, off+length) inside the mapping. The
 // returned slice aliases the mapping; it must not outlive the Mapping
