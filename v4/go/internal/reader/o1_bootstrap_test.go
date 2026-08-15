@@ -8,11 +8,13 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// TestHugeCorruptFileFailsBootstrap proves that OpenImmutable maps only
-// the 2-page bootstrap extent before proving the meta pair. A file with a
-// huge aligned tail but corrupt meta pages must fail with FormatInvalid;
-// the 2-page mapping is the only extent ever mapped (the full physical
-// size is never mapped before bootstrap proves the meta).
+// TestHugeCorruptFileFailsBootstrap verifies that a file with a huge
+// aligned tail but corrupt meta pages fails OpenImmutable with
+// FormatInvalid. The O(1) bootstrap property (only 2 pages mapped before
+// the meta pair is proven) is a structural property of the code path —
+// OpenImmutable maps 2 pages, bootstrap reads only pages 0 and 1, and
+// Remap runs only after bootstrap succeeds — documented in the body
+// comment below.
 func TestHugeCorruptFileFailsBootstrap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "huge-corrupt.iprdb")
