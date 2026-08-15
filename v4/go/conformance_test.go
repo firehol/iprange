@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,7 +94,11 @@ func loadManifest(t *testing.T) conformanceManifest {
 	}
 	// Reject trailing data after the manifest value, mirroring Rust's
 	// strict deserialization (serde_json from_str rejects trailing data).
-	if dec.More() {
+	// More() is unreliable at the top level (it returns false for ] and
+	// }), so a second Decode is the authoritative check: any non-EOF
+	// result means trailing data.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
 		t.Fatal("parse cases.json: trailing data after manifest")
 	}
 	// Reject an unsupported manifest schema, mirroring Rust
@@ -525,6 +530,15 @@ func TestConformanceRustFixtures(t *testing.T) {
 				t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
 			}
 			if len(tc.Feeds) > 0 {
+				// The manifest feed array order must match the catalog
+				// index order: index i is the i-th feed in the manifest,
+				// mirroring Rust's ordered catalog vector comparison
+				// (verify.rs:216-227).
+				for i, feed := range tc.Feeds {
+					if feed.Index != uint32(i) {
+						t.Errorf("feed %s index %d, want %d (manifest order)", feed.Name, feed.Index, i)
+					}
+				}
 				// Every declared feed resolves to its exact index, and
 				// undeclared names are absent.
 				for _, feed := range tc.Feeds {
