@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // strictUnmarshal unmarshals JSON with case-sensitive field names,
@@ -81,6 +82,15 @@ func rejectDuplicateKeys(data []byte) error {
 			if j >= len(data) {
 				return fmt.Errorf("unterminated string at offset %d", i)
 			}
+			// Validate the string is valid UTF-8 with no unpaired surrogates,
+			// mirroring Rust's serde_json::from_slice which rejects both.
+			var decoded string
+			if err := json.Unmarshal(data[i:j+1], &decoded); err != nil {
+				return fmt.Errorf("invalid string at offset %d: %v", i, err)
+			}
+			if !utf8.ValidString(decoded) {
+				return fmt.Errorf("invalid UTF-8 in string at offset %d", i)
+			}
 			// Check if this is a key (followed by :).
 			k := j + 1
 			for k < len(data) && (data[k] == ' ' || data[k] == '\t' || data[k] == '\n' || data[k] == '\r') {
@@ -90,10 +100,6 @@ func rejectDuplicateKeys(data []byte) error {
 				// Decode the key to handle escaped forms (\u0073chema ==
 				// schema): two raw spellings that decode to the same key
 				// are duplicates, mirroring Rust's decoded-field comparison.
-				var decoded string
-				if err := json.Unmarshal(data[i:j+1], &decoded); err != nil {
-					return fmt.Errorf("invalid key at offset %d: %v", i, err)
-				}
 				if stack[len(stack)-1].keys[decoded] {
 					return fmt.Errorf("duplicate key %q", decoded)
 				}
