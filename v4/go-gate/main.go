@@ -172,7 +172,7 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 				failed = true
 				continue
 			}
-			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageCopies: map[any]int{}, boundedPageAppends: map[types.Object]int{}}
+			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageCopies: map[any]int{}, boundedPageAppends: map[types.Object]int{}, appendAliases: map[types.Object]types.Object{}}
 			sums, pf := summarizePackage(pc, di.pkg, store, parsed, pc.pf)
 			pc.pf = pf
 			pc.pf.summaries = sums

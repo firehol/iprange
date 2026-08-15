@@ -977,4 +977,20 @@ var batteryPageCases = []batteryCase{
 	{name: "P262: bounded page spans assembled by repeated append", desc: "out = append(out, page[:2048]...); out = append(out, page[2048:4096]...): repeated bounded appends into one destination variable assemble a complete owned page", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_8.go", content: "package reader\n\nfunc boundedAssemblyAppendProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\tout = append(out, page[:2048]...)\n\tout = append(out, page[2048:4096]...)\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P263: bounded page spans assembled through a field destination", desc: "copy(h.Buf[:2048], page[:2048]); copy(h.Buf[2048:4096], page[2048:4096]): selector-rooted destinations share the root object's bounded-copy accumulation", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_9.go", content: "package reader\n\ntype holderL28Acc struct{ Buf [4096]byte }\n\nfunc selectorAssemblyProbeL28(r *ImmutableReader, pgno uint32) (holderL28Acc, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn holderL28Acc{}, err\n\t}\n\tvar h holderL28Acc\n\tcopy(h.Buf[:2048], page[:2048])\n\tcopy(h.Buf[2048:4096], page[2048:4096])\n\treturn h, nil\n}"},
+	}},
+
+	{name: "P264: bounded page spans appended through a field destination", desc: "h.Buf = append(h.Buf, page[:2048]...); h.Buf = append(h.Buf, page[2048:4096]...): selector-rooted append destinations resolve to the root variable's accumulation counter", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_10.go", content: "package reader\n\ntype holderAppendL28 struct{ Buf []byte }\n\nfunc selectorAppendAssemblyProbeL28(r *ImmutableReader, pgno uint32) (holderAppendL28, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn holderAppendL28{}, err\n\t}\n\th := holderAppendL28{Buf: make([]byte, 0, 4096)}\n\th.Buf = append(h.Buf, page[:2048]...)\n\th.Buf = append(h.Buf, page[2048:4096]...)\n\treturn h, nil\n}"},
+	}},
+
+	{name: "P265: bounded page spans appended through slice alias rebinds", desc: "a := out; a = append(a, page[:2048]...); b := a; b = append(b, page[2048:4096]...): alias rebinds transfer one buffer's accumulated bounded-append bytes", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_11.go", content: "package reader\n\nfunc aliasAppendProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\ta := out\n\ta = append(a, page[:2048]...)\n\tb := a\n\tb = append(b, page[2048:4096]...)\n\treturn b, nil\n}"},
+	}},
+
+	{name: "P266 benign: two one-byte page appends stay bounded", desc: "out = append(out, page[0:1]...); out = append(out, page[1:2]...): append accumulation sums source spans, so two provably bounded bytes cannot reach PageSize", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_12.go", content: "package reader\n\nfunc tinyAppendProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4)\n\tout = append(out, page[0:1]...)\n\tout = append(out, page[1:2]...)\n\treturn out, nil\n}"},
+	}},
 }

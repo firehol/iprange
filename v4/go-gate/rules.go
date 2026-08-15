@@ -1555,12 +1555,54 @@ func (w *fileRules) boundedPageCopySpan(dst ast.Expr, span int64) bool {
 // accumulation key. Identifier occurrences have distinct AST nodes but one
 // object; other expressions fall back to their own node.
 func (w *fileRules) copyRootObject(e ast.Expr) any {
-	if id, ok := e.(*ast.Ident); ok {
-		if obj := w.pc.info.Uses[id]; obj != nil {
+	switch d := e.(type) {
+	case *ast.Ident:
+		if obj := w.pc.info.Uses[d]; obj != nil {
 			return obj
+		}
+	case *ast.SelectorExpr, *ast.StarExpr:
+		if root := boundedChainRoot(d); root != nil {
+			if obj := w.pc.info.Uses[root]; obj != nil {
+				return obj
+			}
 		}
 	}
 	return e
+}
+
+// chainInner returns the base expression of a destination chain step.
+func chainInner(e ast.Expr) ast.Expr {
+	switch d := e.(type) {
+	case *ast.SliceExpr:
+		return d.X
+	case *ast.IndexExpr:
+		return d.X
+	case *ast.SelectorExpr:
+		return d.X
+	case *ast.StarExpr:
+		return d.X
+	case *ast.ParenExpr:
+		return d.X
+	}
+	return e
+}
+
+// boundedChainRoot resolves the root identifier of a selector or pointer
+// destination chain (h.Buf, (*p), h.Inner.Buf).
+func boundedChainRoot(e ast.Expr) *ast.Ident {
+	for {
+		switch d := unparen(e).(type) {
+		case *ast.SelectorExpr:
+			e = d.X
+		case *ast.StarExpr:
+			e = d.X
+		case *ast.ParenExpr:
+			e = d.X
+		default:
+			id, _ := d.(*ast.Ident)
+			return id
+		}
+	}
 }
 
 // boundedCopyTarget resolves the expression that owns a bounded copy
@@ -1571,10 +1613,8 @@ func (w *fileRules) boundedCopyTarget(dst ast.Expr) ast.Expr {
 	switch d := dst.(type) {
 	case *ast.Ident:
 		return d
-	case *ast.SliceExpr:
-		return w.boundedCopyTarget(d.X)
-	case *ast.IndexExpr:
-		return w.boundedCopyTarget(d.X)
+	case *ast.SliceExpr, *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr, *ast.ParenExpr:
+		return w.boundedCopyTarget(chainInner(d))
 	}
 	return dst
 }
@@ -1592,8 +1632,21 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	// complete owned page from bounded spans.
 	if src.tainted && src.maxLen > 0 && src.maxLen < pageSize {
 		if obj := w.boundedAppendTarget(v.Args[0]); obj != nil {
-			w.pc.pf.boundedPageAppends[obj]++
-			if w.pc.pf.boundedPageAppends[obj] > 1 {
+			root := types.Object(obj)
+			for d := 0; d < 8; d++ {
+				next, ok := w.pc.pf.appendAliases[root]
+				if !ok || next == root {
+					break
+				}
+				root = next
+			}
+			obj, _ = root.(*types.Var)
+			if obj == nil {
+				return
+			}
+			total := w.pc.pf.boundedPageAppends[obj] + int(src.maxLen)
+			w.pc.pf.boundedPageAppends[obj] = total
+			if total >= pageSize {
 				w.fail(v.Pos(), "bounded mapped-page spans appended repeatedly into one owned buffer (complete page)")
 			}
 		}
@@ -1631,12 +1684,11 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 // be counted: the destination expression, or the identifier bound when the
 // append result is assigned back (out = append(out, span...)).
 func (w *fileRules) boundedAppendTarget(e ast.Expr) *types.Var {
-	e = unparen(e)
-	id, ok := e.(*ast.Ident)
-	if !ok {
+	root := boundedChainRoot(unparen(e))
+	if root == nil {
 		return nil
 	}
-	obj, ok := w.pc.info.Uses[id].(*types.Var)
+	obj, ok := w.pc.info.Uses[root].(*types.Var)
 	if !ok {
 		return nil
 	}

@@ -389,7 +389,10 @@ type pageFlow struct {
 	// bound to the same destination variable; repeated appends assemble a
 	// complete page even though each source span is bounded.
 	boundedPageAppends map[types.Object]int
-	accum              bool // final sweep: keep expression caches for the rule pass
+	// appendAliases maps a rebound slice name to the canonical variable
+	// whose bounded page-append accumulation it shares.
+	appendAliases map[types.Object]types.Object
+	accum         bool // final sweep: keep expression caches for the rule pass
 }
 
 // methodValueCall is one resolved method-value call: the method and the
@@ -417,6 +420,7 @@ func (pf *pageFlow) clearExprCaches() {
 	pf.destAggregated = map[ast.Expr]bool{}
 	pf.boundedPageCopies = map[any]int{}
 	pf.boundedPageAppends = map[types.Object]int{}
+	pf.appendAliases = map[types.Object]types.Object{}
 }
 
 // summarizePackage computes the symbolic summaries of one package,
@@ -1320,6 +1324,21 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					if srcObj != nil && obj != nil {
 						if st.lenOfPage[srcObj] {
 							st.lenOfPage[obj] = true
+						}
+						// A slice alias rebind shares one backing buffer's
+						// bounded page-append accumulation.
+						if srcObj2, ok := srcObj.(*types.Var); ok {
+							if obj2, ok := obj.(*types.Var); ok {
+								root := types.Object(srcObj2)
+								for d := 0; d < 8; d++ {
+									next, ok := pf.appendAliases[root]
+									if !ok || next == root {
+										break
+									}
+									root = next
+								}
+								pf.appendAliases[obj2] = root
+							}
 						}
 						if _, ok := obj.Type().Underlying().(*types.Slice); ok {
 							if _, ok := srcObj.Type().Underlying().(*types.Slice); ok {
