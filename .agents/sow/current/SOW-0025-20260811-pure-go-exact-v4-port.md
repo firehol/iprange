@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,685-line typed toolchain (11,133-line go/types module
+mmap gate is an 11,766-line typed toolchain (11,214-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -169,7 +169,7 @@ interface-typed type-switch cases, and the same-family sweep of asserted
 field-map key ranges and returned/bound asserted selectors under
 interface-typed switch cases) and one reader divergence (membership
 ContainsIndex skipped the trailing-word canonical check); details in the
-round-25 entry below. The durable battery is 527 cases (453 rejections,
+round-25 entry below. The durable battery is 527 cases (456 rejections,
 71 benign acceptances) plus 9 shell environment mutations and passes end
 to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
