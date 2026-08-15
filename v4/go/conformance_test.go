@@ -567,6 +567,57 @@ func TestConformanceRustFixtures(t *testing.T) {
 				t.Fatalf("feed %s not declared", name)
 				return 0
 			}
+			// verifyMembershipView checks the exact bitmap semantics of a
+			// membership view against the expected feeds for one range,
+			// mirroring Rust assert_membership_at: word count, exact words,
+			// and every listed/unlisted feed.
+			verifyMembershipView := func(view MembershipView, feeds []string, label string) {
+				listed := map[uint32]bool{}
+				for _, feed := range feeds {
+					listed[feedIndexOf(feed)] = true
+				}
+				for _, f := range tc.Feeds {
+					has, err := view.ContainsIndex(f.Index)
+					if err != nil {
+						t.Fatalf("%s contains %s: %v", label, f.Name, err)
+					}
+					if listed[f.Index] && !has {
+						t.Errorf("%s lacks feed %s", label, f.Name)
+					}
+					if !listed[f.Index] && has {
+						t.Errorf("%s contains undeclared feed %s (%d)", label, f.Name, f.Index)
+					}
+				}
+				maxBit := uint32(0)
+				for _, feed := range feeds {
+					if idx := feedIndexOf(feed); idx > maxBit {
+						maxBit = idx
+					}
+				}
+				wantWords := int(maxBit/64 + 1)
+				gotWords, err := view.WordCount()
+				if err != nil {
+					t.Fatalf("%s word count: %v", label, err)
+				}
+				if int(gotWords) != wantWords {
+					t.Errorf("%s word count %d want %d", label, gotWords, wantWords)
+				}
+				words := make([]uint64, wantWords)
+				n, err := view.ReadWords(0, words)
+				if err != nil || n != wantWords {
+					t.Errorf("%s read words: n=%d err=%v", label, n, err)
+				}
+				expected := make([]uint64, wantWords)
+				for _, feed := range feeds {
+					idx := feedIndexOf(feed)
+					expected[idx/64] |= uint64(1) << (idx % 64)
+				}
+				for i := range expected {
+					if words[i] != expected[i] {
+						t.Errorf("%s word %d = %x want %x", label, i, words[i], expected[i])
+					}
+				}
+			}
 			for _, mr := range tc.MembershipRanges {
 				_, _, from4 := addressBytes(mr.From, tc.Family)
 				fh, fl, _ := addressBytes(mr.From, tc.Family)
@@ -610,65 +661,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 						view = v2
 					}
 				}
-				// Every listed feed must be present.
-				for _, feed := range mr.Feeds {
-					has, err := view.ContainsIndex(feedIndexOf(feed))
-					if err != nil {
-						t.Fatal("contains:", err)
-					}
-					if !has {
-						t.Errorf("membership %s lacks feed %s", mr.From, feed)
-					}
-				}
-				// A declared feed that is not listed for this range must be
-				// absent from this range's bitmap.
-				listed := map[uint32]bool{}
-				for _, feed := range mr.Feeds {
-					listed[feedIndexOf(feed)] = true
-				}
-				for _, f := range tc.Feeds {
-					if !listed[f.Index] {
-						has, err := view.ContainsIndex(f.Index)
-						if err != nil {
-							t.Fatal("contains:", err)
-						}
-						if has {
-							t.Errorf("membership %s contains undeclared feed %s (%d)", mr.From, f.Name, f.Index)
-						}
-					}
-				}
-				// Word-exact bitmap verification: the stored word count must
-				// be exactly the words needed for the highest listed feed,
-				// and every word must equal the canonical expectation.
-				maxBit := uint32(0)
-				for _, feed := range mr.Feeds {
-					if idx := feedIndexOf(feed); idx > maxBit {
-						maxBit = idx
-					}
-				}
-				wantWords := int(maxBit/64 + 1)
-				gotWords, err := view.WordCount()
-				if err != nil {
-					t.Fatal("word count:", err)
-				}
-				if int(gotWords) != wantWords {
-					t.Errorf("membership %s word count %d want %d", mr.From, gotWords, wantWords)
-				}
-				words := make([]uint64, wantWords)
-				n, err := view.ReadWords(0, words)
-				if err != nil || n != wantWords {
-					t.Errorf("membership %s read words: n=%d err=%v", mr.From, n, err)
-				}
-				expected := make([]uint64, wantWords)
-				for _, feed := range mr.Feeds {
-					idx := feedIndexOf(feed)
-					expected[idx/64] |= uint64(1) << (idx % 64)
-				}
-				for i := range expected {
-					if words[i] != expected[i] {
-						t.Errorf("membership %s word %d = %x want %x", mr.From, i, words[i], expected[i])
-					}
-				}
+				verifyMembershipView(view, mr.Feeds, "membership "+mr.From)
 				// Any index at or beyond the generation limit is
 				// InvalidArgument; 0xffffffff is always beyond any limit.
 				if _, err := view.ContainsIndex(0xffffffff); err == nil || errorAsCode(err) != ErrorInvalidArgument {
@@ -719,13 +712,16 @@ func TestConformanceRustFixtures(t *testing.T) {
 							}
 						}
 					}
-					// Probe the exact end of each range (to) and just past
-					// it (to+1), mirroring Rust membership_probes. to+1 is
-					// absent only when the next range does not start there.
+					// Probe the exact end of each range (to) with full bitmap
+					// verification, and just past it (to+1) for absence,
+					// mirroring Rust membership_probes.
 					for i, mr := range tc.MembershipRanges {
 						_, _, to4 := addressBytes(mr.To, "ipv4")
 						if present, err := probeMembership(0, uint64(to4)); err != nil || !present {
 							t.Errorf("membership to %s (0x%x): present=%v err=%v, want present", mr.To, to4, present, err)
+						} else {
+							view, _, _ := pin.LookupMembershipV4(IPv4(to4))
+							verifyMembershipView(view, mr.Feeds, "membership to "+mr.To)
 						}
 						if to4 < 0xffffffff {
 							adjacent := i+1 < len(tc.MembershipRanges)
@@ -736,6 +732,22 @@ func TestConformanceRustFixtures(t *testing.T) {
 							if !adjacent {
 								if present, err := probeMembership(0, uint64(to4+1)); err != nil || present {
 									t.Errorf("membership to+1 %s (0x%x): present=%v err=%v, want absent", mr.To, to4+1, present, err)
+								}
+							}
+						}
+						// Probe just before the start (from-1) for absence,
+						// except at the family minimum or when the previous
+						// range ends exactly at from-1 (adjacent ranges).
+						_, _, from4 := addressBytes(mr.From, "ipv4")
+						if from4 > 0 {
+							adjacent := false
+							if i > 0 {
+								_, _, prevTo := addressBytes(tc.MembershipRanges[i-1].To, "ipv4")
+								adjacent = prevTo == from4-1
+							}
+							if !adjacent {
+								if present, err := probeMembership(0, uint64(from4-1)); err != nil || present {
+									t.Errorf("membership from-1 %s (0x%x): present=%v err=%v, want absent", mr.From, from4-1, present, err)
 								}
 							}
 						}
@@ -751,12 +763,17 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership ffff:…: present=%v err=%v, want absent", present, err)
 						}
 					}
-					// Probe the exact end of each range (to) and just past
-					// it (to+1), mirroring Rust membership_probes.
+					// Probe the exact end of each range (to) with full bitmap
+					// verification, just past it (to+1) for absence, and just
+					// before the start (from-1) for absence, mirroring Rust
+					// membership_probes.
 					for i, mr := range tc.MembershipRanges {
 						mh, ml, _ := addressBytes(mr.To, "ipv6")
 						if present, err := probeMembership(mh, ml); err != nil || !present {
 							t.Errorf("membership v6 to %s: present=%v err=%v, want present", mr.To, present, err)
+						} else {
+							view, _, _ := pin.LookupMembershipV6(IPv6{Hi: mh, Lo: ml})
+							verifyMembershipView(view, mr.Feeds, "membership v6 to "+mr.To)
 						}
 						// to+1: absent only when the next range does not start there.
 						toHi, toLo := mh, ml
@@ -776,11 +793,81 @@ func TestConformanceRustFixtures(t *testing.T) {
 								t.Errorf("membership v6 to+1 %s: present=%v err=%v, want absent", mr.To, present, err)
 							}
 						}
+						// from-1: absent except at the family minimum or when
+						// the previous range ends exactly at from-1.
+						fh2, fl2, _ := addressBytes(mr.From, "ipv6")
+						if fh2 != 0 || fl2 != 0 {
+							if fl2 > 0 {
+								fl2--
+							} else {
+								fh2--
+								fl2 = ^uint64(0)
+							}
+							adjacent := false
+							if i > 0 {
+								ph, pl, _ := addressBytes(tc.MembershipRanges[i-1].To, "ipv6")
+								adjacent = ph == fh2 && pl == fl2
+							}
+							if !adjacent {
+								if present, err := probeMembership(fh2, fl2); err != nil || present {
+									t.Errorf("membership v6 from-1 %s: present=%v err=%v, want absent", mr.From, present, err)
+								}
+							}
+						}
 					}
 				}
 			}
 
 			// Structured ranges.
+			// verifyStructuredValue checks the exact structured value and
+			// threat membership of a view against the expected range,
+			// mirroring Rust's structured_probes + assert_structure_at.
+			verifyStructuredValue := func(view NetworkEnrichmentV1View, sr structuredRange, label string) {
+				val, err := view.Value()
+				if err != nil {
+					t.Fatalf("%s structure value: %v", label, err)
+				}
+				if val.ASN != sr.ASN || val.CountryID != sr.CountryID ||
+					val.StateID != sr.StateID || val.CityID != sr.CityID {
+					t.Errorf("%s: asn=%d/%d country=%d/%d state=%d/%d city=%d/%d",
+						label, val.ASN, sr.ASN, val.CountryID, sr.CountryID,
+						val.StateID, sr.StateID, val.CityID, sr.CityID)
+				}
+				wantLoc := sr.Location != nil
+				if val.HasLocation != wantLoc {
+					t.Errorf("%s: location %v want %v", label, val.HasLocation, wantLoc)
+				}
+				if wantLoc {
+					if val.Location.LatitudeMicrodegrees != sr.Location.Lat ||
+						val.Location.LongitudeMicrodegrees != sr.Location.Long {
+						t.Errorf("%s: location %d,%d want %d,%d", label,
+							val.Location.LatitudeMicrodegrees, val.Location.LongitudeMicrodegrees,
+							sr.Location.Lat, sr.Location.Long)
+					}
+				}
+				threat, present, err := view.ThreatMembership()
+				if err != nil {
+					t.Fatalf("%s threat membership: %v", label, err)
+				}
+				if len(sr.Feeds) == 0 {
+					if present {
+						t.Errorf("%s: unexpected threat membership", label)
+					}
+				} else {
+					if !present {
+						t.Errorf("%s: missing threat membership", label)
+					}
+					for _, feed := range sr.Feeds {
+						has, err := threat.ContainsIndex(feedIndexOf(feed))
+						if err != nil {
+							t.Fatalf("%s threat contains: %v", label, err)
+						}
+						if !has {
+							t.Errorf("%s lacks threat feed %s", label, feed)
+						}
+					}
+				}
+			}
 			for _, sr := range tc.StructuredRanges {
 				_, _, from4 := addressBytes(sr.From, tc.Family)
 				fh, fl, _ := addressBytes(sr.From, tc.Family)
@@ -796,53 +883,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("structured %s: %v %v", sr.From, ok, err)
 					continue
 				}
-				val, err := view.Value()
-				if err != nil {
-					t.Fatal("structure value:", err)
-				}
-				if val.ASN != sr.ASN || val.CountryID != sr.CountryID ||
-					val.StateID != sr.StateID || val.CityID != sr.CityID {
-					t.Errorf("structured %s: asn=%d/%d country=%d/%d state=%d/%d city=%d/%d",
-						sr.From, val.ASN, sr.ASN, val.CountryID, sr.CountryID,
-						val.StateID, sr.StateID, val.CityID, sr.CityID)
-				}
-				wantLoc := sr.Location != nil
-				if val.HasLocation != wantLoc {
-					t.Errorf("structured %s: location %v want %v", sr.From, val.HasLocation, wantLoc)
-				}
-				if wantLoc {
-					if val.Location.LatitudeMicrodegrees != sr.Location.Lat ||
-						val.Location.LongitudeMicrodegrees != sr.Location.Long {
-						t.Errorf("structured %s: location %d,%d want %d,%d", sr.From,
-							val.Location.LatitudeMicrodegrees, val.Location.LongitudeMicrodegrees,
-							sr.Location.Lat, sr.Location.Long)
-					}
-				}
-				threat, present, err := view.ThreatMembership()
-				if err != nil {
-					t.Fatal("threat membership:", err)
-				}
-				if len(sr.Feeds) == 0 {
-					// No-threat structured value: canonical absence
-					// (membership id zero) reports present=false with nil
-					// error, mirroring the Rust Option result.
-					if present {
-						t.Errorf("structured %s: unexpected threat membership", sr.From)
-					}
-				} else {
-					if !present {
-						t.Errorf("structured %s: missing threat membership", sr.From)
-					}
-					for _, feed := range sr.Feeds {
-						has, err := threat.ContainsIndex(feedIndexOf(feed))
-						if err != nil {
-							t.Fatal("threat contains:", err)
-						}
-						if !has {
-							t.Errorf("structured %s lacks threat feed %s", sr.From, feed)
-						}
-					}
-				}
+				verifyStructuredValue(view, sr, "structured "+sr.From)
 			}
 
 			// Absence at the family edges and inside inter-range gaps of
@@ -890,13 +931,17 @@ func TestConformanceRustFixtures(t *testing.T) {
 							}
 						}
 					}
-					// Probe the exact end of each range (to) and just past
-					// it (to+1), mirroring Rust membership_probes. to+1 is
-					// absent only when the next range does not start there.
+					// Probe the exact end of each range (to) with full value
+					// verification, just past it (to+1) for absence, and just
+					// before the start (from-1) for absence, mirroring Rust
+					// structured_probes.
 					for i, sr := range tc.StructuredRanges {
 						_, _, to4 := addressBytes(sr.To, "ipv4")
 						if present, err := probeStructured(0, uint64(to4)); err != nil || !present {
 							t.Errorf("structured to %s (0x%x): present=%v err=%v, want present", sr.To, to4, present, err)
+						} else {
+							view, _, _ := pin.LookupNetworkEnrichmentV1V4(IPv4(to4))
+							verifyStructuredValue(view, sr, "structured to "+sr.To)
 						}
 						if to4 < 0xffffffff {
 							adjacent := i+1 < len(tc.StructuredRanges)
@@ -907,6 +952,21 @@ func TestConformanceRustFixtures(t *testing.T) {
 							if !adjacent {
 								if present, err := probeStructured(0, uint64(to4+1)); err != nil || present {
 									t.Errorf("structured to+1 %s (0x%x): present=%v err=%v, want absent", sr.To, to4+1, present, err)
+								}
+							}
+						}
+						// from-1: absent except at the family minimum or when
+						// the previous range ends exactly at from-1.
+						_, _, from4 := addressBytes(sr.From, "ipv4")
+						if from4 > 0 {
+							adjacent := false
+							if i > 0 {
+								_, _, prevTo := addressBytes(tc.StructuredRanges[i-1].To, "ipv4")
+								adjacent = prevTo == from4-1
+							}
+							if !adjacent {
+								if present, err := probeStructured(0, uint64(from4-1)); err != nil || present {
+									t.Errorf("structured from-1 %s (0x%x): present=%v err=%v, want absent", sr.From, from4-1, present, err)
 								}
 							}
 						}
@@ -922,12 +982,17 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("structured ffff:…: present=%v err=%v, want absent", present, err)
 						}
 					}
-					// Probe the exact end of each range (to) and just past
-					// it (to+1), mirroring Rust membership_probes.
+					// Probe the exact end of each range (to) with full value
+					// verification, just past it (to+1) for absence, and just
+					// before the start (from-1) for absence, mirroring Rust
+					// structured_probes.
 					for i, sr := range tc.StructuredRanges {
 						mh, ml, _ := addressBytes(sr.To, "ipv6")
 						if present, err := probeStructured(mh, ml); err != nil || !present {
 							t.Errorf("structured v6 to %s: present=%v err=%v, want present", sr.To, present, err)
+						} else {
+							view, _, _ := pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: mh, Lo: ml})
+							verifyStructuredValue(view, sr, "structured v6 to "+sr.To)
 						}
 						toHi, toLo := mh, ml
 						if toLo < ^uint64(0) {
@@ -944,6 +1009,27 @@ func TestConformanceRustFixtures(t *testing.T) {
 						if !adjacent && (toHi != 0 || toLo != 0) {
 							if present, err := probeStructured(toHi, toLo); err != nil || present {
 								t.Errorf("structured v6 to+1 %s: present=%v err=%v, want absent", sr.To, present, err)
+							}
+						}
+						// from-1: absent except at the family minimum or when
+						// the previous range ends exactly at from-1.
+						fh2, fl2, _ := addressBytes(sr.From, "ipv6")
+						if fh2 != 0 || fl2 != 0 {
+							if fl2 > 0 {
+								fl2--
+							} else {
+								fh2--
+								fl2 = ^uint64(0)
+							}
+							adjacent := false
+							if i > 0 {
+								ph, pl, _ := addressBytes(tc.StructuredRanges[i-1].To, "ipv6")
+								adjacent = ph == fh2 && pl == fl2
+							}
+							if !adjacent {
+								if present, err := probeStructured(fh2, fl2); err != nil || present {
+									t.Errorf("structured v6 from-1 %s: present=%v err=%v, want absent", sr.From, present, err)
+								}
 							}
 						}
 					}
