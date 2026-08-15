@@ -62,7 +62,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
 	if !before.Mode().IsRegular() {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
+		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 	}
 	f, err := os.OpenFile(clean, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -81,7 +81,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 		}
 		if !st.Mode().IsRegular() {
-			return &format.Error{Code: format.CodeFormatInvalid, Detail: "not a regular file"}
+			return &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 		}
 		// Re-stat the path itself (no symlink following, like Rust's
 		// symlink_metadata-based directory entry) and compare against the
@@ -97,7 +97,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
 		}
 		if !now.Mode().IsRegular() {
-			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names a regular file"}
+			return &format.Error{Code: format.CodeInvalidArgument, Detail: "path no longer names a regular file"}
 		}
 		if !os.SameFile(now, st) {
 			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names the opened file"}

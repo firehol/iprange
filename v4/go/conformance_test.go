@@ -704,6 +704,25 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership gap after %s: want absent", tc.MembershipRanges[i-1].To)
 						}
 					}
+					// Probe the exact end of each range (to) and just past
+					// it (to+1), mirroring Rust membership_probes. to+1 is
+					// absent only when the next range does not start there.
+					for i, mr := range tc.MembershipRanges {
+						_, _, to4 := addressBytes(mr.To, "ipv4")
+						if !probeMembership(0, uint64(to4)) {
+							t.Errorf("membership to %s (0x%x): want present", mr.To, to4)
+						}
+						if to4 < 0xffffffff {
+							adjacent := i+1 < len(tc.MembershipRanges)
+							if adjacent {
+								_, _, nextFrom := addressBytes(tc.MembershipRanges[i+1].From, "ipv4")
+								adjacent = nextFrom == to4+1
+							}
+							if !adjacent && probeMembership(0, uint64(to4+1)) {
+								t.Errorf("membership to+1 %s (0x%x): want absent", mr.To, to4+1)
+							}
+						}
+					}
 				} else {
 					if (fh != 0 || fl != 0) && probeMembership(0, 0) {
 						t.Errorf("membership :: : want absent")
@@ -811,6 +830,25 @@ func TestConformanceRustFixtures(t *testing.T) {
 						_, _, curFrom := addressBytes(tc.StructuredRanges[i].From, "ipv4")
 						if curFrom > prevTo+1 && probeStructured(0, uint64(prevTo+1)) {
 							t.Errorf("structured gap after %s: want absent", tc.StructuredRanges[i-1].To)
+						}
+					}
+					// Probe the exact end of each range (to) and just past
+					// it (to+1), mirroring Rust membership_probes. to+1 is
+					// absent only when the next range does not start there.
+					for i, sr := range tc.StructuredRanges {
+						_, _, to4 := addressBytes(sr.To, "ipv4")
+						if !probeStructured(0, uint64(to4)) {
+							t.Errorf("structured to %s (0x%x): want present", sr.To, to4)
+						}
+						if to4 < 0xffffffff {
+							adjacent := i+1 < len(tc.StructuredRanges)
+							if adjacent {
+								_, _, nextFrom := addressBytes(tc.StructuredRanges[i+1].From, "ipv4")
+								adjacent = nextFrom == to4+1
+							}
+							if !adjacent && probeStructured(0, uint64(to4+1)) {
+								t.Errorf("structured to+1 %s (0x%x): want absent", sr.To, to4+1)
+							}
 						}
 					}
 				} else {

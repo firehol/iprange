@@ -142,29 +142,6 @@ func (v MembershipView) readWordsInner(start uint32, output []uint64) error {
 	return nil
 }
 
-// wordBytes returns the 8 mapped bytes of word i, bounds-checked against
-// the checked view retained from the lookup-time record decode.
-func (v MembershipView) wordBytes(i uint32) ([]byte, error) {
-	byteOff := uint64(i) * 8
-	switch v.storage {
-	case format.MembershipStorageInline:
-		return v.inlineBytes(byteOff)
-	case format.MembershipStorageBlob:
-		return v.r.blobRead(v.blobRoot, format.BlobKindMembership, uint64(v.wordCount)*8, byteOff, 8)
-	default:
-		return nil, corrupt("membership storage %d", v.storage)
-	}
-}
-
-// inlineBytes returns the 8 mapped bytes at byteOff inside the inline bitmap
-// retained from the lookup-time record decode.
-func (v MembershipView) inlineBytes(byteOff uint64) ([]byte, error) {
-	if byteOff+8 > uint64(v.bitmapLen) {
-		return nil, corrupt("inline bitmap offset out of range")
-	}
-	return v.leaf.Inline[byteOff : byteOff+8], nil
-}
-
 // LookupMembership4 returns the membership bitmap covering addr, or false
 // when the address is absent.
 func (r *ImmutableReader) LookupMembership4(addr uint32) (MembershipView, bool, error) {
@@ -351,28 +328,6 @@ func membershipLeafFind(sl format.SlottedPage, id uint32, idLimit, feedIndexLimi
 		return 0, format.MembershipIDLeaf{}, false, corrupt("membership blob root out of range")
 	}
 	return uint16(best), rec, true, nil
-}
-
-// blobRead returns the mapped bytes of [off, off+len) inside one blob tree
-// (section 10), mirroring blob_tree.rs find_leaf + leaf_geometry: the walk
-// verifies branch-first-offset continuity, child-level descent, leaf
-// identity and geometry, 8-byte alignment, coverage of the requested span,
-// and the end-vs-declared rules. A span crossing a leaf boundary is
-// corruption here; batched readers loop over blobLeaf instead.
-func (r *ImmutableReader) blobRead(root uint32, kind uint32, totalBytes uint64, off, length uint64) ([]byte, error) {
-	if length == 0 {
-		return nil, corrupt("zero-length blob read")
-	}
-	data, start, err := r.blobLeaf(root, kind, totalBytes, off)
-	if err != nil {
-		return nil, err
-	}
-	end := start + uint64(len(data))
-	if length > end-off {
-		return nil, corrupt("blob leaf does not cover the requested bytes")
-	}
-	base := off - start
-	return data[base : base+length], nil
 }
 
 // blobLeaf walks one blob tree to the leaf covering off and returns its

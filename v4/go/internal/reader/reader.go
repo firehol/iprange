@@ -127,16 +127,16 @@ func namespaceChecks(path string) error {
 	clean := filepath.Clean(path)
 	base := filepath.Base(clean)
 	if base == "." || base == string(filepath.Separator) {
-		return &format.Error{Code: format.CodeNameInvalid, Detail: "no basename"}
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "no basename"}
 	}
 	lower := strings.ToLower(base)
 	if strings.HasPrefix(lower, ".iprange-") || strings.HasSuffix(lower, ".readers") {
-		return &format.Error{Code: format.CodeNameInvalid, Detail: "reserved basename"}
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "reserved basename"}
 	}
 	// The canonical sidecar (main + ".readers") must fit the target
 	// filesystem component limit (POSIX NAME_MAX).
 	if len(base)+len(".readers") > 255 {
-		return &format.Error{Code: format.CodeNameInvalid, Detail: "canonical sidecar name exceeds component limit"}
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "canonical sidecar name exceeds component limit"}
 	}
 	return nil
 }

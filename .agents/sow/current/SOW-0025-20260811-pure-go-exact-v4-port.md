@@ -206,8 +206,8 @@ FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 524-case battery, and the SOW audit.
-Module production 5,227 raw lines (reader core 1,916 incl. search.go and
-the work stubs; the 5k directional goal is met), module tests 5,373 raw
+Module production 5,182 raw lines (reader core 1,871 incl. search.go and
+the work stubs; the 5k directional goal is met), module tests 5,409 raw
 lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
