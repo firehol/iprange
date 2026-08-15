@@ -167,6 +167,25 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if len(m.Invalid) != 3 {
 		t.Fatalf("invalid case count %d, want 3", len(m.Invalid))
 	}
+	// Reject explicit null range arrays: a typed vector in Rust rejects
+	// null, so Go must too. A nil slice from an omitted field is valid;
+	// a nil slice from explicit null is not distinguishable after
+	// unmarshaling, so we re-check the raw JSON for the field name.
+	for _, fx := range m.Fixtures {
+		raw, err := json.Marshal(fx)
+		if err != nil {
+			t.Fatalf("fixture %s: re-encode: %v", fx.File, err)
+		}
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			t.Fatalf("fixture %s: probe decode: %v", fx.File, err)
+		}
+		for _, field := range []string{"direct_ranges", "membership_ranges", "structured_ranges"} {
+			if raw, ok := probe[field]; ok && string(raw) == "null" {
+				t.Fatalf("fixture %s: %s is explicitly null", fx.File, field)
+			}
+		}
+	}
 	// Reject wrong-kind range arrays: a direct fixture must have no
 	// membership or structured ranges, and so on, mirroring Rust's
 	// assert_direct/assert_membership/assert_structured empty-array
@@ -355,16 +374,29 @@ func loadManifest(t *testing.T) conformanceManifest {
 			if fx.Metadata.Byte == nil || fx.Metadata.Len == nil {
 				t.Fatalf("fixture %s: metadata state %q missing byte/length", fx.File, fx.Metadata.State)
 			}
+			var byteVal int
+			if err := json.Unmarshal(fx.Metadata.Byte, &byteVal); err != nil {
+				t.Fatalf("fixture %s: metadata byte: %v", fx.File, err)
+			}
+			if byteVal < 0 || byteVal > 255 {
+				t.Fatalf("fixture %s: metadata byte %d out of range", fx.File, byteVal)
+			}
 		}
 	}
 	// Validate that feeds arrays are present (not nil) for fixtures that
 	// declare feeds in their ranges, mirroring Rust's typed vector fields
-	// (model.rs:70-79). A nil feeds array on a membership or structured
-	// fixture with feed references is a manifest error.
+	// (model.rs:70-79). The top-level feeds array is optional (Rust
+	// defaults it at model.rs:74-75), but every membership or structured
+	// range must carry its own feeds array.
 	for _, fx := range m.Fixtures {
-		if fx.Kind == "membership" || fx.Kind == "structured" {
-			if fx.Feeds == nil {
-				t.Fatalf("fixture %s: feeds array is missing", fx.File)
+		for i, mr := range fx.MembershipRanges {
+			if mr.Feeds == nil {
+				t.Fatalf("fixture %s membership range %d: feeds array is missing", fx.File, i)
+			}
+		}
+		for i, sr := range fx.StructuredRanges {
+			if sr.Feeds == nil {
+				t.Fatalf("fixture %s structured range %d: feeds array is missing", fx.File, i)
 			}
 		}
 	}
@@ -494,6 +526,10 @@ func expandV6(s string) []byte {
 				panic("bad ipv6 multiple :: " + s)
 			} else {
 				flush()
+				// A leading single colon is invalid (only "::" can start).
+				if i == 0 {
+					panic("bad ipv6 leading colon " + s)
+				}
 				// A trailing single colon is invalid.
 				if i+1 == len(s) {
 					panic("bad ipv6 trailing colon " + s)
