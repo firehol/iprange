@@ -88,6 +88,11 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal("parse cases.json:", err)
 	}
+	// Reject an unsupported manifest schema, mirroring Rust
+	// conformance_support/mod.rs:23.
+	if m.Schema != 2 {
+		t.Fatalf("unsupported conformance schema %d, want 2", m.Schema)
+	}
 	// Enforce the exact fixture inventory and producer coverage: all six
 	// committed Rust fixtures must be present with producer "rust", and
 	// no extra fixtures may appear.
@@ -113,6 +118,11 @@ func loadManifest(t *testing.T) conformanceManifest {
 		if !seen[w] {
 			t.Fatalf("fixture %s missing from manifest", w)
 		}
+	}
+	// Enforce the exact invalid-mutation inventory, mirroring Rust
+	// conformance_support/verify.rs:31.
+	if len(m.Invalid) != 3 {
+		t.Fatalf("invalid case count %d, want 3", len(m.Invalid))
 	}
 	return m
 }
@@ -1112,20 +1122,20 @@ func TestConformanceRustFixtures(t *testing.T) {
 // the exact typed error.
 func TestConformanceInvalidMutations(t *testing.T) {
 	m := loadManifest(t)
-	src, err := os.ReadFile(fixturePath(m.Invalid[0].Source))
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range m.Invalid {
 		tc := tc
 		t.Run(tc.Mutation, func(t *testing.T) {
+			src, err := os.ReadFile(fixturePath(tc.Source))
+			if err != nil {
+				t.Fatal(err)
+			}
 			mutated := mutate(t, src, tc.Mutation)
 			dir := t.TempDir()
 			path := filepath.Join(dir, "mutated.iprdb")
 			if err := os.WriteFile(path, mutated, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			_, err := OpenImmutable(path)
+			_, err = OpenImmutable(path)
 			if err == nil {
 				t.Fatal("expected open failure")
 			}
