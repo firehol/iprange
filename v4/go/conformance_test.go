@@ -88,6 +88,32 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal("parse cases.json:", err)
 	}
+	// Enforce the exact fixture inventory and producer coverage: all six
+	// committed Rust fixtures must be present with producer "rust", and
+	// no extra fixtures may appear.
+	want := []string{
+		"rust/direct-ipv4.iprdb",
+		"rust/first-seen-ipv6.iprdb",
+		"rust/membership-ipv4.iprdb",
+		"rust/membership-ipv6.iprdb",
+		"rust/structured-ipv4.iprdb",
+		"rust/structured-ipv4-nothreat.iprdb",
+	}
+	if len(m.Fixtures) != len(want) {
+		t.Fatalf("fixture count %d, want %d", len(m.Fixtures), len(want))
+	}
+	seen := map[string]bool{}
+	for _, fx := range m.Fixtures {
+		if fx.Producer != "rust" {
+			t.Fatalf("fixture %s: producer %q, want rust", fx.File, fx.Producer)
+		}
+		seen[fx.File] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Fatalf("fixture %s missing from manifest", w)
+		}
+	}
 	return m
 }
 
@@ -216,26 +242,6 @@ func addressBytes(s string, family string) (hi, lo uint64, v4 uint32) {
 	}
 	v := parseV6Full(s)
 	return v.Hi, v.Lo, 0
-}
-
-func rangeCardinality(t *testing.T, from, to, family string) string {
-	t.Helper()
-	var card Cardinality129
-	var err error
-	if family == "ipv4" {
-		f, t4, _ := addressBytes(from, family)
-		_, t5, _ := addressBytes(to, family)
-		_ = f
-		card, err = IPv4Inclusive(uint32(t4), uint32(t5))
-	} else {
-		fh, fl, _ := addressBytes(from, family)
-		th, tl, _ := addressBytes(to, family)
-		card, err = IPv6Inclusive(fh, fl, th, tl)
-	}
-	if err != nil {
-		t.Fatal("range cardinality:", err)
-	}
-	return card.String()
 }
 
 // TestConformanceRustFixtures opens every committed Rust-produced fixture and
