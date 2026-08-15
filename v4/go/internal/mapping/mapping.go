@@ -36,6 +36,7 @@ type Mapping struct {
 	data     []byte
 	size     uint64 // currently mapped byte length
 	physical uint64 // file size at open (locked extent)
+	peak     uint64 // largest extent ever mapped (test-only observability)
 }
 
 // OpenImmutable opens path as a regular, symlink-free, page-aligned file and
@@ -153,7 +154,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size}
+	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, peak: 2 * format.PageSize}
 	cleanup = false
 	return m, nil
 }
@@ -164,6 +165,12 @@ func (m *Mapping) Size() uint64 { return m.size }
 
 // PhysicalSize returns the file size recorded at open (the locked extent).
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
+
+// PeakMappedExtent returns the largest byte extent ever mapped by this
+// Mapping. It exists so tests can pin the O(1) bootstrap property: a
+// correct implementation never exceeds 2*PageSize before bootstrap proves
+// the meta pair.
+func (m *Mapping) PeakMappedExtent() uint64 { return m.peak }
 
 // Remap resizes the mapping to exactly committedBytes. The file handle and
 // lifetime lock are retained. The initial bootstrap mapping is exactly two
@@ -185,12 +192,33 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	if committedBytes == m.size {
 		return nil
 	}
-	data, err := remapPages(m.file, m.data, m.size, committedBytes)
+	// Re-stat the locked file to prove the committed extent still fits;
+	// a rogue truncation between open and remap must not map past EOF
+	// (Rust mapping.rs remap -> require_file_extent).
+	st, err := m.file.Stat()
 	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if uint64(st.Size()) < committedBytes {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed extent exceeds current file size"}
+	}
+	// Nil the mapping before remapPages so a partial failure (munmap
+	// succeeded but mmap failed on non-Linux) leaves the Mapping in a
+	// closed state where View returns WrongState instead of slicing
+	// unmapped memory. Linux mremap is atomic in the kernel, so the
+	// nil-first ordering is safe on every platform.
+	old := m.data
+	m.data = nil
+	data, err := remapPages(m.file, old, m.size, committedBytes)
+	if err != nil {
+		m.size = 0
 		return err
 	}
 	m.data = data
 	m.size = committedBytes
+	if committedBytes > m.peak {
+		m.peak = committedBytes
+	}
 	return nil
 }
 
