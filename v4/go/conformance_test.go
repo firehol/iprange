@@ -14,25 +14,19 @@ import (
 // strictUnmarshal unmarshals JSON with case-sensitive field names and
 // trailing-data rejection, mirroring Rust's serde derived deserializer
 // semantics. Go's encoding/json is case-insensitive even with
-// DisallowUnknownFields, so this wrapper first decodes into a map and
-// rejects any key that does not exactly match a known field name.
+// DisallowUnknownFields, so this wrapper validates every nested object's
+// keys against the known field set before the typed decode.
 // Duplicate fields are a known Go limitation (last-value semantics);
 // the conformance manifest is machine-generated and never contains them.
 func strictUnmarshal(data []byte, v any) error {
-	// First pass: decode into a generic map to check for case-mismatched
-	// keys. The map keys are the exact JSON field names; any key that
-	// does not exactly match a known field is rejected.
-	var probe map[string]json.RawMessage
+	// First pass: decode into a generic structure and validate every
+	// nested object's keys against the known field set.
+	var probe any
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return err
 	}
-	known := map[string]bool{
-		"schema": true, "fixtures": true, "invalid_cases": true,
-	}
-	for key := range probe {
-		if !known[key] {
-			return fmt.Errorf("unknown or case-mismatched field %q", key)
-		}
+	if err := validateJSONKeys(probe, ""); err != nil {
+		return err
 	}
 	// Second pass: decode into the typed struct with DisallowUnknownFields.
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -47,6 +41,83 @@ func strictUnmarshal(data []byte, v any) error {
 		return fmt.Errorf("trailing data after manifest")
 	}
 	return nil
+}
+
+// validateJSONKeys recursively checks that every object key in the decoded
+// JSON exactly matches a known field name for its context. The path
+// parameter is the dot-separated path to the current object (for error
+// messages). The known fields are the exact struct tags from the manifest
+// types; any key not in the known set is rejected.
+func validateJSONKeys(v any, path string) error {
+	switch val := v.(type) {
+	case map[string]any:
+		for key, child := range val {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			if !knownJSONField(childPath) {
+				return fmt.Errorf("unknown or case-mismatched field %q", childPath)
+			}
+			if err := validateJSONKeys(child, childPath); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, child := range val {
+			if err := validateJSONKeys(child, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// knownJSONField reports whether the dot-separated path is a known manifest
+// field. Array indices are stripped before the lookup: "fixtures[0].file"
+// is checked as "fixtures.file". The set covers every field in the manifest
+// schema (version 2); any key not in the set is rejected.
+func knownJSONField(path string) bool {
+	// Strip array indices: "fixtures[0].file" -> "fixtures.file".
+	// The path uses [N] for array elements; remove the [N] entirely.
+	clean := path
+	for {
+		start := strings.Index(clean, "[")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(clean[start:], "]")
+		if end < 0 {
+			break
+		}
+		clean = clean[:start] + clean[start+end+1:]
+	}
+	// The exact field set for the manifest schema (version 2).
+	switch clean {
+	case "schema", "fixtures", "invalid_cases",
+		"fixtures.file", "fixtures.producer", "fixtures.family",
+		"fixtures.kind", "fixtures.structure", "fixtures.tag",
+		"fixtures.metadata", "fixtures.metadata.state",
+		"fixtures.metadata.value", "fixtures.metadata.byte",
+		"fixtures.metadata.length",
+		"fixtures.direct_ranges", "fixtures.direct_ranges.from",
+		"fixtures.direct_ranges.to", "fixtures.direct_ranges.value",
+		"fixtures.membership_ranges", "fixtures.membership_ranges.from",
+		"fixtures.membership_ranges.to", "fixtures.membership_ranges.feeds",
+		"fixtures.structured_ranges", "fixtures.structured_ranges.from",
+		"fixtures.structured_ranges.to", "fixtures.structured_ranges.asn",
+		"fixtures.structured_ranges.country_id", "fixtures.structured_ranges.state_id",
+		"fixtures.structured_ranges.city_id", "fixtures.structured_ranges.location",
+		"fixtures.structured_ranges.location.latitude_microdegrees",
+		"fixtures.structured_ranges.location.longitude_microdegrees",
+		"fixtures.structured_ranges.feeds",
+		"fixtures.feeds", "fixtures.feeds.name", "fixtures.feeds.index",
+		"fixtures.cardinality", "fixtures.address_count",
+		"invalid_cases.mutation", "invalid_cases.source",
+		"invalid_cases.expected_error":
+		return true
+	}
+	return false
 }
 
 // Conformance cross-open tests: every committed Rust-produced fixture is
