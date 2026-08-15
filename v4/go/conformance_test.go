@@ -145,13 +145,21 @@ func rejectDuplicateKeys(data []byte) error {
 							if lo < 0xDC00 || lo > 0xDFFF {
 								return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
 							}
-							// Skip the entire surrogate pair (\uXXXX\uXXXX = 12 bytes).
+							// Skip to the last byte of the surrogate pair
+							// (\uXXXX\uXXXX = 12 bytes, k is at the first
+							// backslash, so k+11 is the last byte). The
+							// loop's k++ moves to the next byte after the
+							// pair.
 							k += 11
 						} else if cp >= 0xDC00 && cp <= 0xDFFF {
 							return fmt.Errorf("unpaired low surrogate at offset %d", i+k)
+						} else {
+							// Skip to the last byte of the \uXXXX escape
+							// (6 bytes, k is at the backslash, so k+5 is
+							// the last byte). The loop's k++ moves to the
+							// next byte after the escape.
+							k += 5
 						}
-						// Skip the \uXXXX escape (6 bytes).
-						k += 5
 					}
 				}
 			}
