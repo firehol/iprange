@@ -91,6 +91,11 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if err := dec.Decode(&m); err != nil {
 		t.Fatal("parse cases.json:", err)
 	}
+	// Reject trailing data after the manifest value, mirroring Rust's
+	// strict deserialization (serde_json from_str rejects trailing data).
+	if dec.More() {
+		t.Fatal("parse cases.json: trailing data after manifest")
+	}
 	// Reject an unsupported manifest schema, mirroring Rust
 	// conformance_support/mod.rs:23.
 	if m.Schema != 2 {
@@ -126,6 +131,22 @@ func loadManifest(t *testing.T) conformanceManifest {
 	// conformance_support/verify.rs:31.
 	if len(m.Invalid) != 3 {
 		t.Fatalf("invalid case count %d, want 3", len(m.Invalid))
+	}
+	// Reject duplicate feed names or indices within any fixture, mirroring
+	// Rust's exact catalog comparison (verify.rs:253-267).
+	for _, fx := range m.Fixtures {
+		names := map[string]bool{}
+		indices := map[uint32]bool{}
+		for _, f := range fx.Feeds {
+			if names[f.Name] {
+				t.Fatalf("fixture %s: duplicate feed name %q", fx.File, f.Name)
+			}
+			names[f.Name] = true
+			if indices[f.Index] {
+				t.Fatalf("fixture %s: duplicate feed index %d", fx.File, f.Index)
+			}
+			indices[f.Index] = true
+		}
 	}
 	return m
 }
