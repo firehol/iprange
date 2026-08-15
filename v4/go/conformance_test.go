@@ -465,6 +465,40 @@ func TestConformanceRustFixtures(t *testing.T) {
 			// canonical ranges, in ascending order, with no extra records and
 			// a total equal to the declared address count. Only direct
 			// fixtures have direct ranges.
+			// Feed catalog checks apply to every feed-bearing fixture,
+			// not just direct ones: membership and structured fixtures
+			// also declare feeds that must resolve to their exact index.
+			if len(tc.Feeds) > 0 {
+				// Every declared feed resolves to its exact index, the declared
+				// count matches the meta, and undeclared names are absent.
+				if info.ActiveFeedCount != uint64(len(tc.Feeds)) {
+					t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
+				}
+				for _, feed := range tc.Feeds {
+					entry, ok, err := db.LookupFeed(feed.Name)
+					if err != nil || !ok {
+						t.Errorf("feed %s: %v %v", feed.Name, ok, err)
+						continue
+					}
+					if entry.Index != feed.Index {
+						t.Errorf("feed %s index %d want %d", feed.Name, entry.Index, feed.Index)
+					}
+				}
+				for _, absent := range []string{"feed-999", "zz-not-declared"} {
+					en, ok, err := db.LookupFeed(absent)
+					if err != nil || ok {
+						t.Errorf("undeclared feed %q: %v %v", absent, ok, err)
+					}
+					if ok && en.Index != 0 {
+						t.Errorf("undeclared feed resolved to %d", en.Index)
+					}
+				}
+			}
+
+			// Exact range enumeration: the public scan must yield exactly the
+			// canonical ranges, in ascending order, with no extra records and
+			// a total equal to the declared address count. Only direct
+			// fixtures have direct ranges.
 			if tc.Kind != "direct" {
 				goto membershipCheck
 			}
@@ -524,34 +558,6 @@ func TestConformanceRustFixtures(t *testing.T) {
 						if prev.FromHi > cur.FromHi || (prev.FromHi == cur.FromHi && prev.FromLo >= cur.FromLo) {
 							t.Errorf("scan v6 not strictly ascending at %d", i)
 						}
-					}
-				}
-			}
-
-			// Feed catalog checks only apply to membership-capable files.
-			if len(tc.Feeds) > 0 {
-				// Every declared feed resolves to its exact index, the declared
-				// count matches the meta, and undeclared names are absent.
-				if info.ActiveFeedCount != uint64(len(tc.Feeds)) {
-					t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
-				}
-				for _, feed := range tc.Feeds {
-					entry, ok, err := db.LookupFeed(feed.Name)
-					if err != nil || !ok {
-						t.Errorf("feed %s: %v %v", feed.Name, ok, err)
-						continue
-					}
-					if entry.Index != feed.Index {
-						t.Errorf("feed %s index %d want %d", feed.Name, entry.Index, feed.Index)
-					}
-				}
-				for _, absent := range []string{"feed-999", "zz-not-declared"} {
-					en, ok, err := db.LookupFeed(absent)
-					if err != nil || ok {
-						t.Errorf("undeclared feed %q: %v %v", absent, ok, err)
-					}
-					if ok && en.Index != 0 {
-						t.Errorf("undeclared feed resolved to %d", en.Index)
 					}
 				}
 			}

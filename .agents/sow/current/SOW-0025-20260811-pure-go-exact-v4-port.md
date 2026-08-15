@@ -208,7 +208,7 @@ go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 524-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
-module tests 5,618 raw
+module tests 5,642 raw
 lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
@@ -3528,13 +3528,13 @@ Acceptance criteria evidence:
 
 Tests or equivalent validation:
 
-- `go test ./...` (4 packages) — green at the last commit.
+- `go test ./...` (5 packages: root, format, reader, mapping, work) — green at the last commit.
 - `go test -race ./internal/format ./internal/reader ./internal/mapping .` — green.
 - `go vet ./...` — clean; `gofmt -l .` — empty.
-- `./check-import-graph.sh` — passes; the content-transfer scan is the AST
+- `./check-import-graph.sh` — passes; the content-transfer scan is the typed
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the in-memory inflater call sites
-  exempted as exact, file-taint-verified shapes; the 422-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 524-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
   amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64 (the
