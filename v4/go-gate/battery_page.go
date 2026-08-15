@@ -909,4 +909,12 @@ var batteryPageCases = []batteryCase{
 	{name: "P245: byte-by-byte append of a mapped page into an owned slice", desc: "for i := 0; i < len(page); i++ { out = append(out, page[i]) } with page from r.page(pgno): the for loop whose condition references the length of a page-tainted slice makes the loop body a page-sourcing context; the byte-by-byte appends into the owned slice aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l26_3.go", content: "package reader\n\nfunc appendCopyProbe(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\tfor i := 0; i < len(page); i++ {\n\t\tout = append(out, page[i])\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P246: aliased-length indexed loop over a mapped page into an owned [4096]byte", desc: "n := len(page); for i := 0; i < n; i++ { out[i] = page[i] } with page from r.page(pgno): the for loop whose condition uses a len-of-page alias makes the loop body a page-sourcing context; the element writes into the owned array aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l26_4.go", content: "package reader\n\nfunc aliasedLenCopyProbe(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tn := len(page)\n\tfor i := 0; i < n; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P247: range over the destination array copying from a mapped page", desc: "for i := range out { out[i] = page[i] } with out an owned [4096]byte and page from r.page(pgno): the range over a PageSize destination array makes the loop body a page-sourcing context; the element writes aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l26_5.go", content: "package reader\n\nfunc rangeDestCopyProbe(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := range out {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
 }
