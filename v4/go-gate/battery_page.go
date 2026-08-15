@@ -941,4 +941,40 @@ var batteryPageCases = []batteryCase{
 	{name: "P253 benign: zero-initialization of an owned PageSize array", desc: "var out [4096]byte; for i := range out { out[i] = 0 }: a destination-ranging loop with a clean scalar RHS initializes the buffer; no page source reaches the writes, so the complete-page rule stays silent", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_6.go", content: "package reader\n\nfunc benignZeroProbeL27() [4096]byte {\n\tvar out [4096]byte\n\tfor i := range out {\n\t\tout[i] = 0\n\t}\n\treturn out\n}"},
 	}},
+
+	{name: "P254: nested page-source loop containing a destination range", desc: "for i := 0; i < len(page); i++ { for j := range out { out[j] = page[i] } }: the inner destination range must close its own loop context; decrementing the outer page-source counter corrupts nesting and loses the complete-page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_7.go", content: "package reader\n\nfunc nestedMixProbeL30(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < len(page); i++ {\n\t\tfor j := range out {\n\t\t\tout[j] = page[i]\n\t\t}\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P255: helper sink aliases the destination parameter", desc: "func put(dst []byte, i int, b byte) { d := dst; d[i] = b } called inside for i, b := range page: local aliases of a sink parameter keep the element-write summary", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_1.go", content: "package reader\n\nfunc putByteAliasL28(dst []byte, i int, b byte) {\n\td := dst\n\td[i] = b\n}\n\nfunc helperAliasProbeL28(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i, b := range page {\n\t\tputByteAliasL28(out[:], i, b)\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P256: pointer destination element copy of a mapped page", desc: "p := &out; for i, b := range page { (*p)[i] = b }: pointer destinations dereference to the pointee array before the PageSize ownership test", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_2.go", content: "package reader\n\nfunc ptrDestProbeL28(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tp := &out\n\tfor i, b := range page {\n\t\t(*p)[i] = b\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P257: method receiver field is a page sink", desc: "func (s sink) put(i int, b byte) { s.buf[i] = b }; h.put(i, b) inside a page loop: selector-rooted writes mark the receiver parameter as an element sink", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_3.go", content: "package reader\n\ntype sinkSL28 struct{ buf []byte }\n\nfunc (s sinkSL28) putL28(i int, b byte) { s.buf[i] = b }\n\nfunc methodSinkProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\th := sinkSL28{buf: out}\n\tfor i, b := range page {\n\t\th.putL28(i, b)\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P258: page-sink helper used in assignment RHS", desc: "_ = put(out[:], i, b) with put returning byte and writing dst[i]: value-position helper calls in a page-sourcing loop are complete-page copies", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_4.go", content: "package reader\n\nfunc putByteRHSByteL28(dst []byte, i int, b byte) byte { dst[i] = b; return b }\n\nfunc helperRHSProbeL28(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i, b := range page {\n\t\t_ = putByteRHSByteL28(out[:], i, b)\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P259: range over a slice alias of an owned PageSize destination", desc: "out := make([]byte, 4096); dst := out; for i := range dst[:] { dst[i] = page[i] }: identifier and slice-expression aliases share the destination's make length", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_5.go", content: "package reader\n\nfunc sliceAliasRangeProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tdst := out\n\tfor i := range dst[:] {\n\t\tdst[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P260: chained len(page) aliases keep the page-source bound", desc: "n := len(page); m := n; for i := 0; i < m; i++ { out[i] = page[i] }: chained identifier aliases preserve the page-derived loop bound", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_6.go", content: "package reader\n\nfunc chainedLenProbeL28(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tn := len(page)\n\tm := n\n\tfor i := 0; i < m; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P261: bounded page spans assembled by repeated copy", desc: "copy(out[:2048], page[:2048]); copy(out[2048:4096], page[2048:4096]): bounded copies into one destination root accumulate to a complete owned page", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_7.go", content: "package reader\n\nfunc boundedAssemblyProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tcopy(out[:2048], page[:2048])\n\tcopy(out[2048:4096], page[2048:4096])\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P262: bounded page spans assembled by repeated append", desc: "out = append(out, page[:2048]...); out = append(out, page[2048:4096]...): repeated bounded appends into one destination variable assemble a complete owned page", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_8.go", content: "package reader\n\nfunc boundedAssemblyAppendProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\tout = append(out, page[:2048]...)\n\tout = append(out, page[2048:4096]...)\n\treturn out, nil\n}"},
+	}},
 }

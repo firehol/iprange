@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -123,6 +124,9 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 	for _, f := range goFiles {
 		byDir[filepath.Dir(f)] = append(byDir[filepath.Dir(f)], f)
 	}
+	for _, list := range byDir {
+		sort.Strings(list)
+	}
 	type dirInfo struct {
 		dir   string
 		pkg   string
@@ -136,7 +140,12 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 		}
 		dirs = append(dirs, dirInfo{dir: dir, pkg: pkg, files: list})
 	}
-	sort.Slice(dirs, func(i, j int) bool { return topoRank(dirs[i].pkg) < topoRank(dirs[j].pkg) })
+	sort.Slice(dirs, func(i, j int) bool {
+		if r := topoRank(dirs[i].pkg) - topoRank(dirs[j].pkg); r != 0 {
+			return r < 0
+		}
+		return dirs[i].dir < dirs[j].dir
+	})
 
 	for _, cfg := range configs {
 		store := newSummaryStore()
@@ -163,7 +172,7 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 				failed = true
 				continue
 			}
-			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}}
+			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageCopies: map[any]int{}, boundedPageAppends: map[types.Object]int{}}
 			sums, pf := summarizePackage(pc, di.pkg, store, parsed, pc.pf)
 			pc.pf = pf
 			pc.pf.summaries = sums

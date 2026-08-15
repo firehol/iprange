@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -380,7 +381,15 @@ type pageFlow struct {
 	// destination-ranging loop; the rule pass fails them when the RHS
 	// derives from a page. pageSourceLoops writes always fail.
 	destAggregated map[ast.Expr]bool
-	accum          bool // final sweep: keep expression caches for the rule pass
+	// boundedPageCopies counts statically bounded copy() calls into each
+	// destination expression. More than one sub-page copy into a
+	// PageSize-capable destination can assemble a complete page.
+	boundedPageCopies map[any]int
+	// boundedPageAppends counts sub-page append() calls whose result is
+	// bound to the same destination variable; repeated appends assemble a
+	// complete page even though each source span is bounded.
+	boundedPageAppends map[types.Object]int
+	accum              bool // final sweep: keep expression caches for the rule pass
 }
 
 // methodValueCall is one resolved method-value call: the method and the
@@ -406,11 +415,19 @@ func (pf *pageFlow) clearExprCaches() {
 	pf.callMethodValues = map[*ast.CallExpr]methodValueCall{}
 	pf.pageSinkCalls = map[*ast.CallExpr][]ast.Expr{}
 	pf.destAggregated = map[ast.Expr]bool{}
+	pf.boundedPageCopies = map[any]int{}
+	pf.boundedPageAppends = map[types.Object]int{}
 }
 
 // summarizePackage computes the symbolic summaries of one package,
 // iterating to a fixpoint so intra-package helper chains compose.
 func summarizePackage(pc *packageCheck, path string, store *summaryStore, files []*parsedFile, pf *pageFlow) (map[string]*funcSummary, *pageFlow) {
+	// Analysis and rule passes must visit files in one stable order, or
+	// per-package accumulation state (bounded page-copy spans) resets on
+	// nondeterministic map iteration.
+	sortedFiles := append([]*parsedFile{}, files...)
+	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].name < sortedFiles[j].name })
+	files = sortedFiles
 	if store.pkgs[path] != nil {
 		return store.pkgs[path], pf
 	}
@@ -1052,6 +1069,10 @@ func (pf *pageFlow) markPageAggregated(st *stmtState, lhs, rhs ast.Expr, pageSou
 		}
 		t = t.Underlying()
 	}
+	// A pointer destination ((*p)[i] = b) addresses the pointee buffer.
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem().Underlying()
+	}
 	if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
 		pv := pageValue{tainted: true, maxLen: arr.Len()}
 		if fieldPath != "" {
@@ -1145,6 +1166,10 @@ func (pf *pageFlow) pageDerivedRHS(st *stmtState, rhs ast.Expr) bool {
 // symbolic length reaches PageSize.
 func (pf *pageFlow) rangeDestination(st *stmtState, x ast.Expr) pageValue {
 	x = unparen(x)
+	// A slice expression over an identifier names the same backing array.
+	if se, ok := x.(*ast.SliceExpr); ok {
+		x = unparen(se.X)
+	}
 	id, ok := x.(*ast.Ident)
 	if !ok {
 		return pageValue{}
@@ -1152,6 +1177,18 @@ func (pf *pageFlow) rangeDestination(st *stmtState, x ast.Expr) pageValue {
 	obj := pf.pc.info.ObjectOf(id)
 	if obj == nil {
 		return pageValue{}
+	}
+	// An alias of a recorded slice destination shares its length.
+	if _, ok := st.sliceLens[obj]; !ok {
+		if bind, ok := st.localBindings[obj]; ok {
+			if srcID, ok := unparen(bind).(*ast.Ident); ok {
+				if srcObj := pf.pc.info.ObjectOf(srcID); srcObj != nil {
+					if n, ok := st.sliceLens[srcObj]; ok {
+						st.sliceLens[obj] = n
+					}
+				}
+			}
+		}
 	}
 	t := obj.Type().Underlying()
 	if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
@@ -1222,6 +1259,12 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					break
 				}
 				pv := pf.evalExpr(st, rhs)
+				// A helper used in value position can still be an
+				// element sink (_ = put(out, i, b)); record it like an
+				// expression-statement call inside a page-sourcing loop.
+				if st.pageSourceLoops > 0 {
+					pf.recordPageSinkCall(st, rhs)
+				}
 				// Inside a page-sourcing loop, an element write into an
 				// owned array of PageSize aggregates to a complete page
 				// copy. Mark the array as page-aggregated so the
@@ -1263,6 +1306,40 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 									st.sliceLens[obj] = n
 								} else {
 									delete(st.sliceLens, obj)
+								}
+							}
+						}
+					}
+				}
+				// Chained length aliases: n := len(page); m := n keeps
+				// the page-derived bound transitively. Slice aliases
+				// (dst := out) share the recorded make length.
+				if srcID, ok := unparen(v.Rhs[i]).(*ast.Ident); ok {
+					srcObj := objOf(st, srcID)
+					obj := objOf(st, v.Lhs[i])
+					if srcObj != nil && obj != nil {
+						if st.lenOfPage[srcObj] {
+							st.lenOfPage[obj] = true
+						}
+						if _, ok := obj.Type().Underlying().(*types.Slice); ok {
+							if _, ok := srcObj.Type().Underlying().(*types.Slice); ok {
+								if n, ok := st.sliceLens[srcObj]; ok {
+									st.sliceLens[obj] = n
+								} else {
+									delete(st.sliceLens, obj)
+								}
+							}
+						}
+					}
+				}
+				if se, ok := unparen(v.Rhs[i]).(*ast.SliceExpr); ok {
+					if srcID, ok := unparen(se.X).(*ast.Ident); ok {
+						if srcObj := objOf(st, srcID); srcObj != nil {
+							if obj := objOf(st, v.Lhs[i]); obj != nil {
+								if _, ok := obj.Type().Underlying().(*types.Slice); ok {
+									if n, ok := st.sliceLens[srcObj]; ok {
+										st.sliceLens[obj] = n
+									}
 								}
 							}
 						}
@@ -1671,6 +1748,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			// page-sourcing context: element-wise writes into an owned
 			// buffer of PageSize aggregate to a complete page copy.
 			pageSourcing := false
+			destRange := false
 			pv := pf.evalExpr(st, v.X)
 			if pv.tainted && pageFull(pv) {
 				st.pageSourceLoops++
@@ -1685,6 +1763,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				if pf.rangeDestination(st, v.X).tainted {
 					st.destRangeLoops++
 					pageSourcing = true
+					destRange = true
 				}
 			}
 			// Range variables are bound from the container's element
@@ -1821,12 +1900,13 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			}
 			pre := st.clone()
 			pf.analyzeStmts(st, v.Body.List, fs)
-			if pageSourcing {
-				if st.destRangeLoops > 0 && st.pageSourceLoops == 0 {
-					st.destRangeLoops--
-				} else if st.pageSourceLoops > 0 {
-					st.pageSourceLoops--
-				}
+			// Decrement the counter this statement incremented. Nested
+			// mixed contexts (a destination range inside a page-sourcing
+			// loop) must not close the outer loop's context.
+			if destRange {
+				st.destRangeLoops--
+			} else if pageSourcing {
+				st.pageSourceLoops--
 			}
 			st.joinWith(pre) // zero iterations stay possible
 		case *ast.ExprStmt:
@@ -3621,12 +3701,87 @@ func selectorChain(st *stmtState, e ast.Expr) (types.Object, string) {
 }
 
 // notePageSinks records parameter indexes whose elements are written
-// inside the callee (dst[i] = b). A call site inside a page-sourcing
-// loop that passes an owned buffer to such a parameter aggregates the
-// helper's per-element writes into a complete page copy.
+// inside the callee (dst[i] = b, d[i] = b with d := dst, dst.Out[i] = b,
+// or (*dst)[i] = b). A call site inside a page-sourcing loop that passes
+// an owned buffer to such a parameter aggregates the helper's per-element
+// writes into a complete page copy.
 func (pf *pageFlow) notePageSinks(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
 	if body == nil {
 		return
+	}
+	// sinkAliases maps local variables assigned from a sink parameter;
+	// writes through those aliases name the same backing buffer.
+	sinkAliases := map[types.Object]int{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			dstObj := objOf(st, lhs)
+			if dstObj == nil {
+				continue
+			}
+			srcID, ok := unparen(assign.Rhs[i]).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			srcObj := objOf(st, srcID)
+			if srcObj == nil {
+				continue
+			}
+			if idx, ok := st.params[srcObj]; ok {
+				sinkAliases[dstObj] = idx
+			} else if idx, ok := sinkAliases[srcObj]; ok {
+				sinkAliases[dstObj] = idx
+			}
+		}
+		return true
+	})
+	record := func(idx int) {
+		if fs.pageSinkParams == nil {
+			fs.pageSinkParams = map[int]bool{}
+		}
+		fs.pageSinkParams[idx] = true
+	}
+	recordBase := func(base ast.Expr) {
+		// Strip slice expressions: dst[:][i] still names dst.
+		for {
+			if se, ok := unparen(base).(*ast.SliceExpr); ok {
+				base = se.X
+				continue
+			}
+			break
+		}
+		// Direct parameter or an alias of one.
+		if id, ok := unparen(base).(*ast.Ident); ok {
+			obj := pf.pc.info.ObjectOf(id)
+			if obj == nil {
+				return
+			}
+			if idx, ok := st.params[obj]; ok {
+				record(idx)
+			} else if idx, ok := sinkAliases[obj]; ok {
+				record(idx)
+			}
+			return
+		}
+		// Field/pointer destinations rooted at a parameter or alias.
+		root, _ := selectorChain(st, unparen(base))
+		if root == nil {
+			root = chainRootObject(st, unparen(base))
+		}
+		if root == nil {
+			return
+		}
+		if idx, ok := st.params[root]; ok {
+			record(idx)
+		} else if idx, ok := sinkAliases[root]; ok {
+			record(idx)
+		}
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
@@ -3638,22 +3793,7 @@ func (pf *pageFlow) notePageSinks(st *stmtState, fs *funcSummary, body *ast.Bloc
 			if !ok {
 				continue
 			}
-			id, ok := unparen(ix.X).(*ast.Ident)
-			if !ok {
-				continue
-			}
-			obj := pf.pc.info.ObjectOf(id)
-			if obj == nil {
-				continue
-			}
-			idx, ok := st.params[obj]
-			if !ok {
-				continue
-			}
-			if fs.pageSinkParams == nil {
-				fs.pageSinkParams = map[int]bool{}
-			}
-			fs.pageSinkParams[idx] = true
+			recordBase(ix.X)
 		}
 		return true
 	})
@@ -3727,14 +3867,24 @@ func (pf *pageFlow) recordPageSinkCall(st *stmtState, x ast.Expr) {
 	pf.pageSinkCalls[call] = dests
 	// Mark the caller's destination as a page-aggregated buffer: the
 	// helper writes PageSize elements into it across this loop.
+	pv := pageValue{tainted: true, maxLen: maxUnknown}
 	for _, dst := range dests {
-		pf.values[dst] = pageValue{tainted: true, maxLen: maxUnknown}
+		pf.values[dst] = pv
 		if id, ok := unparen(dst).(*ast.Ident); ok {
 			if obj := pf.pc.info.ObjectOf(id); obj != nil {
 				if _, ok := obj.Type().Underlying().(*types.Slice); ok {
-					st.stmtVars[obj] = pageValue{tainted: true, maxLen: maxUnknown}
+					st.stmtVars[obj] = pv
 				}
 			}
+			continue
+		}
+		// A receiver/argument whose field is written records the field
+		// path (h.put: h.Buf) on the root object.
+		if obj, path := selectorChain(st, dst); obj != nil {
+			if st.structs[obj] == nil {
+				st.structs[obj] = map[string]pageValue{}
+			}
+			st.structs[obj][path] = pv
 		}
 	}
 }
