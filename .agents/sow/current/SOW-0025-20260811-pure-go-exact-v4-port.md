@@ -206,8 +206,8 @@ FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 524-case battery, and the SOW audit.
-Module production 5,150 raw lines (reader core 1,904 incl. search.go and
-the work stubs; the 5k directional goal is met), module tests 5,364 raw
+Module production 5,222 raw lines (reader core 1,916 incl. search.go and
+the work stubs; the 5k directional goal is met), module tests 5,373 raw
 lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
@@ -1734,8 +1734,9 @@ HEAD recorded in the first review entry below):
   targets; the Windows stub gains Remap and PhysicalSize stubs. The
   reader bootstrap now uses PhysicalSize (the locked file extent) for
   meta validation instead of the mapped size. A new regression test
-  proves a 1 GiB corrupt-tail file fails bootstrap without mapping the
-  full extent. The P2 was analyzed: the 5 OS configs (linux, darwin,
+  verifies that a 1 GiB corrupt-tail file fails bootstrap with
+  FormatInvalid; the O(1) property is structural (2-page mmap →
+  bootstrap → Remap only on success). The P2 was analyzed: the 5 OS configs (linux, darwin,
   freebsd, netbsd-as-other-POSIX, windows) cover every distinct
   mapping-owner code path; the remaining 6 targets (linux/386, arm,
   arm64, loong64, darwin/arm64, windows/arm64) compile the same source
