@@ -206,8 +206,8 @@ FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 524-case battery, and the SOW audit.
-Module production 5,051 raw lines (reader core 1,896 incl. search.go and
-the work stubs; the 5k directional goal is met), module tests 5,293 raw
+Module production 5,150 raw lines (reader core 1,904 incl. search.go and
+the work stubs; the 5k directional goal is met), module tests 5,364 raw
 lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
@@ -1717,6 +1717,34 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 26 (full re-review after restart, 3ca6218): the swarm
+  re-reviewed at 3ca6218 after the transport restart. MiMo PASS, kimi
+  PASS, minimax PASS, qwen confirmed no additional findings. Luna
+  returned FAIL with two findings: (1) P1 — Go OpenImmutable maps the
+  entire physical file before bootstrap, violating the O(1) bootstrap
+  and committed-extent-only mapping rules (spec section 3); Rust
+  map_reader maps 2 pages, bootstraps, then remaps to committed_bytes.
+  (2) P2 — the content-transfer gate scans 5 OS configs while the
+  records claim 11-target cross-compilation coverage. The P1 was
+  verified against Rust database_file.rs:106-114 and mapping.rs:262-266.
+  The fix: OpenImmutable now maps exactly 2 pages for bootstrap, the
+  reader bootstraps from those pages, then calls the new
+  Mapping.Remap(committedBytes) which grows the mapping in place via
+  mremap(MREMAP_MAYMOVE) on Linux and munmap+mmap on other POSIX
+  targets; the Windows stub gains Remap and PhysicalSize stubs. The
+  reader bootstrap now uses PhysicalSize (the locked file extent) for
+  meta validation instead of the mapped size. A new regression test
+  proves a 1 GiB corrupt-tail file fails bootstrap without mapping the
+  full extent. The P2 was analyzed: the 5 OS configs (linux, darwin,
+  freebsd, netbsd-as-other-POSIX, windows) cover every distinct
+  mapping-owner code path; the remaining 6 targets (linux/386, arm,
+  arm64, loong64, darwin/arm64, windows/arm64) compile the same source
+  files as the scanned configs, so the typed scanner sees identical
+  ASTs. The shell harness runs import-boundary checks on all 11
+  targets. The records were updated to state this explicitly.
+  Cross-builds pass on all 11 targets. Battery 524/524, import-graph
+  self-test, prod scan, go test both tag sets, race, vet, gofmt, SOW
+  audit all pass.
 - Round 25 (delta re-review, 0018a41): the round-24 closing commit
   review FAILed with ten findings across two residents: luna reported
   six gate escapes and one records nit; glm reported two reader P2s and
