@@ -107,6 +107,21 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if err := verifyPathIdentity(); err != nil {
 		return nil, err
 	}
+	if err := lockLifetimeShared(int(f.Fd())); err != nil {
+		return nil, err
+	}
+	if err := verifyPathIdentity(); err != nil {
+		return nil, err
+	}
+	if check != nil {
+		if err := check(clean); err != nil {
+			return nil, err
+		}
+	}
+	// Stat the locked file for geometry validation, mirroring Rust
+	// map_reader (database_file.rs:107-112): the size is sampled under
+	// the shared lifetime lock, so a writer cannot change the extent
+	// between stat and mmap.
 	st, err := f.Stat()
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
@@ -120,18 +135,6 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	}
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
-	}
-
-	if err := lockLifetimeShared(int(f.Fd())); err != nil {
-		return nil, err
-	}
-	if err := verifyPathIdentity(); err != nil {
-		return nil, err
-	}
-	if check != nil {
-		if err := check(clean); err != nil {
-			return nil, err
-		}
 	}
 	// Bootstrap maps exactly the two meta pages (O(1) bootstrap, spec
 	// section 3). The committed extent is mapped by Remap after bootstrap
