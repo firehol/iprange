@@ -159,7 +159,7 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(11,214 lines) plus a trimmed shell harness (552 lines) whose 527-case
+(11,197 lines) plus a trimmed shell harness (552 lines) whose 527-case
 durable battery (456 rejections, 71 benign acceptances) includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
@@ -1284,7 +1284,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 11,214 (tool) + 552 (shell) = 11,766
+  unlistable module). Gate totals: 11,197 (tool) + 552 (shell) = 11,749
   lines against module production 5,182 / tests 6,410.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,

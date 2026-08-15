@@ -712,10 +712,7 @@ type stmtState struct {
 	// writes into an owned buffer of PageSize aggregate to a complete
 	// page copy (binary-format-v4.md:108).
 	pageSourceLoops int
-	// pageAggregated marks owned buffers that have received element-wise
-	// writes from a page-sourcing loop. Once marked, the buffer is
-	// treated as page-tainted for the complete-page rule.
-	pageAggregated map[types.Object]bool
+
 	// lenOfPage records variables bound to len(page) where page is a
 	// page-tainted slice, so a for-loop condition using the alias
 	// (for i := 0; i < n; i++) is recognized as a page-sourcing loop.
@@ -739,18 +736,17 @@ type stmtState struct {
 
 func newStmtState(pf *pageFlow, fd *ast.FuncDecl, pkgVars map[string]pageValue, pkgStructs map[types.Object]map[string]pageValue) *stmtState {
 	st := &stmtState{
-		pf:             pf,
-		fd:             fd,
-		pageAggregated: map[types.Object]bool{},
-		lenOfPage:      map[types.Object]bool{},
-		params:         map[types.Object]int{},
-		stmtVars:       map[types.Object]pageValue{},
-		structs:        map[types.Object]map[string]pageValue{},
-		pkgVars:        pkgVars,
-		pkgStructs:     pkgStructs,
-		localFuncs:     map[types.Object]*ast.FuncLit{},
-		localBindings:  map[types.Object]ast.Expr{},
-		ambigBind:      map[types.Object]bool{},
+		pf:            pf,
+		fd:            fd,
+		lenOfPage:     map[types.Object]bool{},
+		params:        map[types.Object]int{},
+		stmtVars:      map[types.Object]pageValue{},
+		structs:       map[types.Object]map[string]pageValue{},
+		pkgVars:       pkgVars,
+		pkgStructs:    pkgStructs,
+		localFuncs:    map[types.Object]*ast.FuncLit{},
+		localBindings: map[types.Object]ast.Expr{},
+		ambigBind:     map[types.Object]bool{},
 	}
 	if pf != nil && pf.pc != nil {
 		for k, v := range pf.pc.pkgBindings {
@@ -1029,9 +1025,6 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 				pf.materializeStructFields(st, v.Lhs[i], v.Rhs[i])
 				assignTarget(st, v.Lhs[i], pv)
-				if obj := objOf(st, v.Lhs[i]); obj != nil && obj.Name() == "page" {
-					println("DEBUG assign page: tainted=", pv.tainted, "maxLen=", int(pv.maxLen))
-				}
 				// Inside a page-sourcing loop, an element write into an
 				// owned buffer aggregates to a complete page copy. Mark
 				// the buffer as page-aggregated AFTER the normal
@@ -1053,11 +1046,9 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					if obj := objOf(st, lhs); obj != nil {
 						t := obj.Type().Underlying()
 						if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
-							st.pageAggregated[obj] = true
 							st.stmtVars[obj] = pageValue{tainted: true, maxLen: arr.Len()}
 						}
 						if _, ok := t.(*types.Slice); ok {
-							st.pageAggregated[obj] = true
 							st.stmtVars[obj] = pageValue{tainted: true, maxLen: maxUnknown}
 							// Store the taint on the LHS expression too, so
 							// the rules pass sees the aggregated buffer as
@@ -1485,7 +1476,6 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					}
 				}
 			}
-			_ = pageSourcing
 			// Range variables are bound from the container's element
 			// taint: a page collection ranged over (for _, p := range
 			// [][]byte{page}) must taint the loop value, or appends of
@@ -2470,10 +2460,6 @@ func (st *stmtState) clone() *stmtState {
 	for k := range st.ambigBind {
 		cp.ambigBind[k] = true
 	}
-	cp.pageAggregated = map[types.Object]bool{}
-	for k := range st.pageAggregated {
-		cp.pageAggregated[k] = true
-	}
 	cp.lenOfPage = map[types.Object]bool{}
 	for k := range st.lenOfPage {
 		cp.lenOfPage[k] = true
@@ -2489,9 +2475,6 @@ func (st *stmtState) joinWith(other *stmtState) {
 	// invalidate this path's binding too, or the join would re-establish
 	// a provable callee from the branch that stayed clean while the
 	// page-returning branch is still possible.
-	for k := range other.pageAggregated {
-		st.pageAggregated[k] = true
-	}
 	for k := range other.lenOfPage {
 		st.lenOfPage[k] = true
 	}

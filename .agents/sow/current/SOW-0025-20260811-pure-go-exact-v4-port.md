@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,766-line typed toolchain (11,214-line go/types module
+mmap gate is an 11,749-line typed toolchain (11,197-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -209,7 +209,7 @@ the import-graph gate with its 527-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
 module tests 6,410 raw
-lines; gate tooling 11,685 raw lines total (11,133 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 11,749 raw lines total (11,197 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
