@@ -1522,8 +1522,8 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	// complete page from sub-page spans; count them before the full-page
 	// fast path. Only destinations that can reach PageSize participate.
 	if src.maxLen > 0 && src.maxLen < pageSize {
-		if w.boundedPageCopySpan(dst, src.maxLen) {
-			w.fail(v.Pos(), "bounded mapped-page spans assembled into an owned PageSize-capable buffer (complete page)")
+		if obj, path := w.boundedCopyKey(dst); obj != nil {
+			w.accumulateBoundedSpan(obj, path, src.maxLen, v.Pos(), "bounded mapped-page spans assembled into an owned PageSize-capable buffer (complete page)")
 		}
 		return
 	}
@@ -1536,38 +1536,24 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	w.fail(v.Pos(), "copy of a mapped page view into an owned buffer (complete page)")
 }
 
-// boundedPageCopySpan accumulates bounded mapped-page spans copied into
-// one destination root and reports whether they can now assemble a
-// complete page.
-func (w *fileRules) boundedPageCopySpan(dst ast.Expr, span int64) bool {
-	if w.pc.pf == nil {
-		return false
-	}
-	root := w.boundedCopyTarget(dst)
-	obj := w.copyRootObject(root)
-	prev := int64(w.pc.pf.boundedPageCopies[obj])
-	total := prev + span
-	w.pc.pf.boundedPageCopies[obj] = int(total)
-	return total >= pageSize
-}
-
-// copyRootObject converts a destination-root expression into a stable
-// accumulation key. Identifier occurrences have distinct AST nodes but one
-// object; other expressions fall back to their own node.
-func (w *fileRules) copyRootObject(e ast.Expr) any {
-	switch d := e.(type) {
-	case *ast.Ident:
-		if obj := w.pc.info.Uses[d]; obj != nil {
-			return obj
-		}
-	case *ast.SelectorExpr, *ast.StarExpr:
-		if root := boundedChainRoot(d); root != nil {
-			if obj := w.pc.info.Uses[root]; obj != nil {
-				return obj
-			}
+// boundedChainRoot resolves the root identifier of a selector or pointer
+// destination chain (h.Buf, (*p), h.Inner.Buf).
+func boundedChainRoot(e ast.Expr) *ast.Ident {
+	for {
+		switch d := unparen(e).(type) {
+		case *ast.SelectorExpr:
+			e = d.X
+		case *ast.StarExpr:
+			e = d.X
+		case *ast.ParenExpr:
+			e = d.X
+		case *ast.SliceExpr, *ast.IndexExpr:
+			e = chainInner(d)
+		default:
+			id, _ := d.(*ast.Ident)
+			return id
 		}
 	}
-	return e
 }
 
 // chainInner returns the base expression of a destination chain step.
@@ -1587,27 +1573,80 @@ func chainInner(e ast.Expr) ast.Expr {
 	return e
 }
 
-// boundedChainRoot resolves the root identifier of a selector or pointer
-// destination chain (h.Buf, (*p), h.Inner.Buf).
-func boundedChainRoot(e ast.Expr) *ast.Ident {
+// boundedCopyKey resolves a bounded copy destination to its canonical
+// accumulation key: root object plus flattened field path.
+func (w *fileRules) boundedCopyKey(dst ast.Expr) (types.Object, string) {
+	root := w.boundedCopyTarget(dst)
+	if id, ok := root.(*ast.Ident); ok {
+		obj := w.pc.info.Uses[id]
+		if obj == nil {
+			obj = w.pc.info.Defs[id]
+		}
+		if obj == nil {
+			return nil, ""
+		}
+		return obj, w.destinationFieldPath(dst)
+	}
+	return nil, ""
+}
+
+// boundedAppendKey resolves an append destination to the same canonical
+// key used by bounded copies.
+func (w *fileRules) boundedAppendKey(e ast.Expr) (types.Object, string) {
+	root := boundedChainRoot(unparen(e))
+	if root == nil {
+		return nil, ""
+	}
+	obj := w.pc.info.Uses[root]
+	if obj == nil {
+		obj = w.pc.info.Defs[root]
+	}
+	if obj == nil {
+		return nil, ""
+	}
+	return obj, w.destinationFieldPath(e)
+}
+
+// accumulateBoundedSpan adds a bounded mapped-page span to one canonical
+// destination and fails when that destination can now hold PageSize.
+func (w *fileRules) accumulateBoundedSpan(obj types.Object, path string, span int64, pos token.Pos, msg string) {
+	if w.pc.pf == nil {
+		return
+	}
+	key := boundedSpanKey{obj: obj, path: path}
+	prev := int64(w.pc.pf.boundedPageSpans[key])
+	total := prev + span
+	w.pc.pf.boundedPageSpans[key] = int(total)
+	if total >= pageSize {
+		w.fail(pos, "%s", msg)
+	}
+}
+
+// destinationFieldPath returns the flattened selector field path of a
+// destination expression, or the empty path for a direct variable.
+func (w *fileRules) destinationFieldPath(e ast.Expr) string {
+	e = unparen(e)
+	parts := []string{}
 	for {
-		switch d := unparen(e).(type) {
-		case *ast.SelectorExpr:
-			e = d.X
+		switch d := e.(type) {
+		case *ast.SliceExpr, *ast.IndexExpr:
+			e = chainInner(d)
 		case *ast.StarExpr:
 			e = d.X
 		case *ast.ParenExpr:
 			e = d.X
+		case *ast.SelectorExpr:
+			parts = append([]string{d.Sel.Name}, parts...)
+			e = d.X
 		default:
-			id, _ := d.(*ast.Ident)
-			return id
+			return strings.Join(parts, ".")
 		}
 	}
 }
 
 // boundedCopyTarget resolves the expression that owns a bounded copy
-// destination: the identifier itself, or the root identifier of
-// index/slice chains (out[2048:4096] names out).
+// destination: the identifier itself, or the root identifier of index,
+// slice, selector, pointer, and paren chains.
 func (w *fileRules) boundedCopyTarget(dst ast.Expr) ast.Expr {
 	dst = unparen(dst)
 	switch d := dst.(type) {
@@ -1624,31 +1663,41 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	if len(v.Args) < 2 {
 		return
 	}
-	src := w.pageValue(v.Args[len(v.Args)-1])
-	if src.tainted && pageFull(src) {
-		w.fail(v.Pos(), "append of a mapped page view into an owned buffer (complete page)")
+	span := int64(0)
+	for _, a := range v.Args[1:] {
+		src := w.pageValue(a)
+		if !src.tainted {
+			continue
+		}
+		if pageFull(src) {
+			w.fail(v.Pos(), "append of a mapped page view into an owned buffer (complete page)")
+			return
+		}
+		if src.maxLen > 0 && src.maxLen < pageSize {
+			if src.hasSym {
+				if c, ok := src.sym.isConst(); ok && c > 0 && c < pageSize {
+					src.maxLen = c
+				}
+			}
+			span += src.maxLen
+		}
 	}
 	// Repeated sub-page appends into one destination variable assemble a
 	// complete owned page from bounded spans.
-	if src.tainted && src.maxLen > 0 && src.maxLen < pageSize {
-		if obj := w.boundedAppendTarget(v.Args[0]); obj != nil {
-			root := types.Object(obj)
-			for d := 0; d < 8; d++ {
-				next, ok := w.pc.pf.appendAliases[root]
-				if !ok || next == root {
-					break
+	if span > 0 {
+		if obj, path := w.boundedAppendKey(v.Args[0]); obj != nil {
+			if w.pc.pf != nil {
+				root := obj
+				for d := 0; d < 8; d++ {
+					next, ok := w.pc.pf.appendAliases[root]
+					if !ok || next == root {
+						break
+					}
+					root = next
 				}
-				root = next
+				obj = root
 			}
-			obj, _ = root.(*types.Var)
-			if obj == nil {
-				return
-			}
-			total := w.pc.pf.boundedPageAppends[obj] + int(src.maxLen)
-			w.pc.pf.boundedPageAppends[obj] = total
-			if total >= pageSize {
-				w.fail(v.Pos(), "bounded mapped-page spans appended repeatedly into one owned buffer (complete page)")
-			}
+			w.accumulateBoundedSpan(obj, path, span, v.Pos(), "bounded mapped-page spans appended repeatedly into one owned buffer (complete page)")
 		}
 	}
 	// An append whose destination is a complete mapped page view (a
@@ -1678,21 +1727,6 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 			w.fail(v.Pos(), "file-bearing value appended into a non-file-bearing collection (launder)")
 		}
 	}
-}
-
-// boundedAppendTarget resolves the object whose append accumulation must
-// be counted: the destination expression, or the identifier bound when the
-// append result is assigned back (out = append(out, span...)).
-func (w *fileRules) boundedAppendTarget(e ast.Expr) *types.Var {
-	root := boundedChainRoot(unparen(e))
-	if root == nil {
-		return nil
-	}
-	obj, ok := w.pc.info.Uses[root].(*types.Var)
-	if !ok {
-		return nil
-	}
-	return obj
 }
 
 // ownedCap returns the definite byte capacity of an owned destination

@@ -381,22 +381,23 @@ type pageFlow struct {
 	// destination-ranging loop; the rule pass fails them when the RHS
 	// derives from a page. pageSourceLoops writes always fail.
 	destAggregated map[ast.Expr]bool
-	// boundedPageCopies counts statically bounded copy() calls into each
-	// destination expression. More than one sub-page copy into a
-	// PageSize-capable destination can assemble a complete page.
-	boundedPageCopies map[any]int
-	// boundedPageAppends counts sub-page append() calls whose result is
-	// bound to the same destination variable; repeated appends assemble a
-	// complete page even though each source span is bounded.
-	boundedPageAppends map[types.Object]int
+	// boundedPageSpans accumulates bounded mapped-page spans copied or
+	// appended into one canonical destination (root object + field path).
+	boundedPageSpans map[boundedSpanKey]int
 	// appendAliases maps a rebound slice name to the canonical variable
-	// whose bounded page-append accumulation it shares.
+	// whose bounded page-span accumulation it shares.
 	appendAliases map[types.Object]types.Object
 	accum         bool // final sweep: keep expression caches for the rule pass
 }
 
 // methodValueCall is one resolved method-value call: the method and the
 // receiver expression bound at the binding site.
+// boundedSpanKey canonicalizes one bounded page-span destination.
+type boundedSpanKey struct {
+	obj  types.Object
+	path string
+}
+
 type methodValueCall struct {
 	fn   *types.Func
 	recv ast.Expr
@@ -418,8 +419,7 @@ func (pf *pageFlow) clearExprCaches() {
 	pf.callMethodValues = map[*ast.CallExpr]methodValueCall{}
 	pf.pageSinkCalls = map[*ast.CallExpr][]ast.Expr{}
 	pf.destAggregated = map[ast.Expr]bool{}
-	pf.boundedPageCopies = map[any]int{}
-	pf.boundedPageAppends = map[types.Object]int{}
+	pf.boundedPageSpans = map[boundedSpanKey]int{}
 	pf.appendAliases = map[types.Object]types.Object{}
 }
 
@@ -1629,6 +1629,24 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 								pf.bindLocalFunc(st, name, lit)
 								pf.recordBinding(st, name, vs.Values[i])
 								pf.materializeStructFields(st, name, vs.Values[i])
+								// A var-declared slice alias shares the
+								// canonical bounded page-span accumulation.
+								if srcID, ok := unparen(vs.Values[i]).(*ast.Ident); ok {
+									srcObj := objOf(st, srcID)
+									dstObj, ok1 := obj.(*types.Var)
+									srcVar, ok2 := srcObj.(*types.Var)
+									if ok1 && ok2 {
+										root := types.Object(srcVar)
+										for d := 0; d < 8; d++ {
+											next, ok := pf.appendAliases[root]
+											if !ok || next == root {
+												break
+											}
+											root = next
+										}
+										pf.appendAliases[dstObj] = root
+									}
+								}
 								if pv.tainted {
 									st.stmtVars[obj] = pv
 								} else {

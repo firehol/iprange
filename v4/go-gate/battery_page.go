@@ -993,4 +993,16 @@ var batteryPageCases = []batteryCase{
 	{name: "P266 benign: two one-byte page appends stay bounded", desc: "out = append(out, page[0:1]...); out = append(out, page[1:2]...): append accumulation sums source spans, so two provably bounded bytes cannot reach PageSize", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l28_12.go", content: "package reader\n\nfunc tinyAppendProbeL28(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4)\n\tout = append(out, page[0:1]...)\n\tout = append(out, page[1:2]...)\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P267: bounded page spans appended through a var-declared alias", desc: "var b = a between two bounded page appends: ValueSpec aliases resolve to the canonical bounded-span destination", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_1.go", content: "package reader\n\nfunc varAliasAppendProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\ta := out\n\ta = append(a, page[:2048]...)\n\tvar b = a\n\tb = append(b, page[2048:4096]...)\n\treturn b, nil\n}"},
+	}},
+
+	{name: "P268 benign: bounded page copies into distinct fields stay separate", desc: "copy(h.A, page[:2048]); copy(h.B, page[2048:4096]) with A and B separate 2048-byte fields: field-path keys prevent joining independent destinations", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_2.go", content: "package reader\n\ntype twoBufsL29 struct{ A, B []byte }\n\nfunc twoFieldCopyProbeL29(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\th := twoBufsL29{A: make([]byte, 2048), B: make([]byte, 2048)}\n\tcopy(h.A, page[:2048])\n\tcopy(h.B, page[2048:4096])\n\treturn nil\n}"},
+	}},
+
+	{name: "P269: bounded page spans assembled by copy and append into one destination", desc: "copy(out[:2048], page[:2048]); out = append(out[:2048], page[2048:4096]...): copy and append share one canonical bounded-span accumulator", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_3.go", content: "package reader\n\nfunc copyThenAppendProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tcopy(out[:2048], page[:2048])\n\tout = append(out[:2048], page[2048:4096]...)\n\treturn out, nil\n}"},
+	}},
 }
