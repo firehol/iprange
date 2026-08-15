@@ -30,7 +30,7 @@ still unratified; the gate still accepted indirect content-transfer
 forms, its line-level exemption, and a windows-tagged internal-package
 import; the records contradicted the source) plus two P3 comments, all
 fixed at HEAD dbdf2b7 (exact call-node blanking, extended selectors,
-gzip/compress-zlib import bans, per-target boundary checks over ten
+gzip/compress-zlib import bans, per-target boundary checks over eleven
 GOOS/GOARCH pairs, an eighteen-form durable self-test, and the records
 in this file). The six-reviewer re-review of that fix found the decoder/
 encoder family and two write/reflection gaps still open; the gate now
@@ -159,8 +159,8 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(10,801 lines) plus a trimmed shell harness (552 lines) whose 514-case
-durable battery (443 rejections, 71 benign acceptances) includes the complete-page ownership forms and the
+(11,016 lines) plus a trimmed shell harness (552 lines) whose 524-case
+durable battery (453 rejections, 71 benign acceptances) includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
 records with the history preserved in the SOW appendix. Independent
@@ -211,14 +211,14 @@ review outcome: section 14.
 ## 2. Commands and factual results
 
 ```
-go test ./...                                  ok (4 packages: root, format, reader, mapping)
+go test ./...                                  ok (5 packages: root, format, reader, mapping, work)
 go test -race ./internal/format ./internal/reader ./internal/mapping .   ok
 go vet ./...                                  clean
 gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
-amd64/arm64, freebsd amd64, windows amd64/arm64): all 10 ok
-check-import-graph.sh --self-test (with per-target boundary checks across ten
-GOOS/GOARCH pairs): 514/514 mutation forms rejected (443 rejections, 71
+amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64): all 11 ok
+check-import-graph.sh --self-test (with per-target boundary checks across eleven
+GOOS/GOARCH pairs): 524/524 mutation forms rejected (453 rejections, 71
 benign acceptances)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
   mmap(MAP_SHARED, db fd) -> munmap -> F_OFD_SETLK unlock -> close, with
@@ -254,7 +254,7 @@ tree): 5,180 raw lines. The earlier
   Splice); tolerated c.r.Read calls are blanked as exact call nodes so a
   forbidden transfer on the same line stays visible; dot imports and the
   bufio / io-ioutil / gzip / compress/zlib wrapper imports are banned
-  outright; the internal-package boundary check runs per target over ten
+  outright; the internal-package boundary check runs per target over eleven
   GOOS/GOARCH pairs so a build-tagged package cannot import internal
   packages unseen; the Windows mapping stub no longer carries or exposes
   a raw `*os.File` (Mapping.File removed on every platform); `--self-test`
@@ -1274,7 +1274,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
   decoded metadata-chunk append stay legal. The durable battery is table
-  data inside the tool: 514 cases (443 rejections, 71 benign acceptances)
+  data inside the tool: 524 cases (453 rejections, 71 benign acceptances)
   covering source-transfer, complete-page, and file-capability forms. The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
   module graph, x/sys checksum pins) plus 9 environment mutations

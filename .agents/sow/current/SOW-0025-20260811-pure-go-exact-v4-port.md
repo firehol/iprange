@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,353-line typed toolchain (10,801-line go/types module
+mmap gate is an 11,568-line typed toolchain (11,016-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -37,7 +37,7 @@ assignment slots and struct-result field taint, named array/string
 conversion sinks, file-capability laundering, interface-typed
 parameter assertions, multi-dim index chains, and selector chains
 over indexed bases) plus the round-5,
-round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, round-18, round-19, round-20, round-21, round-22, round-23, and round-24
+round-6, round-7, round-8, round-9, round-10, round-11, round-12, round-13, round-14, round-15, round-16, round-17, round-18, round-19, round-20, round-21, round-22, round-23, round-24, and round-25
 classes recorded in the entries below, all with durable battery pins; the Status is compact with the
 full history in the appendix. The round at HEAD f478278 returned six
 further gate findings (Luna): one-sided branch joins trusted an
@@ -163,8 +163,15 @@ named-pointer recursion (type P *P) through derefStruct/mapUnderlying
 hung the scanner on an unproven callee returning the self-pointer type
 (probe-verified 90s timeout, pinned P225); both fixed in the round-23
 entry below. The
-durable battery is 514 cases (443 rejections, 71 benign acceptances)
-plus 9 shell environment mutations and passes end to end.
+round-25 delta review fixed nine further gate escape classes (type-asserted
+indexed channels, stores, map keys, mutation arguments and returns,
+interface-typed type-switch cases, and the same-family sweep of asserted
+field-map key ranges and returned/bound asserted selectors under
+interface-typed switch cases) and one reader divergence (membership
+ContainsIndex skipped the trailing-word canonical check); details in the
+round-25 entry below. The durable battery is 524 cases (453 rejections,
+71 benign acceptances) plus 9 shell environment mutations and passes end
+to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
 
@@ -184,7 +191,7 @@ Rework outcome per finding:
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
   The durable mutation battery moved into the tool as table data
-  (514 cases: 443 rejections, 71 benign); the shell harness keeps only the import-boundary, module-graph,
+  (524 cases: 453 rejections, 71 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -198,10 +205,10 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 514-case battery, and the SOW audit.
+the import-graph gate with its 524-case battery, and the SOW audit.
 Module production 5,049 raw lines (reader core 1,894 incl. search.go and
 the work stubs; the 5k directional goal is met), module tests 5,180 raw
-lines; gate tooling 11,353 raw lines total (10,801 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -1710,6 +1717,113 @@ HEAD recorded in the first review entry below):
   ./... (both tag sets), -race, vet (go and go-gate), gofmt zero
   diffs, cross-builds for every shell-harness target, the import-graph
   gate with the 443-case battery, and the SOW audit all pass.
+- Round 25 (delta re-review, 0018a41): the round-24 closing commit
+  review FAILed with ten findings across two residents: luna reported
+  six gate escapes and one records nit; glm reported two reader P2s and
+  two records nits. The lead probe-verified every finding on the true
+  round-24 build: all six luna shapes escape (rc 0) and the seven pin
+  shapes reject (rc 1) after the fixes; a same-family sweep then found
+  three further escape shapes (asserted field-map key ranges and
+  returned/bound asserted selectors under interface-typed switch
+  cases), pinned as P240-P242; glm-1 is a false positive with
+  full evidence below; glm-2 is a real reader divergence. Real classes:
+  P233 type-asserted INDEXED CHANNEL send and receive
+  (v.(*H).Chs[0] <- lbox{Data: page}; y := <-v.(*H).Chs[0]; y.Data
+  with v an any holding *H): recordChanSendFields and chanRecvFields
+  resolved the index-chain root only through objOfDeref, so a
+  TypeAssertExpr root bound nothing and the received element laundered
+  the page; the new chainRootObject resolves the asserted base
+  variable, and both sites now record and resolve under the "Chs."
+  prefix;
+  P234 type-asserted INDEXED STRUCT stores (v.(*H).Items[0] =
+  lbox{Data: page} then v.(*H).Items[0].Data): the store recorded
+  element fields only on plain and dereferenced roots; the store's
+  selectorIndexChain root now resolves through chainRootObject, the
+  same object the typeAssertBaseOf read path resolves;
+  P235 type-asserted FIELD MAP key stores (v.(*H).M[&b] = 1 after
+  b.Data = page, with for k := range v.(*H).M reading k.Data): the
+  map-key store bound only selectorChain or dereference roots; the
+  branch now also handles a typeAssertBaseOf root and records the key
+  fields under the field prefix on the asserted base variable, the
+  same path the asserted key-only range resolves;
+  P236 address-of TYPE-ASSERTED INDEXED element mutations
+  (set(&v.(*H).Items[0], page) with set(b *lbox, p []byte) { b.Data =
+  p }): applySummaryMutations' IndexExpr branch resolved the
+  selectorIndexChain root through objOfDeref only; it now binds the
+  asserted base under the "Items." prefix;
+  P237 returned TYPE-ASSERTED indexed elements of interface
+  parameters (return v.(*H).Items[0] with v an any parameter):
+  propagateStructResult's IndexExpr branch handled only plain and
+  dereferenced roots; an interface-typed parameter asserted to a
+  holder now projects the asserted type's "Items."-prefixed leaf paths
+  with the parameter source, exactly like `return v.(T)`;
+  P238 returned indexed elements of CALL-PRODUCED selected containers
+  (return makeH(p).Items[0]): propagateStructResult only handled an
+  indexChainRoot call; a selected call-produced root now re-evaluates
+  the call and strips the "Items." prefix from the callee's flattened
+  element fields;
+  P239 type-switch `case any` variables (switch x := h.get().(type) {
+  case any: b := x.(lbox); return b.Data }): an interface-typed case
+  projected no concrete leaves and the implicit variable carried no
+  whole-value taint, so the body-side assertion laundered the page;
+  typeSwitchJoin now binds whole-value taint on the implicit variable
+  of interface-typed cases, and argFlowOf projects the asserted
+  type's leaves for bind-then-read forms of any whole-tainted local
+  interface value.
+  Same-family sweep (three further shapes, probes 8, 9 and 11,
+  escaped the pre-fix build and reject now):
+  P240 type-switch `case any` + asserted FIELD MAP key range
+  (switch x := h.get().(type) { case any: for k := range
+  x.(*H).M { return k.Data } } with get returning *H{M:
+  map[*lbox]int{{Data: page}: 1}}): the same interface-typed-case
+  join gap left the asserted map-key store with no bound leaf, so
+  the range laundered the page; typeAssertBaseOf stores and the
+  whole-tainted case variable close it;
+  P241 returned type-asserted SELECTOR values of interface
+  parameters (return v.(*H).Inner with v an any parameter and
+  H.Inner holding the page): propagateStructResult's SelectorExpr
+  branch never projected an interface-parameter asserted base, so
+  the returned struct laundered the page; the new
+  typeAssertBaseOf branch projects the asserted type's leaf paths
+  with the parameter source and propagates whole-tainted locals;
+  P242 type-switch `case any` binding an asserted SELECTOR
+  (switch x := h.get().(type) { case any: b := x.(*H).Inner;
+  return b.Data }): the case bind of an asserted selector lost
+  every leaf (no typeAssertBaseOf projection on the implicit
+  variable), so the bound struct laundered the page; the
+  SelectorExpr argument flow now projects whole-tainted locals'
+  asserted leaves.
+  Reader: glm-1 (membership id zero treated as corruption) is a FALSE
+  POSITIVE: spec binary-format-v4.md:562-567 forbids storing zero as a
+  membership id, and both readers reject a stored zero at lookup (Go
+  lookupMembershipID corrupts, Rust membership_tree find -> require_id
+  corrupts), so no valid file diverges. glm-2 is REAL: ContainsIndex
+  read its word through wordBytes and skipped the trailing-zero
+  canonical check that Word, ReadWords and Rust contains_index all
+  apply (spec section 9); ContainsIndex now reads through
+  readWordsInner so a zero FINAL word is corrupt here too, with a
+  runtime regression test that patches the conformance fixture bitmap
+  (mirroring membership_view_tests.rs word(1) on an inline [1, 0]
+  image).
+  Records corrections: the round-24 validation sentence "119 reject"
+  is corrected to 120 above (the 125 prior trees are 120 rejections
+  plus the five recorded benigns l18m, r10-base, r11-base, luna1b,
+  luna1c); the round-24 and round-23 "ten cross-builds" sentences are
+  corrected to eleven (the harness lists 11 GOOS/GOARCH targets
+  including netbsd/amd64); the milestone-1 report "4 packages" and
+  "10 pairs" are corrected to 5 packages (root, format, reader,
+  mapping, work) and eleven pairs.
+  Battery 514 -> 524 (443 -> 453 rejections, 71 benign unchanged;
+  ten new fail pins P233-P242). Gate tooling 10,801 -> 11,016
+  go-gate lines (+552 shell = 11,568 total).
+  Validation at the closing commit: gate --self-test 524/524 (453
+  rejections, 71 benign) + 9 shell environment mutations exit 0,
+  production scan of v4/go clean (rc 0), all eleven r25 probe shapes
+  reject (rc 1) on the closing build (one probe per isolated tree),
+  go test ./... (both tag sets) including -race -count=1, vet (go and
+  go-gate), gofmt zero diffs, eleven cross-builds, the import-graph
+  gate with the 524-case battery, and the SOW audit all pass.
+
 - Round 24 (delta re-review, d482c1c): luna failed the round-23
   closing commit with seven findings; the lead probe-verified all six
   code findings on the true round-23 build (probes
@@ -1763,13 +1877,13 @@ HEAD recorded in the first review entry below):
   production scan of v4/go clean (rc 0), all eight l24 probe trees
   reject (rc 1) on the closing build (l1..l6 plus the l2a literal
   return and l2b captured-assignment forms), all 125 prior probe
-  trees re-scanned with the closing build: 119 reject and the five
+  trees re-scanned with the closing build: 120 reject and the five
   recorded benigns stay accepted (probe-l18m, probe-r10-base,
   probe-r11-base, luna1b/luna1c), all twenty round-23 l23 probe
   trees keep their verdicts on the closing build (all reject except
   the self-pointer benign q2 rc 0), go test ./... (both tag sets)
   including -race -count=1, vet (go and go-gate), gofmt zero diffs,
-  ten cross-builds, the import-graph gate with the 514-case battery,
+  eleven cross-builds, the import-graph gate with the 514-case battery,
   and the SOW audit all pass.
 
 - Round 23 (delta re-review, 07081a2): luna failed the round-22
@@ -1836,13 +1950,13 @@ HEAD recorded in the first review entry below):
   rejections, 70 benign) + 9 shell environment mutations exit 0,
   production scan of v4/go clean (rc 0), all sixteen l23 probe trees
   reject (rc 1) on the closing build, all 125 prior probe trees
-  re-scanned with the closing build: 119 reject and the five recorded
+  re-scanned with the closing build: 120 reject and the five recorded
   benigns stay accepted (probe-l18m, probe-r10-base, probe-r11-base,
   luna1b/luna1c), the q1/q2 verification probes reject or complete as
   pinned (q1 two-value assert rc 1, q1b two-value map index rc 1, q2
   self-pointer rc 0 without hang, q2b func-param form rc 0), go test
   ./... (both tag sets) including -race -count=1, vet (go and go-gate),
-  gofmt zero diffs, ten cross-builds, the import-graph gate, and the
+  gofmt zero diffs, eleven cross-builds, the import-graph gate, and the
   SOW audit all pass.
 - Round 22 (delta re-review, 113867a): luna failed the round-21
   delta with nine findings; the lead probe-verified all nine on the
