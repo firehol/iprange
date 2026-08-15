@@ -155,7 +155,11 @@ func expandV6(s string) []byte {
 	cur := ""
 	flush := func() {
 		if cur != "" {
-			before = append(before, cur)
+			if double {
+				after = append(after, cur)
+			} else {
+				before = append(before, cur)
+			}
 			cur = ""
 		}
 	}
@@ -675,33 +679,44 @@ func TestConformanceRustFixtures(t *testing.T) {
 			// Absence at the family edges and inside inter-range gaps of the
 			// membership ranges.
 			if len(tc.MembershipRanges) > 0 {
-				probeMembership := func(hi, lo uint64) bool {
+				// probeMembership returns (present, error). An error is
+				// never "present": the endpoint checks must distinguish
+				// a valid view from a lookup failure.
+				probeMembership := func(hi, lo uint64) (bool, error) {
 					if tc.Family == "ipv4" {
 						_, ok, err := pin.LookupMembershipV4(IPv4(uint32(lo)))
-						return err != nil || ok
+						return ok, err
 					}
 					_, ok, err := pin.LookupMembershipV6(IPv6{Hi: hi, Lo: lo})
-					return err != nil || ok
+					return ok, err
 				}
 				first, last := tc.MembershipRanges[0], tc.MembershipRanges[len(tc.MembershipRanges)-1]
 				fh, fl, _ := addressBytes(first.From, tc.Family)
 				th, tl, _ := addressBytes(last.To, tc.Family)
 				if tc.Family == "ipv4" {
 					_, _, f4 := addressBytes(first.From, "ipv4")
-					if f4 > 0 && probeMembership(0, uint64(f4-1)) {
-						t.Errorf("membership from-1 (0x%x): want absent", f4-1)
+					if f4 > 0 {
+						if present, err := probeMembership(0, uint64(f4-1)); err != nil || present {
+							t.Errorf("membership from-1 (0x%x): present=%v err=%v, want absent", f4-1, present, err)
+						}
 					}
-					if f4 > 0 && probeMembership(0, 0) {
-						t.Errorf("membership 0.0.0.0: want absent")
+					if f4 > 0 {
+						if present, err := probeMembership(0, 0); err != nil || present {
+							t.Errorf("membership 0.0.0.0: present=%v err=%v, want absent", present, err)
+						}
 					}
-					if th < 0xffffffff && probeMembership(0, 0xffffffff) {
-						t.Errorf("membership 255.255.255.255: want absent")
+					if th < 0xffffffff {
+						if present, err := probeMembership(0, 0xffffffff); err != nil || present {
+							t.Errorf("membership 255.255.255.255: present=%v err=%v, want absent", present, err)
+						}
 					}
 					for i := 1; i < len(tc.MembershipRanges); i++ {
 						_, _, prevTo := addressBytes(tc.MembershipRanges[i-1].To, "ipv4")
 						_, _, curFrom := addressBytes(tc.MembershipRanges[i].From, "ipv4")
-						if curFrom > prevTo+1 && probeMembership(0, uint64(prevTo+1)) {
-							t.Errorf("membership gap after %s: want absent", tc.MembershipRanges[i-1].To)
+						if curFrom > prevTo+1 {
+							if present, err := probeMembership(0, uint64(prevTo+1)); err != nil || present {
+								t.Errorf("membership gap after %s: present=%v err=%v, want absent", tc.MembershipRanges[i-1].To, present, err)
+							}
 						}
 					}
 					// Probe the exact end of each range (to) and just past
@@ -709,8 +724,8 @@ func TestConformanceRustFixtures(t *testing.T) {
 					// absent only when the next range does not start there.
 					for i, mr := range tc.MembershipRanges {
 						_, _, to4 := addressBytes(mr.To, "ipv4")
-						if !probeMembership(0, uint64(to4)) {
-							t.Errorf("membership to %s (0x%x): want present", mr.To, to4)
+						if present, err := probeMembership(0, uint64(to4)); err != nil || !present {
+							t.Errorf("membership to %s (0x%x): present=%v err=%v, want present", mr.To, to4, present, err)
 						}
 						if to4 < 0xffffffff {
 							adjacent := i+1 < len(tc.MembershipRanges)
@@ -718,17 +733,49 @@ func TestConformanceRustFixtures(t *testing.T) {
 								_, _, nextFrom := addressBytes(tc.MembershipRanges[i+1].From, "ipv4")
 								adjacent = nextFrom == to4+1
 							}
-							if !adjacent && probeMembership(0, uint64(to4+1)) {
-								t.Errorf("membership to+1 %s (0x%x): want absent", mr.To, to4+1)
+							if !adjacent {
+								if present, err := probeMembership(0, uint64(to4+1)); err != nil || present {
+									t.Errorf("membership to+1 %s (0x%x): present=%v err=%v, want absent", mr.To, to4+1, present, err)
+								}
 							}
 						}
 					}
 				} else {
-					if (fh != 0 || fl != 0) && probeMembership(0, 0) {
-						t.Errorf("membership :: : want absent")
+					if fh != 0 || fl != 0 {
+						if present, err := probeMembership(0, 0); err != nil || present {
+							t.Errorf("membership :: : present=%v err=%v, want absent", present, err)
+						}
 					}
-					if (th != ^uint64(0) || tl != ^uint64(0)) && probeMembership(^uint64(0), ^uint64(0)) {
-						t.Errorf("membership ffff:…: want absent")
+					if th != ^uint64(0) || tl != ^uint64(0) {
+						if present, err := probeMembership(^uint64(0), ^uint64(0)); err != nil || present {
+							t.Errorf("membership ffff:…: present=%v err=%v, want absent", present, err)
+						}
+					}
+					// Probe the exact end of each range (to) and just past
+					// it (to+1), mirroring Rust membership_probes.
+					for i, mr := range tc.MembershipRanges {
+						mh, ml, _ := addressBytes(mr.To, "ipv6")
+						if present, err := probeMembership(mh, ml); err != nil || !present {
+							t.Errorf("membership v6 to %s: present=%v err=%v, want present", mr.To, present, err)
+						}
+						// to+1: absent only when the next range does not start there.
+						toHi, toLo := mh, ml
+						if toLo < ^uint64(0) {
+							toLo++
+						} else {
+							toHi++
+							toLo = 0
+						}
+						adjacent := i+1 < len(tc.MembershipRanges)
+						if adjacent {
+							nh, nl, _ := addressBytes(tc.MembershipRanges[i+1].From, "ipv6")
+							adjacent = nh == toHi && nl == toLo
+						}
+						if !adjacent && (toHi != 0 || toLo != 0) {
+							if present, err := probeMembership(toHi, toLo); err != nil || present {
+								t.Errorf("membership v6 to+1 %s: present=%v err=%v, want absent", mr.To, present, err)
+							}
+						}
 					}
 				}
 			}
@@ -803,33 +850,44 @@ func TestConformanceRustFixtures(t *testing.T) {
 			// stale view and never corruption (Rust verifier probes the
 			// same positions).
 			if len(tc.StructuredRanges) > 0 {
-				probeStructured := func(hi, lo uint64) bool {
+				// probeStructured returns (present, error). An error is
+				// never "present": the endpoint checks must distinguish
+				// a valid view from a lookup failure.
+				probeStructured := func(hi, lo uint64) (bool, error) {
 					if tc.Family == "ipv4" {
 						_, ok, err := pin.LookupNetworkEnrichmentV1V4(IPv4(uint32(lo)))
-						return err != nil || ok
+						return ok, err
 					}
 					_, ok, err := pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: hi, Lo: lo})
-					return err != nil || ok
+					return ok, err
 				}
 				first, last := tc.StructuredRanges[0], tc.StructuredRanges[len(tc.StructuredRanges)-1]
 				fh, fl, _ := addressBytes(first.From, tc.Family)
 				th, tl, _ := addressBytes(last.To, tc.Family)
 				if tc.Family == "ipv4" {
 					_, _, f4 := addressBytes(first.From, "ipv4")
-					if f4 > 0 && probeStructured(0, uint64(f4-1)) {
-						t.Errorf("structured from-1 (0x%x): want absent", f4-1)
+					if f4 > 0 {
+						if present, err := probeStructured(0, uint64(f4-1)); err != nil || present {
+							t.Errorf("structured from-1 (0x%x): present=%v err=%v, want absent", f4-1, present, err)
+						}
 					}
-					if f4 > 0 && probeStructured(0, 0) {
-						t.Errorf("structured 0.0.0.0: want absent")
+					if f4 > 0 {
+						if present, err := probeStructured(0, 0); err != nil || present {
+							t.Errorf("structured 0.0.0.0: present=%v err=%v, want absent", present, err)
+						}
 					}
-					if th < 0xffffffff && probeStructured(0, 0xffffffff) {
-						t.Errorf("structured 255.255.255.255: want absent")
+					if th < 0xffffffff {
+						if present, err := probeStructured(0, 0xffffffff); err != nil || present {
+							t.Errorf("structured 255.255.255.255: present=%v err=%v, want absent", present, err)
+						}
 					}
 					for i := 1; i < len(tc.StructuredRanges); i++ {
 						_, _, prevTo := addressBytes(tc.StructuredRanges[i-1].To, "ipv4")
 						_, _, curFrom := addressBytes(tc.StructuredRanges[i].From, "ipv4")
-						if curFrom > prevTo+1 && probeStructured(0, uint64(prevTo+1)) {
-							t.Errorf("structured gap after %s: want absent", tc.StructuredRanges[i-1].To)
+						if curFrom > prevTo+1 {
+							if present, err := probeStructured(0, uint64(prevTo+1)); err != nil || present {
+								t.Errorf("structured gap after %s: present=%v err=%v, want absent", tc.StructuredRanges[i-1].To, present, err)
+							}
 						}
 					}
 					// Probe the exact end of each range (to) and just past
@@ -837,8 +895,8 @@ func TestConformanceRustFixtures(t *testing.T) {
 					// absent only when the next range does not start there.
 					for i, sr := range tc.StructuredRanges {
 						_, _, to4 := addressBytes(sr.To, "ipv4")
-						if !probeStructured(0, uint64(to4)) {
-							t.Errorf("structured to %s (0x%x): want present", sr.To, to4)
+						if present, err := probeStructured(0, uint64(to4)); err != nil || !present {
+							t.Errorf("structured to %s (0x%x): present=%v err=%v, want present", sr.To, to4, present, err)
 						}
 						if to4 < 0xffffffff {
 							adjacent := i+1 < len(tc.StructuredRanges)
@@ -846,17 +904,48 @@ func TestConformanceRustFixtures(t *testing.T) {
 								_, _, nextFrom := addressBytes(tc.StructuredRanges[i+1].From, "ipv4")
 								adjacent = nextFrom == to4+1
 							}
-							if !adjacent && probeStructured(0, uint64(to4+1)) {
-								t.Errorf("structured to+1 %s (0x%x): want absent", sr.To, to4+1)
+							if !adjacent {
+								if present, err := probeStructured(0, uint64(to4+1)); err != nil || present {
+									t.Errorf("structured to+1 %s (0x%x): present=%v err=%v, want absent", sr.To, to4+1, present, err)
+								}
 							}
 						}
 					}
 				} else {
-					if (fh != 0 || fl != 0) && probeStructured(0, 0) {
-						t.Errorf("structured :: : want absent")
+					if fh != 0 || fl != 0 {
+						if present, err := probeStructured(0, 0); err != nil || present {
+							t.Errorf("structured :: : present=%v err=%v, want absent", present, err)
+						}
 					}
-					if (th != ^uint64(0) || tl != ^uint64(0)) && probeStructured(^uint64(0), ^uint64(0)) {
-						t.Errorf("structured ffff:…: want absent")
+					if th != ^uint64(0) || tl != ^uint64(0) {
+						if present, err := probeStructured(^uint64(0), ^uint64(0)); err != nil || present {
+							t.Errorf("structured ffff:…: present=%v err=%v, want absent", present, err)
+						}
+					}
+					// Probe the exact end of each range (to) and just past
+					// it (to+1), mirroring Rust membership_probes.
+					for i, sr := range tc.StructuredRanges {
+						mh, ml, _ := addressBytes(sr.To, "ipv6")
+						if present, err := probeStructured(mh, ml); err != nil || !present {
+							t.Errorf("structured v6 to %s: present=%v err=%v, want present", sr.To, present, err)
+						}
+						toHi, toLo := mh, ml
+						if toLo < ^uint64(0) {
+							toLo++
+						} else {
+							toHi++
+							toLo = 0
+						}
+						adjacent := i+1 < len(tc.StructuredRanges)
+						if adjacent {
+							nh, nl, _ := addressBytes(tc.StructuredRanges[i+1].From, "ipv6")
+							adjacent = nh == toHi && nl == toLo
+						}
+						if !adjacent && (toHi != 0 || toLo != 0) {
+							if present, err := probeStructured(toHi, toLo); err != nil || present {
+								t.Errorf("structured v6 to+1 %s: present=%v err=%v, want absent", sr.To, present, err)
+							}
+						}
 					}
 				}
 			}

@@ -97,7 +97,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
 		}
 		if !now.Mode().IsRegular() {
-			return &format.Error{Code: format.CodeInvalidArgument, Detail: "path no longer names a regular file"}
+			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names a regular file"}
 		}
 		if !os.SameFile(now, st) {
 			return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names the opened file"}
