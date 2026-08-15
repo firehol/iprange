@@ -857,13 +857,20 @@ func TestConformanceRustFixtures(t *testing.T) {
 					if !present {
 						t.Errorf("%s: missing threat membership", label)
 					}
+					listed := map[uint32]bool{}
 					for _, feed := range sr.Feeds {
-						has, err := threat.ContainsIndex(feedIndexOf(feed))
+						listed[feedIndexOf(feed)] = true
+					}
+					for _, f := range tc.Feeds {
+						has, err := threat.ContainsIndex(f.Index)
 						if err != nil {
 							t.Fatalf("%s threat contains: %v", label, err)
 						}
-						if !has {
-							t.Errorf("%s lacks threat feed %s", label, feed)
+						if listed[f.Index] && !has {
+							t.Errorf("%s lacks threat feed %s", label, f.Name)
+						}
+						if !listed[f.Index] && has {
+							t.Errorf("%s contains undeclared threat feed %s (%d)", label, f.Name, f.Index)
 						}
 					}
 				}
@@ -884,6 +891,33 @@ func TestConformanceRustFixtures(t *testing.T) {
 					continue
 				}
 				verifyStructuredValue(view, sr, "structured "+sr.From)
+				// Midpoint probe as well, mirroring the membership test.
+				if tc.Family == "ipv4" {
+					mid4 := from4 + (addressBytes4To(sr.To)-from4)/2
+					if mid4 != from4 {
+						v2, ok2, err2 := pin.LookupNetworkEnrichmentV1V4(IPv4(mid4))
+						if err2 != nil || !ok2 {
+							t.Errorf("structured mid %s: %v %v", sr.From, ok2, err2)
+							continue
+						}
+						verifyStructuredValue(v2, sr, "structured mid "+sr.From)
+					}
+				} else {
+					midLo := fl + 1
+					midHi := fh
+					if midLo == 0 {
+						midHi++
+					}
+					th2, tl2, _ := addressBytes(sr.To, "ipv6")
+					if fh != th2 || fl+1 != tl2 {
+						v2, ok2, err2 := pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: midHi, Lo: midLo})
+						if err2 != nil || !ok2 {
+							t.Errorf("structured v6 mid %s: %v %v", sr.From, ok2, err2)
+							continue
+						}
+						verifyStructuredValue(v2, sr, "structured v6 mid "+sr.From)
+					}
+				}
 			}
 
 			// Absence at the family edges and inside inter-range gaps of
