@@ -1180,6 +1180,19 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	if fn != nil {
 		w.checkStringParamCalls(v, fn)
 	}
+	// A helper whose parameter is written element-wise, called inside a
+	// page-sourcing loop with an owned destination argument, copies the
+	// complete page through the helper. The flow pass recorded the
+	// destination expressions at the call site.
+	if w.pc.pf != nil {
+		if dests, ok := w.pc.pf.pageSinkCalls[v]; ok {
+			for _, dst := range dests {
+				if pv := w.pageValue(dst); pv.tainted && pageFull(pv) {
+					w.fail(v.Pos(), "mapped page copied element-wise through %s into an owned buffer (complete page)", calleeText(v.Fun))
+				}
+			}
+		}
+	}
 }
 
 // callCalleeFuncOrVar resolves the statically visible callee of an
@@ -1626,6 +1639,35 @@ func (w *fileRules) pageValue(e ast.Expr) pageValue {
 	return pageValue{}
 }
 
+// pageDerivedByte reports whether a scalar RHS expression derives from
+// a page-tainted container: page[i], page[k], or a variable bound to one.
+func (w *fileRules) pageDerivedByte(e ast.Expr) bool {
+	e = unparen(e)
+	// A direct index whose base is a page-tainted slice derives its byte
+	// from the page even though the byte value itself is clean.
+	if ix, ok := e.(*ast.IndexExpr); ok {
+		if pv := w.pageValue(ix.X); pv.tainted {
+			return true
+		}
+	}
+	// A local variable holds a byte read earlier in the loop; flow still
+	// records page-derived byte values as clean, so conservatively treat
+	// any identifier RHS inside this loop context as page-derived. The
+	// enclosing mark proves the destination is in a page-sourcing loop.
+	if _, ok := e.(*ast.Ident); ok {
+		return true
+	}
+	// A helper call may compute from the page byte (b+1, transform(b)).
+	if _, ok := e.(*ast.CallExpr); ok {
+		return true
+	}
+	// A binary expression containing a page-derived identifier.
+	if be, ok := e.(*ast.BinaryExpr); ok {
+		return w.pageDerivedByte(be.X) || w.pageDerivedByte(be.Y)
+	}
+	return w.pageValue(e).tainted
+}
+
 // checkAssign flags assignment-side launders and page conversions.
 func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 	for i, rhs := range v.Rhs {
@@ -1636,13 +1678,20 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		if pv := w.pageValue(rhs); pv.tainted && pageFull(pv) {
 			w.checkArrayConversionSink(v.Lhs[i].Pos(), lhsTypeForCheck(w, v.Lhs[i]), pv)
 		}
-		// An element write into a page-aggregated buffer (marked by the
+		// An element write into a page-sourced buffer (marked by the
 		// pageflow engine inside a page-sourcing loop) is a complete-page
 		// copy: the buffer has received PageSize element writes from a
 		// page-tainted source.
 		if lv := w.pageValue(v.Lhs[i]); lv.tainted && pageFull(lv) {
 			if _, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
-				w.fail(v.Lhs[i].Pos(), "element-wise copy of a mapped page into an owned buffer (complete page)")
+				// A destination-ranging loop (for i := range out) may
+				// only initialize the buffer (out[i] = 0); it is a copy
+				// only when the RHS derives from a page. A page-sourcing
+				// loop always writes page bytes.
+				destOnly := w.pc.pf != nil && w.pc.pf.destAggregated[v.Lhs[i]]
+				if !destOnly || w.pageDerivedByte(rhs) {
+					w.fail(v.Lhs[i].Pos(), "element-wise copy of a mapped page into an owned buffer (complete page)")
+				}
 			}
 		}
 

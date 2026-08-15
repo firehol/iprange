@@ -917,4 +917,28 @@ var batteryPageCases = []batteryCase{
 	{name: "P247: range over the destination array copying from a mapped page", desc: "for i := range out { out[i] = page[i] } with out an owned [4096]byte and page from r.page(pgno): the range over a PageSize destination array makes the loop body a page-sourcing context; the element writes aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l26_5.go", content: "package reader\n\nfunc rangeDestCopyProbe(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := range out {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P248: helper-mediated element copy of a mapped page", desc: "for i, b := range page { putByte(out[:], i, b) } with putByte(dst []byte, i int, b byte) { dst[i] = b }: the helper writes a page byte into the caller's owned buffer; the call site fails because the callee parameter is an element sink and the caller is in a page-sourcing loop", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_1.go", content: "package reader\n\nfunc putByteL27(dst []byte, i int, b byte) { dst[i] = b }\n\nfunc helperCopyProbeL27(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i, b := range page {\n\t\tputByteL27(out[:], i, b)\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P249: selector destination element copy of a mapped page", desc: "for i, b := range page { h.Out[i] = b } with h a struct holding [4096]byte: a field destination resolves through the selector root and field path; the element writes aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_2.go", content: "package reader\n\ntype holderL27 struct{ Out [4096]byte }\n\nfunc selectorCopyProbeL27(r *ImmutableReader, pgno uint32) (holderL27, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn holderL27{}, err\n\t}\n\th := holderL27{}\n\tfor i, b := range page {\n\t\th.Out[i] = b\n\t}\n\treturn h, nil\n}"},
+	}},
+
+	{name: "P250: slice destination element copy of a mapped page", desc: "out := make([]byte, 4096); for i := range out { out[i] = page[i] }: the range over an owned PageSize slice makes the loop body a page-copy context; the element writes aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_3.go", content: "package reader\n\nfunc sliceDestCopyProbeL27(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tfor i := range out {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P251: for post-clause append copies a mapped page", desc: "for ; n < len(page); n, out = n+1, append(out, page[n]) {}: the post clause executes inside the page-sourcing loop; the byte-by-byte appends into the owned slice aggregate to a complete page copy", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_4.go", content: "package reader\n\nfunc postClauseCopyProbeL27(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\tn := 0\n\tfor ; n < len(page); n, out = n+1, append(out, page[n]) {\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P252: named-constant loop bound copies a mapped page", desc: "const N = 4096; for i := 0; i < N; i++ { out[i] = page[i] }: a named constant equal to PageSize is resolved through go/types constant values; the loop body is a page-sourcing context", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_5.go", content: "package reader\n\nconst pageSizeL27 = 4096\n\nfunc constBoundCopyProbeL27(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < pageSizeL27; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P253 benign: zero-initialization of an owned PageSize array", desc: "var out [4096]byte; for i := range out { out[i] = 0 }: a destination-ranging loop with a clean scalar RHS initializes the buffer; no page source reaches the writes, so the complete-page rule stays silent", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l27_6.go", content: "package reader\n\nfunc benignZeroProbeL27() [4096]byte {\n\tvar out [4096]byte\n\tfor i := range out {\n\t\tout[i] = 0\n\t}\n\treturn out\n}"},
+	}},
 }
