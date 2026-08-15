@@ -647,12 +647,15 @@ func TestConformanceRustFixtures(t *testing.T) {
 						view = v2
 					}
 				} else {
-					midLo := fl + 1
-					midHi := fh
-					if midLo == 0 {
-						midHi++
-					}
-					if fh != th || fl+1 != tl {
+					// Midpoint probe only when the range spans more than one
+					// address (from != to). A singleton range's midpoint is
+					// out of range.
+					if fh != th || fl != tl {
+						midLo := fl + 1
+						midHi := fh
+						if midLo == 0 {
+							midHi++
+						}
 						v2, ok2, err2 := pin.LookupMembershipV6(IPv6{Hi: midHi, Lo: midLo})
 						if err2 != nil || !ok2 {
 							t.Errorf("membership v6 mid %s: %v %v", mr.From, ok2, err2)
@@ -729,6 +732,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 								_, _, nextFrom := addressBytes(tc.MembershipRanges[i+1].From, "ipv4")
 								adjacent = nextFrom == to4+1
 							}
+							// Adjacent to+1 is the next range's from, which
+							// is verified with the next range's feeds at its
+							// own from probe — no separate to+1 check needed.
 							if !adjacent {
 								if present, err := probeMembership(0, uint64(to4+1)); err != nil || present {
 									t.Errorf("membership to+1 %s (0x%x): present=%v err=%v, want absent", mr.To, to4+1, present, err)
@@ -788,6 +794,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 							nh, nl, _ := addressBytes(tc.MembershipRanges[i+1].From, "ipv6")
 							adjacent = nh == toHi && nl == toLo
 						}
+						// Adjacent to+1 is the next range's from, which is
+						// verified with the next range's feeds at its own
+						// from probe — no separate to+1 check needed.
 						if !adjacent && (toHi != 0 || toLo != 0) {
 							if present, err := probeMembership(toHi, toLo); err != nil || present {
 								t.Errorf("membership v6 to+1 %s: present=%v err=%v, want absent", mr.To, present, err)
@@ -903,13 +912,16 @@ func TestConformanceRustFixtures(t *testing.T) {
 						verifyStructuredValue(v2, sr, "structured mid "+sr.From)
 					}
 				} else {
-					midLo := fl + 1
-					midHi := fh
-					if midLo == 0 {
-						midHi++
-					}
+					// Midpoint probe only when the range spans more than one
+					// address (from != to). A singleton range's midpoint is
+					// out of range.
 					th2, tl2, _ := addressBytes(sr.To, "ipv6")
-					if fh != th2 || fl+1 != tl2 {
+					if fh != th2 || fl != tl2 {
+						midLo := fl + 1
+						midHi := fh
+						if midLo == 0 {
+							midHi++
+						}
 						v2, ok2, err2 := pin.LookupNetworkEnrichmentV1V6(IPv6{Hi: midHi, Lo: midLo})
 						if err2 != nil || !ok2 {
 							t.Errorf("structured v6 mid %s: %v %v", sr.From, ok2, err2)
@@ -983,6 +995,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 								_, _, nextFrom := addressBytes(tc.StructuredRanges[i+1].From, "ipv4")
 								adjacent = nextFrom == to4+1
 							}
+							// Adjacent to+1 is the next range's from, which
+							// is verified with the next range's value at its
+							// own from probe — no separate to+1 check needed.
 							if !adjacent {
 								if present, err := probeStructured(0, uint64(to4+1)); err != nil || present {
 									t.Errorf("structured to+1 %s (0x%x): present=%v err=%v, want absent", sr.To, to4+1, present, err)
@@ -1040,6 +1055,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 							nh, nl, _ := addressBytes(tc.StructuredRanges[i+1].From, "ipv6")
 							adjacent = nh == toHi && nl == toLo
 						}
+						// Adjacent to+1 is the next range's from, which is
+						// verified with the next range's value at its own
+						// from probe — no separate to+1 check needed.
 						if !adjacent && (toHi != 0 || toLo != 0) {
 							if present, err := probeStructured(toHi, toLo); err != nil || present {
 								t.Errorf("structured v6 to+1 %s: present=%v err=%v, want absent", sr.To, present, err)
