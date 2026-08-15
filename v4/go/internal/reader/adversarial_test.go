@@ -316,3 +316,116 @@ func TestNameBranchBelowFirstKeyAbsent(t *testing.T) {
 		t.Fatalf("past last key: child=%d err=%v", child, err)
 	}
 }
+
+// membershipIDLeafLocation walks the ID tree to the leaf page and slot of
+// the record with the given membership id, mirroring lookupMembershipID so
+// a test can patch the exact stored bytes of the bitmap.
+func membershipIDLeafLocation(t *testing.T, r *ImmutableReader, id uint32) (uint32, int) {
+	t.Helper()
+	cur := r.meta.MembershipIDRoot
+	level := uint16(0)
+	first := true
+	for {
+		page, err := r.page(cur)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first {
+			level = h.Level
+			first = false
+		} else if h.Level != level {
+			t.Fatalf("membership level %d expected %d", h.Level, level)
+		}
+		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch h.PageType {
+		case format.PageTypeMembershipIDBranch:
+			child, err := membershipBranchChild(sl, id, r.meta.PageCount)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur, level = child, level-1
+		case format.PageTypeMembershipIDLeaf:
+			slot, _, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
+			if err != nil || !found {
+				t.Fatalf("membership leaf find: %v %v", found, err)
+			}
+			return cur, int(slot)
+		default:
+			t.Fatalf("unexpected membership page type %d", h.PageType)
+		}
+	}
+}
+
+// membershipContainsIndexTrailingZeroRejected: ContainsIndex must apply the
+// same trailing-word canonical check as Word and ReadWords (spec section 9),
+// so a stored zero FINAL word is corrupt even when the queried bit happens
+// to be absent — mirroring Rust membership_view_tests.rs word(1) on an
+// inline [1, 0] bitmap. ContainsIndex used to read the word bytes directly
+// and returned false instead of surfacing the corruption.
+func TestMembershipContainsIndexTrailingZeroRejected(t *testing.T) {
+	path := copyFixture(t, "membership-ipv4.iprdb", "ms-trailing-zero.iprdb")
+	orig := openFixture(t, "membership-ipv4.iprdb")
+	view, found, err := orig.LookupMembership4(0x0a000000)
+	if err != nil || !found {
+		t.Fatalf("lookup: %v %v", found, err)
+	}
+	if view.storage != format.MembershipStorageInline {
+		t.Skipf("fixture storage %d, want inline", view.storage)
+	}
+	leafPage, slot := membershipIDLeafLocation(t, orig, view.id)
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := mustRead(t, file, int(leafPage), 0, format.PageSize)
+	h, err := format.DecodePageHeader(page, orig.meta.TxnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := sl.Record(slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recOff, err := sl.SlotOffset(slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recLen := int(format.U16(rec[0:2]))
+	// The inline bitmap follows the 64-byte fixed record header inside the
+	// record, whose own offset is slotted at the page tail.
+	inlineStart := int(recOff) + recLen - int(view.bitmapLen)
+	lastWord := int(view.wordCount-1) * 8
+	if _, err := file.WriteAt(make([]byte, 8), int64(int(leafPage)*format.PageSize+inlineStart+lastWord)); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	orig.Close()
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	v2, found, err := r.LookupMembership4(0x0a000000)
+	if err != nil || !found {
+		t.Fatalf("reopen lookup: %v %v", found, err)
+	}
+	if _, err := v2.ContainsIndex((uint32(v2.wordCount)-1)*64 + 5); err == nil || !isFormatError(err, format.CodeFormatInvalid) {
+		t.Fatalf("ContainsIndex on zero final word: %v, want CodeFormatInvalid", err)
+	}
+	// The canonical constraint applies to the final word only: an earlier
+	// word stays readable and keeps its bits.
+	if _, err := v2.ContainsIndex(0); err != nil {
+		t.Fatalf("ContainsIndex on earlier word: %v", err)
+	}
+}

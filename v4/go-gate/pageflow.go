@@ -781,6 +781,19 @@ func objOfDeref(st *stmtState, e ast.Expr) types.Object {
 	return nil
 }
 
+// chainRootObject resolves the binding object of a selector/index chain
+// root that may name the base of a TYPE ASSERTION: v.(*H).Items[0] binds
+// the asserted base variable v, so element records on a TypeAssertExpr
+// root land on v exactly like records on a plain selector root
+// (h.Items[0] binds h). The read side resolves the same roots through
+// typeAssertBaseOf, so both sides agree on the flattened field paths.
+func chainRootObject(st *stmtState, root ast.Expr) types.Object {
+	if ta, ok := unparen(root).(*ast.TypeAssertExpr); ok {
+		return objOfDeref(st, ta.X)
+	}
+	return objOfDeref(st, unparen(root))
+}
+
 // objOf resolves the binding object of an identifier expression.
 func objOf(st *stmtState, e ast.Expr) types.Object {
 	if st == nil {
@@ -989,8 +1002,10 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						// indexes): the element fields record under the
 						// field prefix on the base object, the same
 						// flattened path the read h.Items[0].Data
-						// resolves.
-						if obj := objOfDeref(st, unparen(root)); obj != nil {
+						// resolves. A TYPE-ASSERTED base
+						// (v.(*H).Items[0]) binds the asserted base
+						// variable the same way.
+						if obj := chainRootObject(st, root); obj != nil {
 							if st.structs[obj] == nil {
 								st.structs[obj] = map[string]pageValue{}
 							}
@@ -1130,6 +1145,29 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 									st.structs[obj][key] = joinPageValue(prev, fv)
 								} else {
 									st.structs[obj][key] = fv
+								}
+							}
+						}
+					} else if ta := typeAssertBaseOf(ix.X); ta != nil {
+						// v.(*H).M[&b] = 1 with v an interface holding
+						// *H: the map is a selected field of an
+						// ASSERTED base, so the key's fields record on
+						// the asserted base variable under the field
+						// prefix, the same flattened path the key-only
+						// range for k := range v.(*H).M resolves.
+						if obj := objOfDeref(st, ta.X); obj != nil {
+							if kf := pf.argFlowOf(st, ix.Index).fields; len(kf) > 0 {
+								if st.structs[obj] == nil {
+									st.structs[obj] = map[string]pageValue{}
+								}
+								path, _ := selectorIndexChain(ix.X)
+								for k, fv := range kf {
+									key := path + "." + k
+									if prev, ok := st.structs[obj][key]; ok {
+										st.structs[obj][key] = joinPageValue(prev, fv)
+									} else {
+										st.structs[obj][key] = fv
+									}
 								}
 							}
 						}
@@ -1661,6 +1699,17 @@ func (pf *pageFlow) typeSwitchJoin(st *stmtState, body []ast.Stmt, fs *funcSumma
 						branch.structs[cv][path] = pageValue{tainted: true, maxLen: maxUnknown}
 					}
 				}
+				// A case whose matched type is itself an INTERFACE
+				// (case any, or a multi-type case carrying the guard's
+				// interface type) projects no concrete leaves; the
+				// concrete value is unknowable, so the implicit
+				// variable keeps its whole-value taint and body-side
+				// type assertions (b := x.(T); b.Data) fail closed
+				// through the asserted type's leaf projection exactly
+				// like any other whole-tainted interface variable.
+				if isInterfaceType(cv.Type()) {
+					branch.stmtVars[cv] = pageValue{tainted: true, maxLen: maxUnknown}
+				}
 			}
 		}
 		pf.analyzeStmts(branch, cc.Body, fs)
@@ -1893,7 +1942,11 @@ func (pf *pageFlow) recordChanSendFields(st *stmtState, ch ast.Expr, fields map[
 	// there.
 	if root := indexChainRoot(ch); root != ch {
 		if path, ro := selectorIndexChain(ch); ro != nil {
-			if oo := objOfDeref(st, ro); oo != nil {
+			// A TYPE-ASSERTED base (v.(*H).Chs[0] with v an interface
+			// holder) binds the asserted base variable: the send's
+			// element records land on v under the "Chs." prefix, the
+			// same object the matching asserted receive resolves.
+			if oo := chainRootObject(st, ro); oo != nil {
 				record(oo, path+".")
 				return
 			}
@@ -1962,7 +2015,10 @@ func (pf *pageFlow) chanRecvFields(st *stmtState, ch ast.Expr) map[string]pageVa
 	// read path.
 	if root := indexChainRoot(ch); root != ch {
 		if path, ro := selectorIndexChain(ch); ro != nil {
-			if oo := objOfDeref(st, ro); oo != nil {
+			// A TYPE-ASSERTED channel base (v.(*H).Chs[0]) resolves the
+			// asserted base variable's "Chs."-prefixed records, the
+			// same object the asserted send recorded them on.
+			if oo := chainRootObject(st, ro); oo != nil {
 				add(oo, path+".", true)
 			}
 		}
@@ -3939,7 +3995,9 @@ func (pf *pageFlow) applySummaryMutations(st *stmtState, call *ast.CallExpr, fs 
 				// the "Items." prefix, the same flattened path the
 				// h.Items[0].Data read resolves.
 				if path, ro := selectorIndexChain(op); ro != nil {
-					if oo := objOfDeref(st, ro); oo != nil {
+					// A TYPE-ASSERTED root (&v.(*H).Items[0]) binds the
+					// asserted base variable under the "Items." prefix.
+					if oo := chainRootObject(st, ro); oo != nil {
 						targets = append(targets, oo)
 						prefix = path + "."
 					}
@@ -4380,6 +4438,29 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 				}
 			}
 		}
+		// A LOCAL interface value with unprovable whole-value taint (a
+		// type-switch implicit variable of an `any` case, a variable
+		// assigned an unprovable call result) asserted to a struct
+		// exposes the asserted type's page-carrying leaves without a
+		// recorded source: the concrete value is unknowable, so every
+		// leaf fails closed exactly like the direct assertion read
+		// path, and a bind-then-read (b := v.(T); b.Data) keeps the
+		// projection inside the callee summary.
+		if fields == nil {
+			if pv := pf.evalExpr(st, v.X); pv.tainted {
+				if stt, ok := derefStruct(pf.pc.info.Types[v.Type].Type); ok {
+					for path, ft := range paramLeafPaths(stt) {
+						if !paramCanCarryPage(ft) {
+							continue
+						}
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[path] = pageValue{tainted: true, maxLen: maxUnknown}
+					}
+				}
+			}
+		}
 	case *ast.SelectorExpr:
 		// A struct VALUE read off a field (take(h.Box) with h.Box.Data
 		// a recorded page): the base's flattened field taints carry the
@@ -4469,6 +4550,28 @@ func (pf *pageFlow) argFlowOf(st *stmtState, a ast.Expr) argFlow {
 								}
 								fields[path[len(prefix):]] = pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: path, hasSrc: true}
 							}
+						}
+					}
+				}
+			}
+			// A LOCAL asserted base with unprovable whole-value taint
+			// (a type-switch implicit variable of an `any` case, a
+			// variable assigned an unprovable call result) exposes the
+			// asserted type's page-carrying leaves under the selected
+			// chain without a recorded source: the concrete value is
+			// unknowable, so every leaf fails closed exactly like the
+			// direct asserted-read path.
+			if fields == nil {
+				if pv := pf.evalExpr(st, ta.X); pv.tainted {
+					if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+						for path, ft := range paramLeafPaths(stt) {
+							if !paramCanCarryPage(ft) || !strings.HasPrefix(path, prefix) {
+								continue
+							}
+							if fields == nil {
+								fields = map[string]pageValue{}
+							}
+							fields[path[len(prefix):]] = pageValue{tainted: true, maxLen: maxUnknown}
 						}
 					}
 				}
@@ -5080,6 +5183,44 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 					fields[k[len(prefix):]] = fv
 				}
 			}
+		} else if ta := typeAssertBaseOf(sel); ta != nil {
+			// v.(*H).Inner with v an interface-typed parameter: the
+			// selected value keeps the caller's field taints through the
+			// asserted type's "Inner."-prefixed leaf paths, the same
+			// projection `return v.(T)` applies for a whole asserted
+			// value, so identity helpers over an interface keep their
+			// results caller-dependent.
+			chain, _ := selectorIndexChain(sel)
+			prefix := chain + "."
+			if o := objOfDeref(st, ta.X); o != nil {
+				if idx, ok := st.params[o]; ok && isInterfaceType(o.Type()) {
+					if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+						for p, ft := range paramLeafPaths(stt) {
+							if !paramCanCarryPage(ft) || !strings.HasPrefix(p, prefix) {
+								continue
+							}
+							src := pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: p, hasSrc: true}
+							fs.fields[p[len(prefix):]] = joinFieldTaint(fs.fields[p[len(prefix):]], fieldTaint{tainted: true, srcs: maxSrcOf(src)})
+						}
+					}
+				}
+			}
+			// A LOCAL whole-tainted asserted base (a type-switch
+			// implicit variable of an `any` case) fails closed on the
+			// same leaves without a recorded source.
+			if pv := pf.evalExpr(st, ta.X); pv.tainted {
+				if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+					for p, ft := range paramLeafPaths(stt) {
+						if !paramCanCarryPage(ft) || !strings.HasPrefix(p, prefix) {
+							continue
+						}
+						if fields == nil {
+							fields = map[string]pageValue{}
+						}
+						fields[p[len(prefix):]] = pageValue{tainted: true, maxLen: maxUnknown}
+					}
+				}
+			}
 		} else {
 			fields = pf.callProducedFields(st, sel)
 		}
@@ -5103,8 +5244,8 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 		// names, so the caller's read of the returned value stays
 		// sourced.
 		if path, ro := selectorIndexChain(expr); ro != nil {
-			if obj := objOfDeref(st, ro); obj != nil {
-				prefix := path + "."
+			prefix := path + "."
+			if obj := chainRootObject(st, ro); obj != nil {
 				if m, ok := st.structs[obj]; ok {
 					for k, fv := range m {
 						if fv.tainted && strings.HasPrefix(k, prefix) {
@@ -5118,6 +5259,41 @@ func (pf *pageFlow) propagateStructResult(st *stmtState, expr ast.Expr, fs *func
 							continue
 						}
 						fs.fields[k[len(prefix):]] = joinFieldTaint(fs.fields[k[len(prefix):]], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+					}
+				}
+			}
+			if ta, ok := unparen(ro).(*ast.TypeAssertExpr); ok {
+				// v.(*H).Items[0] with v an INTERFACE-TYPED parameter:
+				// the returned element keeps the caller's field taints
+				// through the asserted type's "Items."-prefixed leaf
+				// paths, the same projection `return v.(T)` applies for
+				// a whole asserted value, so identity helpers over an
+				// interface keep their results caller-dependent.
+				if o := objOfDeref(st, ta.X); o != nil {
+					if idx, ok := st.params[o]; ok && isInterfaceType(o.Type()) {
+						if stt, ok := derefStruct(pf.pc.info.Types[ta.Type].Type); ok {
+							for p, ft := range paramLeafPaths(stt) {
+								if !paramCanCarryPage(ft) || !strings.HasPrefix(p, prefix) {
+									continue
+								}
+								src := pageValue{tainted: true, maxLen: maxUnknown, srcParam: idx, srcField: p, hasSrc: true}
+								fs.fields[p[len(prefix):]] = joinFieldTaint(fs.fields[p[len(prefix):]], fieldTaint{tainted: true, srcs: maxSrcOf(src)})
+							}
+						}
+					}
+				}
+			}
+			if call, chain := callRootChain(expr); call != nil && chain != "" {
+				// makeH(p).Items[0]: the returned element of a
+				// CALL-PRODUCED selected container keeps the callee's
+				// flattened "Items."-prefixed element fields, renamed to
+				// the element's direct names, so the caller's read of
+				// the returned value stays sourced.
+				if m := pf.callProducedFields(st, expr); len(m) > 0 {
+					for k, fv := range m {
+						if fv.tainted {
+							fs.fields[k] = joinFieldTaint(fs.fields[k], fieldTaint{tainted: true, srcs: maxSrcOf(fv)})
+						}
 					}
 				}
 			}

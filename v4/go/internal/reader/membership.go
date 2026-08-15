@@ -68,7 +68,9 @@ func (v MembershipView) ReadWords(start uint32, output []uint64) (int, error) {
 // ContainsIndex reports whether feed_index is set in the bitmap. An index at
 // or beyond the generation's feed index limit is InvalidArgument (the index
 // is not an observable feed of this generation); otherwise a set bit beyond
-// word_count is absent by definition.
+// word_count is absent by definition. The word is read through
+// readWordsInner so a ZERO FINAL WORD is corrupt here too (spec section 9),
+// exactly like Word and ReadWords and the Rust contains_index.
 func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 	if uint64(feedIndex) >= v.r.meta.FeedIndexLimit {
 		return false, &format.Error{Code: format.CodeInvalidArgument, Detail: "feed index exceeds this catalog generation"}
@@ -77,11 +79,11 @@ func (v MembershipView) ContainsIndex(feedIndex uint32) (bool, error) {
 	if word >= v.wordCount {
 		return false, nil
 	}
-	b, err := v.wordBytes(word)
-	if err != nil {
+	var words [1]uint64
+	if err := v.readWordsInner(word, words[:]); err != nil {
 		return false, err
 	}
-	return format.U64(b)&(uint64(1)<<(feedIndex%64)) != 0, nil
+	return words[0]&(uint64(1)<<(feedIndex%64)) != 0, nil
 }
 
 // readWordsInner copies words [start, start+len(output)) through the same
