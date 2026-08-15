@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +107,35 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if m.Schema != 2 {
 		t.Fatalf("unsupported conformance schema %d, want 2", m.Schema)
 	}
+	// Compare the manifest inventory against the actual directory: every
+	// committed .iprdb fixture must be listed, and no extra .iprdb file
+	// may exist, mirroring Rust's assert_fixture_inventory (verify.rs:77-99).
+	manifestFiles := map[string]bool{}
+	for _, fx := range m.Fixtures {
+		manifestFiles[fx.File] = true
+	}
+	var diskFiles []string
+	err = filepath.Walk("../conformance", func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !fi.IsDir() && strings.HasSuffix(path, ".iprdb") {
+			rel, err := filepath.Rel("../conformance", path)
+			if err != nil {
+				return err
+			}
+			diskFiles = append(diskFiles, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("walk conformance dir:", err)
+	}
+	for _, f := range diskFiles {
+		if !manifestFiles[f] {
+			t.Fatalf("committed fixture %s not in manifest", f)
+		}
+	}
 	// Enforce the exact fixture inventory and producer coverage: all six
 	// committed Rust fixtures must be present with producer "rust", and
 	// no extra fixtures may appear.
@@ -136,6 +166,113 @@ func loadManifest(t *testing.T) conformanceManifest {
 	// conformance_support/verify.rs:31.
 	if len(m.Invalid) != 3 {
 		t.Fatalf("invalid case count %d, want 3", len(m.Invalid))
+	}
+	// Reject wrong-kind range arrays: a direct fixture must have no
+	// membership or structured ranges, and so on, mirroring Rust's
+	// assert_direct/assert_membership/assert_structured empty-array
+	// assertions (verify.rs:146-148, 208-209, 248-249).
+	for _, fx := range m.Fixtures {
+		switch fx.Kind {
+		case "direct":
+			if len(fx.MembershipRanges) > 0 || len(fx.StructuredRanges) > 0 {
+				t.Fatalf("direct fixture %s has membership/structured ranges", fx.File)
+			}
+		case "membership":
+			if len(fx.DirectRanges) > 0 || len(fx.StructuredRanges) > 0 {
+				t.Fatalf("membership fixture %s has direct/structured ranges", fx.File)
+			}
+		case "structured":
+			if len(fx.DirectRanges) > 0 || len(fx.MembershipRanges) > 0 {
+				t.Fatalf("structured fixture %s has direct/membership ranges", fx.File)
+			}
+		}
+	}
+	// Validate canonical range invariants, mirroring Rust's
+	// assert_canonical_memberships (verify.rs:468-482) and
+	// assert_canonical_structures (verify.rs:382-395): bounds, ordering,
+	// no overlap, and no uncoalesced adjacent ranges.
+	// addr128 returns the address as (hi, lo) for comparison; for IPv4,
+	// hi=0 and lo is the 32-bit address.
+	addr128 := func(s string, family string) (uint64, uint64) {
+		h, l, v4 := addressBytes(s, family)
+		if family == "ipv4" {
+			return 0, uint64(v4)
+		}
+		return h, l
+	}
+	for _, fx := range m.Fixtures {
+		family := fx.Family
+		// Membership ranges.
+		var prevToHi, prevToLo uint64
+		var prevFeeds []string
+		for i, mr := range fx.MembershipRanges {
+			fh, fl := addr128(mr.From, family)
+			th, tl := addr128(mr.To, family)
+			if fh > th || (fh == th && fl > tl) {
+				t.Fatalf("membership fixture %s range %d: from > to", fx.File, i)
+			}
+			if len(mr.Feeds) == 0 {
+				t.Fatalf("membership fixture %s range %d: empty feeds", fx.File, i)
+			}
+			if i > 0 {
+				if prevToHi > fh || (prevToHi == fh && prevToLo >= fl) {
+					t.Fatalf("membership fixture %s range %d: overlaps previous range", fx.File, i)
+				}
+				// Adjacent ranges with identical feeds must be coalesced.
+				if prevToLo+1 == fl && prevToHi == fh {
+					same := len(prevFeeds) == len(mr.Feeds)
+					if same {
+						for j := range prevFeeds {
+							if prevFeeds[j] != mr.Feeds[j] {
+								same = false
+								break
+							}
+						}
+					}
+					if same {
+						t.Fatalf("membership fixture %s range %d: uncoalesced with previous", fx.File, i)
+					}
+				}
+			}
+			prevToHi, prevToLo = th, tl
+			prevFeeds = mr.Feeds
+		}
+		// Structured ranges.
+		var prevSToHi, prevSToLo uint64
+		var prevSASN, prevSCountry, prevSState, prevSCity uint32
+		var prevSFeeds []string
+		for i, sr := range fx.StructuredRanges {
+			fh, fl := addr128(sr.From, family)
+			th, tl := addr128(sr.To, family)
+			if fh > th || (fh == th && fl > tl) {
+				t.Fatalf("structured fixture %s range %d: from > to", fx.File, i)
+			}
+			if i > 0 {
+				if prevSToHi > fh || (prevSToHi == fh && prevSToLo >= fl) {
+					t.Fatalf("structured fixture %s range %d: overlaps previous range", fx.File, i)
+				}
+				// Adjacent ranges with identical values must be coalesced.
+				if prevSToLo+1 == fl && prevSToHi == fh &&
+					prevSASN == sr.ASN && prevSCountry == sr.CountryID &&
+					prevSState == sr.StateID && prevSCity == sr.CityID {
+					same := len(prevSFeeds) == len(sr.Feeds)
+					if same {
+						for j := range prevSFeeds {
+							if prevSFeeds[j] != sr.Feeds[j] {
+								same = false
+								break
+							}
+						}
+					}
+					if same {
+						t.Fatalf("structured fixture %s range %d: uncoalesced with previous", fx.File, i)
+					}
+				}
+			}
+			prevSToHi, prevSToLo = th, tl
+			prevSASN, prevSCountry, prevSState, prevSCity = sr.ASN, sr.CountryID, sr.StateID, sr.CityID
+			prevSFeeds = sr.Feeds
+		}
 	}
 	// Reject duplicate feed names or indices within any fixture, mirroring
 	// Rust's exact catalog comparison (verify.rs:253-267).
