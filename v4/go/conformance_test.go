@@ -92,35 +92,23 @@ func rejectDuplicateKeys(data []byte) error {
 			if !utf8.Valid(raw) {
 				return fmt.Errorf("invalid UTF-8 in string at offset %d", i)
 			}
-			// Check for unpaired surrogates in \u escapes.
+			// Check for unpaired surrogates in \u escapes. The scanner must
+			// skip escaped characters correctly: \\ is an escaped backslash
+			// (not a \u escape), so we track escape state explicitly.
 			for k := 0; k < len(raw); k++ {
-				if raw[k] == '\\' && k+1 < len(raw) && raw[k+1] == 'u' {
-					if k+5 >= len(raw) {
-						return fmt.Errorf("truncated \\u escape at offset %d", i+k)
+				if raw[k] == '\\' && k+1 < len(raw) {
+					if raw[k+1] == '\\' {
+						// Escaped backslash: skip both bytes.
+						k++
+						continue
 					}
-					// Decode the 4 hex digits.
-					var cp uint32
-					for _, c := range raw[k+2 : k+6] {
-						var d uint32
-						switch {
-						case c >= '0' && c <= '9':
-							d = uint32(c - '0')
-						case c >= 'a' && c <= 'f':
-							d = uint32(c-'a') + 10
-						case c >= 'A' && c <= 'F':
-							d = uint32(c-'A') + 10
-						default:
-							return fmt.Errorf("invalid \\u escape at offset %d", i+k)
+					if raw[k+1] == 'u' {
+						if k+5 >= len(raw) {
+							return fmt.Errorf("truncated \\u escape at offset %d", i+k)
 						}
-						cp = cp<<4 | d
-					}
-					if cp >= 0xD800 && cp <= 0xDBFF {
-						// High surrogate: must be followed by \uDC00-\uDFFF.
-						if k+11 >= len(raw) || raw[k+6] != '\\' || raw[k+7] != 'u' {
-							return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
-						}
-						var lo uint32
-						for _, c := range raw[k+8 : k+12] {
+						// Decode the 4 hex digits.
+						var cp uint32
+						for _, c := range raw[k+2 : k+6] {
 							var d uint32
 							switch {
 							case c >= '0' && c <= '9':
@@ -130,18 +118,41 @@ func rejectDuplicateKeys(data []byte) error {
 							case c >= 'A' && c <= 'F':
 								d = uint32(c-'A') + 10
 							default:
-								return fmt.Errorf("invalid \\u escape at offset %d", i+k+6)
+								return fmt.Errorf("invalid \\u escape at offset %d", i+k)
 							}
-							lo = lo<<4 | d
+							cp = cp<<4 | d
 						}
-						if lo < 0xDC00 || lo > 0xDFFF {
-							return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
+						if cp >= 0xD800 && cp <= 0xDBFF {
+							// High surrogate: must be followed by \uDC00-\uDFFF.
+							if k+11 >= len(raw) || raw[k+6] != '\\' || raw[k+7] != 'u' {
+								return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
+							}
+							var lo uint32
+							for _, c := range raw[k+8 : k+12] {
+								var d uint32
+								switch {
+								case c >= '0' && c <= '9':
+									d = uint32(c - '0')
+								case c >= 'a' && c <= 'f':
+									d = uint32(c-'a') + 10
+								case c >= 'A' && c <= 'F':
+									d = uint32(c-'A') + 10
+								default:
+									return fmt.Errorf("invalid \\u escape at offset %d", i+k+6)
+								}
+								lo = lo<<4 | d
+							}
+							if lo < 0xDC00 || lo > 0xDFFF {
+								return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
+							}
+							// Skip the entire surrogate pair (\uXXXX\uXXXX = 12 bytes).
+							k += 11
+						} else if cp >= 0xDC00 && cp <= 0xDFFF {
+							return fmt.Errorf("unpaired low surrogate at offset %d", i+k)
 						}
-						k += 11
-					} else if cp >= 0xDC00 && cp <= 0xDFFF {
-						return fmt.Errorf("unpaired low surrogate at offset %d", i+k)
+						// Skip the \uXXXX escape (6 bytes).
+						k += 5
 					}
-					k += 5
 				}
 			}
 			// Decode the string for the duplicate-key check.
