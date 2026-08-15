@@ -11,12 +11,30 @@ import (
 	"testing"
 )
 
-// strictUnmarshal unmarshals JSON with duplicate-field rejection and
+// strictUnmarshal unmarshals JSON with case-sensitive field names and
 // trailing-data rejection, mirroring Rust's serde derived deserializer
-// semantics. Go's encoding/json accepts duplicate fields with last-value
-// semantics and trailing data; this wrapper rejects both.
-// DisallowUnknownFields already rejects unknown and case-mismatched fields.
+// semantics. Go's encoding/json is case-insensitive even with
+// DisallowUnknownFields, so this wrapper first decodes into a map and
+// rejects any key that does not exactly match a known field name.
+// Duplicate fields are a known Go limitation (last-value semantics);
+// the conformance manifest is machine-generated and never contains them.
 func strictUnmarshal(data []byte, v any) error {
+	// First pass: decode into a generic map to check for case-mismatched
+	// keys. The map keys are the exact JSON field names; any key that
+	// does not exactly match a known field is rejected.
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	known := map[string]bool{
+		"schema": true, "fixtures": true, "invalid_cases": true,
+	}
+	for key := range probe {
+		if !known[key] {
+			return fmt.Errorf("unknown or case-mismatched field %q", key)
+		}
+	}
+	// Second pass: decode into the typed struct with DisallowUnknownFields.
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
@@ -413,9 +431,9 @@ func loadManifest(t *testing.T) conformanceManifest {
 			}
 		}
 	}
-	// Validate feed index presence: every feed must carry its index field
-	// (Rust's u32 field is required; Go's omitempty makes omission
-	// indistinguishable from zero, so we check the raw JSON).
+	// Validate feed index presence and type: every feed must carry its
+	// index field as a valid u32 (Rust's required u32 rejects null; Go's
+	// uint32 accepts null as zero, so we check the raw JSON).
 	for _, rawFx := range rawFixtures {
 		if rawFeeds, ok := rawFx["feeds"]; ok && string(rawFeeds) != "null" {
 			var feeds []map[string]json.RawMessage
@@ -423,8 +441,16 @@ func loadManifest(t *testing.T) conformanceManifest {
 				t.Fatalf("feeds decode: %v", err)
 			}
 			for i, rawFeed := range feeds {
-				if _, ok := rawFeed["index"]; !ok {
+				rawIdx, ok := rawFeed["index"]
+				if !ok {
 					t.Fatalf("feed %d: index field is missing", i)
+				}
+				if string(rawIdx) == "null" {
+					t.Fatalf("feed %d: index is null", i)
+				}
+				var idx uint32
+				if err := json.Unmarshal(rawIdx, &idx); err != nil {
+					t.Fatalf("feed %d: index is not a valid u32: %v", i, err)
 				}
 			}
 		}
