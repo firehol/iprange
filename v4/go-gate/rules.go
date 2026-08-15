@@ -1636,6 +1636,16 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		if pv := w.pageValue(rhs); pv.tainted && pageFull(pv) {
 			w.checkArrayConversionSink(v.Lhs[i].Pos(), lhsTypeForCheck(w, v.Lhs[i]), pv)
 		}
+		// An element write into a page-aggregated buffer (marked by the
+		// pageflow engine inside a page-sourcing loop) is a complete-page
+		// copy: the buffer has received PageSize element writes from a
+		// page-tainted source.
+		if lv := w.pageValue(v.Lhs[i]); lv.tainted && pageFull(lv) {
+			if _, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
+				w.fail(v.Lhs[i].Pos(), "element-wise copy of a mapped page into an owned buffer (complete page)")
+			}
+		}
+
 		// m[f] = 1: a runtime map store launders the descriptor through
 		// the KEY when the map's key slot cannot bear it (composite map
 		// keys are checked at the literal itself).

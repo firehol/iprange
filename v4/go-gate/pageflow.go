@@ -716,6 +716,10 @@ type stmtState struct {
 	// writes from a page-sourcing loop. Once marked, the buffer is
 	// treated as page-tainted for the complete-page rule.
 	pageAggregated map[types.Object]bool
+	// lenOfPage records variables bound to len(page) where page is a
+	// page-tainted slice, so a for-loop condition using the alias
+	// (for i := 0; i < n; i++) is recognized as a page-sourcing loop.
+	lenOfPage map[types.Object]bool
 	// localFuncs records the current func-literal binding of local
 	// function-typed variables, so a call through a locally declared
 	// closure (id := func(p []byte) []byte { return p }) resolves the
@@ -738,6 +742,7 @@ func newStmtState(pf *pageFlow, fd *ast.FuncDecl, pkgVars map[string]pageValue, 
 		pf:             pf,
 		fd:             fd,
 		pageAggregated: map[types.Object]bool{},
+		lenOfPage:      map[types.Object]bool{},
 		params:         map[types.Object]int{},
 		stmtVars:       map[types.Object]pageValue{},
 		structs:        map[types.Object]map[string]pageValue{},
@@ -889,7 +894,9 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 }
 
 // condReferencesPage reports whether a for-loop condition references the
-// length of a page-tainted slice (for i := 0; i < len(page); i++).
+// length of a page-tainted slice (for i := 0; i < len(page); i++), an
+// aliased length (n := len(page); for i := 0; i < n; i++), or a constant
+// bound equal to PageSize (for i := 0; i < 4096; i++).
 func (pf *pageFlow) condReferencesPage(st *stmtState, cond ast.Expr) bool {
 	if cond == nil {
 		return false
@@ -899,11 +906,32 @@ func (pf *pageFlow) condReferencesPage(st *stmtState, cond ast.Expr) bool {
 		if found {
 			return false
 		}
+		// Direct len(page) reference.
 		if call, ok := n.(*ast.CallExpr); ok {
 			if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "len" && len(call.Args) == 1 {
-				if pv := pf.evalExpr(st, call.Args[0]); pv.tainted && pageFull(pv) {
+				pv := pf.evalExpr(st, call.Args[0])
+				if pv.tainted && pageFull(pv) {
 					found = true
+					return false
 				}
+			}
+		}
+		// Aliased length: a variable bound to len(page). The variable
+		// itself is not page-tainted (it's an int), but it was recorded
+		// in lenOfPage when bound to len(page).
+		if id, ok := n.(*ast.Ident); ok {
+			if obj := pf.pc.info.ObjectOf(id); obj != nil {
+				if st.lenOfPage[obj] {
+					found = true
+					return false
+				}
+			}
+		}
+		// Constant bound equal to PageSize: for i := 0; i < 4096; i++.
+		if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.INT {
+			if v, err := strconv.ParseInt(bl.Value, 0, 64); err == nil && v == pageSize {
+				found = true
+				return false
 			}
 		}
 		return true
@@ -968,41 +996,6 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				// owned array of PageSize aggregates to a complete page
 				// copy. Mark the array as page-aggregated so the
 				// complete-page rule catches it.
-				if st.pageSourceLoops > 0 {
-					// For an index assignment (out[i] = b), the target is
-					// the array variable, not the index expression.
-					lhs := v.Lhs[i]
-					if ix, ok := unparen(lhs).(*ast.IndexExpr); ok {
-						lhs = ix.X
-					}
-					if obj := objOf(st, lhs); obj != nil {
-						if arr, ok := obj.Type().Underlying().(*types.Array); ok && arr.Len() >= pageSize {
-							st.pageAggregated[obj] = true
-							// Store a tainted pageValue for the aggregated
-							// buffer so the complete-page rule catches it.
-							st.stmtVars[obj] = pageValue{tainted: true, maxLen: arr.Len()}
-						}
-					}
-					// An append into an owned slice inside a page-sourcing
-					// loop aggregates to a complete page copy when the
-					// slice's capacity reaches PageSize. The append sink
-					// check in rules.go catches the buffer-capacity case.
-					if call, ok := unparen(rhs).(*ast.CallExpr); ok {
-						if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "append" && len(call.Args) >= 2 {
-							if obj := objOf(st, v.Lhs[i]); obj != nil {
-								if _, ok := obj.Type().Underlying().(*types.Slice); ok {
-									st.pageAggregated[obj] = true
-									// The slice's exact length is not statically
-									// known, but the append is inside a
-									// page-sourcing loop: if the loop runs
-									// PageSize times, the slice reaches
-									// PageSize. Mark it as page-tainted.
-									st.stmtVars[obj] = pageValue{tainted: true, maxLen: maxUnknown}
-								}
-							}
-						}
-					}
-				}
 				// A struct-valued right side keeps its field provenance
 				// on the bound variable exactly like direct argument
 				// flow: composite literals flatten their fields, calls
@@ -1022,8 +1015,65 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 				pf.bindLocalFunc(st, v.Lhs[i], lit)
 				pf.recordBinding(st, v.Lhs[i], v.Rhs[i])
+				// Track len(page) bindings so a for-loop condition using
+				// the alias (for i := 0; i < n; i++) is recognized as a
+				// page-sourcing loop.
+				if call, ok := unparen(v.Rhs[i]).(*ast.CallExpr); ok {
+					if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "len" && len(call.Args) == 1 {
+						if pv := pf.evalExpr(st, call.Args[0]); pv.tainted && pageFull(pv) {
+							if obj := objOf(st, v.Lhs[i]); obj != nil {
+								st.lenOfPage[obj] = true
+							}
+						}
+					}
+				}
 				pf.materializeStructFields(st, v.Lhs[i], v.Rhs[i])
 				assignTarget(st, v.Lhs[i], pv)
+				if obj := objOf(st, v.Lhs[i]); obj != nil && obj.Name() == "page" {
+					println("DEBUG assign page: tainted=", pv.tainted, "maxLen=", int(pv.maxLen))
+				}
+				// Inside a page-sourcing loop, an element write into an
+				// owned buffer aggregates to a complete page copy. Mark
+				// the buffer as page-aggregated AFTER the normal
+				// assignment processing so the mark survives.
+				if st.pageSourceLoops > 0 {
+					lhs := v.Lhs[i]
+					// For an index assignment (out[i] = b), the target is
+					// the array/slice variable, not the index expression.
+					if ix, ok := unparen(lhs).(*ast.IndexExpr); ok {
+						lhs = ix.X
+					}
+					// For an append assignment (out = append(out, b)), the
+					// target is the first argument of the append.
+					if call, ok := unparen(rhs).(*ast.CallExpr); ok {
+						if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "append" && len(call.Args) >= 1 {
+							lhs = call.Args[0]
+						}
+					}
+					if obj := objOf(st, lhs); obj != nil {
+						t := obj.Type().Underlying()
+						if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
+							st.pageAggregated[obj] = true
+							st.stmtVars[obj] = pageValue{tainted: true, maxLen: arr.Len()}
+						}
+						if _, ok := t.(*types.Slice); ok {
+							st.pageAggregated[obj] = true
+							st.stmtVars[obj] = pageValue{tainted: true, maxLen: maxUnknown}
+							// Store the taint on the LHS expression too, so
+							// the rules pass sees the aggregated buffer as
+							// page-tainted for the complete-page rule.
+							pf.values[v.Lhs[i]] = pageValue{tainted: true, maxLen: maxUnknown}
+							// For an append assignment, also store the taint
+							// on the append's first argument (a different
+							// AST node from the LHS).
+							if call, ok := unparen(rhs).(*ast.CallExpr); ok {
+								if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "append" && len(call.Args) >= 1 {
+									pf.values[call.Args[0]] = pageValue{tainted: true, maxLen: maxUnknown}
+								}
+							}
+						}
+					}
+				}
 				if obj := objOf(st, v.Lhs[i]); obj != nil && len(fields) > 0 {
 					if st.structs[obj] == nil {
 						st.structs[obj] = map[string]pageValue{}
@@ -1422,6 +1472,18 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			if pv.tainted && pageFull(pv) {
 				st.pageSourceLoops++
 				pageSourcing = true
+			}
+			// A range over an owned destination array (for i := range out
+			// { out[i] = page[i] }) is also a page-sourcing context when
+			// the array is PageSize: the loop writes PageSize elements
+			// from a page source.
+			if !pageSourcing {
+				if obj := objOf(st, v.X); obj != nil {
+					if arr, ok := obj.Type().Underlying().(*types.Array); ok && arr.Len() >= pageSize {
+						st.pageSourceLoops++
+						pageSourcing = true
+					}
+				}
 			}
 			_ = pageSourcing
 			// Range variables are bound from the container's element
@@ -2412,6 +2474,10 @@ func (st *stmtState) clone() *stmtState {
 	for k := range st.pageAggregated {
 		cp.pageAggregated[k] = true
 	}
+	cp.lenOfPage = map[types.Object]bool{}
+	for k := range st.lenOfPage {
+		cp.lenOfPage[k] = true
+	}
 	return &cp
 }
 
@@ -2425,6 +2491,9 @@ func (st *stmtState) joinWith(other *stmtState) {
 	// page-returning branch is still possible.
 	for k := range other.pageAggregated {
 		st.pageAggregated[k] = true
+	}
+	for k := range other.lenOfPage {
+		st.lenOfPage[k] = true
 	}
 	for k := range other.ambigBind {
 		if st.ambigBind[k] {
@@ -3717,7 +3786,9 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if pkgPath == mappingImportPath && recv == "Mapping" {
 		switch fn.Name() {
 		case "Page":
-			return pageValue{tainted: true, maxLen: pageSize}
+			pv := pageValue{tainted: true, maxLen: pageSize}
+			pf.callResults[call] = []pageValue{pv, {}}
+			return pv
 		case "View":
 			// View(off, length): the length argument bounds the view; a
 			// constant bound keeps the result below a complete page.
@@ -3729,6 +3800,7 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 					}
 				}
 			}
+			pf.callResults[call] = []pageValue{pv, {}}
 			return pv
 		}
 	}
