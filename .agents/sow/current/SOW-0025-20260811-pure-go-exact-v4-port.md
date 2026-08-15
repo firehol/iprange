@@ -24,7 +24,7 @@ round (six-resident swarm re-approval, then sol, per the user review
 decision). All three review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 11,568-line typed toolchain (11,016-line go/types module
+mmap gate is an 11,685-line typed toolchain (11,133-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -169,7 +169,7 @@ interface-typed type-switch cases, and the same-family sweep of asserted
 field-map key ranges and returned/bound asserted selectors under
 interface-typed switch cases) and one reader divergence (membership
 ContainsIndex skipped the trailing-word canonical check); details in the
-round-25 entry below. The durable battery is 524 cases (453 rejections,
+round-25 entry below. The durable battery is 527 cases (453 rejections,
 71 benign acceptances) plus 9 shell environment mutations and passes end
 to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -205,7 +205,7 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 524-case battery, and the SOW audit.
+the import-graph gate with its 527-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
 module tests 6,402 raw
@@ -1744,7 +1744,7 @@ HEAD recorded in the first review entry below):
   files as the scanned configs, so the typed scanner sees identical
   ASTs. The shell harness runs import-boundary checks on all 11
   targets. The records were updated to state this explicitly.
-  Cross-builds pass on all 11 targets. Battery 524/524, import-graph
+  Cross-builds pass on all 11 targets. Battery 527/527, import-graph
   self-test, prod scan, go test both tag sets, race, vet, gofmt, SOW
   audit all pass.
 - Round 25 (delta re-review, 0018a41): the round-24 closing commit
