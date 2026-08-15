@@ -11,14 +11,20 @@ import (
 	"testing"
 )
 
-// strictUnmarshal unmarshals JSON with case-sensitive field names and
-// trailing-data rejection, mirroring Rust's serde derived deserializer
-// semantics. Go's encoding/json is case-insensitive even with
-// DisallowUnknownFields, so this wrapper validates every nested object's
-// keys against the known field set before the typed decode.
-// Duplicate fields are a known Go limitation (last-value semantics);
-// the conformance manifest is machine-generated and never contains them.
+// strictUnmarshal unmarshals JSON with case-sensitive field names,
+// duplicate-field rejection, and trailing-data rejection, mirroring Rust's
+// serde derived deserializer semantics. Go's encoding/json is
+// case-insensitive even with DisallowUnknownFields and accepts duplicate
+// fields with last-value semantics; this wrapper validates every nested
+// object's keys against the known manifest field set and rejects duplicate
+// keys within any single object.
 func strictUnmarshal(data []byte, v any) error {
+	// Reject duplicate keys within any single object. The manifest is a
+	// flat top-level object with nested arrays of objects; a simple
+	// stack-based scanner detects duplicates without a full JSON parser.
+	if err := rejectDuplicateKeys(data); err != nil {
+		return err
+	}
 	// First pass: decode into a generic structure and validate every
 	// nested object's keys against the known field set.
 	var probe any
@@ -39,6 +45,58 @@ func strictUnmarshal(data []byte, v any) error {
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("trailing data after manifest")
+	}
+	return nil
+}
+
+// rejectDuplicateKeys scans the raw JSON for duplicate keys within any
+// single object. It uses a stack of maps: each { pushes a new map, each }
+// pops it, and each key is checked against the current top of the stack.
+// String values are skipped (keys inside strings are not object keys).
+func rejectDuplicateKeys(data []byte) error {
+	type frame struct {
+		keys map[string]bool
+	}
+	var stack []frame
+	var i int
+	for i < len(data) {
+		switch data[i] {
+		case '{':
+			stack = append(stack, frame{keys: map[string]bool{}})
+			i++
+		case '}':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			i++
+		case '"':
+			// Find the end of the string.
+			j := i + 1
+			for j < len(data) && data[j] != '"' {
+				if data[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(data) {
+				return fmt.Errorf("unterminated string at offset %d", i)
+			}
+			// Check if this is a key (followed by :).
+			k := j + 1
+			for k < len(data) && (data[k] == ' ' || data[k] == '\t' || data[k] == '\n' || data[k] == '\r') {
+				k++
+			}
+			if k < len(data) && data[k] == ':' && len(stack) > 0 {
+				key := string(data[i+1 : j])
+				if stack[len(stack)-1].keys[key] {
+					return fmt.Errorf("duplicate key %q", key)
+				}
+				stack[len(stack)-1].keys[key] = true
+			}
+			i = j + 1
+		default:
+			i++
+		}
 	}
 	return nil
 }
