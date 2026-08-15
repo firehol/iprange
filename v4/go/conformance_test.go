@@ -219,7 +219,15 @@ func loadManifest(t *testing.T) conformanceManifest {
 					t.Fatalf("membership fixture %s range %d: overlaps previous range", fx.File, i)
 				}
 				// Adjacent ranges with identical feeds must be coalesced.
-				if prevToLo+1 == fl && prevToHi == fh {
+				// Handle low-word overflow: prevToLo == MaxUint64 means
+				// the next address is prevToHi+1, 0.
+				adjacent := false
+				if prevToLo < ^uint64(0) {
+					adjacent = prevToHi == fh && prevToLo+1 == fl
+				} else {
+					adjacent = prevToHi+1 == fh && fl == 0
+				}
+				if adjacent {
 					same := len(prevFeeds) == len(mr.Feeds)
 					if same {
 						for j := range prevFeeds {
@@ -241,6 +249,10 @@ func loadManifest(t *testing.T) conformanceManifest {
 		var prevSToHi, prevSToLo uint64
 		var prevSASN, prevSCountry, prevSState, prevSCity uint32
 		var prevSFeeds []string
+		var prevSLoc *struct {
+			Lat  int32 `json:"latitude_microdegrees"`
+			Long int32 `json:"longitude_microdegrees"`
+		}
 		for i, sr := range fx.StructuredRanges {
 			fh, fl := addr128(sr.From, family)
 			th, tl := addr128(sr.To, family)
@@ -252,9 +264,18 @@ func loadManifest(t *testing.T) conformanceManifest {
 					t.Fatalf("structured fixture %s range %d: overlaps previous range", fx.File, i)
 				}
 				// Adjacent ranges with identical values must be coalesced.
-				if prevSToLo+1 == fl && prevSToHi == fh &&
+				// Handle low-word overflow: prevSToLo == MaxUint64 means
+				// the next address is prevSToHi+1, 0.
+				sAdjacent := false
+				if prevSToLo < ^uint64(0) {
+					sAdjacent = prevSToHi == fh && prevSToLo+1 == fl
+				} else {
+					sAdjacent = prevSToHi+1 == fh && fl == 0
+				}
+				if sAdjacent &&
 					prevSASN == sr.ASN && prevSCountry == sr.CountryID &&
-					prevSState == sr.StateID && prevSCity == sr.CityID {
+					prevSState == sr.StateID && prevSCity == sr.CityID &&
+					prevSLoc == sr.Location {
 					same := len(prevSFeeds) == len(sr.Feeds)
 					if same {
 						for j := range prevSFeeds {
@@ -272,6 +293,59 @@ func loadManifest(t *testing.T) conformanceManifest {
 			prevSToHi, prevSToLo = th, tl
 			prevSASN, prevSCountry, prevSState, prevSCity = sr.ASN, sr.CountryID, sr.StateID, sr.CityID
 			prevSFeeds = sr.Feeds
+			prevSLoc = sr.Location
+		}
+	}
+	// Validate direct-range canonical invariants, mirroring Rust's
+	// assert_canonical_direct (verify.rs:193-205): bounds, ordering,
+	// no overlap, and no uncoalesced adjacent ranges with equal values.
+	for _, fx := range m.Fixtures {
+		family := fx.Family
+		var prevToHi, prevToLo uint64
+		var prevValue uint32
+		for i, dr := range fx.DirectRanges {
+			fh, fl := addr128(dr.From, family)
+			th, tl := addr128(dr.To, family)
+			if fh > th || (fh == th && fl > tl) {
+				t.Fatalf("direct fixture %s range %d: from > to", fx.File, i)
+			}
+			if i > 0 {
+				if prevToHi > fh || (prevToHi == fh && prevToLo >= fl) {
+					t.Fatalf("direct fixture %s range %d: overlaps previous range", fx.File, i)
+				}
+				// Adjacent ranges with equal values must be coalesced.
+				adjacent := false
+				if prevToLo < ^uint64(0) {
+					adjacent = prevToHi == fh && prevToLo+1 == fl
+				} else {
+					adjacent = prevToHi+1 == fh && fl == 0
+				}
+				if adjacent && prevValue == uint32(dr.Value) {
+					t.Fatalf("direct fixture %s range %d: uncoalesced with previous", fx.File, i)
+				}
+			}
+			prevToHi, prevToLo = th, tl
+			prevValue = uint32(dr.Value)
+		}
+	}
+	// Reject state-inapplicable metadata fields, mirroring Rust's tagged
+	// MetadataExpectation enum (model.rs:126-133): absent/empty must not
+	// carry value/byte/length; text must not carry byte/length; repeat
+	// must carry byte and length but not value.
+	for _, fx := range m.Fixtures {
+		switch fx.Metadata.State {
+		case "absent", "empty":
+			if fx.Metadata.Value != "" || fx.Metadata.Byte != 0 || fx.Metadata.Len != 0 {
+				t.Fatalf("fixture %s: metadata state %q carries value/byte/length", fx.File, fx.Metadata.State)
+			}
+		case "text":
+			if fx.Metadata.Byte != 0 || fx.Metadata.Len != 0 {
+				t.Fatalf("fixture %s: metadata state %q carries byte/length", fx.File, fx.Metadata.State)
+			}
+		case "repeat":
+			if fx.Metadata.Value != "" {
+				t.Fatalf("fixture %s: metadata state %q carries value", fx.File, fx.Metadata.State)
+			}
 		}
 	}
 	// Reject duplicate feed names or indices within any fixture, mirroring
@@ -324,11 +398,31 @@ func mustClosePin(t *testing.T, pin *Pin) {
 }
 
 func parseV4(s string) IPv4 {
-	var a, b, c, d uint32
-	if _, err := fmt.Sscanf(s, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
+	// Strict dotted-quad parse: exactly four octets, each 0-255, with
+	// full input consumption. fmt.Sscanf accepts trailing text and
+	// out-of-range octets; this parser rejects both.
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
 		panic("bad ipv4 " + s)
 	}
-	return IPv4(a<<24 | b<<16 | c<<8 | d)
+	var v uint32
+	for _, part := range parts {
+		if part == "" || len(part) > 3 {
+			panic("bad ipv4 octet " + s)
+		}
+		var octet uint32
+		for _, c := range part {
+			if c < '0' || c > '9' {
+				panic("bad ipv4 octet " + s)
+			}
+			octet = octet*10 + uint32(c-'0')
+		}
+		if octet > 255 {
+			panic("bad ipv4 octet " + s)
+		}
+		v = v<<8 | octet
+	}
+	return IPv4(v)
 }
 
 func parseV6Full(s string) IPv6 {
