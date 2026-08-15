@@ -288,16 +288,23 @@ func TestConformanceRustFixtures(t *testing.T) {
 				wantKind = ValueKindMembership
 			case "structured":
 				wantKind = ValueKindStructured
+			default:
+				t.Fatalf("unknown kind %q", tc.Kind)
 			}
 			if info.ValueKind != wantKind {
 				t.Errorf("kind %d want %d", info.ValueKind, wantKind)
 			}
-			if tc.Structure == "network-enrichment-v1" {
+			switch tc.Structure {
+			case "network-enrichment-v1":
 				if info.StructureKind != StructureKindNetworkEnrichmentV1 {
 					t.Errorf("structure kind %d want 1", info.StructureKind)
 				}
-			} else if tc.Kind != "structured" && info.StructureKind != StructureKindNone {
-				t.Errorf("structure kind %d want 0", info.StructureKind)
+			case "":
+				if tc.Kind != "structured" && info.StructureKind != StructureKindNone {
+					t.Errorf("structure kind %d want 0", info.StructureKind)
+				}
+			default:
+				t.Fatalf("unknown structure %q", tc.Structure)
 			}
 			// Tag, selection, and geometry assertions (verify.rs: value_tag,
 			// MetaSelection::ProvenCurrent, page_count*4096 == file length).
@@ -375,6 +382,8 @@ func TestConformanceRustFixtures(t *testing.T) {
 				if len(meta) != tc.Metadata.Len {
 					t.Errorf("metadata repeat length %d want %d", len(meta), tc.Metadata.Len)
 				}
+			default:
+				t.Fatalf("unknown metadata state %q", tc.Metadata.State)
 			}
 
 			// Cardinality string.

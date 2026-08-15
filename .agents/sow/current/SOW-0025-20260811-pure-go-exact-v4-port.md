@@ -208,7 +208,7 @@ go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
 the import-graph gate with its 524-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
-module tests 5,741 raw
+module tests 5,750 raw
 lines; gate tooling 11,568 raw lines total (11,016 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
