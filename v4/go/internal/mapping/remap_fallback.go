@@ -11,7 +11,8 @@ import (
 )
 
 // remapPages resizes the mapping by unmapping the old extent and mapping the
-// new one. The old slice is invalidated.
+// new one. On failure the old mapping is already unmapped and the returned
+// slice is nil; the caller must not restore it.
 func remapPages(f *os.File, old []byte, oldSize, newSize uint64) ([]byte, error) {
 	if err := unix.Munmap(old); err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}

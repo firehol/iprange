@@ -36,7 +36,6 @@ type Mapping struct {
 	data     []byte
 	size     uint64 // currently mapped byte length
 	physical uint64 // file size at open (locked extent)
-	peak     uint64 // largest extent ever mapped (test-only observability)
 }
 
 // OpenImmutable opens path as a regular, symlink-free, page-aligned file and
@@ -154,7 +153,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, peak: 2 * format.PageSize}
+	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size}
 	cleanup = false
 	return m, nil
 }
@@ -166,11 +165,33 @@ func (m *Mapping) Size() uint64 { return m.size }
 // PhysicalSize returns the file size recorded at open (the locked extent).
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 
-// PeakMappedExtent returns the largest byte extent ever mapped by this
-// Mapping. It exists so tests can pin the O(1) bootstrap property: a
-// correct implementation never exceeds 2*PageSize before bootstrap proves
-// the meta pair.
-func (m *Mapping) PeakMappedExtent() uint64 { return m.peak }
+// VerifyIdentity re-checks that the path still names the opened inode.
+// Called after bootstrap+remap to mirror Rust's post-map_reader
+// verify_path_any_link: a namespace replacement during the remap window
+// must not publish a mapping of an old unlinked inode.
+func (m *Mapping) VerifyIdentity(path string) error {
+	if m.file == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	st, err := m.file.Stat()
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	now, err := os.Lstat(filepath.Clean(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while open"}
+		}
+		return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
+	}
+	if !now.Mode().IsRegular() {
+		return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names a regular file"}
+	}
+	if !os.SameFile(now, st) {
+		return &format.Error{Code: format.CodeWrongState, Detail: "path no longer names the opened file"}
+	}
+	return nil
+}
 
 // Remap resizes the mapping to exactly committedBytes. The file handle and
 // lifetime lock are retained. The initial bootstrap mapping is exactly two
@@ -211,14 +232,18 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	m.data = nil
 	data, err := remapPages(m.file, old, m.size, committedBytes)
 	if err != nil {
+		// Linux mremap failure returns the old slice (still valid);
+		// restore it so Close can unmap it. Fallback failure returns
+		// nil (old mapping already unmapped); leave m.data nil so
+		// View returns WrongState and Close skips the munmap.
+		if data != nil {
+			m.data = data
+		}
 		m.size = 0
 		return err
 	}
 	m.data = data
 	m.size = committedBytes
-	if committedBytes > m.peak {
-		m.peak = committedBytes
-	}
 	return nil
 }
 

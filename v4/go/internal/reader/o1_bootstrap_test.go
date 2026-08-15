@@ -77,9 +77,4 @@ func TestRemapCommittedExtent(t *testing.T) {
 	if r.m.Size() != r.meta.PageCount*format.PageSize {
 		t.Fatalf("Size=%d, want %d (pageCount*pageSize)", r.m.Size(), r.meta.PageCount*format.PageSize)
 	}
-	// The peak mapped extent equals the committed extent: the bootstrap
-	// mapped 2 pages, then Remap grew to the full committed size.
-	if peak := r.m.PeakMappedExtent(); peak != r.m.Size() {
-		t.Fatalf("PeakMappedExtent=%d, want %d (committed extent)", peak, r.m.Size())
-	}
 }

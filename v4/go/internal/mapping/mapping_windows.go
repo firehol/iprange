@@ -36,6 +36,11 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// VerifyIdentity satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) VerifyIdentity(path string) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
 // PhysicalSize satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) PhysicalSize() uint64 { return 0 }
 

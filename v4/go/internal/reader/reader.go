@@ -77,6 +77,18 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 		m.Close()
 		return nil, err
 	}
+	// Post-remap identity and sidecar recheck, mirroring Rust
+	// open_immutable (verify_path_any_link + require_sidecar_absent
+	// after map_reader): the path must still name the same inode and
+	// no live sidecar may have appeared during the remap window.
+	if err := m.VerifyIdentity(path); err != nil {
+		m.Close()
+		return nil, err
+	}
+	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+		m.Close()
+		return nil, err
+	}
 	return r, nil
 }
 
