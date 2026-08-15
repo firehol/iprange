@@ -530,13 +530,14 @@ func TestConformanceRustFixtures(t *testing.T) {
 				t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
 			}
 			if len(tc.Feeds) > 0 {
-				// The manifest feed array order must match the catalog
-				// index order: index i is the i-th feed in the manifest,
-				// mirroring Rust's ordered catalog vector comparison
-				// (verify.rs:216-227).
-				for i, feed := range tc.Feeds {
-					if feed.Index != uint32(i) {
-						t.Errorf("feed %s index %d, want %d (manifest order)", feed.Name, feed.Index, i)
+				// The manifest feed array must be in strictly ascending
+				// feed-index order, mirroring Rust's ordered catalog
+				// vector comparison (verify.rs:216-227). Sparse indices
+				// are valid; contiguity is not required.
+				for i := 1; i < len(tc.Feeds); i++ {
+					if tc.Feeds[i].Index <= tc.Feeds[i-1].Index {
+						t.Errorf("feed %s index %d not ascending after %s index %d",
+							tc.Feeds[i].Name, tc.Feeds[i].Index, tc.Feeds[i-1].Name, tc.Feeds[i-1].Index)
 					}
 				}
 				// Every declared feed resolves to its exact index, and
