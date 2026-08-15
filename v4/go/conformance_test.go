@@ -1,6 +1,7 @@
 package iprangedb
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,7 +86,9 @@ func loadManifest(t *testing.T) conformanceManifest {
 		t.Fatal("read cases.json:", err)
 	}
 	var m conformanceManifest
-	if err := json.Unmarshal(raw, &m); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
 		t.Fatal("parse cases.json:", err)
 	}
 	// Reject an unsupported manifest schema, mirroring Rust
@@ -300,7 +303,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("structure kind %d want 1", info.StructureKind)
 				}
 			case "":
-				if tc.Kind != "structured" && info.StructureKind != StructureKindNone {
+				if tc.Kind == "structured" {
+					t.Fatalf("structured fixture %s has no structure kind", tc.File)
+				}
+				if info.StructureKind != StructureKindNone {
 					t.Errorf("structure kind %d want 0", info.StructureKind)
 				}
 			default:
@@ -490,15 +496,16 @@ func TestConformanceRustFixtures(t *testing.T) {
 			// canonical ranges, in ascending order, with no extra records and
 			// a total equal to the declared address count. Only direct
 			// fixtures have direct ranges.
-			// Feed catalog checks apply to every feed-bearing fixture,
-			// not just direct ones: membership and structured fixtures
-			// also declare feeds that must resolve to their exact index.
+			// Feed catalog checks apply to every fixture: feed-bearing
+			// fixtures must resolve every declared feed, and no-feed
+			// fixtures must have zero active feeds (an extra unreferenced
+			// catalog feed would be a divergence from the manifest).
+			if info.ActiveFeedCount != uint64(len(tc.Feeds)) {
+				t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
+			}
 			if len(tc.Feeds) > 0 {
-				// Every declared feed resolves to its exact index, the declared
-				// count matches the meta, and undeclared names are absent.
-				if info.ActiveFeedCount != uint64(len(tc.Feeds)) {
-					t.Errorf("active feed count %d want %d", info.ActiveFeedCount, len(tc.Feeds))
-				}
+				// Every declared feed resolves to its exact index, and
+				// undeclared names are absent.
 				for _, feed := range tc.Feeds {
 					entry, ok, err := db.LookupFeed(feed.Name)
 					if err != nil || !ok {
