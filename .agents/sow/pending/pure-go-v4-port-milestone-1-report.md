@@ -236,9 +236,9 @@ copied string: 1 alloc)
 Production LOC measured at HEAD (recomputed after every repair pass;
 `find . -name '*.go' ! -name '*_test.go' | sort | xargs cat | wc -l`
 inside v4/go: internal/format + internal/mapping + internal/reader plus
-doc.go, errors.go, reader_public.go, types.go): 5,049 raw lines, including
+doc.go, errors.go, reader_public.go, types.go): 5,051 raw lines, including
 blanks; new-tree tests (`find . -name '*_test.go' | sort | xargs cat | wc -l` over the same
-tree): 5,180 raw lines. The earlier
+tree): 5,293 raw lines. The earlier
 6,160 figure mixed production and test files and is superseded, as are the
 ~3,720/~1,700 snapshots from the first passes.
 
@@ -1280,8 +1280,8 @@ Fixes (one commit; HEAD recorded in the review entry below):
   module graph, x/sys checksum pins) plus 9 environment mutations
   (internal-import boundary, x/sys outside the mapping owner, assembly
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
-  unlistable module). Gate totals: 10,801 (tool) + 552 (shell) = 11,353
-  lines against module production 5,049 / tests 5,180.
+  unlistable module). Gate totals: 11,016 (tool) + 552 (shell) = 11,568
+  lines against module production 5,051 / tests 5,293.
 - Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
   and copied shell-only module-graph forms (18/238/243/248); benign
