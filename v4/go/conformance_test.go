@@ -38,6 +38,15 @@ type metadataExpect struct {
 	Len   int    `json:"length,omitempty"`
 }
 
+// metadataExpectStrict is the presence-aware decoding of metadataExpect:
+// every field is a pointer so omitted vs explicit zero is distinguishable.
+type metadataExpectStrict struct {
+	State string  `json:"state"`
+	Value *string `json:"value"`
+	Byte  *int    `json:"byte"`
+	Len   *int    `json:"length"`
+}
+
 type directExpect struct {
 	From  string `json:"from"`
 	To    string `json:"to"`
@@ -272,10 +281,14 @@ func loadManifest(t *testing.T) conformanceManifest {
 				} else {
 					sAdjacent = prevSToHi+1 == fh && fl == 0
 				}
+				sameLoc := (prevSLoc == nil) == (sr.Location == nil)
+				if sameLoc && prevSLoc != nil {
+					sameLoc = prevSLoc.Lat == sr.Location.Lat && prevSLoc.Long == sr.Location.Long
+				}
 				if sAdjacent &&
 					prevSASN == sr.ASN && prevSCountry == sr.CountryID &&
 					prevSState == sr.StateID && prevSCity == sr.CityID &&
-					prevSLoc == sr.Location {
+					sameLoc {
 					same := len(prevSFeeds) == len(sr.Feeds)
 					if same {
 						for j := range prevSFeeds {
@@ -331,20 +344,36 @@ func loadManifest(t *testing.T) conformanceManifest {
 	// Reject state-inapplicable metadata fields, mirroring Rust's tagged
 	// MetadataExpectation enum (model.rs:126-133): absent/empty must not
 	// carry value/byte/length; text must not carry byte/length; repeat
-	// must carry byte and length but not value.
+	// must carry byte and length but not value. Presence-aware: an
+	// explicit zero/empty is still a violation.
 	for _, fx := range m.Fixtures {
-		switch fx.Metadata.State {
+		// Re-decode the metadata with presence-aware fields to distinguish
+		// omitted from explicit zero.
+		raw, err := json.Marshal(fx.Metadata)
+		if err != nil {
+			t.Fatalf("fixture %s: re-encode metadata: %v", fx.File, err)
+		}
+		var strict metadataExpectStrict
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&strict); err != nil {
+			t.Fatalf("fixture %s: strict metadata decode: %v", fx.File, err)
+		}
+		switch strict.State {
 		case "absent", "empty":
-			if fx.Metadata.Value != "" || fx.Metadata.Byte != 0 || fx.Metadata.Len != 0 {
-				t.Fatalf("fixture %s: metadata state %q carries value/byte/length", fx.File, fx.Metadata.State)
+			if strict.Value != nil || strict.Byte != nil || strict.Len != nil {
+				t.Fatalf("fixture %s: metadata state %q carries value/byte/length", fx.File, strict.State)
 			}
 		case "text":
-			if fx.Metadata.Byte != 0 || fx.Metadata.Len != 0 {
-				t.Fatalf("fixture %s: metadata state %q carries byte/length", fx.File, fx.Metadata.State)
+			if strict.Byte != nil || strict.Len != nil {
+				t.Fatalf("fixture %s: metadata state %q carries byte/length", fx.File, strict.State)
 			}
 		case "repeat":
-			if fx.Metadata.Value != "" {
-				t.Fatalf("fixture %s: metadata state %q carries value", fx.File, fx.Metadata.State)
+			if strict.Value != nil {
+				t.Fatalf("fixture %s: metadata state %q carries value", fx.File, strict.State)
+			}
+			if strict.Byte == nil || strict.Len == nil {
+				t.Fatalf("fixture %s: metadata state %q missing byte/length", fx.File, strict.State)
 			}
 		}
 	}
@@ -446,6 +475,9 @@ func parseV6Full(s string) IPv6 {
 }
 
 func expandV6(s string) []byte {
+	// Strict IPv6 parse: exactly 8 groups, at most one "::", each group
+	// 1-4 hex digits, full input consumption. netip.ParseAddr normalizes
+	// malformed forms; this parser rejects them.
 	var before, after []string
 	var double bool
 	cur := ""
@@ -480,6 +512,35 @@ func expandV6(s string) []byte {
 			before = append(before, cur)
 		}
 	}
+	// Validate group count: before + after must total exactly 8 when
+	// there is no "::", or at most 7 when there is one.
+	if !double && len(before) != 8 {
+		panic("bad ipv6 group count " + s)
+	}
+	if double && len(before)+len(after) > 7 {
+		panic("bad ipv6 group count " + s)
+	}
+	// Validate each group is 1-4 hex digits.
+	for _, g := range before {
+		if len(g) == 0 || len(g) > 4 {
+			panic("bad ipv6 group " + s)
+		}
+		for _, c := range g {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				panic("bad ipv6 group " + s)
+			}
+		}
+	}
+	for _, g := range after {
+		if len(g) == 0 || len(g) > 4 {
+			panic("bad ipv6 group " + s)
+		}
+		for _, c := range g {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				panic("bad ipv6 group " + s)
+			}
+		}
+	}
 	out := make([]byte, 16)
 	write := func(groups []string, start int) {
 		for gi, g := range groups {
@@ -491,6 +552,8 @@ func expandV6(s string) []byte {
 					d = uint16(g[i] - '0')
 				case g[i] >= 'a' && g[i] <= 'f':
 					d = uint16(g[i]-'a') + 10
+				case g[i] >= 'A' && g[i] <= 'F':
+					d = uint16(g[i]-'A') + 10
 				default:
 					panic("bad hex " + s)
 				}
