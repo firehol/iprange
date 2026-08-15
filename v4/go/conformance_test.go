@@ -84,12 +84,70 @@ func rejectDuplicateKeys(data []byte) error {
 			}
 			// Validate the string is valid UTF-8 with no unpaired surrogates,
 			// mirroring Rust's serde_json::from_slice which rejects both.
+			// Go's json.Unmarshal replaces invalid UTF-8 with U+FFFD, so we
+			// validate the raw bytes before decoding: every byte outside an
+			// escape sequence must be valid UTF-8, and every \u escape must
+			// form a valid surrogate pair.
+			raw := data[i+1 : j]
+			if !utf8.Valid(raw) {
+				return fmt.Errorf("invalid UTF-8 in string at offset %d", i)
+			}
+			// Check for unpaired surrogates in \u escapes.
+			for k := 0; k < len(raw); k++ {
+				if raw[k] == '\\' && k+1 < len(raw) && raw[k+1] == 'u' {
+					if k+5 >= len(raw) {
+						return fmt.Errorf("truncated \\u escape at offset %d", i+k)
+					}
+					// Decode the 4 hex digits.
+					var cp uint32
+					for _, c := range raw[k+2 : k+6] {
+						var d uint32
+						switch {
+						case c >= '0' && c <= '9':
+							d = uint32(c - '0')
+						case c >= 'a' && c <= 'f':
+							d = uint32(c-'a') + 10
+						case c >= 'A' && c <= 'F':
+							d = uint32(c-'A') + 10
+						default:
+							return fmt.Errorf("invalid \\u escape at offset %d", i+k)
+						}
+						cp = cp<<4 | d
+					}
+					if cp >= 0xD800 && cp <= 0xDBFF {
+						// High surrogate: must be followed by \uDC00-\uDFFF.
+						if k+11 >= len(raw) || raw[k+6] != '\\' || raw[k+7] != 'u' {
+							return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
+						}
+						var lo uint32
+						for _, c := range raw[k+8 : k+12] {
+							var d uint32
+							switch {
+							case c >= '0' && c <= '9':
+								d = uint32(c - '0')
+							case c >= 'a' && c <= 'f':
+								d = uint32(c-'a') + 10
+							case c >= 'A' && c <= 'F':
+								d = uint32(c-'A') + 10
+							default:
+								return fmt.Errorf("invalid \\u escape at offset %d", i+k+6)
+							}
+							lo = lo<<4 | d
+						}
+						if lo < 0xDC00 || lo > 0xDFFF {
+							return fmt.Errorf("unpaired high surrogate at offset %d", i+k)
+						}
+						k += 11
+					} else if cp >= 0xDC00 && cp <= 0xDFFF {
+						return fmt.Errorf("unpaired low surrogate at offset %d", i+k)
+					}
+					k += 5
+				}
+			}
+			// Decode the string for the duplicate-key check.
 			var decoded string
 			if err := json.Unmarshal(data[i:j+1], &decoded); err != nil {
 				return fmt.Errorf("invalid string at offset %d: %v", i, err)
-			}
-			if !utf8.ValidString(decoded) {
-				return fmt.Errorf("invalid UTF-8 in string at offset %d", i)
 			}
 			// Check if this is a key (followed by :).
 			k := j + 1
