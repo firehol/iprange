@@ -41,9 +41,7 @@ func TestHugeCorruptFileFailsBootstrap(t *testing.T) {
 	f.Close()
 
 	// Open must fail with FormatInvalid (corrupt meta), not IO (mmap of
-	// 1 GiB + 8 KiB would succeed but waste VA). The mapping owner
-	// tracks the peak mapped extent; a correct implementation never
-	// exceeds 2 pages before bootstrap proves the meta pair.
+	// 1 GiB + 8 KiB would succeed but waste VA).
 	_, err = OpenImmutable(path)
 	if err == nil {
 		t.Fatal("expected error for corrupt meta")
