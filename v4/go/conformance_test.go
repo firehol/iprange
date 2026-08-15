@@ -1622,3 +1622,81 @@ func TestPinValueCopyCannotReleaseSecondPin(t *testing.T) {
 		t.Fatalf("reader close after all pins released: %v", err)
 	}
 }
+
+// TestLookupFeedIntoBufferTooSmall pins the zero-allocation feed lookup
+// contract: a short buffer returns BufferTooSmall with the required size in
+// NameLen, an exact-size buffer copies the full name, and a zero-length
+// buffer returns BufferTooSmall with the size.
+func TestLookupFeedIntoBufferTooSmall(t *testing.T) {
+	r, err := OpenImmutable(fixturePath("rust/membership-ipv4.iprdb"))
+	if err != nil {
+		t.Skipf("fixture not available: %v", err)
+	}
+	defer r.Close()
+	p, err := r.Pin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	// Find a declared feed name from the fixture manifest.
+	m := loadManifest(t)
+	var feedName string
+	var feedIndex uint32
+	for _, fx := range m.Fixtures {
+		if fx.File == "rust/membership-ipv4.iprdb" {
+			if len(fx.Feeds) == 0 {
+				t.Skip("no feeds in fixture")
+			}
+			feedName = fx.Feeds[0].Name
+			feedIndex = fx.Feeds[0].Index
+			break
+		}
+	}
+
+	entry, ok, err := r.LookupFeed(feedName)
+	if err != nil || !ok {
+		t.Fatalf("lookup feed %s: %v %v", feedName, ok, err)
+	}
+
+	// Short buffer: BufferTooSmall with the required size.
+	short := make([]byte, len(entry.Name)-1)
+	fi, ok, err := p.LookupFeedInto(feedName, short)
+	if err == nil || errorAsCode(err) != ErrorBufferTooSmall {
+		t.Fatalf("short buffer: err=%v, want BufferTooSmall", err)
+	}
+	if ok {
+		t.Fatal("short buffer: ok=true, want false")
+	}
+	if fi.NameLen != len(entry.Name) {
+		t.Fatalf("short buffer: NameLen=%d, want %d", fi.NameLen, len(entry.Name))
+	}
+
+	// Exact buffer: full name copied, ok=true.
+	exact := make([]byte, len(entry.Name))
+	fi, ok, err = p.LookupFeedInto(feedName, exact)
+	if err != nil || !ok {
+		t.Fatalf("exact buffer: err=%v ok=%v, want nil true", err, ok)
+	}
+	if string(exact) != feedName {
+		t.Fatalf("exact buffer: name %q want %q", exact, feedName)
+	}
+	if fi.NameLen != len(feedName) {
+		t.Fatalf("exact buffer: NameLen=%d, want %d", fi.NameLen, len(feedName))
+	}
+	if fi.Index != feedIndex {
+		t.Fatalf("exact buffer: Index=%d, want %d", fi.Index, feedIndex)
+	}
+
+	// Zero-length buffer: BufferTooSmall with the required size.
+	fi, ok, err = p.LookupFeedInto(feedName, []byte{})
+	if err == nil || errorAsCode(err) != ErrorBufferTooSmall {
+		t.Fatalf("zero buffer: err=%v, want BufferTooSmall", err)
+	}
+	if ok {
+		t.Fatal("zero buffer: ok=true, want false")
+	}
+	if fi.NameLen != len(feedName) {
+		t.Fatalf("zero buffer: NameLen=%d, want %d", fi.NameLen, len(feedName))
+	}
+}
