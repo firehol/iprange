@@ -87,11 +87,17 @@ func rejectDuplicateKeys(data []byte) error {
 				k++
 			}
 			if k < len(data) && data[k] == ':' && len(stack) > 0 {
-				key := string(data[i+1 : j])
-				if stack[len(stack)-1].keys[key] {
-					return fmt.Errorf("duplicate key %q", key)
+				// Decode the key to handle escaped forms (\u0073chema ==
+				// schema): two raw spellings that decode to the same key
+				// are duplicates, mirroring Rust's decoded-field comparison.
+				var decoded string
+				if err := json.Unmarshal(data[i:j+1], &decoded); err != nil {
+					return fmt.Errorf("invalid key at offset %d: %v", i, err)
 				}
-				stack[len(stack)-1].keys[key] = true
+				if stack[len(stack)-1].keys[decoded] {
+					return fmt.Errorf("duplicate key %q", decoded)
+				}
+				stack[len(stack)-1].keys[decoded] = true
 			}
 			i = j + 1
 		default:
