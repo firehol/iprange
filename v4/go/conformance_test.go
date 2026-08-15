@@ -11,6 +11,26 @@ import (
 	"testing"
 )
 
+// strictUnmarshal unmarshals JSON with duplicate-field rejection and
+// trailing-data rejection, mirroring Rust's serde derived deserializer
+// semantics. Go's encoding/json accepts duplicate fields with last-value
+// semantics and trailing data; this wrapper rejects both.
+// DisallowUnknownFields already rejects unknown and case-mismatched fields.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	// Reject trailing data: any non-EOF result from a second Decode means
+	// the input has extra bytes after the manifest value.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("trailing data after manifest")
+	}
+	return nil
+}
+
 // Conformance cross-open tests: every committed Rust-produced fixture is
 // opened through the public Go API and verified against the language-neutral
 // cases.json expectations, and the three invalid mutations are rejected with
@@ -87,21 +107,14 @@ func loadManifest(t *testing.T) conformanceManifest {
 	if err != nil {
 		t.Fatal("read cases.json:", err)
 	}
+	// Parse with a strict decoder that rejects case-insensitive field names
+	// and duplicate fields, mirroring Rust's serde deny_unknown_fields
+	// and derived deserializer semantics.
 	var m conformanceManifest
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
+	if err := strictUnmarshal(raw, &m); err != nil {
 		t.Fatal("parse cases.json:", err)
 	}
-	// Reject trailing data after the manifest value, mirroring Rust's
-	// strict deserialization (serde_json from_str rejects trailing data).
-	// More() is unreliable at the top level (it returns false for ] and
-	// }), so a second Decode is the authoritative check: any non-EOF
-	// result means trailing data.
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); err != io.EOF {
-		t.Fatal("parse cases.json: trailing data after manifest")
-	}
+
 	// Reject an unsupported manifest schema, mirroring Rust
 	// conformance_support/mod.rs:23.
 	if m.Schema != 2 {
@@ -400,6 +413,22 @@ func loadManifest(t *testing.T) conformanceManifest {
 			}
 		}
 	}
+	// Validate feed index presence: every feed must carry its index field
+	// (Rust's u32 field is required; Go's omitempty makes omission
+	// indistinguishable from zero, so we check the raw JSON).
+	for _, rawFx := range rawFixtures {
+		if rawFeeds, ok := rawFx["feeds"]; ok && string(rawFeeds) != "null" {
+			var feeds []map[string]json.RawMessage
+			if err := json.Unmarshal(rawFeeds, &feeds); err != nil {
+				t.Fatalf("feeds decode: %v", err)
+			}
+			for i, rawFeed := range feeds {
+				if _, ok := rawFeed["index"]; !ok {
+					t.Fatalf("feed %d: index field is missing", i)
+				}
+			}
+		}
+	}
 	// Reject duplicate feed names or indices within any fixture, mirroring
 	// Rust's exact catalog comparison (verify.rs:253-267).
 	for _, fx := range m.Fixtures {
@@ -517,6 +546,10 @@ func expandV6(s string) []byte {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case ':':
+			// Check for triple colon BEFORE consuming the double colon.
+			if i+2 < len(s) && s[i+1] == ':' && s[i+2] == ':' {
+				panic("bad ipv6 triple colon " + s)
+			}
 			if !double && i+1 < len(s) && s[i+1] == ':' {
 				flush()
 				double = true
@@ -524,9 +557,6 @@ func expandV6(s string) []byte {
 			} else if double && i+1 < len(s) && s[i+1] == ':' {
 				// A second "::" is invalid.
 				panic("bad ipv6 multiple :: " + s)
-			} else if !double && i+2 < len(s) && s[i+1] == ':' && s[i+2] == ':' {
-				// A triple ":::" is invalid.
-				panic("bad ipv6 triple colon " + s)
 			} else {
 				flush()
 				// A leading single colon is invalid (only "::" can start).
