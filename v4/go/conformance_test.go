@@ -32,19 +32,10 @@ type conformanceCase struct {
 }
 
 type metadataExpect struct {
-	State string `json:"state"`
-	Value string `json:"value,omitempty"`
-	Byte  int    `json:"byte,omitempty"`
-	Len   int    `json:"length,omitempty"`
-}
-
-// metadataExpectStrict is the presence-aware decoding of metadataExpect:
-// every field is a pointer so omitted vs explicit zero is distinguishable.
-type metadataExpectStrict struct {
-	State string  `json:"state"`
-	Value *string `json:"value"`
-	Byte  *int    `json:"byte"`
-	Len   *int    `json:"length"`
+	State string          `json:"state"`
+	Value json.RawMessage `json:"value"`
+	Byte  json.RawMessage `json:"byte"`
+	Len   json.RawMessage `json:"length"`
 }
 
 type directExpect struct {
@@ -344,36 +335,36 @@ func loadManifest(t *testing.T) conformanceManifest {
 	// Reject state-inapplicable metadata fields, mirroring Rust's tagged
 	// MetadataExpectation enum (model.rs:126-133): absent/empty must not
 	// carry value/byte/length; text must not carry byte/length; repeat
-	// must carry byte and length but not value. Presence-aware: an
-	// explicit zero/empty is still a violation.
+	// must carry byte and length but not value. Presence-aware: a
+	// json.RawMessage is nil when the field is omitted, non-nil when
+	// explicitly present (even as zero/empty).
 	for _, fx := range m.Fixtures {
-		// Re-decode the metadata with presence-aware fields to distinguish
-		// omitted from explicit zero.
-		raw, err := json.Marshal(fx.Metadata)
-		if err != nil {
-			t.Fatalf("fixture %s: re-encode metadata: %v", fx.File, err)
-		}
-		var strict metadataExpectStrict
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&strict); err != nil {
-			t.Fatalf("fixture %s: strict metadata decode: %v", fx.File, err)
-		}
-		switch strict.State {
+		switch fx.Metadata.State {
 		case "absent", "empty":
-			if strict.Value != nil || strict.Byte != nil || strict.Len != nil {
-				t.Fatalf("fixture %s: metadata state %q carries value/byte/length", fx.File, strict.State)
+			if fx.Metadata.Value != nil || fx.Metadata.Byte != nil || fx.Metadata.Len != nil {
+				t.Fatalf("fixture %s: metadata state %q carries value/byte/length", fx.File, fx.Metadata.State)
 			}
 		case "text":
-			if strict.Byte != nil || strict.Len != nil {
-				t.Fatalf("fixture %s: metadata state %q carries byte/length", fx.File, strict.State)
+			if fx.Metadata.Byte != nil || fx.Metadata.Len != nil {
+				t.Fatalf("fixture %s: metadata state %q carries byte/length", fx.File, fx.Metadata.State)
 			}
 		case "repeat":
-			if strict.Value != nil {
-				t.Fatalf("fixture %s: metadata state %q carries value", fx.File, strict.State)
+			if fx.Metadata.Value != nil {
+				t.Fatalf("fixture %s: metadata state %q carries value", fx.File, fx.Metadata.State)
 			}
-			if strict.Byte == nil || strict.Len == nil {
-				t.Fatalf("fixture %s: metadata state %q missing byte/length", fx.File, strict.State)
+			if fx.Metadata.Byte == nil || fx.Metadata.Len == nil {
+				t.Fatalf("fixture %s: metadata state %q missing byte/length", fx.File, fx.Metadata.State)
+			}
+		}
+	}
+	// Validate that feeds arrays are present (not nil) for fixtures that
+	// declare feeds in their ranges, mirroring Rust's typed vector fields
+	// (model.rs:70-79). A nil feeds array on a membership or structured
+	// fixture with feed references is a manifest error.
+	for _, fx := range m.Fixtures {
+		if fx.Kind == "membership" || fx.Kind == "structured" {
+			if fx.Feeds == nil {
+				t.Fatalf("fixture %s: feeds array is missing", fx.File)
 			}
 		}
 	}
@@ -498,8 +489,15 @@ func expandV6(s string) []byte {
 				flush()
 				double = true
 				i++
+			} else if double && i+1 < len(s) && s[i+1] == ':' {
+				// A second "::" is invalid.
+				panic("bad ipv6 multiple :: " + s)
 			} else {
 				flush()
+				// A trailing single colon is invalid.
+				if i+1 == len(s) {
+					panic("bad ipv6 trailing colon " + s)
+				}
 			}
 		default:
 			cur += string(s[i])
@@ -698,15 +696,27 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("metadata empty: present=%v len=%d", present, len(meta))
 				}
 			case "text":
-				if !present || string(meta) != tc.Metadata.Value {
-					t.Errorf("metadata text: present=%v got %q want %q", present, meta, tc.Metadata.Value)
+				var want string
+				if err := json.Unmarshal(tc.Metadata.Value, &want); err != nil {
+					t.Fatalf("metadata text value: %v", err)
+				}
+				if !present || string(meta) != want {
+					t.Errorf("metadata text: present=%v got %q want %q", present, meta, want)
 				}
 			case "repeat":
-				if !present || !repeatEqual(meta, byte(tc.Metadata.Byte), len(meta)) {
-					t.Errorf("metadata repeat: present=%v len=%d want len=%d byte=%d", present, len(meta), tc.Metadata.Len, tc.Metadata.Byte)
+				var wantByte int
+				var wantLen int
+				if err := json.Unmarshal(tc.Metadata.Byte, &wantByte); err != nil {
+					t.Fatalf("metadata repeat byte: %v", err)
 				}
-				if len(meta) != tc.Metadata.Len {
-					t.Errorf("metadata repeat length %d want %d", len(meta), tc.Metadata.Len)
+				if err := json.Unmarshal(tc.Metadata.Len, &wantLen); err != nil {
+					t.Fatalf("metadata repeat length: %v", err)
+				}
+				if !present || !repeatEqual(meta, byte(wantByte), len(meta)) {
+					t.Errorf("metadata repeat: present=%v len=%d want len=%d byte=%d", present, len(meta), wantLen, wantByte)
+				}
+				if len(meta) != wantLen {
+					t.Errorf("metadata repeat length %d want %d", len(meta), wantLen)
 				}
 			default:
 				t.Fatalf("unknown metadata state %q", tc.Metadata.State)
