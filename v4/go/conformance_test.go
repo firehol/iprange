@@ -403,7 +403,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 						}
 					}
 				} else {
-					if fromHi != toHi || fromLo+1 != toLo {
+					if fromHi != toHi || fromLo != toLo {
 						// Midpoint probe of the v6 range.
 						c, ok3, err := db.LookupDirectV6(IPv6{Hi: midHi, Lo: midLo})
 						if err != nil || !ok3 || c != want.Value {
@@ -482,6 +482,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 					}
 					if entry.Index != feed.Index {
 						t.Errorf("feed %s index %d want %d", feed.Name, entry.Index, feed.Index)
+					}
+					if entry.Name != feed.Name {
+						t.Errorf("feed %s name %q want %q", feed.Name, entry.Name, feed.Name)
 					}
 				}
 				for _, absent := range []string{"feed-999", "zz-not-declared"} {
@@ -640,7 +643,10 @@ func TestConformanceRustFixtures(t *testing.T) {
 					t.Errorf("membership %s: %v %v", mr.From, ok, err)
 					continue
 				}
-				// Midpoint probe as well.
+				// Verify the from view's exact bitmap before the midpoint
+				// probe replaces it.
+				verifyMembershipView(view, mr.Feeds, "membership "+mr.From)
+				// Midpoint probe as well: verify its bitmap separately.
 				mid4 := from4
 				if tc.Family == "ipv4" {
 					mid4 = from4 + (addressBytes4To(mr.To)-from4)/2
@@ -650,7 +656,7 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
-						view = v2
+						verifyMembershipView(v2, mr.Feeds, "membership mid "+mr.From)
 					}
 				} else {
 					// Midpoint probe only when the range spans more than one
@@ -667,10 +673,9 @@ func TestConformanceRustFixtures(t *testing.T) {
 							t.Errorf("membership v6 mid %s: %v %v", mr.From, ok2, err2)
 							continue
 						}
-						view = v2
+						verifyMembershipView(v2, mr.Feeds, "membership v6 mid "+mr.From)
 					}
 				}
-				verifyMembershipView(view, mr.Feeds, "membership "+mr.From)
 				// Any index at or beyond the generation limit is
 				// InvalidArgument; 0xffffffff is always beyond any limit.
 				if _, err := view.ContainsIndex(0xffffffff); err == nil || errorAsCode(err) != ErrorInvalidArgument {
