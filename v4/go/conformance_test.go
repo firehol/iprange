@@ -171,18 +171,18 @@ func loadManifest(t *testing.T) conformanceManifest {
 	// null, so Go must too. A nil slice from an omitted field is valid;
 	// a nil slice from explicit null is not distinguishable after
 	// unmarshaling, so we re-check the raw JSON for the field name.
-	for _, fx := range m.Fixtures {
-		raw, err := json.Marshal(fx)
-		if err != nil {
-			t.Fatalf("fixture %s: re-encode: %v", fx.File, err)
-		}
-		var probe map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &probe); err != nil {
-			t.Fatalf("fixture %s: probe decode: %v", fx.File, err)
-		}
-		for _, field := range []string{"direct_ranges", "membership_ranges", "structured_ranges"} {
-			if raw, ok := probe[field]; ok && string(raw) == "null" {
-				t.Fatalf("fixture %s: %s is explicitly null", fx.File, field)
+	// The check runs on the original manifest bytes, not re-marshaled
+	// structs (omitempty would erase the null before checking).
+	var rawFixtures []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &struct {
+		Fixtures *[]map[string]json.RawMessage `json:"fixtures"`
+	}{Fixtures: &rawFixtures}); err != nil {
+		t.Fatal("parse cases.json fixtures:", err)
+	}
+	for i, rawFx := range rawFixtures {
+		for _, field := range []string{"direct_ranges", "membership_ranges", "structured_ranges", "feeds"} {
+			if raw, ok := rawFx[field]; ok && string(raw) == "null" {
+				t.Fatalf("fixture %d: %s is explicitly null", i, field)
 			}
 		}
 	}
@@ -524,6 +524,9 @@ func expandV6(s string) []byte {
 			} else if double && i+1 < len(s) && s[i+1] == ':' {
 				// A second "::" is invalid.
 				panic("bad ipv6 multiple :: " + s)
+			} else if !double && i+2 < len(s) && s[i+1] == ':' && s[i+2] == ':' {
+				// A triple ":::" is invalid.
+				panic("bad ipv6 triple colon " + s)
 			} else {
 				flush()
 				// A leading single colon is invalid (only "::" can start).
