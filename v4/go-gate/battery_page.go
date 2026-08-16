@@ -1097,4 +1097,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P292 benign: unreachable empty bound stays zero iterations", desc: "for i := 1; i < 0; i++ never executes; an empty range cannot make a one-byte page write into a complete-page copy", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l36_1.go", content: "package reader\n\nfunc emptyBoundProbeL36(r *ImmutableReader, pgno uint32) ([1]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [1]byte{}, err\n\t}\n\tvar out [1]byte\n\tfor i := 1; i < 0; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P293: negative loop bounds can still iterate PageSize times", desc: "for i := -4095; i < 1; i++ { out[i+4095] = page[i+4095] }: negative start bounds preserve exact iteration counts instead of collapsing to zero", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l37_1.go", content: "package reader\n\nfunc negativeBoundProbeL37(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := -4095; i < 1; i++ {\n\t\tout[i+4095] = page[i+4095]\n\t}\n\treturn out, nil\n}"},
+	}},
 }
