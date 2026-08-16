@@ -1,5 +1,30 @@
 # SOW-0025 - Pure-Go Exact v4 Semantic Port
 
+## Lead swarm operating rules (user decision, 2026-08-17)
+
+These rules govern this SOW's review process and override the generic
+shared swarm guide for this work (the guide's "residents"/"sol" roles
+map to level-1/level-2 below). They are placed at the top so they are
+re-read after every compaction.
+
+1. Level-1 reviewers: five aspect reviewers on the lead's own model
+   (copies), each holding one disjoint aspect of the milestone scope,
+   adversarial mode. Spawn all five once at first use; every later
+   round is a message to the same agents. Never respawn between rounds.
+2. Level-2 final gate (in place of sol): glm, kimi, minimax, mimo,
+   full-scope review after every available level-1 reviewer has
+   returned PASS. Spawn once at first use, then reuse.
+3. The milestone closes only when every available level-2 reviewer
+   reports no P0-P2 findings. Unavailable reviewers (technical/quota)
+   are skipped, do not count in the PASS denominator, and are reported
+   to the user as reduced coverage.
+4. Aspect split for milestone 2 (writer): (1) writer-core semantics vs
+   the Rust authority; (2) mmap-only/memory-safety/lifetime; (3) wire
+   format and integrity incl. Go<->Rust cross-open; (4) public API,
+   docs and records; (5) durability and crash/resource semantics.
+
+Recorded as Review Process step 6 below.
+
 ## Status
 Status: in-progress
 
