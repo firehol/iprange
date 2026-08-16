@@ -200,13 +200,45 @@ func runBatteryCase(root string, c batteryCase) bool {
 			os.Remove(filepath.Join(root, p))
 		}
 	}
-	clean := scanRoot(root, batteryConfigsFor(c), true)
+	var captured []string
+	clean := true
+	captured = captureDiagnostics(func() {
+		clean = scanRoot(root, batteryConfigsFor(c), true)
+	})
 	cleanup()
 	// A fail case expects the gate to reject the tree (clean=false); a
 	// benign case expects it to stay accepted (clean=true). A mismatch is
 	// when the scan outcome equals the fail flag, not when it differs.
 	if clean == c.expectFail {
 		return reportBattery(root, c, clean, "expectation mismatch")
+	}
+	if c.expectFail && !c.allowTypeCheck {
+		if c.expectRule != "" {
+			found := false
+			for _, msg := range captured {
+				if strings.Contains(msg, c.expectRule) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return reportBattery(root, c, clean, "missing expected rule %q", c.expectRule)
+			}
+		} else {
+			// By default, an expected rejection must carry a semantic gate
+			// diagnostic; a type-check error alone proves nothing about the
+			// named mutation.
+			semantic := false
+			for _, msg := range captured {
+				if !strings.Contains(msg, "does not type-check") {
+					semantic = true
+					break
+				}
+			}
+			if !semantic {
+				return reportBattery(root, c, clean, "rejection came only from a type-check error")
+			}
+		}
 	}
 	if c.expectFail {
 		fmt.Printf("self-test OK: %s rejected\n", c.desc)

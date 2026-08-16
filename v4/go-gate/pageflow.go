@@ -974,6 +974,48 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 // length of a page-tainted slice (for i := 0; i < len(page); i++), an
 // aliased length (n := len(page); for i := 0; i < n; i++), or a constant
 // bound equal to PageSize (for i := 0; i < 4096; i++).
+// boundedLoopCopiesPage counts page-derived byte writes into indexed
+// destinations in one loop body.
+func (pf *pageFlow) boundedLoopCopiesPage(st *stmtState, body *ast.BlockStmt) int {
+	if body == nil {
+		return 0
+	}
+	count := 0
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			if _, ok := unparen(lhs).(*ast.IndexExpr); ok && pf.pageDerivedRHS(st, assign.Rhs[i]) {
+				count++
+			}
+		}
+		return true
+	})
+	return count
+}
+
+// constIntBound returns a compile-time integer loop upper bound, or -1.
+func (pf *pageFlow) constIntBound(cond ast.Expr) int64 {
+	bl, ok := unparen(cond).(*ast.BinaryExpr)
+	if !ok || bl.Op != token.LSS {
+		return -1
+	}
+	tv, ok := pf.pc.info.Types[unparen(bl.Y)]
+	if !ok || tv.Value == nil {
+		return -1
+	}
+	n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 func (pf *pageFlow) condReferencesPage(st *stmtState, cond ast.Expr) bool {
 	if cond == nil {
 		return false
@@ -1100,6 +1142,7 @@ func (pf *pageFlow) markPageAggregated(st *stmtState, lhs, rhs ast.Expr, pageSou
 		t = ptr.Elem().Underlying()
 	}
 	if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
+		println("DIAGMARK", pf.path)
 		pv := pageValue{tainted: true, maxLen: arr.Len()}
 		if fieldPath != "" {
 			pf.recordAggregatedField(st, obj, fieldPath, pv)
@@ -1184,6 +1227,23 @@ func (pf *pageFlow) pageDerivedRHS(st *stmtState, rhs ast.Expr) bool {
 		return pf.pageDerivedRHS(st, be.X) || pf.pageDerivedRHS(st, be.Y)
 	}
 	return pf.evalExpr(st, rhs).tainted
+}
+
+// constRangeDestination reports the definite iteration count of a range
+// over an integer constant (Go 1.22+), or -1 when the bound is unknown.
+func (pf *pageFlow) constRangeDestination(x ast.Expr) int64 {
+	if bl, ok := unparen(x).(*ast.BasicLit); ok && bl.Kind == token.INT {
+		if n, err := strconv.ParseInt(bl.Value, 0, 64); err == nil {
+			return n
+		}
+		return -1
+	}
+	if tv, ok := pf.pc.info.Types[unparen(x)]; ok && tv.Value != nil {
+		if n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64); err == nil {
+			return n
+		}
+	}
+	return -1
 }
 
 // rangeDestination reports whether the range expression names an owned
@@ -1836,6 +1896,18 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				st.pageSourceLoops++
 				pageSourcing = true
 			}
+			// A statically PageSize-iteration loop with page-derived
+			// indexed writes copies a complete page even when each
+			// iteration writes several bytes and the bound is half-page.
+			// A statically bounded loop whose iteration count times
+			// page-derived indexed writes can reach PageSize copies a
+			// complete page, including multiple disjoint writes per body.
+			if !pageSourcing && v.Cond != nil {
+				if bound := pf.constIntBound(v.Cond); bound > 0 && bound*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
+					st.pageSourceLoops++
+					pageSourcing = true
+				}
+			}
 			pre := st.clone()
 			pf.analyzeStmts(st, v.Body.List, fs)
 			if v.Post != nil {
@@ -1866,6 +1938,14 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					st.destRangeLoops++
 					pageSourcing = true
 					destRange = true
+				}
+			}
+			// for i := range 4096 iterates PageSize times. Element writes
+			// from a page source aggregate to a complete page copy.
+			if !pageSourcing {
+				if n := pf.constRangeDestination(v.X); n >= pageSize {
+					st.pageSourceLoops++
+					pageSourcing = true
 				}
 			}
 			// Range variables are bound from the container's element

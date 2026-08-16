@@ -1520,7 +1520,10 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	dst := v.Args[0]
 	// Repeated bounded copies into one destination can assemble a
 	// complete page from sub-page spans; count them before the full-page
-	// fast path. Only destinations that can reach PageSize participate.
+	// fast path. Slice-header destinations never own page bytes.
+	if elemT := collectionElementType(w.typeOf(dst)); elemT != nil && !byteElementType(elemT) {
+		return
+	}
 	if src.maxLen > 0 && src.maxLen < pageSize {
 		if obj, path := w.boundedCopyKey(dst); obj != nil {
 			w.accumulateBoundedSpan(obj, path, src.maxLen, v.Pos(), "bounded mapped-page spans assembled into an owned PageSize-capable buffer (complete page)")

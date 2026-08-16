@@ -38,12 +38,27 @@ type reporter struct {
 	failed bool
 }
 
+// diagnosticCapture collects violation text for battery cases that must
+// prove a gate diagnostic rather than pass on an unrelated type error.
+var diagnosticCapture []string
+
+func captureDiagnostics(fn func()) []string {
+	old := diagnosticCapture
+	diagnosticCapture = []string{}
+	fn()
+	out := diagnosticCapture
+	diagnosticCapture = old
+	return out
+}
+
 func (r *reporter) fail(pos token.Pos, format string, args ...any) {
 	where := ""
 	if pos.IsValid() {
 		where = r.fset.Position(pos).String() + ": "
 	}
-	fmt.Printf("content-transfer violation (%s): %s%s\n", r.config, where, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf("content-transfer violation (%s): %s%s\n", r.config, where, fmt.Sprintf(format, args...))
+	fmt.Print(msg)
+	diagnosticCapture = append(diagnosticCapture, msg)
 	r.failed = true
 }
 

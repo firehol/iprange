@@ -18,7 +18,13 @@ type batteryCase struct {
 	name       string
 	desc       string
 	expectFail bool
-	ops        []batteryOp
+	// expectRule, when set, is a substring that must appear in a gate
+	// violation; an unrelated type-check failure cannot satisfy the case.
+	expectRule string
+	// allowTypeCheck marks deliberately invalid-Go or binary-only
+	// fail-closed shapes whose rejection is itself the contract.
+	allowTypeCheck bool
+	ops            []batteryOp
 }
 
 var batteryCases = []batteryCase{
@@ -99,7 +105,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "create", path: "gatemut_writestr/mut.go", content: "package gatemut_writestr\n\nimport \"os\"\n\nvar f *os.File\n\nfunc use() { _, _ = f.WriteString(\"payload\") }"},
 	}},
 
-	{name: "21: nested transfer inside the tolerated call node", desc: "forbidden transfer nested inside the tolerated call node", expectFail: true, ops: []batteryOp{
+	{name: "21: nested transfer inside the tolerated call node", desc: "forbidden transfer nested inside the tolerated call node", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "gatemut_nested/mut.go", content: "package gatemut_nested\n\nimport \"os\"\n\nvar f *os.File\nvar c = struct{ r *os.File }{f}\n\nfunc use() {\n\tvar b [1]byte\n\t_ = c.r.Read(f.Read(b[:])) // intentional textual probe (cannot typecheck: no\n\t// []byte-typed file-read expression exists); the nested transfer must\n\t// stay visible to the gate, not be blanked with the tolerated node\n}"},
 	}},
 
@@ -209,12 +215,12 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = <-gatemutCh"},
 	}},
 
-	{name: "50: inline FuncLit returning *os.File behind the exemption", desc: "inline FuncLit file behind the inflater exemption", expectFail: true, ops: []batteryOp{
+	{name: "50: inline FuncLit returning *os.File behind the exemption", desc: "inline FuncLit file behind the inflater exemption", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_funclit.go", content: "package reader"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = func() *os.File { f, _ := os.Open(\"/dev/null\"); return f }()"},
 	}},
 
-	{name: "51: type assertion to *os.File behind the exemption", desc: "type-assertion file behind the inflater exemption", expectFail: true, ops: []batteryOp{
+	{name: "51: type assertion to *os.File behind the exemption", desc: "type-assertion file behind the inflater exemption", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_assert.go", content: "package reader\n\nimport \"os\"\n\ntype zrBox struct{ r any }\n\nvar zb zrBox\n\nfunc init() {\n\tw, _, _ := os.Pipe()\n\tzb.r = w\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = zb.r.(*os.File)"},
 	}},
@@ -233,12 +239,12 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = (getFile)()"},
 	}},
 
-	{name: "55: parenthesized inline FuncLit behind the exemption", desc: "parenthesized FuncLit file behind the inflater exemption", expectFail: true, ops: []batteryOp{
+	{name: "55: parenthesized inline FuncLit behind the exemption", desc: "parenthesized FuncLit file behind the inflater exemption", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_parenlit.go", content: "package reader"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = (func() *os.File { f, _ := os.Open(\"/dev/null\"); return f })()"},
 	}},
 
-	{name: "56: interface-typed closure returning a file", desc: "interface-typed FuncLit file behind the inflater exemption", expectFail: true, ops: []batteryOp{
+	{name: "56: interface-typed closure returning a file", desc: "interface-typed FuncLit file behind the inflater exemption", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_ifacelit.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = func() io.ReadCloser { f, _ := os.Open(\"/dev/null\"); return f }()"},
 	}},
@@ -248,7 +254,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = getFat()"},
 	}},
 
-	{name: "58: type-switch bound file behind the exemption", desc: "type-switch bound file behind the inflater exemption", expectFail: true, ops: []batteryOp{
+	{name: "58: type-switch bound file behind the exemption", desc: "type-switch bound file behind the inflater exemption", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_typeswitch.go", content: "package reader\n\nimport \"os\"\n\nvar anyFile2 any\n\nfunc init() {\n\tw, _, _ := os.Pipe()\n\tanyFile2 = w\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "switch zv := anyFile2.(type) { case *os.File: zr = zv }"},
 	}},
@@ -308,7 +314,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "got := <-fnCh\nzr = got()"},
 	}},
 
-	{name: "70: any-erased func return asserted and called", desc: "any-erased func return asserted and called", expectFail: true, ops: []batteryOp{
+	{name: "70: any-erased func return asserted and called", desc: "any-erased func return asserted and called", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_anyfunc.go", content: "package reader\n\nimport \"os\"\n\nfunc getFn() any { return func() *os.File { f, _ := os.Open(\"/dev/null\"); return f } }"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = (getFn().(func() *os.File))()"},
 	}},
@@ -376,7 +382,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = ihv.inner.named()"},
 	}},
 
-	{name: "84: method value bound to a variable, called once", desc: "method value bound to a variable", expectFail: true, ops: []batteryOp{
+	{name: "84: method value bound to a variable, called once", desc: "method value bound to a variable", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_methodval.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\ntype gm84 struct{}\n\nvar gm84v gm84\n\nfunc (g *gm84) get() io.ReadCloser {\n\tw, _, _ := os.Pipe()\n\treturn w\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = fn84()"},
 	}},
@@ -386,7 +392,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = getFn85()()"},
 	}},
 
-	{name: "86: nested-receiver method value, double call", desc: "nested-receiver method value double call", expectFail: true, ops: []batteryOp{
+	{name: "86: nested-receiver method value, double call", desc: "nested-receiver method value double call", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_nestedmethval.go", content: "package reader\n\nimport \"os\"\n\ntype fileFnI func() *os.File\n\ntype minner86 struct{}\n\ntype mholder86 struct{ inner minner86 }\n\nvar mhv86 mholder86\n\nfunc (m *minner86) mk() fileFnI { return func() *os.File { f, _ := os.Open(\"/dev/null\"); return f } }"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = fn86()()"},
 	}},
@@ -421,7 +427,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = get92(osFiles92)"},
 	}},
 
-	{name: "93: method value returning a chan of func-file", desc: "method value returning a chan of func-file", expectFail: true, ops: []batteryOp{
+	{name: "93: method value returning a chan of func-file", desc: "method value returning a chan of func-file", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_chanmethval.go", content: "package reader\n\nimport \"os\"\n\ntype fileFnM func() *os.File\n\ntype chH93 struct{}\n\nvar chh93 chH93\n\nfunc (h chH93) ch() chan fileFnM { return nil }"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "fn93 := chh93.ch"},
 	}},
@@ -431,7 +437,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = fb94.fn()"},
 	}},
 
-	{name: "95: chan-typed struct field assigned a chan of func-file", desc: "chan-typed field assigned a chan of func-file", expectFail: true, ops: []batteryOp{
+	{name: "95: chan-typed struct field assigned a chan of func-file", desc: "chan-typed field assigned a chan of func-file", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_chanfieldassign.go", content: "package reader\n\nimport \"os\"\n\ntype fileFnN func() *os.File\n\ntype chBox95 struct{ ch chan fileFnN }\n\nvar cb95 chBox95\n\nfunc init() {\n\tcb95.ch = make(chan fileFnN)\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "got95 := <-cb95.ch"},
 	}},
@@ -446,7 +452,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = fb97.fn()"},
 	}},
 
-	{name: "98: range over a struct-field chan of func-file", desc: "range over a field chan of func-file", expectFail: true, ops: []batteryOp{
+	{name: "98: range over a struct-field chan of func-file", desc: "range over a field chan of func-file", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_rangefieldchan.go", content: "package reader\n\nimport \"os\"\n\ntype fileFnP func() *os.File\n\ntype chBoxR98 struct{ ch chan fileFnP }\n\nvar cbr98 chBoxR98\n\nfunc init() {\n\tcbr98.ch = make(chan fileFnP)\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "for got98 := range cbr98.ch {"},
 	}},
@@ -456,7 +462,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = <-cfr99.ch"},
 	}},
 
-	{name: "100: method value sent into a field chan from another function", desc: "method value sent into a field chan", expectFail: true, ops: []batteryOp{
+	{name: "100: method value sent into a field chan from another function", desc: "method value sent into a field chan", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_sendfieldchan.go", content: "package reader\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\ntype gm100 struct{}\n\nvar gs100 gm100\n\nfunc (g *gm100) get() io.ReadCloser {\n\tw, _, _ := os.Pipe()\n\treturn w\n}\n\ntype chBox100 struct{ ch chan func() io.ReadCloser }\n\nvar cbs100 chBox100\n\nfunc init() {\n\tcbs100.ch = make(chan func() io.ReadCloser)\n}\n\nfunc fill100() {\n\tcbs100.ch <- gs100.get\n}"},
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "got100 := <-cbs100.ch"},
 	}},
@@ -1130,7 +1136,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "ins", path: "internal/reader/metadata.go", content: "zr = gbb227()"},
 	}},
 
-	{name: "228: cgo content transfer via import \"C\" + C.pread", desc: "cgo C.pread content transfer", expectFail: true, ops: []batteryOp{
+	{name: "228: cgo content transfer via import \"C\" + C.pread", desc: "cgo C.pread content transfer", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "gatemut_cgo.go", content: "package iprangedb\n\n/*\n#include <unistd.h>\n*/\nimport \"C\"\n\nimport (\n\t\"os\"\n\t\"unsafe\"\n)\n\nfunc gateCGORead228(file *os.File, out []byte) int {\n\tif len(out) == 0 {\n\t\treturn 0\n\t}\n\treturn int(C.pread(C.int(file.Fd()), unsafe.Pointer(&out[0]), C.size_t(len(out)), 0))\n}"},
 	}},
 
@@ -1171,7 +1177,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/mapping/gatemut_asmread_linux.s", content: "//go:build linux\n\n#include \"textflag.h\"\n\nTEXT \u00b7gateAsmRead237(SB),NOSPLIT,$0-56\n\tMOVQ $0, AX\n\tSYSCALL\n\tRET"},
 	}},
 
-	{name: "239: assembly object without a Go declaration", desc: "assembly object file", expectFail: true, ops: []batteryOp{
+	{name: "239: assembly object without a Go declaration", desc: "assembly object file", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "gatemut_asmfile/gatemut_asmfile_linux.s", content: "//go:build linux\n\nTEXT \u00b7gateAsmNop239(SB),NOSPLIT,$0\n\tRET"},
 	}},
 
@@ -1183,7 +1189,7 @@ var batteryCases = []batteryCase{
 		batteryOp{kind: "create", path: ".smuggle/.smuggle.go", content: "package smuggle\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc ReadAll(f *os.File) ([]byte, error) { return io.ReadAll(f) }"},
 	}},
 
-	{name: "247: uppercase assembly-object suffix", desc: "uppercase .S assembly object", expectFail: true, ops: []batteryOp{
+	{name: "247: uppercase assembly-object suffix", desc: "uppercase .S assembly object", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/mapping/gatemut_evil.S", content: "TEXT \u00b7GateMut247(SB),0,$0-0\n\tRET"},
 	}},
 

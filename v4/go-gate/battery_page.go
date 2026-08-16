@@ -1037,4 +1037,16 @@ var batteryPageCases = []batteryCase{
 	{name: "P277 benign: slice-header copy into a slice of slices", desc: "copy(chunks, [][]byte{page[:]}): the operation copies slice headers, not page bytes into an owned byte buffer", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_11.go", content: "package reader\n\nfunc sliceHeaderCopyProbeL29(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 1)\n\tcopy(chunks, [][]byte{page[:]})\n\treturn chunks, nil\n}"},
 	}},
+
+	{name: "P278: range over a PageSize integer constant", desc: "for i := range 4096 { out[i] = page[i] }: integer ranges with PageSize iterations are page-sourcing contexts; element writes aggregate to a complete page", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l30_1.go", content: "package reader\n\nfunc rangeConstProbeL30(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := range 4096 {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P279: half-page loop writing two page bytes per iteration", desc: "for i := 0; i < 2048; i++ { out[2*i] = page[2*i]; out[2*i+1] = page[2*i+1] }: iteration count times page-derived indexed writes reaches PageSize", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l30_2.go", content: "package reader\n\nfunc twoWritesProbeL30(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < 2048; i++ {\n\t\tout[2*i] = page[2*i]\n\t\tout[2*i+1] = page[2*i+1]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P280 benign: repeated slice-header copies into [][]byte", desc: "copy(chunks, [][]byte{page[:2048]}); copy(chunks, [][]byte{page[2048:]}): bounded-span accumulation is restricted to byte-element destinations", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l30_3.go", content: "package reader\n\nfunc sliceHeaderCopiesProbeL30(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 2)\n\tcopy(chunks, [][]byte{page[:2048]})\n\tcopy(chunks[1:], [][]byte{page[2048:]})\n\treturn chunks, nil\n}"},
+	}},
 }
