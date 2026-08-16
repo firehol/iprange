@@ -1436,7 +1436,7 @@ var batteryCases = []batteryCase{
 	}},
 
 	{name: "304: benign lifecycle syscall inside the mapping owner", desc: "raw lifecycle syscalls stay legal in the mapping owner", expectFail: false, ops: []batteryOp{
-		batteryOp{kind: "create", path: "internal/mapping/gatemut_lifecycle_benign.go", content: "//go:build linux\npackage mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateLifecycleBenign(fd int, b []byte, n int64, path string) error {\n\tif err := unix.Fsync(fd); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Fdatasync(fd); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Ftruncate(fd, n); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Msync(b, unix.MS_SYNC); err != nil {\n\t\treturn err\n\t}\n\tunix.Sync()\n\treturn unix.Truncate(path, n)\n}"},
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_lifecycle_benign.go", content: "//go:build linux\npackage mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateLifecycleBenign(fd int, b []byte, n int64, path string) error {\n\tif err := unix.Fallocate(fd, 0, 0, n); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Fsync(fd); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Fdatasync(fd); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Ftruncate(fd, n); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Msync(b, unix.MS_SYNC); err != nil {\n\t\treturn err\n\t}\n\tunix.Sync()\n\tunix.SyncFileRange(fd, 0, n, 0)\n\treturn unix.Truncate(path, n)\n}"},
 	}},
 
 	{name: "305: unix.Fdatasync outside the mapping owner", desc: "raw fdatasync durability syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Fdatasync", ops: []batteryOp{
@@ -1457,5 +1457,13 @@ var batteryCases = []batteryCase{
 
 	{name: "309: os.Truncate outside the mapping owner", desc: "stdlib path-based truncation outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Truncate", ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_ostruncate.go", content: "package reader\n\nimport \"os\"\n\nfunc gateOsTruncate(path string, n int64) error { return os.Truncate(path, n) }"},
+	}},
+
+	{name: "310: unix.Fallocate outside the mapping owner", desc: "raw file-geometry preallocation outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Fallocate", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fallocate.go", content: "//go:build linux\npackage reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateFallocate(fd int, n int64) error { return unix.Fallocate(fd, 0, 0, n) }"},
+	}},
+
+	{name: "311: unix.SyncFileRange outside the mapping owner", desc: "raw range durability syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .SyncFileRange", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_syncfilerange.go", content: "//go:build linux\npackage reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateSyncFileRange(fd int, n int64) error { return unix.SyncFileRange(fd, 0, n, 0) }"},
 	}},
 }

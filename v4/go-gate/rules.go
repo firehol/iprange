@@ -51,21 +51,22 @@ var bannedImports = map[string]bool{
 // a future writer package calling raw ftruncate/msync/fsync is the same
 // single-authority erosion the gate exists to pin.
 var lifecycleOwnerOnly = map[string]bool{
-	"Fdatasync": true, "Fsync": true, "Ftruncate": true,
-	"Msync": true, "Sync": true, "Syncfs": true, "Truncate": true,
+	"Fallocate": true, "Fdatasync": true, "Fsync": true, "Ftruncate": true,
+	"Msync": true, "Sync": true, "SyncFileRange": true, "Syncfs": true,
+	"Truncate": true,
 }
 
 var bannedSelectors = map[string]bool{
 	"Call": true, "CallSlice": true, "Clonefile": true, "Clonefileat": true,
 	"Copy": true, "CopyBuffer": true, "CopyFS": true,
 	"CopyFileRange": true, "CopyN": true, "Decode": true, "Dup": true, "Dup2": true, "Dup3": true,
-	"Encode": true, "Exec": true, "FcntlInt": true, "ForkExec": true,
+	"Encode": true, "Exec": true, "Fallocate": true, "FcntlInt": true, "ForkExec": true,
 	"Fdatasync": true, "Fsync": true, "Ftruncate": true,
 	"IoctlFileClone": true, "IoctlFileCloneRange": true, "IoctlFileDedupeRange": true,
 	"Tee": true, "Vmsplice": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true, "Msync": true,
-	"Sync": true, "Syncfs": true,
+	"Sync": true, "SyncFileRange": true, "Syncfs": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
 	"Preadv": true, "Print": true, "Printf": true, "Println": true,
 	"Preadv2": true, "Pwrite": true, "Pwritev": true, "Pwritev2": true,
