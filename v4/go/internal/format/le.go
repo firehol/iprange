@@ -46,3 +46,65 @@ func MetaCRC32C(page []byte) uint32 {
 	crc = crc32.Update(crc, crc32cTable, page[256:])
 	return crc
 }
+
+// Page checksum (non-meta main-file page CRC sealing, binary-format-v4.md
+// section 4; Rust page_checksum.rs). The checksum field sits at byte 28 of
+// the page header and is excluded from its own CRC.
+const (
+	PageChecksumOffset = 28
+	PageChecksumLength = 4
+)
+
+// crc32cZeroes feeds zero bytes through the CRC without allocating, mirroring
+// the Rust crc32c_with_zeroed chunked-zero loop.
+var crc32cZeroes = [64]byte{}
+
+// CRC32CWithZeroed computes CRC-32C over data with the byte range
+// [zeroAt, zeroAt+zeroLen) treated as zero (Rust checksum.rs
+// crc32c_with_zeroed). It reports false when the range is invalid or exceeds
+// data.
+func CRC32CWithZeroed(data []byte, zeroAt, zeroLen int) (uint32, bool) {
+	zeroEnd := zeroAt + zeroLen
+	if zeroAt < 0 || zeroLen < 0 || zeroEnd > len(data) {
+		return 0, false
+	}
+	crc := crc32.Checksum(data[:zeroAt], crc32cTable)
+	remaining := zeroLen
+	for remaining >= len(crc32cZeroes) {
+		crc = crc32.Update(crc, crc32cTable, crc32cZeroes[:])
+		remaining -= len(crc32cZeroes)
+	}
+	if remaining > 0 {
+		crc = crc32.Update(crc, crc32cTable, crc32cZeroes[:remaining])
+	}
+	return crc32.Update(crc, crc32cTable, data[zeroEnd:]), true
+}
+
+// PageChecksumValid reports whether page carries a valid commit-time CRC-32C
+// seal over the whole page with its checksum field treated as zero
+// (Rust page_checksum.rs valid). Short or sealed-less pages are invalid.
+func PageChecksumValid(page []byte) bool {
+	if len(page) < PageChecksumOffset+PageChecksumLength {
+		return false
+	}
+	crc, ok := CRC32CWithZeroed(page, PageChecksumOffset, PageChecksumLength)
+	return ok && crc == U32(page[PageChecksumOffset:PageChecksumOffset+PageChecksumLength])
+}
+
+// SealPageChecksum zeroes the checksum field, computes the CRC-32C seal over
+// the page with that field treated as zero, and writes the seal back
+// (Rust page_checksum.rs seal_mapped). page must be a view into the
+// file-backed mapping: pages are constructed and sealed at their final
+// offsets, never in owned memory.
+func SealPageChecksum(page []byte) error {
+	if len(page) < PageChecksumOffset+PageChecksumLength {
+		return &Error{Code: CodeFormatInvalid, Detail: "page too short for checksum seal"}
+	}
+	PutU32(page[PageChecksumOffset:], 0)
+	crc, ok := CRC32CWithZeroed(page, PageChecksumOffset, PageChecksumLength)
+	if !ok {
+		return &Error{Code: CodeFormatInvalid, Detail: "page too short for checksum seal"}
+	}
+	PutU32(page[PageChecksumOffset:], crc)
+	return nil
+}

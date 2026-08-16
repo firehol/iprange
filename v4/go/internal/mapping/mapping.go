@@ -30,27 +30,34 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// Mapping is one read-only file-backed mapping of a committed v4 artifact.
+// Mapping is one file-backed mapping of a committed v4 artifact: read-only
+// for immutable readers, read-write for the single live writer.
 type Mapping struct {
 	file     *os.File
 	data     []byte
 	size     uint64 // currently mapped byte length
 	physical uint64 // file size at open (locked extent)
+	prot     int    // mmap protection of the current mapping
 }
 
-// OpenImmutable opens path as a regular, symlink-free, page-aligned file and
-// maps exactly its committed extent read-only under a shared lifetime lock.
-// Geometry refusals carry CodeFormatInvalid; operating-system failures carry
-// CodeIO. The optional check runs after the shared lifetime lock is held and
-// before any byte of the file is mapped, so namespace decisions observe one
-// consistent locking state. Path identity is verified after the open, after
-// the lock, and after mapping; each check re-stats the path and requires it
-// to still name the opened inode, mirroring Rust open_immutable
-// (verify_path_any_link): a replacement race must never publish a mapping of
-// an old unlinked inode while the path names a new database. An identity
-// change or non-regular path entry under the lock is the WrongState class
-// (Rust WrongMode maps to code 11).
-func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
+// openMapping implements the shared open path for read-only and read-write
+// mappings: pre-stat, O_NOFOLLOW open, path identity verification, the
+// lifetime lock (shared for readers, exclusive for the writer), geometry
+// checks, and the first mapping, each followed by the same identity and
+// namespace re-checks as the Rust open_immutable path. The optional check
+// runs after the lifetime lock is held and before any byte of the file is
+// mapped, so namespace decisions observe one consistent locking state. A
+// replacement race must never publish a mapping of an old unlinked inode
+// while the path names a new database; an identity change or non-regular
+// path entry under the lock is the WrongState class (Rust WrongMode maps to
+// code 11).
+//
+// Read-only opens map exactly the two meta pages (O(1) bootstrap, spec
+// section 3); the committed extent is mapped by Remap after bootstrap proves
+// the meta pair, so a huge corrupt tail never costs VA. Read-write opens map
+// the full physical extent immediately because the writer mutates pages
+// anywhere in the file (Rust mapping.rs read_write).
+func openMapping(path string, rdwr bool, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
 	// Stat the final name before opening so non-regular files (FIFOs,
 	// directories) are refused without a blocking or surprising open, then
@@ -64,7 +71,15 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if !before.Mode().IsRegular() {
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 	}
-	f, err := os.OpenFile(clean, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	flags := os.O_RDONLY
+	prot := unix.PROT_READ
+	takeLock := lockLifetimeShared
+	if rdwr {
+		flags = os.O_RDWR
+		prot = unix.PROT_READ | unix.PROT_WRITE
+		takeLock = lockLifetimeExclusive
+	}
+	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
 	}
@@ -83,14 +98,11 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 		if !st.Mode().IsRegular() {
 			return &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 		}
-		// Re-stat the path itself (no symlink following, like Rust's
-		// symlink_metadata-based directory entry) and compare against the
-		// opened inode: this is the check that detects replacement after
-		// the fd was opened.
+		// Re-stat the path itself (no symlink following) and compare
+		// against the opened inode: this is the check that detects
+		// replacement after the fd was opened.
 		now, err := os.Lstat(clean)
 		if err != nil {
-			// An unlinked path is NameNotFound, mirroring Rust
-			// verify_path_inner; any other stat failure stays IO.
 			if os.IsNotExist(err) {
 				return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while opening"}
 			}
@@ -107,7 +119,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if err := verifyPathIdentity(); err != nil {
 		return nil, err
 	}
-	if err := lockLifetimeShared(int(f.Fd())); err != nil {
+	if err := takeLock(int(f.Fd())); err != nil {
 		return nil, err
 	}
 	if err := verifyPathIdentity(); err != nil {
@@ -118,10 +130,9 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	// Stat the locked file for geometry validation, mirroring Rust
-	// map_reader (database_file.rs:107-112): the size is sampled under
-	// the shared lifetime lock, so a writer cannot change the extent
-	// between stat and mmap.
+	// Stat the locked file for geometry validation: the size is sampled
+	// under the lifetime lock, so a concurrent writer cannot change the
+	// extent between stat and mmap.
 	st, err := f.Stat()
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
@@ -136,10 +147,11 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
-	// Bootstrap maps exactly the two meta pages (O(1) bootstrap, spec
-	// section 3). The committed extent is mapped by Remap after bootstrap
-	// proves the meta pair, so a huge corrupt tail never costs VA.
-	data, err := unix.Mmap(int(f.Fd()), 0, 2*format.PageSize, unix.PROT_READ, unix.MAP_SHARED)
+	mapLen := uint64(2 * format.PageSize)
+	if rdwr {
+		mapLen = size
+	}
+	data, err := unix.Mmap(int(f.Fd()), 0, int(mapLen), prot, unix.MAP_SHARED)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
 	}
@@ -156,9 +168,28 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size}
+	m := &Mapping{file: f, data: data, size: mapLen, physical: size, prot: prot}
 	cleanup = false
 	return m, nil
+}
+
+// OpenImmutable opens path as a regular, symlink-free, page-aligned file and
+// maps exactly its committed extent read-only under a shared lifetime lock.
+// Geometry refusals carry CodeFormatInvalid; operating-system failures carry
+// CodeIO. See openMapping for the full identity and namespace contract.
+func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
+	return openMapping(path, false, check)
+}
+
+// OpenMutable opens path for the single live writer: O_RDWR under the
+// exclusive lifetime lock (readers hold the same byte range shared, so a
+// mapped reader and a truncating writer can never overlap) with a read-write
+// mapping of the full physical extent, mirroring Rust mapping.rs read_write
+// with live_lock exclusive mode. Format and identity checks are identical to
+// OpenImmutable. Only this package may create and destroy mappings; the
+// descriptor never escapes it.
+func OpenMutable(path string, check func(clean string) error) (*Mapping, error) {
+	return openMapping(path, true, check)
 }
 
 // Size returns the currently mapped byte length (2 pages during bootstrap,
@@ -233,7 +264,7 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	// nil-first ordering is safe on every platform.
 	old := m.data
 	m.data = nil
-	data, err := remapPages(m.file, old, m.size, committedBytes)
+	data, err := remapPages(m.file, old, m.size, committedBytes, m.prot)
 	if err != nil {
 		// Linux mremap failure returns the old slice (still valid);
 		// restore it so Close can unmap it. Fallback failure returns
@@ -247,6 +278,78 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	}
 	m.data = data
 	m.size = committedBytes
+	return nil
+}
+
+// Grow extends the file and the mapping to newSize for a mutable mapping,
+// mirroring Rust mapping.rs resize: ftruncate first, then remap. It refuses
+// read-only mappings, non-page-aligned or oversized requests, and growth on
+// a closed mapping. On remap failure the file may already be extended but
+// the mapping is left fail-closed (View reports WrongState on non-Linux;
+// Linux mremap failure restores the old mapping).
+func (m *Mapping) Grow(newSize uint64) error {
+	if m.data == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	if m.prot&unix.PROT_WRITE == 0 {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping is read-only"}
+	}
+	if newSize%format.PageSize != 0 {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "new size not page-aligned"}
+	}
+	if newSize > uint64(^uint(0)>>1) {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "size larger than host address space"}
+	}
+	if newSize == m.size {
+		return nil
+	}
+	if newSize < m.size {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "shrink is not supported by Grow"}
+	}
+	if err := unix.Ftruncate(int(m.file.Fd()), int64(newSize)); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
+	}
+	old := m.data
+	m.data = nil
+	data, err := remapPages(m.file, old, m.size, newSize, m.prot)
+	if err != nil {
+		// Linux mremap failure returns the old slice (still valid);
+		// restore it so Close can unmap it. Fallback failure returns
+		// nil (old mapping already unmapped); leave m.data nil so
+		// View returns WrongState and Close skips the munmap.
+		if data != nil {
+			m.data = data
+		}
+		m.size = 0
+		return err
+	}
+	m.data = data
+	m.size = newSize
+	m.physical = newSize
+	return nil
+}
+
+// Flush synchronizes the mapped pages to the file (msync MS_SYNC), mirroring
+// Rust mapping.rs flush_range over the whole mapped extent.
+func (m *Mapping) Flush() error {
+	if m.data == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	if err := unix.Msync(m.data, unix.MS_SYNC); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
+	}
+	return nil
+}
+
+// SyncFile forces the file's dirty pages to stable storage (fsync), mirroring
+// Rust mapping.rs sync_file.
+func (m *Mapping) SyncFile() error {
+	if m.file == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	if err := unix.Fsync(int(m.file.Fd())); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "fsync: " + err.Error()}
+	}
 	return nil
 }
 

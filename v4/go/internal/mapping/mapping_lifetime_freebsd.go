@@ -25,6 +25,19 @@ func lockLifetimeShared(fd int) error {
 	}
 }
 
+// lockLifetimeExclusive takes the exclusive whole-file flock lifetime lock
+// on fd, mirroring the Rust freebsd exclusive file lock: the writer excludes
+// every mapped reader, and readers block on LOCK_SH until it releases.
+func lockLifetimeExclusive(fd int) error {
+	for {
+		if err := unix.Flock(fd, unix.LOCK_EX); err == nil {
+			return nil
+		} else if err != unix.EINTR {
+			return &format.Error{Code: format.CodeIO, Detail: "lifetime lock: " + err.Error()}
+		}
+	}
+}
+
 // unlockLifetime releases the shared whole-file flock lifetime lock on fd.
 func unlockLifetime(fd int) error {
 	for {

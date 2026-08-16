@@ -35,6 +35,21 @@ func lockLifetimeShared(fd int) error {
 	}
 }
 
+// lockLifetimeExclusive takes the exclusive OFD byte-range lifetime lock on
+// fd (F_WRLCK on the same byte range), mirroring Rust live_lock exclusive
+// mode: exactly one live writer may hold it, and every immutable open waits
+// (F_OFD_SETLKW) for the writer to release it before mapping.
+func lockLifetimeExclusive(fd int) error {
+	fl := unix.Flock_t{Type: unix.F_WRLCK, Whence: unix.SEEK_SET, Start: lifetimeLockOffset, Len: lifetimeLockLen}
+	for {
+		if err := unix.FcntlFlock(uintptr(fd), unix.F_OFD_SETLKW, &fl); err == nil {
+			return nil
+		} else if !errors.Is(err, unix.EINTR) {
+			return &format.Error{Code: format.CodeIO, Detail: "lifetime lock: " + err.Error()}
+		}
+	}
+}
+
 // unlockLifetime releases the shared OFD byte-range lifetime lock on fd.
 func unlockLifetime(fd int) error {
 	fl := unix.Flock_t{Type: unix.F_UNLCK, Whence: unix.SEEK_SET, Start: lifetimeLockOffset, Len: lifetimeLockLen}

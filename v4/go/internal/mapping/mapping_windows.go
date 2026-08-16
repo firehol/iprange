@@ -18,6 +18,11 @@ func OpenImmutable(path string, _ func(clean string) error) (*Mapping, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// OpenMutable refuses every Windows open in milestone 1.
+func OpenMutable(path string, _ func(clean string) error) (*Mapping, error) {
+	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
 // Size satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Size() uint64 { return 0 }
 
@@ -43,6 +48,21 @@ func (m *Mapping) VerifyIdentity(path string) error {
 
 // PhysicalSize satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) PhysicalSize() uint64 { return 0 }
+
+// Grow satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) Grow(newSize uint64) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
+// Flush satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) Flush() error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
+// SyncFile satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) SyncFile() error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
 
 // Close satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Close() error { return nil }

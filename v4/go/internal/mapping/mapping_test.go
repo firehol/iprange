@@ -329,3 +329,235 @@ func TestOpenImmutableRefusesPathUnlinkedDuringOpen(t *testing.T) {
 		t.Fatal("open did not refuse the unlinked path")
 	}
 }
+
+// makePagesFile creates a page-aligned file of pageCount zero pages.
+func makePagesFile(t *testing.T, dir string, pageCount int) string {
+	t.Helper()
+	path := filepath.Join(dir, "writer.iprdb")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeros := make([]byte, format.PageSize)
+	for i := 0; i < pageCount; i++ {
+		if _, err := f.Write(zeros); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestOpenMutableWritesVisible pins the writer mapping contract: bytes
+// written through a mutable View land in the file-backed mapping (visible to
+// an independent mapping of the same file before any flush) and survive
+// Flush + SyncFile + close for a fresh immutable open.
+func TestOpenMutableWritesVisible(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	view, err := m.View(0, format.PageSize)
+	if err != nil {
+		t.Fatal("view:", err)
+	}
+	copy(view, []byte("writer marker"))
+
+	// MAP_SHARED: an independent raw mapping of the same file sees the
+	// write immediately, before any msync.
+	raw, err := unix.Mmap(-1, 0, format.PageSize, unix.PROT_READ, unix.MAP_SHARED)
+	if err == nil {
+		unix.Munmap(raw) // placeholder; replaced below
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = unix.Mmap(int(f.Fd()), 0, format.PageSize, unix.PROT_READ, unix.MAP_SHARED)
+	f.Close()
+	if err != nil {
+		t.Fatal("raw mmap:", err)
+	}
+	if string(raw[:13]) != "writer marker" {
+		t.Fatalf("independent mapping sees %q, want writer marker", raw[:13])
+	}
+	unix.Munmap(raw)
+
+	if err := m.Flush(); err != nil {
+		t.Fatal("flush:", err)
+	}
+	if err := m.SyncFile(); err != nil {
+		t.Fatal("sync:", err)
+	}
+	if m.Size() != 4*format.PageSize {
+		t.Fatalf("size = %d, want 4 pages", m.Size())
+	}
+	if m.PhysicalSize() != 4*format.PageSize {
+		t.Fatalf("physical = %d, want 4 pages", m.PhysicalSize())
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal("close:", err)
+	}
+
+	r, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal("reopen:", err)
+	}
+	defer r.Close()
+	got, err := r.Page(0)
+	if err != nil {
+		t.Fatal("page:", err)
+	}
+	if string(got[:13]) != "writer marker" {
+		t.Fatalf("immutable reader sees %q, want writer marker", got[:13])
+	}
+}
+
+// TestOpenMutableGrow pins Grow: ftruncate + remap extend the mapping and
+// the file, writes beyond the old extent are visible to a fresh immutable
+// open, and the remap keeps the mapping writable.
+func TestOpenMutableGrow(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	if err := m.Grow(8 * format.PageSize); err != nil {
+		t.Fatal("grow:", err)
+	}
+	if m.Size() != 8*format.PageSize {
+		t.Fatalf("size after grow = %d, want 8 pages", m.Size())
+	}
+	view, err := m.View(4*format.PageSize, format.PageSize)
+	if err != nil {
+		t.Fatal("view beyond old extent:", err)
+	}
+	copy(view, []byte("grown marker"))
+	// The mapping must still be writable after the mremap.
+	view2, err := m.View(5*format.PageSize, format.PageSize)
+	if err != nil {
+		t.Fatal("view:", err)
+	}
+	copy(view2, []byte("still writable"))
+	if err := m.Flush(); err != nil {
+		t.Fatal("flush:", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal("close:", err)
+	}
+
+	r, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal("reopen:", err)
+	}
+	defer r.Close()
+	if r.PhysicalSize() != 8*format.PageSize {
+		t.Fatalf("physical = %d, want 8 pages", r.PhysicalSize())
+	}
+	if err := r.Remap(8 * format.PageSize); err != nil {
+		t.Fatal("remap:", err)
+	}
+	got, err := r.Page(4)
+	if err != nil {
+		t.Fatal("page 4:", err)
+	}
+	if string(got[:12]) != "grown marker" {
+		t.Fatalf("page 4 = %q, want grown marker", got[:12])
+	}
+	got, err = r.Page(5)
+	if err != nil {
+		t.Fatal("page 5:", err)
+	}
+	if string(got[:14]) != "still writable" {
+		t.Fatalf("page 5 = %q, want still writable", got[:14])
+	}
+}
+
+// TestGrowRefusals pins the Grow error classes on a read-only mapping and
+// on misaligned or shrinking requests.
+func TestGrowRefusals(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	r, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Grow(8 * format.PageSize); err == nil {
+		t.Fatal("grow of read-only mapping succeeded")
+	}
+	// The reader's shared lock must be released before the writer's
+	// exclusive lock can be taken (locking order is part of the test).
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err := m.Grow(1000); err == nil {
+		t.Fatal("unaligned grow succeeded")
+	}
+	if err := m.Grow(2 * format.PageSize); err == nil {
+		t.Fatal("shrink succeeded")
+	}
+}
+
+// TestOpenMutableExcludesReaders pins the exclusive lifetime lock: an
+// immutable open blocks while the writer mapping is open, then completes
+// after Close releases the lock.
+func TestOpenMutableExcludesReaders(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan *Mapping, 1)
+	errc := make(chan error, 1)
+	go func() {
+		r, err := OpenImmutable(path, nil)
+		if err != nil {
+			errc <- err
+			return
+		}
+		done <- r
+	}()
+
+	select {
+	case r := <-done:
+		r.Close()
+		t.Fatal("immutable open succeeded while writer held the exclusive lock")
+	case err := <-errc:
+		t.Fatal("immutable open failed:", err)
+	case <-time.After(300 * time.Millisecond):
+		// Blocked as expected.
+	}
+
+	if err := m.Close(); err != nil {
+		t.Fatal("writer close:", err)
+	}
+	select {
+	case r := <-done:
+		r.Close()
+	case err := <-errc:
+		t.Fatal("immutable open after writer close:", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("immutable open still blocked after writer close")
+	}
+}

@@ -15,5 +15,10 @@ func lockLifetimeShared(fd int) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}
 }
 
+// lockLifetimeExclusive refuses the open, mirroring the Rust platform cfg.
+func lockLifetimeExclusive(fd int) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}
+}
+
 // unlockLifetime is unreachable: no lock is ever held.
 func unlockLifetime(fd int) error { return nil }

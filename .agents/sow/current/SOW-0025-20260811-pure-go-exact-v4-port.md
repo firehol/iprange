@@ -288,7 +288,26 @@ zero-copy, single-authority, and clean-code rules. Planned chunks
    vectors pinned from the Rust writer tests.
 Validation per chunk: go test (both tag sets), -race/checkptr, vet,
 gofmt, gate scan + battery on the new production surface, SOW audit;
-cross-open is the milestone gate.## Review Process (user decision, 2026-08-12)
+cross-open is the milestone gate.
+
+Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD <chunk1>):
+mapping write mode and the page checksum authority are implemented and
+pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
+lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the full extent,
+mirroring Rust mapping.rs read_write and live_lock exclusive), grows
+them (ftruncate + remap, mirroring resize), and flushes them (msync /
+fsync, mirroring flush_range / sync_file); the open path is one shared
+implementation (openMapping) for readers and the writer, and the Windows
+stub refuses the new methods like every other owner method. The CRC
+authority in internal/format gained the non-meta page seal exactly as
+Rust page_checksum.rs defines it (offset 28, length 4, zeroed-field
+CRC-32C): CRC32CWithZeroed, PageChecksumValid, SealPageChecksum. Gap
+analysis: .agents/sow/pending/pure-go-v4-port-milestone-2-gap-analysis.md.
+Validation: go test ./... (both tag sets) + -race + vet + gofmt +
+production gate scan rc=0 + import-graph check + 11/11 cross-compiles;
+new tests pin write visibility through MAP_SHARED, Grow, flush/sync
+round-trip, exclusive-lock exclusion of readers, grow refusals, and the
+checksum seal lifecycle with the Castagnoli check vector.## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
 2. Iteratively run 5-7 narrow-scope subagents on the session's own model (no
