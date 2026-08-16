@@ -384,6 +384,9 @@ type pageFlow struct {
 	// boundedPageSpans accumulates bounded mapped-page spans copied or
 	// appended into one canonical destination (root object + field path).
 	boundedPageSpans map[boundedSpanKey]int
+	// spanAliases records canonical destination-key aliases when one
+	// selector field is assigned from another (h.right = h.left).
+	spanAliases map[boundedSpanKey]boundedSpanKey
 	// appendAliases maps a rebound slice name to the canonical variable
 	// whose bounded page-span accumulation it shares.
 	appendAliases map[types.Object]types.Object
@@ -441,6 +444,7 @@ func (pf *pageFlow) clearExprCaches() {
 	pf.pageSinkCalls = map[*ast.CallExpr][]ast.Expr{}
 	pf.destAggregated = map[ast.Expr]bool{}
 	pf.boundedPageSpans = map[boundedSpanKey]int{}
+	pf.spanAliases = map[boundedSpanKey]boundedSpanKey{}
 	pf.appendAliases = map[types.Object]types.Object{}
 	pf.appendCallRoots = map[*ast.CallExpr]types.Object{}
 }
@@ -781,6 +785,9 @@ type stmtState struct {
 	// writes into an owned buffer of PageSize aggregate to a complete
 	// page copy (binary-format-v4.md:108).
 	pageSourceLoops int
+	// loopBound records the statically known iterations of the innermost
+	// bounded loop; nested loops multiply their bounds conservatively.
+	loopBound int64
 	// destRangeLoops counts loops ranging over an owned destination of
 	// PageSize. Element writes in them are copies only when the RHS
 	// derives from a page; the flow pass marks the destination and the
@@ -816,6 +823,7 @@ func newStmtState(pf *pageFlow, fd *ast.FuncDecl, pkgVars map[string]pageValue, 
 	st := &stmtState{
 		pf:            pf,
 		fd:            fd,
+		loopBound:     1,
 		lenOfPage:     map[types.Object]bool{},
 		sliceLens:     map[types.Object]int64{},
 		params:        map[types.Object]int{},
@@ -1188,6 +1196,14 @@ func (pf *pageFlow) recordAggregatedField(st *stmtState, obj types.Object, path 
 	}
 }
 
+// max64 returns the larger two int64 values.
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // makeLen resolves a make length argument to a concrete integer, or -1
 // when it is not a compile-time constant.
 func (pf *pageFlow) makeLen(st *stmtState, n ast.Expr) int64 {
@@ -1418,6 +1434,26 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						}
 					} else if _, ok := aliasSrcTmp.(*ast.Ident); !ok {
 						pf.appendAliases[dstObj] = nil
+					}
+				}
+				// Selector-field aliases share one bounded-span key.
+				if srcSel, ok := unparen(v.Rhs[i]).(*ast.SelectorExpr); ok {
+					if dstSel, ok := unparen(v.Lhs[i]).(*ast.SelectorExpr); ok {
+						srcRoot, srcPath := selectorChain(st, srcSel)
+						dstRoot, dstPath := selectorChain(st, dstSel)
+						if srcRoot != nil && dstRoot != nil {
+							srcKey := boundedSpanKey{obj: srcRoot, path: srcPath}
+							dstKey := boundedSpanKey{obj: dstRoot, path: dstPath}
+							root := srcKey
+							for d := 0; d < 8; d++ {
+								next, ok := pf.spanAliases[root]
+								if !ok || next == root {
+									break
+								}
+								root = next
+							}
+							pf.spanAliases[dstKey] = root
+						}
 					}
 				}
 				// Chained length aliases: n := len(page); m := n keeps
@@ -1901,17 +1937,23 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			// A statically bounded loop whose iteration count times
 			// page-derived indexed writes can reach PageSize copies a
 			// complete page, including multiple disjoint writes per body.
+			innerBound := st.loopBound
 			if !pageSourcing && v.Cond != nil {
-				if bound := pf.constIntBound(v.Cond); bound > 0 && bound*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
+				if bound := pf.constIntBound(v.Cond); bound > 0 && innerBound*bound*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
 					st.pageSourceLoops++
 					pageSourcing = true
 				}
 			}
 			pre := st.clone()
+			st.loopBound = innerBound * max64(pf.constIntBound(v.Cond), 0)
+			if st.loopBound == 0 {
+				st.loopBound = 0
+			}
 			pf.analyzeStmts(st, v.Body.List, fs)
 			if v.Post != nil {
 				pf.analyzeStmts(st, []ast.Stmt{v.Post}, fs)
 			}
+			st.loopBound = innerBound
 			if pageSourcing {
 				st.pageSourceLoops--
 			}
@@ -1941,8 +1983,9 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			}
 			// for i := range 4096 iterates PageSize times. Element writes
 			// from a page source aggregate to a complete page copy.
+			innerBound := st.loopBound
 			if !pageSourcing {
-				if n := pf.constRangeDestination(v.X); n >= pageSize {
+				if n := pf.constRangeDestination(v.X); n > 0 && innerBound*n*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
 					st.pageSourceLoops++
 					pageSourcing = true
 				}
@@ -2080,7 +2123,9 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 			}
 			pre := st.clone()
+			st.loopBound = innerBound * max64(pf.constRangeDestination(v.X), 0)
 			pf.analyzeStmts(st, v.Body.List, fs)
+			st.loopBound = innerBound
 			// Decrement the counter this statement incremented. Nested
 			// mixed contexts (a destination range inside a page-sourcing
 			// loop) must not close the outer loop's context.
@@ -2944,6 +2989,7 @@ func (st *stmtState) clone() *stmtState {
 		cp.ambigBind[k] = true
 	}
 	cp.destRangeLoops = st.destRangeLoops
+	cp.loopBound = st.loopBound
 	cp.lenOfPage = map[types.Object]bool{}
 	for k := range st.lenOfPage {
 		cp.lenOfPage[k] = true
@@ -2965,6 +3011,11 @@ func (st *stmtState) joinWith(other *stmtState) {
 	// page-returning branch is still possible.
 	if other.destRangeLoops > st.destRangeLoops {
 		st.destRangeLoops = other.destRangeLoops
+	}
+	// A nested loop is reachable through either branch; the larger bound
+	// is the conservative join.
+	if other.loopBound > st.loopBound {
+		st.loopBound = other.loopBound
 	}
 	for k := range other.lenOfPage {
 		st.lenOfPage[k] = true

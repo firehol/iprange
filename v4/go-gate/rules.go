@@ -1583,6 +1583,21 @@ func chainInner(e ast.Expr) ast.Expr {
 
 // boundedCopyKey resolves a bounded copy destination to its canonical
 // accumulation key: root object plus flattened field path.
+// canonicalSpanKey follows selector-field aliases to one accumulation key.
+func (w *fileRules) canonicalSpanKey(key boundedSpanKey) boundedSpanKey {
+	if w.pc.pf == nil {
+		return key
+	}
+	for d := 0; d < 8; d++ {
+		next, ok := w.pc.pf.spanAliases[key]
+		if !ok || next == key {
+			return key
+		}
+		key = next
+	}
+	return key
+}
+
 func (w *fileRules) boundedCopyKey(dst ast.Expr) (types.Object, string) {
 	root := w.boundedCopyTarget(dst)
 	id, ok := root.(*ast.Ident)
@@ -1615,7 +1630,9 @@ func (w *fileRules) boundedCopyKey(dst ast.Expr) (types.Object, string) {
 	if obj == nil {
 		return nil, ""
 	}
-	return obj, w.destinationFieldPath(dst)
+	key := boundedSpanKey{obj: obj, path: w.destinationFieldPath(dst)}
+	key = w.canonicalSpanKey(key)
+	return key.obj, key.path
 }
 
 // boundedAppendKey resolves an append destination to the same canonical
@@ -1632,7 +1649,9 @@ func (w *fileRules) boundedAppendKey(e ast.Expr) (types.Object, string) {
 	if obj == nil {
 		return nil, ""
 	}
-	return obj, w.destinationFieldPath(e)
+	key := boundedSpanKey{obj: obj, path: w.destinationFieldPath(e)}
+	key = w.canonicalSpanKey(key)
+	return key.obj, key.path
 }
 
 // accumulateBoundedSpan adds a bounded mapped-page span to one canonical
