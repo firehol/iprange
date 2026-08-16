@@ -58,13 +58,13 @@ var bannedSelectors = map[string]bool{
 	"Preadv2": true, "Pwrite": true, "Pwritev": true, "Pwritev2": true,
 	"RawSyscall": true, "RawSyscall6": true, "RawSyscall9": true,
 	"RawSyscallN": true, "RawSyscallNoError": true, "Read": true,
-	"ReadAll": true,
-	"ReadAt":  true, "ReadAtLeast": true, "ReadByte": true, "ReadFile": true,
+	"ReadAll": true, "Recvfrom": true, "Recvmsg": true, "Recvmmsg": true,
+	"ReadAt": true, "ReadAtLeast": true, "ReadByte": true, "ReadFile": true,
 	"ReadFrom": true, "ReadFull": true, "ReadLine": true, "ReadRune": true,
 	"ReadString": true, "Readv": true, "Scan": true, "Scanf": true,
 	"Scanln": true, "Seek": true, "Sendfile": true, "Splice": true,
-	"StartProcess": true,
-	"Syscall":      true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
+	"Sendmmsg": true, "Sendmsg": true, "Sendto": true, "StartProcess": true,
+	"Syscall": true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
 	"SyscallNoError": true,
 	"Write":          true, "WriteAt": true, "WriteByte": true, "WriteFile": true,
 	"WriteRune": true, "WriteString": true, "WriteTo": true, "Writev": true,
@@ -1387,10 +1387,22 @@ func (w *fileRules) ownedCopySink(fun ast.Expr) bool {
 	// bytes.NewBuffer(page): the package-level constructor of the owned
 	// buffer. Its result is *bytes.Buffer, whose internal []byte the
 	// transfer rule cannot see.
-	if fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok {
-		if pkg := fn.Pkg(); pkg != nil && pkg.Path() == "bytes" && fn.Name() == "NewBuffer" {
-			return true
-		}
+	fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
+	if !ok {
+		return false
+	}
+	pkg := fn.Pkg()
+	if pkg == nil {
+		return false
+	}
+	switch {
+	case pkg.Path() == "bytes" && fn.Name() == "NewBuffer":
+		return true
+	case pkg.Path() == "math/big" && fn.Name() == "SetBytes":
+		// big.Int.SetBytes copies its byte argument into owned
+		// []big.Word limbs, which resultHoldsBytes cannot see; a
+		// full mapped page must not land there (spec:108).
+		return true
 	}
 	return false
 }
@@ -2323,6 +2335,30 @@ func unparen(e ast.Expr) ast.Expr {
 //     type.
 func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 	exempts := map[token.Pos]bool{}
+	if strings.HasSuffix(path, "internal/mapping/mapping_sync_darwin.go") {
+		// macOS durability requires fcntl(F_FULLFSYNC), the only fcntl
+		// variant in the banned content-transfer set. The call passes a
+		// raw descriptor number and moves no mapped bytes, so it is
+		// exempt only in the darwin sync file, and only when the
+		// receiver is the x/sys unix package.
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "FcntlInt" {
+				if id, ok := unparen(sel.X).(*ast.Ident); ok && id.Name == "unix" {
+					exempts[sel.Pos()] = true
+				}
+			}
+			return true
+		})
+		return exempts
+	}
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {
 		return exempts
 	}

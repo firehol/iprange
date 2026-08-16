@@ -51,8 +51,11 @@ cross-open + mixed subprocess gates.
 - Wire parity: literal vectors from the Rust writer tests must pin every
   Go writer output; Go-produced fixtures open in Rust and vice versa.
 - Gate currency: the typed gate must scan the new writer surface; new
-  x/sys lifecycle calls (ftruncate/msync/fsync) are allowed only in
-  internal/mapping (verified by the production scan at chunk 1).
+  x/sys lifecycle calls (ftruncate/msync/fsync, and on darwin
+  fcntl(F_FULLFSYNC) via mapping_sync_darwin.go) are allowed only in
+  internal/mapping (verified by the production scan at chunk 1; the
+  FcntlInt exemption is per-file and per-call, pinned by gate battery
+  cases 240 and 291-298).
 - Performance: no per-item allocation in hot COW paths, declared page
   budgets mirroring Rust PageBudget, necessary-work counters test-only.
 

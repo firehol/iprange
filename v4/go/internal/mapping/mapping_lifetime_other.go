@@ -10,6 +10,12 @@ import (
 // (the OFD byte-range lifetime lock) is not implemented there, so every
 // open is refused with the typed Unsupported error. No content is mapped.
 
+// requireLiveWriter refuses live writer opens, mirroring the Rust platform
+// cfg (require_live_supported).
+func requireLiveWriter() error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}
+}
+
 // lockLifetimeShared refuses the open, mirroring the Rust platform cfg.
 func lockLifetimeShared(fd int) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}

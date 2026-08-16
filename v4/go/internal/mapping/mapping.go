@@ -5,7 +5,11 @@
 //
 // Persistent content is never transferred through read/write/seek language
 // APIs. Page views alias the mapping and are valid only for the lifetime of
-// the Mapping. Retained slices (membership leaves) may survive the lookup
+// the Mapping. Writer views alias the mapping too, but internal/mapping has
+// no pin guard: Grow and Remap invalidate every outstanding view (mremap may
+// move the mapping), so writer code must re-fetch views after every resize
+// and must never retain a view across Grow/Remap (the reader facade's pins
+// guard only reader views). Retained slices (membership leaves) may survive the lookup
 // operation that produced them, but only while a live pin guards the
 // mapping: the reader cannot close while pins exist, and every public view
 // checks its pin before touching the bytes, so a retained slice never
@@ -52,13 +56,22 @@ type Mapping struct {
 // path entry under the lock is the WrongState class (Rust WrongMode maps to
 // code 11).
 //
-// Read-only opens map exactly the two meta pages (O(1) bootstrap, spec
-// section 3); the committed extent is mapped by Remap after bootstrap proves
-// the meta pair, so a huge corrupt tail never costs VA. Read-write opens map
-// the full physical extent immediately because the writer mutates pages
-// anywhere in the file (Rust mapping.rs read_write).
+// Both modes bootstrap-map exactly the two meta pages (O(1) bootstrap,
+// spec section 3), mirroring Rust map_writer (database_file.rs:
+// read_write(file, 2*PAGE_SIZE) then remap(committed)): the writer selects
+// the committed extent from the meta pair and Remaps to it, so a huge
+// corrupt or unpublished tail never costs VA and never becomes writable at
+// open.
 func openMapping(path string, rdwr bool, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
+	// Refuse live opens on platforms without proven live coordination
+	// before any path access, mirroring Rust require_live_supported
+	// (binary-format-v4.md platform table).
+	if rdwr {
+		if err := requireLiveWriter(); err != nil {
+			return nil, err
+		}
+	}
 	// Stat the final name before opening so non-regular files (FIFOs,
 	// directories) are refused without a blocking or surprising open, then
 	// reopen with O_NOFOLLOW. The fd identity, not this first stat, is the
@@ -147,11 +160,7 @@ func openMapping(path string, rdwr bool, check func(clean string) error) (*Mappi
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
-	mapLen := uint64(2 * format.PageSize)
-	if rdwr {
-		mapLen = size
-	}
-	data, err := unix.Mmap(int(f.Fd()), 0, int(mapLen), prot, unix.MAP_SHARED)
+	data, err := unix.Mmap(int(f.Fd()), 0, 2*format.PageSize, prot, unix.MAP_SHARED)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
 	}
@@ -168,7 +177,7 @@ func openMapping(path string, rdwr bool, check func(clean string) error) (*Mappi
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: mapLen, physical: size, prot: prot}
+	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, prot: prot}
 	cleanup = false
 	return m, nil
 }
@@ -184,9 +193,11 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 // OpenMutable opens path for the single live writer: O_RDWR under the
 // exclusive lifetime lock (readers hold the same byte range shared, so a
 // mapped reader and a truncating writer can never overlap) with a read-write
-// mapping of the full physical extent, mirroring Rust mapping.rs read_write
-// with live_lock exclusive mode. Format and identity checks are identical to
-// OpenImmutable. Only this package may create and destroy mappings; the
+// bootstrap mapping of the two meta pages, mirroring Rust map_writer with
+// live_lock exclusive mode. The writer selects the committed extent from the
+// meta pair and calls Remap(committed) before editing; Grow extends the file
+// and the mapping for allocations. Format and identity checks are identical
+// to OpenImmutable. Only this package may create and destroy mappings; the
 // descriptor never escapes it.
 func OpenMutable(path string, check func(clean string) error) (*Mapping, error) {
 	return openMapping(path, true, check)
@@ -197,6 +208,7 @@ func OpenMutable(path string, check func(clean string) error) (*Mapping, error) 
 func (m *Mapping) Size() uint64 { return m.size }
 
 // PhysicalSize returns the file size recorded at open (the locked extent).
+// PhysicalSize returns the file size recorded at open, extended by Grow.
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 
 // VerifyIdentity re-checks that the path still names the opened inode.
@@ -266,12 +278,12 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	m.data = nil
 	data, err := remapPages(m.file, old, m.size, committedBytes, m.prot)
 	if err != nil {
-		// Linux mremap failure returns the old slice (still valid);
-		// restore it so Close can unmap it. Fallback failure returns
-		// nil (old mapping already unmapped); leave m.data nil so
-		// View returns WrongState and Close skips the munmap.
+		// Fail closed exactly like Rust replace_map (map=None, len=0):
+		// the old mapping is torn down (Linux mremap failure leaves it
+		// mapped; the fallback already unmapped it) and every later
+		// access reports WrongState.
 		if data != nil {
-			m.data = data
+			unix.Munmap(data)
 		}
 		m.size = 0
 		return err
@@ -283,10 +295,12 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 
 // Grow extends the file and the mapping to newSize for a mutable mapping,
 // mirroring Rust mapping.rs resize: ftruncate first, then remap. It refuses
-// read-only mappings, non-page-aligned or oversized requests, and growth on
-// a closed mapping. On remap failure the file may already be extended but
-// the mapping is left fail-closed (View reports WrongState on non-Linux;
-// Linux mremap failure restores the old mapping).
+// read-only mappings, any request below the opened physical extent (a Grow
+// must never truncate the file; Remap covers sizes within the extent),
+// non-page-aligned or oversized requests, and growth on a closed mapping.
+// On remap failure the file may already be extended but the mapping is left
+// fail-closed exactly like Rust replace_map: the old mapping is unmapped
+// and every later access reports WrongState.
 func (m *Mapping) Grow(newSize uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
@@ -306,6 +320,9 @@ func (m *Mapping) Grow(newSize uint64) error {
 	if newSize < m.size {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "shrink is not supported by Grow"}
 	}
+	if newSize < m.physical {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "grow below the opened physical extent"}
+	}
 	if err := unix.Ftruncate(int(m.file.Fd()), int64(newSize)); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
 	}
@@ -313,12 +330,9 @@ func (m *Mapping) Grow(newSize uint64) error {
 	m.data = nil
 	data, err := remapPages(m.file, old, m.size, newSize, m.prot)
 	if err != nil {
-		// Linux mremap failure returns the old slice (still valid);
-		// restore it so Close can unmap it. Fallback failure returns
-		// nil (old mapping already unmapped); leave m.data nil so
-		// View returns WrongState and Close skips the munmap.
+		// Fail closed exactly like Rust replace_map (map=None, len=0).
 		if data != nil {
-			m.data = data
+			unix.Munmap(data)
 		}
 		m.size = 0
 		return err
@@ -341,16 +355,15 @@ func (m *Mapping) Flush() error {
 	return nil
 }
 
-// SyncFile forces the file's dirty pages to stable storage (fsync), mirroring
-// Rust mapping.rs sync_file.
+// SyncFile forces the file's data to stable storage, mirroring Rust
+// mapping.rs sync_file: fsync on POSIX platforms, fcntl(F_FULLFSYNC) on
+// macOS (plain fsync on macOS can return before the drive's volatile cache
+// is flushed).
 func (m *Mapping) SyncFile() error {
 	if m.file == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
 	}
-	if err := unix.Fsync(int(m.file.Fd())); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "fsync: " + err.Error()}
-	}
-	return nil
+	return syncFile(int(m.file.Fd()))
 }
 
 // View returns a checked view of [off, off+length) inside the mapping. The
@@ -382,8 +395,10 @@ func (m *Mapping) Close() error {
 		return nil // already closed
 	}
 	var first error
-	if err := unix.Munmap(m.data); err != nil && first == nil {
-		first = &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+	if m.data != nil {
+		if err := unix.Munmap(m.data); err != nil && first == nil {
+			first = &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+		}
 	}
 	m.data = nil
 	if err := unlockLifetime(int(m.file.Fd())); err != nil && first == nil {

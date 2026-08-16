@@ -20,6 +20,10 @@ const (
 	lifetimeLockLen    = 1
 )
 
+// requireLiveWriter permits live writer opens on Linux (OFD coordination is
+// proven here).
+func requireLiveWriter() error { return nil }
+
 // lockLifetimeShared takes the shared OFD byte-range lifetime lock on fd.
 // The lock is blocking (F_OFD_SETLKW), mirroring Rust live_lock lock()
 // with wait=true: an immutable open waits for a writer holding the

@@ -390,6 +390,14 @@ func TestOpenMutableWritesVisible(t *testing.T) {
 	}
 	unix.Munmap(raw)
 
+	// OpenMutable bootstraps exactly the two meta pages like the Rust
+	// writer; the committed extent is mapped by Remap.
+	if m.Size() != 2*format.PageSize {
+		t.Fatalf("size = %d, want 2-page bootstrap", m.Size())
+	}
+	if err := m.Remap(4 * format.PageSize); err != nil {
+		t.Fatal("remap:", err)
+	}
 	if err := m.Flush(); err != nil {
 		t.Fatal("flush:", err)
 	}
@@ -433,6 +441,9 @@ func TestOpenMutableGrow(t *testing.T) {
 	}
 	defer m.Close()
 
+	if m.Size() != 2*format.PageSize {
+		t.Fatalf("size = %d, want 2-page bootstrap", m.Size())
+	}
 	if err := m.Grow(8 * format.PageSize); err != nil {
 		t.Fatal("grow:", err)
 	}
@@ -511,7 +522,7 @@ func TestGrowRefusals(t *testing.T) {
 	if err := m.Grow(1000); err == nil {
 		t.Fatal("unaligned grow succeeded")
 	}
-	if err := m.Grow(2 * format.PageSize); err == nil {
+	if err := m.Grow(1 * format.PageSize); err == nil {
 		t.Fatal("shrink succeeded")
 	}
 }
@@ -559,5 +570,134 @@ func TestOpenMutableExcludesReaders(t *testing.T) {
 		t.Fatal("immutable open after writer close:", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("immutable open still blocked after writer close")
+	}
+}
+
+// TestGrowBelowPhysicalRefused pins the file-truncation guard: after Remap
+// shrinks the mapping, Grow must refuse any request below the opened
+// physical extent instead of ftruncating committed data away.
+func TestGrowBelowPhysicalRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	view, err := m.View(0, format.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(view, []byte("committed marker"))
+	if err := m.Remap(2 * format.PageSize); err != nil {
+		t.Fatal("remap:", err)
+	}
+	if err := m.Grow(3 * format.PageSize); err == nil {
+		t.Fatal("grow below the physical extent succeeded")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != 4*format.PageSize {
+		t.Fatalf("file size = %d, want unchanged 4 pages", st.Size())
+	}
+	r, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := r.Page(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got[:16]) != "committed marker" {
+		t.Fatalf("committed data = %q, want committed marker", got[:16])
+	}
+}
+
+// TestCloseAfterRemapFailure pins the fail-closed contract: a Mapping in
+// the post-remap-failure state (data nil, size zero) closes cleanly and
+// refuses views with WrongState, exactly like Rust replace_map's
+// map=None/len=0 state.
+func TestCloseAfterRemapFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the fail-closed state produced by a remap failure (the
+	// fallback path unmaps before mapping; Linux failure unmaps here).
+	m.data = nil
+	m.size = 0
+	if _, err := m.View(0, 1); err == nil {
+		t.Fatal("view on fail-closed mapping succeeded")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close on fail-closed mapping: %v", err)
+	}
+	if m.data != nil || m.size != 0 {
+		t.Fatal("fail-closed mapping changed on close")
+	}
+}
+
+// TestViewRefetchAfterGrow pins the writer view discipline: views taken
+// before Grow are invalidated (mremap may move the mapping); fresh views
+// after Grow observe the written data, and the mapping stays writable.
+func TestViewRefetchAfterGrow(t *testing.T) {
+	dir := t.TempDir()
+	path := makePagesFile(t, dir, 4)
+
+	m, err := OpenMutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	view, err := m.View(0, format.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(view, []byte("pre-grow marker"))
+	// The view is dead after Grow; writer code must re-fetch.
+	if err := m.Grow(8 * format.PageSize); err != nil {
+		t.Fatal("grow:", err)
+	}
+	view, err = m.View(0, format.PageSize)
+	if err != nil {
+		t.Fatal("re-fetch:", err)
+	}
+	if string(view[:15]) != "pre-grow marker" {
+		t.Fatalf("re-fetched page 0 = %q, want pre-grow marker", view[:15])
+	}
+	page5, err := m.View(5*format.PageSize, format.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(page5, []byte("post-grow marker"))
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Remap(8 * format.PageSize); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Page(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got[:16]) != "post-grow marker" {
+		t.Fatalf("page 5 = %q, want post-grow marker", got[:16])
 	}
 }

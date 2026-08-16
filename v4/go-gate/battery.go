@@ -1383,4 +1383,35 @@ var batteryCases = []batteryCase{
 	{name: "290: //go:embed directive with blank embed import", desc: "go:embed directive with blank embed import", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "gatemut_embdir/mut.go", content: "package gatemut_embdir\n\nimport _ \"embed\"\n\n//go:embed probe.db\nvar gatemutDB []byte"},
 	}},
+	{name: "291: unix.Recvfrom in the mapping owner", desc: "unix.Recvfrom descriptor read in the mapping owner", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_recvfrom.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc recvfrom(fd int, b []byte) (int, error) { n, _, err := unix.Recvfrom(fd, b, 0); return n, err }"},
+	}},
+
+	{name: "292: unix.Recvmsg in the mapping owner", desc: "unix.Recvmsg descriptor read in the mapping owner", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_recvmsg.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc recvmsg(fd int, b []byte) error { _, _, _, _, err := unix.Recvmsg(fd, b, nil, 0); return err }"},
+	}},
+
+	{name: "293: unix.Recvmmsg in the mapping owner", desc: "unix.Recvmmsg descriptor read in the mapping owner", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_recvmmsg.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc recvmmsg(fd int, b []byte) (int, error) { return unix.Recvmmsg(fd, b, nil, 0) }"},
+	}},
+
+	{name: "294: unix.Sendto in the mapping owner", desc: "unix.Sendto descriptor write in the mapping owner", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_sendto.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc sendto(fd int, b []byte) error { return unix.Sendto(fd, b, 0, nil) }"},
+	}},
+
+	{name: "295: unix.Sendmsg in the mapping owner", desc: "unix.Sendmsg descriptor write in the mapping owner", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_sendmsg.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc sendmsg(fd int, b []byte) error { return unix.Sendmsg(fd, nil, b, nil, 0) }"},
+	}},
+
+	{name: "296: unix.Sendmmsg in the mapping owner", desc: "unix.Sendmmsg descriptor write in the mapping owner", expectFail: true, allowTypeCheck: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_sendmmsg.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc sendmmsg(fd int, b []byte) (int, error) { return unix.Sendmmsg(fd, b, nil, 0) }"},
+	}},
+
+	{name: "297: big.Int.SetBytes of a full page", desc: "new(big.Int).SetBytes(page) copies a complete mapped page into owned limbs", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_bigint.go", content: "package reader\n\nimport \"math/big\"\n\nfunc bigIntProbe(r *ImmutableReader, pgno uint32) (*big.Int, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn new(big.Int).SetBytes(page), nil\n}"},
+	}},
+
+	{name: "298: benign bounded big.Int.SetBytes record stays legal", desc: "SetBytes of a bounded record is not a complete-page copy", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_bigintbounded.go", content: "package reader\n\nimport \"math/big\"\n\nfunc bigIntBounded(rec []byte) *big.Int { return new(big.Int).SetBytes(rec[48:112]) }"},
+	}},
 }

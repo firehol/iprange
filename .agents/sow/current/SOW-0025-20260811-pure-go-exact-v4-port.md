@@ -291,6 +291,9 @@ gofmt, gate scan + battery on the new production surface, SOW audit;
 cross-open is the milestone gate.
 
 Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD bf49779):
+this entry supersedes the 578-case gate battery counts in the M1
+close-out paragraphs: the gate battery is now 586 cases (502
+rejections, 84 benign acceptances) plus 9 shell environment mutations.
 mapping write mode and the page checksum authority are implemented and
 pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
 lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the full extent,
@@ -307,7 +310,58 @@ Validation: go test ./... (both tag sets) + -race + vet + gofmt +
 production gate scan rc=0 + import-graph check + 11/11 cross-compiles;
 new tests pin write visibility through MAP_SHARED, Grow, flush/sync
 round-trip, exclusive-lock exclusion of readers, grow refusals, and the
-checksum seal lifecycle with the Castagnoli check vector.## Review Process (user decision, 2026-08-12)
+checksum seal lifecycle with the Castagnoli check vector.
+
+Milestone 2 chunk 1 - level-1 review round 1 and fix round (2026-08-17,
+HEAD ff27d73 -> uncommitted fix tree): the five aspect reviewers
+(Jason, Linnaeus, Peirce, Sartre, Leibniz) ran the first level-1 round
+over chunk 1. Four returned FAIL with P1/P2 findings; one returned PASS.
+All findings were reproduced by the lead and fixed in the working tree
+(commit pending delta re-review):
+
+- P1/P2 FreeBSD writer compliance (Jason, Leibniz, Sartre): the spec
+  (binary-format-v4.md:2403-2411) and the Rust authority
+  (live_lock.rs require_live_supported) refuse a live writer on FreeBSD;
+  the Go writer previously substituted whole-file flock LOCK_EX.
+  Fixed: requireLiveWriter() now returns CodeOSUnsupported before any
+  path access on FreeBSD and the fallback-OS set, nil on Linux/darwin,
+  and lockLifetimeExclusive stays a typed refusal for defense in depth.
+- P1/P2 macOS durability (Jason, Leibniz): plain fsync on macOS can
+  return before the drive's volatile write cache is flushed. Fixed:
+  syncFile now uses fcntl(F_FULLFSYNC) on darwin (mapping_sync_darwin.go)
+  and fsync elsewhere (mapping_sync_posix.go); the gate gained a narrow
+  per-file exemption for the exact unix.FcntlInt call in
+  mapping_sync_darwin.go only, with the existing FcntlInt battery pin
+  (case 240) still rejecting every other location.
+- P2 writer open bootstrap (Jason, Leibniz): the writer previously
+  mapped the full physical extent at open, making an unpublished
+  corrupt tail writable and costing VA; Rust map_writer bootstraps
+  2 pages then remaps to the committed extent. Fixed: openMapping now
+  maps exactly 2*PageSize for both modes and OpenMutable documents the
+  Remap(committed) step before editing.
+- P2 Grow below physical extent (Linnaeus): Grow(newSize) with
+  newSize below the opened physical extent previously fell through to
+  ftruncate and could truncate the file. Fixed: Grow refuses with
+  FormatInvalid ("grow below the opened physical extent"); pinned by
+  TestGrowBelowPhysicalRefused.
+- P2 fail-closed Remap/Grow (Linnaeus; Jason P3): Linux mremap failure
+  previously restored the old slice and leaked the mapping on the
+  fallback path. Fixed: both failure paths munmap any returned slice
+  and set size=0, matching Rust replace_map (map=None, len=0 -> WrongState);
+  Close guards m.data != nil; pinned by TestCloseAfterRemapFailure.
+- P2 writer view lifetime (Linnaeus): writer views alias the mapping
+  with no pin guard; Grow/Remap (mremap may move) invalidate them.
+  Fixed: package doc states the discipline, and
+  TestViewRefetchAfterGrow pins refetch-after-grow behavior.
+- P1 gate socket-direction x/sys variants + big.Int.SetBytes (qwen,
+  late M1-level gate findings ported to the M2 gate): unix.Recvfrom/
+  Recvmsg/Recvmmsg and Sendto/Sendmsg/Sendmmsg joined the banned
+  selector set, and math/big (*Int).SetBytes joined ownedCopySink
+  (a full mapped page must not land in owned big.Int limbs). Battery
+  grew 578 -> 586 cases (291-298; 7 rejections, 1 benign), including
+  an FcntlInt dup-file pin (240) that still rejects every FcntlInt
+  outside mapping_sync_darwin.go.
+## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
 2. Iteratively run 5-7 narrow-scope subagents on the session's own model (no
