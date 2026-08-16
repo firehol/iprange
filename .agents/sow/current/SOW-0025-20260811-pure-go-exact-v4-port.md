@@ -231,7 +231,39 @@ scan rc=0, battery 578/578 (495 rejections, 83 benign acceptances), go
 test ./... (both tag sets), -race/checkptr, vet, gofmt, import graph,
 SOW audit - all green. Milestone 1: CLOSED.
 
-## Review Process (user decision, 2026-08-12)
+
+
+Milestone 2 kickoff (2026-08-17, HEAD 81c9443): the mapped COW writer and
+Go producer starts now per the user decision (proceed to the next
+milestone after milestone 1 closes). Authority: the Rust writer
+(writer_core open/edit/publication/close/reclaim, used_bitmap/free_bitmap
+mutation, retirement, commit_resolution, private_page_pool, page_io,
+page_checksum) and binary-format-v4.md; the Go writer mirrors its
+semantics with one authoritative physical implementation, mmap-only
+(full pages constructed only at final offsets in the file-backed
+mapping; no complete page in owned memory), matching the project's
+zero-copy, single-authority, and clean-code rules. Planned chunks
+(recorded in the Pre-Implementation Gate implementation plan):
+1. M2 gap analysis - Rust writer public/internal export inventory
+   mapped to Go packages, writer risk register (COW ownership,
+   dirty-page sealing, durability, abort, reclaim), same-authority
+   search.
+2. Writer foundation in v4/go: mutable mmap owner mode (write/
+   MAP_SHARED, growth/remap), page checksum, meta publication with
+   commit nonce/generation rules, free/used bitmap mutation,
+   retirement, commit resolution, abort and reclaim, mirroring the
+   Rust core semantics exactly.
+3. COW page-edit layer: final-offset construction for direct/
+   membership/structured trees, draft store with declared page
+   budget, typed high-level construction entry points (public Go
+   generation API).
+4. Go-produced corpus: fixtures built only through public Go
+   operations, verified against cases.json, opened by Rust; mixed
+   Rust/Go subprocess gates in both directions; literal writer
+   vectors pinned from the Rust writer tests.
+Validation per chunk: go test (both tag sets), -race/checkptr, vet,
+gofmt, gate scan + battery on the new production surface, SOW audit;
+cross-open is the milestone gate.## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
 2. Iteratively run 5-7 narrow-scope subagents on the session's own model (no
