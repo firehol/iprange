@@ -1033,29 +1033,29 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 		if increment <= 0 {
 			return -1
 		}
-		diff = hi - lo
+		diff = saturatingSub(hi, lo)
 	case token.LEQ:
 		if increment <= 0 {
 			return -1
 		}
-		diff = hi - lo + 1
+		diff = saturatingAdd(saturatingSub(hi, lo), 1)
 	case token.GTR:
 		if increment >= 0 {
 			return -1
 		}
-		diff = lo - hi
+		diff = saturatingSub(lo, hi)
 	case token.GEQ:
 		if increment >= 0 {
 			return -1
 		}
-		diff = lo - hi + 1
+		diff = saturatingAdd(saturatingSub(lo, hi), 1)
 	default:
 		return -1
 	}
 	if diff < 0 {
 		return 0
 	}
-	return divUp(diff, abs64(increment))
+	return saturatingDivUp(diff, abs64(increment))
 }
 
 // loopOperand resolves the constant starting or ending operand of a for
@@ -1177,6 +1177,26 @@ func saturatingMul(a, b int64) int64 {
 		return math.MaxInt64
 	}
 	return a * b
+}
+
+// saturatingSub caps positive subtraction at MaxInt64.
+func saturatingSub(a, b int64) int64 {
+	if a < 0 || b < 0 || a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a - b
+}
+
+// saturatingDivUp divides nonnegative a by positive b, rounding up and
+// saturating at MaxInt64.
+func saturatingDivUp(a, b int64) int64 {
+	if b <= 0 {
+		return 0
+	}
+	if a > math.MaxInt64-(b-1) {
+		return math.MaxInt64
+	}
+	return (a + b - 1) / b
 }
 
 // divUp divides nonnegative a by positive b, rounding up.
