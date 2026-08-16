@@ -1039,7 +1039,7 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 			return -1
 		}
 		diff = saturatingSub(hi, lo)
-		if diff == 0 {
+		if hi < lo {
 			return 0
 		}
 		diff = saturatingAdd(diff, 1)
@@ -1053,7 +1053,7 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 			return -1
 		}
 		diff = saturatingSub(lo, hi)
-		if diff == 0 {
+		if lo < hi {
 			return 0
 		}
 		diff = saturatingAdd(diff, 1)

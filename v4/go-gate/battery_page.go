@@ -1109,4 +1109,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P295 benign: empty inclusive loop stays zero iterations", desc: "for i := 1; i <= 0; i++ never executes; inclusive arithmetic must not turn an inverted bound into one page-derived write", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l39_1.go", content: "package reader\n\nfunc emptyInclusiveProbeL39(r *ImmutableReader, pgno uint32) ([1]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [1]byte{}, err\n\t}\n\tvar out [1]byte\n\tfor i := 1; i <= 0; i++ {\n\t\tout[0] = page[0]\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P296: singleton inclusive loop with an inner PageSize loop", desc: "for i := 0; i <= 0; i++ { for j := 0; j < 4096; j++ { out[j] = page[j] } }: hi==lo denotes one inclusive iteration, not an empty loop", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l40_1.go", content: "package reader\n\nfunc singletonInnerPageProbeL40(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i <= 0; i++ {\n\t\tfor j := 0; j < 4096; j++ {\n\t\t\tout[j] = page[j]\n\t\t}\n\t}\n\treturn out, nil\n}"},
+	}},
 }

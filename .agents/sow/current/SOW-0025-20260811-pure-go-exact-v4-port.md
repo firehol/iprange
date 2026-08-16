@@ -24,7 +24,7 @@ the next independent final gate after the latest verified fixes. All
 three original review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 13,296-line typed toolchain (12,744-line go/types module
+mmap gate is an 13,300-line typed toolchain (12,748-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -169,7 +169,7 @@ interface-typed type-switch cases, and the same-family sweep of asserted
 field-map key ranges and returned/bound asserted selectors under
 interface-typed switch cases) and one reader divergence (membership
 ContainsIndex skipped the trailing-word canonical check); details in the
-round-25 entry below. The durable battery is 577 cases (494 rejections,
+round-25 entry below. The durable battery is 578 cases (495 rejections,
 83 benign acceptances) plus 9 shell environment mutations and passes end
 to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
@@ -191,7 +191,7 @@ Rework outcome per finding:
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
   The durable mutation battery moved into the tool as table data
-  (577 cases: 494 rejections, 83 benign); the shell harness keeps only the import-boundary, module-graph,
+  (578 cases: 495 rejections, 83 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -205,11 +205,11 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 577-case battery, and the SOW audit.
+the import-graph gate with its 578-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
 module tests 6,410 raw
-lines; gate tooling 13,296 raw lines total (12,744 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 13,300 raw lines total (12,748 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -226,6 +226,18 @@ implementation record below).
    finished only when the final reviewer reports no P0-P2 findings.
 4. If a final reviewer finds any P0-P2 issue, restart at step 1: rework,
    re-run the iterative reviewers, then re-run the final reviewer.
+5. Gate-review threat model and blocker boundary (user decision,
+   2026-08-16): the mmap source gates are mechanical tripwire evidence
+   for trusted maintainers and accidental regressions, not proof against
+   hostile or deliberately obfuscated Go. A gate finding is blocking only
+   when it is a current production violation, a concise/idiomatic bypass
+   of a declared gate family, a runtime mmap-trace violation, or a
+   regression in an existing battery case. Enormous unrolled programs,
+   absurd constants with artificial breaks, and equivalent deliberately
+   adversarial constructions are recorded as accepted limitations unless
+   they appear in production. Static source gates plus Linux runtime
+   tracing provide enforcement evidence; static analysis alone does not
+   prove the invariant for every possible Go program.
 
 ### Gate execution record (2026-08-12)
 
@@ -950,8 +962,10 @@ Validation plan:
 - Explicit malformed/corrupt corpus, fault injection, truncation, crash-point,
   cleanup retry, outcome resolution, worker chaining, and worker-build mismatch
   tests.
-- Static source gates plus Linux runtime tracing prove mmap-only persistent
-  content and the absence of complete out-of-map page images.
+- Static source gates plus Linux runtime tracing provide enforcement
+  evidence for mmap-only persistent content and the absence of complete
+  out-of-map page images; neither mechanism alone is claimed as proof for
+  every possible Go program.
 - Go-produced fixtures are built only through public Go operations, verified
   against `cases.json`, opened by Rust, and then committed. Rust fixtures are
   actually opened and checked by Go.
@@ -3534,7 +3548,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the typed
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the in-memory inflater call sites
-  exempted as exact, file-taint-verified shapes; the 577-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 578-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
   amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64 (the
