@@ -290,7 +290,7 @@ Validation per chunk: go test (both tag sets), -race/checkptr, vet,
 gofmt, gate scan + battery on the new production surface, SOW audit;
 cross-open is the milestone gate.
 
-Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD <chunk1>):
+Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD bf49779):
 mapping write mode and the page checksum authority are implemented and
 pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
 lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the full extent,

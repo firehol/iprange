@@ -28,7 +28,7 @@ purpose).
 | database_file.rs (grow/shrink) | file extent | internal/mapping Grow (chunk 1 partial; shrink later) |
 
 Chunk plan: (1) mapping write mode + page checksum [DONE at HEAD
-<chunk1>]; (2) writer open: map_writer, committed selection, tail trim;
+bf49779]; (2) writer open: map_writer, committed selection, tail trim;
 (3) allocation + COW edit core: bitmaps, retirement, drafts, direct/
 membership/structured page builders; (4) publication/commit/abort/close/
 reclaim; (5) public Go generation API + Go-produced corpus + Rust
