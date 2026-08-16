@@ -1142,7 +1142,6 @@ func (pf *pageFlow) markPageAggregated(st *stmtState, lhs, rhs ast.Expr, pageSou
 		t = ptr.Elem().Underlying()
 	}
 	if arr, ok := t.(*types.Array); ok && arr.Len() >= pageSize {
-		println("DIAGMARK", pf.path)
 		pv := pageValue{tainted: true, maxLen: arr.Len()}
 		if fieldPath != "" {
 			pf.recordAggregatedField(st, obj, fieldPath, pv)
