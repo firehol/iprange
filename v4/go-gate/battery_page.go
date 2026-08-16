@@ -1058,11 +1058,23 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l31_2.go", content: "package reader\n\nfunc nested64ProbeL31(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < 64; i++ {\n\t\tfor j := 0; j < 64; j++ {\n\t\t\tout[i*64+j] = page[i*64+j]\n\t\t}\n\t}\n\treturn out, nil\n}"},
 	}},
 
-	{name: "P283: field aliases join bounded copy spans", desc: "h.right = h.left; copy(h.left, page[:2048]); copy(h.right, page[2048:4096]): selector-field aliases canonicalize to one bounded-span destination", expectFail: true, ops: []batteryOp{
-		batteryOp{kind: "create", path: "internal/reader/gatemut_l31_3.go", content: "package reader\n\ntype faBoxL31 struct{ left, right []byte }\n\nfunc fieldAliasCopyL31(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\th := faBoxL31{left: make([]byte, 2048)}\n\th.right = h.left\n\tcopy(h.left, page[:2048])\n\tcopy(h.right, page[2048:4096])\n\treturn h.left, nil\n}"},
+	{name: "P283: field aliases join bounded copy spans", desc: "h = faBoxL31{left: owned[:2048], right: owned[2048:]}; copy(h.left, page[:2048]); copy(h.right, page[2048:4096]): struct-literal field aliases canonicalize to the backing buffer", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l31_3.go", content: "package reader\n\ntype faBoxL31 struct{ left, right []byte }\n\nfunc fieldAliasCopyL31(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\towned := make([]byte, 4096)\n\th := faBoxL31{left: owned[:2048], right: owned[2048:]}\n\tcopy(h.left, page[:2048])\n\tcopy(h.right, page[2048:4096])\n\treturn h.left, nil\n}"},
 	}},
 
-	{name: "P284: field aliases join bounded append spans", desc: "h.right = h.left; h.left = append(h.left, page[:2048]...); h.right = append(h.right, page[2048:4096]...): selector-field aliases canonicalize append accumulation", expectFail: true, ops: []batteryOp{
-		batteryOp{kind: "create", path: "internal/reader/gatemut_l31_4.go", content: "package reader\n\ntype faBox2L31 struct{ left, right []byte }\n\nfunc fieldAliasAppendL31(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\th := faBox2L31{left: make([]byte, 0, 2048)}\n\th.right = h.left\n\th.left = append(h.left, page[:2048]...)\n\th.right = append(h.right, page[2048:4096]...)\n\treturn h.left, nil\n}"},
+	{name: "P284: field aliases join bounded append spans", desc: "h = faBox2L31{left: owned[:2048], right: owned[2048:]}; appends through both fields canonicalize to the backing buffer", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l31_4.go", content: "package reader\n\ntype faBox2L31 struct{ left, right []byte }\n\nfunc fieldAliasAppendL31(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\towned := make([]byte, 0, 4096)\n\th := faBox2L31{left: owned[:2048], right: owned[2048:]}\n\th.left = append(h.left, page[:2048]...)\n\th.right = append(h.right, page[2048:4096]...)\n\treturn h.left, nil\n}"},
+	}},
+
+	{name: "P285: descending bounded loop copies a complete page", desc: "for i := 4095; i >= 0; i-- { out[i] = page[i] }: descending inclusive loop iteration counts compose with page-derived writes", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l32_1.go", content: "package reader\n\nfunc descendingProbeL32(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 4095; i >= 0; i-- {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P286: ascending inclusive bounded loop copies a complete page", desc: "for i := 0; i <= 4096; i++ { out[i] = page[i] }: inclusive iteration counts compose with page-derived writes", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l32_2.go", content: "package reader\n\nfunc inclusiveProbeL32(r *ImmutableReader, pgno uint32) ([4097]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4097]byte{}, err\n\t}\n\tvar out [4097]byte\n\tfor i := 0; i <= 4096; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P287: bounded-loop arithmetic saturates instead of wrapping", desc: "a constant bound of 1<<62 cannot wrap iteration×write arithmetic to zero; any positive page-derived write count remains a page-copy context", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l32_3.go", content: "package reader\n\nfunc overflowProbeL32(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < 1<<62; i++ {\n\t\tout[i] = page[i]\n\t\tif i >= 4095 {\n\t\t\tbreak\n\t\t}\n\t}\n\treturn out, nil\n}"},
 	}},
 }

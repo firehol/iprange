@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -1007,19 +1008,184 @@ func (pf *pageFlow) boundedLoopCopiesPage(st *stmtState, body *ast.BlockStmt) in
 	return count
 }
 
-// constIntBound returns a compile-time integer loop upper bound, or -1.
-func (pf *pageFlow) constIntBound(cond ast.Expr) int64 {
+// constForIterations returns the compile-time iteration count of a for
+// loop, or -1 when the form is unrecognized.
+func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.Stmt) int64 {
+	if cond == nil {
+		return -1
+	}
 	bl, ok := unparen(cond).(*ast.BinaryExpr)
-	if !ok || bl.Op != token.LSS {
+	if !ok {
 		return -1
 	}
-	tv, ok := pf.pc.info.Types[unparen(bl.Y)]
-	if !ok || tv.Value == nil {
+	lo, loOK := pf.loopOperand(init, bl.X, true)
+	hi, hiOK := pf.loopOperand(init, bl.Y, false)
+	if !loOK || !hiOK {
 		return -1
 	}
-	n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64)
-	if err != nil {
+	increment, incOK := pf.loopIncrement(post)
+	if !incOK {
 		return -1
+	}
+	var diff int64
+	switch bl.Op {
+	case token.LSS:
+		if increment <= 0 {
+			return -1
+		}
+		diff = hi - lo
+	case token.LEQ:
+		if increment <= 0 {
+			return -1
+		}
+		diff = hi - lo + 1
+	case token.GTR:
+		if increment >= 0 {
+			return -1
+		}
+		diff = lo - hi
+	case token.GEQ:
+		if increment >= 0 {
+			return -1
+		}
+		diff = lo - hi + 1
+	default:
+		return -1
+	}
+	if diff < 0 {
+		return 0
+	}
+	return saturatingAdd(divUp(diff, abs64(increment)), 1)
+}
+
+// loopOperand resolves the constant starting or ending operand of a for
+// loop from its initializer, when statically known.
+func (pf *pageFlow) loopOperand(init ast.Stmt, e ast.Expr, _ bool) (int64, bool) {
+	e = unparen(e)
+	if id, ok := e.(*ast.Ident); ok {
+		if init == nil {
+			return 0, false
+		}
+		assign, ok := init.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return 0, false
+		}
+		if lhsID, ok := unparen(assign.Lhs[0]).(*ast.Ident); !ok || pf.pc.info.ObjectOf(lhsID) != pf.pc.info.ObjectOf(id) {
+			return 0, false
+		}
+		e = unparen(assign.Rhs[0])
+	}
+	if n, ok := pf.constIntExpr(e); ok {
+		return n, true
+	}
+	return 0, false
+}
+
+// constIntExpr evaluates literal, named, conversion, and binary integer
+// expressions through go/types constant values.
+func (pf *pageFlow) constIntExpr(e ast.Expr) (int64, bool) {
+	if tv, ok := pf.pc.info.Types[e]; ok && tv.Value != nil {
+		if n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64); err == nil {
+			return n, true
+		}
+	}
+	switch v := e.(type) {
+	case *ast.ParenExpr:
+		return pf.constIntExpr(v.X)
+	case *ast.CallExpr:
+		if len(v.Args) == 1 {
+			return pf.constIntExpr(v.Args[0])
+		}
+	case *ast.BinaryExpr:
+		a, ok := pf.constIntExpr(v.X)
+		if !ok {
+			return 0, false
+		}
+		b, ok := pf.constIntExpr(v.Y)
+		if !ok {
+			return 0, false
+		}
+		switch v.Op {
+		case token.ADD:
+			return saturatingAdd(a, b), true
+		case token.SUB:
+			return saturatingAdd(a, -b), true
+		case token.MUL:
+			return saturatingMul(max64(a, 0), max64(b, 0)), true
+		case token.SHL:
+			if b < 0 || b >= 64 {
+				return 0, false
+			}
+			return saturatingMul(max64(a, 0), int64(1)<<uint(b)), true
+		}
+	}
+	return 0, false
+}
+
+// loopIncrement resolves i++, i--, i += n, and i -= n.
+func (pf *pageFlow) loopIncrement(post ast.Stmt) (int64, bool) {
+	switch p := post.(type) {
+	case *ast.IncDecStmt:
+		if p.Tok == token.INC {
+			return 1, true
+		}
+		return -1, true
+	case *ast.AssignStmt:
+		if len(p.Lhs) != 1 || len(p.Rhs) != 1 {
+			return 0, false
+		}
+		tv, ok := pf.pc.info.Types[unparen(p.Rhs[0])]
+		if !ok || tv.Value == nil {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64)
+		if err != nil {
+			return 0, false
+		}
+		if p.Tok == token.ADD_ASSIGN {
+			return n, true
+		}
+		if p.Tok == token.SUB_ASSIGN {
+			return -n, true
+		}
+	}
+	return 0, false
+}
+
+// saturatingAdd caps positive arithmetic at MaxInt64 and negative at MinInt64.
+func saturatingAdd(a, b int64) int64 {
+	if a > 0 && b > math.MaxInt64-a {
+		return math.MaxInt64
+	}
+	if a < 0 && b < math.MinInt64-a {
+		return math.MinInt64
+	}
+	return a + b
+}
+
+// saturatingMul caps positive arithmetic at MaxInt64.
+func saturatingMul(a, b int64) int64 {
+	if a <= 0 || b <= 0 {
+		return 0
+	}
+	if a > math.MaxInt64/b {
+		return math.MaxInt64
+	}
+	return a * b
+}
+
+// divUp divides nonnegative a by positive b, rounding up.
+func divUp(a, b int64) int64 {
+	if b <= 0 {
+		return 0
+	}
+	return (a + b - 1) / b
+}
+
+// abs64 returns the absolute value when representable.
+func abs64(n int64) int64 {
+	if n < 0 {
+		return -n
 	}
 	return n
 }
@@ -1436,7 +1602,9 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						pf.appendAliases[dstObj] = nil
 					}
 				}
-				// Selector-field aliases share one bounded-span key.
+				// Selector fields alias backing storage with another
+				// selector or an identifier. Canonicalize the destination
+				// key to the source storage before accumulation.
 				if srcSel, ok := unparen(v.Rhs[i]).(*ast.SelectorExpr); ok {
 					if dstSel, ok := unparen(v.Lhs[i]).(*ast.SelectorExpr); ok {
 						srcRoot, srcPath := selectorChain(st, srcSel)
@@ -1453,6 +1621,58 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 								root = next
 							}
 							pf.spanAliases[dstKey] = root
+						}
+					} else if dstSel, ok := unparen(v.Lhs[i]).(*ast.SelectorExpr); ok {
+						if srcRoot, srcPath := selectorChain(st, srcSel); srcRoot != nil {
+							if dstRoot, dstPath := selectorChain(st, dstSel); dstRoot != nil {
+								srcKey := boundedSpanKey{obj: srcRoot, path: srcPath}
+								pf.spanAliases[boundedSpanKey{obj: dstRoot, path: dstPath}] = srcKey
+							}
+						}
+					}
+				} else if srcID, ok := unparen(v.Rhs[i]).(*ast.Ident); ok {
+					if dstSel, ok := unparen(v.Lhs[i]).(*ast.SelectorExpr); ok {
+						if srcObj := objOf(st, srcID); srcObj != nil {
+							if dstRoot, dstPath := selectorChain(st, dstSel); dstRoot != nil {
+								pf.spanAliases[boundedSpanKey{obj: dstRoot, path: dstPath}] = boundedSpanKey{obj: srcObj}
+							}
+						}
+					}
+				} else if _, ok := unparen(v.Rhs[i]).(*ast.BasicLit); ok {
+					if dstSel, ok := unparen(v.Lhs[i]).(*ast.SelectorExpr); ok {
+						if dstRoot, dstPath := selectorChain(st, dstSel); dstRoot != nil {
+							delete(pf.spanAliases, boundedSpanKey{obj: dstRoot, path: dstPath})
+						}
+					}
+				}
+				// A struct literal can alias one backing slice into
+				// several fields (h = box{left: owned[:2048], right:
+				// owned[2048:]}); every such field canonicalizes to that
+				// backing identifier for bounded-span accumulation.
+				if dstID, ok := unparen(v.Lhs[i]).(*ast.Ident); ok {
+					if lit, ok := unparen(v.Rhs[i]).(*ast.CompositeLit); ok {
+						for _, elt := range lit.Elts {
+							kv, ok := elt.(*ast.KeyValueExpr)
+							if !ok {
+								continue
+							}
+							keyID, ok := unparen(kv.Key).(*ast.Ident)
+							if !ok {
+								continue
+							}
+							se, ok := unparen(kv.Value).(*ast.SliceExpr)
+							if !ok {
+								continue
+							}
+							srcID, ok := unparen(se.X).(*ast.Ident)
+							if !ok {
+								continue
+							}
+							srcObj := objOf(st, srcID)
+							if srcObj == nil {
+								continue
+							}
+							pf.spanAliases[boundedSpanKey{obj: pf.pc.info.ObjectOf(dstID), path: keyID.Name}] = boundedSpanKey{obj: srcObj}
 						}
 					}
 				}
@@ -1939,13 +2159,13 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			// complete page, including multiple disjoint writes per body.
 			innerBound := st.loopBound
 			if !pageSourcing && v.Cond != nil {
-				if bound := pf.constIntBound(v.Cond); bound > 0 && innerBound*bound*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
+				if bound := pf.constForIterations(v.Init, v.Cond, v.Post); bound > 0 && saturatingMul(saturatingMul(innerBound, bound), int64(pf.boundedLoopCopiesPage(st, v.Body))) >= pageSize {
 					st.pageSourceLoops++
 					pageSourcing = true
 				}
 			}
 			pre := st.clone()
-			st.loopBound = innerBound * max64(pf.constIntBound(v.Cond), 0)
+			st.loopBound = saturatingMul(innerBound, max64(pf.constForIterations(v.Init, v.Cond, v.Post), 0))
 			if st.loopBound == 0 {
 				st.loopBound = 0
 			}
@@ -1985,7 +2205,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 			// from a page source aggregate to a complete page copy.
 			innerBound := st.loopBound
 			if !pageSourcing {
-				if n := pf.constRangeDestination(v.X); n > 0 && innerBound*n*int64(pf.boundedLoopCopiesPage(st, v.Body)) >= pageSize {
+				if n := pf.constRangeDestination(v.X); n > 0 && saturatingMul(saturatingMul(innerBound, n), int64(pf.boundedLoopCopiesPage(st, v.Body))) >= pageSize {
 					st.pageSourceLoops++
 					pageSourcing = true
 				}
@@ -2123,7 +2343,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 				}
 			}
 			pre := st.clone()
-			st.loopBound = innerBound * max64(pf.constRangeDestination(v.X), 0)
+			st.loopBound = saturatingMul(innerBound, max64(pf.constRangeDestination(v.X), 0))
 			pf.analyzeStmts(st, v.Body.List, fs)
 			st.loopBound = innerBound
 			// Decrement the counter this statement incremented. Nested
