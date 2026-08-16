@@ -1101,4 +1101,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P293: negative loop bounds can still iterate PageSize times", desc: "for i := -4095; i < 1; i++ { out[i+4095] = page[i+4095] }: negative start bounds preserve exact iteration counts instead of collapsing to zero", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l37_1.go", content: "package reader\n\nfunc negativeBoundProbeL37(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := -4095; i < 1; i++ {\n\t\tout[i+4095] = page[i+4095]\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P294: MinInt64-to-zero loop counts without wrapping", desc: "for i := math.MinInt64; i < 0; i++ { out[uint64(i)&4095] = page[uint64(i)&4095] }: subtraction across MinInt64 saturates instead of wrapping to a zero bound", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l38_1.go", content: "package reader\n\nimport \"math\"\n\nfunc minIntBoundProbeL38(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := int64(math.MinInt64); i < 0; i++ {\n\t\tout[uint64(i)&4095] = page[uint64(i)&4095]\n\t}\n\treturn out, nil\n}"},
+	}},
 }

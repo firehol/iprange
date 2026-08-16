@@ -1179,13 +1179,13 @@ func saturatingMul(a, b int64) int64 {
 	return a * b
 }
 
-// saturatingSub returns a-b for non-negative operands, saturating a
-// negative result at MaxInt64 because it denotes an unreachable bound.
+// saturatingSub returns a-b, treating inverted bounds as zero and
+// arithmetic overflow as MaxInt64.
 func saturatingSub(a, b int64) int64 {
 	if b > a {
 		return 0
 	}
-	if a > 0 && b < math.MinInt64+a {
+	if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
 		return math.MaxInt64
 	}
 	return a - b
