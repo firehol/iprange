@@ -1025,4 +1025,16 @@ var batteryPageCases = []batteryCase{
 	{name: "P274 benign: page slice headers appended to a slice of slices", desc: "chunks = append(chunks, page[:2048], page[2048:4096]): byte-span accumulation applies only to byte-element destinations, not [][]byte slice-header collections", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_8.go", content: "package reader\n\nfunc chunksAppendProbeL29(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 0, 2)\n\tchunks = append(chunks, page[:2048], page[2048:4096])\n\treturn chunks, nil\n}"},
 	}},
+
+	{name: "P275: bounded copy spans through an asserted field destination", desc: "copy(v.(*H).Buf[:2048], page[:2048]); copy(v.(*H).Buf[2048:], page[2048:4096]): type-asserted copy destinations resolve to one canonical root", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_9.go", content: "package reader\n\ntype typeAssertCopyL29 struct{ Buf []byte }\n\nfunc typeAssertCopyProbeL29(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar v interface{} = &typeAssertCopyL29{Buf: make([]byte, 4096)}\n\tcopy(v.(*typeAssertCopyL29).Buf[:2048], page[:2048])\n\tcopy(v.(*typeAssertCopyL29).Buf[2048:], page[2048:4096])\n\treturn nil\n}"},
+	}},
+
+	{name: "P276 benign: full page slice header appended to a slice of slices", desc: "chunks = append(chunks, page[:]): the destination stores a slice header, not a complete page of owned bytes", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_10.go", content: "package reader\n\nfunc fullPageSliceHeaderProbeL29(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 0, 2)\n\tchunks = append(chunks, page[:])\n\treturn chunks, nil\n}"},
+	}},
+
+	{name: "P277 benign: slice-header copy into a slice of slices", desc: "copy(chunks, [][]byte{page[:]}): the operation copies slice headers, not page bytes into an owned byte buffer", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_11.go", content: "package reader\n\nfunc sliceHeaderCopyProbeL29(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 1)\n\tcopy(chunks, [][]byte{page[:]})\n\treturn chunks, nil\n}"},
+	}},
 }

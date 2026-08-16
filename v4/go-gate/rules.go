@@ -1530,6 +1530,9 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	if !pageFull(src) {
 		return
 	}
+	if elemT := collectionElementType(w.typeOf(dst)); elemT != nil && !byteElementType(elemT) {
+		return // slice-header copy, not page-byte ownership
+	}
 	if dstCap := w.ownedCap(dst); dstCap >= 0 && dstCap < pageSize {
 		return // statically bounded record destination
 	}
@@ -1674,7 +1677,7 @@ func (w *fileRules) boundedCopyTarget(dst ast.Expr) ast.Expr {
 	switch d := dst.(type) {
 	case *ast.Ident:
 		return d
-	case *ast.SliceExpr, *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr, *ast.ParenExpr:
+	case *ast.SliceExpr, *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr, *ast.ParenExpr, *ast.TypeAssertExpr:
 		return w.boundedCopyTarget(chainInner(d))
 	}
 	return dst
@@ -1691,13 +1694,14 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	if len(v.Args) < 2 {
 		return
 	}
+	byteElemT := collectionElementType(w.typeOf(v.Args[0]))
 	span := int64(0)
 	for _, a := range v.Args[1:] {
 		src := w.pageValue(a)
 		if !src.tainted {
 			continue
 		}
-		if pageFull(src) {
+		if pageFull(src) && (byteElemT == nil || byteElementType(byteElemT)) {
 			w.fail(v.Pos(), "append of a mapped page view into an owned buffer (complete page)")
 			return
 		}
@@ -1714,7 +1718,6 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	// complete owned page from bounded spans. Byte-span accumulation is
 	// meaningful only for byte-element destinations; [][]byte appends
 	// slice headers, not page bytes.
-	byteElemT := collectionElementType(w.typeOf(v.Args[0]))
 	if span > 0 && byteElemT != nil && byteElementType(byteElemT) {
 		obj, path := w.boundedAppendKey(v.Args[0])
 		if w.pc.pf != nil && obj != nil {
