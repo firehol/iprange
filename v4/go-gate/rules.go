@@ -51,7 +51,8 @@ var bannedImports = map[string]bool{
 // a future writer package calling raw ftruncate/msync/fsync is the same
 // single-authority erosion the gate exists to pin.
 var lifecycleOwnerOnly = map[string]bool{
-	"Fsync": true, "Ftruncate": true, "Msync": true,
+	"Fdatasync": true, "Fsync": true, "Ftruncate": true,
+	"Msync": true, "Sync": true, "Syncfs": true, "Truncate": true,
 }
 
 var bannedSelectors = map[string]bool{
@@ -59,11 +60,12 @@ var bannedSelectors = map[string]bool{
 	"Copy": true, "CopyBuffer": true, "CopyFS": true,
 	"CopyFileRange": true, "CopyN": true, "Decode": true, "Dup": true, "Dup2": true, "Dup3": true,
 	"Encode": true, "Exec": true, "FcntlInt": true, "ForkExec": true,
-	"Fsync": true, "Ftruncate": true,
+	"Fdatasync": true, "Fsync": true, "Ftruncate": true,
 	"IoctlFileClone": true, "IoctlFileCloneRange": true, "IoctlFileDedupeRange": true,
 	"Tee": true, "Vmsplice": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true, "Msync": true,
+	"Sync": true, "Syncfs": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
 	"Preadv": true, "Print": true, "Printf": true, "Println": true,
 	"Preadv2": true, "Pwrite": true, "Pwritev": true, "Pwritev2": true,
@@ -75,7 +77,8 @@ var bannedSelectors = map[string]bool{
 	"ReadString": true, "Readv": true, "Scan": true, "Scanf": true,
 	"Scanln": true, "Seek": true, "Sendfile": true, "Splice": true,
 	"Sendmmsg": true, "Sendmsg": true, "Sendto": true, "StartProcess": true,
-	"Syscall": true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
+	"Truncate": true,
+	"Syscall":  true, "Syscall6": true, "Syscall9": true, "SyscallN": true,
 	"SyscallNoError": true,
 	"Write":          true, "WriteAt": true, "WriteByte": true, "WriteFile": true,
 	"WriteRune": true, "WriteString": true, "WriteTo": true, "Writev": true,
