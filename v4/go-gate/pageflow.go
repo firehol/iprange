@@ -1038,7 +1038,11 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 		if increment <= 0 {
 			return -1
 		}
-		diff = saturatingAdd(saturatingSub(hi, lo), 1)
+		diff = saturatingSub(hi, lo)
+		if diff == 0 {
+			return 0
+		}
+		diff = saturatingAdd(diff, 1)
 	case token.GTR:
 		if increment >= 0 {
 			return -1
@@ -1048,7 +1052,11 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 		if increment >= 0 {
 			return -1
 		}
-		diff = saturatingAdd(saturatingSub(lo, hi), 1)
+		diff = saturatingSub(lo, hi)
+		if diff == 0 {
+			return 0
+		}
+		diff = saturatingAdd(diff, 1)
 	default:
 		return -1
 	}
