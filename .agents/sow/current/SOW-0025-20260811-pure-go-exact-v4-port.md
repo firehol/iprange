@@ -323,9 +323,11 @@ All findings were reproduced by the lead and fixed in the working tree
   (binary-format-v4.md:2403-2411) and the Rust authority
   (live_lock.rs require_live_supported) refuse a live writer on FreeBSD;
   the Go writer previously substituted whole-file flock LOCK_EX.
-  Fixed: requireLiveWriter() now returns CodeOSUnsupported before any
-  path access on FreeBSD and the fallback-OS set, nil on Linux/darwin,
-  and lockLifetimeExclusive stays a typed refusal for defense in depth.
+  Fixed: requireLiveWriter() now returns CodeLiveCoordinationUnsupported
+  (44, the pinned SDK class) before any path access on FreeBSD and the
+  fallback-OS set, nil on Linux/darwin, and lockLifetimeExclusive stays
+  a typed CodeOSUnsupported refusal for defense in depth (mirroring the
+  Rust lock-primitive class).
 - P1/P2 macOS durability (Jason, Leibniz): plain fsync on macOS can
   return before the drive's volatile write cache is flushed. Fixed:
   syncFile now uses fcntl(F_FULLFSYNC) on darwin (mapping_sync_darwin.go)
