@@ -288,6 +288,17 @@ cross-open is the milestone gate.## Review Process (user decision, 2026-08-12)
    tracing provide enforcement evidence; static analysis alone does not
    prove the invariant for every possible Go program.
 
+6. Review organization (user decision, 2026-08-17): level-1 reviewers
+   are five aspect reviewers on the lead's own model (copies), each
+   holding one disjoint aspect of the milestone scope, spawned once at
+   first use and reused by message for every delta round. Level-2 is
+   the full-scope final gate in place of step 3's sol: glm, kimi,
+   minimax, mimo, spawned once and reused; the milestone is finished
+   only when every available level-2 reviewer reports no P0-P2
+   findings. Unavailable reviewers (technical/quota) are skipped and
+   reported as reduced coverage; swarm agents are never respawned
+   between rounds.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
