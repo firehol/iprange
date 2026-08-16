@@ -24,7 +24,7 @@ the next independent final gate after the latest verified fixes. All
 three original review
 findings are fixed: the hot path has one authoritative key-only search
 primitive with test-only necessary-work counters and benchmarks; the
-mmap gate is an 13,231-line typed toolchain (12,679-line go/types module
+mmap gate is an 13,244-line typed toolchain (12,692-line go/types module
 plus the 552-line shell boundary/self-test harness, down from 14,519)
 that detects complete-page ownership; follow-up swarm rounds closed
 nineteen bypass classes (function-variable callees, closure/defer/go
@@ -169,8 +169,8 @@ interface-typed type-switch cases, and the same-family sweep of asserted
 field-map key ranges and returned/bound asserted selectors under
 interface-typed switch cases) and one reader divergence (membership
 ContainsIndex skipped the trailing-word canonical check); details in the
-round-25 entry below. The durable battery is 569 cases (490 rejections,
-79 benign acceptances) plus 9 shell environment mutations and passes end
+round-25 entry below. The durable battery is 571 cases (491 rejections,
+80 benign acceptances) plus 9 shell environment mutations and passes end
 to end.
 Milestone 2 (writer) remains blocked until the review passes and the user
 authorizes it.
@@ -191,7 +191,7 @@ Rework outcome per finding:
   (copy/append/array-conversion sinks at or above PageSize, spec
   binary-format-v4.md:108) plus the file-capability and text-ban families.
   The durable mutation battery moved into the tool as table data
-  (569 cases: 490 rejections, 79 benign); the shell harness keeps only the import-boundary, module-graph,
+  (571 cases: 491 rejections, 80 benign); the shell harness keeps only the import-boundary, module-graph,
   x/sys-ownership and environment checks (552 lines) and the self-test
   invocation. A production function that copies a mapped page into an
   owned [4096]byte now fails the gate with a specific rule violation
@@ -205,11 +205,11 @@ semantics, rejects the three invalid corpus mutations with the typed
 FormatInvalid class, keeps warm lookups and scans at zero heap allocation,
 holds the mapping owner in internal/mapping (mmap-only access), and passes
 go test (both tag sets), -race/checkptr, vet, gofmt, cross-compilation,
-the import-graph gate with its 569-case battery, and the SOW audit.
+the import-graph gate with its 571-case battery, and the SOW audit.
 Module production 5,182 raw lines (reader core 1,871 across the 7
 production files in internal/reader; the 5k directional goal is met),
 module tests 6,410 raw
-lines; gate tooling 13,231 raw lines total (12,679 go-gate + 552 shell). Hot-path benchmarks on the
+lines; gate tooling 13,244 raw lines total (12,692 go-gate + 552 shell). Hot-path benchmarks on the
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
@@ -3534,7 +3534,7 @@ Tests or equivalent validation:
 - `./check-import-graph.sh` — passes; the content-transfer scan is the typed
   gate (v4/go-gate, stdlib only): banned imports/selectors and the
   `*os.File` capability surface, with the in-memory inflater call sites
-  exempted as exact, file-taint-verified shapes; the 569-form `--self-test`
+  exempted as exact, file-taint-verified shapes; the 571-form `--self-test`
   runs in a private temp copy and never modifies the reviewed tree.
 - Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
   amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64 (the

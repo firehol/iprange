@@ -1055,7 +1055,7 @@ func (pf *pageFlow) constForIterations(init ast.Stmt, cond ast.Expr, post ast.St
 	if diff < 0 {
 		return 0
 	}
-	return saturatingAdd(divUp(diff, abs64(increment)), 1)
+	return divUp(diff, abs64(increment))
 }
 
 // loopOperand resolves the constant starting or ending operand of a for
@@ -1087,6 +1087,11 @@ func (pf *pageFlow) constIntExpr(e ast.Expr) (int64, bool) {
 	if tv, ok := pf.pc.info.Types[e]; ok && tv.Value != nil {
 		if n, err := strconv.ParseInt(tv.Value.ExactString(), 0, 64); err == nil {
 			return n, true
+		}
+		// Unsigned bounds above MaxInt64 saturate: any such loop can run
+		// far beyond PageSize, and signed conversion must not wrap to 0.
+		if u, err := strconv.ParseUint(tv.Value.ExactString(), 0, 64); err == nil && u > math.MaxInt64 {
+			return math.MaxInt64, true
 		}
 	}
 	switch v := e.(type) {

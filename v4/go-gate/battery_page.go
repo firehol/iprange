@@ -1077,4 +1077,12 @@ var batteryPageCases = []batteryCase{
 	{name: "P287: bounded-loop arithmetic saturates instead of wrapping", desc: "a constant bound of 1<<62 cannot wrap iteration×write arithmetic to zero; any positive page-derived write count remains a page-copy context", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l32_3.go", content: "package reader\n\nfunc overflowProbeL32(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < 1<<62; i++ {\n\t\tout[i] = page[i]\n\t\tif i >= 4095 {\n\t\t\tbreak\n\t\t}\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P288: unsigned 1<<63 loop bound saturates", desc: "for i := uint64(0); i < 1<<63; i++ copies page bytes with a bounded break: unsigned bounds beyond MaxInt64 cannot wrap signed arithmetic to zero", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l33_1.go", content: "package reader\n\nfunc unsignedOverflowProbeL33(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := uint64(0); i < 1<<63; i++ {\n\t\tout[i] = page[i]\n\t\tif i >= 4095 {\n\t\t\tbreak\n\t\t}\n\t}\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P289 benign: 4095-byte bounded loop stays sub-page", desc: "for i := 0; i < 4095; i++ { out[i] = page[i] }: exact iteration counting must not inflate an exclusive bound by one", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l33_2.go", content: "package reader\n\nfunc subPageLoopProbeL33(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := 0; i < 4095; i++ {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
 }
