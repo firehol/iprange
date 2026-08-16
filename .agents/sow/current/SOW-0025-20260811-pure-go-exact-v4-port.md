@@ -292,8 +292,8 @@ cross-open is the milestone gate.
 
 Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD bf49779):
 this entry supersedes the 578-case gate battery counts in the M1
-close-out paragraphs: the gate battery is now 586 cases (502
-rejections, 84 benign acceptances) plus 9 shell environment mutations.
+close-out paragraphs: the gate battery is now 599 cases (514
+rejections, 85 benign acceptances) plus 9 shell environment mutations.
 mapping write mode and the page checksum authority are implemented and
 pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
 lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the full extent,
@@ -363,6 +363,44 @@ All findings were reproduced by the lead and fixed in the working tree
   grew 578 -> 586 cases (291-298; 7 rejections, 1 benign); the
   pre-existing FcntlInt dup pin (240) still rejects every FcntlInt
   outside mapping_sync_darwin.go.
+Milestone 2 chunk 1 - level-1 review round 2 and close (2026-08-17,
+HEAD 7c08889/745da34): all five aspect reviewers passed their delta
+re-review after two fix waves.
+
+- Jason (writer-core semantics): PASS. Round-1 P2 - the FreeBSD/
+  fallback live refusal used CodeOSUnsupported (58) instead of the
+  pinned LiveCoordinationUnsupported (44, Rust live_lock.rs
+  require_live_supported; spec binary-format-v4.md:2406-2409). Fixed
+  in d46f4aa (requireLiveWriter returns 44; lockLifetimeExclusive
+  keeps 58 as the lock-primitive class). Jason also caught that the
+  SOW record still named the old class; corrected in 7c08889.
+- Linnaeus (mmap/lifetime): PASS. All four round-1 blockers verified
+  fixed (FreeBSD gate, Grow below-physical guard, fail-closed
+  munmap/Close, view refetch discipline).
+- Peirce (wire format/integrity): PASS. Zero wire-format or checksum
+  delta vs the round-1 reviewed state; bootstrap/remap mirrors Rust
+  map_writer; conformance corpus untouched.
+- Sartre (public API/docs/records): PASS. P3 cleanups applied:
+  PhysicalSize and Remap extent wording, gap-analysis status header,
+  case-240 wording in the fix-round entry.
+- Leibniz (durability/crash): PASS after three waves. Round-2 P2: the
+  lifecycle-owner rule covered only Fsync/Ftruncate/Msync while the
+  risk register declared it a hard single-authority rule; the gate now
+  name-bans the full same-class family - Fdatasync, Syncfs, Sync,
+  path-based Truncate (unix/os) in d91fe3a, then Fallocate and
+  SyncFileRange (the spec's sparse-extension and range-durability
+  primitives) in 745da34, all allowed only inside internal/mapping.
+  Leibniz mechanistically enumerated all 369 x/sys unix exports and
+  confirmed no remaining gate-silent durability/flush/geometry
+  primitive. Battery grew 578 -> 586 (round 1) -> 597 (round 2) -> 599
+  (round 3, 514 rejections, 85 benign), every new reject pin
+  vacuity-proven against the pre-fix rules; production gate scan rc=0
+  across the 5 OS configs after every wave; go test (both tag sets),
+  -race, vet, gofmt, import-graph, and 11/11 cross-compiles stay
+  green.
+
+Level-1 result: 5/5 PASS at HEAD 745da34. Level-2 final gate follows.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
