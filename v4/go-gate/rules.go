@@ -44,15 +44,26 @@ var bannedImports = map[string]bool{
 // deliberately broad: it also covers function aliases, method values,
 // reflection Invocation, x/sys descriptor variants, and the subprocess
 // escape (dup the descriptor onto stdin, then exec a reader).
+// lifecycleOwnerOnly are content-transfer-adjacent lifecycle syscalls
+// that are legal only inside the mapping owner (internal/mapping): the
+// single authority for file growth and durability. Every other package
+// must go through the owner's typed methods (Grow/Flush/SyncFile);
+// a future writer package calling raw ftruncate/msync/fsync is the same
+// single-authority erosion the gate exists to pin.
+var lifecycleOwnerOnly = map[string]bool{
+	"Fsync": true, "Ftruncate": true, "Msync": true,
+}
+
 var bannedSelectors = map[string]bool{
 	"Call": true, "CallSlice": true, "Clonefile": true, "Clonefileat": true,
 	"Copy": true, "CopyBuffer": true, "CopyFS": true,
 	"CopyFileRange": true, "CopyN": true, "Decode": true, "Dup": true, "Dup2": true, "Dup3": true,
 	"Encode": true, "Exec": true, "FcntlInt": true, "ForkExec": true,
+	"Fsync": true, "Ftruncate": true,
 	"IoctlFileClone": true, "IoctlFileCloneRange": true, "IoctlFileDedupeRange": true,
 	"Tee": true, "Vmsplice": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
-	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true,
+	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true, "Msync": true,
 	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
 	"Preadv": true, "Print": true, "Printf": true, "Println": true,
 	"Preadv2": true, "Pwrite": true, "Pwritev": true, "Pwritev2": true,
@@ -76,7 +87,7 @@ var bannedSelectors = map[string]bool{
 // banned separately by name).
 var approvedFileMethods = map[string]bool{
 	"Chmod": true, "Chown": true, "Close": true, "Fd": true,
-	"Name": true, "Stat": true, "Sync": true, "Truncate": true,
+	"Name": true, "Stat": true,
 }
 
 // inMemoryReaders are concrete standard-library byte containers: a value
@@ -870,7 +881,7 @@ func (w *fileRules) checkSelector(v *ast.SelectorExpr) {
 	if w.exempts[v.Pos()] {
 		return
 	}
-	if bannedSelectors[v.Sel.Name] {
+	if bannedSelectors[v.Sel.Name] && !(lifecycleOwnerOnly[v.Sel.Name] && isMappingOwnerPath(w.pc.pkg.Path())) {
 		w.fail(v.Pos(), "banned content-transfer selector .%s", v.Sel.Name)
 	}
 	if obj, ok := w.pc.info.Uses[v.Sel].(*types.Var); ok && obj.Pkg() != nil &&

@@ -1,6 +1,6 @@
 # SOW-0025 — Milestone 2 Gap Analysis: mapped COW writer and Go producer
 
-Status: in progress (2026-08-17, HEAD 6ba3e01)
+Status: in progress (2026-08-17, chunk 1 done at HEAD bf49779, fix round at HEAD 88f9c93)
 
 ## Scope
 
@@ -53,9 +53,11 @@ cross-open + mixed subprocess gates.
 - Gate currency: the typed gate must scan the new writer surface; new
   x/sys lifecycle calls (ftruncate/msync/fsync, and on darwin
   fcntl(F_FULLFSYNC) via mapping_sync_darwin.go) are allowed only in
-  internal/mapping (verified by the production scan at chunk 1; the
-  FcntlInt exemption is per-file and per-call, pinned by gate battery
-  cases 240 and 291-298).
+  internal/mapping and are now name-banned everywhere else
+  (lifecycleOwnerOnly rule family, pinned by gate battery cases
+  299-304); the FcntlInt exemption is per-file and per-call
+  (mapping_sync_darwin.go only), with the pre-existing FcntlInt dup pin
+  (240) still rejecting every other location.
 - Performance: no per-item allocation in hot COW paths, declared page
   budgets mirroring Rust PageBudget, necessary-work counters test-only.
 

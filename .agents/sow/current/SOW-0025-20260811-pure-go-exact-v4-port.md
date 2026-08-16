@@ -358,8 +358,8 @@ All findings were reproduced by the lead and fixed in the working tree
   Recvmsg/Recvmmsg and Sendto/Sendmsg/Sendmmsg joined the banned
   selector set, and math/big (*Int).SetBytes joined ownedCopySink
   (a full mapped page must not land in owned big.Int limbs). Battery
-  grew 578 -> 586 cases (291-298; 7 rejections, 1 benign), including
-  an FcntlInt dup-file pin (240) that still rejects every FcntlInt
+  grew 578 -> 586 cases (291-298; 7 rejections, 1 benign); the
+  pre-existing FcntlInt dup pin (240) still rejects every FcntlInt
   outside mapping_sync_darwin.go.
 ## Review Process (user decision, 2026-08-12)
 

@@ -207,8 +207,8 @@ func OpenMutable(path string, check func(clean string) error) (*Mapping, error) 
 // the committed extent after Remap).
 func (m *Mapping) Size() uint64 { return m.size }
 
-// PhysicalSize returns the file size recorded at open (the locked extent).
-// PhysicalSize returns the file size recorded at open, extended by Grow.
+// PhysicalSize returns the physical file extent: the size recorded at
+// open (the locked extent), extended by Grow.
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 
 // VerifyIdentity re-checks that the path still names the opened inode.
@@ -243,7 +243,7 @@ func (m *Mapping) VerifyIdentity(path string) error {
 // lifetime lock are retained. The initial bootstrap mapping is exactly two
 // meta pages; Remap grows it to the committed extent after bootstrap proves
 // the meta pair. committedBytes must be page-aligned and must not exceed
-// the physical file size recorded at open. Retained slices from the old
+// the physical file extent (opened size, extended by Grow). Retained slices from the old
 // mapping are invalidated; bootstrap does not retain any, so the caller is
 // safe. On same-size the call is a no-op.
 func (m *Mapping) Remap(committedBytes uint64) error {

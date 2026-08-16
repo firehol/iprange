@@ -1414,4 +1414,28 @@ var batteryCases = []batteryCase{
 	{name: "298: benign bounded big.Int.SetBytes record stays legal", desc: "SetBytes of a bounded record is not a complete-page copy", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_bigintbounded.go", content: "package reader\n\nimport \"math/big\"\n\nfunc bigIntBounded(rec []byte) *big.Int { return new(big.Int).SetBytes(rec[48:112]) }"},
 	}},
+
+	{name: "299: unix.Ftruncate outside the mapping owner", desc: "raw lifecycle growth syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Ftruncate", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_ftruncate.go", content: "package reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateFtruncate(fd int, n int64) error { return unix.Ftruncate(fd, n) }"},
+	}},
+
+	{name: "300: unix.Msync outside the mapping owner", desc: "raw lifecycle flush syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Msync", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_msync.go", content: "package reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateMsync(b []byte) error { return unix.Msync(b, unix.MS_SYNC) }"},
+	}},
+
+	{name: "301: unix.Fsync outside the mapping owner", desc: "raw lifecycle durability syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .Fsync", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_fsync.go", content: "package reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateFsync(fd int) error { return unix.Fsync(fd) }"},
+	}},
+
+	{name: "302: os.File.Sync outside the mapping owner", desc: "file durability method outside the mapping owner", expectFail: true, expectRule: "Sync on a file-bearing receiver outside the approved capability surface", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_filesync.go", content: "package reader\n\nimport \"os\"\n\nvar gateSyncFile *os.File\n\nfunc gateFileSync() error { return gateSyncFile.Sync() }"},
+	}},
+
+	{name: "303: os.File.Truncate outside the mapping owner", desc: "file truncation method outside the mapping owner", expectFail: true, expectRule: "Truncate on a file-bearing receiver outside the approved capability surface", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_filetruncate.go", content: "package reader\n\nimport \"os\"\n\nvar gateTruncFile *os.File\n\nfunc gateFileTruncate(n int64) error { return gateTruncFile.Truncate(n) }"},
+	}},
+
+	{name: "304: benign lifecycle syscall inside the mapping owner", desc: "raw lifecycle syscalls stay legal in the mapping owner", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/mapping/gatemut_lifecycle_benign.go", content: "package mapping\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateLifecycleBenign(fd int, b []byte, n int64) error {\n\tif err := unix.Fsync(fd); err != nil {\n\t\treturn err\n\t}\n\tif err := unix.Ftruncate(fd, n); err != nil {\n\t\treturn err\n\t}\n\treturn unix.Msync(b, unix.MS_SYNC)\n}"},
+	}},
 }

@@ -32,7 +32,7 @@ func lockLifetimeShared(fd int) error {
 // before path access; whole-file flock must not be substituted for the
 // absent OFD coordination.
 func requireLiveWriter() error {
-	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}
+	return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "live coordination is not implemented on this platform"}
 }
 
 // lockLifetimeExclusive is unreachable on FreeBSD (requireLiveWriter
