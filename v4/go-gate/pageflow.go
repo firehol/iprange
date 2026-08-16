@@ -1179,32 +1179,29 @@ func saturatingMul(a, b int64) int64 {
 	return a * b
 }
 
-// saturatingSub caps positive subtraction at MaxInt64.
+// saturatingSub returns a-b for non-negative operands, saturating a
+// negative result at MaxInt64 because it denotes an unreachable bound.
 func saturatingSub(a, b int64) int64 {
-	if a < 0 || b < 0 || a > math.MaxInt64-b {
+	if a < 0 || b < 0 || b > a {
 		return math.MaxInt64
 	}
 	return a - b
 }
 
-// saturatingDivUp divides nonnegative a by positive b, rounding up and
-// saturating at MaxInt64.
+// saturatingDivUp divides non-negative a by positive b, rounding up and
+// saturating only when the rounded quotient cannot fit int64.
 func saturatingDivUp(a, b int64) int64 {
-	if b <= 0 {
+	if a < 0 || b <= 0 {
 		return 0
 	}
-	if a > math.MaxInt64-(b-1) {
-		return math.MaxInt64
+	q := a / b
+	if a%b != 0 {
+		if q == math.MaxInt64 {
+			return math.MaxInt64
+		}
+		q++
 	}
-	return (a + b - 1) / b
-}
-
-// divUp divides nonnegative a by positive b, rounding up.
-func divUp(a, b int64) int64 {
-	if b <= 0 {
-		return 0
-	}
-	return (a + b - 1) / b
+	return q
 }
 
 // abs64 returns the absolute value when representable.

@@ -1089,4 +1089,8 @@ var batteryPageCases = []batteryCase{
 	{name: "P290: unsigned 1<<63 inclusive bound saturates through subtraction", desc: "for i := uint64(0); i <= 1<<63; i++ copies page bytes with a bounded break: inclusive hi-lo+1 arithmetic must saturate instead of wrapping to zero", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l34_1.go", content: "package reader\n\nfunc unsignedInclusiveOverflowProbeL34(r *ImmutableReader, pgno uint32) ([4096]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [4096]byte{}, err\n\t}\n\tvar out [4096]byte\n\tfor i := uint64(0); i <= 1<<63; i++ {\n\t\tout[i] = page[i]\n\t\tif i >= 4095 {\n\t\t\tbreak\n\t\t}\n\t}\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P291 benign: one-iteration huge-step loop copies one byte", desc: "for i := 0; i <= math.MaxInt64; i += math.MaxInt64 { out[i] = page[i] }: exact division preserves one iteration and does not reject a sub-page copy", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l35_1.go", content: "package reader\n\nimport \"math\"\n\nfunc oneHugeStepProbeL35(r *ImmutableReader, pgno uint32) ([1]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn [1]byte{}, err\n\t}\n\tvar out [1]byte\n\tfor i := 0; i <= math.MaxInt64; i += math.MaxInt64 {\n\t\tout[i] = page[i]\n\t}\n\treturn out, nil\n}"},
+	}},
 }
