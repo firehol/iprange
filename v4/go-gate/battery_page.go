@@ -1005,4 +1005,24 @@ var batteryPageCases = []batteryCase{
 	{name: "P269: bounded page spans assembled by copy and append into one destination", desc: "copy(out[:2048], page[:2048]); out = append(out[:2048], page[2048:4096]...): copy and append share one canonical bounded-span accumulator", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_3.go", content: "package reader\n\nfunc copyThenAppendProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tcopy(out[:2048], page[:2048])\n\tout = append(out[:2048], page[2048:4096]...)\n\treturn out, nil\n}"},
 	}},
+
+	{name: "P270: bounded copy spans through an identifier alias", desc: "a := out; copy(a[:2048], page[:2048]); copy(out[2048:], page[2048:4096]): identifier aliases resolve to one canonical bounded-span destination", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_4.go", content: "package reader\n\nfunc copyAliasProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\ta := out\n\tcopy(a[:2048], page[:2048])\n\tcopy(out[2048:], page[2048:4096])\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P271 benign: alias rebind to a fresh small buffer stops accumulation", desc: "a := out; append 2048 page bytes; a = make([]byte, 0, 8); append 2048 page bytes: each buffer receives at most 2048 bytes and no complete page exists", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_5.go", content: "package reader\n\nfunc rebindAliasProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 0, 4096)\n\ta := out\n\ta = append(a, page[:2048]...)\n\ta = make([]byte, 0, 8)\n\ta = append(a, page[:2048]...)\n\treturn a, nil\n}"},
+	}},
+
+	{name: "P272: bounded appends through an asserted field destination", desc: "v.(*T).Buf = append(v.(*T).Buf, page[:2048]...) twice: type-asserted selector roots resolve to one canonical destination", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_6.go", content: "package reader\n\ntype typeAssertHolderL29 struct{ Buf []byte }\n\nfunc typeAssertAppendProbeL29(r *ImmutableReader, pgno uint32) error {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar v interface{} = &typeAssertHolderL29{Buf: make([]byte, 0, 4096)}\n\tv.(*typeAssertHolderL29).Buf = append(v.(*typeAssertHolderL29).Buf, page[:2048]...)\n\tv.(*typeAssertHolderL29).Buf = append(v.(*typeAssertHolderL29).Buf, page[2048:4096]...)\n\treturn nil\n}"},
+	}},
+
+	{name: "P273: bounded copy and append through a re-slice alias", desc: "sl := out[:2048]; copy(out[:2048], page[:2048]); sl = append(sl, page[2048:4096]...): slice aliases resolve to the same canonical destination", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_7.go", content: "package reader\n\nfunc sliceAliasAppendProbeL29(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tout := make([]byte, 4096)\n\tsl := out[:2048]\n\tcopy(out[:2048], page[:2048])\n\tsl = append(sl, page[2048:4096]...)\n\treturn out, nil\n}"},
+	}},
+
+	{name: "P274 benign: page slice headers appended to a slice of slices", desc: "chunks = append(chunks, page[:2048], page[2048:4096]): byte-span accumulation applies only to byte-element destinations, not [][]byte slice-header collections", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_l29_8.go", content: "package reader\n\nfunc chunksAppendProbeL29(r *ImmutableReader, pgno uint32) ([][]byte, error) {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tchunks := make([][]byte, 0, 2)\n\tchunks = append(chunks, page[:2048], page[2048:4096])\n\treturn chunks, nil\n}"},
+	}},
 }

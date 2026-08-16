@@ -387,11 +387,32 @@ type pageFlow struct {
 	// appendAliases maps a rebound slice name to the canonical variable
 	// whose bounded page-span accumulation it shares.
 	appendAliases map[types.Object]types.Object
-	accum         bool // final sweep: keep expression caches for the rule pass
+	// appendCallRoots records each append call's destination canonical
+	// root at the statement's position in control flow, before a later
+	// rebind changes the variable's alias state.
+	appendCallRoots map[*ast.CallExpr]types.Object
+	accum           bool // final sweep: keep expression caches for the rule pass
 }
 
 // methodValueCall is one resolved method-value call: the method and the
 // receiver expression bound at the binding site.
+// canonicalAppendRoot resolves the current canonical root of an append
+// destination, following bounded-span aliases until absence or a fresh
+// rebind marker.
+func (pf *pageFlow) canonicalAppendRoot(obj types.Object) types.Object {
+	for d := 0; d < 8; d++ {
+		next, ok := pf.appendAliases[obj]
+		if !ok || next == nil {
+			return obj
+		}
+		if next == obj {
+			return obj
+		}
+		obj = next
+	}
+	return obj
+}
+
 // boundedSpanKey canonicalizes one bounded page-span destination.
 type boundedSpanKey struct {
 	obj  types.Object
@@ -421,6 +442,7 @@ func (pf *pageFlow) clearExprCaches() {
 	pf.destAggregated = map[ast.Expr]bool{}
 	pf.boundedPageSpans = map[boundedSpanKey]int{}
 	pf.appendAliases = map[types.Object]types.Object{}
+	pf.appendCallRoots = map[*ast.CallExpr]types.Object{}
 }
 
 // summarizePackage computes the symbolic summaries of one package,
@@ -1263,6 +1285,15 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 					break
 				}
 				pv := pf.evalExpr(st, rhs)
+				if call, ok := unparen(rhs).(*ast.CallExpr); ok {
+					if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "append" && len(call.Args) >= 1 {
+						if argID, ok := unparen(call.Args[0]).(*ast.Ident); ok {
+							if obj := pf.pc.info.ObjectOf(argID); obj != nil {
+								pf.appendCallRoots[call] = pf.canonicalAppendRoot(obj)
+							}
+						}
+					}
+				}
 				// A helper used in value position can still be an
 				// element sink (_ = put(out, i, b)); record it like an
 				// expression-statement call inside a page-sourcing loop.
@@ -1315,10 +1346,31 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						}
 					}
 				}
+				// A non-alias slice rebind names a fresh buffer: its
+				// old bounded-span alias edge must not survive.
+				if dstObj, ok := objOf(st, v.Lhs[i]).(*types.Var); ok {
+					aliasSrcTmp := unparen(v.Rhs[i])
+					if se, ok := aliasSrcTmp.(*ast.SliceExpr); ok {
+						aliasSrcTmp = unparen(se.X)
+					}
+					if call, ok := aliasSrcTmp.(*ast.CallExpr); ok {
+						if id, ok := unparen(call.Fun).(*ast.Ident); !ok || id.Name != "append" {
+							pf.appendAliases[dstObj] = nil
+						}
+					} else if _, ok := aliasSrcTmp.(*ast.Ident); !ok {
+						pf.appendAliases[dstObj] = nil
+					}
+				}
 				// Chained length aliases: n := len(page); m := n keeps
 				// the page-derived bound transitively. Slice aliases
 				// (dst := out) share the recorded make length.
-				if srcID, ok := unparen(v.Rhs[i]).(*ast.Ident); ok {
+				aliasSrc := unparen(v.Rhs[i])
+				if se, ok := aliasSrc.(*ast.SliceExpr); ok {
+					if id, ok := unparen(se.X).(*ast.Ident); ok {
+						aliasSrc = id
+					}
+				}
+				if srcID, ok := aliasSrc.(*ast.Ident); ok {
 					srcObj := objOf(st, srcID)
 					obj := objOf(st, v.Lhs[i])
 					if srcObj != nil && obj != nil {
@@ -1333,6 +1385,12 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 								for d := 0; d < 8; d++ {
 									next, ok := pf.appendAliases[root]
 									if !ok || next == root {
+										break
+									}
+									if next == nil {
+										// The source was rebound to a fresh buffer;
+										// that source variable is the new canonical
+										// buffer name, not the end of the chain.
 										break
 									}
 									root = next
@@ -1629,9 +1687,16 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 								pf.bindLocalFunc(st, name, lit)
 								pf.recordBinding(st, name, vs.Values[i])
 								pf.materializeStructFields(st, name, vs.Values[i])
-								// A var-declared slice alias shares the
-								// canonical bounded page-span accumulation.
-								if srcID, ok := unparen(vs.Values[i]).(*ast.Ident); ok {
+								// A declared slice alias (short and var
+								// forms) shares the canonical bounded
+								// page-span accumulation.
+								declSrc := unparen(vs.Values[i])
+								if se, ok := declSrc.(*ast.SliceExpr); ok {
+									if id, ok := unparen(se.X).(*ast.Ident); ok {
+										declSrc = id
+									}
+								}
+								if srcID, ok := declSrc.(*ast.Ident); ok {
 									srcObj := objOf(st, srcID)
 									dstObj, ok1 := obj.(*types.Var)
 									srcVar, ok2 := srcObj.(*types.Var)
@@ -1639,7 +1704,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 										root := types.Object(srcVar)
 										for d := 0; d < 8; d++ {
 											next, ok := pf.appendAliases[root]
-											if !ok || next == root {
+											if !ok || next == nil || next == root {
 												break
 											}
 											root = next

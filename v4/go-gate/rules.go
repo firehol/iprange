@@ -1547,7 +1547,7 @@ func boundedChainRoot(e ast.Expr) *ast.Ident {
 			e = d.X
 		case *ast.ParenExpr:
 			e = d.X
-		case *ast.SliceExpr, *ast.IndexExpr:
+		case *ast.SliceExpr, *ast.IndexExpr, *ast.TypeAssertExpr:
 			e = chainInner(d)
 		default:
 			id, _ := d.(*ast.Ident)
@@ -1563,6 +1563,8 @@ func chainInner(e ast.Expr) ast.Expr {
 		return d.X
 	case *ast.IndexExpr:
 		return d.X
+	case *ast.TypeAssertExpr:
+		return d.X
 	case *ast.SelectorExpr:
 		return d.X
 	case *ast.StarExpr:
@@ -1577,17 +1579,37 @@ func chainInner(e ast.Expr) ast.Expr {
 // accumulation key: root object plus flattened field path.
 func (w *fileRules) boundedCopyKey(dst ast.Expr) (types.Object, string) {
 	root := w.boundedCopyTarget(dst)
-	if id, ok := root.(*ast.Ident); ok {
-		obj := w.pc.info.Uses[id]
-		if obj == nil {
-			obj = w.pc.info.Defs[id]
-		}
-		if obj == nil {
-			return nil, ""
-		}
-		return obj, w.destinationFieldPath(dst)
+	id, ok := root.(*ast.Ident)
+	if !ok {
+		return nil, ""
 	}
-	return nil, ""
+	obj := w.pc.info.Uses[id]
+	if obj == nil {
+		obj = w.pc.info.Defs[id]
+	}
+	if obj == nil {
+		return nil, ""
+	}
+	if w.pc.pf != nil {
+		for d := 0; d < 8; d++ {
+			next, ok := w.pc.pf.appendAliases[obj]
+			if !ok {
+				break
+			}
+			if next == nil {
+				break
+			}
+			if next == obj {
+				obj = nil
+				break
+			}
+			obj = next
+		}
+	}
+	if obj == nil {
+		return nil, ""
+	}
+	return obj, w.destinationFieldPath(dst)
 }
 
 // boundedAppendKey resolves an append destination to the same canonical
@@ -1658,6 +1680,12 @@ func (w *fileRules) boundedCopyTarget(dst ast.Expr) ast.Expr {
 	return dst
 }
 
+// byteElementType reports whether t is the byte type itself.
+func byteElementType(t types.Type) bool {
+	b, ok := unwrapToUnderlying(types.Unalias(t)).(*types.Basic)
+	return ok && b.Kind() == types.Byte
+}
+
 // checkAppend flags append(dst, src...) when src is a mapped page view.
 func (w *fileRules) checkAppend(v *ast.CallExpr) {
 	if len(v.Args) < 2 {
@@ -1683,19 +1711,38 @@ func (w *fileRules) checkAppend(v *ast.CallExpr) {
 		}
 	}
 	// Repeated sub-page appends into one destination variable assemble a
-	// complete owned page from bounded spans.
-	if span > 0 {
-		if obj, path := w.boundedAppendKey(v.Args[0]); obj != nil {
+	// complete owned page from bounded spans. Byte-span accumulation is
+	// meaningful only for byte-element destinations; [][]byte appends
+	// slice headers, not page bytes.
+	byteElemT := collectionElementType(w.typeOf(v.Args[0]))
+	if span > 0 && byteElemT != nil && byteElementType(byteElemT) {
+		obj, path := w.boundedAppendKey(v.Args[0])
+		if w.pc.pf != nil && obj != nil {
+			if root, ok := w.pc.pf.appendCallRoots[v]; ok && root != nil {
+				obj = root
+			}
+		}
+		if obj != nil {
 			if w.pc.pf != nil {
 				root := obj
 				for d := 0; d < 8; d++ {
 					next, ok := w.pc.pf.appendAliases[root]
-					if !ok || next == root {
+					if !ok {
+						break
+					}
+					if next == nil {
+						break
+					}
+					if next == root {
+						root = nil
 						break
 					}
 					root = next
 				}
 				obj = root
+			}
+			if obj == nil {
+				return
 			}
 			w.accumulateBoundedSpan(obj, path, span, v.Pos(), "bounded mapped-page spans appended repeatedly into one owned buffer (complete page)")
 		}
