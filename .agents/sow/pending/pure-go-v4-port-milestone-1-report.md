@@ -1595,5 +1595,20 @@ Fixes (one commit; HEAD recorded in the review entry below):
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, SOW audit - all green.
 
-Review outcome (six-resident swarm, then sol, per the user's review
-process): recorded after the entry below when the review completes.
+Review outcome (final check, 2026-08-17, HEAD 4f11e3d): the five-resident
+full-scope swarm (glm, kimi, qwen, minimax, mimo) reviewed milestone 1
+under the user-approved gate-review boundary (SOW Review Process step 5).
+glm, kimi, minimax, and mimo returned PASS with independent adversarial
+evidence - wire-contract parity with the Rust authority (bootstrap
+selection, meta invariants, slotted geometry, membership/blob/structure
+rules), mapping/lifetime and remap fail-closed states, pin semantics,
+zero-allocation hot paths, gate rule families and the 578-case battery,
+per-target import boundaries, and SOW/report record consistency; no P0-P2
+finding survived a realistic in-scope scenario. qwen was unavailable (no
+response; technical skip); sol and luna were unavailable (weekly quota
+exhausted). Per the user decision, the final gate closed on the
+available-resident quorum; reduced review coverage is reported to the
+user separately. Lead re-verification at close: gate production scan
+rc=0, battery 578/578 (495 rejections, 83 benign), go test ./... (both
+tag sets), -race, vet, gofmt, import graph, SOW audit - all green.
+Milestone 1: CLOSED. Milestone 2 (writer) is authorized to start.

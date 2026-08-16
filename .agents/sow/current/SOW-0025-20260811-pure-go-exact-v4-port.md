@@ -172,8 +172,9 @@ ContainsIndex skipped the trailing-word canonical check); details in the
 round-25 entry below. The durable battery is 578 cases (495 rejections,
 83 benign acceptances) plus 9 shell environment mutations and passes end
 to end.
-Milestone 2 (writer) remains blocked until the review passes and the user
-authorizes it.
+Milestone 2 (writer) is authorized to start: the final milestone-1 check
+passed at HEAD 4f11e3d (2026-08-17, entry below) and the user authorized
+proceeding to the writer once milestone 1 closes.
 
 Rework outcome per finding:
 
@@ -213,6 +214,22 @@ lines; gate tooling 13,300 raw lines total (12,748 go-gate + 552 shell). Hot-pat
 synthetic multi-level tree: LookupDirect4 159 ns/op, direct-6 69 ns/op,
 membership word 95 ns/op, all 0 allocs/op (full table in the
 implementation record below).
+
+
+Final check (2026-08-17, HEAD 4f11e3d): the five-resident full-scope swarm
+(glm, kimi, qwen, minimax, mimo) reviewed milestone 1 under the
+user-approved gate-review boundary (Review Process step 5). glm, kimi,
+minimax, and mimo returned PASS with independent zero-trust evidence
+(wire parity of codecs vs the Rust authority and binary-format-v4.md,
+mapping owner and remap fail-closed states, hot-path probes and pin
+lifetime, gate families and the 578-case battery, import graph, records).
+qwen was unavailable (no response; technical skip); sol and luna were
+unavailable (weekly quota exhausted), so the final gate closed on the
+available-resident quorum per the user decision; reduced review coverage
+is reported to the user. Lead re-verification at close: production gate
+scan rc=0, battery 578/578 (495 rejections, 83 benign acceptances), go
+test ./... (both tag sets), -race/checkptr, vet, gofmt, import graph,
+SOW audit - all green. Milestone 1: CLOSED.
 
 ## Review Process (user decision, 2026-08-12)
 
@@ -3657,6 +3674,16 @@ Reviewer findings:
   The closed-state error class was resolved by decision 3 (WrongState
   class, error-capable WordCount) and was never an open defect.
 
+  Final check (2026-08-17, HEAD 4f11e3d): full-scope five-resident swarm
+  under the Review Process step-5 boundary - glm, kimi, minimax, and mimo
+  PASS with no P0-P2 (independent adversarial sweeps of codec parity vs
+  the Rust authority, mapping/remap fail-closed states, pin lifetime,
+  zero-allocation hot paths, gate families and the 578-case battery,
+  per-target import boundaries, records); qwen skipped as unavailable;
+  sol and luna skipped (weekly quota); the final gate closed on the
+  available-resident quorum per user decision; reduced coverage reported
+  to the user. No findings to fix; no round restart.
+
 Same-failure scan:
 
 - Round-2 searches re-ran the full classes: content-transfer I/O (now also a
@@ -3688,8 +3715,8 @@ Artifact maintenance gate:
   project record, not published product documentation.
 - End-user/operator skills: none exist and no public workflow changed.
 - SOW lifecycle: this file remains `in-progress` under `current/`; Milestone 1
-  is reopened and Milestone 2 is blocked; SOW-0017 remains the separate Phase-2
-  item.
+  is CLOSED at HEAD 4f11e3d after the final check (2026-08-17); Milestone 2
+  (writer) is authorized to start; SOW-0017 remains the separate Phase-2 item.
 
 Specs update:
 
