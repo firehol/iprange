@@ -1247,6 +1247,95 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 	}
 }
 
+// checkStoreCallbackViews enforces the store-callback counter-check at
+// an invocation point inside a store callback implementation
+// (Inspect/Update/CopyPage on an approved store interface): every
+// byte-slice argument of the invocation must be a provably MAPPED view.
+// The callback formal receives views seeded as mapped at the dispatch
+// site; an owned buffer bound here would make the seeding bless copies
+// of complete mapped pages into owned memory. The callee itself can be
+// the formal, a local identity alias (cb := fn, any block), a recorded
+// wrapper, a struct field that holds the formal (s.cb = fn), or a
+// forwarder literal that receives the formal as a func-typed argument.
+func (w *fileRules) checkStoreCallbackViews(v *ast.CallExpr, fun ast.Expr) {
+	sig := funcSignature(w.typeOf(fun))
+	if sig == nil || sig.Params() == nil {
+		return
+	}
+	params := sig.Params()
+	for i := 0; i < params.Len() && i < len(v.Args); i++ {
+		if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); isSlice {
+			if pv := w.pageValue(v.Args[i]); !pv.mapped {
+				w.fail(v.Pos(), "store callback %s must receive a mapped page view (an owned callback buffer launders complete pages into owned memory)", calleeText(fun))
+			}
+		}
+	}
+}
+
+// recordedCallbackAlias reports whether a local function-typed variable
+// is a callback alias recorded by the flow pass for the current
+// function: cb := fn, cb := func(a, b []byte) error { return fn(a, b) },
+// chains of both, and block-scoped or var-declared forms of either.
+func (w *fileRules) recordedCallbackAlias(v *types.Var) bool {
+	if v == nil || w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	_, ok = encl.callbackAliases[v]
+	return ok
+}
+
+// fieldHoldsCallbackFormal reports whether a field selection is a plain
+// struct field that the current function assigned the store callback
+// formal (s.cb = fn); method values and interface dispatches are not
+// storage slots and return false.
+func (w *fileRules) fieldHoldsCallbackFormal(sel *ast.SelectorExpr) bool {
+	fieldSel, isSel := w.pc.info.Selections[sel]
+	if !isSel || fieldSel.Kind() != types.FieldVal {
+		return false
+	}
+	if w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	_, ok = encl.fieldAliases[fieldSel.Obj()]
+	return ok
+}
+
+// forwardsCallbackFormal reports whether the call passes the current
+// store implementation's callback formal (directly, through a local
+// alias, or through a field holder) as a func-typed argument. A
+// forwarder literal or helper receiving the formal must hand it mapped
+// views, so the store-implementation call site enforces the same
+// counter-check on its byte arguments.
+func (w *fileRules) forwardsCallbackFormal(v *ast.CallExpr) bool {
+	resolves := func(e ast.Expr) bool {
+		switch a := unparen(e).(type) {
+		case *ast.Ident:
+			obj, ok := w.pc.info.Uses[a].(*types.Var)
+			if !ok || funcSignature(obj.Type()) == nil {
+				return false
+			}
+			return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
+		case *ast.SelectorExpr:
+			return w.fieldHoldsCallbackFormal(a)
+		}
+		return false
+	}
+	for _, arg := range v.Args {
+		if resolves(arg) {
+			return true
+		}
+	}
+	return false
+}
+
 // checkFuncTypedArgs enforces the scanned-callback fence: an approved
 // module callee with a func-typed formal may only receive a callback
 // whose body is part of the scanned tree. Every implementer and caller
@@ -1621,29 +1710,19 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// function is the approved exception: its call sites are
 			// scanned, and the callback fence requires them to pass a
 			// scanned callback.
-			if !w.approvedFuncVar(obj, 0) && !w.approvedFuncParamVar(obj) {
+			formalLike := w.approvedFuncParamVar(obj)
+			aliasLike := w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
+			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike {
 				varIndirect = true
-			} else if w.approvedFuncParamVar(obj) && w.isStoreCallbackImpl() {
-				// Store-callback counter-check: an implementation of
-				// Inspect/Update/CopyPage on an approved store
-				// interface must invoke its callback formal only with
-				// MAPPED views (the store contract). An owned buffer
-				// here would make the dispatch-site callback seeding
-				// treat it as a mapping alias, silently blessing
-				// copies of complete mapped pages into owned memory.
-				if sig, ok := obj.Type().(*types.Signature); ok {
-					params := sig.Params()
-					for i := 0; i < params.Len() && i < len(v.Args); i++ {
-						if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); isSlice {
-							if pv := w.pageValue(v.Args[i]); !pv.mapped {
-								w.fail(v.Pos(), "store callback %s must receive a mapped page view (an owned callback buffer launders complete pages into owned memory)", calleeText(fun))
-							}
-						}
-					}
-				}
+			}
+			if w.isStoreCallbackImpl() && (formalLike || aliasLike || w.forwardsCallbackFormal(v)) {
+				w.checkStoreCallbackViews(v, fun)
 			}
 		}
 	case *ast.SelectorExpr:
+		if w.isStoreCallbackImpl() && w.fieldHoldsCallbackFormal(f) {
+			w.checkStoreCallbackViews(v, fun)
+		}
 		switch obj := w.pc.info.Uses[f.Sel].(type) {
 		case *types.Func:
 			// A concrete method on a value type has a scanned body, but

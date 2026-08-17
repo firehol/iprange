@@ -173,6 +173,15 @@ type funcSummary struct {
 	// alias so the helper's byte arguments are still required to be
 	// mapped views.
 	callbackAliases map[types.Object]callbackAlias
+	// fieldAliases records struct-field slots the body assigns a
+	// func-typed formal parameter (h.f = fn): keyed by the field object,
+	// holding the formal's parameter slot. The store-callback fence uses
+	// the record both here (a later h.f(...) invocation inside the same
+	// function carries the formal slot) and in the rules pass (a store
+	// implementation invoking the callback through a field must hand it
+	// mapped views). A field assigned several times keeps the last
+	// recorded binding; the fence stays fail-closed.
+	fieldAliases map[types.Object]int
 }
 
 // callbackAlias records one local that aliases a func-typed formal
@@ -4804,10 +4813,6 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			if i >= len(assign.Rhs) {
 				break
 			}
-			dstObj := objOf(st, lhs)
-			if dstObj == nil {
-				continue
-			}
 			srcID, ok := unparen(assign.Rhs[i]).(*ast.Ident)
 			if !ok {
 				continue
@@ -4816,12 +4821,33 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			if srcObj == nil {
 				continue
 			}
-			if idx, ok := st.params[srcObj]; ok {
-				paramAliases[dstObj] = idx
-			} else if idx, ok := paramAliases[srcObj]; ok {
-				paramAliases[dstObj] = idx
-			} else if al, ok := fs.callbackAliases[srcObj]; ok {
-				paramAliases[dstObj] = al.slot
+			idx, ok := st.params[srcObj]
+			if !ok {
+				idx, ok = paramAliases[srcObj]
+			}
+			if !ok {
+				al, aok := fs.callbackAliases[srcObj]
+				if aok {
+					idx, ok = al.slot, true
+				}
+			}
+			if !ok {
+				continue
+			}
+			switch l := unparen(lhs).(type) {
+			case *ast.Ident:
+				paramAliases[objOf(st, l)] = idx
+			case *ast.SelectorExpr:
+				// h.f = fn: the field holds the formal; a later h.f(...)
+				// invocation carries the formal slot. Only plain field
+				// selections count (method-value writes cannot name a
+				// storage slot).
+				if sel, isSel := pf.pc.info.Selections[l]; isSel && sel.Kind() == types.FieldVal {
+					if fs.fieldAliases == nil {
+						fs.fieldAliases = map[types.Object]int{}
+					}
+					fs.fieldAliases[sel.Obj()] = idx
+				}
 			}
 		}
 		return true
@@ -4902,27 +4928,52 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			litStack = append(litStack, v)
 			return true
 		case *ast.CallExpr:
-			id, ok := unparen(v.Fun).(*ast.Ident)
-			if !ok {
-				return true
-			}
-			obj := pf.pc.info.ObjectOf(id)
-			if obj == nil {
-				return true
-			}
-			fnSlot, ok := st.params[obj]
-			if !ok {
-				fnSlot, ok = paramAliases[obj]
-				if !ok {
-					al, ok2 := fs.callbackAliases[obj]
-					if !ok2 {
-						return true
-					}
-					fnSlot = al.slot
+			// Resolve the callee to a func-typed formal slot: the formal
+			// itself, a recorded local alias, a param alias (including a
+			// global assigned the formal), or a struct field assigned the
+			// formal (h.f = fn; h.f(a, b)).
+			var fnSlot int
+			var sig *types.Signature
+			if id, ok := unparen(v.Fun).(*ast.Ident); ok {
+				obj := pf.pc.info.ObjectOf(id)
+				if obj == nil {
+					return true
 				}
+				found := false
+				fnSlot, found = st.params[obj]
+				if !found {
+					fnSlot, found = paramAliases[obj]
+					if !found {
+						al, ok2 := fs.callbackAliases[obj]
+						if ok2 {
+							fnSlot, found = al.slot, true
+						}
+					}
+				}
+				if !found {
+					return true
+				}
+				sig, _ = obj.Type().(*types.Signature)
+			} else if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
+				fieldSel, isSel := pf.pc.info.Selections[sel]
+				if !isSel || fieldSel.Kind() != types.FieldVal {
+					// Method values and interface dispatches are not
+					// storage slots: their bodies are scanned (concrete
+					// methods) or fail closed elsewhere (interfaces).
+					return true
+				}
+				slot, ok := fs.fieldAliases[fieldSel.Obj()]
+				if !ok {
+					return true
+				}
+				fnSlot = slot
+				if sig, _ = fieldSel.Obj().Type().(*types.Signature); sig == nil {
+					return true
+				}
+			} else {
+				return true
 			}
-			sig, ok := obj.Type().(*types.Signature)
-			if !ok || sig.Params() == nil {
+			if sig == nil || sig.Params() == nil {
 				return true
 			}
 			params := sig.Params()

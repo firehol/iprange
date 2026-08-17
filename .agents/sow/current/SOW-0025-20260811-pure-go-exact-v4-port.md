@@ -856,6 +856,43 @@ mode (--self-test-jobs N / --self-test-chunk K/N, each worker in its
 own private module copy), cutting the dominant validation cost from
 ~14 minutes sequential to ~1.5-2 minutes.
 
+Level-1 round continuation (2026-08-17, Peirce P2 on clean-buffer
+callback indirections): Peirce returned FAIL at HEAD c597eba with one
+P2: a store implementation forwarding its callback formal into a
+helper that stores the formal in a local struct field and invokes it
+there (h.f = fn; h.f(a, a)) escapes the callback-invocation records,
+which resolve only Ident callees. Reproduced by the lead with probe
+modules: the EXACT Peirce shape is caught by the generic
+unproven-callee fence because the store field buffers carry page
+taint, but the same class with CLEAN owned buffers (out := make([]byte,
+4096)) is gate-silent through four indirections - struct field in the
+store impl (s.cb = fn; s.cb(out, out)), local identity alias
+(cb := fn; cb(out, out)), forwarder literal
+(wrap := func(cb, a, b []byte) error { return cb(a, b) };
+wrap(fn, out, out)), and helper-local struct field
+(runCb(fn) { var h struct{ f ... }; h.f = fn; h.f(out, out) }). Fixed:
+the flow pass now records func-formal value flow into struct fields
+(fs.fieldAliases, populated in noteCallbackInvokes from h.f = fn
+assignments and resolved for field-selection callees), and the
+store-implementation counter-check (checkStoreCallbackViews) now
+requires byte-slice arguments to be provably mapped whenever the
+callee is the formal, a local identity alias
+(paramAliasedFuncVar), a recorded wrapper alias, a field that holds
+the formal, or a forwarder call passing the formal as a func-typed
+argument. Direct field/alias/wrapper invocation with MAPPED views
+stays reject-by-design (the pre-existing unproven-callee conservatism,
+P304-class, verified unchanged against the pre-fix binary); the legal
+production patterns (formal invocation, scanned-helper forwarding with
+mapped views) stay green on the real module. Battery: 618 cases (526
+rejections, 92 benign acceptances) with P305 de-vacuated (constructors
+no longer embed the page, so the pin fails only through the
+store-implementation fence), P307 (four clean-buffer liar variants)
+and P308 (block-scoped wrapper honest twin) pinned durably; zero
+misses under --self-test-jobs 24 (1:46 wall). Real module scan rc=0
+across the 5 OS configs; go test ./... both tag sets, -race, vet
+(module and gate), gofmt, and the import-graph boundary check over
+the 11 GOOS/GOARCH pairs all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
