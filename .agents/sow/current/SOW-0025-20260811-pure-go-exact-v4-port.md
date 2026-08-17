@@ -585,7 +585,7 @@ round-1 note) - recorded as reduced coverage, never respawned. Chunk 2
 (writer open surface) gate: CLOSED.
 
 Milestone 2 chunk 3a - COW page-edit storage surface + gate extensions
-(2026-08-17; HEAD before commit 066fc6a; committed below): the
+(2026-08-17; committed at d9990b9, HEAD before commit 066fc6a): the
 storage surface of chunk 3 (COW page-edit layer), implemented and
 locally validated:
 - internal/tree: the generic COW fixed-tree core mirroring Rust
