@@ -440,8 +440,8 @@ page checksum authority with the Castagnoli vector, and the gate at
 full lifecycle-owner syscall family with vacuity-proven pins.
 
 Milestone 2 chunk 2 - writer open (2026-08-17; design record at HEAD
-7a90fb4, implementation committed at 56e8516, review-fix round in the
-working tree): the
+7a90fb4, implementation committed at 56e8516, level-1 round-1 fix
+round committed at 35a096b): the
 writer open surface: map_writer / select_committed /
 trim_committed_tail (Rust authority writer_core/open.rs +
 database_file.rs map_writer), the shared bootstrap authority with the
@@ -472,7 +472,7 @@ the swarm guidelines):
   Rust live_writer.open_locked arrives with the M4 sidecar milestone.
 
 Milestone 2 chunk 2 - writer open IMPLEMENTED (2026-08-17, committed at
-56e8516; the level-1 review-fix round is uncommitted in the working tree):
+56e8516, review-fix round committed at 35a096b):
 the chunk-2 design decisions above are implemented and locally validated:
 - internal/bootstrap: pure shared selection authority (Open with
   ImmutableReader/Writer modes, Result with Meta/Selection/SelectedMetaPage/
@@ -513,10 +513,12 @@ Validation so far: go test ./... (both tag sets), -race, vet, gofmt,
 import-graph scan, 11/11 cross-compiles, and the 601-case gate battery
 + 9 shell mutations - all green at 56e8516. Level-1 round 1: 4/5
 PASS; Leibniz FAILed on one P2 (writer open lacked the terminal
-path-identity re-verification) plus Peirce's same-path P3; the fix
-round (VerifyIdentity in Open/OpenWriter after remap/trim, deterministic
-replacement-race test, failed-open lock-release probes) is in the
-working tree ahead of the delta re-reviews. Level-2 rounds are pending.
+path-identity re-verification) plus Peirce's same-path P3. The round-1
+fixes (VerifyIdentity in Open/OpenWriter after remap/trim, deterministic
+replacement-race test, failed-open lock-release probes; plus the P3
+cleanups incl. the doc-only disposition of the Shrink both-failure
+error-reporting finding) were committed at 35a096b; level-1 delta
+re-reviews and the level-2 rounds are recorded below.
 
 ## Review Process (user decision, 2026-08-12)
 

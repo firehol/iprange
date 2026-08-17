@@ -16,7 +16,11 @@ import (
 // It refuses closed or read-only mappings, non-page-aligned requests, and
 // any request above the current physical extent (a shrink must never
 // extend the file; a file shorter than the requested extent is the Corrupt
-// class, FormatInvalid). Same-size requests are a no-op. On success the
+// class, FormatInvalid). Same-size requests are a no-op. No lower bound
+// is enforced below the two-page meta extent: the committed generation is
+// never smaller than two pages (meta validation refuses PageCount < 2), so
+// a smaller request is caller misuse, and Rust shrink_or_retain has no such
+// check either (accepted parity, recorded). On success the
 // tracked physical extent becomes the truncated size, so later Grow/Remap
 // and writer committed-selection observe the real locked extent.
 func (m *Mapping) Shrink(newSize uint64) error {
