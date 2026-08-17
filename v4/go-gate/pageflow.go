@@ -4648,109 +4648,95 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 		}
 		fs.callbackAliases[obj] = al
 	}
-	// Literal wrappers must invoke the formal somewhere in their body
-	// (an identity alias chain cb2 := cb counts through the chained
-	// record): resolve the invoked callee through params, identity
-	// aliases, and previously recorded aliases, and mark the closure
-	// parameter positions passed as arguments.
-	for _, decl := range body.List {
-		assign, ok := decl.(*ast.AssignStmt)
-		if !ok {
-			continue
-		}
-		for i, lhs := range assign.Lhs {
-			if i >= len(assign.Rhs) {
-				break
-			}
-			lit, ok := unparen(assign.Rhs[i]).(*ast.FuncLit)
-			if !ok {
-				continue
-			}
-			dstObj := objOf(st, lhs)
-			if dstObj == nil {
-				continue
-			}
-			params := paramsOf(lit)
-			slot := -1
-			forwarded := make([]bool, len(params))
-			ast.Inspect(lit.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
+	// Aliases may be declared in any block of the enclosing function
+	// (if/switch/loop bodies) and as var declarations; the fence must
+	// follow them wherever they are declared. Nested func literals are
+	// analyzed as their own summaries, so the traversal never descends
+	// into a literal body: their statements must not be attributed to
+	// this function.
+	collect := func(wrappers bool) {
+		recordAlias := func(lhs, rhs ast.Expr) {
+			if wrappers {
+				lit, ok := unparen(rhs).(*ast.FuncLit)
 				if !ok {
-					return true
+					return
 				}
-				al, ok := aliasOf(call.Fun)
-				if !ok {
-					return true
+				dstObj := objOf(st, lhs)
+				if dstObj == nil {
+					return
 				}
-				if slot == -1 {
-					slot = al.slot
-				} else if slot != al.slot {
-					// A literal invoking several func formals is not a
-					// single-wrapper alias; call-site views could reach
-					// either formal, so the fence does not attribute
-					// them.
-					slot = -2
-				}
-				for i, arg := range call.Args {
-					if i >= len(params) {
-						break
-					}
-					aid, ok := unparen(arg).(*ast.Ident)
+				params := paramsOf(lit)
+				slot := -1
+				forwarded := make([]bool, len(params))
+				ast.Inspect(lit.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
 					if !ok {
-						continue
+						return true
 					}
-					argObj := pf.pc.info.ObjectOf(aid)
-					for p, pobj := range params {
-						if pobj != nil && pobj == argObj {
-							forwarded[p] = true
+					al, ok := aliasOf(call.Fun)
+					if !ok {
+						return true
+					}
+					if slot == -1 {
+						slot = al.slot
+					} else if slot != al.slot {
+						// A literal invoking several func formals is not a
+						// single-wrapper alias; call-site views could reach
+						// either formal, so the fence does not attribute
+						// them.
+						slot = -2
+					}
+					for i, arg := range call.Args {
+						if i >= len(params) {
 							break
 						}
+						aid, ok := unparen(arg).(*ast.Ident)
+						if !ok {
+							continue
+						}
+						argObj := pf.pc.info.ObjectOf(aid)
+						for p, pobj := range params {
+							if pobj != nil && pobj == argObj {
+								forwarded[p] = true
+								break
+							}
+						}
+					}
+					return true
+				})
+				if slot < 0 {
+					return
+				}
+				used := false
+				for _, f := range forwarded {
+					if f {
+						used = true
+						break
 					}
 				}
-				return true
-			})
-			if slot < 0 {
-				continue
-			}
-			used := false
-			for _, f := range forwarded {
-				if f {
-					used = true
-					break
+				if !used {
+					// The literal invokes the formal only with
+					// non-parameter expressions: the views it forwards are
+					// its own captured values, not the call-site bindings,
+					// so call-site enforcement would be unsound. The
+					// invocation remains visible to the body-level
+					// counter-check inside the literal.
+					return
 				}
+				record(dstObj, callbackAlias{slot: slot, forwarded: forwarded, lit: lit, litParams: params}, lit)
+				return
 			}
-			if !used {
-				// The literal invokes the formal only with
-				// non-parameter expressions: the views it forwards are
-				// its own captured values, not the call-site bindings,
-				// so call-site enforcement would be unsound. The
-				// invocation remains visible to the body-level
-				// counter-check inside the literal.
-				continue
-			}
-			record(dstObj, callbackAlias{slot: slot, forwarded: forwarded, lit: lit, litParams: params}, lit)
-		}
-	}
-	// Identity aliases: cb := fn records the formal itself, and
-	// cb2 := cb copies the existing record (the value is the same
-	// closure object, so the forwarded positions are the same signature
-	// positions).
-	for _, decl := range body.List {
-		assign, ok := decl.(*ast.AssignStmt)
-		if !ok {
-			continue
-		}
-		for i, lhs := range assign.Lhs {
-			if i >= len(assign.Rhs) {
-				break
-			}
-			src, ok := unparen(assign.Rhs[i]).(*ast.Ident)
+			// Identity aliases: cb := fn records the formal itself, and
+			// cb2 := cb copies the existing record (the value is the same
+			// closure object, so the forwarded positions are the same
+			// signature positions).
+			src, ok := unparen(rhs).(*ast.Ident)
 			if !ok {
-				continue
+				return
 			}
 			srcObj := pf.pc.info.ObjectOf(src)
 			if srcObj == nil {
-				continue
+				return
 			}
 			if al, ok := fs.callbackAliases[srcObj]; ok {
 				record(objOf(st, lhs), callbackAlias{slot: al.slot, forwarded: nil, lit: al.lit, litParams: al.litParams}, al.lit)
@@ -4758,7 +4744,39 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 				record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
 			}
 		}
+		skipStmt := func(lhs []ast.Expr, rhs []ast.Expr) bool {
+			for i, l := range lhs {
+				if i >= len(rhs) {
+					break
+				}
+				recordAlias(l, rhs[i])
+			}
+			// Do not descend: a func literal bound by this statement (or
+			// nested inside its initializer expressions) is analyzed as
+			// its own summary.
+			return false
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.AssignStmt:
+				return skipStmt(v.Lhs, v.Rhs)
+			case *ast.ValueSpec:
+				names := make([]ast.Expr, len(v.Names))
+				for i, name := range v.Names {
+					names[i] = name
+				}
+				return skipStmt(names, v.Values)
+			case *ast.FuncLit:
+				return false
+			}
+			return true
+		})
 	}
+	// Literal wrappers first, then identity aliases: a chain cb2 := cb
+	// copies the wrapper's record, so wrapper records must exist before
+	// the identity pass resolves them.
+	collect(true)
+	collect(false)
 }
 
 // noteCallbackInvokes records byte-slice parameters the body passes to

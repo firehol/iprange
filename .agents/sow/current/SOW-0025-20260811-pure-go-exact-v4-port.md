@@ -826,6 +826,36 @@ P303/P304 pinned durably; full-battery re-run at the fixed HEAD was
 clean. The real module scan stays at zero violations and v4/go test
 ./... (both tag sets) stays green.
 
+Level-1 callback-alias round, fix wave (2026-08-17): the five
+aspect reviewers reviewed the alias/pointer/join delta at HEAD 08db7d7.
+Sartre and Leibniz PASSed (Leibniz added a P3-strength preference for
+pinning the pointer-dereference alias forms). Jason FAILed with one
+reproducible P2: the store-callback alias fence read only the top-level
+statement list of a store implementation body in noteCallbackAliases
+(pageflow.go), while paramAliasedFuncVar admitted block-scoped and
+var-declared identity aliases for direct-invocation approval; a
+block-scoped alias forwarded through a scanned helper therefore escaped
+the helper-forwarding fence. Reproduced by the lead on a probe module:
+if-block alias to helper = gate-silent; switch-case alias, var-declared
+identity aliases (top-level and nested), and block-scoped literal
+wrappers are the same class. Fixed by recording callback aliases from
+every block of the enclosing function (if/switch/loop bodies and var
+declarations) while never descending into nested func literal bodies
+(those are analyzed as their own summaries); the assignCount/
+addressTaken guards already covered the whole body. All five liar
+variants now fail closed; the honest twin (block-scoped aliases
+forwarded with mapped views) stays legal. Pinned durably as P305
+(four liar variants, one file) and P306 (honest twins). Battery: 616
+cases (525 rejections, 91 benign acceptances), zero misses under
+--self-test-jobs 24 (1:46 wall, ~8x faster than the sequential
+self-test); real module scan rc=0 across the 5 OS configs; go test
+./... both tag sets, -race, vet (module and gate), gofmt, and the
+import-graph boundary check over the 11 GOOS/GOARCH pairs all green.
+Also in this period: the battery self-test gained a parallel worker
+mode (--self-test-jobs N / --self-test-chunk K/N, each worker in its
+own private module copy), cutting the dominant validation cost from
+~14 minutes sequential to ~1.5-2 minutes.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
