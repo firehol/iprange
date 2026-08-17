@@ -423,7 +423,21 @@ in d83fa28:
   Remap(committed).
 Battery 599 -> 601 (515 rejections, 86 benign); production gate scan
 rc=0 (5 OS configs); go test (both tag sets), -race, vet, gofmt,
-import-graph, 11/11 cross-compiles all green. GLM re-review pending.
+import-graph, 11/11 cross-compiles all green. GLM re-review returned
+one records-only P2 (stale battery counts and missing level-2 entry),
+fixed in de338fa (601/515/86, pin range 299-313, round-1 entry added);
+GLM PASS at HEAD de338fa.
+
+Milestone 2 chunk 1 - level-2 gate CLOSED (2026-08-17, HEAD de338fa):
+all four available level-2 reviewers (glm, kimi, minimax, mimo)
+report no P0-P2 findings; reduced coverage: none (qwen was not part of
+the level-2 set for this chunk). The chunk-1 foundation is complete:
+mutable mapping owner with per-platform live coordination, two-page
+bootstrap + Remap(committed) mirroring map_writer, fail-closed
+Remap/Grow matching replace_map, darwin F_FULLFSYNC durability, the
+page checksum authority with the Castagnoli vector, and the gate at
+601 cases covering content transfer, complete-page ownership, and the
+full lifecycle-owner syscall family with vacuity-proven pins.
 
 ## Review Process (user decision, 2026-08-12)
 
