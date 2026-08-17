@@ -1018,6 +1018,12 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	fs.mutFields = map[int]map[string]fieldTaint{}
 	fs.stringParams = map[int]bool{}
 	fs.pageSinkParams = map[int]bool{}
+	// Callback-invocation records are value-dependent (the untraceable
+	// mark depends on the mappedness of the body's byte expressions),
+	// so every fixpoint pass rebuilds them like the other recorders
+	// instead of accumulating an early unstable pass's verdict.
+	fs.callbackInvokes = nil
+	fs.callbackInvokesInternal = nil
 	pf.notePageSinks(st, fs, st.fd.Body)
 	named := map[types.Object]int{}
 	if st.fd.Type.Results != nil {
@@ -4632,6 +4638,14 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			}
 			slot, traced := rootSlot(call.Args[i])
 			if !traced {
+				// A byte view the body mints locally (a mapped page from
+				// the mapping owner, a reader.page result) is provably
+				// mapped at the definition site and stays honest;
+				// anything else is not provably the caller's mapped view
+				// and fails closed at the store-implementation call site.
+				if pv := pf.evalExpr(st, call.Args[i]); pv.mapped {
+					continue
+				}
 				internal = true
 				continue
 			}

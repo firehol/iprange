@@ -708,11 +708,19 @@ byte-parameter slots it is invoked with) and callbackInvokesInternal
 copyParams (recordCallbackInvokeComposition), and
 checkCallbackInvokeCalls enforces the store contract at the
 store-implementation call site: the forwarded callback formal must
-receive only mapped views through the helper. New battery pins P297
-(fail: helper-forwarded owned buffers) and P298 (benign:
-helper-forwarded mapped views); the two-hop chain and the
-untraceable-invocation shapes are probe-verified as well. Battery
-now 608 cases (519 rejections, 89 benign acceptances), zero misses.
+receive only mapped views through the helper. Linnaeus's round-3
+re-check then found the first cut false-positived on an honest store
+whose internal helper MINTS the mapped views itself (fetch-inside-
+helper: fn(a, b) with a, b from s.r.page); probe-verified, then
+fixed: the definition-site record evaluates untraceable byte
+arguments for mapped provenance (mints stay honest, owned/unknown
+buffers still fail closed) and the records are rebuilt every fixpoint
+pass instead of accumulating an early unstable pass's verdict. New
+battery pins P297 (fail: helper-forwarded owned buffers) and P298
+(benign: helper-forwarded mapped views); the two-hop chain, the
+untraceable-invocation, closure-capture, wrap-then-invoke, and
+global-registration shapes are probe-verified as well. Battery now
+608 cases (519 rejections, 89 benign acceptances), zero misses.
 Round-2 verdicts for the other four reviewers were not capturable
 (interrupted sessions / no output); their round-3 re-review is
 required at the new HEAD.
