@@ -1182,4 +1182,374 @@ var batteryPageCases = []batteryCase{
 	}},
 	{name: "P312 benign: assertion aliases forwarded through a helper with mapped views pass", desc: "CopyPage(src, dst, fn) implementations sourcing mapped views from s.r.page and forwarding them through an assertion alias of the formal (var box any = fn; f := box.(T); runJ312(f, x, y), or f := s.cb.(T) on an any field holding the formal): the store contract is satisfied through the indirection, and the assertion/non-interface-holder recordings must not over-reject the honest forwarding", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_jason_ok.go", content: "package reader\n\nimport \"github.com/firehol/iprange/v4/go/internal/tree\"\n\ntype cbSig = func(src, output []byte) error\n\n// K1: box-assertion alias of the formal forwarded to a helper with\n// mapped views.\ntype honestK1 struct{ r *ImmutableReader }\n\nfunc (s honestK1) TargetTxn() uint64                        { return 0 }\nfunc (s honestK1) PageLimit() uint64                        { return 0 }\nfunc (s honestK1) Inspect(uint32, func([]byte) error) error { return nil }\nfunc (s honestK1) Allocate() (uint32, error)                { return 0, nil }\nfunc (s honestK1) DiscardPrivate(uint32) error              { return nil }\nfunc (s honestK1) Update(uint32, func([]byte) error) error  { return nil }\nfunc (s honestK1) CopyPage(source, destination uint32, fn cbSig) error {\n\tx, err := s.r.page(source)\n\tif err != nil {\n\t\treturn err\n\t}\n\ty, err := s.r.page(destination)\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar box any = fn\n\tf := box.(cbSig)\n\treturn runJ312(f, x, y)\n}\n\n// K2: field-assertion alias (any field holding the formal) forwarded\n// to a helper with mapped views.\ntype honestK2 struct{ r *ImmutableReader; cb any }\n\nfunc (s *honestK2) TargetTxn() uint64                        { return 0 }\nfunc (s *honestK2) PageLimit() uint64                        { return 0 }\nfunc (s *honestK2) Inspect(uint32, func([]byte) error) error { return nil }\nfunc (s *honestK2) Allocate() (uint32, error)                { return 0, nil }\nfunc (s *honestK2) DiscardPrivate(uint32) error              { return nil }\nfunc (s *honestK2) Update(uint32, func([]byte) error) error  { return nil }\nfunc (s *honestK2) CopyPage(source, destination uint32, fn cbSig) error {\n\tx, err := s.r.page(source)\n\tif err != nil {\n\t\treturn err\n\t}\n\ty, err := s.r.page(destination)\n\tif err != nil {\n\t\treturn err\n\t}\n\ts.cb = fn\n\tf := s.cb.(cbSig)\n\treturn runJ312(f, x, y)\n}\n\nfunc runJ312(fn cbSig, a, b []byte) error { return fn(a, b) }\n\nfunc honestProbeJ312(x *ImmutableReader, src, dst uint32) error {\n\tvar st1 tree.Store = honestK1{r: x}\n\tvar st2 tree.Store = &honestK2{r: x}\n\t_ = st1.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })\n\treturn st2.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })\n}\n"},
-	}}}
+	}},
+	{name: "P313: store-implementation direct trailing mint and helper trailing mint launder the store callback", desc: "CopyPage(src, dst, fn) implementations that (a) invoke the callback with an owned buffer DIRECTLY in the implementation body and then re-mint the local from the mapping AFTER the invocation, or (b) hide the same trailing mint in a helper the implementation forwards the callback into: the call-time value of the local must stay the pre-invocation owned buffer, not the end-state mapped value, or the definition-site mapped exemption blesses clean owned buffers into the callback", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_m313.go", content: `package reader
+
+import "github.com/firehol/iprange/v4/go/internal/tree"
+
+// M313a: the trailing mint happens directly in the implementation body
+// after the callback invocation (end-state mappedness poisoning).
+type liarM313a struct{ buf []byte; r *ImmutableReader }
+
+func (s liarM313a) TargetTxn() uint64                        { return 0 }
+func (s liarM313a) PageLimit() uint64                        { return 0 }
+func (s liarM313a) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM313a) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM313a) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM313a) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM313a) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {
+	v := s.buf
+	err := fn(v, v)
+	p, perr := s.r.page(0)
+	if perr != nil {
+		return perr
+	}
+	v = p
+	_ = v
+	return err
+}
+
+// M313b: the same trailing mint hidden in a helper the implementation
+// forwards the callback into.
+type liarM313b struct{ buf []byte; r *ImmutableReader }
+
+func (s liarM313b) TargetTxn() uint64                        { return 0 }
+func (s liarM313b) PageLimit() uint64                        { return 0 }
+func (s liarM313b) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM313b) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM313b) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM313b) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM313b) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {
+	return launderM313(fn, &s)
+}
+
+func launderM313(fn func(src, output []byte) error, s *liarM313b) error {
+	v := s.buf
+	err := fn(v, v)
+	p, perr := s.r.page(0)
+	if perr != nil {
+		return perr
+	}
+	v = p
+	_ = v
+	return err
+}
+
+func liarProbeM313(page []byte, x *ImmutableReader) error {
+	var st1 tree.Store = liarM313a{buf: page, r: x}
+	var st2 tree.Store = liarM313b{buf: page, r: x}
+	_ = st1.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+	return st2.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+}
+`},
+	}},
+	{name: "P314 benign: mint-before-invocation direct and helper positions pass", desc: "CopyPage(src, dst, fn) implementations that mint the mapped views BEFORE invoking the callback formal, either (a) directly in the implementation body or (b) inside a helper: the position-faithful call-time value is already mapped, so the end-state cache discipline must not over-reject the honest forwarding", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_m314.go", content: `package reader
+
+import "github.com/firehol/iprange/v4/go/internal/tree"
+
+// M314a: mapped views minted BEFORE the callback invocation directly
+// in the implementation body.
+type honestM314a struct{ r *ImmutableReader }
+
+func (s honestM314a) TargetTxn() uint64                        { return 0 }
+func (s honestM314a) PageLimit() uint64                        { return 0 }
+func (s honestM314a) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM314a) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM314a) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM314a) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM314a) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {
+	p, perr := s.r.page(0)
+	if perr != nil {
+		return perr
+	}
+	v := p
+	err := fn(v, v)
+	_ = v
+	return err
+}
+
+// M314b: the same mint-before position inside a helper.
+type honestM314b struct{ r *ImmutableReader }
+
+func (s honestM314b) TargetTxn() uint64                        { return 0 }
+func (s honestM314b) PageLimit() uint64                        { return 0 }
+func (s honestM314b) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM314b) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM314b) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM314b) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM314b) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {
+	return launderMintFirstM314(fn, &s)
+}
+
+func launderMintFirstM314(fn func(src, output []byte) error, s *honestM314b) error {
+	p, perr := s.r.page(0)
+	if perr != nil {
+		return perr
+	}
+	v := p
+	err := fn(v, v)
+	_ = v
+	return err
+}
+
+func honestProbeM314(x *ImmutableReader) error {
+	var st1 tree.Store = honestM314a{r: x}
+	var st2 tree.Store = honestM314b{r: x}
+	_ = st1.CopyPage(0, 1, func(a, b []byte) error { copy(b, a); return nil })
+	return st2.CopyPage(0, 1, func(a, b []byte) error { copy(b, a); return nil })
+}
+`},
+	}},
+	{name: "P315: struct-field carriers forwarded or invoked with owned buffers launder the store callback", desc: "CopyPage(src, dst, fn) implementations binding the callback formal into a struct field and reaching the invocation through a named or anonymous carrier helper (h := car{cb: fn}; runCar(h, out, out)), a carrier method receiver (h.run(out, out)), a composite-literal carrier invoked directly in the implementation body, or a two-helper chain: the clean owned buffers travel inside the carrier struct, so the per-function alias record cannot see them; the canonical-field composition and the carrier call-site fence must require mapped views at every invocation point reachable from the store implementation", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_m315.go", content: `package reader
+
+import "github.com/firehol/iprange/v4/go/internal/tree"
+
+type cbSig = func(src, output []byte) error
+
+// M315a: named carrier struct, invoked through a helper.
+type carNamedM315 struct{ cb cbSig }
+
+type liarM315a struct{}
+
+func (s liarM315a) TargetTxn() uint64                        { return 0 }
+func (s liarM315a) PageLimit() uint64                        { return 0 }
+func (s liarM315a) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM315a) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM315a) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM315a) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM315a) CopyPage(source, destination uint32, fn cbSig) error {
+	h := carNamedM315{cb: fn}
+	out := make([]byte, 4096)
+	return runCarM315(h, out, out)
+}
+
+func runCarM315(h carNamedM315, a, b []byte) error { return h.cb(a, b) }
+
+// M315b: anonymous struct carrier, invoked through a helper.
+type liarM315b struct{}
+
+func (s liarM315b) TargetTxn() uint64                        { return 0 }
+func (s liarM315b) PageLimit() uint64                        { return 0 }
+func (s liarM315b) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM315b) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM315b) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM315b) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM315b) CopyPage(source, destination uint32, fn cbSig) error {
+	h := struct{ cb cbSig }{cb: fn}
+	out := make([]byte, 4096)
+	return runAnonM315(h, out, out)
+}
+
+func runAnonM315(h struct{ cb cbSig }, a, b []byte) error { return h.cb(a, b) }
+
+// M315c: carrier method receiver, invoked in the implementation body.
+type carMethodM315 struct{ cb cbSig }
+
+func (h carMethodM315) run(a, b []byte) error { return h.cb(a, b) }
+
+type liarM315c struct{}
+
+func (s liarM315c) TargetTxn() uint64                        { return 0 }
+func (s liarM315c) PageLimit() uint64                        { return 0 }
+func (s liarM315c) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM315c) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM315c) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM315c) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM315c) CopyPage(source, destination uint32, fn cbSig) error {
+	h := carMethodM315{cb: fn}
+	out := make([]byte, 4096)
+	return h.run(out, out)
+}
+
+// M315d: composite-literal carrier invoked directly with owned buffers.
+type carLitM315 struct{ cb cbSig }
+
+type liarM315d struct{}
+
+func (s liarM315d) TargetTxn() uint64                        { return 0 }
+func (s liarM315d) PageLimit() uint64                        { return 0 }
+func (s liarM315d) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM315d) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM315d) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM315d) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM315d) CopyPage(source, destination uint32, fn cbSig) error {
+	h := carLitM315{cb: fn}
+	out := make([]byte, 4096)
+	return h.cb(out, out)
+}
+
+// M315e: two-helper chain with the carrier and owned buffers.
+type carChainM315 struct{ cb cbSig }
+
+type liarM315e struct{}
+
+func (s liarM315e) TargetTxn() uint64                        { return 0 }
+func (s liarM315e) PageLimit() uint64                        { return 0 }
+func (s liarM315e) Inspect(uint32, func([]byte) error) error { return nil }
+func (s liarM315e) Allocate() (uint32, error)                { return 0, nil }
+func (s liarM315e) Update(uint32, func([]byte) error) error  { return nil }
+func (s liarM315e) DiscardPrivate(uint32) error              { return nil }
+
+func (s liarM315e) CopyPage(source, destination uint32, fn cbSig) error {
+	h := carChainM315{cb: fn}
+	out := make([]byte, 4096)
+	return h1CarM315(h, out, out)
+}
+
+func h1CarM315(h carChainM315, a, b []byte) error { return h2CarM315(h, a, b) }
+
+func h2CarM315(h carChainM315, a, b []byte) error { return h.cb(a, b) }
+
+func liarProbeM315(page []byte) error {
+	var st1 tree.Store = liarM315a{}
+	var st2 tree.Store = liarM315b{}
+	var st3 tree.Store = liarM315c{}
+	var st4 tree.Store = liarM315d{}
+	var st5 tree.Store = liarM315e{}
+	_ = st1.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+	_ = st2.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+	_ = st3.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+	_ = st4.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+	return st5.CopyPage(0, 1, func(src, output []byte) error { copy(output, page); return nil })
+}
+`},
+	}},
+	{name: "P316 benign: carrier helpers with mapped views pass", desc: "CopyPage(src, dst, fn) implementations sourcing mapped views from s.r.page and forwarding them through a named or anonymous carrier helper, a carrier method receiver, or a two-helper chain: the canonical-field composition and the carrier call-site fence must not over-reject the honest forwarding; the direct composite-literal invocation has no honest twin because a direct field call inside a store implementation fails closed by design (P304-class conservatism)", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_m316.go", content: `package reader
+
+import "github.com/firehol/iprange/v4/go/internal/tree"
+
+type cbSig = func(src, output []byte) error
+
+// M316a: named carrier helper with mapped views.
+type carNamedM316 struct{ cb cbSig }
+
+type honestM316a struct{ r *ImmutableReader }
+
+func (s honestM316a) TargetTxn() uint64                        { return 0 }
+func (s honestM316a) PageLimit() uint64                        { return 0 }
+func (s honestM316a) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM316a) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM316a) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM316a) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM316a) CopyPage(source, destination uint32, fn cbSig) error {
+	x, err := s.r.page(source)
+	if err != nil {
+		return err
+	}
+	y, err := s.r.page(destination)
+	if err != nil {
+		return err
+	}
+	h := carNamedM316{cb: fn}
+	return runCarM316(h, x, y)
+}
+
+func runCarM316(h carNamedM316, a, b []byte) error { return h.cb(a, b) }
+
+// M316b: anonymous struct carrier helper with mapped views.
+type honestM316b struct{ r *ImmutableReader }
+
+func (s honestM316b) TargetTxn() uint64                        { return 0 }
+func (s honestM316b) PageLimit() uint64                        { return 0 }
+func (s honestM316b) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM316b) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM316b) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM316b) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM316b) CopyPage(source, destination uint32, fn cbSig) error {
+	x, err := s.r.page(source)
+	if err != nil {
+		return err
+	}
+	y, err := s.r.page(destination)
+	if err != nil {
+		return err
+	}
+	h := struct{ cb cbSig }{cb: fn}
+	return runAnonM316(h, x, y)
+}
+
+func runAnonM316(h struct{ cb cbSig }, a, b []byte) error { return h.cb(a, b) }
+
+// M316c: carrier method receiver with mapped views.
+type carMethodM316 struct{ cb cbSig }
+
+func (h carMethodM316) run(a, b []byte) error { return h.cb(a, b) }
+
+type honestM316c struct{ r *ImmutableReader }
+
+func (s honestM316c) TargetTxn() uint64                        { return 0 }
+func (s honestM316c) PageLimit() uint64                        { return 0 }
+func (s honestM316c) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM316c) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM316c) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM316c) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM316c) CopyPage(source, destination uint32, fn cbSig) error {
+	x, err := s.r.page(source)
+	if err != nil {
+		return err
+	}
+	y, err := s.r.page(destination)
+	if err != nil {
+		return err
+	}
+	h := carMethodM316{cb: fn}
+	return h.run(x, y)
+}
+
+// M316d: two-helper chain with mapped views.
+type carChainM316 struct{ cb cbSig }
+
+type honestM316d struct{ r *ImmutableReader }
+
+func (s honestM316d) TargetTxn() uint64                        { return 0 }
+func (s honestM316d) PageLimit() uint64                        { return 0 }
+func (s honestM316d) Inspect(uint32, func([]byte) error) error { return nil }
+func (s honestM316d) Allocate() (uint32, error)                { return 0, nil }
+func (s honestM316d) Update(uint32, func([]byte) error) error  { return nil }
+func (s honestM316d) DiscardPrivate(uint32) error              { return nil }
+
+func (s honestM316d) CopyPage(source, destination uint32, fn cbSig) error {
+	x, err := s.r.page(source)
+	if err != nil {
+		return err
+	}
+	y, err := s.r.page(destination)
+	if err != nil {
+		return err
+	}
+	h := carChainM316{cb: fn}
+	return h1CarM316(h, x, y)
+}
+
+func h1CarM316(h carChainM316, a, b []byte) error { return h2CarM316(h, a, b) }
+
+func h2CarM316(h carChainM316, a, b []byte) error { return h.cb(a, b) }
+
+func honestProbeM316(x *ImmutableReader, src, dst uint32) error {
+	var st1 tree.Store = honestM316a{r: x}
+	var st2 tree.Store = honestM316b{r: x}
+	var st3 tree.Store = honestM316c{r: x}
+	var st4 tree.Store = honestM316d{r: x}
+	_ = st1.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })
+	_ = st2.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })
+	_ = st3.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })
+	return st4.CopyPage(src, dst, func(a, b []byte) error { copy(b, a); return nil })
+}
+`},
+	}},
+}

@@ -1002,6 +1002,50 @@ OS configs; go test ./... both tag sets, -race, vet (module and
 gate), gofmt, and the import-graph boundary check over the 11
 GOOS/GOARCH pairs all green.
 
+### 2026-08-17 - level-1 re-review round: trailing-mint cache poisoning and cross-function carrier escapes closed (HEAD 149492f, committed with this record)
+
+Two level-1 reviewer classes (Linnaeus/Sartre P2, silent at 149492f)
+were probe-verified and fixed, plus the earlier Jason class closed at
+149492f:
+
+- Jason escape (fixed at 149492f): type-assertion callees, assertion
+  aliases, indexed container slots, and identity-return wrappers
+  reached the storage callback with clean owned buffers; slotOfExpr
+  authority, fieldAliases/indexAliases/returnAliases, composite-literal
+  seeding, and the rules-side counterparts close it. Battery P311
+  (nine liar shapes) / P312 (honest assertion-alias twins).
+- Linnaeus/Sartre P2-1 (fixed in this round): the definition-site
+  mapped exemption read the END-STATE value of a local that a TRAILING
+  mint (v := s.buf; fn(v, v); v = s.r.page(0)) re-blessed after the
+  invocation; the callback-invocation walk now snapshot-evaluates the
+  exemption path (snapshotEvalExpr) so the call-time owned buffer is
+  not poisoned by the later mapped value.
+- Linnaeus/Sartre P2-2 (fixed in this round): the callback formal
+  carried inside a STRUCT FIELD (h := car{cb: fn}; runCar(h, out, out),
+  h.run(out, out), composite-literal carriers, two-helper chains)
+  laundered clean owned buffers; field records are now keyed by
+  canonical struct type + field name (canonFieldType structural
+  identity, named and anonymous structs share keys), composite
+  literals are seeded, fieldInvokes compose through call chains
+  (recordFieldAliasComposition forwards caller records and re-records
+  callee invocations), and the rules side enforces mapped views at
+  every carrier call site (checkCallbackInvokeCalls field fence,
+  moduleFieldCarrier, storeCarrierTracedFieldCall suppressing the
+  generic unprovable-callee fence only for parameter-sourced carrier
+  calls).
+
+Evidence: probe module shapes R-A..R-I (liars flagged: direct
+trailing mint, helper trailing mint, named/anonymous carrier helpers,
+carrier method receiver, composite-literal carrier, two-helper
+chains; honest mint-before and mapped-view carrier twins clean).
+Pinned durably as P313 (direct + helper trailing mint liars), P314
+(mint-before honest twins), P315 (five carrier liars), P316 (four
+mapped-carrier honest twins). Battery: 622 -> 626 cases (530
+rejections, 96 benign acceptances), zero misses under
+--self-test-jobs 24 (1:55 wall). Real module scan rc=0; go test
+./..., -race, vet, gofmt, import-graph boundary check, and GOOS=windows
+cross build all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

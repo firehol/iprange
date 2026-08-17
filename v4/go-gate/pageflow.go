@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -173,15 +174,37 @@ type funcSummary struct {
 	// alias so the helper's byte arguments are still required to be
 	// mapped views.
 	callbackAliases map[types.Object]callbackAlias
-	// fieldAliases records struct-field slots the body assigns a
-	// func-typed formal parameter (h.f = fn): keyed by the field object,
-	// holding the formal's parameter slot. The store-callback fence uses
-	// the record both here (a later h.f(...) invocation inside the same
-	// function carries the formal slot) and in the rules pass (a store
-	// implementation invoking the callback through a field must hand it
-	// mapped views). A field assigned several times keeps the last
-	// recorded binding; the fence stays fail-closed.
-	fieldAliases map[types.Object]int
+	// fieldAliases records struct-field storage slots the body (or a
+	// caller passing a carrier struct) associates with a func-typed
+	// formal parameter (h.f = fn): keyed by the canonical struct type
+	// and field name, holding the formal's parameter slot. forwarded
+	// marks records received from a caller (the function's own parameter
+	// carries the formal, so local callee resolution must not treat it
+	// as a direct slot). The store-callback fence uses the record both
+	// here (a later h.f(...) invocation inside the same function carries
+	// the formal slot) and in the rules pass (a store implementation
+	// invoking the callback through a field must hand it mapped views).
+	// A field assigned several times keeps the last recorded binding;
+	// the fence stays fail-closed.
+	fieldAliases map[fieldSlotKey]fieldSlotAlias
+	// fieldInvokes records struct-field callees the body invokes with
+	// byte-slice arguments but cannot resolve to a func-typed formal of
+	// its own (h.f(a, b) with h a struct whose field f is bound to the
+	// callback formal by a caller): keyed by the canonical struct type
+	// and field name, holding the callee's parameter slots the byte
+	// views come from. The store-callback fence at the helper call
+	// sites composes the record against the caller's fieldAliases, so a
+	// store implementation forwarding its callback formal through a
+	// struct carrier is enforced exactly like a func-typed forward. The
+	// record re-records through call chains (recordFieldAliasComposition)
+	// so multi-helper carriers stay visible.
+	fieldInvokes map[fieldSlotKey][]int
+	// fieldInvokesInternal marks struct-field callees the body invokes
+	// with byte arguments it cannot trace to a parameter (a field read,
+	// a call, a literal): the views are not provably the caller's mapped
+	// views, so a store implementation forwarding its callback formal
+	// through the carrier fails closed at the call site.
+	fieldInvokesInternal map[fieldSlotKey]bool
 	// paramAliases records locals the body binds to a func-typed formal
 	// slot (f := fn, g := s.cb.(T)): keyed by the local object, holding
 	// the formal's parameter slot. Internal to the function analysis;
@@ -224,6 +247,32 @@ type indexSlotKey struct {
 	index string
 }
 
+// fieldSlotKey identifies a struct-field storage slot by the canonical
+// structural key of the field's enclosing struct type and the field
+// name. The key is shared by the flow pass (assignments, callee
+// resolution, cross-function composition) and the rules pass
+// (store-callback counter-check). Keying by the canonical type instead
+// of the field objects lets a helper parameter declared as a named
+// struct match a caller's anonymous struct value with the same fields,
+// which is how a callback formal travels across functions inside a
+// struct carrier (var h car; h.cb = fn; runCar(h, buf, buf)).
+type fieldSlotKey struct {
+	typ   string
+	field string
+}
+
+// fieldSlotAlias records that a struct field holds the store callback
+// formal. slot is the func-typed formal slot in the recording function.
+// forwarded marks a record received from a caller at the given
+// parameter slot (a carrier this function forwards, not a field it
+// assigned): local callee resolution must not treat a forwarded record
+// as this function's own formal slot, but composition and the call-site
+// fence follow it through chains.
+type fieldSlotAlias struct {
+	slot      int
+	forwarded bool
+}
+
 // constIndexKey returns the canonical constant text of an index
 // expression (0, "cb"), or ("", false) when the index is not a
 // constant. Non-constant indices match the catch-all empty key.
@@ -233,6 +282,109 @@ func constIndexKey(info *types.Info, idx ast.Expr) (string, bool) {
 		return "", false
 	}
 	return tv.Value.ExactString(), true
+}
+
+// isStructType reports whether t is a struct type (after unaliasing and
+// unwrapping named types).
+func isStructType(t types.Type) bool {
+	t = types.Unalias(t)
+	if n, ok := t.(*types.Named); ok {
+		t = n.Underlying()
+	}
+	_, ok := t.(*types.Struct)
+	return ok
+}
+
+// canonFieldType returns the canonical structural key of a struct
+// type: the first registered types.Identical type wins, so a named
+// struct and an anonymous struct with the same fields share one key.
+// Pointer wrappers are stripped (field selection on *T and T name the
+// same storage). Non-struct types return "". The registry lives on the
+// pageFlow because field records must match across the whole scan.
+func (pf *pageFlow) canonFieldType(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if t == nil || !isStructType(t) {
+		return ""
+	}
+	if k, ok := pf.canonTypeIdx[t]; ok {
+		return k
+	}
+	for e, k := range pf.canonTypeIdx {
+		if types.Identical(e, t) {
+			if pf.canonTypeIdx == nil {
+				pf.canonTypeIdx = map[types.Type]string{}
+			}
+			pf.canonTypeIdx[t] = k
+			return k
+		}
+	}
+	k := fmt.Sprintf("t%d", len(pf.canonTypes))
+	pf.canonTypes = append(pf.canonTypes, t)
+	if pf.canonTypeIdx == nil {
+		pf.canonTypeIdx = map[types.Type]string{}
+	}
+	pf.canonTypeIdx[t] = k
+	return k
+}
+
+// fieldSlotKeyOf returns the canonical storage key of a plain struct
+// field selection (h.cb): the canonical key of the selection's
+// receiver struct type and the field name. Method values, interface
+// dispatch, and non-struct receivers return false.
+func (pf *pageFlow) fieldSlotKeyOf(info *types.Info, sel *ast.SelectorExpr) (fieldSlotKey, bool) {
+	if sel == nil {
+		return fieldSlotKey{}, false
+	}
+	s, isSel := info.Selections[sel]
+	if !isSel || s.Kind() != types.FieldVal {
+		return fieldSlotKey{}, false
+	}
+	k := pf.canonFieldType(s.Recv())
+	if k == "" {
+		return fieldSlotKey{}, false
+	}
+	return fieldSlotKey{typ: k, field: sel.Sel.Name}, true
+}
+
+// fieldCalleeKey resolves a func-callee expression to the canonical
+// struct-field storage key it reads: a plain field selection (h.cb) or
+// a type assertion chain over one (h.cb.(func([]byte, []byte) error)).
+// It is the callee-resolution counterpart of fieldSlotKeyOf used when
+// the local slotOfExpr cannot resolve the callee: the invocation may
+// still name a struct field the CALLER bound to the callback formal.
+func (pf *pageFlow) fieldCalleeKey(info *types.Info, e ast.Expr) (fieldSlotKey, bool) {
+	src := unparen(e)
+	for {
+		if ta, isTa := src.(*ast.TypeAssertExpr); isTa {
+			src = unparen(ta.X)
+			continue
+		}
+		break
+	}
+	sel, ok := src.(*ast.SelectorExpr)
+	if !ok {
+		return fieldSlotKey{}, false
+	}
+	return pf.fieldSlotKeyOf(info, sel)
+}
+
+// snapshotEvalExpr evaluates e like evalExpr but restores the
+// per-expression cache afterwards. The callback-invocation walk reads
+// END-STATE values (the body has already been analyzed), so an
+// evaluation there must not overwrite the call-time value the rule pass
+// will read for the same node: a trailing mint after an invocation must
+// not bless an owned buffer that already reached the callback.
+func (pf *pageFlow) snapshotEvalExpr(st *stmtState, e ast.Expr) pageValue {
+	prev, had := pf.values[e]
+	out := pf.evalExpr(st, e)
+	if had {
+		pf.values[e] = prev
+	} else {
+		delete(pf.values, e)
+	}
+	return out
 }
 
 // indexSlotKeyOf builds the slot key of an indexed LHS or callee
@@ -589,7 +741,14 @@ type pageFlow struct {
 	// root at the statement's position in control flow, before a later
 	// rebind changes the variable's alias state.
 	appendCallRoots map[*ast.CallExpr]types.Object
-	accum           bool // final sweep: keep expression caches for the rule pass
+	// canonTypes is the registry of struct types seen while building
+	// fieldSlotKey values, with canonTypeIdx their structural keys: two
+	// types that are types.Identical (a named struct and an anonymous
+	// struct with the same fields) share one key, so field records made
+	// in different functions and through different declarations match.
+	canonTypes   []types.Type
+	canonTypeIdx map[types.Type]string
+	accum        bool // final sweep: keep expression caches for the rule pass
 }
 
 // methodValueCall is one resolved method-value call: the method and the
@@ -936,9 +1095,21 @@ func summaryDup(fs *funcSummary) *funcSummary {
 		}
 	}
 	if len(fs.fieldAliases) > 0 {
-		out.fieldAliases = map[types.Object]int{}
+		out.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
 		for k, v := range fs.fieldAliases {
 			out.fieldAliases[k] = v
+		}
+	}
+	if len(fs.fieldInvokes) > 0 {
+		out.fieldInvokes = map[fieldSlotKey][]int{}
+		for k, vs := range fs.fieldInvokes {
+			out.fieldInvokes[k] = append([]int{}, vs...)
+		}
+	}
+	if len(fs.fieldInvokesInternal) > 0 {
+		out.fieldInvokesInternal = map[fieldSlotKey]bool{}
+		for k := range fs.fieldInvokesInternal {
+			out.fieldInvokesInternal[k] = true
 		}
 	}
 	if len(fs.indexAliases) > 0 {
@@ -1044,6 +1215,28 @@ func callbackRecordsEqual(a, b *funcSummary) bool {
 	}
 	for k, v := range a.fieldAliases {
 		if b.fieldAliases[k] != v {
+			return false
+		}
+	}
+	if len(a.fieldInvokes) != len(b.fieldInvokes) {
+		return false
+	}
+	for k, vs := range a.fieldInvokes {
+		bv, ok := b.fieldInvokes[k]
+		if !ok || len(vs) != len(bv) {
+			return false
+		}
+		for i := range vs {
+			if vs[i] != bv[i] {
+				return false
+			}
+		}
+	}
+	if len(a.fieldInvokesInternal) != len(b.fieldInvokesInternal) {
+		return false
+	}
+	for k := range a.fieldInvokesInternal {
+		if !b.fieldInvokesInternal[k] {
 			return false
 		}
 	}
@@ -4853,9 +5046,9 @@ func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int,
 			return al.slot, true
 		}
 	case *ast.SelectorExpr:
-		if sel, isSel := pf.pc.info.Selections[t]; isSel && sel.Kind() == types.FieldVal {
-			if idx, ok := fs.fieldAliases[sel.Obj()]; ok {
-				return idx, true
+		if key, ok := pf.fieldSlotKeyOf(pf.pc.info, t); ok {
+			if r, ok := fs.fieldAliases[key]; ok && !r.forwarded {
+				return r.slot, true
 			}
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
@@ -5507,12 +5700,14 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			// h.f = fn: the field holds the formal; a later h.f(...)
 			// invocation carries the formal slot. Only plain field
 			// selections count (method-value writes cannot name a
-			// storage slot).
-			if sel, isSel := pf.pc.info.Selections[l]; isSel && sel.Kind() == types.FieldVal {
+			// storage slot). The canonical type key lets a caller's
+			// anonymous struct value match a helper's named parameter
+			// carrying the same field across functions.
+			if key, ok := pf.fieldSlotKeyOf(pf.pc.info, l); ok {
 				if fs.fieldAliases == nil {
-					fs.fieldAliases = map[types.Object]int{}
+					fs.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
 				}
-				fs.fieldAliases[sel.Obj()] = idx
+				fs.fieldAliases[key] = fieldSlotAlias{slot: idx}
 			}
 		case *ast.IndexExpr, *ast.IndexListExpr:
 			// arr[0] = fn: the indexed slot holds the formal. The
@@ -5542,6 +5737,32 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			base = l
 		default:
 			return
+		}
+		// A struct composite literal seeds the field holder records the
+		// same way an assignment does: h := car{cb: fn} binds field cb
+		// of the literal's type to the formal slot, so the caller's
+		// cross-function composition and the local callee resolution
+		// see the carrier.
+		if t := pf.pc.info.TypeOf(lit); t != nil {
+			if k := pf.canonFieldType(t); k != "" {
+				for _, el := range lit.Elts {
+					kv, isKV := el.(*ast.KeyValueExpr)
+					if !isKV {
+						continue
+					}
+					fid, isID := unparen(kv.Key).(*ast.Ident)
+					if !isID {
+						continue
+					}
+					if slot, ok := pf.slotOfExpr(st, fs, kv.Value); ok {
+						key := fieldSlotKey{typ: k, field: fid.Name}
+						if fs.fieldAliases == nil {
+							fs.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
+						}
+						fs.fieldAliases[key] = fieldSlotAlias{slot: slot}
+					}
+				}
+			}
 		}
 		root := pf.rootObjectOf(base)
 		if root == nil {
@@ -5709,7 +5930,15 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			// arr[0] = fn), a type assertion of any of these
 			// (s.cb.(T)(a, b)), or the result of a return wrapper
 			// (id := func(f F) F { return f }; id(x)(a, b) invokes x).
+			// When the callee names a struct FIELD the body itself cannot
+			// resolve to a local formal (h.cb with h a parameter or a
+			// carrier), the invocation is still recorded under the
+			// canonical field key: a caller that bound the field to the
+			// store callback formal composes the record into its own
+			// call-site fence (recordFieldAliasComposition).
 			var fnSlot int
+			var fk fieldSlotKey
+			var isFieldCall bool
 			var sig *types.Signature
 			fun := unparen(v.Fun)
 			if _, isCall := fun.(*ast.CallExpr); isCall {
@@ -5736,7 +5965,10 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 				var ok bool
 				fnSlot, ok = pf.slotOfExpr(st, fs, fun)
 				if !ok {
-					return true
+					fk, isFieldCall = pf.fieldCalleeKey(pf.pc.info, v.Fun)
+					if !isFieldCall {
+						return true
+					}
 				}
 			}
 			if sig = pf.funcTypeOf(fun); sig == nil {
@@ -5776,7 +6008,7 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 					// most once BEFORE the invocation: a trailing mint after the
 					// call must not exempt an owned buffer that already reached
 					// the callback.
-					pv := pf.evalExpr(st, v.Args[i])
+					pv := pf.snapshotEvalExpr(st, v.Args[i])
 					if pv.mapped && census.stable(v.Args[i], v.Pos()) {
 						continue
 					}
@@ -5784,27 +6016,51 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 					continue
 				}
 				dup := false
-				for _, prev := range fs.callbackInvokes[fnSlot] {
-					if prev == slot {
-						dup = true
-						break
+				if !isFieldCall {
+					for _, prev := range fs.callbackInvokes[fnSlot] {
+						if prev == slot {
+							dup = true
+							break
+						}
+					}
+				} else {
+					for _, prev := range fs.fieldInvokes[fk] {
+						if prev == slot {
+							dup = true
+							break
+						}
 					}
 				}
 				if !dup {
 					slots = append(slots, slot)
 				}
 			}
-			if len(slots) > 0 {
-				if fs.callbackInvokes == nil {
-					fs.callbackInvokes = map[int][]int{}
+			if !isFieldCall {
+				if len(slots) > 0 {
+					if fs.callbackInvokes == nil {
+						fs.callbackInvokes = map[int][]int{}
+					}
+					fs.callbackInvokes[fnSlot] = append(fs.callbackInvokes[fnSlot], slots...)
 				}
-				fs.callbackInvokes[fnSlot] = append(fs.callbackInvokes[fnSlot], slots...)
-			}
-			if internal {
-				if fs.callbackInvokesInternal == nil {
-					fs.callbackInvokesInternal = map[int]bool{}
+				if internal {
+					if fs.callbackInvokesInternal == nil {
+						fs.callbackInvokesInternal = map[int]bool{}
+					}
+					fs.callbackInvokesInternal[fnSlot] = true
 				}
-				fs.callbackInvokesInternal[fnSlot] = true
+			} else {
+				if len(slots) > 0 {
+					if fs.fieldInvokes == nil {
+						fs.fieldInvokes = map[fieldSlotKey][]int{}
+					}
+					fs.fieldInvokes[fk] = append(fs.fieldInvokes[fk], slots...)
+				}
+				if internal {
+					if fs.fieldInvokesInternal == nil {
+						fs.fieldInvokesInternal = map[fieldSlotKey]bool{}
+					}
+					fs.fieldInvokesInternal[fk] = true
+				}
 			}
 		}
 		return true
@@ -5997,6 +6253,155 @@ func (pf *pageFlow) recordCallbackInvokeComposition(st *stmtState, call *ast.Cal
 			continue
 		}
 		recordInternal(fnIdx)
+	}
+}
+
+// recordFieldAliasComposition composes struct-field callback records
+// through a helper call, the structural-field counterpart of
+// recordCallbackInvokeComposition:
+//
+//   - (a) a callee that INVOKES a struct field (h.cb(a, b), recorded in
+//     fs.fieldInvokes) is re-recorded in the caller with the caller's
+//     own byte-argument slots whenever the caller passes a carrier
+//     value for that field key up the chain, so multi-helper carriers
+//     (store -> h1 -> h2, with h2 invoking h.cb) stay visible at the
+//     store-implementation call site;
+//   - (b) a caller that hands a carrier value (a struct argument or
+//     receiver holding the callback formal in one of its fields) to a
+//     callee writes the callee's field-alias record as FORWARDED at the
+//     callee's carrier parameter slot, so the callee's own body walk
+//     and its onward call sites resolve the same canonical key.
+//
+// Only same-package callees are composed: cross-package summaries may
+// already have stabilized before this package's fixpoint runs.
+func (pf *pageFlow) recordFieldAliasComposition(st *stmtState, call *ast.CallExpr, fs *funcSummary, recvExpr ast.Expr, argOff int) {
+	if st.activeFS == nil || fs == nil || call == nil {
+		return
+	}
+	if len(fs.fieldInvokes) == 0 && len(st.activeFS.fieldAliases) == 0 {
+		return
+	}
+	// slotExpr maps a callee-relative slot to the caller's argument
+	// expression (the receiver is slot 0 of a method call).
+	slotExpr := func(slot int) ast.Expr {
+		if recvExpr != nil && slot == 0 {
+			return recvExpr
+		}
+		ai := slot - argOff
+		if ai < 0 || ai >= len(call.Args) {
+			return nil
+		}
+		return call.Args[ai]
+	}
+	paramSlot := func(e ast.Expr) (int, bool) {
+		if e == nil {
+			return 0, false
+		}
+		for {
+			if se, ok := unparen(e).(*ast.SliceExpr); ok {
+				e = se.X
+				continue
+			}
+			break
+		}
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return 0, false
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return 0, false
+		}
+		idx, ok := st.params[obj]
+		return idx, ok
+	}
+	// calleeParamType returns the canonical struct key of the callee's
+	// parameter at the given callee-relative slot, or "" when the slot
+	// does not name a carrier-capable struct parameter (or maps to no
+	// argument expression at all).
+	calleeParamType := func(slot int) string {
+		if recvExpr != nil && slot == 0 {
+			if pv := pf.pc.info.TypeOf(recvExpr); pv != nil {
+				return pf.canonFieldType(pv)
+			}
+			return ""
+		}
+		sig := pf.funcTypeOf(call.Fun)
+		if sig == nil || sig.Params() == nil {
+			return ""
+		}
+		ai := slot - argOff
+		if ai < 0 || ai >= sig.Params().Len() {
+			return ""
+		}
+		return pf.canonFieldType(types.Unalias(sig.Params().At(ai).Type()))
+	}
+	// (a) re-record the callee's field invocations in the caller with
+	// caller-relative byte slots. The caller must carry the same field
+	// key (directly or forwarded) for the callee's invocation to be part
+	// of the callback flow.
+	for fk, byteSlots := range fs.fieldInvokes {
+		if _, ok := st.activeFS.fieldAliases[fk]; !ok {
+			continue
+		}
+		internal := false
+		var slots []int
+		for _, bs := range byteSlots {
+			bIdx, bok := paramSlot(slotExpr(bs))
+			if !bok {
+				internal = true
+				continue
+			}
+			dup := false
+			for _, prev := range st.activeFS.fieldInvokes[fk] {
+				if prev == bIdx {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				slots = append(slots, bIdx)
+			}
+		}
+		if len(slots) > 0 {
+			if st.activeFS.fieldInvokes == nil {
+				st.activeFS.fieldInvokes = map[fieldSlotKey][]int{}
+			}
+			st.activeFS.fieldInvokes[fk] = append(st.activeFS.fieldInvokes[fk], slots...)
+		}
+		if internal {
+			if st.activeFS.fieldInvokesInternal == nil {
+				st.activeFS.fieldInvokesInternal = map[fieldSlotKey]bool{}
+			}
+			st.activeFS.fieldInvokesInternal[fk] = true
+		}
+	}
+	// (b) forward caller carrier records into the callee: every callee
+	// parameter (receiver included) whose canonical struct type matches
+	// one of the caller's field keys receives a forwarded alias record
+	// at its own slot, so the callee's body walk resolves the key and
+	// its own call sites compose onward. Forwarded records cascade
+	// (store -> h1 -> h2 chains need h2's record even though h1's is a
+	// forwarded one). A direct record already recorded by the callee's
+	// own body wins.
+	for fk := range st.activeFS.fieldAliases {
+		n := len(call.Args) + argOff
+		if recvExpr != nil {
+			n++
+		}
+		for slot := 0; slot < n; slot++ {
+			if calleeParamType(slot) != fk.typ {
+				continue
+			}
+			if cur, ok := fs.fieldAliases[fk]; ok && !cur.forwarded {
+				break
+			}
+			if fs.fieldAliases == nil {
+				fs.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
+			}
+			fs.fieldAliases[fk] = fieldSlotAlias{slot: slot, forwarded: true}
+			break
+		}
 	}
 }
 
@@ -6621,6 +7026,7 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		argOff = 1
 	}
 	pf.recordCallbackInvokeComposition(st, call, fs, recvExpr, argOff)
+	pf.recordFieldAliasComposition(st, call, fs, recvExpr, argOff)
 	args := make([]pageValue, len(call.Args)+argOff)
 	argVals := make([]symbol, len(call.Args)+argOff)
 	argFlows := make([]argFlow, len(call.Args)+argOff)

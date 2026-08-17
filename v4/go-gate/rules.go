@@ -1132,7 +1132,8 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		receiverSlot = true
 	}
 	fs, ok := sums[key]
-	if !ok || (len(fs.callbackInvokes) == 0 && len(fs.callbackInvokesInternal) == 0) {
+	if !ok || (len(fs.callbackInvokes) == 0 && len(fs.callbackInvokesInternal) == 0 &&
+		len(fs.fieldInvokes) == 0 && len(fs.fieldInvokesInternal) == 0) {
 		return
 	}
 	recvOffset := 0
@@ -1245,6 +1246,77 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		}
 		w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
 	}
+	// Struct-field carriers: the callee invokes a struct field with
+	// byte-slice arguments (h.cb(a, b)); when the caller binds that
+	// canonical field key to its own store callback formal (a direct
+	// record in the caller's summary), the byte arguments at this call
+	// site must be mapped views, exactly like a func-typed forward.
+	// Forwarded records (this call site is a helper in the middle of a
+	// chain) defer to the store-implementation call site through the
+	// composition. Only store-implementation callers carry the callback
+	// formal, so the fence runs inside the existing isStoreCallbackImpl
+	// guard of this function.
+	for fk, byteSlots := range fs.fieldInvokes {
+		if fs.fieldInvokesInternal[fk] {
+			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
+			continue
+		}
+		encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+		if !ok {
+			continue
+		}
+		// The callee signature decides which arguments are byte slots
+		// and which parameter carries the struct; the records use the
+		// summary layout, receiver at slot 0.
+		sig, _ := fn.Type().(*types.Signature)
+		if sig == nil {
+			continue
+		}
+		typeAt := func(slot int) types.Type {
+			if sig.Recv() != nil {
+				if slot == 0 {
+					return sig.Recv().Type()
+				}
+				if slot-1 < sig.Params().Len() {
+					return sig.Params().At(slot - 1).Type()
+				}
+				return nil
+			}
+			if slot < sig.Params().Len() {
+				return sig.Params().At(slot).Type()
+			}
+			return nil
+		}
+		n := sig.Params().Len()
+		if sig.Recv() != nil {
+			n++
+		}
+		for slot := 0; slot < n; slot++ {
+			pt := typeAt(slot)
+			if pt == nil || w.pc.pf.canonFieldType(pt) != fk.typ {
+				continue
+			}
+			carrierArg, ok := argAt(slot)
+			if !ok {
+				continue
+			}
+			rec, ok := encl.fieldAliases[fk]
+			if !ok || rec.forwarded {
+				continue
+			}
+			for _, bs := range byteSlots {
+				ba, ok := argAt(bs)
+				if !ok {
+					continue
+				}
+				if pv := w.pageValue(ba); !pv.mapped {
+					w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(carrierArg), calleeText(v.Fun))
+					break
+				}
+			}
+			break
+		}
+	}
 }
 
 // checkStoreCallbackViews enforces the store-callback counter-check at
@@ -1290,22 +1362,132 @@ func (w *fileRules) recordedCallbackAlias(v *types.Var) bool {
 
 // fieldHoldsCallbackFormal reports whether a field selection is a plain
 // struct field that the current function assigned the store callback
-// formal (s.cb = fn); method values and interface dispatches are not
-// storage slots and return false.
+// formal (s.cb = fn), keyed by the canonical struct type and field name
+// so a caller's anonymous struct carrier matches a helper's named
+// parameter with the same fields. Forwarded records (the field arrived
+// as a function parameter, not an assignment of this body) are not
+// direct local holders and resolve to false, exactly like the flow-side
+// slotOfExpr; method values and interface dispatches are not storage
+// slots either.
 func (w *fileRules) fieldHoldsCallbackFormal(sel *ast.SelectorExpr) bool {
-	fieldSel, isSel := w.pc.info.Selections[sel]
-	if !isSel || fieldSel.Kind() != types.FieldVal {
+	if w.pc.pf == nil || w.curFunc == nil {
 		return false
 	}
-	if w.pc.pf == nil || w.curFunc == nil {
+	key, ok := w.pc.pf.fieldSlotKeyOf(w.pc.info, sel)
+	if !ok {
 		return false
 	}
 	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
 	if !ok {
 		return false
 	}
-	_, ok = encl.fieldAliases[fieldSel.Obj()]
-	return ok
+	r, ok := encl.fieldAliases[key]
+	return ok && !r.forwarded
+}
+
+// moduleFieldCarrier returns the canonical field key of e (a plain
+// field selection or an assertion chain over one) when the key is
+// recorded as a DIRECT callback-formal carrier in some
+// store-implementation summary of the scanned module. Only direct
+// records count: a forwarded (helper-carried) record means the key
+// flows through a chain whose enforcement happens at the store call
+// site, and the generic unprovable-callee fence must not weaken itself
+// on such keys unless the store site will enforce them.
+func (w *fileRules) moduleFieldCarrier(key fieldSlotKey) bool {
+	if w.pc.pf == nil || w.pc.pf.store == nil {
+		return false
+	}
+	seen := map[string]bool{}
+	check := func(sums map[string]*funcSummary) bool {
+		for k, fs := range sums {
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			name := k
+			if i := strings.LastIndexByte(k, '.'); i >= 0 {
+				name = k[i+1:]
+			}
+			if !storeCallbackMethod(name) {
+				continue
+			}
+			if r, ok := fs.fieldAliases[key]; ok && !r.forwarded {
+				return true
+			}
+		}
+		return false
+	}
+	if check(w.pc.pf.summaries) {
+		return true
+	}
+	for _, sums := range w.pc.pf.store.pkgs {
+		if check(sums) {
+			return true
+		}
+	}
+	return false
+}
+
+// storeCarrierTracedFieldCall reports whether an unprovable
+// struct-field callee is a recorded store-callback carrier invocation:
+// the current function traced the call into fs.fieldInvokes, the
+// canonical key is a direct carrier of some store implementation in the
+// module, and every byte argument at this call is parameter-sourced
+// (its mappedness is decided by the store call sites through the
+// composition, not by a concrete local value). Such calls are enforced
+// by checkCallbackInvokeCalls at the carrier call sites, so the generic
+// unprovable-callee transfer fence must not double-flag them; anything
+// else keeps the fence.
+func (w *fileRules) storeCarrierTracedFieldCall(v *ast.CallExpr, fun ast.Expr) bool {
+	if w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	key, ok := w.pc.pf.fieldCalleeKey(w.pc.info, fun)
+	if !ok {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	if _, traced := encl.fieldInvokes[key]; !traced {
+		return false
+	}
+	if !w.moduleFieldCarrier(key) {
+		return false
+	}
+	hasSlice := false
+	for _, a := range v.Args {
+		a = unparen(a)
+		for {
+			if se, ok := a.(*ast.SliceExpr); ok {
+				a = unparen(se.X)
+				continue
+			}
+			break
+		}
+		id, ok := a.(*ast.Ident)
+		if !ok || w.curFunc == nil || w.curFunc.Type.Params == nil {
+			return false
+		}
+		obj, ok := w.pc.info.Uses[id].(*types.Var)
+		if !ok || !paramCanCarryPage(obj.Type()) {
+			return false
+		}
+		hasSlice = true
+		found := false
+		for _, f := range w.curFunc.Type.Params.List {
+			for _, name := range f.Names {
+				if w.pc.info.ObjectOf(name) == obj {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return hasSlice
 }
 
 // callbackSlotOf reports whether a func-typed expression ultimately
@@ -1840,8 +2022,15 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		default:
 			// h.cb(page) with cb a function-typed field of a struct: the
 			// callee is not statically visible, so the call is an
-			// unproven indirection like a function variable.
-			varIndirect = true
+			// unproven indirection like a function variable. A recorded
+			// store-callback carrier field is the approved exception: its
+			// call sites are scanned and the callback fence requires the
+			// carrier argument's byte views to be mapped, so the fence
+			// replaces the generic transfer check for parameter-sourced
+			// arguments.
+			if !w.storeCarrierTracedFieldCall(v, f) {
+				varIndirect = true
+			}
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		// fs[0](page): a call through a slice/array element or map
@@ -2047,7 +2236,8 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			continue
 		}
 		pageArg := w.pageValue(arg)
-		if pageArg.tainted && pageFull(pageArg) && (transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
+		if pageArg.tainted && pageFull(pageArg) && !w.storeCarrierTracedFieldCall(v, fun) &&
+			(transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
 			w.fail(v.Pos(), "mapped page view passed to %s (complete page into owned memory)", calleeText(fun))
 		}
 		// The owned byte-builder family copies its argument into an owned
