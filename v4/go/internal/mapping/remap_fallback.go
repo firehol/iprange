@@ -13,9 +13,10 @@ import (
 // remapPages resizes the mapping by unmapping the old extent and mapping the
 // new one with the given protection (PROT_READ for immutable mappings,
 // PROT_READ|PROT_WRITE for the live writer). On Munmap failure the old
-// mapping is still valid and the old slice is returned so the caller can
-// restore it for Close. On Mmap failure the old mapping is already unmapped
-// and nil is returned; the caller must not restore it.
+// mapping is still valid and is returned as the data slice; callers fail
+// closed by tearing it down (Munmap) and reporting the error. On Mmap
+// failure the old mapping is already unmapped and nil is returned; the
+// caller must not restore it.
 func remapPages(f *os.File, old []byte, oldSize, newSize uint64, prot int) ([]byte, error) {
 	if err := unix.Munmap(old); err != nil {
 		return old, &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}

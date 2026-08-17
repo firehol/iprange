@@ -67,6 +67,10 @@ func (m *Mapping) Shrink(newSize uint64) error {
 			unix.Munmap(data)
 		}
 		m.size = 0
+		// Both-failure reporting (Rust combines the two errors via
+		// combine_errors): the truncate error is the more specific one and
+		// the remap error is dropped; the observable state is identical
+		// either way (fail-closed, size zero).
 		if truncateErr != nil {
 			return truncateErr
 		}

@@ -6,9 +6,10 @@
 // Persistent content is never transferred through read/write/seek language
 // APIs. Page views alias the mapping and are valid only for the lifetime of
 // the Mapping. Writer views alias the mapping too, but internal/mapping has
-// no pin guard: Grow and Remap invalidate every outstanding view (mremap may
-// move the mapping), so writer code must re-fetch views after every resize
-// and must never retain a view across Grow/Remap (the reader facade's pins
+// no pin guard: Grow, Remap, and Shrink invalidate every outstanding view
+// (mremap may move the mapping), so writer code must re-fetch views after
+// every resize and must never retain a view across Grow/Remap/Shrink (the
+// reader facade's pins
 // guard only reader views). Retained slices (membership leaves) may survive the lookup
 // operation that produced them, but only while a live pin guards the
 // mapping: the reader cannot close while pins exist, and every public view

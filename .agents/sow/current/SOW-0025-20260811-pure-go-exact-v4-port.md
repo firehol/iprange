@@ -439,8 +439,10 @@ page checksum authority with the Castagnoli vector, and the gate at
 601 cases covering content transfer, complete-page ownership, and the
 full lifecycle-owner syscall family with vacuity-proven pins.
 
-Milestone 2 chunk 2 - writer open (2026-08-17, HEAD 7a90fb4): the
-writer open surface starts now: map_writer / select_committed /
+Milestone 2 chunk 2 - writer open (2026-08-17; design record at HEAD
+7a90fb4, implementation committed at 56e8516, review-fix round in the
+working tree): the
+writer open surface: map_writer / select_committed /
 trim_committed_tail (Rust authority writer_core/open.rs +
 database_file.rs map_writer), the shared bootstrap authority with the
 writer finish rules, and the mapping Shrink primitive. Chunk-2
@@ -469,9 +471,9 @@ the swarm guidelines):
   SelectCommitted -> TrimCommittedTail); the sidecar coordination of
   Rust live_writer.open_locked arrives with the M4 sidecar milestone.
 
-Milestone 2 chunk 2 - writer open IMPLEMENTED (2026-08-17, working tree
-over HEAD 7a90fb4): the chunk-2 design decisions above are implemented
-and locally validated:
+Milestone 2 chunk 2 - writer open IMPLEMENTED (2026-08-17, committed at
+56e8516; the level-1 review-fix round is uncommitted in the working tree):
+the chunk-2 design decisions above are implemented and locally validated:
 - internal/bootstrap: pure shared selection authority (Open with
   ImmutableReader/Writer modes, Result with Meta/Selection/SelectedMetaPage/
   CommittedBytes/PhysicalBytes), mirroring Rust bootstrap.rs
@@ -500,7 +502,7 @@ and locally validated:
   and adds bootstrap to the sync-free zone; gatescan topoRank places
   bootstrap at leaf rank and writer with the reader.
 - Tests: bootstrap selection matrix (equal/adjacent/gap/sole/identity/
-  checksum/geometry/unknown-kind/tail), shrink contract (truncate+data
+  corrupt-CRC identity refusals/geometry/unknown-kind/tail rules), shrink contract (truncate+data
   survival+regrow, no-op, above-physical/unaligned/read-only/closed
   refusals), writer open (tail trim, no-tail no-op, empty 2-page db,
   primitive sequence, sole-meta/no-meta/bad-checksum/short-file
@@ -508,9 +510,13 @@ and locally validated:
   (tailed open = 2 remaps + 1 file sync; no-tail = 1 remap; 2-page db =
   0; same-size no-ops count 0).
 Validation so far: go test ./... (both tag sets), -race, vet, gofmt,
-import-graph scan, 11/11 cross-compiles - all green at the working
-tree. Gate battery + shell self-test and the level-1/level-2 rounds
-are pending records below.
+import-graph scan, 11/11 cross-compiles, and the 601-case gate battery
++ 9 shell mutations - all green at 56e8516. Level-1 round 1: 4/5
+PASS; Leibniz FAILed on one P2 (writer open lacked the terminal
+path-identity re-verification) plus Peirce's same-path P3; the fix
+round (VerifyIdentity in Open/OpenWriter after remap/trim, deterministic
+replacement-race test, failed-open lock-release probes) is in the
+working tree ahead of the delta re-reviews. Level-2 rounds are pending.
 
 ## Review Process (user decision, 2026-08-12)
 

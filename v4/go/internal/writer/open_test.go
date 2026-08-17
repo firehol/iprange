@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -34,6 +35,31 @@ func copyFixture(t testing.TB, name, destName string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// assertReopen proves a failed open released the exclusive lifetime lock:
+// a second open of the same path must return promptly with the file's own
+// refusal (the fixture is still corrupt) instead of blocking on the leaked
+// lock. OFD locks conflict even within one process, so a leaked lock hangs
+// the probe until the timeout.
+func assertReopen(t *testing.T, path string) {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() {
+		c, err := Open(path, testBudget(), nil)
+		if c != nil {
+			c.Close()
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("reopen of the corrupt fixture succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("exclusive lifetime lock leaked by the refused open")
+	}
 }
 
 func fileSize(t *testing.T, path string) int64 {
@@ -93,7 +119,7 @@ func TestOpenTrimsUnpublishedTail(t *testing.T) {
 	}
 	before := info.Size()
 
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +165,7 @@ func readMeta(path string, pg int) (format.Meta, bool, error) {
 func TestOpenNoTailNoOp(t *testing.T) {
 	path := copyFixture(t, "direct-ipv4.iprdb", "notail.iprdb")
 	committed := fileSize(t, path)
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +179,7 @@ func TestOpenNoTailNoOp(t *testing.T) {
 // trim work, committed == physical == 2 pages.
 func TestOpenEmptyDatabase(t *testing.T) {
 	path := makeEmptyDB(t)
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +201,7 @@ func TestOpenWriterPrimitives(t *testing.T) {
 	if err := os.Truncate(path, committed+4*format.PageSize); err != nil {
 		t.Fatal(err)
 	}
-	c, err := OpenWriter(path, testBudget())
+	c, err := OpenWriter(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,11 +232,12 @@ func TestOpenRefusesSoleMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	_, err = Open(path, testBudget())
+	_, err = Open(path, testBudget(), nil)
 	ferr, ok := err.(*format.Error)
 	if !ok || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
+	assertReopen(t, path)
 }
 
 // TestOpenRefusesNoValidMeta pins the no-candidate refusal.
@@ -223,11 +250,12 @@ func TestOpenRefusesNoValidMeta(t *testing.T) {
 	f.WriteAt([]byte{'X'}, 0)
 	f.WriteAt([]byte{'X'}, format.PageSize)
 	f.Close()
-	_, err = Open(path, testBudget())
+	_, err = Open(path, testBudget(), nil)
 	ferr, ok := err.(*format.Error)
 	if !ok || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
+	assertReopen(t, path)
 }
 
 // TestOpenRefusesChecksumInvalidMeta pins the identity checksum rule: a
@@ -245,11 +273,12 @@ func TestOpenRefusesChecksumInvalidMeta(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.Close()
-		_, err = Open(path, testBudget())
+		_, err = Open(path, testBudget(), nil)
 		ferr, ok := err.(*format.Error)
 		if !ok || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
+		assertReopen(t, path)
 	})
 	t.Run("both-pages", func(t *testing.T) {
 		path := copyFixture(t, "direct-ipv4.iprdb", "badcrc2.iprdb")
@@ -263,11 +292,12 @@ func TestOpenRefusesChecksumInvalidMeta(t *testing.T) {
 			}
 		}
 		f.Close()
-		_, err = Open(path, testBudget())
+		_, err = Open(path, testBudget(), nil)
 		ferr, ok := err.(*format.Error)
 		if !ok || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
+		assertReopen(t, path)
 	})
 }
 
@@ -283,18 +313,19 @@ func TestOpenRefusesCommittedBeyondPhysical(t *testing.T) {
 	if err := os.Truncate(path, committed-format.PageSize); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(path, testBudget())
+	_, err := Open(path, testBudget(), nil)
 	ferr, ok := err.(*format.Error)
 	if !ok || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
+	assertReopen(t, path)
 }
 
 // TestOpenBudgetAndInfo pins the budget round-trip and the base generation
 // facts of the selected committed meta.
 func TestOpenBudgetAndInfo(t *testing.T) {
 	path := copyFixture(t, "direct-ipv4.iprdb", "budget.iprdb")
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,5 +342,50 @@ func TestOpenBudgetAndInfo(t *testing.T) {
 		info.PageCount != meta0.PageCount || info.TransactionID != meta0.TxnID ||
 		info.DatabaseID != meta0.DatabaseID {
 		t.Fatalf("base info %+v does not match file meta %+v", info, meta0)
+	}
+}
+
+// TestOpenRefusesPathReplacedDuringOpen pins the terminal path-identity
+// re-verification (Rust open_locked's verify_pair; reader.go parity): when
+// the path is replaced while the writer open is in flight, after the
+// mapping owner's own namespace checks, Open must refuse with
+// WrongState instead of publishing a writer bound to the detached inode.
+// The namespace hook (check) runs under the exclusive lock before the
+// first mapping and again after openMapping's final identity check; the
+// rename on the second invocation lands exactly in the window between the
+// mapping owner's checks and the writer's post-remap VerifyIdentity.
+func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "replaced.iprdb")
+	raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other.iprdb")
+	if err := os.WriteFile(other, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	check := func(clean string) error {
+		calls++
+		if calls == 2 {
+			if err := os.Rename(other, path); err != nil {
+				t.Errorf("replace path: %v", err)
+			}
+		}
+		return nil
+	}
+	c, err := Open(path, testBudget(), check)
+	if c != nil {
+		c.Close()
+		t.Fatal("open accepted a path replaced while the open was in flight")
+	}
+	fe, ok := err.(*format.Error)
+	if !ok || fe.Code != format.CodeWrongState {
+		t.Fatalf("replaced-during-open error %v, want WrongState (11)", err)
 	}
 }

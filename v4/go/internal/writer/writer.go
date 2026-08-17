@@ -55,11 +55,16 @@ type Core struct {
 // two-page bootstrap mapping, the Writer-mode meta selection, then Remap
 // to the committed extent, so a huge corrupt or unpublished tail never
 // costs VA and never becomes writable at open. The tail itself is trimmed
-// by TrimCommittedTail, mirroring Rust live_writer.open_locked (the
-// sidecar coordination of open_locked arrives with the M4 sidecar
-// milestone). On failure the lock and descriptor are released.
-func OpenWriter(path string, budget PageBudget) (*Core, error) {
-	m, err := mapping.OpenMutable(path, nil)
+// by TrimCommittedTail and the path identity is re-verified after the
+// remap, mirroring Rust live_writer.open_locked's terminal verify_pair
+// (the sidecar coordination of open_locked arrives with the M4 sidecar
+// milestone; until then the mapping owner's exclusive lifetime lock
+// substitutes for the sidecar writer claim, a recorded chunk-1 decision).
+// check, when non-nil, runs under the lifetime lock exactly like the
+// reader's namespace hook and arrives before the sidecar checks of M4. On
+// failure the lock and descriptor are released.
+func OpenWriter(path string, budget PageBudget, check func(clean string) error) (*Core, error) {
+	m, err := mapping.OpenMutable(path, check)
 	if err != nil {
 		return nil, err
 	}
@@ -72,15 +77,24 @@ func OpenWriter(path string, budget PageBudget) (*Core, error) {
 		m.Close()
 		return nil, err
 	}
+	// The path must still name the opened inode (reader.go parity and
+	// Rust open_locked verify_pair): a replacement during the remap
+	// window must not publish a writer bound to a detached inode.
+	if err := m.VerifyIdentity(path); err != nil {
+		m.Close()
+		return nil, err
+	}
 	return c, nil
 }
 
 // Open performs the full writer open, mirroring Rust live_writer
 // open_main + open_locked minus the sidecar coordination: map_writer,
-// committed selection, and tail trim. On failure the exclusive lock and
-// descriptor are released.
-func Open(path string, budget PageBudget) (*Core, error) {
-	c, err := OpenWriter(path, budget)
+// committed selection, tail trim, and the terminal path-identity
+// re-verification (Rust open_locked ends with verify_pair after
+// trim_committed_tail). On failure the exclusive lock and descriptor are
+// released.
+func Open(path string, budget PageBudget, check func(clean string) error) (*Core, error) {
+	c, err := OpenWriter(path, budget, check)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +106,10 @@ func Open(path string, budget PageBudget) (*Core, error) {
 		c.Close()
 		return nil, err
 	}
+	if err := c.m.VerifyIdentity(path); err != nil {
+		c.Close()
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -99,7 +117,11 @@ func Open(path string, budget PageBudget) (*Core, error) {
 // physical extent under the still-held exclusive lock, mirroring Rust
 // WriterCore::select_committed (writer_core/open.rs). The writer rule
 // applies: only a provable current generation opens; a sole meta or a
-// transaction-gapped pair is refused.
+// transaction-gapped pair is refused. The extent is the mapping's tracked
+// locked value (open size, extended by Grow, shrunk by trim) rather than a
+// fresh stat: under the exclusive lock no legitimate change can occur, and
+// a rogue truncation is caught by the next Shrink/Remap re-stat with the
+// same FormatInvalid class.
 func (c *Core) SelectCommitted() error {
 	return c.rebootstrap()
 }
@@ -124,7 +146,10 @@ func (c *Core) rebootstrap() error {
 // TrimCommittedTail removes any unpublished tail, mirroring Rust
 // WriterCore::trim_committed_tail: when the physical extent exceeds the
 // committed generation the file is shrunk to the committed bytes and
-// synced to stable storage; a committed==physical core is a no-op.
+// synced to stable storage; a committed==physical core is a no-op. If the
+// shrink succeeds but the sync fails, the tracked physical extent is
+// already updated (Rust parity), so a retried trim is a no-op: the caller
+// must abort on the error and let the next open re-trim.
 func (c *Core) TrimCommittedTail() error {
 	if c.base.PhysicalBytes == c.base.CommittedBytes {
 		return nil

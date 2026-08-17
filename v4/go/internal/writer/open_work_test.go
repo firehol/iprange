@@ -34,7 +34,7 @@ func TestOpenTailedFileWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	work.Reset()
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestOpenTailedFileWork(t *testing.T) {
 func TestOpenNoTailWork(t *testing.T) {
 	path := copyFixture(t, "direct-ipv4.iprdb", "notailwork.iprdb")
 	work.Reset()
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestOpenNoTailWork(t *testing.T) {
 func TestOpenEmptyDBWork(t *testing.T) {
 	path := makeEmptyDB(t)
 	work.Reset()
-	c, err := Open(path, testBudget())
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
