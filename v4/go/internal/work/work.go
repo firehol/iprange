@@ -1,11 +1,11 @@
 //go:build !v4work
 
-// Package work records test-only necessary-work counters for the reader
-// core. Every counter call compiles to an inlineable no-op in production
-// builds (Enabled is const false); build the module with -tags v4work to
-// enable the counters and the snapshot API. Tests pin the exact counts so
-// a change that adds or removes required work on the hot path is visible
-// (mirroring v4/rust/iprange-livedb/src/work.rs for the Go peer).
+// Package work records test-only necessary-work counters for the reader and
+// writer cores. Every counter call compiles to an inlineable no-op in
+// production builds (Enabled is const false); build the module with -tags
+// v4work to enable the counters and the snapshot API. Tests pin the exact
+// counts so a change that adds or removes required work on the hot path is
+// visible (mirroring v4/rust/iprange-livedb/src/work.rs for the Go peer).
 package work
 
 // Enabled reports whether the counters are compiled in.
@@ -37,3 +37,16 @@ func WordRead(uint64) {}
 
 // StructureDecode counts one structured payload decode.
 func StructureDecode(uint64) {}
+
+// MappingRemap counts one actual mapping resize (remap or shrink that
+// re-establishes the mapping); same-size no-ops do not count.
+func MappingRemap(uint64) {}
+
+// MappingGrowth counts one file-and-mapping extension.
+func MappingGrowth(uint64) {}
+
+// MappingFlush counts one whole-mapping msync (MS_SYNC).
+func MappingFlush(uint64) {}
+
+// FileSync counts one stable-storage file sync (fsync / F_FULLFSYNC).
+func FileSync(uint64) {}

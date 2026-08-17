@@ -439,6 +439,79 @@ page checksum authority with the Castagnoli vector, and the gate at
 601 cases covering content transfer, complete-page ownership, and the
 full lifecycle-owner syscall family with vacuity-proven pins.
 
+Milestone 2 chunk 2 - writer open (2026-08-17, HEAD 7a90fb4): the
+writer open surface starts now: map_writer / select_committed /
+trim_committed_tail (Rust authority writer_core/open.rs +
+database_file.rs map_writer), the shared bootstrap authority with the
+writer finish rules, and the mapping Shrink primitive. Chunk-2
+implementation decisions (lead, under the long-term-best /
+minimal-complete rules; the user delegated technical design choices to
+the swarm guidelines):
+- One bootstrap authority: reader and writer share a new pure
+  internal/bootstrap package mirroring Rust bootstrap.rs
+  (open_meta_pages + finish_open incl. the Writer rule: selection must
+  be ProvenCurrent; the immutable length check applies only to
+  ImmutableReader). The reader is refactored to call it, so a
+  selection-rule change cannot diverge between open modes. Only the
+  two modes the milestone actually uses exist (ImmutableReader,
+  Writer); the Rust LiveReader mode joins when the live-reader
+  milestone needs it.
+- Mapping Shrink mirrors Rust shrink_or_retain (unmap first, stat,
+  ftruncate, remap, fail-closed on remap failure; physical < committed
+  is the FormatInvalid Corrupt class; no-op when already trimmed;
+  Windows stub refuses like every other owner method).
+- Test-only mapping work counters (MappingRemap, MappingGrowth,
+  MappingFlush, FileSync) mirror Rust work.rs; the import-graph gate
+  extends the mapping owner's allowed set with internal/work and
+  admits internal/bootstrap + internal/writer as internal importers.
+- internal/writer exposes the three Rust mirrors plus an Open entry
+  (OpenMutable -> bootstrap Writer mode -> Remap(committed) ->
+  SelectCommitted -> TrimCommittedTail); the sidecar coordination of
+  Rust live_writer.open_locked arrives with the M4 sidecar milestone.
+
+Milestone 2 chunk 2 - writer open IMPLEMENTED (2026-08-17, working tree
+over HEAD 7a90fb4): the chunk-2 design decisions above are implemented
+and locally validated:
+- internal/bootstrap: pure shared selection authority (Open with
+  ImmutableReader/Writer modes, Result with Meta/Selection/SelectedMetaPage/
+  CommittedBytes/PhysicalBytes), mirroring Rust bootstrap.rs
+  open_meta_pages + finish_open (identity + per-meta validation + pair
+  selection + mode rules: writer requires ProvenCurrent, immutable
+  requires committed == physical, unknown structured kinds report
+  UnsupportedStructure after selection). The reader was refactored onto
+  it (MetaSelection is now an alias of bootstrap.Selection); the reader
+  module lost its private validateMeta/selectBetween/sameIdentity, so
+  one selection authority remains.
+- internal/mapping.Shrink: mirrors Rust shrink_or_retain (unmap first,
+  stat, ftruncate, remap; fail-closed on remap failure; physical <
+  committed is the FormatInvalid Corrupt class; same-extent no-op;
+  read-only/closed refusal WrongState; Windows stub refuses). The
+  mapping owner now increments test-only work counters (MappingRemap/
+  MappingGrowth/MappingFlush/FileSync, no-ops in production) mirroring
+  Rust work.rs.
+- internal/writer: Core with OpenWriter (map_writer mirror: OpenMutable
+  -> Writer bootstrap -> Remap(committed)), SelectCommitted (Writer-mode
+  re-derivation), TrimCommittedTail (shrink + SyncFile when physical !=
+  committed), Open (the composed open_locked-minus-sidecar entry),
+  PageBudget and WriterInfo mirrors. The sidecar coordination of Rust
+  live_writer.open_locked arrives with the M4 sidecar milestone.
+- Gate: import-graph allowlist admits internal/bootstrap + internal/
+  writer, extends the mapping owner's allowed set with internal/work,
+  and adds bootstrap to the sync-free zone; gatescan topoRank places
+  bootstrap at leaf rank and writer with the reader.
+- Tests: bootstrap selection matrix (equal/adjacent/gap/sole/identity/
+  checksum/geometry/unknown-kind/tail), shrink contract (truncate+data
+  survival+regrow, no-op, above-physical/unaligned/read-only/closed
+  refusals), writer open (tail trim, no-tail no-op, empty 2-page db,
+  primitive sequence, sole-meta/no-meta/bad-checksum/short-file
+  refusals, budget+info round-trip), and v4work necessary-work pins
+  (tailed open = 2 remaps + 1 file sync; no-tail = 1 remap; 2-page db =
+  0; same-size no-ops count 0).
+Validation so far: go test ./... (both tag sets), -race, vet, gofmt,
+import-graph scan, 11/11 cross-compiles - all green at the working
+tree. Gate battery + shell self-test and the level-1/level-2 rounds
+are pending records below.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

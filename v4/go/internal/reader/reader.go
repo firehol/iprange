@@ -7,23 +7,25 @@
 package reader
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // MetaSelection reports how the selected meta was derived (section 4.2).
-type MetaSelection uint8
+// It aliases the shared bootstrap authority so the reader and the writer
+// can never diverge on selection semantics.
+type MetaSelection = bootstrap.Selection
 
 const (
-	MetaSelectionProvenCurrent MetaSelection = iota
-	MetaSelectionSoleMeta0
-	MetaSelectionSoleMeta1
+	MetaSelectionProvenCurrent = bootstrap.SelectionProvenCurrent
+	MetaSelectionSoleMeta0     = bootstrap.SelectionSoleMeta0
+	MetaSelectionSoleMeta1     = bootstrap.SelectionSoleMeta1
 )
 
 // ImmutableReader is the opened immutable database. Its state (mapping,
@@ -141,11 +143,12 @@ func namespaceChecks(path string) error {
 	return nil
 }
 
-// bootstrap implements the O(1) two-meta selection of section 4.2. Every
-// bootstrap failure is the typed FormatInvalid error (the conformance corpus
-// requires FormatInvalid for the wrong-magic, short, and unaligned
-// mutations); only an unknown structure kind reports the typed
-// UnsupportedStructure.
+// bootstrap implements the O(1) two-meta selection of section 4.2 through
+// the shared bootstrap authority (internal/bootstrap), so the reader and
+// writer share one selection implementation. Every bootstrap failure is
+// the typed FormatInvalid error (the conformance corpus requires
+// FormatInvalid for the wrong-magic, short, and unaligned mutations); only
+// an unknown structure kind reports the typed UnsupportedStructure.
 func (r *ImmutableReader) bootstrap() error {
 	p0, err := r.m.Page(0)
 	if err != nil {
@@ -155,93 +158,12 @@ func (r *ImmutableReader) bootstrap() error {
 	if err != nil {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
 	}
-	m0, ok0 := format.ParseIdentity(p0)
-	m1, ok1 := format.ParseIdentity(p1)
-	if ok0 && ok1 && !sameIdentity(m0, m1) {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "conflicting meta identity"}
-	}
-	physical := r.m.PhysicalSize()
-	e0 := validateMeta(m0, ok0, physical)
-	e1 := validateMeta(m1, ok1, physical)
-	valid0 := ok0 && e0 == nil
-	valid1 := ok1 && e1 == nil
-	if err := r.selectBetween(p0, p1, m0, m1, valid0, valid1, e0, e1); err != nil {
+	res, err := bootstrap.Open(p0, p1, r.m.PhysicalSize(), bootstrap.ModeImmutableReader)
+	if err != nil {
 		return err
 	}
-	// An unknown structure kind on a structured file is reported only
-	// after the meta pair selected (bootstrap.rs finish_open), never as a
-	// validation failure.
-	if r.meta.ValueKind == format.ValueKindStructured && r.meta.StructureKind != format.StructureKindNetworkEnrichmentV1 {
-		return &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
-	}
-	// Immutable open requires the exact physical size (section 3).
-	if r.meta.PageCount*format.PageSize != r.m.PhysicalSize() {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "file size does not match meta page count"}
-	}
-	return nil
-}
-
-func (r *ImmutableReader) selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool, e0, e1 error) error {
-	bootstrapFail := func(detail string) error {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
-	}
-	if valid0 && valid1 {
-		switch {
-		case m0.TxnID == m1.TxnID:
-			if !bytes.Equal(p0[:256], p1[:256]) {
-				return bootstrapFail("equal transactions with different meta images")
-			}
-			if m0.TxnID&1 == 0 {
-				r.meta, r.selection = m0, MetaSelectionProvenCurrent
-			} else {
-				r.meta, r.selection = m1, MetaSelectionProvenCurrent
-			}
-			return nil
-		case m0.TxnID == m1.TxnID+1:
-			if m0.TxnID&1 != 0 {
-				return bootstrapFail("swapped meta parity")
-			}
-			r.meta, r.selection = m0, MetaSelectionProvenCurrent
-			return nil
-		case m1.TxnID == m0.TxnID+1:
-			if m1.TxnID&1 != 1 {
-				return bootstrapFail("swapped meta parity")
-			}
-			r.meta, r.selection = m1, MetaSelectionProvenCurrent
-			return nil
-		default:
-			return bootstrapFail("transaction gap between metas")
-		}
-	}
-	if valid0 != valid1 {
-		if valid0 {
-			r.meta, r.selection = m0, MetaSelectionSoleMeta0
-		} else {
-			r.meta, r.selection = m1, MetaSelectionSoleMeta1
-		}
-		return nil
-	}
-	return bootstrapFail("no bootstrap-valid meta")
-}
-
-func sameIdentity(a, b format.Meta) bool {
-	return a.AddressFamily == b.AddressFamily &&
-		a.ValueKind == b.ValueKind &&
-		a.StructureKind == b.StructureKind &&
-		a.ValueTag == b.ValueTag &&
-		a.DatabaseID == b.DatabaseID
-}
-
-func validateMeta(m format.Meta, ok bool, physical uint64) error {
-	if !ok {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta not identity-readable"}
-	}
-	if err := m.ValidateKindInvariants(); err != nil {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
-	}
-	if m.PageCount*format.PageSize > physical {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "meta page count exceeds physical size"}
-	}
+	r.meta = res.Meta
+	r.selection = res.Selection
 	return nil
 }
 

@@ -216,9 +216,11 @@ func topoRank(pkg string) int {
 	switch pkg {
 	case "github.com/firehol/iprange/v4/go/internal/format", "github.com/firehol/iprange/v4/go/internal/work":
 		return 0
+	case "github.com/firehol/iprange/v4/go/internal/bootstrap":
+		return 0
 	case "github.com/firehol/iprange/v4/go/internal/mapping":
 		return 1
-	case "github.com/firehol/iprange/v4/go/internal/reader":
+	case "github.com/firehol/iprange/v4/go/internal/reader", "github.com/firehol/iprange/v4/go/internal/writer":
 		return 2
 	case "github.com/firehol/iprange/v4/go":
 		return 3

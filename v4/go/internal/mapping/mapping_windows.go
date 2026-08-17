@@ -54,6 +54,11 @@ func (m *Mapping) Grow(newSize uint64) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// Shrink satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) Shrink(newSize uint64) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
 // Flush satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Flush() error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}

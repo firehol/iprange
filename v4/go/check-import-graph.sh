@@ -5,7 +5,13 @@
 # Mirrors v4/rust/check-source-graph.sh for the Go peer:
 #   - internal/format is the wire-codec owner: stdlib only.
 #   - internal/mapping is the mapping owner: stdlib + golang.org/x/sys +
-#     internal/format (page-size constants and the shared error codes only).
+#     internal/format (page-size constants and the shared error codes) +
+#     internal/work (test-only necessary-work counters) only.
+#   - internal/bootstrap is the pure two-meta selection authority: stdlib
+#     + internal/format only, shared by the reader and the writer, and no
+#     sync/sync/atomic/unsafe.
+#   - internal/writer is the writer core: stdlib + internal/bootstrap +
+#     internal/format + internal/mapping + internal/work only.
 #   - internal/reader is the reader core: stdlib + internal/format +
 #     internal/mapping + internal/work only, and no sync/sync/atomic/unsafe:
 #     the traversal paths carry no per-call synchronization
@@ -137,13 +143,16 @@ check() {
 }
 
 check "github.com/firehol/iprange/v4/go/internal/format" "github.com/firehol/iprange/v4/go/internal/format\$"
-check "github.com/firehol/iprange/v4/go/internal/mapping" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\)"
-check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/bootstrap" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\)"
+check "github.com/firehol/iprange/v4/go/internal/mapping" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
 check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
 
 # The reader core is the synchronization-free zone: no sync, sync/atomic, or
 # unsafe anywhere in its import closure.
 for pkg in "github.com/firehol/iprange/v4/go/internal/format" \
+		"github.com/firehol/iprange/v4/go/internal/bootstrap" \
 		"github.com/firehol/iprange/v4/go/internal/reader"; do
 	if printf '%s\n' "$(pkg_imports "$pkg")" | grep -qE '^(sync|sync/atomic|unsafe)$'; then
 		echo "synchronization/unsafe violation: $pkg"
@@ -274,7 +283,9 @@ for target in $targets; do
 		case "$pkg" in
 		"github.com/firehol/iprange/v4/go"|\
 		"github.com/firehol/iprange/v4/go/internal/format"|\
+		"github.com/firehol/iprange/v4/go/internal/bootstrap"|\
 		"github.com/firehol/iprange/v4/go/internal/mapping"|\
+		"github.com/firehol/iprange/v4/go/internal/writer"|\
 		"github.com/firehol/iprange/v4/go/internal/reader")
 			# these may import internal/* by the approved boundary
 			;;

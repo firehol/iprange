@@ -32,6 +32,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Mapping is one file-backed mapping of a committed v4 artifact: read-only
@@ -290,6 +291,7 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	}
 	m.data = data
 	m.size = committedBytes
+	work.MappingRemap(1)
 	return nil
 }
 
@@ -340,6 +342,7 @@ func (m *Mapping) Grow(newSize uint64) error {
 	m.data = data
 	m.size = newSize
 	m.physical = newSize
+	work.MappingGrowth(1)
 	return nil
 }
 
@@ -352,6 +355,7 @@ func (m *Mapping) Flush() error {
 	if err := unix.Msync(m.data, unix.MS_SYNC); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
 	}
+	work.MappingFlush(1)
 	return nil
 }
 
@@ -363,7 +367,11 @@ func (m *Mapping) SyncFile() error {
 	if m.file == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
 	}
-	return syncFile(int(m.file.Fd()))
+	if err := syncFile(int(m.file.Fd())); err != nil {
+		return err
+	}
+	work.FileSync(1)
+	return nil
 }
 
 // View returns a checked view of [off, off+length) inside the mapping. The
