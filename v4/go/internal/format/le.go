@@ -64,10 +64,13 @@ var crc32cZeroes = [64]byte{}
 // crc32c_with_zeroed). It reports false when the range is invalid or exceeds
 // data.
 func CRC32CWithZeroed(data []byte, zeroAt, zeroLen int) (uint32, bool) {
-	zeroEnd := zeroAt + zeroLen
-	if zeroAt < 0 || zeroLen < 0 || zeroEnd > len(data) {
+	// Overflow-safe bounds check (Rust checksum.rs uses checked
+	// arithmetic): zeroAt+zeroLen can wrap past MaxInt and must not
+	// turn an invalid range into a slice panic.
+	if zeroAt < 0 || zeroLen < 0 || zeroAt > len(data) || zeroLen > len(data)-zeroAt {
 		return 0, false
 	}
+	zeroEnd := zeroAt + zeroLen
 	crc := crc32.Checksum(data[:zeroAt], crc32cTable)
 	remaining := zeroLen
 	for remaining >= len(crc32cZeroes) {

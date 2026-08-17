@@ -55,6 +55,18 @@ func TestCRC32CWithZeroedInvalid(t *testing.T) {
 	}
 }
 
+// TestCRC32CWithZeroedOverflow pins the overflow-safe bounds check: a
+// zeroAt near MaxInt with zeroLen > 0 wraps the sum and must be reported
+// invalid, never a slice panic (Rust checksum.rs checked addition).
+func TestCRC32CWithZeroedOverflow(t *testing.T) {
+	if _, ok := CRC32CWithZeroed([]byte("abc"), int(^uint(0)>>1), 1); ok {
+		t.Fatal("overflowing zero range reported valid")
+	}
+	if _, ok := CRC32CWithZeroed([]byte("abc"), int(^uint(0)>>1), 0); ok {
+		t.Fatal("offset beyond input reported valid")
+	}
+}
+
 // TestSealAndValid pins the seal lifecycle: SealPageChecksum produces a valid
 // seal, clearing or mutating the page invalidates it, and short pages are
 // refused.

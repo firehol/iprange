@@ -296,10 +296,11 @@ close-out paragraphs: the gate battery is now 599 cases (514
 rejections, 85 benign acceptances) plus 9 shell environment mutations.
 mapping write mode and the page checksum authority are implemented and
 pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
-lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the full extent,
-mirroring Rust mapping.rs read_write and live_lock exclusive), grows
-them (ftruncate + remap, mirroring resize), and flushes them (msync /
-fsync, mirroring flush_range / sync_file); the open path is one shared
+lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the two-page
+bootstrap extent, then Remap(committed) after the meta pair is proven,
+mirroring Rust database_file.rs map_writer and live_lock exclusive),
+grows them (ftruncate + remap, mirroring resize), and flushes them
+(msync / fsync, mirroring flush_range / sync_file); the open path is one shared
 implementation (openMapping) for readers and the writer, and the Windows
 stub refuses the new methods like every other owner method. The CRC
 authority in internal/format gained the non-meta page seal exactly as

@@ -1,6 +1,6 @@
 # SOW-0025 — Milestone 2 Gap Analysis: mapped COW writer and Go producer
 
-Status: in progress (2026-08-17, chunk 1 done at HEAD bf49779, fix round at HEAD 88f9c93)
+Status: in progress (2026-08-17, chunk 1 done at HEAD bf49779; review fix rounds through HEAD ebe8e46; level-2 gate re-review in progress)
 
 ## Scope
 

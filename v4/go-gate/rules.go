@@ -2354,8 +2354,10 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 		// macOS durability requires fcntl(F_FULLFSYNC), the only fcntl
 		// variant in the banned content-transfer set. The call passes a
 		// raw descriptor number and moves no mapped bytes, so it is
-		// exempt only in the darwin sync file, and only when the
-		// receiver is the x/sys unix package.
+		// exempt ONLY as the exact three-argument call whose command
+		// argument is the x/sys constant unix.F_FULLFSYNC: any other
+		// FcntlInt command (F_DUPFD, F_DUPFD_CLOEXEC, F_PREALLOCATE, ...)
+		// added to this file must still be rejected.
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -2365,11 +2367,22 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 			if !ok {
 				return true
 			}
-			if sel.Sel.Name == "FcntlInt" {
-				if id, ok := unparen(sel.X).(*ast.Ident); ok && id.Name == "unix" {
-					exempts[sel.Pos()] = true
-				}
+			if sel.Sel.Name != "FcntlInt" || len(call.Args) < 2 {
+				return true
 			}
+			recv, ok := unparen(sel.X).(*ast.Ident)
+			if !ok || recv.Name != "unix" {
+				return true
+			}
+			cmd, ok := unparen(call.Args[1]).(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			cmdPkg, ok := unparen(cmd.X).(*ast.Ident)
+			if !ok || cmdPkg.Name != "unix" || cmd.Sel.Name != "F_FULLFSYNC" {
+				return true
+			}
+			exempts[sel.Pos()] = true
 			return true
 		})
 		return exempts

@@ -1466,4 +1466,12 @@ var batteryCases = []batteryCase{
 	{name: "311: unix.SyncFileRange outside the mapping owner", desc: "raw range durability syscall outside the mapping owner", expectFail: true, expectRule: "banned content-transfer selector .SyncFileRange", ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_syncfilerange.go", content: "//go:build linux\npackage reader\n\nimport \"golang.org/x/sys/unix\"\n\nfunc gateSyncFileRange(fd int, n int64) error { return unix.SyncFileRange(fd, 0, n, 0) }"},
 	}},
+
+	{name: "312: FcntlInt F_DUPFD_CLOEXEC in the darwin sync file", desc: "non-FULLFSYNC fcntl command must not inherit the darwin exemption", expectFail: true, expectRule: "banned content-transfer selector .FcntlInt", ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/mapping/mapping_sync_darwin.go", content: "//go:build darwin\n\nfunc gatemutDup(fd uintptr) (int, error) {\n\treturn unix.FcntlInt(fd, unix.F_DUPFD_CLOEXEC, 0)\n}\n"},
+	}},
+
+	{name: "313: benign appended FcntlInt F_FULLFSYNC darwin call", desc: "an additional exact F_FULLFSYNC call inside the darwin sync file stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/mapping/mapping_sync_darwin.go", content: "//go:build darwin\n\nfunc gateFullfsync2(fd uintptr) error {\n\t_, err := unix.FcntlInt(fd, unix.F_FULLFSYNC, 0)\n\treturn err\n}\n"},
+	}},
 }
