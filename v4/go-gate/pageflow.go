@@ -6367,13 +6367,17 @@ func (pf *pageFlow) promoteFullPageFields(st *stmtState, e ast.Expr) {
 	if e == nil {
 		return
 	}
-	// Evaluate the expression FIRST: the shared value cache is how the
-	// rule pass reads whole-value taints, and the field scan below must
-	// see the current statement-state value (a local binding, a package
-	// holder) before it decides whether the value is a field-hidden
-	// carrier. Re-evaluating is idempotent: evalExpr caches its result
-	// on the expression node, so an already-cached value is returned
-	// unchanged.
+	// Evaluate the expression FIRST, before the promotionCandidate gate:
+	// for a call-expression argument (len(s.Text()), a conversion, an
+	// opaque helper) this runs evalCall on the nested call, which
+	// analyzes the interface dispatch (promoting a concrete page-carrying
+	// receiver via the miss path) and records fail-closed call state.
+	// The candidate gate below would otherwise skip a non-carrier
+	// argument (a string result, a uint) and the nested call would never
+	// be flow-analyzed at this site. The gate still controls the
+	// whole-value/field PROMOTION on e itself; evalExpr is idempotent
+	// (results cached per expression node), so this ordering only decides
+	// whether the nested call is analyzed before the gate.
 	pv := pf.evalExpr(st, e)
 	// A promoted whole-value taint is only meaningful when the expression
 	// itself can hold page bytes: struct values carry their field taints
