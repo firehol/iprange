@@ -823,6 +823,32 @@ func summaryDup(fs *funcSummary) *funcSummary {
 			out.copyParams[k] = append([]int{}, vs...)
 		}
 	}
+	if len(fs.callbackInvokes) > 0 {
+		out.callbackInvokes = map[int][]int{}
+		for k, vs := range fs.callbackInvokes {
+			out.callbackInvokes[k] = append([]int{}, vs...)
+		}
+	}
+	if len(fs.callbackInvokesInternal) > 0 {
+		out.callbackInvokesInternal = map[int]bool{}
+		for k := range fs.callbackInvokesInternal {
+			out.callbackInvokesInternal[k] = true
+		}
+	}
+	if len(fs.callbackAliases) > 0 {
+		out.callbackAliases = map[types.Object]callbackAlias{}
+		for k, v := range fs.callbackAliases {
+			// forwarded/litParams are immutable after recording; sharing
+			// them across copies is safe.
+			out.callbackAliases[k] = v
+		}
+	}
+	if len(fs.fieldAliases) > 0 {
+		out.fieldAliases = map[types.Object]int{}
+		for k, v := range fs.fieldAliases {
+			out.fieldAliases[k] = v
+		}
+	}
 	return out
 }
 
@@ -852,7 +878,71 @@ func summaryEqual(a, b *funcSummary) bool {
 	if !copyParamsEqual(a.copyParams, b.copyParams) {
 		return false
 	}
+	if !callbackRecordsEqual(a, b) {
+		return false
+	}
 
+	return true
+}
+
+// callbackRecordsEqual compares the four callback-record maps of two
+// summaries. The records are built during the body walk
+// (recordCallbackInvokeComposition) from callee summaries that stabilize
+// across fixpoint passes, so the fixpoint must keep iterating until the
+// records settle; without the comparison, a chain whose callee records
+// arrive one pass late terminates early and the store-callback fence
+// never sees the forwarded invocation.
+func callbackRecordsEqual(a, b *funcSummary) bool {
+	if len(a.callbackInvokes) != len(b.callbackInvokes) {
+		return false
+	}
+	for k, vs := range a.callbackInvokes {
+		bv, ok := b.callbackInvokes[k]
+		if !ok || len(vs) != len(bv) {
+			return false
+		}
+		for i := range vs {
+			if vs[i] != bv[i] {
+				return false
+			}
+		}
+	}
+	if len(a.callbackInvokesInternal) != len(b.callbackInvokesInternal) {
+		return false
+	}
+	for k := range a.callbackInvokesInternal {
+		if !b.callbackInvokesInternal[k] {
+			return false
+		}
+	}
+	if len(a.callbackAliases) != len(b.callbackAliases) {
+		return false
+	}
+	for k, al := range a.callbackAliases {
+		bl, ok := b.callbackAliases[k]
+		if !ok || al.slot != bl.slot || len(al.forwarded) != len(bl.forwarded) ||
+			al.lit != bl.lit || len(al.litParams) != len(bl.litParams) {
+			return false
+		}
+		for i := range al.forwarded {
+			if al.forwarded[i] != bl.forwarded[i] {
+				return false
+			}
+		}
+		for i := range al.litParams {
+			if al.litParams[i] != bl.litParams[i] {
+				return false
+			}
+		}
+	}
+	if len(a.fieldAliases) != len(b.fieldAliases) {
+		return false
+	}
+	for k, v := range a.fieldAliases {
+		if b.fieldAliases[k] != v {
+			return false
+		}
+	}
 	return true
 }
 
@@ -1075,11 +1165,21 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 			}
 		}
 	}
+	// Callback aliases are read by recordCallbackInvokeComposition while
+	// analyzeStmts walks the body: a callee's callback-invocation records
+	// only compose through this function when the scanned-helper call
+	// hands the function's own callback formal (or one of its recorded
+	// aliases) to the callee. Recording the aliases BEFORE the body walk
+	// makes the composition see the bindings in the same pass; the
+	// records derive only from the body AST and the formal signature,
+	// so an earlier recording cannot be stale. noteCallbackInvokes still
+	// runs after the walk: its mapped-exemption reads the end-state
+	// values left by analyzeStmts (guarded by the assignment census).
+	pf.noteCallbackAliases(st, fs, st.fd.Body)
 	pf.analyzeStmts(st, st.fd.Body.List, fs)
 	pf.noteStringConvs(st, fs, st.fd.Body)
 	pf.noteFmtSpreads(st, fs, st.fd.Body)
 	pf.noteCopyParams(st, fs, st.fd.Body)
-	pf.noteCallbackAliases(st, fs, st.fd.Body)
 	pf.noteCallbackInvokes(st, fs, st.fd.Body)
 	// Named results with a naked return: the body's stores to the named
 	// result variables are the function's results. Functions need it for
@@ -4788,6 +4888,299 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 	collect(false)
 }
 
+// invokeCensus snapshots the assignment structure of a function body so
+// the callback-invocation records can tell whether an expression's
+// end-state value equals its value at an earlier call. The exemption in
+// noteCallbackInvokes accepts a locally-minted mapped view only when
+// every storage the argument reads is assigned at most once in the whole
+// body, with that assignment preceding the call: a mint AFTER the call
+// must not let the record-time check bless an owned buffer that already
+// reached the callback.
+type invokeCensus struct {
+	pf *pageFlow
+	// params: the enclosing function's parameter objects (receiver
+	// included). Parameters are stable unless reassigned or
+	// address-taken inside the body.
+	params map[types.Object]bool
+	// assignCount/assignPos: identifiers written anywhere in the body
+	// (locals and parameters; the walk descends into nested func
+	// literals, whose captured writes mutate the enclosing local).
+	assignCount map[types.Object]int
+	assignPos   map[types.Object]token.Pos
+	// fieldCount/fieldPos: selector paths written anywhere
+	// (h.Inner.Buf = v marks both "Inner" and "Inner.Buf").
+	fieldCount map[string]int
+	fieldPos   map[string]token.Pos
+	// indexCount/indexPos: container roots written through an index
+	// (xs[0] = v marks the root object of xs).
+	indexCount map[types.Object]int
+	indexPos   map[types.Object]token.Pos
+	// derefCount/derefPos: roots written through a dereference (*p = v).
+	derefCount map[types.Object]int
+	derefPos   map[types.Object]token.Pos
+	// addressTaken: roots whose address escapes into storage the scan
+	// cannot follow (&x, &h.Buf), so their values can change behind the
+	// expression's back.
+	addressTaken map[types.Object]bool
+	// bodyDeclared: objects declared inside the body (locals, nested
+	// block variables, literal parameters). Package-level and captured
+	// outer values are never position-stable for the exemption.
+	bodyDeclared map[types.Object]bool
+	// litParams: func-literal parameters declared inside the body; they
+	// bind like function parameters (stable unless reassigned).
+	litParams map[types.Object]bool
+}
+
+func newInvokeCensus(pf *pageFlow, st *stmtState, body *ast.BlockStmt) *invokeCensus {
+	c := &invokeCensus{
+		pf:           pf,
+		params:       map[types.Object]bool{},
+		assignCount:  map[types.Object]int{},
+		assignPos:    map[types.Object]token.Pos{},
+		fieldCount:   map[string]int{},
+		fieldPos:     map[string]token.Pos{},
+		indexCount:   map[types.Object]int{},
+		indexPos:     map[types.Object]token.Pos{},
+		derefCount:   map[types.Object]int{},
+		derefPos:     map[types.Object]token.Pos{},
+		addressTaken: map[types.Object]bool{},
+		bodyDeclared: map[types.Object]bool{},
+		litParams:    map[types.Object]bool{},
+	}
+	for obj := range st.params {
+		c.params[obj] = true
+	}
+	// Declared objects are collected by walking the body AST (go/types
+	// does not key every block scope by an in-body node, so the scope
+	// map cannot be filtered reliably): short-variable declarations,
+	// var declarations, range variables, and func-literal parameters
+	// are all declared inside the body.
+	declared := func(e ast.Expr) {
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return
+		}
+		if obj := pf.pc.info.ObjectOf(id); obj != nil {
+			c.bodyDeclared[obj] = true
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			if v.Tok == token.DEFINE {
+				for _, lhs := range v.Lhs {
+					declared(lhs)
+				}
+			}
+		case *ast.ValueSpec:
+			for _, name := range v.Names {
+				c.bodyDeclared[pf.pc.info.ObjectOf(name)] = true
+			}
+		case *ast.RangeStmt:
+			if v.Tok == token.DEFINE {
+				declared(v.Key)
+				declared(v.Value)
+			}
+		case *ast.FuncLit:
+			// The literal's own parameters bind like function
+			// parameters: stable unless reassigned inside the literal.
+			if v.Type.Params != nil {
+				for _, f := range v.Type.Params.List {
+					for _, name := range f.Names {
+						if obj := pf.pc.info.ObjectOf(name); obj != nil {
+							c.bodyDeclared[obj] = true
+							c.litParams[obj] = true
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	var count func(pos token.Pos, e ast.Expr)
+	count = func(pos token.Pos, e ast.Expr) {
+		switch t := unparen(e).(type) {
+		case *ast.Ident:
+			if obj := pf.pc.info.ObjectOf(t); obj != nil {
+				c.assignCount[obj]++
+				if c.assignCount[obj] == 1 {
+					c.assignPos[obj] = pos
+				}
+			}
+		case *ast.SelectorExpr:
+			for _, key := range c.fieldKeys(t) {
+				c.fieldCount[key]++
+				if c.fieldCount[key] == 1 {
+					c.fieldPos[key] = pos
+				}
+			}
+			count(pos, t.X)
+		case *ast.IndexExpr:
+			if obj := c.rootOf(t.X); obj != nil {
+				c.indexCount[obj]++
+				if c.indexCount[obj] == 1 {
+					c.indexPos[obj] = pos
+				}
+			}
+			count(pos, t.X)
+		case *ast.StarExpr:
+			if obj := c.rootOf(t.X); obj != nil {
+				c.derefCount[obj]++
+				if c.derefCount[obj] == 1 {
+					c.derefPos[obj] = pos
+				}
+			}
+			count(pos, t.X)
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				count(v.Pos(), lhs)
+			}
+		case *ast.ValueSpec:
+			for _, name := range v.Names {
+				count(v.Pos(), name)
+			}
+		case *ast.IncDecStmt:
+			count(v.Pos(), v.X)
+		case *ast.UnaryExpr:
+			if v.Op == token.AND {
+				if obj := c.rootOf(v.X); obj != nil {
+					c.addressTaken[obj] = true
+				}
+			}
+		}
+		return true
+	})
+	return c
+}
+
+// fieldKeys returns the selector-path keys of a selector expression in
+// outer-to-inner order (h.Inner.Buf -> ["Inner", "Inner.Buf"]), so a
+// write to a whole field blocks an argument reading a path beneath it,
+// and a write to a nested field blocks an argument reading the whole
+// field or the nested path.
+func (c *invokeCensus) fieldKeys(sel *ast.SelectorExpr) []string {
+	var inner []string
+	for e := ast.Expr(sel); ; {
+		s, ok := unparen(e).(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		inner = append(inner, s.Sel.Name)
+		e = s.X
+	}
+	var keys []string
+	key := ""
+	for i := len(inner) - 1; i >= 0; i-- {
+		if key == "" {
+			key = inner[i]
+		} else {
+			key = key + "." + inner[i]
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// rootOf resolves the root identifier object of an expression chain,
+// digging through selectors, indexes, dereferences, slices, and type
+// assertions to the base object (h.Items[0].Data -> h).
+func (c *invokeCensus) rootOf(e ast.Expr) types.Object {
+	for {
+		switch t := unparen(e).(type) {
+		case *ast.SelectorExpr:
+			e = t.X
+		case *ast.IndexExpr:
+			e = t.X
+		case *ast.StarExpr:
+			e = t.X
+		case *ast.SliceExpr:
+			e = t.X
+		case *ast.TypeAssertExpr:
+			e = t.X
+		default:
+			if id, ok := t.(*ast.Ident); ok {
+				return c.pf.pc.info.ObjectOf(id)
+			}
+			return nil
+		}
+	}
+}
+
+// stable reports whether an argument expression's end-state value
+// equals its value at the invocation. analyzeStmts has already finished
+// before noteCallbackInvokes runs, so the end-state snapshot is the only
+// value available; every storage the expression reads must be assigned
+// at most once in the whole body, with that assignment before the call,
+// or the mappedness decision made here is not the one the call saw.
+func (c *invokeCensus) stable(e ast.Expr, callPos token.Pos) bool {
+	ok := true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if !ok {
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.Ident:
+			if !c.identStable(t, callPos) {
+				ok = false
+				return false
+			}
+		case *ast.SelectorExpr:
+			for _, key := range c.fieldKeys(t) {
+				if cnt := c.fieldCount[key]; cnt > 1 || (cnt == 1 && c.fieldPos[key] >= callPos) {
+					ok = false
+					return false
+				}
+			}
+		case *ast.IndexExpr:
+			if obj := c.rootOf(t.X); obj != nil {
+				if cnt := c.indexCount[obj]; cnt > 1 || (cnt == 1 && c.indexPos[obj] >= callPos) {
+					ok = false
+					return false
+				}
+			}
+		case *ast.StarExpr:
+			if obj := c.rootOf(t.X); obj != nil {
+				if cnt := c.derefCount[obj]; cnt > 1 || (cnt == 1 && c.derefPos[obj] >= callPos) {
+					ok = false
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return ok
+}
+
+// identStable reports whether one identifier's value is the same at the
+// call site and at the end-state snapshot. Constants, builtins, type
+// names, and package qualifiers are position-independent. Parameters
+// are stable unless reassigned or address-taken in the body. Locals
+// are stable only when declared in the body, assigned exactly once
+// (their definition), not address-taken, and defined before the call;
+// everything else falls back to fail-closed.
+func (c *invokeCensus) identStable(id *ast.Ident, callPos token.Pos) bool {
+	if id.Name == "_" {
+		return true
+	}
+	obj := c.pf.pc.info.ObjectOf(id)
+	if obj == nil {
+		return false
+	}
+	switch obj.(type) {
+	case *types.Builtin, *types.Const, *types.TypeName, *types.PkgName:
+		return true
+	}
+	if c.params[obj] || c.litParams[obj] {
+		return c.assignCount[obj] == 0 && !c.addressTaken[obj]
+	}
+	return c.bodyDeclared[obj] && c.assignCount[obj] == 1 && !c.addressTaken[obj] &&
+		c.assignPos[obj] != 0 && c.assignPos[obj] < callPos
+}
+
 // noteCallbackInvokes records byte-slice parameters the body passes to
 // each func-typed formal parameter it invokes (fn(x, y) with fn a func
 // formal and x, y byte parameters). The invocation is the
@@ -4803,6 +5196,7 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 	if body == nil {
 		return
 	}
+	census := newInvokeCensus(pf, st, body)
 	paramAliases := map[types.Object]int{}
 	ast.Inspect(body, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
@@ -5003,7 +5397,12 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 					// mapped at the definition site and stays honest;
 					// anything else is not provably the caller's mapped view
 					// and fails closed at the store-implementation call site.
-					if pv := pf.evalExpr(st, v.Args[i]); pv.mapped {
+					// The end-state snapshot only speaks for storage assigned at
+					// most once BEFORE the invocation: a trailing mint after the
+					// call must not exempt an owned buffer that already reached
+					// the callback.
+					pv := pf.evalExpr(st, v.Args[i])
+					if pv.mapped && census.stable(v.Args[i], v.Pos()) {
 						continue
 					}
 					internal = true

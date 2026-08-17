@@ -893,6 +893,57 @@ across the 5 OS configs; go test ./... both tag sets, -race, vet
 (module and gate), gofmt, and the import-graph boundary check over
 the 11 GOOS/GOARCH pairs all green.
 
+Level-1 round continuation (2026-08-17, Linnaeus P2 on callback
+invocation end-state and composition fixpoint): Linnaeus returned FAIL
+at HEAD 7b379bf with two P2 gate defects, both reproduced by the lead
+with probe modules:
+
+1. P2-1 trailing-mint end-state divergence: a store helper invokes the
+callback formal with a locally-sourced owned variable and then re-mints
+from r.page AFTER the call. noteCallbackInvokes runs after the body
+walk and read end-state stmtVars, so the mapped exemption exempts the
+invocation even though the value at call time was owned. The probe
+(helper-local `v` loaded earlier, trailing `r.page` mint after the
+call) was gate-silent before the fix; it now fails.
+2. P2-2 cross-helper alias chain: h1(fn, s) does `cb := fn; return
+h2(cb, s.buf, s.buf)`; h2 invokes fn(a,b). The composition record
+(recordCallbackInvokeComposition) could not resolve `cb` because
+noteCallbackAliases ran AFTER analyzeStmts, and summaryEqual did not
+compare the callback maps, so the fixpoint terminated before a second
+pass could stabilize the alias. The probe (identity alias in one
+helper, invocation in a second helper with clean owned buffers) was
+gate-silent before the fix; it now fails.
+
+Fixed in v4/go-gate/pageflow.go with three coordinated changes:
+(a) noteCallbackAliases now runs BEFORE analyzeStmts in analyzeFunc -
+it derives purely from the AST and the signature, so earlier recording
+cannot be stale, and the composition records see the aliases on the
+same pass; (b) summaryDup/summaryEqual gained callbackInvokes,
+callbackInvokesInternal, callbackAliases, and fieldAliases via a new
+callbackRecordsEqual helper, without which the fixpoint terminated
+early; (c) a new invokeCensus snapshots the body's assignment
+structure (identifier assignment count/position, selector-path writes,
+index writes, deref writes, address-taken) and the mapped exemption in
+noteCallbackInvokes now requires pv.mapped AND census.stable(arg,
+callPos): body-declared locals must be single-assigned, not
+address-taken, and assigned before the call; params stay stable unless
+reassigned/address-taken; selector paths allow at most one write
+before the call; constants/builtins/type/pkg names are always stable;
+everything else fails closed (package vars, captured values,
+multi-assigned locals). The census is deliberately conservative - the
+end-state of a variable is not its call-time value, so any storage the
+argument reads that can be written after the call rejects.
+
+Pinned durably in the battery as P309 (four liar shapes: direct
+trailing mint by the callee-owned prover, helper-local owned `v` with
+trailing mint, and the two-helper identity-alias chain) and P310
+(honest twins: mint-before-call helper, and the two-helper chain
+forwarding mapped views). Battery: 620 cases (527 rejections, 93
+benign acceptances), zero misses under --self-test-jobs 24 (1:45
+wall). Real module scan rc=0 across the 5 OS configs; go test ./...
+both tag sets, -race, vet (module and gate), gofmt, and the
+import-graph boundary check over the 11 GOOS/GOARCH pairs all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
