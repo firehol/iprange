@@ -3351,17 +3351,17 @@ func joinPageValue(a, b pageValue) pageValue {
 		return a
 	}
 	if a.maxLen == maxUnknown || b.maxLen == maxUnknown {
-		return pageValue{tainted: true, maxLen: maxUnknown, mapped: a.mapped || b.mapped}
+		// The mapped flag is PROVABLY-mapped: the value must be a mapped
+		// view on every path that can produce it, or the fail-closed
+		// consumers (store-callback mapped-view fence, owned-copy
+		// checks) would bless an owned buffer that one branch delivers.
+		return pageValue{tainted: true, maxLen: maxUnknown, mapped: a.mapped && b.mapped}
 	}
 	if a.maxLen >= b.maxLen {
-		if b.mapped {
-			a.mapped = true
-		}
+		a.mapped = a.mapped && b.mapped
 		return a
 	}
-	if a.mapped {
-		b.mapped = true
-	}
+	b.mapped = a.mapped && b.mapped
 	return b
 }
 
@@ -3381,13 +3381,11 @@ func joinFieldTaint(a, b fieldTaint) fieldTaint {
 			seen[src] = true
 			out.srcs = append(out.srcs, src)
 		}
-		if src.mapped {
-			out.mapped = true
-		}
 	}
-	if a.mapped || b.mapped {
-		out.mapped = true
-	}
+	// Conservative mapped join: a value tainted on any path keeps every
+	// length source, but it is PROVABLY mapped only when both records
+	// are (one owned path makes the consumer checks fail closed).
+	out.mapped = a.mapped && b.mapped
 	return out
 }
 

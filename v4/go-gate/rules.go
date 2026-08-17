@@ -2122,8 +2122,16 @@ func (w *fileRules) isTypeExpr(fun ast.Expr) bool {
 		}
 		_, ok := obj.(*types.TypeName)
 		return ok
-	case *ast.ArrayType, *ast.MapType, *ast.ChanType, *ast.FuncType, *ast.StarExpr, *ast.StructType:
+	case *ast.ArrayType, *ast.MapType, *ast.ChanType, *ast.FuncType, *ast.StructType:
 		return true
+	case *ast.StarExpr:
+		// (*T)(x) is a conversion; (*p)(x) with p a func-typed VARIABLE
+		// is a call through a dereferenced function pointer with an
+		// unknowable callee body. The pointee must itself name a type
+		// for the expression to be a type expression: a pointer-deref
+		// call would otherwise fall into the conversion branch and skip
+		// the unproven-callee page-argument fence entirely.
+		return w.isTypeExpr(f.X)
 	case *ast.SelectorExpr:
 		_, ok := w.pc.info.Uses[f.Sel].(*types.TypeName)
 		return ok

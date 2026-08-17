@@ -782,6 +782,50 @@ dispatch with mapped pages), not as a bypass. The three liar
 sub-shapes are pinned durably as P301 (fail). Battery: 611 cases
 (521 rejections, 90 benign acceptances).
 
+Round review 2026-08-17 (chunk 3a, level-1 re-review on the alias
+machinery; HEAD 1e90c67): the round-4 delta probes (probe_r9) applied
+the alias attack surface to the store-callback fence. R9-1 (identity
+alias chain whose source is reassigned after the chain binds;
+cb := fn; cb2 := cb; cb = nil; runCb9(cb2, owned, owned)) was SILENT
+at 1cd3975 - the alias follower dropped the record when the source was
+reassigned and the unproven-callee transfer never fired; Jason's
+P2-1 reproduced. Fixed at 9d7ffa4 (noteCallbackAliases records chains
+with reassigned/address-taken guards; the store-callback fence follows
+the alias at call sites; the scanned-callback fence admits identity
+aliases of func-typed formals whose call sites are policed) and the
+direct alias/literal-wrapper/field sub-shapes are pinned as P301.
+Probe verification at 1e90c67: R9-1, R9-2 (address-taken), R9-3
+(array element), R9-5 (map value), and R9-7 (helper-forwarded capture)
+all fail closed; R9-6/R9-9 honest twins stay clean; R9-8 (captured
+local re-minted to a mapped view before the invocation) stays benign
+by reference semantics. Same-failure sweep over the round-4 fixes then
+found two further escapes, probe-verified in isolation before any fix:
+- P302 (pointer-deref callee): (*p)(owned, owned) with p := &cb was
+  completely silent because the syntactic isTypeExpr StarExpr case
+  misread a dereferenced FUNCTION POINTER call as a type conversion,
+  returning before the unproven-callee page-argument fence ran; the
+  pointee must itself name a type (rules.go isTypeExpr now recurses
+  into the StarExpr operand). The same sweep proved B1-B4 (pointer to
+  package func var, func literal var, the formal, double deref) were
+  equally silent and now all fail closed; the honest mapped twin also
+  fails by the same unproven-indirection conservatism as the array/
+  map/interface classes and is pinned as accepted P304.
+- P303 (branch-joined capture): a helper capturing v := s.capture,
+  re-minting v to a mapped view on ONE branch, then invoking the
+  callback formal with v, was silent because joinPageValue/
+  joinFieldTaint OR-ed the mapped flag across paths; the value is
+  provably mapped only when EVERY path is mapped, so both joins now
+  AND the flag and the store-callback fence fails closed on the
+  owned path.
+Deep-chain stress (4/8/16-hop identity aliases with source or
+mid-chain reassignment) all fail closed, the unmolested 16-hop honest
+chain with mapped views passes, and the fixpoint converges with no
+hang and no growth on the real-tree scan (still zero violations).
+Battery: 614 cases (524 rejections, 90 benign acceptances) with P302/
+P303/P304 pinned durably; full-battery re-run at the fixed HEAD was
+clean. The real module scan stays at zero violations and v4/go test
+./... (both tag sets) stays green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
