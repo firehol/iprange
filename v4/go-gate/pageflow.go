@@ -182,6 +182,26 @@ type funcSummary struct {
 	// mapped views). A field assigned several times keeps the last
 	// recorded binding; the fence stays fail-closed.
 	fieldAliases map[types.Object]int
+	// paramAliases records locals the body binds to a func-typed formal
+	// slot (f := fn, g := s.cb.(T)): keyed by the local object, holding
+	// the formal's parameter slot. Internal to the function analysis;
+	// the composition and the callback-invocation walk resolve callees
+	// through it like the alias and holder records.
+	paramAliases map[types.Object]int
+	// indexAliases records indexed container slots the body binds to a
+	// func-typed formal slot (arr[0] = fn, m["cb"] = fn, hs[0] = fn,
+	// hs := []func{fn}): keyed by the container slot, holding the
+	// formal's parameter slot. The store-callback fence follows indexed
+	// callees through the record exactly like field holders.
+	indexAliases map[indexSlotKey]int
+	// returnAliases records local func literals whose body returns one
+	// of their own func-typed parameters unchanged
+	// (id := func(f F) F { return f }): keyed by the local object,
+	// holding the returned parameter position, or -2 when different
+	// branches return different parameters. A call id(x)(args...) is
+	// then the callback bound to x, so the store-callback fence
+	// counter-checks its byte arguments.
+	returnAliases map[types.Object]int
 }
 
 // callbackAlias records one local that aliases a func-typed formal
@@ -192,6 +212,78 @@ type funcSummary struct {
 // or nil for a plain identity alias; litParams are the literal's
 // parameter objects, used to defer the literal-body invocation records
 // to the call sites that bind the literal.
+// indexSlotKey identifies one indexed container slot (arr[0], m["cb"],
+// s.hs[0]) by its root object, the selector path from the root to the
+// container, and the constant index text. An empty index means "any
+// index on this container" (a non-constant index write fails closed).
+// The key is shared by the flow pass (assignments, callee resolution)
+// and the rules pass (store-callback counter-check).
+type indexSlotKey struct {
+	root  types.Object
+	path  string
+	index string
+}
+
+// constIndexKey returns the canonical constant text of an index
+// expression (0, "cb"), or ("", false) when the index is not a
+// constant. Non-constant indices match the catch-all empty key.
+func constIndexKey(info *types.Info, idx ast.Expr) (string, bool) {
+	tv, ok := info.Types[idx]
+	if !ok || tv.Value == nil {
+		return "", false
+	}
+	return tv.Value.ExactString(), true
+}
+
+// indexSlotKeyOf builds the slot key of an indexed LHS or callee
+// expression: arr[0], m["cb"], s.hs[0], xs[i, j]. The key is the root
+// object, the selector path from the root to the indexed container, and
+// the constant index text ("" when any index is non-constant, which
+// matches the catch-all key recorded for non-constant writes).
+func indexSlotKeyOf(info *types.Info, e ast.Expr) (indexSlotKey, bool) {
+	var base ast.Expr
+	var indices []ast.Expr
+	switch t := unparen(e).(type) {
+	case *ast.IndexExpr:
+		base, indices = t.X, []ast.Expr{t.Index}
+	case *ast.IndexListExpr:
+		base, indices = t.X, t.Indices
+	default:
+		return indexSlotKey{}, false
+	}
+	var names []string
+	for {
+		b := unparen(base)
+		if sel, isSel := b.(*ast.SelectorExpr); isSel {
+			names = append([]string{sel.Sel.Name}, names...)
+			base = sel.X
+			continue
+		}
+		break
+	}
+	id, ok := unparen(base).(*ast.Ident)
+	if !ok {
+		return indexSlotKey{}, false
+	}
+	root := info.ObjectOf(id)
+	if root == nil {
+		return indexSlotKey{}, false
+	}
+	key := indexSlotKey{root: root, path: strings.Join(names, ".")}
+	for _, ix := range indices {
+		if s, c := constIndexKey(info, ix); c {
+			if key.index != "" {
+				key.index += ","
+			}
+			key.index += s
+		} else {
+			key.index = ""
+			break
+		}
+	}
+	return key, true
+}
+
 type callbackAlias struct {
 	slot      int
 	forwarded []bool
@@ -849,6 +941,18 @@ func summaryDup(fs *funcSummary) *funcSummary {
 			out.fieldAliases[k] = v
 		}
 	}
+	if len(fs.indexAliases) > 0 {
+		out.indexAliases = map[indexSlotKey]int{}
+		for k, v := range fs.indexAliases {
+			out.indexAliases[k] = v
+		}
+	}
+	if len(fs.returnAliases) > 0 {
+		out.returnAliases = map[types.Object]int{}
+		for k, v := range fs.returnAliases {
+			out.returnAliases[k] = v
+		}
+	}
 	return out
 }
 
@@ -940,6 +1044,22 @@ func callbackRecordsEqual(a, b *funcSummary) bool {
 	}
 	for k, v := range a.fieldAliases {
 		if b.fieldAliases[k] != v {
+			return false
+		}
+	}
+	if len(a.indexAliases) != len(b.indexAliases) {
+		return false
+	}
+	for k, v := range a.indexAliases {
+		if b.indexAliases[k] != v {
+			return false
+		}
+	}
+	if len(a.returnAliases) != len(b.returnAliases) {
+		return false
+	}
+	for k, v := range a.returnAliases {
+		if b.returnAliases[k] != v {
 			return false
 		}
 	}
@@ -1148,6 +1268,7 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	fs.callbackInvokes = nil
 	fs.callbackInvokesInternal = nil
 	fs.callbackAliases = nil
+	fs.paramAliases = nil
 	pf.notePageSinks(st, fs, st.fd.Body)
 	named := map[types.Object]int{}
 	if st.fd.Type.Results != nil {
@@ -4634,9 +4755,6 @@ func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.Blo
 		if idx, ok := st.params[obj]; ok {
 			return idx, true
 		}
-		if idx, ok := paramAliases[obj]; ok {
-			return idx, true
-		}
 		return 0, false
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -4678,6 +4796,85 @@ func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.Blo
 // positions reach the callback. A literal that cannot be shown to
 // invoke the formal is not an alias: binding it at a call site is not
 // forwarding the callback formal, and the fence would be unsound.
+// rootObjectOf resolves the root object of a selector/identifier
+// expression (s.hs -> s), used by composite-literal seeding to key the
+// container slot.
+func (pf *pageFlow) rootObjectOf(e ast.Expr) types.Object {
+	for {
+		switch t := unparen(e).(type) {
+		case *ast.SelectorExpr:
+			e = t.X
+		case *ast.IndexExpr:
+			e = t.X
+		case *ast.StarExpr:
+			e = t.X
+		case *ast.ParenExpr:
+			e = t.X
+		default:
+			if id, ok := t.(*ast.Ident); ok {
+				return pf.pc.info.ObjectOf(id)
+			}
+			return nil
+		}
+	}
+}
+
+// funcTypeOf returns the signature type of a func-typed expression (a
+// callee expression: identifier, field, index element, asserted type, or
+// call result).
+func (pf *pageFlow) funcTypeOf(e ast.Expr) *types.Signature {
+	t := pf.pc.info.TypeOf(unparen(e))
+	if t == nil {
+		return nil
+	}
+	return funcSignature(t)
+}
+
+// slotOfExpr resolves a func-typed expression to a store-callback
+// formal slot of the current function: the formal itself, a local
+// identity or type-assertion alias, a struct field that holds the
+// formal, an indexed slot that holds it, or a type assertion of any of
+// these. It is the single callee-resolution authority shared by the
+// alias pass, the invocation walk, and the composition.
+func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int, bool) {
+	switch t := unparen(e).(type) {
+	case *ast.Ident:
+		obj := pf.pc.info.ObjectOf(t)
+		if obj == nil {
+			return 0, false
+		}
+		if idx, ok := st.params[obj]; ok {
+			return idx, true
+		}
+		if idx, ok := fs.paramAliases[obj]; ok {
+			return idx, true
+		}
+		if al, ok := fs.callbackAliases[obj]; ok {
+			return al.slot, true
+		}
+	case *ast.SelectorExpr:
+		if sel, isSel := pf.pc.info.Selections[t]; isSel && sel.Kind() == types.FieldVal {
+			if idx, ok := fs.fieldAliases[sel.Obj()]; ok {
+				return idx, true
+			}
+		}
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		if key, ok := indexSlotKeyOf(pf.pc.info, t); ok {
+			if idx, ok := fs.indexAliases[key]; ok {
+				return idx, true
+			}
+			if key.index != "" {
+				if idx, ok2 := fs.indexAliases[indexSlotKey{root: key.root, path: key.path}]; ok2 {
+					return idx, true
+				}
+			}
+		}
+	case *ast.TypeAssertExpr:
+		return pf.slotOfExpr(st, fs, t.X)
+	}
+	return 0, false
+}
+
 func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
 	if body == nil {
 		return
@@ -4757,6 +4954,57 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 		}
 		fs.callbackAliases[obj] = al
 	}
+	// returnParamOf reports the parameter position a func literal
+	// returns unchanged from its body (id := func(f F) F { return f }),
+	// or -2 when different branches return different parameters. Only
+	// func-typed parameters count; any other return shape means the
+	// literal is not a return wrapper. Returns nested in branches are
+	// visited; nested func literals are not.
+	returnParamOf := func(lit *ast.FuncLit, params []types.Object) (int, bool) {
+		pos := -1
+		ok := false
+		ast.Inspect(lit.Body, func(n ast.Node) bool {
+			if fl, isFl := n.(*ast.FuncLit); isFl && fl != lit {
+				return false
+			}
+			ret, isRet := n.(*ast.ReturnStmt)
+			if !isRet {
+				return true
+			}
+			if len(ret.Results) != 1 {
+				ok = false
+				pos = -1
+				return false
+			}
+			id, isID := unparen(ret.Results[0]).(*ast.Ident)
+			if !isID {
+				ok = false
+				pos = -1
+				return false
+			}
+			obj := pf.pc.info.ObjectOf(id)
+			idx := -3
+			for p, pobj := range params {
+				if pobj != nil && pobj == obj && funcSignature(obj.Type()) != nil {
+					idx = p
+					break
+				}
+			}
+			if idx < 0 {
+				ok = false
+				pos = -1
+				return false
+			}
+			if pos == -1 {
+				pos = idx
+				ok = true
+			} else if pos != idx {
+				pos = -2
+			}
+			return true
+		})
+		return pos, ok
+	}
 	// Aliases may be declared in any block of the enclosing function
 	// (if/switch/loop bodies) and as var declarations; the fence must
 	// follow them wherever they are declared. Nested func literals are
@@ -4775,6 +5023,19 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 					return
 				}
 				params := paramsOf(lit)
+				// A return wrapper id := func(f F) F { return f } is not
+				// an invocation wrapper: calling id(x)(out, out) invokes
+				// the callback bound to x, so the call's byte arguments
+				// are policed like every holder invocation. Recorded
+				// independently of the invocation-wrapper analysis below.
+				if retPos, isWrapper := returnParamOf(lit, params); isWrapper {
+					if dstObj != nil && !addressTaken[dstObj] && assignCount[dstObj] == 1 {
+						if fs.returnAliases == nil {
+							fs.returnAliases = map[types.Object]int{}
+						}
+						fs.returnAliases[dstObj] = retPos
+					}
+				}
 				slot := -1
 				forwarded := make([]bool, len(params))
 				ast.Inspect(lit.Body, func(n ast.Node) bool {
@@ -4838,19 +5099,35 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 			// Identity aliases: cb := fn records the formal itself, and
 			// cb2 := cb copies the existing record (the value is the same
 			// closure object, so the forwarded positions are the same
-			// signature positions).
-			src, ok := unparen(rhs).(*ast.Ident)
-			if !ok {
-				return
+			// signature positions). Type assertions bind the same
+			// closure value as their base (f := fn.(T), g := s.cb.(T)),
+			// and holder reads copied to a local (f := s.cb) resolve
+			// through the holder records of the previous fixpoint pass.
+			src := unparen(rhs)
+			for {
+				if ta, isTa := src.(*ast.TypeAssertExpr); isTa {
+					src = unparen(ta.X)
+					continue
+				}
+				break
 			}
-			srcObj := pf.pc.info.ObjectOf(src)
-			if srcObj == nil {
-				return
-			}
-			if al, ok := fs.callbackAliases[srcObj]; ok {
-				record(objOf(st, lhs), callbackAlias{slot: al.slot, forwarded: nil, lit: al.lit, litParams: al.litParams}, al.lit)
-			} else if slot, ok := st.params[srcObj]; ok && funcSignature(srcObj.Type()) != nil {
-				record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
+			switch s := src.(type) {
+			case *ast.Ident:
+				srcObj := pf.pc.info.ObjectOf(s)
+				if srcObj == nil {
+					return
+				}
+				if al, ok := fs.callbackAliases[srcObj]; ok {
+					record(objOf(st, lhs), callbackAlias{slot: al.slot, forwarded: nil, lit: al.lit, litParams: al.litParams}, al.lit)
+				} else if slot, ok := st.params[srcObj]; ok && funcSignature(srcObj.Type()) != nil {
+					record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
+				} else if slot, ok := fs.paramAliases[srcObj]; ok {
+					record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
+				}
+			case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
+				if slot, ok := pf.slotOfExpr(st, fs, src); ok {
+					record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
+				}
 			}
 		}
 		skipStmt := func(lhs []ast.Expr, rhs []ast.Expr) bool {
@@ -5197,50 +5474,154 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 		return
 	}
 	census := newInvokeCensus(pf, st, body)
-	paramAliases := map[types.Object]int{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
+	// fs.paramAliases is the per-pass recording of locals bound to a
+	// func-typed formal slot; the assignment walk below records it,
+	// callee resolution reads it, and the composition resolves through
+	// it like the alias and holder records.
+	if fs.paramAliases == nil {
+		fs.paramAliases = map[types.Object]int{}
+	}
+	// recordSlot stores a bound slot under an LHS: an identifier local
+	// (paramAliases, plus a guarded callbackAlias so cross-function
+	// composition sees it), a struct field, or an indexed container
+	// slot.
+	recordSlot := func(lhs ast.Expr, idx int) {
+		switch l := unparen(lhs).(type) {
+		case *ast.Ident:
+			obj := objOf(st, l)
+			if obj == nil {
+				return
+			}
+			fs.paramAliases[obj] = idx
+			// The asserted holder copied to a local must be visible to
+			// the composition at helper call sites; the census guards
+			// match record() in noteCallbackAliases (single assignment,
+			// no address taken).
+			if census.assignCount[obj] == 1 && !census.addressTaken[obj] {
+				if fs.callbackAliases == nil {
+					fs.callbackAliases = map[types.Object]callbackAlias{}
+				}
+				fs.callbackAliases[obj] = callbackAlias{slot: idx}
+			}
+		case *ast.SelectorExpr:
+			// h.f = fn: the field holds the formal; a later h.f(...)
+			// invocation carries the formal slot. Only plain field
+			// selections count (method-value writes cannot name a
+			// storage slot).
+			if sel, isSel := pf.pc.info.Selections[l]; isSel && sel.Kind() == types.FieldVal {
+				if fs.fieldAliases == nil {
+					fs.fieldAliases = map[types.Object]int{}
+				}
+				fs.fieldAliases[sel.Obj()] = idx
+			}
+		case *ast.IndexExpr, *ast.IndexListExpr:
+			// arr[0] = fn: the indexed slot holds the formal. The
+			// container root and the selector path to it make the key,
+			// so s.hs[0] and hs[0] stay distinct; a non-constant index
+			// records the catch-all key and any indexed call on the
+			// container fails closed.
+			if key, ok2 := indexSlotKeyOf(pf.pc.info, l); ok2 {
+				if fs.indexAliases == nil {
+					fs.indexAliases = map[indexSlotKey]int{}
+				}
+				fs.indexAliases[key] = idx
+			}
 		}
-		for i, lhs := range assign.Lhs {
-			if i >= len(assign.Rhs) {
-				break
-			}
-			srcID, ok := unparen(assign.Rhs[i]).(*ast.Ident)
-			if !ok {
+	}
+	// seedComposite records formal-bound elements of an array, slice, or
+	// map literal bound to a local or field: hs := []func{fn} seeds
+	// slot hs[0], s.hs = []func{fn} seeds path hs element 0, and a map
+	// literal seeds its constant keys.
+	seedComposite := func(lhs ast.Expr, lit *ast.CompositeLit) {
+		var base ast.Expr
+		path := ""
+		switch l := unparen(lhs).(type) {
+		case *ast.Ident:
+			base = l
+		case *ast.SelectorExpr:
+			base = l
+		default:
+			return
+		}
+		root := pf.rootObjectOf(base)
+		if root == nil {
+			return
+		}
+		for {
+			b := unparen(base)
+			if sel, isSel := b.(*ast.SelectorExpr); isSel {
+				if path == "" {
+					path = sel.Sel.Name
+				} else {
+					path = sel.Sel.Name + "." + path
+				}
+				base = sel.X
 				continue
 			}
-			srcObj := objOf(st, srcID)
-			if srcObj == nil {
+			break
+		}
+		record := func(index string, e ast.Expr) {
+			if slot, ok := pf.slotOfExpr(st, fs, e); ok {
+				key := indexSlotKey{root: root, path: path, index: index}
+				if fs.indexAliases == nil {
+					fs.indexAliases = map[indexSlotKey]int{}
+				}
+				fs.indexAliases[key] = slot
+			}
+		}
+		pos := 0
+		for _, el := range lit.Elts {
+			if kv, isKV := el.(*ast.KeyValueExpr); isKV {
+				key := ""
+				if k, c := constIndexKey(pf.pc.info, kv.Key); c {
+					key = k
+				}
+				record(key, kv.Value)
+				pos++
 				continue
 			}
-			idx, ok := st.params[srcObj]
-			if !ok {
-				idx, ok = paramAliases[srcObj]
-			}
-			if !ok {
-				al, aok := fs.callbackAliases[srcObj]
-				if aok {
-					idx, ok = al.slot, true
+			record(strconv.Itoa(pos), el)
+			pos++
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range n.Lhs {
+				if i >= len(n.Rhs) {
+					break
+				}
+				// Type assertions bind the same closure value as their
+				// base: fn.(T), s.cb.(T), arr[0].(T) all resolve through
+				// the base's slot when one is recorded.
+				src := unparen(n.Rhs[i])
+				for {
+					if ta, isTa := src.(*ast.TypeAssertExpr); isTa {
+						src = unparen(ta.X)
+						continue
+					}
+					break
+				}
+				switch s := src.(type) {
+				case *ast.CompositeLit:
+					seedComposite(lhs, s)
+				default:
+					if idx, ok := pf.slotOfExpr(st, fs, src); ok {
+						recordSlot(lhs, idx)
+					}
 				}
 			}
-			if !ok {
-				continue
-			}
-			switch l := unparen(lhs).(type) {
-			case *ast.Ident:
-				paramAliases[objOf(st, l)] = idx
-			case *ast.SelectorExpr:
-				// h.f = fn: the field holds the formal; a later h.f(...)
-				// invocation carries the formal slot. Only plain field
-				// selections count (method-value writes cannot name a
-				// storage slot).
-				if sel, isSel := pf.pc.info.Selections[l]; isSel && sel.Kind() == types.FieldVal {
-					if fs.fieldAliases == nil {
-						fs.fieldAliases = map[types.Object]int{}
-					}
-					fs.fieldAliases[sel.Obj()] = idx
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				if i >= len(n.Values) {
+					break
+				}
+				if lit, isLit := unparen(n.Values[i]).(*ast.CompositeLit); isLit {
+					seedComposite(name, lit)
+					continue
+				}
+				if idx, ok := pf.slotOfExpr(st, fs, n.Values[i]); ok {
+					recordSlot(name, idx)
 				}
 			}
 		}
@@ -5266,7 +5647,7 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 		if idx, ok := st.params[obj]; ok {
 			return idx, true
 		}
-		if idx, ok := paramAliases[obj]; ok {
+		if idx, ok := fs.paramAliases[obj]; ok {
 			return idx, true
 		}
 		return 0, false
@@ -5323,48 +5704,42 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 			return true
 		case *ast.CallExpr:
 			// Resolve the callee to a func-typed formal slot: the formal
-			// itself, a recorded local alias, a param alias (including a
-			// global assigned the formal), or a struct field assigned the
-			// formal (h.f = fn; h.f(a, b)).
+			// itself, a recorded local or assertion alias, a struct
+			// field or indexed slot assigned the formal (h.f = fn,
+			// arr[0] = fn), a type assertion of any of these
+			// (s.cb.(T)(a, b)), or the result of a return wrapper
+			// (id := func(f F) F { return f }; id(x)(a, b) invokes x).
 			var fnSlot int
 			var sig *types.Signature
-			if id, ok := unparen(v.Fun).(*ast.Ident); ok {
+			fun := unparen(v.Fun)
+			if _, isCall := fun.(*ast.CallExpr); isCall {
+				// Return wrapper: the inner call's result is the
+				// callback bound to the returned parameter position.
+				ic := unparen(v.Fun).(*ast.CallExpr)
+				id, ok := unparen(ic.Fun).(*ast.Ident)
+				if !ok {
+					return true
+				}
 				obj := pf.pc.info.ObjectOf(id)
 				if obj == nil {
 					return true
 				}
-				found := false
-				fnSlot, found = st.params[obj]
-				if !found {
-					fnSlot, found = paramAliases[obj]
-					if !found {
-						al, ok2 := fs.callbackAliases[obj]
-						if ok2 {
-							fnSlot, found = al.slot, true
-						}
-					}
-				}
-				if !found {
+				pos, ok := fs.returnAliases[obj]
+				if !ok || pos < 0 || pos >= len(ic.Args) {
 					return true
 				}
-				sig, _ = obj.Type().(*types.Signature)
-			} else if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
-				fieldSel, isSel := pf.pc.info.Selections[sel]
-				if !isSel || fieldSel.Kind() != types.FieldVal {
-					// Method values and interface dispatches are not
-					// storage slots: their bodies are scanned (concrete
-					// methods) or fail closed elsewhere (interfaces).
-					return true
-				}
-				slot, ok := fs.fieldAliases[fieldSel.Obj()]
+				fnSlot, ok = pf.slotOfExpr(st, fs, ic.Args[pos])
 				if !ok {
 					return true
 				}
-				fnSlot = slot
-				if sig, _ = fieldSel.Obj().Type().(*types.Signature); sig == nil {
+			} else {
+				var ok bool
+				fnSlot, ok = pf.slotOfExpr(st, fs, fun)
+				if !ok {
 					return true
 				}
-			} else {
+			}
+			if sig = pf.funcTypeOf(fun); sig == nil {
 				return true
 			}
 			if sig == nil || sig.Params() == nil {
@@ -5566,22 +5941,22 @@ func (pf *pageFlow) recordCallbackInvokeComposition(st *stmtState, call *ast.Cal
 	}
 	// resolveFnIdx maps the callee's func-typed slot to the current
 	// function's summary slot: the slot binds the current function's
-	// own func-typed formal directly, or a local alias (cb := fn, or a
-	// wrapper literal) recorded by noteCallbackAliases.
+	// own func-typed formal directly, or a local alias, a struct field
+	// or indexed holder, or an assertion of any of these, through the
+	// shared slotOfExpr resolver.
 	resolveFnIdx := func(slot int) (int, bool) {
-		obj, ok := paramObj(slotExpr(slot))
-		if ok {
-			if _, isFunc := obj.Type().(*types.Signature); !isFunc {
-				return 0, false
-			}
-			return st.params[obj], true
+		se := slotExpr(slot)
+		if se == nil {
+			return 0, false
 		}
-		if obj := objOf(st, slotExpr(slot)); obj != nil {
-			if al, ok := st.activeFS.callbackAliases[obj]; ok {
-				return al.slot, true
+		for {
+			if sl, ok := unparen(se).(*ast.SliceExpr); ok {
+				se = sl.X
+				continue
 			}
+			break
 		}
-		return 0, false
+		return pf.slotOfExpr(st, st.activeFS, se)
 	}
 	for fnSlot := range fs.callbackInvokes {
 		fnIdx, ok := resolveFnIdx(fnSlot)

@@ -1308,6 +1308,97 @@ func (w *fileRules) fieldHoldsCallbackFormal(sel *ast.SelectorExpr) bool {
 	return ok
 }
 
+// callbackSlotOf reports whether a func-typed expression ultimately
+// names the store-callback formal of the current function: the formal
+// itself, an identity or type-assertion alias of it, a struct field or
+// indexed slot that holds it, or a type assertion of any of these. The
+// rules-side counterpart of the flow-pass slotOfExpr; the two must
+// agree on every shape so the counter-check fires exactly when the flow
+// records an invocation.
+func (w *fileRules) callbackSlotOf(e ast.Expr) bool {
+	switch t := unparen(e).(type) {
+	case *ast.Ident:
+		obj, ok := w.pc.info.Uses[t].(*types.Var)
+		if !ok || funcSignature(obj.Type()) == nil {
+			return false
+		}
+		return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
+	case *ast.SelectorExpr:
+		return w.fieldHoldsCallbackFormal(t)
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		return w.indexHoldsCallbackFormal(t)
+	case *ast.TypeAssertExpr:
+		return w.callbackSlotOf(t.X)
+	}
+	return false
+}
+
+// indexHoldsCallbackFormal reports whether an indexed callee names a
+// container slot the current function assigned the store callback
+// formal (arr[0] = fn, m["cb"] = fn, hs := []func{fn}), matching the
+// flow-pass indexAliases record by root object, selector path, and
+// constant index; a non-constant callee index hits the catch-all key.
+func (w *fileRules) indexHoldsCallbackFormal(e ast.Expr) bool {
+	if w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	key, ok := indexSlotKeyOf(w.pc.info, e)
+	if !ok {
+		return false
+	}
+	if _, ok := encl.indexAliases[key]; ok {
+		return true
+	}
+	if key.index != "" {
+		_, ok = encl.indexAliases[indexSlotKey{root: key.root, path: key.path}]
+		return ok
+	}
+	return false
+}
+
+// callResultHoldsCallbackFormal reports whether a call-typed callee
+// (id(...)(args...)) is the result of a local return wrapper that
+// passed the store callback formal through (id := func(f F) F { return
+// f }; id(s.cb.(T))(out, out) invokes the asserted formal).
+func (w *fileRules) callResultHoldsCallbackFormal(fun ast.Expr) bool {
+	if w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	ic, ok := unparen(fun).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := unparen(ic.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	obj, ok := w.pc.info.Uses[id].(*types.Var)
+	if !ok {
+		return false
+	}
+	pos, ok := encl.returnAliases[obj]
+	if !ok {
+		return false
+	}
+	if pos == -2 {
+		// Different branches return different parameters: the result is
+		// one of them, so the fence fails closed.
+		return true
+	}
+	if pos < 0 || pos >= len(ic.Args) {
+		return false
+	}
+	return w.callbackSlotOf(ic.Args[pos])
+}
+
 // forwardsCallbackFormal reports whether the call passes the current
 // store implementation's callback formal (directly, through a local
 // alias, or through a field holder) as a func-typed argument. A
@@ -1316,17 +1407,7 @@ func (w *fileRules) fieldHoldsCallbackFormal(sel *ast.SelectorExpr) bool {
 // counter-check on its byte arguments.
 func (w *fileRules) forwardsCallbackFormal(v *ast.CallExpr) bool {
 	resolves := func(e ast.Expr) bool {
-		switch a := unparen(e).(type) {
-		case *ast.Ident:
-			obj, ok := w.pc.info.Uses[a].(*types.Var)
-			if !ok || funcSignature(obj.Type()) == nil {
-				return false
-			}
-			return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
-		case *ast.SelectorExpr:
-			return w.fieldHoldsCallbackFormal(a)
-		}
-		return false
+		return w.callbackSlotOf(e)
 	}
 	for _, arg := range v.Args {
 		if resolves(arg) {
@@ -1545,16 +1626,35 @@ func (w *fileRules) paramAliasedFuncVar(v *types.Var, depth int) bool {
 	if !ok {
 		return false
 	}
-	id, ok := unparen(init).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	switch o := w.pc.info.Uses[id].(type) {
-	case *types.Var:
-		if w.approvedFuncParamVar(o) {
-			return true
+	// A type-assertion initializer binds the same closure value as its
+	// base: f := fn.(T), f := s.cb.(T), f := arr[0].(T) are scanned
+	// callbacks exactly like the base expression.
+	src := unparen(init)
+	for {
+		if ta, isTa := src.(*ast.TypeAssertExpr); isTa {
+			src = unparen(ta.X)
+			continue
 		}
-		return w.paramAliasedFuncVar(o, depth+1)
+		break
+	}
+	switch s := src.(type) {
+	case *ast.Ident:
+		switch o := w.pc.info.Uses[s].(type) {
+		case *types.Var:
+			if w.approvedFuncParamVar(o) {
+				return true
+			}
+			// An any-typed holder the flow recorded as bound to the
+			// formal (var box any = fn; f := box.(T)) is a scanned
+			// callback exactly like the formal: the box's value is the
+			// closure the formal's call sites police.
+			if w.recordedCallbackAlias(o) {
+				return true
+			}
+			return w.paramAliasedFuncVar(o, depth+1)
+		}
+	case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
+		return w.callbackSlotOf(s)
 	}
 	return false
 }
@@ -1745,15 +1845,34 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		// fs[0](page): a call through a slice/array element or map
-		// lookup has an unknowable callee body.
+		// lookup has an unknowable callee body. When the indexed
+		// container slot holds the store callback formal (arr[0] = fn;
+		// arr[0](out, out)), the clean owned buffers launder through it,
+		// so the counter-check demands mapped views like every holder.
+		if w.isStoreCallbackImpl() && w.indexHoldsCallbackFormal(f) {
+			w.checkStoreCallbackViews(v, f)
+		}
 		varIndirect = true
 	case *ast.StarExpr:
 		// (*p)(page): a call through a dereferenced function pointer has
 		// an unknowable callee body.
 		varIndirect = true
-	case *ast.CallExpr, *ast.TypeAssertExpr:
-		// factory()(page) and x.(func([]byte) int)(page): the callee is
-		// produced by an expression the scan cannot resolve to a body.
+	case *ast.TypeAssertExpr:
+		// x.(func([]byte) int)(page): a type assertion over a base that
+		// holds the store callback formal (s.cb.(T)(out, out)) launders
+		// clean owned buffers exactly like the base holder itself.
+		if w.isStoreCallbackImpl() && w.callbackSlotOf(f) {
+			w.checkStoreCallbackViews(v, f)
+		}
+		varIndirect = true
+	case *ast.CallExpr:
+		// factory()(page): a call-typed callee produced by a return
+		// wrapper that passed the store callback formal through
+		// (id := func(f F) F { return f }; id(s.cb.(T))(out, out)) is
+		// the formal at the invocation point.
+		if w.isStoreCallbackImpl() && w.callResultHoldsCallbackFormal(f) {
+			w.checkStoreCallbackViews(v, f)
+		}
 		varIndirect = true
 	}
 	transfer := !approved && !exempt && (resultHoldsBytes(w.typeOf(v)) || voidVarCall)

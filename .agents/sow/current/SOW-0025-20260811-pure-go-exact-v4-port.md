@@ -944,6 +944,64 @@ wall). Real module scan rc=0 across the 5 OS configs; go test ./...
 both tag sets, -race, vet (module and gate), gofmt, and the
 import-graph boundary check over the 11 GOOS/GOARCH pairs all green.
 
+Level-1 round continuation (2026-08-17, Jason P2 on type-assertion
+and indexed-slot callee escapes): Jason returned FAIL at HEAD 6bf4467
+with three P2 gate escapes, all probe-verified silent at HEAD and all
+reproduced by the lead:
+
+1. P2-1 type-assertion callee defeats the holder fence: s.cb = fn with
+cb any, then s.cb.(T)(out, out) with owned buffers - the counter-check
+was wired only for Ident/Selector callees, so the assertion callee
+matched neither the flow records nor the rules counter-check; the
+identity-func roundtrip cast(s.cb.(T))(out, out) (cast := func(f F) F
+{ return f }) was equally silent.
+2. P2-2 type-assertion-to-local breaks the alias chain: f := s.cb.(T);
+f(out, out) - noteCallbackInvokes accepted RHS recordings only as
+*ast.Ident and paramAliasedFuncVar required an Ident initializer, so
+the assertion result was neither a scanned callback nor a policed
+holding.
+3. P2-3 indexed slot holders are not recorded: arr[0] = fn, map
+m["cb"] = fn, slice literals hs := []func{fn}, and slice fields
+s.hs = []func{fn} invoked as arr[0](out, out) etc. - slot recording
+handled only Ident/Selector LHS and callee resolution only
+Ident/Selector functions.
+
+Fixed with one shared callee-resolution authority (slotOfExpr in
+pageflow.go, with its rules-side counterpart callbackSlotOf in
+rules.go): a func-typed expression resolves to the callback formal
+slot through the formal itself, identity/assertion aliases
+(f := fn.(T), f := s.cb.(T), var box any = fn; f := box.(T)),
+struct-field holders, indexed container slots (keyed by root object,
+selector path, and constant index; non-constant indices fail closed
+with a catch-all key), and type assertions of any of these. The
+flow pass records type-assert RHSs in the identity and param-alias
+passes, seeds indexAliases from indexed assignments AND array/slice/
+map composite literals ([]func{fn} seeds hs[0]), records return
+wrappers (id := func(f F) F { return f }) as returnAliases so
+id(x)(out, out) resolves the callee to the callback bound to x, and
+the composition and rootSlot resolve through the same authority.
+The rules counter-check now fires for TypeAssertExpr, IndexExpr/
+IndexListExpr, and call-typed callees, and forwardsCallbackFormal and
+paramAliasedFuncVar resolve the new shapes (paramAliasedFuncVar also
+accepts flow-recorded any-holder aliases, so a box-asserted callback
+forwarded to a helper is scanned instead of over-rejected).
+
+All nine Jason liar shapes now fail (type-assert callee, array slot,
+map slot, assert-to-local, slice literal, slice field, identity-
+return roundtrip, box-assert forwarded, field-assert forwarded),
+per-OS as expected, while the honest twin (assertion alias forwarded
+through a helper with mapped views, box- or field-derived) stays
+clean; helper-internal direct holder invocations with traced params
+stay over-rejected exactly like the pre-existing alias/field classes
+(verified identical to the 6bf4467 binary on the mapped honest
+controls). Pinned durably as P311 (nine liar shapes) and P312
+(honest assertion-alias forwarding twins). Battery: 620 -> 622 cases
+(528 rejections, 94 benign acceptances), zero misses under
+--self-test-jobs 24 (1:47 wall). Real module scan rc=0 across the 5
+OS configs; go test ./... both tag sets, -race, vet (module and
+gate), gofmt, and the import-graph boundary check over the 11
+GOOS/GOARCH pairs all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
