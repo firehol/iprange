@@ -617,41 +617,81 @@ locally validated:
   and test-only BytesMoved/BytesZeroed/PageCreated/page counters. The
   editor entry points and workflow state machines (range/membership/
   structure deltas) arrive in chunk 3b.
-- Gate: module-internal interfaces (Store/Codec/BitmapStore) dispatch
-  as approved callees - every implementation is scanned - with two new
-  fail-closed checks that keep concrete page carriers visible through
-  the erased receiver: module-internal interface receivers that
-  concretely carry a full page fail at the dispatch, and field-hidden
-  full-page arguments to unproven callback callees fail at the call.
-  The scanned-callback fence (checkFuncTypedArgs) requires func-typed
-  arguments of approved module callees to bottom out in scanned
-  bodies; func-typed FORMAL PARAMETERS are the approved exception
-  (call sites are scanned). Field-full-page promotion now also covers
-  expressions whose whole value is already full-page taint (an
-  interface variable bound to a page-carrying struct, a struct literal
-  with a page-bound field), so P119/P130/P131-style launders fail
-  closed while interface-PARAMETER fallbacks stay benign (store
-  dispatches keep passing). Param copy pairs (copy(paramD, paramS))
+- Gate: dispatch approval and the store-callback closure are scoped
+  by NAME, not by declaration site. The only approved module-internal
+  interface dispatches are tree.Store, tree.RetiringStore,
+  tree.Codec, and bitmap.BitmapStore (approvedModuleInterfaces):
+  their method sets have no satisfier outside the scanned source
+  (Codec references internal tree.Key; the Store-family method names
+  plus exact signatures exist nowhere in the stdlib or x/sys). Every
+  other interface - including module-declared ones whose method set a
+  stdlib type satisfies (interface UnmarshalText([]byte) error on
+  *big.Int) - is an unproven indirection that fails closed on
+  page-bearing arguments (new battery pin P242). The two fail-closed
+  checks that keep concrete page carriers visible through the erased
+  receiver still apply to every module-declared interface:
+  interface receivers that concretely carry a full page fail at the
+  dispatch (P119), and field-hidden full-page arguments to unproven
+  callback callees fail at the call. The store-callback seeding (only
+  on the four approved names) is counter-checked at the
+  IMPLEMENTATION site: Inspect/Update/CopyPage implementations on an
+  approved store interface must invoke their callback formal only
+  with mapped views (P243 dishonest-store pin); an owned callback
+  buffer would make the seeding bless copies of complete mapped pages
+  into owned memory. The scanned-callback fence (checkFuncTypedArgs)
+  requires func-typed arguments of approved module callees to bottom
+  out in scanned bodies; func-typed FORMAL PARAMETERS are the approved
+  exception (call sites are scanned). Field-full-page promotion
+  covers expressions whose whole value is already full-page taint
+  (P119/P130/P131-style launders fail closed while interface-PARAMETER
+  fallbacks stay benign). Param copy pairs (copy(paramD, paramS))
   recorded in callee summaries are enforced at the binding call site
-  (checkParamCopyCalls). Battery: 604 cases (516 rejections, 88
-  benign acceptances) + 9 shell mutations; P57 reclassified to benign
-  (scanned literal callback; its unproven-callback intent is now
-  pinned by the new P136 fence case and the existing P42/P67/P68
-  unproven-callee cases), P130/P131/P132 field-promotion pins added
-  earlier restored, P119 module-internal interface receiver pin added,
-  P137 (CopyPage mapped->mapped callback benign) and P138 (CopyPage
-  callback laundering into an owned buffer rejected) pin the new
-  store-callback closure shape.
+  (checkParamCopyCalls). Battery: 606 cases (518 rejections, 88
+  benign acceptances); P57 reclassified to benign (scanned literal
+  callback; intent pinned by P136 + P42/P67/P68), P130/P131/P132
+  field-promotion pins, P119 module-internal interface receiver pin,
+  P137/P138 store-callback pins rewritten to dispatch through the
+  real tree.Store (the approved surface they model), P242
+  stdlib-satisfiable-interface pin, P243 dishonest-store pin.
 Validation so far: go test ./... (both tag sets), -race on
 tree/bitmap/retire/writer/format, vet, gofmt, import-graph scan with
 the new tree/bitmap/retire boundaries, 11/11 cross-builds, and the
-604-case gate battery + 9 shell mutations - all green, battery with
-zero misses. Work-counter pins cover one-shot reads visiting each path
-page once, lower-bound reuse of its final probe, fixed replacement
-single capacity probe, deletion single tree lookup, same-path
-set-free exactly two bitmap probes, draft PagesCreated/BytesZeroed/
-BytesMoved/MappingGrowths. Level-1/level-2 swarm review of this chunk
-follows the commit.
+606-case gate battery - all green, battery with zero misses.
+Work-counter pins cover one-shot reads visiting each path page once,
+lower-bound reuse of its final probe, fixed replacement single
+capacity probe, deletion single tree lookup, same-path set-free
+exactly two bitmap probes, draft PagesCreated/BytesZeroed/BytesMoved/
+MappingGrowths.
+
+Review round 1 (level-1 swarm, 2026-08-17): five aspect reviewers at
+d9990b9/eaa4d26; findings verified and fixed in this round:
+- P2 (gate): module-internal dispatch approval accepted ANY
+  module-declared interface; a stdlib-satisfiable method set
+  (UnmarshalText on *big.Int) passed a full mapped page with zero
+  diagnostics. Fixed by named-set approval + P242 pin; the SOW claim
+  now matches the implementation (Store/RetiringStore/BitmapStore/
+  Codec only).
+- P1->P2 (gate): store-callback seeding was trust-based; an owned
+  buffer implementation made mapped->owned copies silent. Fixed by
+  the implementation-site mapped-view requirement + P243 pin.
+- P2 (wire parity): Go bitmap headerProblem omitted the Rust
+  common_valid magic/flags/header-size checks, so a torn page could
+  be COW-copied and re-sealed with a valid CRC. Fixed in
+  bitmap_page.go with a bounded magic compare + parity tests.
+- P3 (parity) fixed: splitDifference >= -> > (Rust >), retirement
+  After u32 wrap to the next transaction, error-class alignment
+  (Unsupported->58 for requireCodec/newBranchCell/run-removal,
+  ArithmeticOverflow->60 for retire grow/insert/remove and
+  childBaseAt, Corrupt->32 for the fixedPositions gap), findLowest
+  no-summary now reports no candidate (Rust Found(None)) instead of
+  bit 0, mapped provenance preserved through function summaries so
+  the store-callback rule sees mapping views across helper calls.
+- Duplicate battery case numbers P136/P137/P138 (two cases each)
+  remain as-is (reporting cosmetics only; both run); not renumbered
+  to keep the shell battery history stable.
+- Accepted-with-record P3s: retire encode/decode boxing per extent
+  and put.go fixed-position bookkeeping allocations are bounded and
+  commit-path only; revisit under chunk 3b with commit benchmarks.
 
 ## Review Process (user decision, 2026-08-12)
 

@@ -108,7 +108,7 @@ func RemoveLeafRun(codec Codec, store Store, root *uint32, key Key, include func
 	} else {
 		cellLen, ok := FixedCellSize(codec, 0)
 		if !ok {
-			return nil, invalid("B+tree run removal requires fixed leaf cells")
+			return nil, unsupported("B+tree run removal requires fixed leaf cells")
 		}
 		if err := store.Update(leaf.PageNumber, func(page []byte) error {
 			_, err := format.SlottedRemoveFixedRange(page, &leaf.Header, index, end-index, cellLen)

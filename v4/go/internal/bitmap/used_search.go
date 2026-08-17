@@ -32,6 +32,7 @@ func findLowest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32,
 		pageLimit := store.PageLimit()
 		found := uint32(0)
 		missing := uint32(0)
+		noCandidate := false
 		child := uint32(0)
 		nextBase := uint64(0)
 		step := 0 // 0 = leaf result, 1 = finished, 2 = descend
@@ -73,6 +74,7 @@ func findLowest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32,
 					return corrupt("used bitmap summary has no candidate")
 				}
 				step = 1
+				noCandidate = true
 				return nil
 			}
 			childBase, err := childBaseAt(base, span, index)
@@ -110,7 +112,12 @@ func findLowest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32,
 		case 0:
 			return found, true, nil
 		case 1:
-			if level == 0 {
+			if level == 0 || noCandidate {
+				// Rust LowestStep::Found(None): no candidate below this
+				// root/branch summary at all. A missing CHILD is a
+				// candidate bit (Some(missing)); a missing SUMMARY is
+				// not - returning bit 0 here would hand the allocator a
+				// nonexistent candidate.
 				return 0, false, nil
 			}
 			return missing, true, nil

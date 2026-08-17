@@ -213,7 +213,7 @@ func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, pre
 
 func grow(count, by uint32) (uint32, error) {
 	if uint64(count)+uint64(by) > 1<<32 {
-		return 0, corrupt("retirement extent length")
+		return 0, overflow("retirement extent length")
 	}
 	return count + by, nil
 }
@@ -224,6 +224,9 @@ func insert(store tree.Store, root *uint32, extentCount *uint64, extent Extent, 
 		return err
 	}
 	if inserted {
+		if *extentCount == ^uint64(0) {
+			return overflow("retirement extent count")
+		}
 		*extentCount = *extentCount + 1
 	}
 	return nil
@@ -234,7 +237,7 @@ func remove(store tree.Store, root *uint32, extentCount *uint64, key Key, retire
 		return err
 	}
 	if *extentCount == 0 {
-		return corrupt("retirement extent count underflows")
+		return overflow("retirement extent count underflows")
 	}
 	*extentCount = *extentCount - 1
 	return nil
@@ -280,11 +283,19 @@ func First(store tree.Store, root uint32) (*Extent, error) {
 
 // After returns the first extent strictly after extent (Rust after).
 func After(store tree.Store, root uint32, extent Extent) (*Extent, error) {
-	key := Key{Txn: extent.Key.Txn, First: extent.Key.First + 1}
-	// first+1 overflows only at the 32-bit boundary; txn never exceeds
-	// that in a coherent tree (txn is a u64 and first a u32: the next
-	// possible key is the next transaction).
-	return atOrAfter(store, root, key)
+	first := extent.Key.First + 1
+	txn := extent.Key.Txn
+	if first == 0 {
+		// first+1 wrapped at the u32 boundary: the next possible key is
+		// the first extent of the next transaction; an overflowing txn
+		// has no successor at all (Rust checked_add chain: first, then
+		// txn, else None).
+		if txn == ^uint64(0) {
+			return nil, nil
+		}
+		txn++
+	}
+	return atOrAfter(store, root, Key{Txn: txn, First: first})
 }
 
 // SelectReclamation selects the reclamation-safe prefix of the retirement
@@ -410,4 +421,8 @@ func corrupt(detail string) error {
 
 func invalid(detail string) error {
 	return &format.Error{Code: format.CodeInvalidArgument, Detail: detail}
+}
+
+func overflow(detail string) error {
+	return &format.Error{Code: format.CodeArithmeticOverflow, Detail: detail}
 }

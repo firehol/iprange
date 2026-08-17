@@ -3142,14 +3142,17 @@ func maxSrcOf(pv pageValue) []maxSrc {
 	// extractions, mints) keep their caller-dependent source below.
 	if pv.hasSym {
 		if c, ok := pv.sym.isConst(); ok {
-			return []maxSrc{{param: -1, kind: "const", constVal: c}}
+			// A bounded slice of a mapped view is still mapped: the
+			// store-callback rule and the copy rules need the mapped
+			// provenance across summary boundaries, not only the bound.
+			return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: c})}
 		}
 		if len(pv.sym.coeff) == 1 && pv.sym.c == 0 {
 			for p := range pv.sym.coeff {
 				return []maxSrc{mk(maxSrc{param: p, kind: "value"})}
 			}
 		}
-		return []maxSrc{{param: -1, kind: "const", constVal: maxUnknown}}
+		return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: maxUnknown})}
 	}
 	if pv.hasSrc {
 		if pv.srcField != "" {
@@ -3159,19 +3162,19 @@ func maxSrcOf(pv pageValue) []maxSrc {
 	}
 	if pv.hasSym {
 		if c, ok := pv.sym.isConst(); ok {
-			return []maxSrc{{param: -1, kind: "const", constVal: c}}
+			return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: c})}
 		}
 		if len(pv.sym.coeff) == 1 && pv.sym.c == 0 {
 			for p := range pv.sym.coeff {
 				return []maxSrc{mk(maxSrc{param: p, kind: "value"})}
 			}
 		}
-		return []maxSrc{{param: -1, kind: "const", constVal: maxUnknown}}
+		return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: maxUnknown})}
 	}
 	if pv.maxLen >= 0 {
-		return []maxSrc{{param: -1, kind: "const", constVal: pv.maxLen}}
+		return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: pv.maxLen})}
 	}
-	return []maxSrc{{param: -1, kind: "const", constVal: maxUnknown}}
+	return []maxSrc{mk(maxSrc{param: -1, kind: "const", constVal: maxUnknown})}
 }
 
 func assignTarget(st *stmtState, lhs ast.Expr, pv pageValue) {
@@ -5075,13 +5078,16 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 		recv = recvTypeNameFromTypes(sig.Recv().Type())
 	}
-	// Store-surface callbacks (Inspect/Update/CopyPage on a
-	// module-internal store interface) receive mapped page views: the
-	// func-literal arguments are analyzed with their byte parameters
-	// marked as mapping aliases.
+	// Store-surface callbacks (Inspect/Update/CopyPage on one of the
+	// explicitly approved module-internal store interfaces) receive
+	// mapped page views: the func-literal arguments are analyzed with
+	// their byte parameters marked as mapping aliases. A non-approved
+	// interface is never seeded: its implementation is not provably a
+	// scanned module store, so a callback argument could escape mapped
+	// data into owned memory.
 	storeCallback := false
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
-		moduleInternalInterface(sig.Recv().Type()) && storeCallbackMethod(fn.Name()) {
+		approvedModuleInternalInterface(sig.Recv().Type()) && storeCallbackMethod(fn.Name()) {
 		storeCallback = true
 	}
 	// Mints: the mmap call returns the mapped bytes; the mapping owner's

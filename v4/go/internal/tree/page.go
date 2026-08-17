@@ -183,7 +183,7 @@ func newBranchCell(codec Codec, key Key, child uint32) (*CellBuf, error) {
 	var cell CellBuf
 	cell.len = codec.KeySize() + 4
 	if cell.len == 0 || cell.len > MaxBranchSize(codec) || cell.len > maxTreeCell {
-		return nil, invalid("B+tree branch encoding is invalid")
+		return nil, unsupported("B+tree branch encoding is invalid")
 	}
 	codec.WriteKey(key, cell.bytes[:codec.KeySize()])
 	format.PutU32(cell.bytes[codec.KeySize():cell.len], child)
@@ -431,7 +431,7 @@ func splitBySize(total int, cellLen func(int) (int, error)) (int, error) {
 func splitDifference(total, middle, payload, leftPayload int) (int, bool) {
 	left := pageSize(middle, leftPayload)
 	right := pageSize(total-middle, payload-leftPayload)
-	if left >= format.PageSize || right >= format.PageSize {
+	if left > format.PageSize || right > format.PageSize {
 		return 0, false
 	}
 	difference := left - right

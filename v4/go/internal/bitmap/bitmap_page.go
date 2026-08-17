@@ -6,6 +6,7 @@
 package bitmap
 
 import (
+	"bytes"
 	"math/bits"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -63,7 +64,16 @@ func PageLower(level uint16) int {
 func headerProblem(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) error {
 	level := format.U16(page[format.HeaderLevel:])
 	lower := PageLower(level)
+	// Rust page_header::common_valid runs on every bitmap parse (private
+	// and committed): magic, zero flags, and the fixed 32-byte header
+	// size. A torn write at offset 0 with the rest of the header intact
+	// must be rejected here, before any COW copy re-seals the page with
+	// a valid checksum. The magic compare is bounded (4 bytes) and never
+	// moves mapped bytes into owned memory.
 	if len(page) != format.PageSize ||
+		!bytes.Equal(page[format.HeaderMagic:format.HeaderMagic+4], format.PageMagic[:]) ||
+		page[format.HeaderFlags] != 0 ||
+		int(format.U16(page[format.HeaderSizePos:])) != format.SlottedHeaderSize ||
 		int(format.U16(page[format.HeaderLower:])) != lower ||
 		int(format.U16(page[format.HeaderUpper:])) != format.PageSize {
 		return corrupt("bitmap page header is invalid")
@@ -358,4 +368,8 @@ func corrupt(detail string) error {
 
 func invalid(detail string) error {
 	return &format.Error{Code: format.CodeInvalidArgument, Detail: detail}
+}
+
+func overflow(detail string) error {
+	return &format.Error{Code: format.CodeArithmeticOverflow, Detail: detail}
 }

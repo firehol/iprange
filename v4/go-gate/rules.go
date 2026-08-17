@@ -171,6 +171,9 @@ type packageCheck struct {
 	// module-internal packages (the callback fence polices the call
 	// sites).
 	funcParams map[*types.Var]bool
+	// storeInterfaces caches the approved store/codec interface values
+	// (approvedStoreInterfaces), resolved lazily per scanned package.
+	storeInterfaces []*types.Interface
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -325,6 +328,7 @@ type fileRules struct {
 	path        string
 	exempts     map[token.Pos]bool
 	pkgFuncVars map[types.Object]bool
+	curFunc     *ast.FuncDecl // FuncDecl whose body is being walked
 }
 
 // runRules applies every rule family to one file of one package.
@@ -350,6 +354,7 @@ func runRules(rep *reporter, f *ast.File, pc *packageCheck, path string) {
 			// (nor the enclosing context into the literal's).
 			retCtx := map[ast.Node][]types.Type{}
 			mapReturnCtxs(w, d.Body, resultTypes(w, d.Type), retCtx)
+			w.curFunc = d
 			ast.Inspect(d.Body, func(n ast.Node) bool {
 				if ret, ok := n.(*ast.ReturnStmt); ok {
 					w.checkReturnCtx(ret, retCtx[ret])
@@ -583,23 +588,136 @@ func isFileNamed(n *types.Named) bool {
 	return obj.Name() == "File" || obj.Name() == "Root"
 }
 
-// moduleInternalInterface reports whether t is an interface type declared
-// in a module-internal package. Every implementation of such an interface
-// lives inside this module and is scanned by the gate, so dispatching
-// through the interface is not an unproven indirection: the concrete
-// method bodies are policed at their own sites. Interfaces declared
-// outside the module keep failing closed everywhere.
-func moduleInternalInterface(t types.Type) bool {
-	u := types.Unalias(t)
-	if named, ok := u.(*types.Named); ok {
-		if _, isIface := named.Underlying().(*types.Interface); isIface {
-			if obj := named.Obj(); obj != nil && obj.Pkg() != nil {
-				p := obj.Pkg().Path()
-				return p == moduleInternalPrefix || strings.HasPrefix(p, moduleInternalPrefix+"/")
-			}
+// approvedModuleInterfaces is the explicit set of module-internal
+// interfaces whose dispatch is an approved indirection. The four names
+// are the writer's whole store/codec surface: tree.Store and
+// RetiringStore (COW mutation), bitmap.BitmapStore (free-page authority),
+// and tree.Codec (per-tree wire contract). Approval is by (package,
+// name), never by declaration site: an interface declared in a
+// module-internal package can be satisfied by an OUT-OF-MODULE type
+// (stdlib or a future dependency) whose method body the gate cannot
+// scan, so a general declaration-based approval would let a full mapped
+// page launder into owned memory with no diagnostics. The four named
+// interfaces are safe to approve because no type outside the scanned
+// source satisfies their method sets today: Codec references
+// module-internal types (tree.Key), and the Store-family method names
+// plus exact signatures exist nowhere in the standard library or x/sys.
+// Any new interface must be added here together with its satisfier
+// argument before its dispatch becomes approved; otherwise it keeps
+// failing closed everywhere.
+var approvedModuleInterfaces = []struct {
+	path string
+	name string
+}{
+	{"github.com/firehol/iprange/v4/go/internal/tree", "Codec"},
+	{"github.com/firehol/iprange/v4/go/internal/tree", "Store"},
+	{"github.com/firehol/iprange/v4/go/internal/tree", "RetiringStore"},
+	{"github.com/firehol/iprange/v4/go/internal/bitmap", "BitmapStore"},
+}
+
+// isStoreCallbackImpl reports whether the enclosing function is an
+// implementation of an approved store-callback method (Inspect/Update/
+// CopyPage on tree.Store/RetiringStore/BitmapStore). The store contract
+// hands the callback MAPPED page views; an implementation passing OWNED
+// buffers would make the dispatch-site callback seeding bless copies of
+// complete mapped pages into owned memory, so every invocation of the
+// callback formal in such an implementation must receive a mapped view.
+func (w *fileRules) isStoreCallbackImpl() bool {
+	fd := w.curFunc
+	if fd == nil || fd.Recv == nil || len(fd.Recv.List) == 0 || !storeCallbackMethod(fd.Name.Name) {
+		return false
+	}
+	rt := w.pc.info.TypeOf(fd.Recv.List[0].Type)
+	if rt == nil {
+		return false
+	}
+	for _, iface := range w.pc.approvedStoreInterfaces() {
+		if types.Implements(rt, iface) {
+			return true
 		}
 	}
 	return false
+}
+
+// approvedStoreInterfaces resolves the four approved store/codec
+// interfaces from the scanned module (approvedModuleInterfaces maps
+// import path -> interface name); the resolution is cached per scanned
+// package. An unresolvable name fails closed: the module cannot be
+// type-checked without its own package set.
+func (pc *packageCheck) approvedStoreInterfaces() []*types.Interface {
+	if pc.storeInterfaces != nil {
+		return pc.storeInterfaces
+	}
+	var out []*types.Interface
+	for _, pair := range approvedModuleInterfaces {
+		pkg, err := pc.loader.Import(pair.path)
+		if err != nil {
+			continue
+		}
+		tn, ok := pkg.Scope().Lookup(pair.name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		iface, ok := tn.Type().Underlying().(*types.Interface)
+		if !ok {
+			continue
+		}
+		out = append(out, iface)
+	}
+	pc.storeInterfaces = out
+	return out
+}
+
+// approvedModuleInternalInterface reports whether t is one of the
+// explicitly approved module-internal store/codec interfaces (see
+// approvedModuleInterfaces). Every other interface - declared inside or
+// outside the module - keeps failing closed as an unproven indirection:
+// dispatching through it is approved by neither the callee rule nor the
+// store-callback seeding.
+func approvedModuleInternalInterface(t types.Type) bool {
+	u := types.Unalias(t)
+	named, ok := u.(*types.Named)
+	if !ok {
+		return false
+	}
+	if _, isIface := named.Underlying().(*types.Interface); !isIface {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	for _, pair := range approvedModuleInterfaces {
+		if pair.path == obj.Pkg().Path() && pair.name == obj.Name() {
+			return true
+		}
+	}
+	return false
+}
+
+// moduleInternalInterface reports whether t is an interface type declared
+// in a module-internal package. Such an interface can only receive
+// implementations from inside the module (declaration is module-local),
+// but its method set may still be satisfiable by an out-of-module type
+// bound at a call site; this predicate therefore only drives FAIL-CLOSED
+// checks (receiver/erasure data is concrete at the call site) and never
+// approves a dispatch on its own. Dispatch approval is the narrower
+// approvedModuleInternalInterface.
+func moduleInternalInterface(t types.Type) bool {
+	u := types.Unalias(t)
+	named, ok := u.(*types.Named)
+	if !ok {
+		return false
+	}
+	if _, isIface := named.Underlying().(*types.Interface); !isIface {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	p := obj.Pkg().Path()
+	return p == moduleInternalPrefix || strings.HasPrefix(p, moduleInternalPrefix+"/")
 }
 
 // moduleInternalPackage reports whether pkgPath is a module-internal
@@ -664,22 +782,23 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			p := pkg.Path()
 			if p == w.pc.pkg.Path() || moduleInternalPackage(p) || p == xsysImport {
 				if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
-					// An interface declared in a module-internal package
-					// has every implementation scanned by this gate, so
-					// dispatching through it is not an unproven
-					// indirection: the concrete method bodies are policed
-					// at their own sites. The dispatch is therefore
-					// approved like a same-module call. External interface
-					// methods keep failing closed: their bodies can
-					// launder a mapped view into owned memory without the
-					// scan seeing it. The receiver/argument checks below
-					// still fail module-internal dispatches when the
-					// receiver or an argument CONCRETELY carries a full
-					// mapped page (field promotion or a direct binding),
-					// because the concrete implementation is erased at the
-					// call site and its own conversion rules cannot see
-					// the receiver's data.
-					return moduleInternalInterface(sig.Recv().Type())
+					// Only the explicitly approved store/codec
+					// interfaces dispatch as approved callees: their
+					// method sets have no out-of-module satisfier in
+					// the current dependency graph (see
+					// approvedModuleInterfaces). Any other interface,
+					// module-declared or external, is an unproven
+					// indirection: its concrete method body could
+					// launder a mapped view into owned memory without
+					// the scan seeing it, so such calls fail closed.
+					// The receiver/argument checks below still fail
+					// approved dispatches when the receiver or an
+					// argument CONCRETELY carries a full mapped page
+					// (field promotion or a direct binding), because
+					// the concrete implementation is erased at the call
+					// site and its own conversion rules cannot see the
+					// receiver's data.
+					return approvedModuleInternalInterface(sig.Recv().Type())
 				}
 				return true
 			}
@@ -1329,6 +1448,24 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// scanned callback.
 			if !w.approvedFuncVar(obj, 0) && !w.approvedFuncParamVar(obj) {
 				varIndirect = true
+			} else if w.approvedFuncParamVar(obj) && w.isStoreCallbackImpl() {
+				// Store-callback counter-check: an implementation of
+				// Inspect/Update/CopyPage on an approved store
+				// interface must invoke its callback formal only with
+				// MAPPED views (the store contract). An owned buffer
+				// here would make the dispatch-site callback seeding
+				// treat it as a mapping alias, silently blessing
+				// copies of complete mapped pages into owned memory.
+				if sig, ok := obj.Type().(*types.Signature); ok {
+					params := sig.Params()
+					for i := 0; i < params.Len() && i < len(v.Args); i++ {
+						if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); isSlice {
+							if pv := w.pageValue(v.Args[i]); !pv.mapped {
+								w.fail(v.Pos(), "store callback %s must receive a mapped page view (an owned callback buffer launders complete pages into owned memory)", calleeText(fun))
+							}
+						}
+					}
+				}
 			}
 		}
 	case *ast.SelectorExpr:
@@ -1337,12 +1474,13 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// A concrete method on a value type has a scanned body, but
 			// an interface method dispatches to an unknowable
 			// implementation: c.Apply(page) on a CB interface can copy
-			// the full page inside an unscanned method body. Interfaces
-			// declared in module-internal packages have every
-			// implementation scanned, so their dispatch is not an
-			// indirection.
+			// the full page inside an unscanned method body. Only the
+			// explicitly approved store/codec interfaces dispatch
+			// without indirection; every other interface - including
+			// module-declared ones with an out-of-module satisfier -
+			// is an unproven callee.
 			if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
-				!moduleInternalInterface(sig.Recv().Type()) {
+				!approvedModuleInternalInterface(sig.Recv().Type()) {
 				varIndirect = true
 			}
 		default:
@@ -1891,12 +2029,13 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 			continue
 		}
 		if isInterfaceType(ft) {
-			// An interface declared in a module-internal package only
-			// accepts implementations from scanned code: the erased
+			// Only the explicitly approved store/codec interfaces
+			// accept implementations from scanned code: the erased
 			// descriptor is re-inspected at every use inside the
-			// module, so the erasure is not a launder. External
-			// interfaces keep failing closed.
-			if !moduleInternalInterface(ft) {
+			// module, so the erasure is not a launder. Every other
+			// interface keeps failing closed (an out-of-module
+			// implementation could launder the erased descriptor).
+			if !approvedModuleInternalInterface(ft) {
 				w.fail(v.Pos(), "file-bearing argument laundered into an interface parameter (type erasure)")
 			}
 		} else if _, ok := ft.(*types.TypeParam); ok {

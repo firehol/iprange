@@ -1,8 +1,6 @@
 package format
 
 import (
-	"fmt"
-
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -459,7 +457,7 @@ func fixedPositions(page []byte, header *PageHeader, cellLen int) ([]int, error)
 	}
 	for _, logical := range positions {
 		if logical == -1 {
-			return nil, fmt.Errorf("v4 page header: fixed slotted-page payload has a gap")
+			return nil, headerErr("fixed slotted-page payload has a gap")
 		}
 	}
 	return positions, nil

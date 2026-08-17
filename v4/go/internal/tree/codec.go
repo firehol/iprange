@@ -142,7 +142,7 @@ func requireCodec(codec Codec) error {
 		branchSize+2+format.SlottedHeaderSize > format.PageSize ||
 		leafSize+2+format.SlottedHeaderSize > format.PageSize ||
 		branchSize > maxTreeCell {
-		return invalid("invalid B+tree codec")
+		return unsupported("invalid B+tree codec")
 	}
 	return nil
 }
@@ -156,4 +156,11 @@ func corrupt(detail string) error {
 
 func invalid(detail string) error {
 	return &format.Error{Code: format.CodeInvalidArgument, Detail: detail}
+}
+
+// unsupported mirrors Rust Error::Unsupported, which maps to the SDK
+// OsUnsupported code (sdk_error.rs: Error::Unsupported -> OsUnsupported,
+// 58). The Go port names the code OSUnsupported after the SDK table.
+func unsupported(detail string) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: detail}
 }

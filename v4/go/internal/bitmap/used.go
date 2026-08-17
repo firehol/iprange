@@ -532,11 +532,11 @@ func stampLeaf(page []byte, count int) {
 func childBaseAt(base, span uint64, index int) (uint64, error) {
 	product := span * uint64(index)
 	if span != 0 && product/span != uint64(index) {
-		return 0, corrupt("used bitmap coverage")
+		return 0, overflow("used bitmap coverage")
 	}
 	sum := base + product
 	if sum < base {
-		return 0, corrupt("used bitmap coverage")
+		return 0, overflow("used bitmap coverage")
 	}
 	return sum, nil
 }
