@@ -1046,6 +1046,41 @@ rejections, 96 benign acceptances), zero misses under
 ./..., -race, vet, gofmt, import-graph boundary check, and GOOS=windows
 cross build all green.
 
+### Round 3 (delta re-review of the round-2 fixes, working-tree build): the five resident
+level-1 reviewers re-audited the round-2 delta and returned five further callback-escape
+classes, all probe-verified by the lead on the round-2 build (dev9): S2-1a/S2-1b
+(package-global and pointer-setter carrier binding: setGlobal(fn); g.cb(out, out) and
+var h car; setCb(&h, fn); h.cb(out, out) escaped because the setter helper's DIRECT field
+record never reached the store-implementation summary), D (identity-return passthrough:
+cb := passthrough(fn); cb(out, out) lost the formal binding through the helper return), L2-1
+(positional struct composites h := car{fn} of a NAMED carrier type never seeded the
+canonical field alias), L2-2 (wrapper literals carrying a byte pair composite:
+wrap(fn, pair{a: buf, b: buf}) invoked the formal with fields of an owned pair), L2-3
+(cross-method storage s.prep(fn); s.cb(out(), out())), and the bound-carrier launch
+(launchS2c(car{cb: arbitrary}, page) feeding a mapped page into a field callee with an
+unscannable body). Fixed at the working tree: seedStructComposite resolves NAMED carrier
+types to their underlying struct so positional elements seed field aliases; the
+store-implementation call site pulls the callee's DIRECT field aliases into its own record
+(recordFieldAliasComposition leg c), so global/pointer setters and prep methods bind the
+canonical key for moduleFieldCarrier and the counter-check; rootSlot traces selector
+chains (v.a, s.buf) to the root parameter so pair-carrying wrapper literals are
+parameter-traced instead of marked internal; evalComposite computes a struct composite's
+mappedness as the conjunction of its byte-carrying element expressions; and the rules-side
+compositeCarrierMapped re-derives the same conjunction at the store-callback fence, because
+promoteFullPageFields rewrites a composite's cached whole-value taint without the mapped
+flag after evalComposite wrote it (probe-verified with per-pass cache traces: the element
+expressions x and y keep mapped=true in the flow cache, so honest pair{a: x, b: y} wrapper
+arguments pass while owned pair{a: buf, b: buf} stays fail-closed). The Sartre P2-2
+carrier-fence class (checkCarrierViewCallSites) shipped with round 2 as part of the same
+working tree. Pinned durably as P321 (passthrough liar), P322 (positional-composite liar),
+P323 (cross-method liar), P324 (wrapper-literal pair liar with owned elements),
+P325 (global + pointer setter liars), P326 (benign helper-forwarding honest twins of all
+seven classes with mapped views; direct field-call forms remain P304-class fail-closed).
+Battery: 630 -> 636 cases (538 rejections, 98 benign acceptances), zero misses under
+--self-test-jobs 24; probe modules: eight round-2 liar lines and the s2c liar rejected,
+zero honest/control over-rejections; real module scan rc=0; go test ./..., -race, vet,
+gofmt, import-graph boundary check, and GOOS=windows cross build all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
