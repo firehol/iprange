@@ -1103,6 +1103,104 @@ func (w *fileRules) checkParamCopyCalls(v *ast.CallExpr, fn *types.Func) {
 	}
 }
 
+// checkCallbackInvokeCalls fails module callee call sites where an
+// enclosing store implementation forwards its callback formal into a
+// callee func-typed parameter the callee invokes. The store contract
+// hands the callback mapped page views; the callee's summary records
+// which of its parameters flow into the callback, and each of those
+// arguments must be a mapped view at this call site. Invocations the
+// callee cannot trace to a parameter fail closed: the views are not
+// provably the call site's mapped views, so blessing them would launder
+// complete pages into owned memory exactly like the direct-invocation
+// counter-check.
+func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
+	if w.pc.pf == nil || w.pc.pf.store == nil || fn == nil || fn.Pkg() == nil || !w.isStoreCallbackImpl() {
+		return
+	}
+	pkgPath := fn.Pkg().Path()
+	sums := w.pc.pf.summaries
+	if pkgPath != w.pc.pkg.Path() {
+		sums = w.pc.pf.store.pkgs[pkgPath]
+	}
+	if sums == nil {
+		return
+	}
+	key := fn.Name()
+	receiverSlot := false
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+		key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+		receiverSlot = true
+	}
+	fs, ok := sums[key]
+	if !ok || (len(fs.callbackInvokes) == 0 && len(fs.callbackInvokesInternal) == 0) {
+		return
+	}
+	recvOffset := 0
+	var recvExpr ast.Expr
+	if mvr, ok := w.methodValueCallee(v); ok {
+		recvExpr = mvr.recv
+	} else if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
+		if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+			recvExpr = sel.X
+			recvOffset = 1
+		}
+	}
+	argAt := func(slot int) (ast.Expr, bool) {
+		if receiverSlot && slot == 0 && recvExpr != nil {
+			return recvExpr, true
+		}
+		ai := slot - recvOffset
+		if ai < 0 || ai >= len(v.Args) {
+			return nil, false
+		}
+		return v.Args[ai], true
+	}
+	// The forwarded value must be the enclosing store implementation's
+	// own callback formal: only then does the store contract apply to
+	// the views the callee hands it.
+	forwardedCallback := func(e ast.Expr) bool {
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return false
+		}
+		obj, ok := w.pc.info.Uses[id].(*types.Var)
+		return ok && w.approvedFuncParamVar(obj)
+	}
+	fail := func(fnArg ast.Expr) {
+		w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(fnArg), calleeText(v.Fun))
+	}
+	for fnSlot, byteSlots := range fs.callbackInvokes {
+		fnArg, ok := argAt(fnSlot)
+		if !ok || !forwardedCallback(fnArg) {
+			continue
+		}
+		if fs.callbackInvokesInternal[fnSlot] {
+			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
+			continue
+		}
+		for _, bs := range byteSlots {
+			ba, ok := argAt(bs)
+			if !ok {
+				continue
+			}
+			if pv := w.pageValue(ba); !pv.mapped {
+				fail(fnArg)
+				break
+			}
+		}
+	}
+	for fnSlot := range fs.callbackInvokesInternal {
+		if _, traced := fs.callbackInvokes[fnSlot]; traced {
+			continue
+		}
+		fnArg, ok := argAt(fnSlot)
+		if !ok || !forwardedCallback(fnArg) {
+			continue
+		}
+		w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
+	}
+}
+
 // checkFuncTypedArgs enforces the scanned-callback fence: an approved
 // module callee with a func-typed formal may only receive a callback
 // whose body is part of the scanned tree. Every implementer and caller
@@ -1704,6 +1802,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	if fn != nil {
 		w.checkStringParamCalls(v, fn)
 		w.checkParamCopyCalls(v, fn)
+		w.checkCallbackInvokeCalls(v, fn)
 	}
 	// Func-typed formals of approved module callees receive a scanned
 	// callback: the callee hands it page views by contract, so an

@@ -646,7 +646,7 @@ locally validated:
   (P119/P130/P131-style launders fail closed while interface-PARAMETER
   fallbacks stay benign). Param copy pairs (copy(paramD, paramS))
   recorded in callee summaries are enforced at the binding call site
-  (checkParamCopyCalls). Battery: 606 cases (518 rejections, 88
+  (checkParamCopyCalls). Battery: 608 cases (519 rejections, 89
   benign acceptances); P57 reclassified to benign (scanned literal
   callback; intent pinned by P136 + P42/P67/P68), P130/P131/P132
   field-promotion pins, P119 module-internal interface receiver pin,
@@ -656,7 +656,7 @@ locally validated:
 Validation so far: go test ./... (both tag sets), -race on
 tree/bitmap/retire/writer/format, vet, gofmt, import-graph scan with
 the new tree/bitmap/retire boundaries, 11/11 cross-builds, and the
-606-case gate battery - all green, battery with zero misses.
+608-case gate battery - all green, battery with zero misses.
 Work-counter pins cover one-shot reads visiting each path page once,
 lower-bound reuse of its final probe, fixed replacement single
 capacity probe, deletion single tree lookup, same-path set-free
@@ -692,6 +692,30 @@ d9990b9/eaa4d26; findings verified and fixed in this round:
 - Accepted-with-record P3s: retire encode/decode boxing per extent
   and put.go fixed-position bookkeeping allocations are bounded and
   commit-path only; revisit under chunk 3b with commit benchmarks.
+
+Review round 2 (level-1 swarm, 2026-08-17): aspect reviewers at
+579f8a1. Linnaeus reported one P2: the implementation-site
+store-callback mapped-view counter-check was bypassed when the
+callback formal was FORWARDED through a scanned helper (runCbR2(fn,
+s.buf, s.buf) with a helper invoking its own func formal with its own
+byte parameters); the direct, local-alias, and struct-field forms
+were already rejected. Probe-verified as a real escape on the round-1
+build (zero diagnostics for the helper form), then fixed:
+funcSummary now records callbackInvokes (func-typed formal slot ->
+byte-parameter slots it is invoked with) and callbackInvokesInternal
+(untraceable byte invocations) at the definition site
+(noteCallbackInvokes), composes them through call chains like
+copyParams (recordCallbackInvokeComposition), and
+checkCallbackInvokeCalls enforces the store contract at the
+store-implementation call site: the forwarded callback formal must
+receive only mapped views through the helper. New battery pins P297
+(fail: helper-forwarded owned buffers) and P298 (benign:
+helper-forwarded mapped views); the two-hop chain and the
+untraceable-invocation shapes are probe-verified as well. Battery
+now 608 cases (519 rejections, 89 benign acceptances), zero misses.
+Round-2 verdicts for the other four reviewers were not capturable
+(interrupted sessions / no output); their round-3 re-review is
+required at the new HEAD.
 
 ## Review Process (user decision, 2026-08-12)
 

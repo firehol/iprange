@@ -149,6 +149,21 @@ type funcSummary struct {
 	// (F's argument is F's own parameter), so the fence survives
 	// arbitrary helper depth.
 	copyParams map[int][]int
+	// callbackInvokes records byte-slice parameters the body passes to a
+	// func-typed formal parameter it invokes: func-typed formal slot ->
+	// callee parameter slots the byte views come from. Whether those
+	// views are mapped is decided by the call sites that bind the func
+	// formal (the store callback contract), so the store-callback fence
+	// at the store-implementation call site uses this record exactly
+	// like copyParams; the record composes through call chains.
+	callbackInvokes map[int][]int
+	// callbackInvokesInternal marks func-typed formal slots the body
+	// invokes with byte arguments the definition site cannot trace to a
+	// parameter (a field read, a call, a literal): the views are not
+	// provably the caller's mapped views, so a store implementation
+	// forwarding its callback formal into such a slot fails closed at
+	// the call site.
+	callbackInvokesInternal map[int]bool
 }
 
 // argFlow binds one call-site argument: its value taint and, for struct
@@ -1024,6 +1039,7 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	pf.noteStringConvs(st, fs, st.fd.Body)
 	pf.noteFmtSpreads(st, fs, st.fd.Body)
 	pf.noteCopyParams(st, fs, st.fd.Body)
+	pf.noteCallbackInvokes(st, fs, st.fd.Body)
 	// Named results with a naked return: the body's stores to the named
 	// result variables are the function's results. Functions need it for
 	// FuncDecl bodies; closures need it too (out = p; return loses the
@@ -4511,6 +4527,141 @@ func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.Blo
 	})
 }
 
+// noteCallbackInvokes records byte-slice parameters the body passes to
+// each func-typed formal parameter it invokes (fn(x, y) with fn a func
+// formal and x, y byte parameters). The invocation is the
+// definition-site side of the store-callback fence: whether the views
+// that reach the callback are mapped is decided by the call sites that
+// bind the func formal, so the byte-parameter slots (and the
+// untraceable mark) are carried through call chains exactly like
+// copyParams. Aliases of a formal (cb := fn) count as the formal, and
+// aliases of parameters (x := a) count as the parameter.
+func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
+	if body == nil {
+		return
+	}
+	paramAliases := map[types.Object]int{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			dstObj := objOf(st, lhs)
+			if dstObj == nil {
+				continue
+			}
+			srcID, ok := unparen(assign.Rhs[i]).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			srcObj := objOf(st, srcID)
+			if srcObj == nil {
+				continue
+			}
+			if idx, ok := st.params[srcObj]; ok {
+				paramAliases[dstObj] = idx
+			} else if idx, ok := paramAliases[srcObj]; ok {
+				paramAliases[dstObj] = idx
+			}
+		}
+		return true
+	})
+	rootSlot := func(e ast.Expr) (int, bool) {
+		// Strip slice wrappers: fn(page[:]) still names page.
+		for {
+			if se, ok := unparen(e).(*ast.SliceExpr); ok {
+				e = se.X
+				continue
+			}
+			break
+		}
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return 0, false
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return 0, false
+		}
+		if idx, ok := st.params[obj]; ok {
+			return idx, true
+		}
+		if idx, ok := paramAliases[obj]; ok {
+			return idx, true
+		}
+		return 0, false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := unparen(call.Fun).(*ast.Ident)
+		if !ok {
+			return true
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return true
+		}
+		fnSlot, ok := st.params[obj]
+		if !ok {
+			fnSlot, ok = paramAliases[obj]
+			if !ok {
+				return true
+			}
+		}
+		sig, ok := obj.Type().(*types.Signature)
+		if !ok || sig.Params() == nil {
+			return true
+		}
+		params := sig.Params()
+		nargs := params.Len()
+		if nargs > len(call.Args) {
+			nargs = len(call.Args)
+		}
+		internal := false
+		var slots []int
+		for i := 0; i < nargs; i++ {
+			if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); !isSlice {
+				continue
+			}
+			slot, traced := rootSlot(call.Args[i])
+			if !traced {
+				internal = true
+				continue
+			}
+			dup := false
+			for _, prev := range fs.callbackInvokes[fnSlot] {
+				if prev == slot {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				slots = append(slots, slot)
+			}
+		}
+		if len(slots) > 0 {
+			if fs.callbackInvokes == nil {
+				fs.callbackInvokes = map[int][]int{}
+			}
+			fs.callbackInvokes[fnSlot] = append(fs.callbackInvokes[fnSlot], slots...)
+		}
+		if internal {
+			if fs.callbackInvokesInternal == nil {
+				fs.callbackInvokesInternal = map[int]bool{}
+			}
+			fs.callbackInvokesInternal[fnSlot] = true
+		}
+		return true
+	})
+}
+
 // recordCopyParamComposition forwards a callee's copy-parameter pairs
 // through the current function when both slots bind the current
 // function's own parameters: F(p1, p2) calling G(p1, p2) where G copies
@@ -4584,6 +4735,107 @@ func (pf *pageFlow) recordCopyParamComposition(st *stmtState, call *ast.CallExpr
 				st.activeFS.copyParams[dd] = append(st.activeFS.copyParams[dd], ss)
 			}
 		}
+	}
+}
+
+// recordCallbackInvokeComposition forwards a callee's callback-invocation
+// records through the current function when the func-typed slot binds
+// the current function's own func-typed formal: F(fn, a, b) calling
+// G(fn, a, b) where G invokes fn with its byte parameters means F's
+// summary carries the record onward, so the store-callback fence at the
+// store-implementation call site still sees the invocation. A byte slot
+// that does not bind a current-function parameter has views the call
+// site cannot prove mapped, and the record turns internal.
+func (pf *pageFlow) recordCallbackInvokeComposition(st *stmtState, call *ast.CallExpr, fs *funcSummary, recvExpr ast.Expr, argOff int) {
+	if st.activeFS == nil || fs == nil || (len(fs.callbackInvokes) == 0 && len(fs.callbackInvokesInternal) == 0) {
+		return
+	}
+	slotExpr := func(slot int) ast.Expr {
+		if recvExpr != nil && slot == 0 {
+			return recvExpr
+		}
+		ai := slot - argOff
+		if ai < 0 || ai >= len(call.Args) {
+			return nil
+		}
+		return call.Args[ai]
+	}
+	paramObj := func(e ast.Expr) (types.Object, bool) {
+		if e == nil {
+			return nil, false
+		}
+		for {
+			if se, ok := unparen(e).(*ast.SliceExpr); ok {
+				e = se.X
+				continue
+			}
+			break
+		}
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return nil, false
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return nil, false
+		}
+		if _, ok := st.params[obj]; !ok {
+			return nil, false
+		}
+		return obj, true
+	}
+	recordInternal := func(slot int) {
+		if st.activeFS.callbackInvokesInternal == nil {
+			st.activeFS.callbackInvokesInternal = map[int]bool{}
+		}
+		st.activeFS.callbackInvokesInternal[slot] = true
+	}
+	for fnSlot := range fs.callbackInvokes {
+		obj, ok := paramObj(slotExpr(fnSlot))
+		if !ok {
+			continue
+		}
+		if _, isFunc := obj.Type().(*types.Signature); !isFunc {
+			continue
+		}
+		fnIdx := st.params[obj]
+		if fs.callbackInvokesInternal[fnSlot] {
+			recordInternal(fnIdx)
+		}
+		for _, byteSlot := range fs.callbackInvokes[fnSlot] {
+			bobj, bok := paramObj(slotExpr(byteSlot))
+			if !bok {
+				recordInternal(fnIdx)
+				continue
+			}
+			bIdx := st.params[bobj]
+			dup := false
+			for _, prev := range st.activeFS.callbackInvokes[fnIdx] {
+				if prev == bIdx {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				if st.activeFS.callbackInvokes == nil {
+					st.activeFS.callbackInvokes = map[int][]int{}
+				}
+				st.activeFS.callbackInvokes[fnIdx] = append(st.activeFS.callbackInvokes[fnIdx], bIdx)
+			}
+		}
+	}
+	for fnSlot := range fs.callbackInvokesInternal {
+		if _, traced := fs.callbackInvokes[fnSlot]; traced {
+			continue
+		}
+		obj, ok := paramObj(slotExpr(fnSlot))
+		if !ok {
+			continue
+		}
+		if _, isFunc := obj.Type().(*types.Signature); !isFunc {
+			continue
+		}
+		recordInternal(st.params[obj])
 	}
 }
 
@@ -5207,6 +5459,7 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if recvExpr != nil {
 		argOff = 1
 	}
+	pf.recordCallbackInvokeComposition(st, call, fs, recvExpr, argOff)
 	args := make([]pageValue, len(call.Args)+argOff)
 	argVals := make([]symbol, len(call.Args)+argOff)
 	argFlows := make([]argFlow, len(call.Args)+argOff)
