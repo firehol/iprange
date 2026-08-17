@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -73,15 +74,50 @@ func main() {
 		return
 	}
 	selfTest := false
+	jobs := 1
+	chunkK, chunkN := -1, -1
 	root := "."
 	if len(args) > 0 && args[0] == "--self-test" {
 		selfTest = true
 		args = args[1:]
 	}
+	if len(args) > 0 && args[0] == "--self-test-jobs" && len(args) > 1 {
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "gatescan: invalid --self-test-jobs %q\n", args[1])
+			os.Exit(2)
+		}
+		selfTest = true
+		jobs = n
+		args = args[2:]
+	}
+	if len(args) > 0 && args[0] == "--self-test-chunk" && len(args) > 1 {
+		var err error
+		if chunkK, chunkN, err = parseChunk(args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "gatescan: invalid --self-test-chunk %q\n", args[1])
+			os.Exit(2)
+		}
+		selfTest = true
+		args = args[2:]
+	}
 	if len(args) > 0 {
 		root = args[0]
 	}
 	if selfTest {
+		if chunkK >= 0 {
+			// Worker mode: run one disjoint chunk of the battery in a
+			// private module copy; the parent aggregates the totals.
+			if runSelfTestChunk(root, chunkK, chunkN) {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		}
+		if jobs > 1 {
+			if runSelfTestParallel(root, jobs) {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		}
 		if runSelfTest(root) {
 			os.Exit(0)
 		}
@@ -91,6 +127,23 @@ func main() {
 		os.Exit(0)
 	}
 	os.Exit(1)
+}
+
+// parseChunk parses "k/n" into 0-based worker index k and worker count n.
+func parseChunk(s string) (int, int, error) {
+	slash := strings.IndexByte(s, '/')
+	if slash < 0 {
+		return -1, -1, fmt.Errorf("missing '/'")
+	}
+	k, err := strconv.Atoi(s[:slash])
+	if err != nil || k < 0 {
+		return -1, -1, fmt.Errorf("bad worker index")
+	}
+	n, err := strconv.Atoi(s[slash+1:])
+	if err != nil || n < 1 || k >= n {
+		return -1, -1, fmt.Errorf("bad worker count")
+	}
+	return k, n, nil
 }
 
 // scanRoot runs the scan over root under the given OS configs. battery

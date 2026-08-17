@@ -5,33 +5,22 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+// allBatteryCases concatenates the durable battery in its canonical
+// order (the order a full self-test runs).
+func allBatteryCases() []batteryCase {
+	return append(append([]batteryCase{}, batteryCases...), batteryPageCases...)
+}
 
 // runSelfTest applies the durable mutation battery to a private copy of
 // the module: every fail case must make the scan reject the tree, every
 // pass case must stay clean. The reviewed tree is never modified.
 func runSelfTest(root string) bool {
-	tmp, err := os.MkdirTemp("", "iprange-gate-self")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
-		return false
-	}
-	defer os.RemoveAll(tmp)
-	if err := copyTree(root, tmp); err != nil {
-		fmt.Fprintf(os.Stderr, "gatescan: copy: %v\n", err)
-		return false
-	}
-	ok := true
-	ran := 0
-	all := append(append([]batteryCase{}, batteryCases...), batteryPageCases...)
-	for _, c := range all {
-		ran++
-		if !runBatteryCase(tmp, c) {
-			ok = false
-		}
-	}
+	ok, ran := runSelfTestCases(root, allBatteryCases())
 	if ok {
 		fmt.Printf("gatescan self-test passed (%d cases, %d fail forms, %d benign forms)\n", ran, failFormsAll(), passFormsAll())
 	} else {
@@ -40,9 +29,115 @@ func runSelfTest(root string) bool {
 	return ok
 }
 
+// runSelfTestCases applies one case subset to a private module copy.
+// It reports the pass/fail verdict and the number of cases actually run.
+func runSelfTestCases(root string, cases []batteryCase) (bool, int) {
+	tmp, err := os.MkdirTemp("", "iprange-gate-self")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gatescan: %v\n", err)
+		return false, 0
+	}
+	defer os.RemoveAll(tmp)
+	if err := copyTree(root, tmp); err != nil {
+		fmt.Fprintf(os.Stderr, "gatescan: copy: %v\n", err)
+		return false, 0
+	}
+	ok := true
+	ran := 0
+	for _, c := range cases {
+		ran++
+		if !runBatteryCase(tmp, c) {
+			ok = false
+		}
+	}
+	return ok, ran
+}
+
+// runSelfTestChunk runs worker k of n of the battery in its own private
+// module copy. Workers share nothing: each copy is independent, so
+// arbitrary worker counts are safe (no shared temp tree, no shared
+// analyzer state across processes).
+func runSelfTestChunk(root string, k, n int) bool {
+	cases := allBatteryCases()
+	if n > len(cases) {
+		if k >= len(cases) {
+			return true // empty worker partition
+		}
+		n = len(cases)
+	}
+	start, end := chunkRange(len(cases), k, n)
+	ok, ran := runSelfTestCases(root, cases[start:end])
+	fmt.Printf("[worker %d/%d] %s (%d cases)\n", k+1, n, map[bool]string{true: "ok", false: "FAILED"}[ok], ran)
+	return ok
+}
+
+// chunkRange returns the half-open case range of worker k of n.
+func chunkRange(total, k, n int) (int, int) {
+	base := total / n
+	rem := total % n
+	start := k*base + min(k, rem)
+	end := start + base
+	if k < rem {
+		end++
+	}
+	return start, end
+}
+
+// runSelfTestParallel splits the battery across jobs worker processes of
+// this same binary, streaming every worker's per-case verdicts to stdout,
+// and aggregates the totals. The case-by-case expectations are identical
+// to the sequential run; only the wall time changes.
+func runSelfTestParallel(root string, jobs int) bool {
+	cases := allBatteryCases()
+	if jobs > len(cases) {
+		jobs = len(cases)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gatescan: executable: %v\n", err)
+		return false
+	}
+	type result struct {
+		k    int
+		ok   bool
+		note string
+	}
+	results := make(chan result, jobs)
+	for k := 0; k < jobs; k++ {
+		k := k
+		go func() {
+			cmd := exec.Command(exe, "--self-test-chunk", fmt.Sprintf("%d/%d", k, jobs))
+			cmd.Args = append(cmd.Args, root)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			note := "ok"
+			ok := true
+			if err := cmd.Run(); err != nil {
+				ok = false
+				note = err.Error()
+			}
+			results <- result{k: k, ok: ok, note: note}
+		}()
+	}
+	allOK := true
+	for k := 0; k < jobs; k++ {
+		r := <-results
+		if !r.ok {
+			allOK = false
+			fmt.Fprintf(os.Stderr, "gatescan: self-test worker %d/%d failed: %s\n", r.k+1, jobs, r.note)
+		}
+	}
+	if allOK {
+		fmt.Printf("gatescan self-test passed (%d cases, %d fail forms, %d benign forms)\n", len(cases), failFormsAll(), passFormsAll())
+	} else {
+		fmt.Printf("gatescan self-test FAILED (%d cases)\n", len(cases))
+	}
+	return allOK
+}
+
 func failFormsAll() int {
 	n := 0
-	for _, c := range append(append([]batteryCase{}, batteryCases...), batteryPageCases...) {
+	for _, c := range allBatteryCases() {
 		if c.expectFail {
 			n++
 		}
@@ -50,7 +145,7 @@ func failFormsAll() int {
 	return n
 }
 
-func passFormsAll() int { return len(batteryCases) + len(batteryPageCases) - failFormsAll() }
+func passFormsAll() int { return len(allBatteryCases()) - failFormsAll() }
 
 // copyTree copies the module root into dst, skipping .git (the scan
 // itself skips only .git; hidden directories are scanned).
