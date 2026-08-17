@@ -765,6 +765,23 @@ one-param closure bisect. Battery now 610 cases (520 rejections, 90
 benign acceptances), zero misses; the real-tree scan stays at zero
 violations and v4/go test ./... stays green.
 
+Round-3.5 follow-up (2026-08-17): the round-4 re-review reported a
+P2-1 for the DIRECT invocation of the callback formal through a local
+identity alias (cb := fn; cb(s.buf, s.buf)), a declared-parameter
+literal wrapper (wrap := func(cb, a, b []byte) error { return cb(a,
+b) }; wrap(fn, s.buf, s.buf)), and a struct field
+(s.cb = fn; s.cb(s.buf, s.buf)). Probe verification (probe_r8) shows
+all three liar sub-shapes were ALREADY rejected at the previous HEAD
+by the existing fail-closed transfer for calls through unproven
+callees (rules.go varIndirect on the full-page arguments; the
+identity-alias and field forms are the existing R2-4/R2-6 pins), with
+byte-identical diagnostics at 1cd3975 and 9d7ffa4; the honest twins
+fail identically at both heads by the same fail-closed rule and are
+recorded as accepted conservatism (the same class as interface
+dispatch with mapped pages), not as a bypass. The three liar
+sub-shapes are pinned durably as P301 (fail). Battery: 611 cases
+(521 rejections, 90 benign acceptances).
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
