@@ -292,8 +292,8 @@ cross-open is the milestone gate.
 
 Milestone 2 chunk 1 - writer foundation (2026-08-17, HEAD bf49779):
 this entry supersedes the 578-case gate battery counts in the M1
-close-out paragraphs: the gate battery is now 599 cases (514
-rejections, 85 benign acceptances) plus 9 shell environment mutations.
+close-out paragraphs: the gate battery is now 601 cases (515
+rejections, 86 benign acceptances) plus 9 shell environment mutations.
 mapping write mode and the page checksum authority are implemented and
 pinned. internal/mapping now opens mutable mappings (O_RDWR + exclusive
 lifetime lock + PROT_READ|PROT_WRITE MAP_SHARED of the two-page
@@ -401,6 +401,29 @@ re-review after two fix waves.
   green.
 
 Level-1 result: 5/5 PASS at HEAD 745da34. Level-2 final gate follows.
+
+Milestone 2 chunk 1 - level-2 gate round 1 and fix round (2026-08-17,
+HEAD ebe8e46 -> d83fa28): kimi, minimax, and mimo returned PASS with
+independent full-scope evidence (Rust-authority parity for
+mapping/locks/checksum, gate family completeness, records truth,
+attempted bypasses). glm returned FAIL with three findings, all fixed
+in d83fa28:
+- P0 CRC32CWithZeroed overflow: zeroAt+zeroLen could wrap past MaxInt
+  and panic on slicing instead of reporting an invalid range; le.go
+  now uses overflow-safe comparisons (Rust checksum.rs checked
+  arithmetic) and TestCRC32CWithZeroedOverflow pins MaxInt offsets.
+- P1 FcntlInt exemption scope: the darwin exemption was per-file and
+  inherited every unix.FcntlInt command in mapping_sync_darwin.go
+  (F_DUPFD/F_DUPFD_CLOEXEC/F_PREALLOCATE would pass the gate); it is
+  now per-call, requiring the exact unix.F_FULLFSYNC command argument.
+  Battery pins 312 (appended F_DUPFD_CLOEXEC in the darwin file
+  rejects) and 313 (appended exact F_FULLFSYNC call stays legal).
+- P2 records: the chunk-1 entry still claimed the writer maps the
+  full extent at open; corrected to the two-page bootstrap followed by
+  Remap(committed).
+Battery 599 -> 601 (515 rejections, 86 benign); production gate scan
+rc=0 (5 OS configs); go test (both tag sets), -race, vet, gofmt,
+import-graph, 11/11 cross-compiles all green. GLM re-review pending.
 
 ## Review Process (user decision, 2026-08-12)
 
