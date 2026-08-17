@@ -521,12 +521,68 @@ error-reporting finding) were committed at 35a096b. The delta re-review
 at 0c9dd95 reworked the lock-release probe to a same-inode pin
 (TestRefusedOpenPathMovedReleasesLock renames the opened file itself out
 of the way, so a leaked lock on the original inode genuinely blocks the
-probe; trigger-verified by dropping the failure-path Close) and added a
-same-inode VerifyIdentity probe for VerifyIdentity's doc (mapping.go).
+probe; trigger-verified by dropping the failure-path Close) and widened
+VerifyIdentity's doc comment to name both Rust mirrors (mapping.go).
 Accepted reduced coverage, recorded not waived: mapping_shrink_test.go is
 linux-tagged, so the Shrink unmap-first contract is compiled (not run) on
 darwin/freebsd cross-builds - no darwin host is available in the
-validation harness. The remaining record rounds are appended below.
+validation harness. Level-2 final gate (full scope, chunk-2 surface):
+kimi PASS, minimax PASS, mimo PASS; glm was unavailable (quota/technical,
+recorded as reduced coverage per the review-organization decision) - no
+P0-P2 findings were reported by any available level-2 reviewer. Chunk 2
+gate: CLOSED.
+
+Milestone 2 chunk 2 - level-1 review rounds (2026-08-17): five aspect
+reviewers (writer-core parity, mmap/lifetime, wire/error classes,
+records/gate, durability/lock) run over the chunk-2 surface.
+- Round 1 at 56e8516: 4/5 PASS. FAIL: durability (1x P2 - writer open
+  lacked the terminal path-identity re-verification: Rust open_locked
+  ends with verify_pair after trim_committed_tail; a rename during open
+  could publish a writer bound to a detached inode). P3s recorded:
+  missing linux build tag on the shrink test (windows vet), stale
+  remap/shrink comments, mapping doc missing Shrink in the
+  view-invalidation wording, Shrink both-failure error reporting
+  simplification vs Rust combine_errors, stale SOW headers and
+  overclaiming test-record wording, gate sync-free-zone comment.
+- Round 2 delta at 35a096b: Open/OpenWriter gained the check hook and
+  terminal m.VerifyIdentity after remap/trim; deterministic
+  replacement-race test (WrongState); assertReopen lock-release probes
+  on every refusal test; the P3 list above fixed. Re-review: 4/5 PASS;
+  FAIL: records (1x P2 - the committed records still claimed the fix
+  round was an uncommitted working tree; plus 2 P3s: gap-analysis
+  header lag, missing both-failure P3 disposition). Linnaeus P3: the
+  promised Shrink lower-bound note was absent from the tree.
+- Round 3 delta at 996cc9c: records corrected (fix commit named,
+  gap-analysis header advanced, both-failure disposition recorded),
+  Shrink no-lower-bound boundary documented (Rust parity - no floor
+  check in shrink_or_retain; committed is never below two pages).
+  Re-review: 4/5 PASS; FAIL: durability (1x P2 - the new lock-release
+  probe in the replacement-race test was vacuous: after the rename the
+  path named a different inode and OFD locks are per-inode, so a
+  leaked lock was unobservable; trigger experiment: removing the
+  failure-path Close did not fail the probe).
+- Round 4 delta at 3987142: the vacuous probe was removed (scoped
+  comment) and TestRefusedOpenPathMovedReleasesLock added - the open
+  hook renames the opened file itself out of the way, VerifyIdentity
+  refuses with NameNotFound on the same inode, and the reopen probe
+  genuinely contends with a leaked lock; trigger-verified (dropping
+  the failure-path Close fails the probe at the 5s timeout). The
+  darwin/freebsd Shrink coverage boundary (compiled, not run) is
+  recorded as accepted reduced coverage. Re-review: 5/5 PASS, no
+  P0-P2. Level-1 gate for chunk 2: PASS.
+
+Milestone 2 chunk 2 - level-2 final gate (2026-08-17): full-scope
+adversarial review of the chunk-2 surface at HEAD 3987142. kimi: PASS
+(P3 only - Remap lacks Grow's explicit oversize check; on 32-bit a
+>maxInt extent fails fail-closed, never OOB; cosmetic asymmetry). mimo:
+PASS (exhaustive per-file audit; zero findings). minimax: PASS
+(independent adversarial attempts incl. FIFO refusal, tailed trim,
+detached-inode probes, freebsd typed refusal, txn-gap, structured-kind
+validation, page-count-beyond-physical, shrink-below-physical - all
+blocked at the correct classes; P3s informational). glm: unavailable
+(no response across two 10-minute waits; quota/technical per the
+round-1 note) - recorded as reduced coverage, never respawned. Chunk 2
+(writer open surface) gate: CLOSED.
 
 ## Review Process (user decision, 2026-08-12)
 
