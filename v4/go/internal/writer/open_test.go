@@ -388,13 +388,55 @@ func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
 	if !ok || fe.Code != format.CodeWrongState {
 		t.Fatalf("replaced-during-open error %v, want WrongState (11)", err)
 	}
-	// The refused open must have released the exclusive lifetime lock: the
-	// path now names the valid replacement fixture (other.iprdb's bytes),
-	// so a prompt successful reopen proves the lock is free; a leaked OFD
-	// lock would hang the probe until the timeout.
+	// Lock release after this refusal is not probe-observable here: the
+	// path now names the replacement inode, and a leaked OFD lock would sit
+	// on the detached original inode (locks are per-inode). The same-inode
+	// release pins live in TestRefusedOpenPathMovedReleasesLock and in the
+	// assertReopen probes over unchanged inodes.
+}
+
+// TestRefusedOpenPathMovedReleasesLock pins the lock release on the
+// VerifyIdentity failure path with a same-inode probe: the check hook
+// renames the opened file itself out of the way on its second invocation,
+// so VerifyIdentity refuses with NameNotFound while the original inode
+// stays reachable at the moved path. A reopened moved path lands on the
+// same inode, so a leaked exclusive OFD lock would genuinely block the
+// probe until the timeout; a prompt successful reopen proves the refused
+// open released the lock.
+func TestRefusedOpenPathMovedReleasesLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "moved.iprdb")
+	moved := filepath.Join(dir, "moved-away.iprdb")
+	raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	check := func(clean string) error {
+		calls++
+		if calls == 2 {
+			if err := os.Rename(path, moved); err != nil {
+				t.Errorf("move path: %v", err)
+			}
+		}
+		return nil
+	}
+	c, err := Open(path, testBudget(), check)
+	if c != nil {
+		c.Close()
+		t.Fatal("open accepted a path moved while the open was in flight")
+	}
+	fe, ok := err.(*format.Error)
+	if !ok || fe.Code != format.CodeNameNotFound {
+		t.Fatalf("moved-during-open error %v, want NameNotFound (18)", err)
+	}
 	result := make(chan error, 1)
 	go func() {
-		c, err := Open(path, testBudget(), nil)
+		c, err := Open(moved, testBudget(), nil)
 		if c != nil {
 			c.Close()
 		}
@@ -403,9 +445,9 @@ func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
 	select {
 	case err := <-result:
 		if err != nil {
-			t.Fatalf("reopen after the refused open failed: %v", err)
+			t.Fatalf("reopen of the moved path failed: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("exclusive lifetime lock leaked by the WrongState refusal")
+		t.Fatal("exclusive lifetime lock leaked by the NameNotFound refusal")
 	}
 }

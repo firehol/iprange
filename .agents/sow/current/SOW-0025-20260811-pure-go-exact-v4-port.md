@@ -517,8 +517,16 @@ path-identity re-verification) plus Peirce's same-path P3. The round-1
 fixes (VerifyIdentity in Open/OpenWriter after remap/trim, deterministic
 replacement-race test, failed-open lock-release probes; plus the P3
 cleanups incl. the doc-only disposition of the Shrink both-failure
-error-reporting finding) were committed at 35a096b; level-1 delta
-re-reviews and the level-2 rounds are recorded below.
+error-reporting finding) were committed at 35a096b. The delta re-review
+at 0c9dd95 reworked the lock-release probe to a same-inode pin
+(TestRefusedOpenPathMovedReleasesLock renames the opened file itself out
+of the way, so a leaked lock on the original inode genuinely blocks the
+probe; trigger-verified by dropping the failure-path Close) and added a
+same-inode VerifyIdentity probe for VerifyIdentity's doc (mapping.go).
+Accepted reduced coverage, recorded not waived: mapping_shrink_test.go is
+linux-tagged, so the Shrink unmap-first contract is compiled (not run) on
+darwin/freebsd cross-builds - no darwin host is available in the
+validation harness. The remaining record rounds are appended below.
 
 ## Review Process (user decision, 2026-08-12)
 
