@@ -187,7 +187,7 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 				failed = true
 				continue
 			}
-			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageSpans: map[boundedSpanKey]int{}, appendAliases: map[types.Object]types.Object{}, appendCallRoots: map[*ast.CallExpr]types.Object{}}
+			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, fieldPromoted: map[ast.Expr]bool{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageSpans: map[boundedSpanKey]int{}, appendAliases: map[types.Object]types.Object{}, appendCallRoots: map[*ast.CallExpr]types.Object{}}
 			sums, pf := summarizePackage(pc, di.pkg, store, parsed, pc.pf)
 			pc.pf = pf
 			pc.pf.summaries = sums
@@ -218,7 +218,10 @@ func topoRank(pkg string) int {
 		return 0
 	case "github.com/firehol/iprange/v4/go/internal/bootstrap":
 		return 0
-	case "github.com/firehol/iprange/v4/go/internal/mapping":
+	case "github.com/firehol/iprange/v4/go/internal/tree",
+		"github.com/firehol/iprange/v4/go/internal/bitmap",
+		"github.com/firehol/iprange/v4/go/internal/retire",
+		"github.com/firehol/iprange/v4/go/internal/mapping":
 		return 1
 	case "github.com/firehol/iprange/v4/go/internal/reader", "github.com/firehol/iprange/v4/go/internal/writer":
 		return 2

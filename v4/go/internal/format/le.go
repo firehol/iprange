@@ -3,6 +3,8 @@ package format
 import (
 	"encoding/binary"
 	"hash/crc32"
+
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Little-endian scalar codecs. On-disk integers are always little-endian;
@@ -103,6 +105,7 @@ func SealPageChecksum(page []byte) error {
 	if len(page) < PageChecksumOffset+PageChecksumLength {
 		return &Error{Code: CodeFormatInvalid, Detail: "page too short for checksum seal"}
 	}
+	work.PageSealed(1)
 	PutU32(page[PageChecksumOffset:], 0)
 	crc, ok := CRC32CWithZeroed(page, PageChecksumOffset, PageChecksumLength)
 	if !ok {

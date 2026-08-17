@@ -77,6 +77,14 @@ type pageValue struct {
 	srcParam int
 	srcField string
 	hasSrc   bool
+	// mapped records that the value provably aliases the mapping (a
+	// Store callback's page parameter, or any slice/record derived from
+	// it). Copies INTO a mapped destination never create an owned
+	// complete page, so the byte-ownership rules treat mapped
+	// destinations as benign. Conditional (parameter-sourced) values
+	// keep mapped=false; their destinations are resolved by the
+	// copy-parameter call-site rule instead.
+	mapped bool
 }
 
 // maxSrc is one contribution to a tainted result's maxLen. "const"
@@ -88,11 +96,13 @@ type maxSrc struct {
 	constVal int64
 	kind     string // "const" | "paramMax" | "value" | "param" | "paramField"
 	field    string // "paramField": struct field of the argument
+	mapped   bool   // the source value also aliases the mapping
 }
 
 type fieldTaint struct {
 	tainted bool
 	srcs    []maxSrc
+	mapped  bool // tainted AND provably aliasing the mapping
 }
 
 type funcSummary struct {
@@ -130,6 +140,15 @@ type funcSummary struct {
 	// object, so b.Set(page); return b.Data keeps the caller's page
 	// source. Value parameters (copies) never export mutations.
 	mutFields map[int]map[string]fieldTaint
+	// copyParams records copy(paramD[..], paramS[..]) pairs INSIDE the
+	// body: destination parameter -> source parameter slots. A call
+	// site that binds an OWNED destination and a MAPPED source to such
+	// a pair creates the complete-page copy the definition site cannot
+	// see (both sides are caller-dependent), so the call-site rule
+	// fails that binding. The pairs compose through call chains
+	// (F's argument is F's own parameter), so the fence survives
+	// arbitrary helper depth.
+	copyParams map[int][]int
 }
 
 // argFlow binds one call-site argument: its value taint and, for struct
@@ -203,6 +222,20 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 		return true // const / paramMax / value sources are tainted by construction
 	}
 	out := pageValue{}
+	mappedOf := func(s maxSrc) bool {
+		switch s.kind {
+		case "param":
+			return s.param >= 0 && s.param < len(args) && args[s.param].mapped
+		case "paramField":
+			if s.param >= 0 && s.param < len(argFlows) {
+				if fv, ok := argFlows[s.param].fields[s.field]; ok {
+					return fv.mapped
+				}
+			}
+			return false
+		}
+		return s.mapped
+	}
 	var fields map[string]pageValue
 	for _, r := range fs.results {
 		// A result with several recorded sources is tainted when ANY
@@ -216,6 +249,9 @@ func (fs *funcSummary) eval(args []pageValue, argVals []symbol, argFlows []argFl
 		for _, s := range r.srcs {
 			if !taintOf(s) {
 				continue
+			}
+			if mappedOf(s) {
+				out.mapped = true
 			}
 			if m := val(s); m == maxUnknown || m > out.maxLen {
 				out.maxLen = m
@@ -332,6 +368,15 @@ func (fs *funcSummary) evalResults(args []pageValue, argVals []symbol, argFlows 
 			if m := val(s); m == maxUnknown || m > pv.maxLen {
 				pv.maxLen = m
 			}
+			if s.kind == "param" && s.param >= 0 && s.param < len(args) && args[s.param].mapped {
+				pv.mapped = true
+			} else if s.kind == "paramField" && s.param >= 0 && s.param < len(argFlows) {
+				if fv, ok := argFlows[s.param].fields[s.field]; ok && fv.mapped {
+					pv.mapped = true
+				}
+			} else if s.mapped {
+				pv.mapped = true
+			}
 		}
 		out[i] = pv
 	}
@@ -366,6 +411,15 @@ type pageFlow struct {
 	// promoted.
 	callFieldsFailClosed map[*ast.CallExpr]bool
 	callResults          map[*ast.CallExpr][]pageValue // per-slot results of the last evaluated module calls
+	// fieldPromoted records expressions whose whole-value page taint was
+	// synthesized by promoteFullPageFields from a struct-field taint
+	// (b.Data = page; cb(b)): the value itself is clean, only a field
+	// carries the mapped page. Opaque-call and interface-dispatch rules
+	// use the marker to fail calls that hand a field-hidden complete page
+	// to a callee body the call site cannot see, while whole-value page
+	// arguments (a callback receiving the mapped page itself by contract)
+	// stay benign for approved callees.
+	fieldPromoted map[ast.Expr]bool
 	// callMethodValues records calls resolved through a method VALUE
 	// stored in a local or package variable (get := b.String; get()):
 	// the resolved method and its receiver expression. The rule pass
@@ -715,6 +769,12 @@ func summaryDup(fs *funcSummary) *funcSummary {
 			out.pageSinkParams[k] = true
 		}
 	}
+	if len(fs.copyParams) > 0 {
+		out.copyParams = map[int][]int{}
+		for k, vs := range fs.copyParams {
+			out.copyParams[k] = append([]int{}, vs...)
+		}
+	}
 	return out
 }
 
@@ -741,6 +801,10 @@ func summaryEqual(a, b *funcSummary) bool {
 	if !stringParamsEqual(a.pageSinkParams, b.pageSinkParams) {
 		return false
 	}
+	if !copyParamsEqual(a.copyParams, b.copyParams) {
+		return false
+	}
+
 	return true
 }
 
@@ -757,12 +821,30 @@ func stringParamsEqual(a, b map[int]bool) bool {
 }
 
 func fieldEqual(a, b fieldTaint) bool {
-	if a.tainted != b.tainted || len(a.srcs) != len(b.srcs) {
+	if a.tainted != b.tainted || a.mapped != b.mapped || len(a.srcs) != len(b.srcs) {
 		return false
 	}
 	for i := range a.srcs {
 		if a.srcs[i] != b.srcs[i] {
 			return false
+		}
+	}
+	return true
+}
+
+func copyParamsEqual(a, b map[int][]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, vs := range a {
+		bs, ok := b[k]
+		if !ok || len(vs) != len(bs) {
+			return false
+		}
+		for i := range vs {
+			if vs[i] != bs[i] {
+				return false
+			}
 		}
 	}
 	return true
@@ -774,8 +856,13 @@ func fieldEqual(a, b fieldTaint) bool {
 // a distinct AST node at every mention, so node pointers can never be the
 // binding key; the object is the same for the definition and all uses.
 type stmtState struct {
-	pf         *pageFlow
-	fd         *ast.FuncDecl
+	pf *pageFlow
+	fd *ast.FuncDecl
+	// activeFS is the funcSummary of the function currently being
+	// analyzed; copy-parameter composition records the current
+	// function's own copy pairs when it forwards its parameters into a
+	// callee that copies between them.
+	activeFS   *funcSummary
 	params     map[types.Object]int
 	stmtVars   map[types.Object]pageValue
 	structs    map[types.Object]map[string]pageValue
@@ -936,8 +1023,11 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	pf.analyzeStmts(st, st.fd.Body.List, fs)
 	pf.noteStringConvs(st, fs, st.fd.Body)
 	pf.noteFmtSpreads(st, fs, st.fd.Body)
+	pf.noteCopyParams(st, fs, st.fd.Body)
 	// Named results with a naked return: the body's stores to the named
-	// result variables are the function's results. Fields of a named
+	// result variables are the function's results. Functions need it for
+	// FuncDecl bodies; closures need it too (out = p; return loses the
+	// returned view). Fields of a named
 	// struct result are recorded the same way.
 	for obj, slot := range named {
 		if pv, ok := st.stmtVars[obj]; ok && pv.tainted {
@@ -1507,6 +1597,7 @@ func (pf *pageFlow) rangeDestination(st *stmtState, x ast.Expr) pageValue {
 }
 
 func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary) {
+	st.activeFS = fs
 	for _, s := range list {
 		switch v := s.(type) {
 		case *ast.AssignStmt:
@@ -1536,6 +1627,7 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						// Struct-result calls also record their field
 						// taints per slot (chunk, err := Decode(page)
 						// keeps chunk.Data page-sourced).
+
 						if fields, ok := pf.callFields[call]; ok {
 							for _, lhs := range v.Lhs {
 								if obj := objOf(st, lhs); obj != nil {
@@ -2762,6 +2854,7 @@ func (pf *pageFlow) materializeStructFields(st *stmtState, dst ast.Expr, src ast
 	if dstObj == nil {
 		return
 	}
+
 	var fields map[string]pageValue
 	var id *ast.Ident
 	switch e := unparen(src).(type) {
@@ -3036,11 +3129,33 @@ func (pf *pageFlow) resolveMethodExpr(call *ast.CallExpr) (ast.Expr, bool) {
 // maxSrcOf converts a concrete pageValue into summary sources (constants,
 // single-parameter value dependencies, and param-sourced taints survive).
 func maxSrcOf(pv pageValue) []maxSrc {
+	mk := func(s maxSrc) maxSrc {
+		s.mapped = pv.mapped
+		return s
+	}
+	// A definite symbol bound wins over the parametric source: a slice
+	// of a parameter with constant low/high (p[48:112]) carries a
+	// caller-independent bound, so its summary must keep the constant
+	// instead of degrading to the parameter's whole bound (which would
+	// turn every bounded slice into a full page at the call site).
+	// Parametric-sourced values WITHOUT a symbol (plain parameters,
+	// extractions, mints) keep their caller-dependent source below.
+	if pv.hasSym {
+		if c, ok := pv.sym.isConst(); ok {
+			return []maxSrc{{param: -1, kind: "const", constVal: c}}
+		}
+		if len(pv.sym.coeff) == 1 && pv.sym.c == 0 {
+			for p := range pv.sym.coeff {
+				return []maxSrc{mk(maxSrc{param: p, kind: "value"})}
+			}
+		}
+		return []maxSrc{{param: -1, kind: "const", constVal: maxUnknown}}
+	}
 	if pv.hasSrc {
 		if pv.srcField != "" {
-			return []maxSrc{{param: pv.srcParam, kind: "paramField", field: pv.srcField}}
+			return []maxSrc{mk(maxSrc{param: pv.srcParam, kind: "paramField", field: pv.srcField})}
 		}
-		return []maxSrc{{param: pv.srcParam, kind: "param"}}
+		return []maxSrc{mk(maxSrc{param: pv.srcParam, kind: "param"})}
 	}
 	if pv.hasSym {
 		if c, ok := pv.sym.isConst(); ok {
@@ -3048,7 +3163,7 @@ func maxSrcOf(pv pageValue) []maxSrc {
 		}
 		if len(pv.sym.coeff) == 1 && pv.sym.c == 0 {
 			for p := range pv.sym.coeff {
-				return []maxSrc{{param: p, kind: "value"}}
+				return []maxSrc{mk(maxSrc{param: p, kind: "value"})}
 			}
 		}
 		return []maxSrc{{param: -1, kind: "const", constVal: maxUnknown}}
@@ -3185,10 +3300,16 @@ func joinPageValue(a, b pageValue) pageValue {
 		return a
 	}
 	if a.maxLen == maxUnknown || b.maxLen == maxUnknown {
-		return pageValue{tainted: true, maxLen: maxUnknown}
+		return pageValue{tainted: true, maxLen: maxUnknown, mapped: a.mapped || b.mapped}
 	}
 	if a.maxLen >= b.maxLen {
+		if b.mapped {
+			a.mapped = true
+		}
 		return a
+	}
+	if a.mapped {
+		b.mapped = true
 	}
 	return b
 }
@@ -3209,6 +3330,12 @@ func joinFieldTaint(a, b fieldTaint) fieldTaint {
 			seen[src] = true
 			out.srcs = append(out.srcs, src)
 		}
+		if src.mapped {
+			out.mapped = true
+		}
+	}
+	if a.mapped || b.mapped {
+		out.mapped = true
 	}
 	return out
 }
@@ -3687,7 +3814,12 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 			if c, ok := sym.isConst(); ok {
 				maxLen = c
 			}
-			out = pageValue{tainted: true, maxLen: maxLen, sym: sym, hasSym: true}
+			out = pageValue{tainted: true, maxLen: maxLen, sym: sym, hasSym: true, mapped: base.mapped}
+			if base.hasSrc {
+				out.srcParam = base.srcParam
+				out.srcField = base.srcField
+				out.hasSrc = true
+			}
 		}
 	case *ast.CompositeLit:
 		out = pf.evalComposite(st, v)
@@ -3757,7 +3889,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 // parameter-sourced base keeps its source so summaries of param-derived
 // results stay caller-dependent instead of reporting "always tainted".
 func derivedPageValue(base pageValue) pageValue {
-	out := pageValue{tainted: true, maxLen: base.maxLen, hasSym: base.hasSym, sym: base.sym}
+	out := pageValue{tainted: true, maxLen: base.maxLen, hasSym: base.hasSym, sym: base.sym, mapped: base.mapped}
 	if base.hasSrc {
 		out.srcParam = base.srcParam
 		out.srcField = base.srcField
@@ -4284,6 +4416,201 @@ func (pf *pageFlow) notePageSinks(st *stmtState, fs *funcSummary, body *ast.Bloc
 	})
 }
 
+// noteCopyParams records copy(paramD[..], paramS[..]) pairs inside the
+// body: the callee copies between two caller-bound buffers, so the
+// owned/mapped decision belongs to the call sites (an owned destination
+// bound together with a mapped full-page source is the complete-page
+// copy the definition site cannot see). Aliases of parameters count as
+// the parameter they were assigned from (d := page; copy(d[..], cell)).
+func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
+	if body == nil {
+		return
+	}
+	paramAliases := map[types.Object]int{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			dstObj := objOf(st, lhs)
+			if dstObj == nil {
+				continue
+			}
+			srcID, ok := unparen(assign.Rhs[i]).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			srcObj := objOf(st, srcID)
+			if srcObj == nil {
+				continue
+			}
+			if idx, ok := st.params[srcObj]; ok {
+				paramAliases[dstObj] = idx
+			} else if idx, ok := paramAliases[srcObj]; ok {
+				paramAliases[dstObj] = idx
+			}
+		}
+		return true
+	})
+	rootSlot := func(e ast.Expr) (int, bool) {
+		// Strip slice wrappers: copy(page[:][..], x) still names page.
+		for {
+			if se, ok := unparen(e).(*ast.SliceExpr); ok {
+				e = se.X
+				continue
+			}
+			break
+		}
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return 0, false
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return 0, false
+		}
+		if idx, ok := st.params[obj]; ok {
+			return idx, true
+		}
+		if idx, ok := paramAliases[obj]; ok {
+			return idx, true
+		}
+		return 0, false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		id, ok := unparen(call.Fun).(*ast.Ident)
+		if !ok || id.Name != "copy" {
+			return true
+		}
+		d, dok := rootSlot(call.Args[0])
+		s, sok := rootSlot(call.Args[1])
+		if !dok || !sok {
+			return true
+		}
+		if fs.copyParams == nil {
+			fs.copyParams = map[int][]int{}
+		}
+		for _, prev := range fs.copyParams[d] {
+			if prev == s {
+				return true
+			}
+		}
+		fs.copyParams[d] = append(fs.copyParams[d], s)
+		return true
+	})
+}
+
+// recordCopyParamComposition forwards a callee's copy-parameter pairs
+// through the current function when both slots bind the current
+// function's own parameters: F(p1, p2) calling G(p1, p2) where G copies
+// p2 into p1 means F's callers bind the same owned/mapped decision, so
+// F's summary carries the pair onward.
+// storeCallbackMethod reports whether the method name belongs to the
+// module store callback surface (Rust Store::inspect_page/update_page/
+// copy_page). Only these methods hand a complete mapped page view to a
+// caller-supplied function.
+func storeCallbackMethod(name string) bool {
+	return name == "Inspect" || name == "Update" || name == "CopyPage"
+}
+
+func (pf *pageFlow) recordCopyParamComposition(st *stmtState, call *ast.CallExpr, fs *funcSummary, recvExpr ast.Expr, argOff int) {
+	if st.activeFS == nil || fs == nil || len(fs.copyParams) == 0 {
+		return
+	}
+	slotExpr := func(slot int) ast.Expr {
+		if recvExpr != nil && slot == 0 {
+			return recvExpr
+		}
+		ai := slot - argOff
+		if ai < 0 || ai >= len(call.Args) {
+			return nil
+		}
+		return call.Args[ai]
+	}
+	paramSlot := func(e ast.Expr) (int, bool) {
+		if e == nil {
+			return 0, false
+		}
+		for {
+			if se, ok := unparen(e).(*ast.SliceExpr); ok {
+				e = se.X
+				continue
+			}
+			break
+		}
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return 0, false
+		}
+		obj := pf.pc.info.ObjectOf(id)
+		if obj == nil {
+			return 0, false
+		}
+		idx, ok := st.params[obj]
+		return idx, ok
+	}
+	for d, srcs := range fs.copyParams {
+		dd, dok := paramSlot(slotExpr(d))
+		if !dok {
+			continue
+		}
+		for _, s := range srcs {
+			ss, sok := paramSlot(slotExpr(s))
+			if !sok {
+				continue
+			}
+			if st.activeFS.copyParams == nil {
+				st.activeFS.copyParams = map[int][]int{}
+			}
+			dup := false
+			for _, prev := range st.activeFS.copyParams[dd] {
+				if prev == ss {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				st.activeFS.copyParams[dd] = append(st.activeFS.copyParams[dd], ss)
+			}
+		}
+	}
+}
+
+// seedMappedCallbackParams marks a Store-surface callback literal's
+// byte-carrying parameters as mapping aliases: Inspect/Update/CopyPage
+// on a module-internal store interface hand the mapped page to the
+// callback, so inside its body copies INTO those parameters stay in
+// mapped memory. The parameters are seeded as parameter-conditional
+// taint (the caller-bound length argument decides the span) plus the
+// mapped flag; the seeds are removed after the literal body is
+// analyzed.
+func (pf *pageFlow) seedMappedCallbackParams(st *stmtState, lit *ast.FuncLit) []types.Object {
+	if lit.Type.Params == nil {
+		return nil
+	}
+	var seeded []types.Object
+	idx := 0
+	for _, f := range lit.Type.Params.List {
+		for _, name := range f.Names {
+			obj := pf.pc.info.ObjectOf(name)
+			if obj != nil && paramCanCarryPage(obj.Type()) {
+				st.stmtVars[obj] = pageValue{tainted: true, maxLen: maxUnknown, hasSrc: true, srcParam: idx, mapped: true}
+				seeded = append(seeded, obj)
+			}
+			idx++
+		}
+	}
+	return seeded
+}
+
 // recordPageSinkCall checks an expression-statement call made inside a
 // page-sourcing loop. When the callee writes element-wise into one of
 // its parameters and the caller passes a byte-buffer expression to that
@@ -4748,6 +5075,15 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 		recv = recvTypeNameFromTypes(sig.Recv().Type())
 	}
+	// Store-surface callbacks (Inspect/Update/CopyPage on a
+	// module-internal store interface) receive mapped page views: the
+	// func-literal arguments are analyzed with their byte parameters
+	// marked as mapping aliases.
+	storeCallback := false
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
+		moduleInternalInterface(sig.Recv().Type()) && storeCallbackMethod(fn.Name()) {
+		storeCallback = true
+	}
 	// Mints: the mmap call returns the mapped bytes; the mapping owner's
 	// Page/View hand out views of those bytes; the metadata chunk codec
 	// exposes a page slice whose length is pinned below a complete page
@@ -4758,13 +5094,13 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	if pkgPath == mappingImportPath && recv == "Mapping" {
 		switch fn.Name() {
 		case "Page":
-			pv := pageValue{tainted: true, maxLen: pageSize}
+			pv := pageValue{tainted: true, maxLen: pageSize, mapped: true}
 			pf.callResults[call] = []pageValue{pv, {}}
 			return pv
 		case "View":
 			// View(off, length): the length argument bounds the view; a
 			// constant bound keeps the result below a complete page.
-			pv := pageValue{tainted: true, maxLen: maxUnknown}
+			pv := pageValue{tainted: true, maxLen: maxUnknown, mapped: true}
 			if len(call.Args) == 2 {
 				if s, ok := symbolOf(call.Args[1], st); ok {
 					if c, ok := s.isConst(); ok {
@@ -4800,6 +5136,25 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	}
 	fs, ok := sums[key]
 	if !ok {
+		// Store-surface interface methods (Inspect/Update/CopyPage) hand
+		// a complete mapped page view to a caller-supplied callback. The
+		// interface method has no body summary, so this miss path is the
+		// only analysis these calls get: evaluate callback literals with
+		// their byte parameters seeded as mapping aliases, exactly like
+		// the concrete-callee args loop below.
+		if storeCallback {
+			for _, a := range call.Args {
+				var seeded []types.Object
+				if lit, ok := unparen(a).(*ast.FuncLit); ok {
+					seeded = pf.seedMappedCallbackParams(st, lit)
+				}
+				pf.promoteFullPageFields(st, a)
+				pf.evalExpr(st, a)
+				for _, obj := range seeded {
+					delete(st.stmtVars, obj)
+				}
+			}
+		}
 		// A module-declared interface method dispatches to an
 		// implementation this scan cannot follow; a byte-holding result
 		// may be a mapped page regardless of the arguments. Fail closed
@@ -4842,6 +5197,7 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	// explicit arguments follow (the same layout the summary analysis
 	// uses, where the receiver is parameter slot 0).
 	argOff := 0
+	pf.recordCopyParamComposition(st, call, fs, recvExpr, argOff)
 	if recvExpr != nil {
 		argOff = 1
 	}
@@ -4860,8 +5216,24 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		vi = fs.variadic
 	}
 	for _, a := range call.Args {
+		// Store-surface callback literals receive mapped page views by
+		// contract: Inspect/Update/CopyPage on a module-internal store
+		// interface hand the mapping to the callback, so its byte
+		// parameters are seeded as mapping aliases while the literal
+		// body is analyzed. Copies INTO those parameters stay mapped;
+		// the fail-closed page checks over the literal's own calls keep
+		// seeing the conditional taint, so nothing launders.
+		var seeded []types.Object
+		if storeCallback {
+			if lit, ok := unparen(a).(*ast.FuncLit); ok {
+				seeded = pf.seedMappedCallbackParams(st, lit)
+			}
+		}
 		pf.promoteFullPageFields(st, a)
 		pv := pf.evalExpr(st, a)
+		for _, obj := range seeded {
+			delete(st.stmtVars, obj)
+		}
 		sv, _ := symbolOf(a, st)
 		af := pf.argFlowOf(st, a)
 		if vi >= 0 && slot >= vi {
@@ -4934,10 +5306,16 @@ func (pf *pageFlow) evalLitResults(fs *funcSummary, bound []pageValue, _ *ast.Fu
 			switch src.kind {
 			case "const":
 				m = src.constVal
+				if src.mapped {
+					pv.mapped = true
+				}
 			case "param":
 				if src.param >= 0 && src.param < len(bound) {
 					b := bound[src.param]
 					m = b.maxLen
+					if b.mapped {
+						pv.mapped = true
+					}
 					if b.hasSym {
 						if c, ok := b.sym.isConst(); ok {
 							m = c
@@ -4948,6 +5326,9 @@ func (pf *pageFlow) evalLitResults(fs *funcSummary, bound []pageValue, _ *ast.Fu
 				if src.param >= 0 && src.param < len(bound) {
 					b := bound[src.param]
 					m = b.maxLen
+					if b.mapped {
+						pv.mapped = true
+					}
 					if b.hasSym {
 						if c, ok := b.sym.isConst(); ok {
 							m = c
@@ -4983,10 +5364,16 @@ func (pf *pageFlow) litResultFields(fs *funcSummary, bound []pageValue) map[stri
 			switch src.kind {
 			case "const":
 				m = src.constVal
+				if src.mapped {
+					pv.mapped = true
+				}
 			case "param", "paramMax":
 				if src.param >= 0 && src.param < len(bound) {
 					b := bound[src.param]
 					m = b.maxLen
+					if b.mapped {
+						pv.mapped = true
+					}
 					if b.hasSym {
 						if c, ok := b.sym.isConst(); ok {
 							m = c
@@ -5242,6 +5629,7 @@ func (pf *pageFlow) analyzeFuncLitBody(st *stmtState, lit *ast.FuncLit) {
 	pf.noteStringConvs(st, fs, lit.Body)
 	pf.noteFmtSpreads(st, fs, lit.Body)
 	pf.notePageSinks(st, fs, lit.Body)
+	pf.noteCopyParams(st, fs, lit.Body)
 }
 
 // analyzeFuncLitCall binds a closure's parameters to the call-site
@@ -5979,11 +6367,40 @@ func (pf *pageFlow) promoteFullPageFields(st *stmtState, e ast.Expr) {
 	if e == nil {
 		return
 	}
+	// Evaluate the expression FIRST: the shared value cache is how the
+	// rule pass reads whole-value taints, and the field scan below must
+	// see the current statement-state value (a local binding, a package
+	// holder) before it decides whether the value is a field-hidden
+	// carrier. Re-evaluating is idempotent: evalExpr caches its result
+	// on the expression node, so an already-cached value is returned
+	// unchanged.
 	pv := pf.evalExpr(st, e)
-	if pv.tainted && pageFull(pv) {
+	// A promoted whole-value taint is only meaningful when the expression
+	// itself can hold page bytes: struct values carry their field taints
+	// (b.Data = page; cb(b)), byte slices carry the view, interface
+	// values can box either. Scalar expressions (int/bool variables that
+	// an over-approximating multi-result distribution stamped with a
+	// junk field map) must never graduate into whole-value page taint:
+	// the field map on a scalar is an analyzer artifact, not a real page
+	// carrier.
+	if t := pf.pc.info.Types[e].Type; t == nil || !promotionCandidate(t) {
 		return
 	}
 	af := pf.argFlowOf(st, e)
+	// A whole-value full-page taint with NO recorded struct field is a
+	// direct page binding or a parameter fallback (an interface or byte
+	// parameter that might receive a page from a caller), not a
+	// field-hidden carrier: nothing is promoted, and the fail-closed
+	// module-internal receiver and opaque-call checks stay benign for
+	// such values (their concrete carriers are policed at the source).
+	// Expressions that carry BOTH a full whole value AND recorded
+	// page-bearing fields (an interface variable bound to a
+	// page-carrying struct, a struct literal with a page-bound field)
+	// fall through to the scan below, which marks the field-promoted
+	// marker on the concrete carrier.
+	if pv.tainted && pageFull(pv) && len(af.fields) == 0 {
+		return
+	}
 	if call, ok := unparen(e).(*ast.CallExpr); ok && pf.callFieldsFailClosed[call] {
 		// Fail-closed field over-approximations must not graduate into
 		// whole-value page taint (see callFieldsFailClosed): a clean
@@ -5999,8 +6416,24 @@ func (pf *pageFlow) promoteFullPageFields(st *stmtState, e ast.Expr) {
 			npv.maxLen = maxUnknown
 		}
 		pf.values[e] = npv
+		if pf.fieldPromoted == nil {
+			pf.fieldPromoted = map[ast.Expr]bool{}
+		}
+		pf.fieldPromoted[e] = true
 		return
 	}
+	// The whole value may ALREADY be a full-page taint (an interface
+	// variable bound to a page-carrying struct, a struct literal with a
+	// page-bound field) while the same recorded struct fields still make
+	// it a FIELD-HIDDEN carrier: a callee this call site cannot resolve
+	// (an interface dispatch, a callback) can extract and copy the field
+	// even though the value itself is not a byte slice. The old early
+	// return above would never have marked such expressions as promoted,
+	// so the fail-closed receiver/argument checks could not see concrete
+	// carriers bound through a whole-page value. The scan above keeps
+	// the promotion gate: a whole-value fallback taint WITHOUT a recorded
+	// full-page field (an interface parameter that might receive a page
+	// from a caller) is not a concrete carrier and stays benign.
 }
 
 func recvTypeNameFromTypes(t types.Type) string {
@@ -6661,6 +7094,24 @@ func isByteElem(t types.Type) bool {
 // fmt.Sprintf, and minting them would flag the spread at every helper
 // definition regardless of callers. The taint stays call-site-sensitive:
 // a clean argument never taints.
+// promotionCandidate reports whether an expression can carry a mapped
+// page either as its whole value (byte slices, interfaces, containers)
+// or through struct fields (b.Data = page makes b a carrier for the
+// field-promotion rule). Scalar expressions (int, bool, uint indexes)
+// are never carriers: a field map stamped on them by an
+// over-approximating multi-result distribution is an analyzer artifact.
+func promotionCandidate(t types.Type) bool {
+	if paramCanCarryPage(t) {
+		return true
+	}
+	for _, ft := range paramLeafPaths(t) {
+		if paramCanCarryPage(ft) {
+			return true
+		}
+	}
+	return false
+}
+
 func paramCanCarryPage(t types.Type) bool {
 	return paramCanCarryPageSeen(t, map[types.Type]bool{})
 }

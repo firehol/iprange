@@ -195,8 +195,11 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_xfvar.go", content: "package reader\n\nvar factoryXF56 func() any\n"},
 		batteryOp{kind: "create", path: "internal/reader/gatemut_xfuse.go", content: "package reader\n\nfunc crossFileProbe56(r *ImmutableReader, pgno uint32) error {\n\t_ = factoryXF56()\n\treturn nil\n}"},
 	}},
-	{name: "P57: scalar-result unproven callback receiving a full page", desc: "useCb1(cb func([]byte) int, page) with an unproven callback must be rejected", expectFail: true, ops: []batteryOp{
+	{name: "P57: scanned literal callback receiving a full page stays benign", desc: "useCb1(cb func([]byte) int, page) with a scanned func-literal callback (len only) is approved by the callback fence: the literal body is policed at its own site and copies nothing", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_scalarcb.go", content: "package reader\n\nfunc useCb1(cb func([]byte) int, page []byte) int {\n\treturn cb(page)\n}\n\nfunc scalarCbProbe(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useCb1(func(p []byte) int { return len(p) }, page)\n}"},
+	}},
+	{name: "P136: unproven func-typed variable passed as a page-receiving callback fails closed", desc: "useCb2(unprovenCb136, page) with the callback a package func variable without a scanned body must be rejected by the callback fence", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_cbvar.go", content: "package reader\n\nfunc useCb2(cb func([]byte) int, page []byte) int {\n\treturn cb(page)\n}\n\nvar unprovenCb136 func([]byte) int\n\nfunc scalarCbVarProbe136(r *ImmutableReader, pgno uint32) int {\n\tpage, err := r.page(pgno)\n\tif err != nil {\n\t\treturn -1\n\t}\n\treturn useCb2(unprovenCb136, page)\n}"},
 	}},
 	{name: "P58: named func type with an interface result", desc: "type factoryF2 func() any; var makeF2 factoryF2; makeF2() outside the mapping owner must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_namedfn.go", content: "package reader\n\ntype factoryF2 func() any\n\nvar makeF2 factoryF2\n\nfunc namedFuncVarProbe2() {\n\t_ = makeF2()\n}"},
@@ -470,6 +473,12 @@ var batteryPageCases = []batteryCase{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r12_8b.go", content: "package reader\n\ntype mgrR128b interface{ Make() any }\n\nvar mgrVarR128b mgrR128b\n\nfunc ifaceFactoryVarProbeR128b() any { return mgrVarR128b.Make() }"},
 	}},
 
+	{name: "P137: store CopyPage callback copying between mapped pages stays benign", desc: "CopyPage(src, dst, func(src, output []byte) { copy(output, src) }) with the callback seeded as a mapping alias is the module's COW page-copy shape and must pass", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_cowcb.go", content: "package reader\n\ntype cowStore137 interface {\n\tCopyPage(source, destination uint32, fn func(src, output []byte) error) error\n}\n\ntype cowStoreImpl137 struct{ r *ImmutableReader }\n\nfunc (s cowStoreImpl137) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {\n\tsrc, err := s.r.page(source)\n\tif err != nil {\n\t\treturn err\n\t}\n\tdst, err := s.r.page(destination)\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn fn(src, dst)\n}\n\nfunc cowCbProbe137(s cowStore137, src, dst uint32) error {\n\treturn s.CopyPage(src, dst, func(src, output []byte) error {\n\t\tcopy(output, src)\n\t\treturn nil\n\t})\n}\n"},
+	}},
+	{name: "P138: store CopyPage callback laundering a mapped page into an owned buffer fails closed", desc: "the callback appending a seeded mapped src into a package-level owned buffer must be rejected at the append site", expectFail: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_cowcb_bad.go", content: "package reader\n\ntype cowStore138 interface {\n\tCopyPage(source, destination uint32, fn func(src, output []byte) error) error\n}\n\ntype cowStoreImpl138 struct{ r *ImmutableReader }\n\nfunc (s cowStoreImpl138) CopyPage(source, destination uint32, fn func(src, output []byte) error) error {\n\tsrc, err := s.r.page(source)\n\tif err != nil {\n\t\treturn err\n\t}\n\tdst, err := s.r.page(destination)\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn fn(src, dst)\n}\n\nvar sinkBuf138 []byte\n\nfunc cowCbBadProbe138(s cowStore138, src, dst uint32) error {\n\treturn s.CopyPage(src, dst, func(src, output []byte) error {\n\t\tsinkBuf138 = append(sinkBuf138, src...)\n\t\treturn nil\n\t})\n}\n"},
+	}},
 	{name: "P135: struct holding a file into an interface formal fails closed", desc: "sink(H{F: f}) with sink func(any) erases the struct and must be rejected", expectFail: true, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/reader/gatemut_r12_9.go", content: "package reader\n\nimport \"os\"\n\ntype H129 struct{ F *os.File }\n\nvar fileVarR129 *os.File\n\nfunc ifaceArgLaunderR129(sink func(any)) {\n\tsink(H129{F: fileVarR129})\n}"},
 	}},

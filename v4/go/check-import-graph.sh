@@ -3,15 +3,23 @@
 # mmap-only content-transfer ban.
 #
 # Mirrors v4/rust/check-source-graph.sh for the Go peer:
-#   - internal/format is the wire-codec owner: stdlib only.
+#   - internal/format is the wire-codec owner: stdlib + internal/work
+#     (test-only counters; Rust slotted_page.rs imports crate::work).
 #   - internal/mapping is the mapping owner: stdlib + golang.org/x/sys +
 #     internal/format (page-size constants and the shared error codes) +
 #     internal/work (test-only necessary-work counters) only.
 #   - internal/bootstrap is the pure two-meta selection authority: stdlib
 #     + internal/format only, shared by the reader and the writer, and no
 #     sync/sync/atomic/unsafe.
+#   - internal/tree is the generic COW B+tree core: stdlib + internal/format
+#     + internal/work only.
+#   - internal/bitmap is the hierarchical-bitmap core: stdlib + internal/
+#     format + internal/tree + internal/work only.
+#   - internal/retire is the retirement-extent tree: stdlib + internal/
+#     format + internal/tree only.
 #   - internal/writer is the writer core: stdlib + internal/bootstrap +
-#     internal/format + internal/mapping + internal/work only.
+#     internal/format + internal/mapping + internal/work + internal/tree +
+#     internal/bitmap + internal/retire only.
 #   - internal/reader is the reader core: stdlib + internal/format +
 #     internal/mapping + internal/work only, and no sync/sync/atomic/unsafe:
 #     the traversal paths carry no per-call synchronization
@@ -142,10 +150,13 @@ check() {
 	fi
 }
 
-check "github.com/firehol/iprange/v4/go/internal/format" "github.com/firehol/iprange/v4/go/internal/format\$"
+check "github.com/firehol/iprange/v4/go/internal/format" "github.com/firehol/iprange/v4/go/internal/\(format\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/bootstrap" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\)"
 check "github.com/firehol/iprange/v4/go/internal/mapping" "github.com/firehol/iprange/v4/go/internal/\(format\|mapping\|work\)"
-check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/tree" "github.com/firehol/iprange/v4/go/internal/\(format\|tree\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/bitmap" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|format\|tree\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/retire" "github.com/firehol/iprange/v4/go/internal/\(format\|retire\|tree\)"
+check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|bootstrap\|format\|mapping\|retire\|tree\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
 check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
 
@@ -286,6 +297,9 @@ for target in $targets; do
 		"github.com/firehol/iprange/v4/go/internal/format"|\
 		"github.com/firehol/iprange/v4/go/internal/bootstrap"|\
 		"github.com/firehol/iprange/v4/go/internal/mapping"|\
+		"github.com/firehol/iprange/v4/go/internal/tree"|\
+		"github.com/firehol/iprange/v4/go/internal/bitmap"|\
+		"github.com/firehol/iprange/v4/go/internal/retire"|\
 		"github.com/firehol/iprange/v4/go/internal/writer"|\
 		"github.com/firehol/iprange/v4/go/internal/reader")
 			# these may import internal/* by the approved boundary

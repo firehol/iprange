@@ -50,3 +50,48 @@ func MappingFlush(uint64) {}
 
 // FileSync counts one stable-storage file sync (fsync / F_FULLFSYNC).
 func FileSync(uint64) {}
+
+// CellProbe counts one per-record decode attempt during slotted-page
+// inspection (fixed cells and variable records).
+func CellProbe(uint64) {}
+
+// SlotRead counts one persistent slot-array value read.
+func SlotRead(uint64) {}
+
+// SlotScanStep counts one slot visited during a layout scan or adjustment.
+func SlotScanStep(uint64) {}
+
+// EditFitProbe counts one fit pre-check before a structural edit.
+func EditFitProbe(uint64) {}
+
+// BitmapProbe counts one bitmap word or summary read during a bitmap walk.
+func BitmapProbe(uint64) {}
+
+// PageCreated counts one page allocated (private or tail) for a draft.
+func PageCreated(uint64) {}
+
+// PageCopied counts one complete page copied for COW (copy_for_cow).
+func PageCopied(uint64) {}
+
+// PageSplit counts one page split during a structural edit.
+func PageSplit(uint64) {}
+
+// PageRetired counts one page retired to the retirement tree.
+func PageRetired(uint64) {}
+
+// PageReclaimed counts one retired page extent reclaimed into the free
+// bitmap.
+func PageReclaimed(uint64) {}
+
+// PageSealed counts one page whose checksum was stamped.
+func PageSealed(uint64) {}
+
+// BytesMoved counts bytes copied within or across mapped pages.
+func BytesMoved(uint64) {}
+
+// BytesZeroed counts bytes zeroed inside mapped pages.
+func BytesZeroed(uint64) {}
+
+// FirstFenceUpdate counts one branch first-key (fence) update during a
+// split or delete propagation.
+func FirstFenceUpdate(uint64) {}

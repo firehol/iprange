@@ -416,3 +416,24 @@ func zeroRelations(m *Meta, checkMembership, checkCatalog bool) error {
 	}
 	return nil
 }
+
+// Roots returns the thirteen persistent roots of the meta page in the
+// canonical order (Rust contract.rs MetaV4::roots). The free bitmap uses
+// this set to refuse allocations that would alias a live root.
+func (m *Meta) Roots() [13]uint32 {
+	return [13]uint32{
+		m.RangeRoot,
+		m.CatalogNameRoot,
+		m.CatalogIndexRoot,
+		m.FeedUsedRoot,
+		m.MembershipIDRoot,
+		m.MembershipHashRoot,
+		m.MembershipUsedRoot,
+		m.MetadataRoot,
+		m.FreeBitmapRoot,
+		m.RetirementRoot,
+		m.StructureIDRoot,
+		m.StructureHashRoot,
+		m.StructureUsedRoot,
+	}
+}

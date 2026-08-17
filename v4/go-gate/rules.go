@@ -145,8 +145,20 @@ type packageCheck struct {
 	// statement state seeds its local binding map from it, so a
 	// package-level method value (var get = holder.Get) keeps its
 	// receiver when called from any function.
-	pkgBindings     map[*types.Var]ast.Expr
-	reassignedVars  map[*types.Var]bool
+	pkgBindings    map[*types.Var]ast.Expr
+	reassignedVars map[*types.Var]bool
+	// localFuncInits records the declaration initializer of every local
+	// function-typed variable (f := func... / var f = func...) keyed by
+	// its object. A never-reassigned local whose initializer is a func
+	// literal or a provably scanned function is itself scanned: the
+	// scanned-callback fence can admit it as an argument to approved
+	// module callees.
+	localFuncInits map[*types.Var]ast.Expr
+	// localReassigned marks local function-typed variables written after
+	// their declaration (plain assignment, redefinition of an existing
+	// name, address-taken store): their runtime value is no longer
+	// provable from the declaration initializer.
+	localReassigned map[*types.Var]bool
 	pkgFuncLitBound map[*types.Var]bool
 	// pkgFuncNonLitBound records package-scope function variables that
 	// receive a non-literal value anywhere: a reassignment to an
@@ -154,6 +166,11 @@ type packageCheck struct {
 	// the variable's runtime value unknowable, so the func-literal
 	// exemption below no longer applies.
 	pkgFuncNonLitBound map[*types.Var]bool
+	// funcParams records the func-typed formal parameters of every
+	// FuncDecl in the package; calls through them are approved inside
+	// module-internal packages (the callback fence polices the call
+	// sites).
+	funcParams map[*types.Var]bool
 }
 
 // typesChecker type-checks one package's parsed files with the loader.
@@ -199,6 +216,8 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	pkgFuncLitBound := map[*types.Var]bool{}
 	pkgFuncNonLitBound := map[*types.Var]bool{}
 	reassigned := map[*types.Var]bool{}
+	localFuncInits := map[*types.Var]ast.Expr{}
+	localReassigned := map[*types.Var]bool{}
 	for _, f := range asts {
 		ast.Inspect(f, func(n ast.Node) bool {
 			vs, ok := n.(*ast.ValueSpec)
@@ -218,6 +237,8 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					} else {
 						pkgFuncNonLitBound[obj] = true
 					}
+				} else if ok {
+					localFuncInits[obj] = vs.Values[i]
 				}
 			}
 			return true
@@ -240,6 +261,15 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 							} else {
 								pkgFuncNonLitBound[obj] = true
 							}
+						} else if obj, ok := info.Uses[id].(*types.Var); ok {
+							// A local function variable written after
+							// its declaration can no longer be proven to
+							// hold the declaration initializer.
+							localReassigned[obj] = true
+						} else if d, ok := info.Defs[id].(*types.Var); ok && i < len(v.Rhs) {
+							// f := func...: the declaration initializer
+							// of a new local binding.
+							localFuncInits[d] = v.Rhs[i]
 						}
 					}
 				}
@@ -248,6 +278,8 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 						reassigned[obj] = true
 						pkgFuncNonLitBound[obj] = true
+					} else if obj, ok := info.Uses[id].(*types.Var); ok {
+						localReassigned[obj] = true
 					}
 				}
 			case *ast.RangeStmt:
@@ -263,14 +295,16 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 					}
 				}
 			case *ast.UnaryExpr:
-				// Taking a package-level variable's address permits a
-				// store through that pointer (p := &f; *p = bytes.Clone),
-				// so the initializer is no longer proof of the callee.
+				// Taking a variable's address permits a store through
+				// that pointer (p := &f; *p = bytes.Clone), so the
+				// initializer is no longer proof of the callee.
 				if v.Op == token.AND {
 					if id, ok := unparen(v.X).(*ast.Ident); ok {
 						if obj, ok := info.Uses[id].(*types.Var); ok && obj.Parent() == pkg.Scope() {
 							reassigned[obj] = true
 							pkgFuncNonLitBound[obj] = true
+						} else if obj, ok := info.Uses[id].(*types.Var); ok {
+							localReassigned[obj] = true
 						}
 					}
 				}
@@ -280,7 +314,7 @@ func (tc *typesChecker) check(path string, files []*parsedFile) (*packageCheck, 
 	}
 	sorted := append([]*parsedFile{}, files...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
-	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: sorted, pf: nil, varInits: varInits, pkgBindings: pkgBindings, reassignedVars: reassigned, pkgFuncLitBound: pkgFuncLitBound, pkgFuncNonLitBound: pkgFuncNonLitBound}, nil
+	return &packageCheck{pkg: pkg, info: info, fset: tc.fset, loader: tc.loader, files: sorted, pf: nil, varInits: varInits, pkgBindings: pkgBindings, reassignedVars: reassigned, localFuncInits: localFuncInits, localReassigned: localReassigned, pkgFuncLitBound: pkgFuncLitBound, pkgFuncNonLitBound: pkgFuncNonLitBound, funcParams: collectPkgFuncParams(info, sorted)}, nil
 }
 
 // fileRules carries one file's rule pass.
@@ -549,6 +583,31 @@ func isFileNamed(n *types.Named) bool {
 	return obj.Name() == "File" || obj.Name() == "Root"
 }
 
+// moduleInternalInterface reports whether t is an interface type declared
+// in a module-internal package. Every implementation of such an interface
+// lives inside this module and is scanned by the gate, so dispatching
+// through the interface is not an unproven indirection: the concrete
+// method bodies are policed at their own sites. Interfaces declared
+// outside the module keep failing closed everywhere.
+func moduleInternalInterface(t types.Type) bool {
+	u := types.Unalias(t)
+	if named, ok := u.(*types.Named); ok {
+		if _, isIface := named.Underlying().(*types.Interface); isIface {
+			if obj := named.Obj(); obj != nil && obj.Pkg() != nil {
+				p := obj.Pkg().Path()
+				return p == moduleInternalPrefix || strings.HasPrefix(p, moduleInternalPrefix+"/")
+			}
+		}
+	}
+	return false
+}
+
+// moduleInternalPackage reports whether pkgPath is a module-internal
+// package (all its code is scanned).
+func moduleInternalPackage(pkgPath string) bool {
+	return pkgPath == moduleInternalPrefix || strings.HasPrefix(pkgPath, moduleInternalPrefix+"/")
+}
+
 func (w *fileRules) typeOf(e ast.Expr) types.Type {
 	tv, ok := w.pc.info.Types[e]
 	if !ok {
@@ -583,7 +642,15 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			// full mapped page or a file descriptor flow into owned
 			// memory through an indirection the source scan cannot
 			// follow, so such calls are transfers unless the variable
-			// provably binds a scanned function.
+			// provably binds a scanned function. A func-typed FORMAL
+			// PARAMETER of the current function is the one exception:
+			// every caller of the function is scanned (the package is
+			// module-internal), and the call-site callback fence
+			// requires the argument to be a scanned callback, so the
+			// chain bottoms out in a policed body.
+			if w.approvedFuncParamVar(o) {
+				return true
+			}
 			return w.approvedFuncVar(o, 0)
 		}
 		return false
@@ -595,15 +662,73 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 		}
 		if pkg := fn.Pkg(); pkg != nil {
 			p := pkg.Path()
-			if p == w.pc.pkg.Path() || strings.HasPrefix(p, moduleInternalPrefix) || p == xsysImport {
+			if p == w.pc.pkg.Path() || moduleInternalPackage(p) || p == xsysImport {
 				if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
-					return false
+					// An interface declared in a module-internal package
+					// has every implementation scanned by this gate, so
+					// dispatching through it is not an unproven
+					// indirection: the concrete method bodies are policed
+					// at their own sites. The dispatch is therefore
+					// approved like a same-module call. External interface
+					// methods keep failing closed: their bodies can
+					// launder a mapped view into owned memory without the
+					// scan seeing it. The receiver/argument checks below
+					// still fail module-internal dispatches when the
+					// receiver or an argument CONCRETELY carries a full
+					// mapped page (field promotion or a direct binding),
+					// because the concrete implementation is erased at the
+					// call site and its own conversion rules cannot see
+					// the receiver's data.
+					return moduleInternalInterface(sig.Recv().Type())
 				}
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// pkgFuncParams records every func-typed formal parameter of the
+// package's FuncDecls (methods included). Calls through such parameters
+// are approved inside module-internal packages: the callee chain is
+// caller-supplied, and the call-site callback fence requires every
+// argument bound to a func-typed formal to be a scanned callback.
+func collectPkgFuncParams(info *types.Info, files []*parsedFile) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	for _, pf := range files {
+		for _, decl := range pf.ast.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Type.Params == nil {
+				continue
+			}
+			for _, f := range fd.Type.Params.List {
+				if funcSignature(info.TypeOf(f.Type)) == nil {
+					continue
+				}
+				for _, name := range f.Names {
+					if obj, ok := info.Defs[name].(*types.Var); ok {
+						out[obj] = true
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// approvedFuncParamVar reports whether a func-typed variable is a formal
+// parameter of a function in this module-internal package. The current
+// package must be module-internal: then every caller of the declaring
+// function is scanned, and the callback fence at the call sites
+// guarantees the parameter only ever receives a scanned callback.
+func (w *fileRules) approvedFuncParamVar(v *types.Var) bool {
+	if v == nil || !moduleInternalPackage(w.pc.pkg.Path()) || w.pc.funcParams == nil {
+		return false
+	}
+	if !w.pc.funcParams[v] {
+		return false
+	}
+	return funcSignature(v.Type()) != nil
 }
 
 func (w *fileRules) visit(n ast.Node) bool {
@@ -766,7 +891,8 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 	}
 	for pi := range fs.stringParams {
 		for _, arg := range slotArgs(pi) {
-			if pv := w.pageValue(arg); pv.tainted && pageFull(pv) {
+			pv := w.pageValue(arg)
+			if pv.tainted && pageFull(pv) {
 				w.fail(v.Pos(), "mapped page view passed to %s: parameter %d is converted to an owned string inside the callee", calleeText(v.Fun), pi+1)
 			}
 		}
@@ -778,6 +904,172 @@ func (w *fileRules) checkStringParamCalls(v *ast.CallExpr, fn *types.Func) {
 			}
 		}
 	}
+}
+
+// checkParamCopyCalls fails module callee call sites that bind an owned
+// destination and a mapped full-page source to a callee parameter pair
+// the callee copies between (copy(paramD[..], paramS[..]) recorded in
+// its summary). The definition site cannot decide: both sides are
+// caller-bound. The recorded pairs compose through call chains, so the
+// owned/mapped decision is enforced at the binding site where both
+// values are concrete.
+func (w *fileRules) checkParamCopyCalls(v *ast.CallExpr, fn *types.Func) {
+	if w.pc.pf == nil || w.pc.pf.store == nil || fn == nil || fn.Pkg() == nil {
+		return
+	}
+	pkgPath := fn.Pkg().Path()
+	sums := w.pc.pf.summaries
+	if pkgPath != w.pc.pkg.Path() {
+		sums = w.pc.pf.store.pkgs[pkgPath]
+	}
+	if sums == nil {
+		return
+	}
+	key := fn.Name()
+	receiverSlot := false
+	var sig *types.Signature
+	if s, ok := fn.Type().(*types.Signature); ok {
+		sig = s
+		if sig.Recv() != nil {
+			key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+			receiverSlot = true
+		}
+	}
+	fs, ok := sums[key]
+	if !ok || len(fs.copyParams) == 0 {
+		return
+	}
+	recvOffset := 0
+	var recvExpr ast.Expr
+	if mvr, ok := w.methodValueCallee(v); ok {
+		recvExpr = mvr.recv
+	} else if sel, ok := unparen(v.Fun).(*ast.SelectorExpr); ok {
+		if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+			recvExpr = sel.X
+			recvOffset = 1
+		}
+	}
+	argAt := func(slot int) (ast.Expr, bool) {
+		if receiverSlot && slot == 0 && recvExpr != nil {
+			return recvExpr, true
+		}
+		ai := slot - recvOffset
+		if ai < 0 || ai >= len(v.Args) {
+			return nil, false
+		}
+		return v.Args[ai], true
+	}
+	for d, srcs := range fs.copyParams {
+		dstArg, dok := argAt(d)
+		if !dok {
+			continue
+		}
+		// "Owned" means not page-tainted at all: a mapped destination, a
+		// page-tainted local, or a parameter-sourced buffer is decided
+		// elsewhere in the chain; a clean local buffer is owned.
+		dpv := w.pageValue(dstArg)
+		if dpv.tainted {
+			continue
+		}
+		for _, s := range srcs {
+			srcArg, sok := argAt(s)
+			if !sok {
+				continue
+			}
+			spv := w.pageValue(srcArg)
+			if spv.tainted && pageFull(spv) {
+				w.fail(v.Pos(), "copy of a mapped page view into an owned buffer through %s (complete page)", calleeText(v.Fun))
+			}
+		}
+	}
+}
+
+// checkFuncTypedArgs enforces the scanned-callback fence: an approved
+// module callee with a func-typed formal may only receive a callback
+// whose body is part of the scanned tree. Every implementer and caller
+// of module-internal code is scanned, so a func literal, a provably
+// scanned package function variable, a func-typed formal parameter of
+// the current function, or a method value on a scanned concrete type
+// all bottom out in policed bodies; anything else (a stdlib binding, an
+// interface method value, an opaque local) could launder a complete
+// mapped page into memory the gate cannot see.
+func (w *fileRules) checkFuncTypedArgs(v *ast.CallExpr, fun ast.Expr, formals []types.Type, approved bool) {
+	if !approved || len(formals) == 0 {
+		return
+	}
+	for i, arg := range v.Args {
+		ft := types.Type(nil)
+		if i < len(formals) {
+			ft = formals[i]
+		} else if sl, ok := types.Unalias(formals[len(formals)-1]).(*types.Slice); ok {
+			ft = sl.Elem()
+		} else {
+			break
+		}
+		if !isFuncType(ft) {
+			continue
+		}
+		if w.scannedCallback(arg) {
+			continue
+		}
+		w.fail(v.Pos(), "func-typed argument to %s is not a scanned callback (complete page into owned memory)", calleeText(fun))
+	}
+}
+
+// scannedCallback reports whether a func-typed argument names a callback
+// whose body is scanned by this gate.
+func (w *fileRules) scannedCallback(arg ast.Expr) bool {
+	switch a := unparen(arg).(type) {
+	case *ast.FuncLit:
+		return true
+	case *ast.Ident:
+		switch obj := w.pc.info.Uses[a].(type) {
+		case *types.Func:
+			if obj.Pkg() == nil {
+				return false
+			}
+			p := obj.Pkg().Path()
+			return p == w.pc.pkg.Path() || moduleInternalPackage(p)
+		case *types.Var:
+			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0)
+		}
+		return false
+	case *ast.SelectorExpr:
+		fn, ok := w.pc.info.Uses[a.Sel].(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return false
+		}
+		p := fn.Pkg().Path()
+		if p != w.pc.pkg.Path() && !moduleInternalPackage(p) {
+			return false
+		}
+		// A method value on an interface dispatches; only concrete
+		// scanned receiver types have a policed body.
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return !isInterfaceType(sig.Recv().Type())
+		}
+		return true
+	}
+	return false
+}
+
+// isFuncType reports whether t is a function (signature) type.
+func isFuncType(t types.Type) bool {
+	return funcSignature(t) != nil
+}
+
+// funcSignature unwraps aliases and defined func types (type F func(...)
+// with a named declaration) to the underlying signature.
+func funcSignature(t types.Type) *types.Signature {
+	if t == nil {
+		return nil
+	}
+	t = types.Unalias(t)
+	if n, ok := t.(*types.Named); ok {
+		t = n.Underlying()
+	}
+	sig, _ := t.(*types.Signature)
+	return sig
 }
 
 // methodValueCallee returns the flow-pass resolution of a method-value
@@ -832,6 +1124,51 @@ func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
 			// implementation dispatches dynamically, so a call through
 			// the alias is an unproven indirection no matter how the
 			// alias itself is spelled.
+			return false
+		}
+		return w.approvedFuncPkg(fn)
+	}
+	return false
+}
+
+// approvedLocalFuncVar reports whether a local function variable
+// provably binds a scanned callback from its declaration initializer: a
+// func literal (its body is part of this package), a scanned package
+// function, or a chain of never-reassigned local aliases to either. A
+// local written after declaration or declared without an initializer has
+// no provable binding; the callback fence treats it like any other
+// opaque local.
+func (w *fileRules) approvedLocalFuncVar(v *types.Var, depth int) bool {
+	if v == nil || depth > 2 || w.pc.localReassigned[v] || funcSignature(v.Type()) == nil {
+		return false
+	}
+	init, ok := w.pc.localFuncInits[v]
+	if !ok {
+		return false
+	}
+	switch i := unparen(init).(type) {
+	case *ast.FuncLit:
+		return true
+	case *ast.Ident:
+		switch o := w.pc.info.Uses[i].(type) {
+		case *types.Func:
+			return w.approvedFuncPkg(o)
+		case *types.Var:
+			if o.Parent() == w.pc.pkg.Scope() {
+				return w.approvedFuncVar(o, 0)
+			}
+			return w.approvedLocalFuncVar(o, depth+1)
+		}
+		return false
+	case *ast.SelectorExpr:
+		fn, ok := w.pc.info.Uses[i.Sel].(*types.Func)
+		if !ok {
+			return false
+		}
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+			// An interface method expression has no scanned body: the
+			// implementation dispatches dynamically, so an alias to it
+			// is an unproven indirection no matter how it is spelled.
 			return false
 		}
 		return w.approvedFuncPkg(fn)
@@ -986,7 +1323,11 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// scan cannot follow: even a scalar result (func([]byte) int)
 			// can copy a full mapped view into owned memory inside that
 			// body, so such calls are transfers when they receive a page.
-			if !w.approvedFuncVar(obj, 0) {
+			// A func-typed formal parameter of a module-internal
+			// function is the approved exception: its call sites are
+			// scanned, and the callback fence requires them to pass a
+			// scanned callback.
+			if !w.approvedFuncVar(obj, 0) && !w.approvedFuncParamVar(obj) {
 				varIndirect = true
 			}
 		}
@@ -996,8 +1337,12 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// A concrete method on a value type has a scanned body, but
 			// an interface method dispatches to an unknowable
 			// implementation: c.Apply(page) on a CB interface can copy
-			// the full page inside an unscanned method body.
-			if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) {
+			// the full page inside an unscanned method body. Interfaces
+			// declared in module-internal packages have every
+			// implementation scanned, so their dispatch is not an
+			// indirection.
+			if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
+				!moduleInternalInterface(sig.Recv().Type()) {
 				varIndirect = true
 			}
 		default:
@@ -1042,6 +1387,29 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		if mvr, ok := w.methodValueCallee(v); ok {
 			if pv := w.pageValue(mvr.recv); pv.tainted && pageFull(pv) {
 				w.fail(v.Pos(), "mapped page view passed to %s on an unprovable receiver (complete page into owned memory)", calleeText(v.Fun))
+			}
+		}
+	}
+	// A module-internal interface method whose receiver CONCRETELY
+	// carries a complete mapped page (a struct field bound to a page, or
+	// a local binding) can launder it into owned memory inside an
+	// implementation this call site cannot resolve: every implementation
+	// is scanned, but the receiver data is erased here, so the call
+	// fails closed like the external interface case. The conservative
+	// parameter fallback (a Store/Codec interface parameter that only
+	// MIGHT receive a page from a caller) is not concrete and stays
+	// benign: the scanned implementations receive no page data through
+	// the erased receiver, and page-bearing ARGUMENTS of the dispatch
+	// are policed at the same call site.
+	if sel, ok := fun.(*ast.SelectorExpr); ok {
+		if selRecv, isSel := w.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+			if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok {
+				if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
+					moduleInternalInterface(sig.Recv().Type()) {
+					if pv := w.pageValue(sel.X); pv.tainted && pageFull(pv) && w.pageFieldPromoted(sel.X) {
+						w.fail(v.Pos(), "mapped page view passed to %s on a module-internal interface receiver (complete page into owned memory)", calleeText(fun))
+					}
+				}
 			}
 		}
 	}
@@ -1168,7 +1536,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			continue
 		}
 		pageArg := w.pageValue(arg)
-		if pageArg.tainted && pageFull(pageArg) && (transfer || varIndirect) {
+		if pageArg.tainted && pageFull(pageArg) && (transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
 			w.fail(v.Pos(), "mapped page view passed to %s (complete page into owned memory)", calleeText(fun))
 		}
 		// The owned byte-builder family copies its argument into an owned
@@ -1197,7 +1565,13 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	}
 	if fn != nil {
 		w.checkStringParamCalls(v, fn)
+		w.checkParamCopyCalls(v, fn)
 	}
+	// Func-typed formals of approved module callees receive a scanned
+	// callback: the callee hands it page views by contract, so an
+	// unprovable argument would launder a complete mapped page into a
+	// body the gate cannot follow.
+	w.checkFuncTypedArgs(v, fun, formals, approved)
 	// A helper whose parameter is written element-wise, called inside a
 	// page-sourcing loop with an owned destination argument, copies the
 	// complete page through the helper. The flow pass recorded the
@@ -1517,7 +1891,14 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 			continue
 		}
 		if isInterfaceType(ft) {
-			w.fail(v.Pos(), "file-bearing argument laundered into an interface parameter (type erasure)")
+			// An interface declared in a module-internal package only
+			// accepts implementations from scanned code: the erased
+			// descriptor is re-inspected at every use inside the
+			// module, so the erasure is not a launder. External
+			// interfaces keep failing closed.
+			if !moduleInternalInterface(ft) {
+				w.fail(v.Pos(), "file-bearing argument laundered into an interface parameter (type erasure)")
+			}
 		} else if _, ok := ft.(*types.TypeParam); ok {
 			if !resBears {
 				w.fail(v.Pos(), "file-bearing argument through a generic callee erased into a non-file-bearing result (type erasure)")
@@ -1528,7 +1909,16 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 
 // checkCopy flags copy(dst, src) when the copied span can be a complete
 // page: src is a mapped page view with an unbounded/unknown bound, and dst
-// is an owned buffer that is not statically tiny.
+// is an owned buffer that is not statically tiny. Three shapes are benign
+// and return before the owned-destination test:
+//
+//   - a MAPPED destination: every copied byte stays inside the mapping;
+//   - a same-root intra-buffer copy: the bytes move inside one buffer
+//     (the slotted-page record shifts of internal/format);
+//   - a parameter-sourced destination paired with a parameter-sourced
+//     source: both sides are caller-bound, and the callee's copy-parameter
+//     summary makes the call sites fail an owned destination bound with a
+//     mapped full-page source.
 func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	if len(v.Args) != 2 {
 		return
@@ -1537,6 +1927,23 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 	if !src.tainted {
 		return
 	}
+	dst := v.Args[0]
+	// Slice-header destinations never own page bytes.
+	if elemT := collectionElementType(w.typeOf(dst)); elemT != nil && !byteElementType(elemT) {
+		return
+	}
+	// A mapped destination keeps the copied bytes inside the mapping:
+	// writing into a page view never creates an owned complete page.
+	if pvd := w.pageValue(dst); pvd.tainted && pvd.mapped {
+		return
+	}
+	// A copy between two views of the same buffer stays inside that
+	// buffer (an intra-page record move), whether the buffer is mapped
+	// (writer page mutations) or an owned test page.
+	if d, s := w.pageRoot(dst), w.pageRoot(v.Args[1]); d != nil && d == s {
+		return
+	}
+	dpv := w.pageValue(dst)
 	// Definite symbolic bounds count as bounded spans too (a slice with
 	// constant low/high carries a constant maxLen).
 	if src.hasSym {
@@ -1544,11 +1951,27 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 			src.maxLen = c
 		}
 	}
-	dst := v.Args[0]
 	// Repeated bounded copies into one destination can assemble a
 	// complete page from sub-page spans; count them before the full-page
-	// fast path. Slice-header destinations never own page bytes.
-	if elemT := collectionElementType(w.typeOf(dst)); elemT != nil && !byteElementType(elemT) {
+	// fast path. A parameter-sourced destination is caller-bound, so the
+	// callee's call sites decide (the copy-parameter rule); the span
+	// accumulation only applies to objects with a definite owned shape.
+	if dpv.hasSrc {
+		if src.hasSrc {
+			// Both sides caller-bound: the call-site copy-parameter rule
+			// fails an owned destination bound with a mapped full-page
+			// source, so the definition site lets the pair through.
+			return
+		}
+		// An unconditional mapped source into a caller-bound destination
+		// is a complete-page copy regardless of what the caller binds:
+		// fail here, the mapped content cannot be re-bound away.
+		if src.maxLen > 0 && src.maxLen < pageSize {
+			return // bounded unconditional span into a param stays sub-page at every call site
+		}
+		if pageFull(src) {
+			w.fail(v.Pos(), "copy of a mapped page view into an owned buffer (complete page)")
+		}
 		return
 	}
 	if src.maxLen > 0 && src.maxLen < pageSize {
@@ -1586,7 +2009,24 @@ func boundedChainRoot(e ast.Expr) *ast.Ident {
 			id, _ := d.(*ast.Ident)
 			return id
 		}
+
 	}
+}
+
+// pageRoot resolves the root object of a slice/index/selector/pointer
+// destination or source chain (page[slot+2:], h.Buf[lo:hi], (*p)[lo:]).
+// Two expressions sharing one root object name the same backing buffer,
+// so a copy between them is an intra-buffer move, never an ownership
+// transfer.
+func (w *fileRules) pageRoot(e ast.Expr) types.Object {
+	root := boundedChainRoot(unparen(e))
+	if root == nil {
+		return nil
+	}
+	if obj := w.pc.info.Uses[root]; obj != nil {
+		return obj
+	}
+	return w.pc.info.Defs[root]
 }
 
 // chainInner returns the base expression of a destination chain step.
@@ -1911,6 +2351,33 @@ func (w *fileRules) pageValue(e ast.Expr) pageValue {
 	return pageValue{}
 }
 
+// unprovenVarCallee reports whether fun is called through a
+// function-typed variable or a struct function field: a callee the scan
+// cannot resolve to one body at this call site, even when the variable is
+// an approved formal parameter (whose bound callbacks are all scanned).
+func (w *fileRules) unprovenVarCallee(fun ast.Expr) bool {
+	switch f := unparen(fun).(type) {
+	case *ast.Ident:
+		_, ok := w.pc.info.Uses[f].(*types.Var)
+		return ok
+	case *ast.SelectorExpr:
+		_, ok := w.pc.info.Uses[f.Sel].(*types.Var)
+		return ok
+	}
+	return false
+}
+
+// pageFieldPromoted reports whether the flow pass synthesized e's
+// whole-value page taint from a struct-field taint (b.Data = page with
+// b itself clean; cb(b)). Opaque-call rules use the marker to fail
+// calls handing a field-hidden complete page to a callee body the call
+// site cannot see, while whole-value page arguments (a store callback
+// receiving the mapped page itself by contract) stay benign for
+// approved callees.
+func (w *fileRules) pageFieldPromoted(e ast.Expr) bool {
+	return w.pc.pf != nil && w.pc.pf.fieldPromoted[e]
+}
+
 // pageDerivedByte reports whether a scalar RHS expression derives from
 // a page-tainted container: page[i], page[k], or a variable bound to one.
 func (w *fileRules) pageDerivedByte(e ast.Expr) bool {
@@ -1955,7 +2422,14 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		// copy: the buffer has received PageSize element writes from a
 		// page-tainted source.
 		if lv := w.pageValue(v.Lhs[i]); lv.tainted && pageFull(lv) {
-			if _, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
+			if ix, ok := unparen(v.Lhs[i]).(*ast.IndexExpr); ok {
+				// Element writes into a MAPPED page (page[i] = b) stay
+				// inside the mapping: the writer's normal mutation never
+				// creates owned page bytes. The aggregation rule targets
+				// owned destinations only.
+				if bpv := w.pageValue(ix.X); bpv.tainted && bpv.mapped {
+					continue
+				}
 				// A destination-ranging loop (for i := range out) may
 				// only initialize the buffer (out[i] = 0); it is a copy
 				// only when the RHS derives from a page. A page-sourcing

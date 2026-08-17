@@ -584,6 +584,75 @@ blocked at the correct classes; P3s informational). glm: unavailable
 round-1 note) - recorded as reduced coverage, never respawned. Chunk 2
 (writer open surface) gate: CLOSED.
 
+Milestone 2 chunk 3a - COW page-edit storage surface + gate extensions
+(2026-08-17; HEAD before commit 066fc6a; committed below): the
+storage surface of chunk 3 (COW page-edit layer), implemented and
+locally validated:
+- internal/tree: the generic COW fixed-tree core mirroring Rust
+  fixed_tree (page.rs lower_bound/lower_bound_by key-only probes,
+  branch/leaf descent, cell codec surface; insert.rs leaf targets and
+  split propagation; delete.rs path collapse; read.rs Predecessor/
+  AtOrAfter/adjacent-leaf cursor; walk.rs release/visit). One
+  authoritative search primitive serves both read and edit paths, with
+  test-only necessary-work counters (KeyProbe/CellProbe/SlotRead/
+  EditFitProbe/FirstFenceUpdate).
+- internal/bitmap: free-page bitmap COW mutation (free.rs) and the
+  used-bitmap authority (used.rs) mirroring Rust free_bitmap +
+  used_bitmap: hierarchical word/leaf geometry, lowest-zero selection,
+  membership-zero exclusion, committed-path privatization,
+  allocation-protection over the live meta roots, and COW descent via
+  the tree core.
+- internal/retire: the ordered retirement-extent B+tree mirroring the
+  Rust retirement module: (transaction, first, count) extents,
+  neighbor coalescing, oldest-safe-transaction reclamation selection.
+- internal/format put.go: the write-side page authority mirroring Rust
+  page_header.rs initialize + slotted_page.rs mutation; writes only
+  into caller-supplied mapped views, checksum seal counted by work.
+- internal/writer Draft + DraftStore (draft.go, draft_store.go): one
+  mapped COW draft storage surface mirroring Rust draft_store.rs +
+  storage.rs - private-page stack (dirty-chain tags in the checksum
+  slot), allocation from private stack / committed free bitmap /
+  allocator reserve / file tail, CopyPage with mapped src/output
+  callback, DiscardPrivate, retire backlog, seal/charge accounting,
+  and test-only BytesMoved/BytesZeroed/PageCreated/page counters. The
+  editor entry points and workflow state machines (range/membership/
+  structure deltas) arrive in chunk 3b.
+- Gate: module-internal interfaces (Store/Codec/BitmapStore) dispatch
+  as approved callees - every implementation is scanned - with two new
+  fail-closed checks that keep concrete page carriers visible through
+  the erased receiver: module-internal interface receivers that
+  concretely carry a full page fail at the dispatch, and field-hidden
+  full-page arguments to unproven callback callees fail at the call.
+  The scanned-callback fence (checkFuncTypedArgs) requires func-typed
+  arguments of approved module callees to bottom out in scanned
+  bodies; func-typed FORMAL PARAMETERS are the approved exception
+  (call sites are scanned). Field-full-page promotion now also covers
+  expressions whose whole value is already full-page taint (an
+  interface variable bound to a page-carrying struct, a struct literal
+  with a page-bound field), so P119/P130/P131-style launders fail
+  closed while interface-PARAMETER fallbacks stay benign (store
+  dispatches keep passing). Param copy pairs (copy(paramD, paramS))
+  recorded in callee summaries are enforced at the binding call site
+  (checkParamCopyCalls). Battery: 604 cases (516 rejections, 88
+  benign acceptances) + 9 shell mutations; P57 reclassified to benign
+  (scanned literal callback; its unproven-callback intent is now
+  pinned by the new P136 fence case and the existing P42/P67/P68
+  unproven-callee cases), P130/P131/P132 field-promotion pins added
+  earlier restored, P119 module-internal interface receiver pin added,
+  P137 (CopyPage mapped->mapped callback benign) and P138 (CopyPage
+  callback laundering into an owned buffer rejected) pin the new
+  store-callback closure shape.
+Validation so far: go test ./... (both tag sets), -race on
+tree/bitmap/retire/writer/format, vet, gofmt, import-graph scan with
+the new tree/bitmap/retire boundaries, 11/11 cross-builds, and the
+604-case gate battery + 9 shell mutations - all green, battery with
+zero misses. Work-counter pins cover one-shot reads visiting each path
+page once, lower-bound reuse of its final probe, fixed replacement
+single capacity probe, deletion single tree lookup, same-path
+set-free exactly two bitmap probes, draft PagesCreated/BytesZeroed/
+BytesMoved/MappingGrowths. Level-1/level-2 swarm review of this chunk
+follows the commit.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
