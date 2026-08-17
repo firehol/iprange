@@ -388,4 +388,24 @@ func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
 	if !ok || fe.Code != format.CodeWrongState {
 		t.Fatalf("replaced-during-open error %v, want WrongState (11)", err)
 	}
+	// The refused open must have released the exclusive lifetime lock: the
+	// path now names the valid replacement fixture (other.iprdb's bytes),
+	// so a prompt successful reopen proves the lock is free; a leaked OFD
+	// lock would hang the probe until the timeout.
+	result := make(chan error, 1)
+	go func() {
+		c, err := Open(path, testBudget(), nil)
+		if c != nil {
+			c.Close()
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("reopen after the refused open failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("exclusive lifetime lock leaked by the WrongState refusal")
+	}
 }

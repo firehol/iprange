@@ -214,9 +214,10 @@ func (m *Mapping) Size() uint64 { return m.size }
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 
 // VerifyIdentity re-checks that the path still names the opened inode.
-// Called after bootstrap+remap to mirror Rust's post-map_reader
-// verify_path_any_link: a namespace replacement during the remap window
-// must not publish a mapping of an old unlinked inode.
+// Called after bootstrap+remap and after writer tail-trim to mirror Rust's
+// post-map_reader verify_path_any_link and the writer's open_locked
+// verify_pair: a namespace replacement during the remap window must not
+// publish a reader or writer bound to an old unlinked inode.
 func (m *Mapping) VerifyIdentity(path string) error {
 	if m.file == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
