@@ -725,6 +725,46 @@ Round-2 verdicts for the other four reviewers were not capturable
 (interrupted sessions / no output); their round-3 re-review is
 required at the new HEAD.
 
+Review round 3 (level-1 swarm, 2026-08-17): Sartre reported one P2 at
+1cd3975: the implementation-site store-callback fence only followed
+the callback formal DIRECTLY at the call site, so a store
+implementation hiding the formal behind a LOCAL (cb := fn, or cb :=
+func(a, b []byte) error { return fn(a, b) }) and handing the local to
+a scanned helper bypassed the mapped-view requirement. Probe
+verification on the round-3 build found the family in three states:
+the direct- and helper-closure liar forms were caught only by
+accident (the body-level counter-check over unbound closure params),
+an honest closure wrapper with mapped views FALSE-POSITIVED the same
+way, and a closure routing the formal through a struct field escaped
+with zero diagnostics. Fixed:
+- funcSummary now records local callback aliases (noteCallbackAliases):
+  cb := fn and cb := func(a, b []byte) error { return fn(a, b) } map
+  the local to the wrapped formal slot plus the closure parameter
+  positions actually forwarded to it (position-precise, so dropped
+  positions are not constrained); chains (cb2 := cb) copy the record;
+  reassigned or address-taken locals are not aliases.
+- recordCallbackInvokeComposition and checkCallbackInvokeCalls follow
+  the alias: a callee that invokes its func-typed formal must still
+  receive MAPPED views for every forwarded position when the argument
+  is the local wrapper, and identity aliases forward every position.
+- Func-literal arguments of approved module callees are now analyzed
+  with their parameters bound to the call-site views the callee's
+  invocation record reaches the callback: the body-level
+  counter-check and the fail-closed unproven-callee checks evaluate
+  the true views instead of unbound parameters (honest wrappers stay
+  legal; the struct-field routing closure now fails the same way).
+- The scanned-callback fence admits never-reassigned identity aliases
+  of func-typed formals (paramAliasedFuncVar): the formal's call
+  sites are policed, so the alias is a scanned callback; the
+  call-site callback fence then provides the mapped-view check.
+New battery pins P299 (fail: closure wrapper + identity alias with
+owned buffers through a helper) and P300 (benign: both honest forms
+with mapped views); probe evidence kept for the direct-closure,
+helper-closure, identity-alias, and field-routing shapes plus the
+one-param closure bisect. Battery now 610 cases (520 rejections, 90
+benign acceptances), zero misses; the real-tree scan stays at zero
+violations and v4/go test ./... stays green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

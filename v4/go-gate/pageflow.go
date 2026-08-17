@@ -164,6 +164,30 @@ type funcSummary struct {
 	// forwarding its callback formal into such a slot fails closed at
 	// the call site.
 	callbackInvokesInternal map[int]bool
+	// callbackAliases records local function-typed variables that
+	// alias a func-typed formal parameter of the function, keyed by the
+	// local object: cb := fn, cb := func(a, b []byte) error { return
+	// fn(a, b) }, and chains of both. A store implementation can hide
+	// its callback formal behind such a local and hand the local to a
+	// helper; the store-callback fence at the call site follows the
+	// alias so the helper's byte arguments are still required to be
+	// mapped views.
+	callbackAliases map[types.Object]callbackAlias
+}
+
+// callbackAlias records one local that aliases a func-typed formal
+// parameter of the enclosing function. slot is the formal's parameter
+// slot. forwarded marks the closure parameter positions the body passes
+// to the formal (a nil slice means an identity alias cb := fn, where
+// every position forwards unchanged); lit is the wrapping func literal,
+// or nil for a plain identity alias; litParams are the literal's
+// parameter objects, used to defer the literal-body invocation records
+// to the call sites that bind the literal.
+type callbackAlias struct {
+	slot      int
+	forwarded []bool
+	lit       *ast.FuncLit
+	litParams []types.Object
 }
 
 // argFlow binds one call-site argument: its value taint and, for struct
@@ -1024,6 +1048,7 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	// instead of accumulating an early unstable pass's verdict.
 	fs.callbackInvokes = nil
 	fs.callbackInvokesInternal = nil
+	fs.callbackAliases = nil
 	pf.notePageSinks(st, fs, st.fd.Body)
 	named := map[types.Object]int{}
 	if st.fd.Type.Results != nil {
@@ -1045,6 +1070,7 @@ func (pf *pageFlow) analyzeFunc(st *stmtState, fs *funcSummary) {
 	pf.noteStringConvs(st, fs, st.fd.Body)
 	pf.noteFmtSpreads(st, fs, st.fd.Body)
 	pf.noteCopyParams(st, fs, st.fd.Body)
+	pf.noteCallbackAliases(st, fs, st.fd.Body)
 	pf.noteCallbackInvokes(st, fs, st.fd.Body)
 	// Named results with a naked return: the body's stores to the named
 	// result variables are the function's results. Functions need it for
@@ -4533,6 +4559,210 @@ func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.Blo
 	})
 }
 
+// noteCallbackAliases records local function-typed variables that
+// alias a func-typed formal parameter of the enclosing function:
+// cb := fn, cb := func(a, b []byte) error { return fn(a, b) }, and
+// chains of both (cb2 := cb). The alias record carries the formal's
+// parameter slot and, for literal wrappers, the closure parameter
+// positions the body actually forwards to the formal. A store
+// implementation can hide its callback formal behind such a local and
+// hand the local to a scanned helper; the store-callback fence at the
+// call site follows the alias, and only views bound to forwarded
+// positions reach the callback. A literal that cannot be shown to
+// invoke the formal is not an alias: binding it at a call site is not
+// forwarding the callback formal, and the fence would be unsound.
+func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
+	if body == nil {
+		return
+	}
+	// A local assigned more than once (or whose address is taken) may
+	// stop holding the literal, so only single-assignment locals whose
+	// initializer is the func literal (or an identity alias of one)
+	// count as aliases.
+	assignCount := map[types.Object]int{}
+	addressTaken := map[types.Object]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				if obj := objOf(st, lhs); obj != nil {
+					assignCount[obj]++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, name := range v.Names {
+				if obj := pf.pc.info.ObjectOf(name); obj != nil {
+					assignCount[obj]++
+				}
+			}
+		case *ast.UnaryExpr:
+			if v.Op == token.AND {
+				if obj := objOf(st, v.X); obj != nil {
+					addressTaken[obj] = true
+				}
+			}
+		}
+		return true
+	})
+	// literalParams returns the literal's parameter objects in
+	// declaration order, for forwarded-position resolution and for the
+	// invocation-record deferral in noteCallbackInvokes.
+	litParams := map[*ast.FuncLit][]types.Object{}
+	paramsOf := func(lit *ast.FuncLit) []types.Object {
+		if objs, ok := litParams[lit]; ok {
+			return objs
+		}
+		var objs []types.Object
+		if lit.Type.Params != nil {
+			for _, f := range lit.Type.Params.List {
+				for _, name := range f.Names {
+					objs = append(objs, pf.pc.info.ObjectOf(name))
+				}
+			}
+		}
+		litParams[lit] = objs
+		return objs
+	}
+	// aliasOf resolves a callee expression to a func-typed formal slot:
+	// the formal itself, a recorded local alias, or a formal parameter
+	// of the current function.
+	aliasOf := func(e ast.Expr) (callbackAlias, bool) {
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return callbackAlias{}, false
+		}
+		if obj := pf.pc.info.ObjectOf(id); obj != nil {
+			if al, ok := fs.callbackAliases[obj]; ok {
+				return al, true
+			}
+			if idx, ok := st.params[obj]; ok {
+				return callbackAlias{slot: idx}, true
+			}
+		}
+		return callbackAlias{}, false
+	}
+	record := func(obj types.Object, al callbackAlias, lit *ast.FuncLit) {
+		if obj == nil || addressTaken[obj] || assignCount[obj] != 1 {
+			return
+		}
+		if fs.callbackAliases == nil {
+			fs.callbackAliases = map[types.Object]callbackAlias{}
+		}
+		fs.callbackAliases[obj] = al
+	}
+	// Literal wrappers must invoke the formal somewhere in their body
+	// (an identity alias chain cb2 := cb counts through the chained
+	// record): resolve the invoked callee through params, identity
+	// aliases, and previously recorded aliases, and mark the closure
+	// parameter positions passed as arguments.
+	for _, decl := range body.List {
+		assign, ok := decl.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			lit, ok := unparen(assign.Rhs[i]).(*ast.FuncLit)
+			if !ok {
+				continue
+			}
+			dstObj := objOf(st, lhs)
+			if dstObj == nil {
+				continue
+			}
+			params := paramsOf(lit)
+			slot := -1
+			forwarded := make([]bool, len(params))
+			ast.Inspect(lit.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				al, ok := aliasOf(call.Fun)
+				if !ok {
+					return true
+				}
+				if slot == -1 {
+					slot = al.slot
+				} else if slot != al.slot {
+					// A literal invoking several func formals is not a
+					// single-wrapper alias; call-site views could reach
+					// either formal, so the fence does not attribute
+					// them.
+					slot = -2
+				}
+				for i, arg := range call.Args {
+					if i >= len(params) {
+						break
+					}
+					aid, ok := unparen(arg).(*ast.Ident)
+					if !ok {
+						continue
+					}
+					argObj := pf.pc.info.ObjectOf(aid)
+					for p, pobj := range params {
+						if pobj != nil && pobj == argObj {
+							forwarded[p] = true
+							break
+						}
+					}
+				}
+				return true
+			})
+			if slot < 0 {
+				continue
+			}
+			used := false
+			for _, f := range forwarded {
+				if f {
+					used = true
+					break
+				}
+			}
+			if !used {
+				// The literal invokes the formal only with
+				// non-parameter expressions: the views it forwards are
+				// its own captured values, not the call-site bindings,
+				// so call-site enforcement would be unsound. The
+				// invocation remains visible to the body-level
+				// counter-check inside the literal.
+				continue
+			}
+			record(dstObj, callbackAlias{slot: slot, forwarded: forwarded, lit: lit, litParams: params}, lit)
+		}
+	}
+	// Identity aliases: cb := fn records the formal itself, and
+	// cb2 := cb copies the existing record (the value is the same
+	// closure object, so the forwarded positions are the same signature
+	// positions).
+	for _, decl := range body.List {
+		assign, ok := decl.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for i, lhs := range assign.Lhs {
+			if i >= len(assign.Rhs) {
+				break
+			}
+			src, ok := unparen(assign.Rhs[i]).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			srcObj := pf.pc.info.ObjectOf(src)
+			if srcObj == nil {
+				continue
+			}
+			if al, ok := fs.callbackAliases[srcObj]; ok {
+				record(objOf(st, lhs), callbackAlias{slot: al.slot, forwarded: nil, lit: al.lit, litParams: al.litParams}, al.lit)
+			} else if slot, ok := st.params[srcObj]; ok && funcSignature(srcObj.Type()) != nil {
+				record(objOf(st, lhs), callbackAlias{slot: slot, forwarded: nil}, nil)
+			}
+		}
+	}
+}
+
 // noteCallbackInvokes records byte-slice parameters the body passes to
 // each func-typed formal parameter it invokes (fn(x, y) with fn a func
 // formal and x, y byte parameters). The invocation is the
@@ -4540,8 +4770,10 @@ func (pf *pageFlow) noteCopyParams(st *stmtState, fs *funcSummary, body *ast.Blo
 // that reach the callback are mapped is decided by the call sites that
 // bind the func formal, so the byte-parameter slots (and the
 // untraceable mark) are carried through call chains exactly like
-// copyParams. Aliases of a formal (cb := fn) count as the formal, and
-// aliases of parameters (x := a) count as the parameter.
+// copyParams. Aliases of a formal (cb := fn, or a func literal wrapping
+// it) count as the formal; a wrapper literal's OWN parameters are
+// deferred to the composition at the call sites that bind the literal,
+// because only there are the views known.
 func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *ast.BlockStmt) {
 	if body == nil {
 		return
@@ -4572,6 +4804,8 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 				paramAliases[dstObj] = idx
 			} else if idx, ok := paramAliases[srcObj]; ok {
 				paramAliases[dstObj] = idx
+			} else if al, ok := fs.callbackAliases[srcObj]; ok {
+				paramAliases[dstObj] = al.slot
 			}
 		}
 		return true
@@ -4601,76 +4835,136 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 		}
 		return 0, false
 	}
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	// Call nodes are visited in source order (children before
+	// siblings), so the nearest enclosing func literal is the last
+	// pushed literal whose subtree has not ended yet.
+	var litStack []*ast.FuncLit
+	popExpired := func(n ast.Node) {
+		for len(litStack) > 0 && n.Pos() > litStack[len(litStack)-1].End() {
+			litStack = litStack[:len(litStack)-1]
 		}
-		id, ok := unparen(call.Fun).(*ast.Ident)
-		if !ok {
-			return true
+	}
+	// deferredArg reports whether e is one of the wrapping literal's own
+	// parameters: such arguments are the wrapper's parameters, whose
+	// views are decided at the call sites that bind the wrapper, so
+	// this invocation record defers to the composition there.
+	deferredArg := func(lit *ast.FuncLit, e ast.Expr) bool {
+		if lit == nil {
+			return false
 		}
-		obj := pf.pc.info.ObjectOf(id)
-		if obj == nil {
-			return true
+		var al callbackAlias
+		found := false
+		for _, cand := range fs.callbackAliases {
+			if cand.lit == lit {
+				al = cand
+				found = true
+				break
+			}
 		}
-		fnSlot, ok := st.params[obj]
+		if !found {
+			return false
+		}
+		aid, ok := unparen(e).(*ast.Ident)
 		if !ok {
-			fnSlot, ok = paramAliases[obj]
-			if !ok {
+			return false
+		}
+		obj := pf.pc.info.ObjectOf(aid)
+		for _, pobj := range al.litParams {
+			if pobj != nil && pobj == obj {
 				return true
 			}
 		}
-		sig, ok := obj.Type().(*types.Signature)
-		if !ok || sig.Params() == nil {
+		return false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
 			return true
 		}
-		params := sig.Params()
-		nargs := params.Len()
-		if nargs > len(call.Args) {
-			nargs = len(call.Args)
-		}
-		internal := false
-		var slots []int
-		for i := 0; i < nargs; i++ {
-			if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); !isSlice {
-				continue
+		popExpired(n)
+		switch v := n.(type) {
+		case *ast.FuncLit:
+			litStack = append(litStack, v)
+			return true
+		case *ast.CallExpr:
+			id, ok := unparen(v.Fun).(*ast.Ident)
+			if !ok {
+				return true
 			}
-			slot, traced := rootSlot(call.Args[i])
-			if !traced {
-				// A byte view the body mints locally (a mapped page from
-				// the mapping owner, a reader.page result) is provably
-				// mapped at the definition site and stays honest;
-				// anything else is not provably the caller's mapped view
-				// and fails closed at the store-implementation call site.
-				if pv := pf.evalExpr(st, call.Args[i]); pv.mapped {
+			obj := pf.pc.info.ObjectOf(id)
+			if obj == nil {
+				return true
+			}
+			fnSlot, ok := st.params[obj]
+			if !ok {
+				fnSlot, ok = paramAliases[obj]
+				if !ok {
+					al, ok2 := fs.callbackAliases[obj]
+					if !ok2 {
+						return true
+					}
+					fnSlot = al.slot
+				}
+			}
+			sig, ok := obj.Type().(*types.Signature)
+			if !ok || sig.Params() == nil {
+				return true
+			}
+			params := sig.Params()
+			nargs := params.Len()
+			if nargs > len(v.Args) {
+				nargs = len(v.Args)
+			}
+			internal := false
+			var slots []int
+			var litCtx *ast.FuncLit
+			if len(litStack) > 0 {
+				litCtx = litStack[len(litStack)-1]
+			}
+			for i := 0; i < nargs; i++ {
+				if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); !isSlice {
 					continue
 				}
-				internal = true
-				continue
-			}
-			dup := false
-			for _, prev := range fs.callbackInvokes[fnSlot] {
-				if prev == slot {
-					dup = true
-					break
+				if deferredArg(litCtx, v.Args[i]) {
+					// The wrapper literal's own parameter: the call
+					// sites binding the wrapper decide its mappedness.
+					continue
+				}
+				slot, traced := rootSlot(v.Args[i])
+				if !traced {
+					// A byte view the body mints locally (a mapped page from
+					// the mapping owner, a reader.page result) is provably
+					// mapped at the definition site and stays honest;
+					// anything else is not provably the caller's mapped view
+					// and fails closed at the store-implementation call site.
+					if pv := pf.evalExpr(st, v.Args[i]); pv.mapped {
+						continue
+					}
+					internal = true
+					continue
+				}
+				dup := false
+				for _, prev := range fs.callbackInvokes[fnSlot] {
+					if prev == slot {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					slots = append(slots, slot)
 				}
 			}
-			if !dup {
-				slots = append(slots, slot)
+			if len(slots) > 0 {
+				if fs.callbackInvokes == nil {
+					fs.callbackInvokes = map[int][]int{}
+				}
+				fs.callbackInvokes[fnSlot] = append(fs.callbackInvokes[fnSlot], slots...)
 			}
-		}
-		if len(slots) > 0 {
-			if fs.callbackInvokes == nil {
-				fs.callbackInvokes = map[int][]int{}
+			if internal {
+				if fs.callbackInvokesInternal == nil {
+					fs.callbackInvokesInternal = map[int]bool{}
+				}
+				fs.callbackInvokesInternal[fnSlot] = true
 			}
-			fs.callbackInvokes[fnSlot] = append(fs.callbackInvokes[fnSlot], slots...)
-		}
-		if internal {
-			if fs.callbackInvokesInternal == nil {
-				fs.callbackInvokesInternal = map[int]bool{}
-			}
-			fs.callbackInvokesInternal[fnSlot] = true
 		}
 		return true
 	})
@@ -4804,15 +5098,30 @@ func (pf *pageFlow) recordCallbackInvokeComposition(st *stmtState, call *ast.Cal
 		}
 		st.activeFS.callbackInvokesInternal[slot] = true
 	}
+	// resolveFnIdx maps the callee's func-typed slot to the current
+	// function's summary slot: the slot binds the current function's
+	// own func-typed formal directly, or a local alias (cb := fn, or a
+	// wrapper literal) recorded by noteCallbackAliases.
+	resolveFnIdx := func(slot int) (int, bool) {
+		obj, ok := paramObj(slotExpr(slot))
+		if ok {
+			if _, isFunc := obj.Type().(*types.Signature); !isFunc {
+				return 0, false
+			}
+			return st.params[obj], true
+		}
+		if obj := objOf(st, slotExpr(slot)); obj != nil {
+			if al, ok := st.activeFS.callbackAliases[obj]; ok {
+				return al.slot, true
+			}
+		}
+		return 0, false
+	}
 	for fnSlot := range fs.callbackInvokes {
-		obj, ok := paramObj(slotExpr(fnSlot))
+		fnIdx, ok := resolveFnIdx(fnSlot)
 		if !ok {
 			continue
 		}
-		if _, isFunc := obj.Type().(*types.Signature); !isFunc {
-			continue
-		}
-		fnIdx := st.params[obj]
 		if fs.callbackInvokesInternal[fnSlot] {
 			recordInternal(fnIdx)
 		}
@@ -4842,14 +5151,11 @@ func (pf *pageFlow) recordCallbackInvokeComposition(st *stmtState, call *ast.Cal
 		if _, traced := fs.callbackInvokes[fnSlot]; traced {
 			continue
 		}
-		obj, ok := paramObj(slotExpr(fnSlot))
+		fnIdx, ok := resolveFnIdx(fnSlot)
 		if !ok {
 			continue
 		}
-		if _, isFunc := obj.Type().(*types.Signature); !isFunc {
-			continue
-		}
-		recordInternal(st.params[obj])
+		recordInternal(fnIdx)
 	}
 }
 
@@ -5539,6 +5845,51 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		argVals[slot] = sv
 		argFlows[slot] = af
 		slot++
+	}
+	// Func-literal arguments bound to a callee formal the callee
+	// invokes are analyzed with the literal's parameters bound to the
+	// call-site views the invocation record says reach the callback:
+	// the store-callback counter-check and the fail-closed
+	// unproven-callee checks over the literal body then evaluate those
+	// views instead of unbound parameters. Slots the callee marks
+	// internal leave the parameters unbound (the views are not provably
+	// the call-site arguments and fail closed at the call site).
+	for fnSlot, byteSlots := range fs.callbackInvokes {
+		if fs.callbackInvokesInternal[fnSlot] {
+			continue
+		}
+		ai := fnSlot - argOff
+		if ai < 0 || ai >= len(call.Args) {
+			continue
+		}
+		lit, ok := unparen(call.Args[ai]).(*ast.FuncLit)
+		if !ok {
+			// A local bound to the literal (cb := func...): resolve the
+			// current binding so the literal body still sees the views
+			// the callee hands the callback.
+			if id, isID := unparen(call.Args[ai]).(*ast.Ident); isID {
+				if obj := pf.pc.info.ObjectOf(id); obj != nil {
+					lit, _ = st.localFuncs[obj]
+				}
+			}
+		}
+		if lit == nil {
+			continue
+		}
+		bound := make([]ast.Expr, 0, len(byteSlots))
+		missing := false
+		for _, bs := range byteSlots {
+			bi := bs - argOff
+			if bi < 0 || bi >= len(call.Args) {
+				missing = true
+				break
+			}
+			bound = append(bound, call.Args[bi])
+		}
+		if missing {
+			continue
+		}
+		pf.analyzeFuncLitCall(st, lit, &ast.CallExpr{Fun: lit, Args: bound})
 	}
 	rv, fields := fs.eval(args, argVals, argFlows)
 	// Pointer-argument field mutations inside the callee (b.Set(page)

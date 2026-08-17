@@ -1156,8 +1156,12 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		return v.Args[ai], true
 	}
 	// The forwarded value must be the enclosing store implementation's
-	// own callback formal: only then does the store contract apply to
-	// the views the callee hands it.
+	// own callback formal, directly or through a local alias recorded
+	// by the flow pass (cb := fn, or cb := func(a, b []byte) error {
+	// return fn(a, b) }): only then does the store contract apply to
+	// the views the callee hands it. A wrapper literal forwards only
+	// the closure parameter positions recorded in its alias; identity
+	// aliases forward every position.
 	forwardedCallback := func(e ast.Expr) bool {
 		id, ok := unparen(e).(*ast.Ident)
 		if !ok {
@@ -1166,19 +1170,56 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		obj, ok := w.pc.info.Uses[id].(*types.Var)
 		return ok && w.approvedFuncParamVar(obj)
 	}
+	// aliasCallback resolves a local func-typed argument through the
+	// enclosing store implementation's recorded aliases: the local must
+	// wrap the implementation's own callback formal for the fence to
+	// follow it.
+	aliasCallback := func(e ast.Expr) (callbackAlias, bool) {
+		id, ok := unparen(e).(*ast.Ident)
+		if !ok {
+			return callbackAlias{}, false
+		}
+		obj, ok := w.pc.info.Uses[id].(*types.Var)
+		if !ok || w.pc.pf == nil || w.curFunc == nil {
+			return callbackAlias{}, false
+		}
+		encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+		if !ok {
+			return callbackAlias{}, false
+		}
+		al, ok := encl.callbackAliases[obj]
+		return al, ok
+	}
 	fail := func(fnArg ast.Expr) {
 		w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(fnArg), calleeText(v.Fun))
 	}
+	positionForwarded := func(al *callbackAlias, i int) bool {
+		if al == nil || al.forwarded == nil {
+			return true
+		}
+		return i < len(al.forwarded) && al.forwarded[i]
+	}
 	for fnSlot, byteSlots := range fs.callbackInvokes {
 		fnArg, ok := argAt(fnSlot)
-		if !ok || !forwardedCallback(fnArg) {
+		if !ok {
 			continue
+		}
+		var al *callbackAlias
+		if !forwardedCallback(fnArg) {
+			a, aok := aliasCallback(fnArg)
+			if !aok {
+				continue
+			}
+			al = &a
 		}
 		if fs.callbackInvokesInternal[fnSlot] {
 			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
 			continue
 		}
-		for _, bs := range byteSlots {
+		for i, bs := range byteSlots {
+			if !positionForwarded(al, i) {
+				continue
+			}
 			ba, ok := argAt(bs)
 			if !ok {
 				continue
@@ -1194,8 +1235,13 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 			continue
 		}
 		fnArg, ok := argAt(fnSlot)
-		if !ok || !forwardedCallback(fnArg) {
+		if !ok {
 			continue
+		}
+		if !forwardedCallback(fnArg) {
+			if _, aok := aliasCallback(fnArg); !aok {
+				continue
+			}
 		}
 		w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
 	}
@@ -1248,7 +1294,7 @@ func (w *fileRules) scannedCallback(arg ast.Expr) bool {
 			p := obj.Pkg().Path()
 			return p == w.pc.pkg.Path() || moduleInternalPackage(p)
 		case *types.Var:
-			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0)
+			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0) || w.paramAliasedFuncVar(obj, 0)
 		}
 		return false
 	case *ast.SelectorExpr:
@@ -1389,6 +1435,37 @@ func (w *fileRules) approvedLocalFuncVar(v *types.Var, depth int) bool {
 			return false
 		}
 		return w.approvedFuncPkg(fn)
+	}
+	return false
+}
+
+// paramAliasedFuncVar reports whether a local function-typed variable
+// is a never-reassigned identity alias of a func-typed FORMAL parameter
+// of the enclosing function (cb := fn, or a chain cb2 := cb of such
+// aliases). The formal's call sites are policed by the callback fence
+// (every argument bound to a func-typed formal must be a scanned
+// callback), so the alias is a scanned callback exactly like the formal
+// itself. A literal wrapper is NOT covered here: literal wrappers are
+// admitted by approvedLocalFuncVar and the store-callback fence follows
+// their recorded aliases.
+func (w *fileRules) paramAliasedFuncVar(v *types.Var, depth int) bool {
+	if v == nil || depth > 2 || w.pc.localReassigned[v] || funcSignature(v.Type()) == nil {
+		return false
+	}
+	init, ok := w.pc.localFuncInits[v]
+	if !ok {
+		return false
+	}
+	id, ok := unparen(init).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch o := w.pc.info.Uses[id].(type) {
+	case *types.Var:
+		if w.approvedFuncParamVar(o) {
+			return true
+		}
+		return w.paramAliasedFuncVar(o, depth+1)
 	}
 	return false
 }
