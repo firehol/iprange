@@ -1540,6 +1540,52 @@ import-graph boundary check all green.
    reported as reduced coverage; swarm agents are never respawned
    between rounds.
 
+Milestone 2 chunk 3b - range gap edit core (2026-08-18; committed
+at 7a1b4f8): the range editor entry points over the chunk 3a COW
+storage surface, implemented and locally validated:
+- internal/tree: one authoritative selector-based private-path descent
+  (privatePathSelect, Rust private_path_select port) now shared by
+  PrivatePath/PrivateLeafSelect; the LocalGap probe surface (gap.go,
+  Rust fixed_tree/gap.rs port: Edge, LocalPrevious/LocalNext,
+  LocalInsert, CachedInsert, EdgeInsert, PrivatePosition, PrivateEdge,
+  RootEdge, FlushEdge, InsertIfLocalGap, InsertIfCachedInteriorGap,
+  InsertRejectedGap, InsertIfEdgeGap, ReplaceLocalPredecessorWith,
+  ReplaceLocalRun); SplitLeafAtEdge + locatePrivatePosition in
+  insert.rs parity.
+- internal/writer: range_codec.go (rangeFamily/rangeRecord,
+  rangeCodec4/rangeCodec6 with 32-bit and 128-bit checked next/
+  previous arithmetic); range_edit.go (Rust range_mutation.rs +
+  assign.rs port: assign/assignPrivate/assignWithHint, clear,
+  retireTree, transform, replace/insert/remove with predecessor/
+  successor trimming and split/coalesce coalescing, per-record value
+  accounting through RangeStore); range_draft.go (DraftStore
+  AssignV4/V6 and ClearV4/V6 entry points; RangeRecordAdded/Removed
+  fail closed with unsupported for membership/structured kinds until
+  those accounting cores arrive).
+- work counters: EdgePathCheck, RangeEmitted, RangeSplit,
+  RangeCoalesced in both prod no-op and v4work atomic builds.
+- gate: approvedModuleInterfaces extended with tree.LocalGap,
+  writer.rangeFamily, writer.RangeStore under the same satisfier
+  argument as the existing store family (every method set references a
+  module-internal type; no stdlib or x/sys satisfier). The range codec
+  method is named EncodeRecord: Encode is a banned content-transfer
+  selector name (the gate keeps that ban unconditional), with the Rust
+  RangeCodec::encode parity recorded in the comment.
+- Tests: Rust-port vectors (portable record literal bytes, arrival-
+  order overlap, clear split/coalesce, endpoint arithmetic on both
+  full address spaces, transforms vs scalar reference after every
+  non-idempotent op, randomized sequences vs scalar reference map,
+  many disjoint ranges split leaves and COW once per path), work pins
+  (clear split/coalesce, nested-assignment linearity 1023 tree
+  lookups, disjoint split leaves), gap semantics (inspect/update
+  without copying the leaf, cached-leaf interior-gap acceptance,
+  rejected-gap local insertion completion, edge split), DraftStore
+  v4/v6 family dispatch, membership-kind accounting fail-closed.
+Validation: go test ./... (both tag sets), -race on
+tree/bitmap/retire/writer/format, vet, gofmt, import-graph check,
+11/11 cross-builds, and the 694-case gate battery (574 fail forms,
+120 benign forms) - all green, battery with zero misses.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
