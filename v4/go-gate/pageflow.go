@@ -6806,8 +6806,19 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 				litCtx = litStack[len(litStack)-1]
 			}
 			for i := 0; i < nargs; i++ {
-				if _, isSlice := types.Unalias(params.At(i).Type()).(*types.Slice); !isSlice {
-					continue
+				pt := types.Unalias(params.At(i).Type())
+				if _, isSlice := pt.(*types.Slice); !isSlice {
+					if _, isTP := pt.(*types.TypeParam); !isTP {
+						continue
+					}
+					// A type-parameter byte view (f(v) with f
+					// func(T) T in a generic wrapper): only the
+					// concrete instantiation decides whether v is
+					// bytes, so the argument is recorded like a traced
+					// byte slot and the call-site fences test the
+					// instantiated view's mappedness. Without this,
+					// gApply(func(b []byte) []byte {...}, page) keeps
+					// the copying closure invisible to every fence.
 				}
 				if deferredArg(litCtx, v.Args[i]) {
 					// The wrapper literal's own parameter: the call
@@ -9376,6 +9387,29 @@ func calleeObject(pc *packageCheck, call *ast.CallExpr) types.Object {
 		return pc.info.Uses[f]
 	case *ast.SelectorExpr:
 		return pc.info.Uses[f.Sel]
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		// A generic instantiation (gApply[T](...)) names the same
+		// scanned function as the plain identifier: resolve the base
+		// so the call reaches the generic body's summary (callback
+		// invocations, bound literal analysis, string-conversion
+		// propagation). A func-typed container slot (arr[0](fn)) whose
+		// base is a variable resolves to that variable and stays in the
+		// local-binding/unproven path exactly as before.
+		var base ast.Expr
+		if ie, ok := f.(*ast.IndexExpr); ok {
+			base = ie.X
+		} else if il, ok := f.(*ast.IndexListExpr); ok {
+			base = il.X
+		}
+		if id, ok := unparen(base).(*ast.Ident); ok {
+			return pc.info.Uses[id]
+		}
+		// A generic METHOD with its own type arguments
+		// (w.apply[T](...)): the base is a selector naming the same
+		// scanned method as the plain call.
+		if sel, ok := unparen(base).(*ast.SelectorExpr); ok {
+			return pc.info.Uses[sel.Sel]
+		}
 	}
 	return nil
 }
@@ -9525,6 +9559,11 @@ func (pf *pageFlow) calleeExprFunc(st *stmtState, x ast.Expr) (*types.Func, bool
 			}
 			if id, ok := unparen(base).(*ast.Ident); ok {
 				if f, ok := pf.pc.info.Uses[id].(*types.Func); ok {
+					return f, true
+				}
+			}
+			if sel, ok := unparen(base).(*ast.SelectorExpr); ok {
+				if f, ok := pf.pc.info.Uses[sel.Sel].(*types.Func); ok {
 					return f, true
 				}
 			}

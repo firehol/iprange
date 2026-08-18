@@ -1247,7 +1247,15 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 			// The value may be this store's own callback formal, so the
 			// views handed to it must be mapped views at this call site;
 			// an owned buffer would launder a complete page into owned
-			// memory through an invocation the scan cannot trace.
+			// memory through an invocation the scan cannot trace. The
+			// internal marker still applies: a byte view the callee
+			// could not trace to a parameter (a locally minted owned
+			// buffer) must fail closed exactly like the positive-slot
+			// branch.
+			if fs.callbackInvokesInternal[fnSlot] {
+				w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
+				continue
+			}
 			for _, bs := range byteSlots {
 				ba, ok := argAt(bs)
 				if !ok {
@@ -1314,6 +1322,15 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 	}
 	for fnSlot := range fs.callbackInvokesInternal {
 		if _, traced := fs.callbackInvokes[fnSlot]; traced {
+			continue
+		}
+		if fnSlot < 0 {
+			// Negative-only internal record: the callee invoked an
+			// un-attributable callback value entirely with views it
+			// could not trace to a parameter. argAt can never resolve
+			// the callback argument, so the store call site fails
+			// closed instead of dropping the record.
+			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
 			continue
 		}
 		fnArg, ok := argAt(fnSlot)

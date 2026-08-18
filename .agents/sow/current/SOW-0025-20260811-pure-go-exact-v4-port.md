@@ -1348,6 +1348,54 @@ P364 (field-argument forwarding with owned buffers, reject), P365
 Real module scan rc=0 (5 OS); go test (both tag sets), -race, vet
 (module and gate), gofmt, import-graph boundary check all green.
 
+### 2026-08-18 - level-2 gate round 3 (39a1956 -> working tree): negative-slot internal marker and generic type-parameter callback gaps closed (HEAD 39a1956 -> working tree)
+
+Round-6 level-2 verdicts at 39a1956: kimi PASS, minimax PASS, glm FAIL
+(P1), qwen FAIL (P2). Both FAILs were probe-reproduced against store
+shapes, then fixed in the working tree:
+
+- glm P1 (negative-slot internal marker dropped): a CopyPage
+  implementation that binds fn into a carrier, passes the carrier's
+  method value through an identity passthrough, and invokes the result
+  with LOCALLY MINTED owned buffers recorded only
+  callbackInvokesInternal[-1]; the store-site fence dropped the record
+  because argAt(-1) can never resolve, so the all-owned launder was
+  gate-silent (probe rc=0). FIXED: checkCallbackInvokeCalls now fails
+  closed on callbackInvokesInternal[fnSlot] in the negative-slot branch
+  AND on the negative-only internal record (rules.go).
+- qwen P2 (generic type-param callback escape): gApply[T any](f func(T)
+  T, v T) with f a copying closure and v a complete mapped page was
+  gate-silent for the inferred call; noteCallbackInvokes only recorded
+  *types.Slice parameters, so the TypeParam-typed byte view never
+  reached the bound-literal analysis. FIXED: type-parameter arguments
+  now flow into the same trace/honest/internal logic as slice
+  parameters (pageflow.go). Lead probing of the same class found the
+  EXPLICIT instantiation spelling (gApply[[]byte](...)) still silent:
+  calleeObject did not resolve generic instantiation index callees, so
+  the call never reached the generic summary. FIXED: calleeObject and
+  calleeExprFunc resolve IndexExpr/IndexListExpr bases (identifier and
+  selector forms) to the underlying scanned function (pageflow.go).
+  Generic methods (receiver type parameters, wrapRM[[]byte]{}.apply)
+  resolve through the existing selector path and are probe-verified.
+
+Probe expectations verified with the fixed scanner: inferred generic
+full-page liar flags, explicit generic full-page liar flags, generic
+method full-page liar flags, non-generic control flags, generic bounded
+page[:16] honest forms pass (function and method), all-owned
+negative-internal store launder flags, negative-slot honest
+method-expression carrier twin with mapped views passes.
+
+Battery: 676 -> 683 cases (569 rejections, 114 benign acceptances),
+zero misses under --self-test-jobs 24. New durable pins: P367 (generic
+inferred full-page reject), P368 (generic explicit-instantiation
+full-page reject), P369 (generic method full-page reject), P370
+(generic bounded span benign), P371 (generic method bounded span
+benign), P372 (negative-internal all-owned store launder reject), P373
+(honest method-expression carrier twin benign). Real module scan rc=0
+(5 OS); go test (both tag sets), -race, vet (module and gate), gofmt,
+import-graph boundary check all green.
+
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
