@@ -1683,6 +1683,51 @@ reader), vet, gofmt, import-graph check incl. the 696-case battery
 with zero misses, 11/11 cross-builds - all green. Level-2 gate for
 chunk 3b (glm, kimi, minimax, mimo) still pending at this record.
 
+Chunk 4 level-1 review round (2026-08-18; reviewed at HEAD e1c8aeb):
+five aspect reviewers; four PASS (Linnaeus, Peirce, Jason, Leibniz),
+one FAIL with two P2 (Sartre). Fix wave committed at 818691f:
+- Sartre P2-1 (records): the chunk-4 record named 0963218 -> working
+  tree; the code is committed at e1c8aeb. Corrected in this record.
+- Sartre P2-2 (gate): the reclaim.go rand.Read exemption let a
+  receiver that FAILED the *types.Func resolution (a local struct
+  field named Read) fall through to the exemption, and never checked
+  the argument. The exemption now requires resolution to
+  crypto/rand's Read (receiver) AND an owned, non-tainted,
+  non-file-bearing argument; battery pin 316 (struct-field shadow,
+  expectFail) added. Battery 696 -> 697 cases.
+- Sartre P3-3 (API): StartDraft accepted an all-zero commit nonce;
+  Rust nonzero_128 hard-fails an all-zero draw. StartDraft now
+  refuses the zero nonce (CodeFormatInvalid) with the caller
+  contract recorded; the public workflows draw from randomNonce
+  when they arrive.
+- Peirce P3-1 / Jason P3-1 / Leibniz P3-3 / Sartre P3-1 (parity):
+  reclaimExtent freed u32-truncated page numbers where Rust fails
+  closed Corrupt("reclaimed page exceeds page-number space"); the
+  guard now matches. Jason P3-2 / Sartre P3-2: retire appendGroup/
+  scanGroup totals now checked (Rust checked_add
+  ArithmeticOverflow); the check-add rewrite initially introduced a
+  loop-scope shadowing regression the existing retire pin caught
+  immediately, fixed with plain assignment; the appendGroup
+  overflow/limit branches were then separated to exact Rust
+  error propagation ((bool, error), ArithmeticOverflow) per the
+  re-review residuals, verified by Leibniz at the final tree.
+- P3 accepted with record: crash-consistency child tests for the
+  four commit crash points are tracked to the crash/recovery chunk
+  (the points and the fault machinery are parity-exact; no Go test
+  yet spawns IPRANGE_V4_TEST_CRASH_AT children); FlushRange
+  alignment strictness (stricter than Rust checked_range, all call
+  sites aligned) accepted conservatism; unprovedTailEnd as *uint64
+  is the idiomatic Go Option<u64> (Rust Option<u64> parity); the
+  post-sync FileSize in Publish equals Rust's shrink-time
+  physical_bytes under the exclusive lifetime lock.
+- Level-1 re-review at the fix-wave tree: 5/5 PASS (Linnaeus, Jason,
+  Peirce, Sartre, Leibniz). The regression pin for the scanGroup
+  shadowing fails on the pre-fix build (local proof). Level-2 gate
+  (glm, kimi, minimax, mimo) for chunk 4 dispatched at 818691f.
+Validation (fix wave): go test ./... (both tag sets), -race, vet,
+gofmt, import-graph, 11/11 cross-builds, 697-case gate battery
+(576 fail, 121 benign) - all green, zero misses.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
