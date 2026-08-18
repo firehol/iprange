@@ -1205,15 +1205,22 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		if !ok {
 			continue
 		}
+		// A method value of a carrier (h := car{cb: fn};
+		// runCb(h.run, ...)) forwards the callback the same way a plain
+		// forward does: the method body invokes the bound field with
+		// its own parameters, so the byte arguments at THIS call site
+		// must be mapped views. An internal method body (it mints the
+		// views itself) fails closed.
+		mvForwards, mvInternal := w.methodValueCarriesCallback(fnArg)
 		var al *callbackAlias
-		if !forwardedCallback(fnArg) {
+		if !forwardedCallback(fnArg) && !mvForwards {
 			a, aok := aliasCallback(fnArg)
 			if !aok {
 				continue
 			}
 			al = &a
 		}
-		if fs.callbackInvokesInternal[fnSlot] {
+		if fs.callbackInvokesInternal[fnSlot] || mvInternal {
 			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
 			continue
 		}
@@ -1265,9 +1272,35 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		if !ok {
 			continue
 		}
+		rec, recOK := encl.fieldAliases[fk]
+		if !recOK || rec.forwarded {
+			// The current implementation never bound this carrier key
+			// (or only forwards it), so no sanctioned callback exists
+			// for the field callee inside the callee's body: a CONCRETE
+			// mapped view must not enter that unprovable field body.
+			// Owned buffers and parameter-sourced views stay legal
+			// (owned buffers cannot launder complete pages, and
+			// parameters are decided by the store call sites upward).
+			for _, bs := range byteSlots {
+				ba, ok := argAt(bs)
+				if !ok {
+					continue
+				}
+				if w.paramOf(ba) {
+					continue
+				}
+				if pv := w.pageValue(ba); pv.tainted && pageFull(pv) {
+					w.fail(v.Pos(), "mapped page view passed to a struct-field callee through %s (complete page into owned memory)", calleeText(v.Fun))
+					break
+				}
+			}
+			continue
+		}
 		// The callee signature decides which arguments are byte slots
 		// and which parameter carries the struct; the records use the
-		// summary layout, receiver at slot 0.
+		// summary layout, receiver at slot 0. A nested carrier record
+		// matches a parameter declared as the OUTER carrier type (the
+		// path's first step); a flat record matches the leaf key type.
 		sig, _ := fn.Type().(*types.Signature)
 		if sig == nil {
 			continue
@@ -1287,21 +1320,23 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 			}
 			return nil
 		}
+		want := fk.typ
+		if rec.path != "" {
+			if i := strings.IndexByte(rec.path, '.'); i > 0 {
+				want = rec.path[:i]
+			}
+		}
 		n := sig.Params().Len()
 		if sig.Recv() != nil {
 			n++
 		}
 		for slot := 0; slot < n; slot++ {
 			pt := typeAt(slot)
-			if pt == nil || w.pc.pf.canonFieldType(pt) != fk.typ {
+			if pt == nil || w.pc.pf.canonFieldType(pt) != want {
 				continue
 			}
 			carrierArg, ok := argAt(slot)
 			if !ok {
-				continue
-			}
-			rec, ok := encl.fieldAliases[fk]
-			if !ok || rec.forwarded {
 				continue
 			}
 			for _, bs := range byteSlots {
@@ -1310,13 +1345,100 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 					continue
 				}
 				if pv := w.pageValue(ba); !pv.mapped && !w.compositeCarrierMapped(ba) {
-					w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(carrierArg), calleeText(v.Fun))
+					w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", w.carrierText(carrierArg), calleeText(v.Fun))
 					break
 				}
 			}
 			break
 		}
 	}
+}
+
+// paramOf reports whether e names a []byte-typed parameter of the
+// enclosing function (receiver included), whose mappedness is decided
+// by the store call sites through the composition rather than by a
+// concrete local value here.
+func (w *fileRules) paramOf(e ast.Expr) bool {
+	id, ok := unparen(e).(*ast.Ident)
+	if !ok || w.curFunc == nil {
+		return false
+	}
+	obj, ok := w.pc.info.Uses[id].(*types.Var)
+	if !ok || !paramCanCarryPage(obj.Type()) {
+		return false
+	}
+	for _, f := range w.curFunc.Type.Params.List {
+		for _, name := range f.Names {
+			if w.pc.info.ObjectOf(name) == obj {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// methodValueCarriesCallback reports whether a func-typed call argument
+// is a method value whose body invokes a struct field the enclosing
+// store implementation bound to its callback formal (h := car{cb: fn};
+// runCb(h.run, ...): the method value forwards the callback, so the
+// byte arguments at the call site must be mapped views). A local
+// initialized to the method value (mv := h.run) resolves through its
+// single never-address-taken definition. The second result reports
+// that the method invokes the bound field with buffers its own body
+// mints, which fails closed at the call site.
+func (w *fileRules) methodValueCarriesCallback(e ast.Expr) (bool, bool) {
+	if w.pc.pf == nil || w.curFunc == nil {
+		return false, false
+	}
+	if id, isID := unparen(e).(*ast.Ident); isID {
+		obj, ok := w.pc.info.Uses[id].(*types.Var)
+		if !ok || w.curFunc.Body == nil {
+			return false, false
+		}
+		init, single, taken := varDefOf(w.pc.info, w.curFunc.Body, obj)
+		if !single || taken || init == nil {
+			return false, false
+		}
+		return w.methodValueCarriesCallback(init)
+	}
+	sel, ok := unparen(e).(*ast.SelectorExpr)
+	if !ok {
+		return false, false
+	}
+	recv, isSel := w.pc.info.Selections[sel]
+	if !isSel || recv.Kind() != types.MethodVal {
+		return false, false
+	}
+	mfn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
+	if !ok || mfn.Pkg() == nil {
+		return false, false
+	}
+	p := mfn.Pkg().Path()
+	if p != w.pc.pkg.Path() && !moduleInternalPackage(p) {
+		return false, false
+	}
+	msum := w.calleeSummary(sel)
+	if msum == nil {
+		return false, false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false, false
+	}
+	internal := false
+	for fk := range msum.fieldInvokes {
+		if msum.fieldInvokesInternal[fk] {
+			internal = true
+			continue
+		}
+		if r, ok := encl.fieldAliases[fk]; ok && !r.forwarded {
+			return true, internal
+		}
+	}
+	// The method value forwards a field no key of which the current
+	// function bound directly: the callback decision belongs to the
+	// store call sites bound-carrier fence, not here.
+	return false, false
 }
 
 // checkCarrierViewCallSites enforces the carrier mapped-view fence at
@@ -1447,6 +1569,45 @@ func (w *fileRules) checkCarrierViewCallSites(v *ast.CallExpr, fn *types.Func) {
 // the formal, a local identity alias (cb := fn, any block), a recorded
 // wrapper, a struct field that holds the formal (s.cb = fn), or a
 // forwarder literal that receives the formal as a func-typed argument.
+// storeCallbackCallee reports whether a call inside a store callback
+// implementation invokes the sanctioned store callback itself: the
+// callback formal, a recorded alias/return-wrapper of it, a carrier
+// field, an indexed slot, an asserted holder, or a call-result wrapper.
+// Such invocations REQUIRE mapped views (checkStoreCallbackViews
+// counter-checks owned buffers), so handing the mapped page to them is
+// the store contract, not an unproven transfer: the generic
+// fail-closed fence must not double-flag the honest twins while the
+// owned-view direction stays policed.
+func (w *fileRules) storeCallbackCallee(v *ast.CallExpr) bool {
+	if !w.isStoreCallbackImpl() {
+		return false
+	}
+	switch f := unparen(v.Fun).(type) {
+	case *ast.Ident:
+		obj, ok := w.pc.info.Uses[f].(*types.Var)
+		if !ok {
+			return false
+		}
+		return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) ||
+			w.recordedCallbackAlias(obj) || w.forwardsCallbackFormal(v)
+	case *ast.SelectorExpr:
+		if w.fieldHoldsCallbackFormal(f) {
+			return true
+		}
+		if fld, isFld := w.pc.info.Uses[f.Sel].(*types.Var); isFld && funcSignature(fld.Type()) != nil {
+			return true
+		}
+		return false
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		return w.indexHoldsCallbackFormal(f)
+	case *ast.TypeAssertExpr:
+		return w.callbackSlotOf(f)
+	case *ast.CallExpr:
+		return w.callResultHoldsCallbackFormal(f)
+	}
+	return false
+}
+
 func (w *fileRules) checkStoreCallbackViews(v *ast.CallExpr, fun ast.Expr) {
 	sig := funcSignature(w.typeOf(fun))
 	if sig == nil || sig.Params() == nil {
@@ -1690,7 +1851,28 @@ func (w *fileRules) callResultHoldsCallbackFormal(fun ast.Expr) bool {
 	// caller's argument decides a parameter-identity result. Checked
 	// before the local-ident path because the callee may be a selector
 	// (method) or a free function, not a local variable.
-	if fs := w.calleeSummary(ic.Fun); fs != nil {
+	//
+	// The callee may also be a LOCAL func-typed variable provably bound
+	// to a module function or method value (g := passthrough; cb :=
+	// g(fn), mv := s.getCB; cb := mv()): resolve it through its single
+	// never-address-taken definition so the scanned summary applies.
+	callee := ic.Fun
+	for {
+		id, isID := unparen(callee).(*ast.Ident)
+		if !isID {
+			break
+		}
+		obj, isVar := w.pc.info.Uses[id].(*types.Var)
+		if !isVar || w.curFunc == nil || w.curFunc.Body == nil {
+			break
+		}
+		init, single, taken := varDefOf(w.pc.info, w.curFunc.Body, obj)
+		if !single || taken || init == nil {
+			break
+		}
+		callee = init
+	}
+	if fs := w.calleeSummary(callee); fs != nil {
 		if fk, ok := fs.returnFieldKeys[0]; ok {
 			if fk == multiReturnKey {
 				return true
@@ -2426,7 +2608,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			continue
 		}
 		pageArg := w.pageValue(arg)
-		if pageArg.tainted && pageFull(pageArg) && !w.storeCarrierTracedFieldCall(v, fun) &&
+		if pageArg.tainted && pageFull(pageArg) && !w.storeCarrierTracedFieldCall(v, fun) && !w.storeCallbackCallee(v) &&
 			(transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
 			w.fail(v.Pos(), "mapped page view passed to %s (complete page into owned memory)", calleeText(fun))
 		}
@@ -3745,6 +3927,23 @@ func calleeText(fun ast.Expr) string {
 		return exprText(f.X) + "." + f.Sel.Name
 	}
 	return "?"
+}
+
+// carrierText renders a carrier argument for fence diagnostics: the
+// expression text when it names a value, else the value's type name
+// (a composite literal arg to a nested-carrier call reads as its
+// struct type instead of "?").
+func (w *fileRules) carrierText(e ast.Expr) string {
+	if t := calleeText(e); t != "?" {
+		return t
+	}
+	if tv, ok := w.pc.info.Types[unparen(e)]; ok && tv.Type != nil {
+		if n, ok := types.Unalias(tv.Type).(*types.Named); ok {
+			return n.Obj().Name()
+		}
+		return tv.Type.String()
+	}
+	return "carrier"
 }
 
 func exprText(e ast.Expr) string {
