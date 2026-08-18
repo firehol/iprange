@@ -1482,4 +1482,8 @@ var batteryCases = []batteryCase{
 	{name: "315: benign rand.Read CSPRNG fill in the nonce file", desc: "the exact production-shaped crypto/rand.Read fill of an owned 16-byte buffer stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "append", path: "internal/writer/reclaim.go", content: "func gateNonceBenign() ([16]byte, error) {\n\tvar n [16]byte\n\tif _, err := rand.Read(n[:]); err != nil {\n\t\treturn n, err\n\t}\n\treturn n, nil\n}\n"},
 	}},
+
+	{name: "316: struct-field rand.Read shadow in the nonce file", desc: "a local struct whose Read field is a func must not inherit the CSPRNG exemption (the receiver must resolve to crypto/rand)", expectFail: true, expectRule: "banned content-transfer selector .Read", ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/writer/reclaim.go", content: "func gateNonceFieldShadow() ([16]byte, error) {\n\trand := struct{ Read func([]byte) (int, error) }{func([]byte) (int, error) { return 0, nil }}\n\tvar n [16]byte\n\tif _, err := rand.Read(n[:]); err != nil {\n\t\treturn n, err\n\t}\n\treturn n, nil\n}\n"},
+	}},
 }

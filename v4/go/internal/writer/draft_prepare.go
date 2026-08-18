@@ -228,6 +228,12 @@ func (s *DraftStore) reclaimExtent(extent retire.Extent, checkpoint func() error
 				return err
 			}
 		}
+		// The page-number space is u32 (Rust u32::try_from Corrupt guard);
+		// a retirement extent crossing 2^32 must fail closed, never
+		// truncate into the live allocator.
+		if page > uint64(^uint32(0)) {
+			return corrupt("reclaimed page exceeds page-number space")
+		}
 		if err := s.freeOne(uint32(page)); err != nil {
 			return err
 		}

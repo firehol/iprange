@@ -41,10 +41,17 @@ type PublishResult struct {
 
 // StartDraft begins one COW draft over the committed generation with the
 // caller's nonce (Rust workflow draft installation: Draft::new over
-// base.meta).
+// base.meta). The all-zero nonce is refused exactly like Rust
+// random::nonzero_128 refuses an all-zero draw: the commit nonce is the
+// crash-recovery operation identity and a constant zero generation is a
+// class Rust's API cannot produce. The public workflows draw the nonce
+// from randomNonce when they arrive.
 func (c *Core) StartDraft(nonce [16]byte) error {
 	if c.draft != nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "a draft is already open"}
+	}
+	if nonce == [16]byte{} {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "commit nonce must be nonzero"}
 	}
 	draft, err := NewDraft(c.base.Meta, nonce)
 	if err != nil {

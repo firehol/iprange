@@ -336,7 +336,11 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 		if selected.Transactions == 0 && group.pages > maxPages {
 			return nil, &format.Error{Code: format.CodeWorkLimitTooSmall, Detail: "reclamation work limit too small"}
 		}
-		if !appendGroup(&selected, group.txn, group.pages, maxPages) {
+		ok, err = appendGroup(&selected, group.txn, group.pages, maxPages)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			break
 		}
 		next = group.next
@@ -374,15 +378,21 @@ func readerSafe(oldestReader *uint64, retiredByTxn uint64) bool {
 	return *oldestReader >= retiredByTxn
 }
 
-func appendGroup(selected *Reclamation, txn uint64, groupPages uint64, maxPages uint64) bool {
-	total := selected.Pages + groupPages
+func appendGroup(selected *Reclamation, txn uint64, groupPages uint64, maxPages uint64) (bool, error) {
+	// Rust append_group: checked_add propagates ArithmeticOverflow, only a
+	// limit exceed returns Ok(false); unreachable for coalesced
+	// u32-bounded extents but the fail-closed shape is parity.
+	total, ok := checkedAddPages(selected.Pages, groupPages)
+	if !ok {
+		return false, overflow("reclaimed page count")
+	}
 	if total > maxPages {
-		return false
+		return false, nil
 	}
 	selected.Transactions++
 	selected.Pages = total
 	selected.ThroughTxn = txn
-	return true
+	return true, nil
 }
 
 func scanGroup(store tree.Store, root uint32, firstExtent Extent, selectedTxn uint64, checkpoint func() error) (uint64, *Extent, error) {
@@ -396,7 +406,11 @@ func scanGroup(store tree.Store, root uint32, firstExtent Extent, selectedTxn ui
 		if err := validateSelected(store, extent, selectedTxn); err != nil {
 			return 0, nil, err
 		}
-		pages += uint64(extent.Count)
+		nextCount, ok := checkedAddPages(pages, uint64(extent.Count))
+		if !ok {
+			return 0, nil, overflow("reclaimed page count")
+		}
+		pages = nextCount
 		next, err := After(store, root, extent)
 		if err != nil {
 			return 0, nil, err
@@ -434,4 +448,13 @@ func invalid(detail string) error {
 
 func overflow(detail string) error {
 	return &format.Error{Code: format.CodeArithmeticOverflow, Detail: detail}
+}
+
+// checkedAddPages adds two page counts, reporting overflow (Rust
+// checked_add semantics for the reclamation page totals).
+func checkedAddPages(a, b uint64) (uint64, bool) {
+	if ^uint64(0)-a < b {
+		return 0, false
+	}
+	return a + b, true
 }

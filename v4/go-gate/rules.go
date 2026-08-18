@@ -4495,11 +4495,18 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 			if !ok || recv.Name != "rand" {
 				return true
 			}
-			// The receiver ident must resolve to crypto/rand: an aliased
-			// import of any other package under the name rand must not
-			// inherit the exemption.
-			if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok && obj.Pkg() != nil &&
+			// The receiver ident must resolve to crypto/rand's Read: an
+			// aliased import, a struct field, or any other selector of
+			// the same name must not inherit the exemption. The
+			// argument must be an owned buffer - a mapped page view or
+			// a file-bearing value stays banned.
+			if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); !ok || obj.Pkg() == nil ||
 				obj.Pkg().Path() != "crypto/rand" {
+				return true
+			}
+			a0 := call.Args[0]
+			if w.pageValue(a0).tainted ||
+				(w.typeOf(a0) != nil && fileValueType(w.typeOf(a0), map[types.Type]bool{})) {
 				return true
 			}
 			exempts[sel.Pos()] = true
