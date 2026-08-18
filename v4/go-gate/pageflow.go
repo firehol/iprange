@@ -5309,6 +5309,28 @@ func (pf *pageFlow) seedStructComposite(st *stmtState, target *funcSummary, lit 
 	pf.seedStructCompositeAt(st, target, lit, "")
 }
 
+// seedCarrierFieldOfReceiver seeds the leaf record for a carrier field
+// read off a receiver/arg expression (get() returning h.p): when the
+// expression is a composite literal (or a local bound to one) whose
+// field holds a nested carrier composite, the child seeds under the
+// given path step.
+func (pf *pageFlow) seedCarrierFieldOfReceiver(st *stmtState, target *funcSummary, root ast.Expr, field string, leafStep string) {
+	if root == nil {
+		return
+	}
+	cv2, ok := pf.fieldBoundValue(st, root, field)
+	if !ok {
+		return
+	}
+	cv2u := unparen(cv2)
+	if ue, isUe := cv2u.(*ast.UnaryExpr); isUe && ue.Op == token.AND {
+		cv2u = unparen(ue.X)
+	}
+	if child, isLit := cv2u.(*ast.CompositeLit); isLit {
+		pf.seedStructCompositeAt(st, target, child, leafStep)
+	}
+}
+
 // seedStructCompositeAt records formal-bound fields of a struct
 // composite literal onto the target summary, recursing into nested
 // struct composites (o := outer{in: car{cb: fn}} seeds the leaf key
@@ -5400,6 +5422,66 @@ func (pf *pageFlow) seedStructCompositeAt(st *stmtState, target *funcSummary, li
 			if child, isLit := iv.(*ast.CompositeLit); isLit {
 				pf.seedStructCompositeAt(st, target, child, pf.joinPath(path, k, field))
 			}
+			continue
+		}
+		// A field value produced by a call (w := pw21{p: mkP21(fn)} or
+		// w := pw23{p: (&holder23{p: &pn23{cb: fn}}).get()}): the
+		// callee's return carrier records seed the leaf under this
+		// field's path step. A param-sourced record binds the call's
+		// argument at the callee slot; a receiver-field record (srcRead)
+		// resolves the receiver composite's field value visible at this
+		// call site.
+		if call, isCall := unparen(val).(*ast.CallExpr); isCall {
+			cfs := pf.calleeSummaryOfCall(st, call)
+			if cfs == nil {
+				continue
+			}
+			leafStep := pf.joinPath(path, k, field)
+			for _, rc := range cfs.returnCarrierFields {
+				if rc.param == -2 {
+					continue
+				}
+				if rc.param >= 0 {
+					argExpr, ok := pf.callArgAtSlot(call, rc.param)
+					if !ok {
+						continue
+					}
+					slot, ok := pf.slotOfExpr(st, target, argExpr)
+					if !ok {
+						continue
+					}
+					pf.setFieldAlias(target, rc.field, fieldSlotAlias{slot: slot, path: leafStep})
+					continue
+				}
+				if rc.srcRead {
+					pf.seedCarrierFieldOfReceiver(st, target, call, rc.srcKey.field, leafStep)
+				}
+			}
+			// A receiver/param FIELD read returned directly (get()
+			// returning h.p): the callee's returnFieldKeys name the
+			// field the result came from. Resolve that field against
+			// the call's receiver (method) or first argument (free
+			// function) and seed the composite it holds, exactly like
+			// an srcRead carrier record.
+			if fk, ok := cfs.returnFieldKeys[0]; ok && fk != multiReturnKey {
+				if len(cfs.returnCarrierFields) == 0 || funcSignature(pf.pc.info.TypeOf(unparen(call.Fun))) == nil {
+					var root ast.Expr
+					if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+						if rsel, isSel := pf.pc.info.Selections[sel]; isSel && rsel.Kind() == types.MethodVal {
+							root = sel.X
+						}
+					}
+					if root == nil {
+						if len(call.Args) > 0 {
+							root = call.Args[0]
+						}
+					}
+					if root != nil {
+						pf.seedCarrierFieldOfReceiver(st, target, root, fk.field, leafStep)
+					}
+				}
+			}
+			continue
 		}
 	}
 }
@@ -5423,6 +5505,17 @@ func (pf *pageFlow) joinPath(path, k, field string) string {
 // bottom out in the same record. Callers with an unknown body or a
 // non-param return resolve to nothing.
 func (pf *pageFlow) callResultAlias(st *stmtState, fs *funcSummary, x ast.Expr, seen map[*ast.CallExpr]bool) (callbackAlias, bool) {
+	return pf.callResultAliasAt(st, fs, x, 0, seen)
+}
+
+// callResultAliasAt resolves RESULT SLOT slot of a func-typed call
+// result (_, cb := pair(fn) binds cb to result slot 1) to the value it
+// provably returns: a scanned callee whose return position slot is one
+// of its own func-typed parameters (pair returning f at slot 1), the
+// -2 multi-branch marker, or a struct field holding the callback
+// formal (getCB returning s.cb) when the current function bound that
+// canonical field key to its formal.
+func (pf *pageFlow) callResultAliasAt(st *stmtState, fs *funcSummary, x ast.Expr, slot int, seen map[*ast.CallExpr]bool) (callbackAlias, bool) {
 	call, ok := unparen(x).(*ast.CallExpr)
 	if !ok || seen[call] {
 		return callbackAlias{}, false
@@ -5447,7 +5540,7 @@ func (pf *pageFlow) callResultAlias(st *stmtState, fs *funcSummary, x ast.Expr, 
 	if !ok {
 		return callbackAlias{}, false
 	}
-	if p, ok := cfs.returnSlotAliases[0]; ok {
+	if p, ok := cfs.returnSlotAliases[slot]; ok {
 		if p == -2 {
 			return callbackAlias{slot: -2, forwarded: nil}, true
 		}
@@ -5456,7 +5549,7 @@ func (pf *pageFlow) callResultAlias(st *stmtState, fs *funcSummary, x ast.Expr, 
 		}
 		return pf.resolveFuncValue(st, fs, call.Args[p], seen)
 	}
-	if fk, ok := cfs.returnFieldKeys[0]; ok && fk != multiReturnKey {
+	if fk, ok := cfs.returnFieldKeys[slot]; ok && fk != multiReturnKey {
 		for _, r := range fs.fieldAliases[fk] {
 			if !r.forwarded {
 				return callbackAlias{slot: r.slot, forwarded: nil}, true
@@ -5466,6 +5559,49 @@ func (pf *pageFlow) callResultAlias(st *stmtState, fs *funcSummary, x ast.Expr, 
 	}
 
 	return callbackAlias{}, false
+}
+
+// calleeSummaryOfCall returns the scanned summary of a call's resolved
+// module callee (free function or method), mirroring callResultAlias's
+// resolution so callers can read the callee's return records.
+func (pf *pageFlow) calleeSummaryOfCall(st *stmtState, call *ast.CallExpr) *funcSummary {
+	fn, ok := pf.calleeExprFunc(st, call.Fun)
+	if !ok || fn.Pkg() == nil || !strings.HasPrefix(fn.Pkg().Path(), moduleImportPrefix) {
+		return nil
+	}
+	sums := pf.summaries
+	if fn.Pkg().Path() != pf.path {
+		sums = pf.store.pkgs[fn.Pkg().Path()]
+	}
+	if sums == nil {
+		return nil
+	}
+	key := fn.Name()
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+		key = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+	}
+	return sums[key]
+}
+
+// callArgAtSlot returns the argument expression bound to a callee
+// parameter slot, mapping slot 0 to the receiver expression for method
+// calls (mirroring the summary layout used by recordReturnCarrierCompos
+// ition).
+func (pf *pageFlow) callArgAtSlot(call *ast.CallExpr, slot int) (ast.Expr, bool) {
+	off := 0
+	if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+		if recv, isSel := pf.pc.info.Selections[sel]; isSel && recv.Kind() == types.MethodVal {
+			if slot == 0 {
+				return sel.X, true
+			}
+			off = 1
+		}
+	}
+	ai := slot - off
+	if ai < 0 || ai >= len(call.Args) {
+		return nil, false
+	}
+	return call.Args[ai], true
 }
 
 // resolveFuncValue resolves a func-typed expression to a callback-alias
@@ -5792,12 +5928,36 @@ func (pf *pageFlow) noteCallbackAliases(st *stmtState, fs *funcSummary, body *as
 				// through the same resolver.
 				if al, ok := pf.callResultAlias(st, fs, src, make(map[*ast.CallExpr]bool)); ok {
 					record(objOf(st, lhs), al, al.lit)
+				} else if cfs := pf.calleeSummaryOfCall(st, s); cfs != nil &&
+					(len(cfs.returnSlotAliases) > 0 || len(cfs.returnFieldKeys) > 0) {
+					// The callee provably returns one of its own func
+					// formals, but the bound argument resolved to a
+					// shape (a method value/expression, an unresolved
+					// local) this body cannot attribute. The invocation
+					// of the result must fail closed on un-mapped views
+					// instead of dropping the chain silently.
+					if o := objOf(st, lhs); o != nil {
+						if fs.paramAliases == nil {
+							fs.paramAliases = map[types.Object]int{}
+						}
+						fs.paramAliases[o] = -1
+					}
 				}
 			}
 		}
 		skipStmt := func(lhs []ast.Expr, rhs []ast.Expr) bool {
 			for i, l := range lhs {
 				if i >= len(rhs) {
+					// A multi-value call result pairs by position
+					// (_, cb := pair(fn) binds cb to result slot 1).
+					if len(rhs) == 1 {
+						if call, isCall := unparen(rhs[0]).(*ast.CallExpr); isCall {
+							if al, ok := pf.callResultAliasAt(st, fs, call, i, make(map[*ast.CallExpr]bool)); ok {
+								record(objOf(st, l), al, al.lit)
+							}
+							continue
+						}
+					}
 					break
 				}
 				recordAlias(l, rhs[i])
@@ -6447,6 +6607,11 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 					}
 					break
 				}
+				if ue, isUe := e.(*ast.UnaryExpr); isUe && ue.Op == token.AND {
+					// Pointer-returned carriers (return &car{cb: fn})
+					// seed the same leaf records as their pointee.
+					e = unparen(ue.X)
+				}
 				// A struct carrier literal returned from the body:
 				// mkCar(fn) returning car{cb: fn} (and nested spellings
 				// return top{mid{car{cb: fn}}}).
@@ -6470,15 +6635,54 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 						continue
 					}
 				}
-				// A call returned unchanged: h2(g) { return h1(g) }
-				// forwards one of the called helper's OWN return
-				// positions. Resolve EAGERLY against this function's
-				// own frame (the call's arguments are its expressions):
-				// once the called helper's return summary has settled
-				// (a later fixpoint pass), the result records the
-				// parameter slot of THIS function, which the callers
-				// resolve without seeing the callee's frame.
+				// A struct CARRIER returned through a callee's call
+				// result (mk24(fn) { return mk24b(fn) }): forward the
+				// callee's return carrier records with the call's
+				// argument positions bound to this function's own
+				// parameter slots, so callers of THIS function compose
+				// the leaf records without seeing the callee's frame.
 				if call, isCall := e.(*ast.CallExpr); isCall {
+					if cfs := pf.calleeSummaryOfCall(st, call); cfs != nil && len(cfs.returnCarrierFields) > 0 {
+						for slot, rc := range cfs.returnCarrierFields {
+							nrc := rc
+							if rc.param == -2 {
+								// keep the fail-closed marker below
+							} else if rc.param >= 0 {
+								argExpr, ok := pf.callArgAtSlot(call, rc.param)
+								if !ok {
+									continue
+								}
+								sp, ok := pf.slotOfExpr(st, fs, argExpr)
+								if !ok {
+									continue
+								}
+								nrc.param = sp
+							} else {
+								// srcRead records (a receiver-field
+								// return) do not survive a further hop:
+								// the receiver is only visible at the
+								// first call site. Fail closed instead.
+								nrc.param = -2
+							}
+							if fs.returnCarrierFields == nil {
+								fs.returnCarrierFields = map[int]returnCarrierField{}
+							}
+							if cur, isCur := fs.returnCarrierFields[slot]; isCur && cur != nrc {
+								fs.returnCarrierFields[slot] = returnCarrierField{field: nrc.field, param: -2, path: nrc.path}
+							} else {
+								fs.returnCarrierFields[slot] = nrc
+							}
+						}
+					}
+					// A call returned unchanged: h2(g) { return h1(g) }
+					// forwards one of the called helper's OWN return
+					// positions. Resolve EAGERLY against this function's
+					// own frame (the call's arguments are its
+					// expressions): once the called helper's return
+					// summary has settled (a later fixpoint pass), the
+					// result records the parameter slot of THIS
+					// function, which the callers resolve without
+					// seeing the callee's frame.
 					al, alok := pf.callResultAlias(st, fs, call, make(map[*ast.CallExpr]bool))
 					if alok {
 						if fs.returnSlotAliases == nil {
@@ -6492,6 +6696,34 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 						continue
 					}
 					continue
+				}
+				// A func-typed container read of a parameter returned
+				// unchanged (return f[0] of a variadic func parameter):
+				// the result is the parameter's func value.
+				if ix, isIx := e.(*ast.IndexExpr); isIx {
+					if id, isID := unparen(ix.X).(*ast.Ident); isID {
+						if pobj, ok := pf.pc.info.ObjectOf(id).(*types.Var); ok {
+							isF := funcSignature(pobj.Type()) != nil
+							if !isF {
+								if sl, ok := types.Unalias(pobj.Type()).(*types.Slice); ok {
+									isF = funcSignature(sl.Elem()) != nil
+								}
+							}
+							if isF {
+								if idx, ok2 := st.params[pobj]; ok2 {
+									if fs.returnSlotAliases == nil {
+										fs.returnSlotAliases = map[int]int{}
+									}
+									if cur, isCur := fs.returnSlotAliases[i]; isCur && cur != idx {
+										fs.returnSlotAliases[i] = -2
+									} else {
+										fs.returnSlotAliases[i] = idx
+									}
+									continue
+								}
+							}
+						}
+					}
 				}
 				// A func-typed parameter (or recorded alias of one)
 				// returned unchanged: func id(f F) F { return f } as a
@@ -9272,12 +9504,37 @@ func (pf *pageFlow) calleeExprFunc(st *stmtState, x ast.Expr) (*types.Func, bool
 				}
 			}
 			return nil, false
-		case *ast.IndexExpr:
-			// A func-typed container slot called through a constant
-			// index (arr := [1]func{...}{passthrough}; cb := arr[0](fn)).
-			if val, ok := pf.indexBoundValue(st, t); ok {
-				x = val
-				continue
+		case *ast.IndexExpr, *ast.IndexListExpr:
+			// A generic instantiation of a scanned function
+			// (cb := runG[T](...)...): the callee is the generic
+			// function itself.
+			var base ast.Expr
+			if ie, ok := t.(*ast.IndexExpr); ok {
+				base = ie.X
+			} else if il, ok := t.(*ast.IndexListExpr); ok {
+				base = il.X
+			}
+			if id, ok := unparen(base).(*ast.Ident); ok {
+				if f, ok := pf.pc.info.Uses[id].(*types.Func); ok {
+					return f, true
+				}
+			}
+			if ie, ok := t.(*ast.IndexExpr); ok {
+				// A func-typed container slot called through a constant
+				// index (arr := [1]func{...}{passthrough}; cb :=
+				// arr[0](fn)).
+				if val, ok := pf.indexBoundValue(st, ie); ok {
+					x = val
+					continue
+				}
+				// A non-constant index over a container whose every
+				// element is the same func value (hs := []F{passthrough};
+				// for i := range hs { cb := hs[i](fn) }): any index
+				// selects that value.
+				if val, ok := pf.anyIndexBoundValue(st, ie); ok {
+					x = val
+					continue
+				}
 			}
 			return nil, false
 		case *ast.CallExpr:
@@ -9310,6 +9567,22 @@ func (pf *pageFlow) exprCompositeLit(st *stmtState, x ast.Expr) (*ast.CompositeL
 			obj := pf.pc.info.ObjectOf(t)
 			if obj == nil || st == nil || st.fd == nil || st.fd.Body == nil {
 				return nil, false
+			}
+			if obj.Parent() == pf.pc.pkg.Scope() {
+				// A package-scope container (var ar = [1]F{passthrough})
+				// has no definition inside the function body: resolve
+				// through the package initializer, guarded by the
+				// never-reassigned proof the package-var rules rely on.
+				pv, isVar := obj.(*types.Var)
+				if !isVar || pf.pc.varInits == nil || pf.pc.reassignedVars[pv] {
+					return nil, false
+				}
+				init, ok := pf.pc.varInits[pv]
+				if !ok {
+					return nil, false
+				}
+				x = init
+				continue
 			}
 			init, single, taken := varDefOf(pf.pc.info, st.fd.Body, obj)
 			if init == nil || (!single && !taken) {
@@ -9379,9 +9652,12 @@ func (pf *pageFlow) fieldBoundValue(st *stmtState, x ast.Expr, field string) (as
 }
 
 // indexBoundValue extracts the value bound at a constant index of a
-// container composite (arr := [1]func{...}{passthrough}; arr[0]).
+// container composite (arr := [1]func{...}{passthrough}; arr[0],
+// m := map[string]F{"cb": passthrough}; m["cb"]). Integer keys select
+// positional elements of array/slice literals; any constant key selects
+// a keyed map element.
 func (pf *pageFlow) indexBoundValue(st *stmtState, ix *ast.IndexExpr) (ast.Expr, bool) {
-	idx, ok := pf.constIndex(ix.Index)
+	idx, ok := pf.constValue(st, ix.Index)
 	if !ok {
 		return nil, false
 	}
@@ -9392,31 +9668,83 @@ func (pf *pageFlow) indexBoundValue(st *stmtState, ix *ast.IndexExpr) (ast.Expr,
 	positional := int64(0)
 	for _, el := range lit.Elts {
 		if kv, isKV := el.(*ast.KeyValueExpr); isKV {
-			kid, kok := pf.constIndex(kv.Key)
-			if !kok {
+			kid, kok := pf.constValue(st, kv.Key)
+			if !kok || kid.Kind() != idx.Kind() {
 				continue
 			}
-			if kid == idx {
+			if constant.Compare(kid, token.EQL, idx) {
 				return kv.Value, true
 			}
 			continue
 		}
-		if positional == idx {
-			return el, true
+		if idx.Kind() == constant.Int {
+			if n, ok := constant.Int64Val(idx); ok && positional == n {
+				return el, true
+			}
 		}
 		positional++
 	}
 	return nil, false
 }
 
+// constValue evaluates e to a constant value (an array index, a map
+// key), resolving single-definition local variables (i := 0; hs[i]).
+func (pf *pageFlow) constValue(st *stmtState, e ast.Expr) (constant.Value, bool) {
+	for {
+		e2 := unparen(e)
+		if tv, ok := pf.pc.info.Types[e2]; ok && tv.Value != nil {
+			return tv.Value, true
+		}
+		id, ok := e2.(*ast.Ident)
+		if !ok || st == nil || st.fd == nil || st.fd.Body == nil {
+			return nil, false
+		}
+		init, single, taken := varDefOf(pf.pc.info, st.fd.Body, pf.pc.info.ObjectOf(id))
+		if init == nil || !single || taken {
+			return nil, false
+		}
+		e = init
+	}
+}
+
 // constIndex evaluates an expression to a constant integer index.
-func (pf *pageFlow) constIndex(e ast.Expr) (int64, bool) {
-	if tv, ok := pf.pc.info.Types[unparen(e)]; ok && tv.Value != nil && tv.Value.Kind() == constant.Int {
-		if n, ok := constant.Int64Val(tv.Value); ok {
-			return n, true
+func (pf *pageFlow) constIndex(st *stmtState, e ast.Expr) (int64, bool) {
+	cv, ok := pf.constValue(st, e)
+	if !ok || cv.Kind() != constant.Int {
+		return 0, false
+	}
+	return constant.Int64Val(cv)
+}
+
+// anyIndexBoundValue resolves a container read at a NON-constant index
+// when every positional element of the container composite resolves to
+// the same func-typed value: whatever the index selects, the value is
+// that element. Keyed (map) literals and mixed element sets stay
+// unresolved (conservative).
+func (pf *pageFlow) anyIndexBoundValue(st *stmtState, ix *ast.IndexExpr) (ast.Expr, bool) {
+	lit, ok := pf.exprCompositeLit(st, ix.X)
+	if !ok || len(lit.Elts) == 0 {
+		return nil, false
+	}
+	var want *types.Func
+	for _, el := range lit.Elts {
+		if _, isKV := el.(*ast.KeyValueExpr); isKV {
+			return nil, false
+		}
+		f, ok := pf.calleeExprFunc(st, el)
+		if !ok {
+			return nil, false
+		}
+		if want == nil {
+			want = f
+		} else if want != f {
+			return nil, false
 		}
 	}
-	return 0, false
+	if want == nil {
+		return nil, false
+	}
+	return unparen(lit.Elts[0]), true
 }
 
 // resultHoldsPage reports whether a call result type could itself be a

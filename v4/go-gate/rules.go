@@ -734,6 +734,18 @@ func (w *fileRules) typeOf(e ast.Expr) types.Type {
 	return tv.Type
 }
 
+// approvedGenericCallee approves a generic instantiation whose generic
+// function is a scanned module function: same-package or
+// module-internal, exactly like the direct function spelling.
+func (w *fileRules) approvedGenericCallee(x ast.Expr) bool {
+	fn := callCalleeFuncOrVar(w, x)
+	if fn == nil || fn.Pkg() == nil {
+		return false
+	}
+	p := fn.Pkg().Path()
+	return p == w.pc.pkg.Path() || moduleInternalPackage(p)
+}
+
 // approvedCallee allows file- and page-bearing values into same-package
 // functions (their bodies are scanned too), module-internal packages, and
 // the x/sys syscall surface used by the mapping owner. Any other callee —
@@ -772,6 +784,10 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			return w.approvedFuncVar(o, 0)
 		}
 		return false
+	case *ast.IndexExpr:
+		return w.approvedGenericCallee(f.X)
+	case *ast.IndexListExpr:
+		return w.approvedGenericCallee(f.X)
 	case *ast.SelectorExpr:
 		obj := w.pc.info.Uses[f.Sel]
 		fn, ok := obj.(*types.Func)
@@ -1188,8 +1204,18 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		if !ok {
 			return callbackAlias{}, false
 		}
-		al, ok := encl.callbackAliases[obj]
-		return al, ok
+		if al, ok := encl.callbackAliases[obj]; ok {
+			return al, ok
+		}
+		// An alias recorded only in paramAliases survives instability
+		// (reassignment, branch install, address taken): the value may
+		// still hold the formal, so the invocation fence follows it
+		// fail-closed (-1 marks a proven-formal-returning call result
+		// whose argument could not be attributed).
+		if ps, ok := encl.paramAliases[obj]; ok {
+			return callbackAlias{slot: ps, forwarded: nil}, true
+		}
+		return callbackAlias{}, false
 	}
 	fail := func(fnArg ast.Expr) {
 		w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(fnArg), calleeText(v.Fun))
@@ -1603,7 +1629,7 @@ func (w *fileRules) storeCallbackCallee(v *ast.CallExpr) bool {
 			return false
 		}
 		return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) ||
-			w.recordedCallbackAlias(obj) || w.forwardsCallbackFormal(v)
+			w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj) || w.forwardsCallbackFormal(v)
 	case *ast.SelectorExpr:
 		// Only a field the current implementation PROVABLY bound to
 		// its callback formal is sanctioned: a bare func-typed field
@@ -1648,6 +1674,45 @@ func (w *fileRules) recordedCallbackAlias(v *types.Var) bool {
 		return false
 	}
 	_, ok = encl.callbackAliases[v]
+	return ok
+}
+
+// localMethodCarrier reports whether a func-typed local was bound to a
+// method VALUE or method EXPRESSION of a carrier type (mv := h.run,
+// m := (*car).run): the method body invokes a field the enclosing
+// store implementation bound to its callback formal, so invoking the
+// local with byte views must demand mapped views exactly like
+// invoking the method directly.
+func (w *fileRules) localMethodCarrier(v *types.Var) bool {
+	if v == nil || w.curFunc == nil || w.curFunc.Body == nil {
+		return false
+	}
+	init, single, taken := varDefOf(w.pc.info, w.curFunc.Body, v)
+	if init == nil || !single || taken {
+		return false
+	}
+	fw, _ := w.methodValueCarriesCallback(init)
+	return fw
+}
+
+// formalAliasedLocal reports whether a func-typed local of the current
+// function was recorded by the flow pass as a may-be alias of the
+// store callback formal (paramAliases: identity aliases, wrapper
+// literals, field/index carriers, and call results of formal-returning
+// helpers). The record survives instability (reassignment, branch
+// install, address taken), so the invocation fences fail closed on
+// un-mapped views instead of dropping the chain; -1 marks a call
+// result of a proven formal-returning callee whose own argument could
+// not be attributed.
+func (w *fileRules) formalAliasedLocal(v *types.Var) bool {
+	if v == nil || w.pc.pf == nil || w.curFunc == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return false
+	}
+	_, ok = encl.paramAliases[v]
 	return ok
 }
 
@@ -2025,10 +2090,22 @@ func (w *fileRules) scannedCallback(arg ast.Expr) bool {
 			p := obj.Pkg().Path()
 			return p == w.pc.pkg.Path() || moduleInternalPackage(p)
 		case *types.Var:
-			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
+			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj)
 		}
 		return false
 	case *ast.SelectorExpr:
+		// A func-typed FIELD argument (h.cb): scanned when the field
+		// key is a recorded direct store-carrier of some
+		// implementation - the carrier composition fences its call
+		// sites, so the field's body needs no separate scan.
+		if v, isVar := w.pc.info.Uses[a.Sel].(*types.Var); isVar && funcSignature(v.Type()) != nil {
+			if w.pc.pf != nil {
+				if key, ok := w.pc.pf.fieldSlotKeyOf(w.pc.info, a); ok {
+					return w.moduleFieldCarrier(key)
+				}
+			}
+			return false
+		}
 		fn, ok := w.pc.info.Uses[a.Sel].(*types.Func)
 		if !ok || fn.Pkg() == nil {
 			return false
@@ -2043,6 +2120,36 @@ func (w *fileRules) scannedCallback(arg ast.Expr) bool {
 			return !isInterfaceType(sig.Recv().Type())
 		}
 		return true
+	case *ast.CallExpr:
+		// A func-typed argument produced by a helper call (h1(g)
+		// passed on): the callee's return records decide whether the
+		// result is one of the helper's own func-typed parameters
+		// (identity chains), a carrier field read, or an unknown value.
+		if w.pc.pf == nil || w.pc.pf.store == nil {
+			return false
+		}
+		fs := w.calleeSummary(a.Fun)
+		if fs == nil {
+			return false
+		}
+		if p, ok := fs.returnSlotAliases[0]; ok {
+			if p == -2 {
+				// Different branches return different parameters: the
+				// result is one of them, so the fence fails closed.
+				return true
+			}
+			if p < 0 || p >= len(a.Args) {
+				return false
+			}
+			return w.scannedCallback(a.Args[p])
+		}
+		if fk, ok := fs.returnFieldKeys[0]; ok {
+			if fk == multiReturnKey {
+				return true
+			}
+			return w.moduleFieldCarrier(fk)
+		}
+		return false
 	}
 	return false
 }
@@ -2372,7 +2479,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// scanned, and the callback fence requires them to pass a
 			// scanned callback.
 			formalLike := w.approvedFuncParamVar(obj)
-			aliasLike := w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj)
+			aliasLike := w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj)
 			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike {
 				varIndirect = true
 			}
@@ -2427,6 +2534,12 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			}
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
+		// A generic instantiation of a scanned module function is a
+		// direct approved call (approvedCallee resolves it), so only
+		// UNRESOLVED index callees are indirect.
+		if callCalleeFuncOrVar(w, f) != nil {
+			break
+		}
 		// fs[0](page): a call through a slice/array element or map
 		// lookup has an unknowable callee body. When the indexed
 		// container slot holds the store callback formal (arr[0] = fn;
@@ -2699,6 +2812,12 @@ func callCalleeFuncOrVar(w *fileRules, fun ast.Expr) *types.Func {
 	case *ast.SelectorExpr:
 		fn, _ := w.pc.info.Uses[f.Sel].(*types.Func)
 		return fn
+	case *ast.IndexExpr:
+		// A generic instantiation (runG[T](...)) names the generic
+		// function itself.
+		return callCalleeFuncOrVar(w, f.X)
+	case *ast.IndexListExpr:
+		return callCalleeFuncOrVar(w, f.X)
 	}
 	return nil
 }
