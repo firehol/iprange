@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"math"
@@ -176,17 +177,20 @@ type funcSummary struct {
 	callbackAliases map[types.Object]callbackAlias
 	// fieldAliases records struct-field storage slots the body (or a
 	// caller passing a carrier struct) associates with a func-typed
-	// formal parameter (h.f = fn): keyed by the canonical struct type
-	// and field name, holding the formal's parameter slot. forwarded
-	// marks records received from a caller (the function's own parameter
-	// carries the formal, so local callee resolution must not treat it
-	// as a direct slot). The store-callback fence uses the record both
-	// here (a later h.f(...) invocation inside the same function carries
-	// the formal slot) and in the rules pass (a store implementation
-	// invoking the callback through a field must hand it mapped views).
-	// A field assigned several times keeps the last recorded binding;
-	// the fence stays fail-closed.
-	fieldAliases map[fieldSlotKey]fieldSlotAlias
+	// formal parameter (h.f = fn, o := outer{in: car{cb: fn}}): keyed
+	// by the canonical struct type and field name, holding the
+	// formal's parameter slot; path names the carrier steps from the
+	// root down to the leaf's host struct, so the SAME key can hold a
+	// flat record (h := car{fn}) and a nested one
+	// (o := outer{in: car{fn}}) side by side and each binding keeps
+	// its own enforcement. forwarded marks records received from a
+	// caller (the function's own parameter carries the formal, so
+	// local callee resolution must not treat it as a direct slot). The
+	// store-callback fence uses the record both here (a later h.f(...)
+	// invocation inside the same function carries the formal slot) and
+	// in the rules pass (a store implementation invoking the callback
+	// through a field must hand it mapped views).
+	fieldAliases map[fieldSlotKey][]fieldSlotAlias
 	// fieldInvokes records struct-field callees the body invokes with
 	// byte-slice arguments but cannot resolve to a func-typed formal of
 	// its own (h.f(a, b) with h a struct whose field f is bound to the
@@ -1164,9 +1168,9 @@ func summaryDup(fs *funcSummary) *funcSummary {
 		}
 	}
 	if len(fs.fieldAliases) > 0 {
-		out.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
-		for k, v := range fs.fieldAliases {
-			out.fieldAliases[k] = v
+		out.fieldAliases = map[fieldSlotKey][]fieldSlotAlias{}
+		for k, vs := range fs.fieldAliases {
+			out.fieldAliases[k] = append([]fieldSlotAlias(nil), vs...)
 		}
 	}
 	if len(fs.fieldInvokes) > 0 {
@@ -1214,6 +1218,7 @@ func summaryDup(fs *funcSummary) *funcSummary {
 			out.returnSlotAliases[k] = v
 		}
 	}
+
 	if len(fs.returnCarrierFields) > 0 {
 		out.returnCarrierFields = map[int]returnCarrierField{}
 		for k, v := range fs.returnCarrierFields {
@@ -1309,9 +1314,15 @@ func callbackRecordsEqual(a, b *funcSummary) bool {
 	if len(a.fieldAliases) != len(b.fieldAliases) {
 		return false
 	}
-	for k, v := range a.fieldAliases {
-		if b.fieldAliases[k] != v {
+	for k, avs := range a.fieldAliases {
+		bvs, ok := b.fieldAliases[k]
+		if !ok || len(avs) != len(bvs) {
 			return false
+		}
+		for i := range avs {
+			if avs[i] != bvs[i] {
+				return false
+			}
 		}
 	}
 	if len(a.fieldInvokes) != len(b.fieldInvokes) {
@@ -1382,6 +1393,7 @@ func callbackRecordsEqual(a, b *funcSummary) bool {
 			return false
 		}
 	}
+
 	if len(a.returnCarrierFields) != len(b.returnCarrierFields) {
 		return false
 	}
@@ -5235,8 +5247,10 @@ func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int,
 		}
 	case *ast.SelectorExpr:
 		if key, ok := pf.fieldSlotKeyOf(pf.pc.info, t); ok {
-			if r, ok := fs.fieldAliases[key]; ok && !r.forwarded {
-				return r.slot, true
+			for _, r := range fs.fieldAliases[key] {
+				if !r.forwarded {
+					return r.slot, true
+				}
 			}
 		}
 	case *ast.IndexExpr, *ast.IndexListExpr:
@@ -5265,25 +5279,24 @@ func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int,
 	return 0, false
 }
 
-// setFieldAlias records a carrier field binding on a summary. When the
-// same field key is bound at several nesting depths in one function
+// setFieldAlias records a carrier field binding on a summary. The same
+// field key may be bound at several nesting depths in one function
 // (h := car{fn} and o := outer{in: car{fn}} both create a {car,"cb"}
-// key), the record with the LONGEST carrier path wins: the nested
-// record matches a helper parameter declared as the OUTER carrier
-// type, while the flat record matches a leaf-typed parameter, and the
-// deeper record is the one the fences must enforce. Equal-depth
-// records are overwritten (last write wins; the per-pass evaluation
-// order is deterministic).
+// key): EVERY distinct record is kept, because the flat record matches
+// a helper parameter declared as the leaf type while the nested record
+// matches one declared as the OUTER carrier type, and dropping either
+// silences one enforcement direction. Identical records dedupe so the
+// fixpoint stabilizes.
 func (pf *pageFlow) setFieldAlias(target *funcSummary, key fieldSlotKey, rec fieldSlotAlias) {
 	if target.fieldAliases == nil {
-		target.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
+		target.fieldAliases = map[fieldSlotKey][]fieldSlotAlias{}
 	}
-	if cur, ok := target.fieldAliases[key]; ok {
-		if strings.Count(cur.path, ".") > strings.Count(rec.path, ".") {
+	for _, cur := range target.fieldAliases[key] {
+		if cur == rec {
 			return
 		}
 	}
-	target.fieldAliases[key] = rec
+	target.fieldAliases[key] = append(target.fieldAliases[key], rec)
 }
 
 // seedStructComposite records formal-bound fields of a struct
@@ -5357,7 +5370,15 @@ func (pf *pageFlow) seedStructCompositeAt(st *stmtState, target *funcSummary, li
 			key := fieldSlotKey{typ: k, field: field}
 			pf.setFieldAlias(target, key, fieldSlotAlias{slot: slot, path: path})
 		}
-		if child, isLit := unparen(val).(*ast.CompositeLit); isLit {
+		cv := unparen(val)
+		if ue, isUe := cv.(*ast.UnaryExpr); isUe && ue.Op == token.AND {
+			// Pointer-element carriers (w := pw{p: &pn{cb: fn}}): the
+			// pointee composite seeds the leaf record with the same
+			// path step, so a consumer reading w.p.cb matches the
+			// outer-typed helper parameter.
+			cv = unparen(ue.X)
+		}
+		if child, isLit := cv.(*ast.CompositeLit); isLit {
 			pf.seedStructCompositeAt(st, target, child, pf.joinPath(path, k, field))
 			continue
 		}
@@ -5372,7 +5393,11 @@ func (pf *pageFlow) seedStructCompositeAt(st *stmtState, target *funcSummary, li
 			if !single || taken || init == nil {
 				continue
 			}
-			if child, isLit := unparen(init).(*ast.CompositeLit); isLit {
+			iv := unparen(init)
+			if ue, isUe := iv.(*ast.UnaryExpr); isUe && ue.Op == token.AND {
+				iv = unparen(ue.X)
+			}
+			if child, isLit := iv.(*ast.CompositeLit); isLit {
 				pf.seedStructCompositeAt(st, target, child, pf.joinPath(path, k, field))
 			}
 		}
@@ -5432,12 +5457,14 @@ func (pf *pageFlow) callResultAlias(st *stmtState, fs *funcSummary, x ast.Expr, 
 		return pf.resolveFuncValue(st, fs, call.Args[p], seen)
 	}
 	if fk, ok := cfs.returnFieldKeys[0]; ok && fk != multiReturnKey {
-		r, ok := fs.fieldAliases[fk]
-		if !ok || r.forwarded {
-			return callbackAlias{}, false
+		for _, r := range fs.fieldAliases[fk] {
+			if !r.forwarded {
+				return callbackAlias{slot: r.slot, forwarded: nil}, true
+			}
 		}
-		return callbackAlias{slot: r.slot, forwarded: nil}, true
+		return callbackAlias{}, false
 	}
+
 	return callbackAlias{}, false
 }
 
@@ -6142,14 +6169,35 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 				fs.callbackAliases[obj] = callbackAlias{slot: idx}
 			}
 		case *ast.SelectorExpr:
-			// h.f = fn: the field holds the formal; a later h.f(...)
-			// invocation carries the formal slot. Only plain field
+			// h.f = fn, and t.m.cb = fn: the field (or nested leaf
+			// field) holds the formal; a later invocation carries the
+			// formal slot. Nested destinations record the steps from
+			// the destination ROOT down to the leaf's host struct
+			// (t.m.cb = fn records {mL,"cb"} with the path "<tL>.m")
+			// so the cross-function composition matches a callee
+			// parameter declared as the outer type. Only plain field
 			// selections count (method-value writes cannot name a
 			// storage slot). The canonical type key lets a caller's
 			// anonymous struct value match a helper's named parameter
 			// carrying the same field across functions.
 			if key, ok := pf.fieldSlotKeyOf(pf.pc.info, l); ok {
-				pf.setFieldAlias(fs, key, fieldSlotAlias{slot: idx})
+				path := ""
+				for e := unparen(l.X); ; {
+					sel, isSel := unparen(e).(*ast.SelectorExpr)
+					if !isSel {
+						break
+					}
+					if k2, ok := pf.fieldSlotKeyOf(pf.pc.info, sel); ok {
+						step := k2.typ + "." + k2.field
+						if path == "" {
+							path = step
+						} else {
+							path += "/" + step
+						}
+					}
+					e = sel.X
+				}
+				pf.setFieldAlias(fs, key, fieldSlotAlias{slot: idx, path: path})
 			}
 		case *ast.IndexExpr, *ast.IndexListExpr:
 			// arr[0] = fn: the indexed slot holds the formal. The
@@ -6421,6 +6469,29 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 						}
 						continue
 					}
+				}
+				// A call returned unchanged: h2(g) { return h1(g) }
+				// forwards one of the called helper's OWN return
+				// positions. Resolve EAGERLY against this function's
+				// own frame (the call's arguments are its expressions):
+				// once the called helper's return summary has settled
+				// (a later fixpoint pass), the result records the
+				// parameter slot of THIS function, which the callers
+				// resolve without seeing the callee's frame.
+				if call, isCall := e.(*ast.CallExpr); isCall {
+					al, alok := pf.callResultAlias(st, fs, call, make(map[*ast.CallExpr]bool))
+					if alok {
+						if fs.returnSlotAliases == nil {
+							fs.returnSlotAliases = map[int]int{}
+						}
+						if cur, isCur := fs.returnSlotAliases[i]; isCur && cur != al.slot {
+							fs.returnSlotAliases[i] = -2
+						} else {
+							fs.returnSlotAliases[i] = al.slot
+						}
+						continue
+					}
+					continue
 				}
 				// A func-typed parameter (or recorded alias of one)
 				// returned unchanged: func id(f F) F { return f } as a
@@ -6855,7 +6926,7 @@ func (pf *pageFlow) recordFieldAliasComposition(st *stmtState, call *ast.CallExp
 	// key (directly or forwarded) for the callee's invocation to be part
 	// of the callback flow.
 	for fk, byteSlots := range fs.fieldInvokes {
-		if _, ok := st.activeFS.fieldAliases[fk]; !ok {
+		if len(st.activeFS.fieldAliases[fk]) == 0 {
 			continue
 		}
 		internal := false
@@ -6922,22 +6993,31 @@ func (pf *pageFlow) recordFieldAliasComposition(st *stmtState, call *ast.CallExp
 	// for moduleFieldCarrier and the param-sourced suppression to see
 	// it. Only direct callee records pull up; forwarded records stay
 	// anchored at the store call sites that own the enforcement.
-	for fk, r := range fs.fieldAliases {
-		if r.forwarded {
-			continue
+	for fk, recs := range fs.fieldAliases {
+		for _, r := range recs {
+			if r.forwarded {
+				continue
+			}
+			src := slotExpr(r.slot)
+			if src == nil {
+				continue
+			}
+			cs, ok := pf.slotOfExpr(st, st.activeFS, src)
+			if !ok {
+				continue
+			}
+			hasDirect := false
+			for _, cur := range st.activeFS.fieldAliases[fk] {
+				if cur == (fieldSlotAlias{slot: cs, path: r.path}) {
+					hasDirect = true
+					break
+				}
+			}
+			if hasDirect {
+				continue
+			}
+			pf.setFieldAlias(st.activeFS, fk, fieldSlotAlias{slot: cs, path: r.path})
 		}
-		src := slotExpr(r.slot)
-		if src == nil {
-			continue
-		}
-		cs, ok := pf.slotOfExpr(st, st.activeFS, src)
-		if !ok {
-			continue
-		}
-		if cur, ok := st.activeFS.fieldAliases[fk]; ok && !cur.forwarded {
-			continue
-		}
-		pf.setFieldAlias(st.activeFS, fk, fieldSlotAlias{slot: cs, path: r.path})
 	}
 	// (b) forward caller carrier records into the callee: every callee
 	// parameter (receiver included) whose canonical struct type matches
@@ -6953,29 +7033,38 @@ func (pf *pageFlow) recordFieldAliasComposition(st *stmtState, call *ast.CallExp
 	// callback at o.in.cb): the path's first step names that outer
 	// type, and the leaf key stays the field the callee actually
 	// invokes.
-	for fk, rec := range st.activeFS.fieldAliases {
-		want := fk.typ
-		if rec.path != "" {
-			if i := strings.IndexByte(rec.path, '.'); i > 0 {
-				want = rec.path[:i]
+	for fk, recs := range st.activeFS.fieldAliases {
+		for _, rec := range recs {
+			want := fk.typ
+			if rec.path != "" {
+				if i := strings.IndexByte(rec.path, '.'); i > 0 {
+					want = rec.path[:i]
+				}
 			}
-		}
-		n := len(call.Args) + argOff
-		if recvExpr != nil {
-			n++
-		}
-		for slot := 0; slot < n; slot++ {
-			if calleeParamType(slot) != want {
-				continue
+			n := len(call.Args) + argOff
+			if recvExpr != nil {
+				n++
 			}
-			if cur, ok := fs.fieldAliases[fk]; ok && !cur.forwarded {
+			for slot := 0; slot < n; slot++ {
+				if calleeParamType(slot) != want {
+					continue
+				}
+				dup := false
+				for _, cur := range fs.fieldAliases[fk] {
+					if !cur.forwarded || cur == (fieldSlotAlias{slot: slot, forwarded: true, path: rec.path}) {
+						dup = true
+						break
+					}
+				}
+				if dup {
+					break
+				}
+				if fs.fieldAliases == nil {
+					fs.fieldAliases = map[fieldSlotKey][]fieldSlotAlias{}
+				}
+				fs.fieldAliases[fk] = append(fs.fieldAliases[fk], fieldSlotAlias{slot: slot, forwarded: true, path: rec.path})
 				break
 			}
-			if fs.fieldAliases == nil {
-				fs.fieldAliases = map[fieldSlotKey]fieldSlotAlias{}
-			}
-			fs.fieldAliases[fk] = fieldSlotAlias{slot: slot, forwarded: true, path: rec.path}
-			break
 		}
 	}
 }
@@ -7099,11 +7188,20 @@ func (pf *pageFlow) recordReturnCarrierComposition(st *stmtState, call *ast.Call
 			}
 			slot = s
 		} else if rc.srcRead {
-			r, ok := st.activeFS.fieldAliases[rc.srcKey]
-			if !ok || r.forwarded {
+			found := false
+			for _, r := range st.activeFS.fieldAliases[rc.srcKey] {
+				if r.forwarded {
+					continue
+				}
+				if rc.path != "" && r.path != rc.path {
+					continue
+				}
+				slot, found = r.slot, true
+				break
+			}
+			if !found {
 				continue
 			}
-			slot = r.slot
 		} else {
 			continue
 		}
@@ -9105,8 +9203,16 @@ func varDefOf(info *types.Info, body *ast.BlockStmt, obj types.Object) (ast.Expr
 		}
 		return true
 	})
-	if taken || count != 1 {
+	if count != 1 {
 		return nil, false, taken
+	}
+	if taken {
+		// The variable may still hold its single definition (the
+		// address was taken but the value may be unchanged), so return
+		// the initializer with the taken flag: callers that resolve
+		// deliberately (calleeExprFunc, method values) stay fail-closed
+		// through the resolved summary instead of dropping the chain.
+		return init, false, true
 	}
 	return init, true, false
 }
@@ -9114,10 +9220,15 @@ func varDefOf(info *types.Info, body *ast.BlockStmt, obj types.Object) (ast.Expr
 // calleeExprFunc resolves a call's callee expression to the scanned
 // module function it provably names: a package function identifier, a
 // method selector, or a LOCAL func-typed variable whose single
-// never-address-taken definition binds one of those (g := passthrough;
-// cb := g(fn) and mv := s.getCB; cb := mv() launch the same closure
-// values as the direct spellings). Chained locals and conversion/unwrap
-// expressions resolve recursively.
+// definition binds one of those (g := passthrough; cb := g(fn) and
+// mv := s.getCB; cb := mv() launch the same closure values as the
+// direct spellings). The local resolution also follows address-taken
+// single-definition locals (p := &g does not prove g was exchanged),
+// func-typed struct fields bound through a composite definition
+// (h := car{g: passthrough}; cb := h.g(fn)), and func-typed indexed
+// container slots (arr := [1]func{...}{passthrough}; cb := arr[0](fn)).
+// Chained locals, field/selector chains, conversion/unwrap expressions,
+// and call-result wrappers resolve recursively.
 func (pf *pageFlow) calleeExprFunc(st *stmtState, x ast.Expr) (*types.Func, bool) {
 	for {
 		e := unparen(x)
@@ -9142,13 +9253,33 @@ func (pf *pageFlow) calleeExprFunc(st *stmtState, x ast.Expr) (*types.Func, bool
 				return nil, false
 			}
 			init, single, taken := varDefOf(pf.pc.info, st.fd.Body, v)
-			if !single || taken || init == nil {
+			if init == nil || (!single && !taken) {
 				return nil, false
 			}
 			x = init
 		case *ast.SelectorExpr:
-			f, ok := pf.pc.info.Uses[t.Sel].(*types.Func)
-			return f, ok
+			if f, ok := pf.pc.info.Uses[t.Sel].(*types.Func); ok {
+				return f, true
+			}
+			// A func-typed FIELD called through a receiver whose
+			// binding provably holds a function value (h :=
+			// car{g: passthrough}; cb := h.g(fn)): extract the bound
+			// value and keep resolving.
+			if v, ok := pf.pc.info.Uses[t.Sel].(*types.Var); ok && funcSignature(v.Type()) != nil {
+				if val, ok := pf.fieldBoundValue(st, t.X, t.Sel.Name); ok {
+					x = val
+					continue
+				}
+			}
+			return nil, false
+		case *ast.IndexExpr:
+			// A func-typed container slot called through a constant
+			// index (arr := [1]func{...}{passthrough}; cb := arr[0](fn)).
+			if val, ok := pf.indexBoundValue(st, t); ok {
+				x = val
+				continue
+			}
+			return nil, false
 		case *ast.CallExpr:
 			// The func-typed value is the call's own callee (a local
 			// bound to passthrough(x) still names passthrough).
@@ -9157,6 +9288,135 @@ func (pf *pageFlow) calleeExprFunc(st *stmtState, x ast.Expr) (*types.Func, bool
 			return nil, false
 		}
 	}
+}
+
+// exprCompositeLit resolves an expression to the struct/array composite
+// literal its provable value binds: a literal itself (optionally
+// parenthesized or address-taken), a local's single definition, or a
+// field of such a composite read through a selector chain. The
+// resolution deliberately follows address-taken single-definition
+// locals (the value may still be the literal) so the callee fence
+// stays fail-closed instead of dropping the chain.
+func (pf *pageFlow) exprCompositeLit(st *stmtState, x ast.Expr) (*ast.CompositeLit, bool) {
+	for {
+		e := unparen(x)
+		if ue, isUe := e.(*ast.UnaryExpr); isUe && ue.Op == token.AND {
+			e = unparen(ue.X)
+		}
+		switch t := e.(type) {
+		case *ast.CompositeLit:
+			return t, true
+		case *ast.Ident:
+			obj := pf.pc.info.ObjectOf(t)
+			if obj == nil || st == nil || st.fd == nil || st.fd.Body == nil {
+				return nil, false
+			}
+			init, single, taken := varDefOf(pf.pc.info, st.fd.Body, obj)
+			if init == nil || (!single && !taken) {
+				return nil, false
+			}
+			x = init
+		case *ast.SelectorExpr:
+			if _, ok := pf.pc.info.Uses[t.Sel].(*types.Var); ok {
+				val, ok := pf.fieldBoundValue(st, t.X, t.Sel.Name)
+				if !ok {
+					return nil, false
+				}
+				x = val
+				continue
+			}
+			return nil, false
+		default:
+			return nil, false
+		}
+	}
+}
+
+// fieldBoundValue extracts the value bound to a struct field from the
+// composite literal its receiver provably binds (h := car{g:
+// passthrough} then h.g; chains like h.a.g resolve recursively).
+func (pf *pageFlow) fieldBoundValue(st *stmtState, x ast.Expr, field string) (ast.Expr, bool) {
+	lit, ok := pf.exprCompositeLit(st, x)
+	if !ok {
+		return nil, false
+	}
+	t := pf.pc.info.TypeOf(lit)
+	if t == nil {
+		return nil, false
+	}
+	var styp *types.Struct
+	switch u := types.Unalias(t).(type) {
+	case *types.Struct:
+		styp = u
+	case *types.Named:
+		if su, ok := u.Underlying().(*types.Struct); ok {
+			styp = su
+		}
+	}
+	if styp == nil {
+		return nil, false
+	}
+	for i, el := range lit.Elts {
+		var fname string
+		var val ast.Expr
+		if kv, isKV := el.(*ast.KeyValueExpr); isKV {
+			fid, isID := unparen(kv.Key).(*ast.Ident)
+			if !isID {
+				continue
+			}
+			fname, val = fid.Name, kv.Value
+		} else {
+			if i >= styp.NumFields() {
+				return nil, false
+			}
+			fname, val = styp.Field(i).Name(), el
+		}
+		if fname == field {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
+// indexBoundValue extracts the value bound at a constant index of a
+// container composite (arr := [1]func{...}{passthrough}; arr[0]).
+func (pf *pageFlow) indexBoundValue(st *stmtState, ix *ast.IndexExpr) (ast.Expr, bool) {
+	idx, ok := pf.constIndex(ix.Index)
+	if !ok {
+		return nil, false
+	}
+	lit, ok := pf.exprCompositeLit(st, ix.X)
+	if !ok {
+		return nil, false
+	}
+	positional := int64(0)
+	for _, el := range lit.Elts {
+		if kv, isKV := el.(*ast.KeyValueExpr); isKV {
+			kid, kok := pf.constIndex(kv.Key)
+			if !kok {
+				continue
+			}
+			if kid == idx {
+				return kv.Value, true
+			}
+			continue
+		}
+		if positional == idx {
+			return el, true
+		}
+		positional++
+	}
+	return nil, false
+}
+
+// constIndex evaluates an expression to a constant integer index.
+func (pf *pageFlow) constIndex(e ast.Expr) (int64, bool) {
+	if tv, ok := pf.pc.info.Types[unparen(e)]; ok && tv.Value != nil && tv.Value.Kind() == constant.Int {
+		if n, ok := constant.Int64Val(tv.Value); ok {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // resultHoldsPage reports whether a call result type could itself be a

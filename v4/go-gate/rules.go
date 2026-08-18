@@ -1272,8 +1272,14 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		if !ok {
 			continue
 		}
-		rec, recOK := encl.fieldAliases[fk]
-		if !recOK || rec.forwarded {
+		recs := encl.fieldAliases[fk]
+		direct := recs[:0]
+		for _, r := range recs {
+			if !r.forwarded {
+				direct = append(direct, r)
+			}
+		}
+		if len(direct) == 0 {
 			// The current implementation never bound this carrier key
 			// (or only forwards it), so no sanctioned callback exists
 			// for the field callee inside the callee's body: a CONCRETE
@@ -1301,6 +1307,8 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		// summary layout, receiver at slot 0. A nested carrier record
 		// matches a parameter declared as the OUTER carrier type (the
 		// path's first step); a flat record matches the leaf key type.
+		// Every direct record for the key is tried: the same key bound
+		// flat AND nested keeps both enforcements alive.
 		sig, _ := fn.Type().(*types.Signature)
 		if sig == nil {
 			continue
@@ -1320,36 +1328,38 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 			}
 			return nil
 		}
-		want := fk.typ
-		if rec.path != "" {
-			if i := strings.IndexByte(rec.path, '.'); i > 0 {
-				want = rec.path[:i]
-			}
-		}
 		n := sig.Params().Len()
 		if sig.Recv() != nil {
 			n++
 		}
-		for slot := 0; slot < n; slot++ {
-			pt := typeAt(slot)
-			if pt == nil || w.pc.pf.canonFieldType(pt) != want {
-				continue
+		for _, rec := range direct {
+			want := fk.typ
+			if rec.path != "" {
+				if i := strings.IndexByte(rec.path, '.'); i > 0 {
+					want = rec.path[:i]
+				}
 			}
-			carrierArg, ok := argAt(slot)
-			if !ok {
-				continue
-			}
-			for _, bs := range byteSlots {
-				ba, ok := argAt(bs)
+			for slot := 0; slot < n; slot++ {
+				pt := typeAt(slot)
+				if pt == nil || w.pc.pf.canonFieldType(pt) != want {
+					continue
+				}
+				carrierArg, ok := argAt(slot)
 				if !ok {
 					continue
 				}
-				if pv := w.pageValue(ba); !pv.mapped && !w.compositeCarrierMapped(ba) {
-					w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", w.carrierText(carrierArg), calleeText(v.Fun))
-					break
+				for _, bs := range byteSlots {
+					ba, ok := argAt(bs)
+					if !ok {
+						continue
+					}
+					if pv := w.pageValue(ba); !pv.mapped && !w.compositeCarrierMapped(ba) {
+						w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", w.carrierText(carrierArg), calleeText(v.Fun))
+						break
+					}
 				}
+				break
 			}
-			break
 		}
 	}
 }
@@ -1378,14 +1388,16 @@ func (w *fileRules) paramOf(e ast.Expr) bool {
 }
 
 // methodValueCarriesCallback reports whether a func-typed call argument
-// is a method value whose body invokes a struct field the enclosing
-// store implementation bound to its callback formal (h := car{cb: fn};
-// runCb(h.run, ...): the method value forwards the callback, so the
-// byte arguments at the call site must be mapped views). A local
+// is a method value or method expression whose body invokes a struct
+// field the enclosing store implementation bound to its callback
+// formal (h := car{cb: fn}; runCb(h.run, ...) and
+// runCbME((*car).run, h, ...): the method forwards the callback, so
+// the byte arguments at the call site must be mapped views). A local
 // initialized to the method value (mv := h.run) resolves through its
-// single never-address-taken definition. The second result reports
-// that the method invokes the bound field with buffers its own body
-// mints, which fails closed at the call site.
+// single definition, address-taken included (the value may still be
+// the method). The second result reports that the method invokes the
+// bound field with buffers its own body mints, which fails closed at
+// the call site.
 func (w *fileRules) methodValueCarriesCallback(e ast.Expr) (bool, bool) {
 	if w.pc.pf == nil || w.curFunc == nil {
 		return false, false
@@ -1396,7 +1408,7 @@ func (w *fileRules) methodValueCarriesCallback(e ast.Expr) (bool, bool) {
 			return false, false
 		}
 		init, single, taken := varDefOf(w.pc.info, w.curFunc.Body, obj)
-		if !single || taken || init == nil {
+		if init == nil || (!single && !taken) {
 			return false, false
 		}
 		return w.methodValueCarriesCallback(init)
@@ -1406,7 +1418,7 @@ func (w *fileRules) methodValueCarriesCallback(e ast.Expr) (bool, bool) {
 		return false, false
 	}
 	recv, isSel := w.pc.info.Selections[sel]
-	if !isSel || recv.Kind() != types.MethodVal {
+	if !isSel || (recv.Kind() != types.MethodVal && recv.Kind() != types.MethodExpr) {
 		return false, false
 	}
 	mfn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
@@ -1431,8 +1443,10 @@ func (w *fileRules) methodValueCarriesCallback(e ast.Expr) (bool, bool) {
 			internal = true
 			continue
 		}
-		if r, ok := encl.fieldAliases[fk]; ok && !r.forwarded {
-			return true, internal
+		for _, r := range encl.fieldAliases[fk] {
+			if !r.forwarded {
+				return true, internal
+			}
 		}
 	}
 	// The method value forwards a field no key of which the current
@@ -1591,13 +1605,11 @@ func (w *fileRules) storeCallbackCallee(v *ast.CallExpr) bool {
 		return w.approvedFuncParamVar(obj) || w.paramAliasedFuncVar(obj, 0) ||
 			w.recordedCallbackAlias(obj) || w.forwardsCallbackFormal(v)
 	case *ast.SelectorExpr:
-		if w.fieldHoldsCallbackFormal(f) {
-			return true
-		}
-		if fld, isFld := w.pc.info.Uses[f.Sel].(*types.Var); isFld && funcSignature(fld.Type()) != nil {
-			return true
-		}
-		return false
+		// Only a field the current implementation PROVABLY bound to
+		// its callback formal is sanctioned: a bare func-typed field
+		// (hook, decorator, never-assigned handler) has an unprovable
+		// body, and a mapped page must not enter it (the P336 class).
+		return w.fieldHoldsCallbackFormal(f)
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		return w.indexHoldsCallbackFormal(f)
 	case *ast.TypeAssertExpr:
@@ -1660,8 +1672,12 @@ func (w *fileRules) fieldHoldsCallbackFormal(sel *ast.SelectorExpr) bool {
 	if !ok {
 		return false
 	}
-	r, ok := encl.fieldAliases[key]
-	return ok && !r.forwarded
+	for _, r := range encl.fieldAliases[key] {
+		if !r.forwarded {
+			return true
+		}
+	}
+	return false
 }
 
 // moduleFieldCarrier returns the canonical field key of e (a plain
@@ -1690,8 +1706,10 @@ func (w *fileRules) moduleFieldCarrier(key fieldSlotKey) bool {
 			if !storeCallbackMethod(name) {
 				continue
 			}
-			if r, ok := fs.fieldAliases[key]; ok && !r.forwarded {
-				return true
+			for _, r := range fs.fieldAliases[key] {
+				if !r.forwarded {
+					return true
+				}
 			}
 		}
 		return false
@@ -1867,7 +1885,7 @@ func (w *fileRules) callResultHoldsCallbackFormal(fun ast.Expr) bool {
 			break
 		}
 		init, single, taken := varDefOf(w.pc.info, w.curFunc.Body, obj)
-		if !single || taken || init == nil {
+		if init == nil || (!single && !taken) {
 			break
 		}
 		callee = init
@@ -1877,8 +1895,12 @@ func (w *fileRules) callResultHoldsCallbackFormal(fun ast.Expr) bool {
 			if fk == multiReturnKey {
 				return true
 			}
-			r, ok := encl.fieldAliases[fk]
-			return ok && !r.forwarded
+			for _, r := range encl.fieldAliases[fk] {
+				if !r.forwarded {
+					return true
+				}
+			}
+			return false
 		}
 		if p, ok := fs.returnSlotAliases[0]; ok {
 			if p == -2 {

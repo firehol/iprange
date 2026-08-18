@@ -1081,6 +1081,142 @@ Battery: 630 -> 636 cases (538 rejections, 98 benign acceptances), zero misses u
 zero honest/control over-rejections; real module scan rc=0; go test ./..., -race, vet,
 gofmt, import-graph boundary check, and GOOS=windows cross build all green.
 
+### Round 3 second delta (2026-08-17, level-1 re-review of the round-2 fixes; working tree at ef10446)
+
+The five level-1 aspect reviewers (Jason, Linnaeus, Peirce, Sartre,
+Leibniz) re-audited the round-2 delta on the working tree and returned
+five further callback-escape classes, all probe-verified by the lead:
+
+- Peirce: local func-typed callees. g := passthrough; cb := g(fn) with
+  cb(out, out) and mv := s.getCB; cb := mv() lost the formal binding
+  because callResultAlias and the rules pass only resolved the callee
+  when the call expression was a selector or free function, not a local
+  func-typed variable. Fixed: both passes resolve a local func-typed
+  callee through its single never-address-taken definition
+  (varDefOf/calleeExprFunc) before applying the scanned summary.
+- Jason: nested carriers. o := outerJL{in: carJ1{cb: fn}} followed by
+  runOuterJL(o, out, out), the three-level form
+  runTopJM(topJM{midJM{outerJL{...}}}, out, out), the inner-field
+  setter var o outer; o.in = car{cb: fn}, and the positional
+  local-bound form o := outer{car{fn}} all escaped: the leaf field
+  record had no path, so the helper fence never matched the callee
+  parameter declared as the OUTER carrier type. Fixed: fieldSlotAlias
+  and returnCarrierField carry a carrier path (outer-to-inner field
+  steps); seedStructCompositeAt recurses into nested literals and
+  local-held composites; setFieldAlias keeps the longest path per
+  field key (the nested record matches the outer-typed parameter, the
+  flat record matches the leaf-typed one); the rules pass matches the
+  callee parameter through the path's first step.
+- Linnaeus: address-taken alias chains and method-value carriers.
+  cb := fn; p := &cb; cb2 := cb with a later launch lost the formal via
+  the address-taken paramAliases guard, and runCb(h.run, ...) was not
+  recognized as forwarding the bound carrier field. Fixed: record()
+  keeps paramAliases across address-taken/reassignment (only
+  callbackAliases stay guarded); methodValueCarriesCallback resolves
+  method values bound to locals (mv := h.run) and marks internal
+  method bodies fail-closed; checkStoreCallbackViews runs the carrier
+  invocation loop for method values.
+- Sartre: module-wide carrier suppression was over-broad. A concrete
+  mapped page entering a field callee whose carrier key the enclosing
+  store implementation never bound (runCar(car{cb: nop}, v))
+  previously fell into the suppression path and was accepted. Fixed:
+  when the current implementation has no direct record for the
+  carrier key, a concrete mapped page entering the field callee FAILS
+  (parameter-sourced views stay legal - the decision belongs to the
+  store call sites upward).
+- Honest-twin over-rejection (JP3 class): cb(x, y) with mapped views
+  after a passthrough was double-flagged by the generic unproven-callee
+  transfer fence. Fixed: storeCallbackCallee sanctions invocations of
+  the store callback itself (formal, alias, carrier field, indexed
+  slot, asserted holder, call-result wrapper) inside store callback
+  implementations; the owned-view direction stays policed by
+  checkStoreCallbackViews.
+
+Pinned durably as P327 (local func-var passthrough liar), P328
+(local-bound method-value getter liar), P329 (keyed nested carrier
+liar), P330 (three-level nested carrier liar), P331 (inner-field setter
+liar), P332 (local-bound nested carrier liar), P333 (method-value launch
+liar), P334 (delegated address-taken chain liar), P335 (local method-
+value launch liar), P336 (mapped mint into an unrelated carrier field
+callee), P337-P339 (benign honest twins of the same classes with
+mapped views). All seven liar snippets without the full Store method
+set were completed with the standard stubs so the probe type-checks
+(P327/P329-P333/P335 - the earlier two MISSes were snippet type errors,
+not scanner gaps).
+
+Battery: 636 -> 649 cases (548 rejections, 101 benign acceptances),
+zero misses under --self-test-jobs 24 (~2:10 wall). Probe modules:
+every expected round-3 liar flags (probe_jm.go:16/31/49/67,
+probe_jp.go:20/39, probe_jn.go:17/33, probe_jh.go carrier helpers,
+probe_r14.go delegated/method-value/address-taken forms, probe_ji.go
+nested carriers) and every honest twin passes (probe_jm.go:89,
+probe_jp.go:62, r14e/r14d, probe_jh.go:73, probe_jl.go:174,
+probe_jn.go:55 over-rejections from HEAD are gone). Real module scan
+rc=0; go test ./..., -race, vet, gofmt, import-graph boundary check,
+and GOOS=windows/darwin cross builds all green. The round-3 code
+fixes were committed and pushed as HEAD e7bc666 (this SOW record was
+written against the pre-commit tree).
+
+### Round 3 third delta (2026-08-18, level-1 re-review of the round-3
+fixes; working tree at e7bc666)
+
+The level-1 reviewers (Jason, Linnaeus, Peirce, Sartre; the Leibniz
+session returned incoherent output twice and was not reused, so its
+aspect coverage is reduced) re-audited the round-3 delta and returned
+eight further callback-escape classes, all probe-verified by the lead:
+
+- Linnaeus (nested carriers): a pointer-element composite carrier
+  w := pw{p: &pn{cb: fn}} and the nested inner-field setter
+  var t T; t.m.cb = fn silently lost the formal binding. Fixed:
+  fieldSlotAlias keeps multiple path records per field key (deduped,
+  no longest-path-wins), recordSlot records the nested destination
+  path, and seedStructCompositeAt unwraps &CompositeLit so the leaf
+  record carries the outer-to-inner path.
+- Peirce (local callees): passthrough behind an address-taken local,
+  a struct field, and an indexed slot silently escaped. Fixed:
+  calleeExprFunc resolves address-taken single-definition locals, and
+  exprCompositeLit/fieldBoundValue/indexBoundValue/constIndex resolve
+  func-typed fields and index slots bound through composite literals.
+- Sartre (store-callback fences): intra-package method expressions
+  (*T).m as callback carriers were fully silent, including mixed
+  mapped+owned laundering. Fixed: methodValueCarriesCallback accepts
+  types.MethodExpr and method-expression launches enforce mapped
+  views at the call site.
+- Jason (cross-cutting soundness): storeCallbackCallee exempted any
+  func-typed struct field, so a mapped mint through an unrelated
+  field was silent; a flat+nested same-key collision dropped the flat
+  record; and multi-hop return h1(g) call-return resolution was
+  missing. Fixed: the SelectorExpr sanction was narrowed to
+  fieldHoldsCallbackFormal only, the field-alias enforcement loop now
+  iterates every direct record, and ReturnStmt resolves call returns
+  eagerly through callResultAlias so helper summaries settle over the
+  fixpoint passes.
+
+Pinned durably as P340-P356 (17 pins): P340/P341 pointer-element
+carrier liar/honest, P342/P343 nested inner-field setter liar/honest,
+P344/P345 address-taken local passthrough liar/honest, P346 struct-
+field-held passthrough liar, P347 indexed-slot passthrough liar,
+P348/P349 multi-hop return-call liar/honest, P350/P351/P352 method-
+expression owned/mixed/honest, P353 unrelated store-struct field
+direct mapped mint, P354 unrelated local carrier direct mapped mint,
+P355/P356 flat+nested same-key liar/honest.
+
+Battery: 649 -> 666 cases (559 rejections, 107 benign acceptances),
+zero misses under --self-test-jobs 24 (~2:10 wall). Probe modules:
+every expected round-3.5 liar flags (probe_ln15.go:29/61,
+probe_jl_e1.go:21/41/57/101, probe_q1.go:25, probe_q2.go:30,
+probe_q3.go:27, probe_q9.go:25, probe_r17.go:27/48/66,
+probe_qa.go:50) and every honest twin passes, including the two
+full-module honest twins re-checked after the isolation delta
+(probe_jl_e1.go:83 mapped-view twin and probe_qa.go:25 mapped-view
+multi-hop twin are both clean in the full probe module with the final
+scanner, matching their battery-isolated P345/P349 pins).
+probe_ln15.go:82 (interface type-erasure note) is pre-existing at
+HEAD e7bc666 and unchanged - a probe-harness artifact, not a scanner
+regression. Real module scan rc=0; go test ./..., -race, vet, gofmt,
+import-graph boundary check, and GOOS=windows/darwin cross builds all
+green. Committed with this SOW record.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
