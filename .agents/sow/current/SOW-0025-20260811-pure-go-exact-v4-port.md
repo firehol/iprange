@@ -1757,7 +1757,9 @@ Dispositions:
 - glm P3 (post-sync FileSize, crash tests pending, previousTxn=0,
   unprovedTailEnd) - accepted as already recorded; the stale
   chunk-4 header GLM flagged is corrected in this record.
-Re-review with glm dispatched at the corrected record.
+Re-review at the corrected record: glm PASS, confirming the P1
+refutation (Rust publication.rs publish unchecked multiply) and the
+corrected header; chunk 4 level-2 gate closes 4/4 PASS.
 
 ### Gate execution record (2026-08-12)
 
