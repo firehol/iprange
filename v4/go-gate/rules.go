@@ -589,22 +589,25 @@ func isFileNamed(n *types.Named) bool {
 }
 
 // approvedModuleInterfaces is the explicit set of module-internal
-// interfaces whose dispatch is an approved indirection. The four names
+// interfaces whose dispatch is an approved indirection. The seven names
 // are the writer's whole store/codec surface: tree.Store and
-// RetiringStore (COW mutation), bitmap.BitmapStore (free-page authority),
-// and tree.Codec (per-tree wire contract). Approval is by (package,
-// name), never by declaration site: an interface declared in a
-// module-internal package can be satisfied by an OUT-OF-MODULE type
-// (stdlib or a future dependency) whose method body the gate cannot
-// scan, so a general declaration-based approval would let a full mapped
-// page launder into owned memory with no diagnostics. The four named
-// interfaces are safe to approve because no type outside the scanned
-// source satisfies their method sets today: Codec references
-// module-internal types (tree.Key), and the Store-family method names
-// plus exact signatures exist nowhere in the standard library or x/sys.
-// Any new interface must be added here together with its satisfier
-// argument before its dispatch becomes approved; otherwise it keeps
-// failing closed everywhere.
+// RetiringStore (COW mutation), tree.LocalGap (gap-callback cells),
+// bitmap.BitmapStore (free-page authority), tree.Codec (per-tree wire
+// contract), writer.rangeFamily (per-family range codec over Codec),
+// and writer.RangeStore (range value accounting over RetiringStore).
+// Approval is by (package, name), never by declaration site: an
+// interface declared in a module-internal package can be satisfied by an
+// OUT-OF-MODULE type (stdlib or a future dependency) whose method body
+// the gate cannot scan, so a general declaration-based approval would
+// let a full mapped page launder into owned memory with no diagnostics.
+// The named interfaces are safe to approve because no type outside the
+// scanned source satisfies their method sets today: Codec, LocalGap and
+// rangeFamily reference module-internal types (tree.Key, tree.LocalPrevious,
+// LocalNext, rangeRecord), and the Store-family method names plus exact
+// signatures exist nowhere in the standard library or x/sys. Any new
+// interface must be added here together with its satisfier argument
+// before its dispatch becomes approved; otherwise it keeps failing
+// closed everywhere.
 var approvedModuleInterfaces = []struct {
 	path string
 	name string
@@ -612,7 +615,10 @@ var approvedModuleInterfaces = []struct {
 	{"github.com/firehol/iprange/v4/go/internal/tree", "Codec"},
 	{"github.com/firehol/iprange/v4/go/internal/tree", "Store"},
 	{"github.com/firehol/iprange/v4/go/internal/tree", "RetiringStore"},
+	{"github.com/firehol/iprange/v4/go/internal/tree", "LocalGap"},
 	{"github.com/firehol/iprange/v4/go/internal/bitmap", "BitmapStore"},
+	{"github.com/firehol/iprange/v4/go/internal/writer", "rangeFamily"},
+	{"github.com/firehol/iprange/v4/go/internal/writer", "RangeStore"},
 }
 
 // isStoreCallbackImpl reports whether the enclosing function is an
@@ -639,7 +645,7 @@ func (w *fileRules) isStoreCallbackImpl() bool {
 	return false
 }
 
-// approvedStoreInterfaces resolves the four approved store/codec
+// approvedStoreInterfaces resolves the approved store/codec
 // interfaces from the scanned module (approvedModuleInterfaces maps
 // import path -> interface name); the resolution is cached per scanned
 // package. An unresolvable name fails closed: the module cannot be

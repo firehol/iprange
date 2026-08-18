@@ -95,3 +95,16 @@ func BytesZeroed(uint64) {}
 // FirstFenceUpdate counts one branch first-key (fence) update during a
 // split or delete propagation.
 func FirstFenceUpdate(uint64) {}
+
+// EdgePathCheck counts one cached-edge position verification during a
+// monotonic edge insertion (Rust edge_path_check).
+func EdgePathCheck(uint64) {}
+
+// RangeEmitted counts one range record written during a range edit.
+func RangeEmitted(uint64) {}
+
+// RangeSplit counts one range record split into two during a rewrite.
+func RangeSplit(uint64) {}
+
+// RangeCoalesced counts one adjacency merge of two same-value ranges.
+func RangeCoalesced(uint64) {}

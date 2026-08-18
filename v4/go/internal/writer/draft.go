@@ -2,9 +2,9 @@
 // generation (Rust draft_store.rs Draft). It owns the evolving meta and the
 // private-page bookkeeping: the private-page stack, the dirty-page chain
 // head and charge, the allocator-retired backlog, and the growth charge for
-// one transaction. The workflow state machines of the Rust Draft (range
-// tree privacy, membership/structure deltas, workflow phases) arrive with
-// the edit workflows; this chunk delivers the storage surface only.
+// one transaction, plus the range-tree privacy flag. The membership and
+// structure delta state machines of the Rust Draft arrive with their edit
+// cores.
 
 package writer
 
@@ -37,6 +37,11 @@ type Draft struct {
 	// changed reports whether the draft mutated persistent content
 	// (Rust Draft::changed; set by the edit workflows and prepare).
 	changed bool
+	// rangeTreePrivate reports the range tree is draft-private (Rust
+	// Draft::range_tree_private; true when the committed base has no
+	// range tree). Public range edits on a private tree take the gap
+	// path; edits over a committed tree COW it.
+	rangeTreePrivate bool
 }
 
 // NewDraft starts one draft over base with the next transaction ID and the
@@ -49,7 +54,7 @@ func NewDraft(base format.Meta, nonce [16]byte) (*Draft, error) {
 	}
 	meta.TxnID++
 	meta.CommitNonce = nonce
-	return &Draft{base: base, meta: meta}, nil
+	return &Draft{base: base, meta: meta, rangeTreePrivate: base.RangeRoot == 0}, nil
 }
 
 // Base returns the committed base generation the draft edits.

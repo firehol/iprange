@@ -1,0 +1,483 @@
+// Range edit tests mirroring the Rust range_mutation_tests.rs base
+// vectors (assign/clear/transform semantics against a scalar reference).
+
+package writer
+
+import (
+	"testing"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
+)
+
+// rangeMemoryStore is the MemoryStore of the Rust range_mutation_tests:
+// owned pages, retired and discarded logs, read/write counters.
+type rangeMemoryStore struct {
+	targetTxn uint64
+	pages     [][format.PageSize]byte
+	retired   []uint32
+	discarded []uint32
+	reads     uint64
+	writes    uint64
+}
+
+func newRangeMemoryStore() *rangeMemoryStore {
+	return &rangeMemoryStore{targetTxn: 1, pages: make([][format.PageSize]byte, 2)}
+}
+
+func (m *rangeMemoryStore) TargetTxn() uint64 { return m.targetTxn }
+func (m *rangeMemoryStore) PageLimit() uint64 { return uint64(len(m.pages)) }
+
+func (m *rangeMemoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+	m.reads++
+	if int(pageNumber) >= len(m.pages) {
+		return corrupt("test page is out of bounds")
+	}
+	return fn(m.pages[pageNumber][:])
+}
+
+func (m *rangeMemoryStore) Allocate() (uint32, error) {
+	if len(m.pages) >= 1<<32 {
+		return 0, invalid("test page space exhausted")
+	}
+	pageNumber := uint32(len(m.pages))
+	m.pages = append(m.pages, [format.PageSize]byte{})
+	return pageNumber, nil
+}
+
+func (m *rangeMemoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+	m.writes++
+	if int(pageNumber) >= len(m.pages) {
+		return corrupt("test page is out of bounds")
+	}
+	return fn(m.pages[pageNumber][:])
+}
+
+func (m *rangeMemoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+	m.reads++
+	m.writes++
+	if int(source) >= len(m.pages) || int(destination) >= len(m.pages) {
+		return corrupt("test page is out of bounds")
+	}
+	return fn(m.pages[source][:], m.pages[destination][:])
+}
+
+func (m *rangeMemoryStore) DiscardPrivate(pageNumber uint32) error {
+	m.discarded = append(m.discarded, pageNumber)
+	return nil
+}
+
+func (m *rangeMemoryStore) RetirePages(pages []uint32) error {
+	m.retired = append(m.retired, pages...)
+	return nil
+}
+
+func (m *rangeMemoryStore) RangeRecordAdded(uint32) error   { return nil }
+func (m *rangeMemoryStore) RangeRecordRemoved(uint32) error { return nil }
+
+func rangesV4(m *rangeMemoryStore, root uint32) []format.RangeRecordV4 {
+	var result []format.RangeRecordV4
+	key := tree.Key{}
+	for {
+		value, err := tree.AtOrAfter(rangeCodec4{}, m, root, key)
+		if err != nil {
+			panic(err)
+		}
+		if value == nil {
+			return result
+		}
+		r := value.(rangeRecord)
+		result = append(result, format.RangeRecordV4{From: uint32(r.from.Hi), To: uint32(r.to.Hi), Value: r.value})
+		next, ok := rangeCodec4{}.Next(r.from)
+		if !ok {
+			break
+		}
+		key = next
+	}
+	return result
+}
+
+func rangesV6(m *rangeMemoryStore, root uint32) []format.RangeRecordV6 {
+	var result []format.RangeRecordV6
+	key := tree.Key{}
+	for {
+		value, err := tree.AtOrAfter(rangeCodec6{}, m, root, key)
+		if err != nil {
+			panic(err)
+		}
+		if value == nil {
+			return result
+		}
+		r := value.(rangeRecord)
+		result = append(result, format.RangeRecordV6{
+			FromHi: r.from.Hi, FromLo: r.from.Lo,
+			ToHi: r.to.Hi, ToLo: r.to.Lo,
+			Value: r.value,
+		})
+		next, ok := rangeCodec6{}.Next(r.from)
+		if !ok {
+			break
+		}
+		key = next
+	}
+	return result
+}
+
+func newV4Ctx(m *rangeMemoryStore, root *uint32, count *uint64) *rangeCtx {
+	return &rangeCtx{family: rangeCodec4{}, store: m, root: root, count: count}
+}
+
+// TestBigEndianPortableRangeRecordMatchesLiteralBytes mirrors the Rust
+// literal vector (little-endian from, to, value).
+func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
+	r := rangeRecord{
+		from:  tree.Key{Hi: 0x01020304},
+		to:    tree.Key{Hi: 0x05060708},
+		value: 0x090a0b0c,
+	}
+	encoded, err := newEncodedRange(rangeCodec4{}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{4, 3, 2, 1, 8, 7, 6, 5, 0x0c, 0x0b, 0x0a, 9}
+	if len(encoded.slice()) != len(want) {
+		t.Fatalf("encoded length = %d, want %d", len(encoded.slice()), len(want))
+	}
+	for i := range want {
+		if encoded.slice()[i] != want[i] {
+			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded.slice()[i], want[i])
+		}
+	}
+	decoded, err := rangeCodec4{}.ReadLeaf(encoded.slice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.(rangeRecord) != r {
+		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
+	}
+}
+
+// TestOverlappingRangesApplyInArrivalOrder mirrors the Rust test.
+func TestOverlappingRangesApplyInArrivalOrder(t *testing.T) {
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+
+	if changed, err := rangeAssign(ctx, v4key(0), v4key(100), 1); err != nil || !changed {
+		t.Fatalf("assign(0,100,1) = %v, %v", changed, err)
+	}
+	if changed, err := rangeAssign(ctx, v4key(20), v4key(30), 2); err != nil || !changed {
+		t.Fatalf("assign(20,30,2) = %v, %v", changed, err)
+	}
+	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{
+		{From: 0, To: 19, Value: 1}, {From: 20, To: 30, Value: 2}, {From: 31, To: 100, Value: 1},
+	})
+
+	if changed, err := rangeAssign(ctx, v4key(25), v4key(120), 3); err != nil || !changed {
+		t.Fatalf("assign(25,120,3) = %v, %v", changed, err)
+	}
+	if changed, err := rangeAssign(ctx, v4key(121), v4key(130), 3); err != nil || !changed {
+		t.Fatalf("assign(121,130,3) = %v, %v", changed, err)
+	}
+	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{
+		{From: 0, To: 19, Value: 1}, {From: 20, To: 24, Value: 2}, {From: 25, To: 130, Value: 3},
+	})
+	if count != 3 {
+		t.Fatalf("record count = %d, want 3", count)
+	}
+
+	if changed, err := rangeAssign(ctx, v4key(40), v4key(50), 3); err != nil || changed {
+		t.Fatalf("same-value assign = %v, %v; want false", changed, err)
+	}
+	if count != 3 {
+		t.Fatalf("record count after no-op = %d, want 3", count)
+	}
+}
+
+// TestClearSplitsAndCoalescesWithoutTouchingAbsentSpace mirrors the Rust
+// test including the work counters.
+func TestClearSplitsAndCoalescesWithoutTouchingAbsentSpace(t *testing.T) {
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+	if _, err := rangeAssign(ctx, v4key(0), v4key(100), 7); err != nil {
+		t.Fatal(err)
+	}
+
+	cleared, err := rangeClear(ctx, v4key(40), v4key(60))
+	if err != nil || !cleared {
+		t.Fatalf("clear(40,60) = %v, %v", cleared, err)
+	}
+	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{
+		{From: 0, To: 39, Value: 7}, {From: 61, To: 100, Value: 7},
+	})
+	if count != 2 {
+		t.Fatalf("record count = %d, want 2", count)
+	}
+
+	if cleared, err := rangeClear(ctx, v4key(40), v4key(60)); err != nil || cleared {
+		t.Fatalf("absent clear = %v, %v; want false", cleared, err)
+	}
+
+	if changed, err := rangeAssign(ctx, v4key(40), v4key(60), 7); err != nil || !changed {
+		t.Fatalf("reassign = %v, %v", changed, err)
+	}
+	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{{From: 0, To: 100, Value: 7}})
+	if count != 1 {
+		t.Fatalf("record count = %d, want 1", count)
+	}
+}
+
+// TestEndpointArithmeticHandlesBothFullAddressSpaces mirrors the Rust
+// test: full-space ranges on both families split at the extreme edges.
+func TestEndpointArithmeticHandlesBothFullAddressSpaces(t *testing.T) {
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+	if _, err := rangeAssign(ctx, tree.Key{}, tree.Key{Hi: 0xFFFFFFFF}, 11); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rangeAssign(ctx, v4key(1), tree.Key{Hi: 0xFFFFFFFE}, 12); err != nil {
+		t.Fatal(err)
+	}
+	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{
+		{From: 0, To: 0, Value: 11}, {From: 1, To: 0xFFFFFFFE, Value: 12}, {From: 0xFFFFFFFF, To: 0xFFFFFFFF, Value: 11},
+	})
+
+	m6 := newRangeMemoryStore()
+	root6 := uint32(0)
+	count6 := uint64(0)
+	ctx6 := &rangeCtx{family: rangeCodec6{}, store: m6, root: &root6, count: &count6}
+	if _, err := rangeAssign(ctx6, tree.Key{}, tree.Key{Hi: ^uint64(0), Lo: ^uint64(0)}, 21); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rangeAssign(ctx6, tree.Key{Lo: 1}, tree.Key{Hi: ^uint64(0), Lo: ^uint64(0) - 1}, 22); err != nil {
+		t.Fatal(err)
+	}
+	checkRanges6(t, rangesV6(m6, root6), []format.RangeRecordV6{
+		{FromHi: 0, FromLo: 0, ToHi: 0, ToLo: 0, Value: 21},
+		{FromHi: 0, FromLo: 1, ToHi: ^uint64(0), ToLo: ^uint64(0) - 1, Value: 22},
+		{FromHi: ^uint64(0), FromLo: ^uint64(0), ToHi: ^uint64(0), ToLo: ^uint64(0), Value: 21},
+	})
+}
+
+// TestTransformsMatchScalarStateAfterEachNonIdempotentOperation mirrors
+// the Rust test.
+func TestTransformsMatchScalarStateAfterEachNonIdempotentOperation(t *testing.T) {
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+	var expected [256]*uint32
+	random := uint32(0x9e3779b9)
+
+	for step := 0; step < 200; step++ {
+		random = random*1664525 + 1013904223
+		first := int(random & 255)
+		random = random*1664525 + 1013904223
+		second := int(random & 255)
+		from, to := first, second
+		if from > to {
+			from, to = to, from
+		}
+		mode := step % 4
+		if _, err := rangeTransform(ctx, v4key(uint32(from)), v4key(uint32(to)), func(store RangeStore, old *uint32) (*uint32, error) {
+			return mapped(old, mode), nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for i := from; i <= to; i++ {
+			expected[i] = mapped(expected[i], mode)
+		}
+		for address, wanted := range expected {
+			pred, err := tree.Predecessor(rangeCodec4{}, m, root, v4key(uint32(address)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual *uint32
+			if pred != nil {
+				r := pred.(rangeRecord)
+				if !r.to.Less(v4key(uint32(address))) {
+					v := r.value
+					actual = &v
+				}
+			}
+			if !sameValue(actual, wanted) {
+				t.Fatalf("step %d, address %d: value %v, want %v", step, address, actual, wanted)
+			}
+		}
+	}
+}
+
+func mapped(value *uint32, mode int) *uint32 {
+	switch mode {
+	case 0:
+		if value == nil {
+			return nil
+		}
+		v := *value ^ 3
+		if v == 0 {
+			return nil
+		}
+		return &v
+	case 1:
+		v := uint32(0)
+		if value != nil {
+			v = *value
+		}
+		v |= 4
+		return &v
+	case 2:
+		if value != nil && *value == 7 {
+			return nil
+		}
+		return value
+	default:
+		if value == nil {
+			return uint32ptr(9)
+		}
+		return nil
+	}
+}
+
+func uint32ptr(v uint32) *uint32 { return &v }
+
+// TestRandomizedSequenceMatchesAScalarReferenceMap mirrors the Rust test.
+func TestRandomizedSequenceMatchesAScalarReferenceMap(t *testing.T) {
+	const space = 256
+	var expected [space]*uint32
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+	random := uint32(0x6d2b79f5)
+
+	for operation := 0; operation < 1000; operation++ {
+		random = random*1664525 + 1013904223
+		a := int(random) % space
+		random = random*1664525 + 1013904223
+		b := int(random) % space
+		from, to := a, b
+		if from > to {
+			from, to = to, from
+		}
+		random = random*1664525 + 1013904223
+
+		if operation%4 == 0 {
+			if _, err := rangeClear(ctx, v4key(uint32(from)), v4key(uint32(to))); err != nil {
+				t.Fatal(err)
+			}
+			for i := from; i <= to; i++ {
+				expected[i] = nil
+			}
+		} else {
+			value := random % 7
+			if _, err := rangeAssign(ctx, v4key(uint32(from)), v4key(uint32(to)), value); err != nil {
+				t.Fatal(err)
+			}
+			for i := from; i <= to; i++ {
+				v := value
+				expected[i] = &v
+			}
+		}
+
+		actual := rangesV4(m, root)
+		if uint64(len(actual)) != count {
+			t.Fatalf("operation %d: record count = %d, tree has %d", operation, count, len(actual))
+		}
+		for address, wanted := range expected {
+			found := (*uint32)(nil)
+			for _, r := range actual {
+				if r.From <= uint32(address) && uint32(address) <= r.To {
+					v := r.Value
+					found = &v
+					break
+				}
+			}
+			if !sameValue(found, wanted) {
+				t.Fatalf("operation %d, address %d: value %v, want %v", operation, address, found, wanted)
+			}
+		}
+		for i := 1; i < len(actual); i++ {
+			if !(actual[i-1].To < actual[i].From) {
+				t.Fatalf("operation %d: overlapping records %v %v", operation, actual[i-1], actual[i])
+			}
+			if actual[i-1].To+1 == actual[i].From && actual[i-1].Value == actual[i].Value {
+				t.Fatalf("operation %d: uncoalesced records %v %v", operation, actual[i-1], actual[i])
+			}
+		}
+	}
+}
+
+// TestManyDisjointRangesSplitLeavesAndCowOnlyOncePerPath mirrors the Rust
+// test: after the COW txn bumps, the second same-path write retires
+// nothing.
+func TestManyDisjointRangesSplitLeavesAndCowOnlyOncePerPath(t *testing.T) {
+	m := newRangeMemoryStore()
+	root := uint32(0)
+	count := uint64(0)
+	ctx := newV4Ctx(m, &root, &count)
+	for key := int32(1999); key >= 0; key-- {
+		if _, err := rangeAssign(ctx, v4key(uint32(key*2)), v4key(uint32(key*2)), uint32(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count != 2000 {
+		t.Fatalf("record count = %d, want 2000", count)
+	}
+	committed := make([][format.PageSize]byte, len(m.pages))
+	copy(committed, m.pages)
+	m.targetTxn = 2
+
+	if _, err := rangeAssign(ctx, v4key(8000), v4key(8000), 9); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.retired) == 0 {
+		t.Fatal("first COW assignment retired nothing")
+	}
+	for i := range committed {
+		if committed[i] != m.pages[i] {
+			t.Fatalf("committed page %d changed", i)
+		}
+	}
+
+	retiredAfterFirst := len(m.retired)
+	if _, err := rangeAssign(ctx, v4key(8002), v4key(8002), 10); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.retired) != retiredAfterFirst {
+		t.Fatalf("second same-path assignment retired %d pages, want %d", len(m.retired), retiredAfterFirst)
+	}
+	if count != 2002 {
+		t.Fatalf("record count = %d, want 2002", count)
+	}
+}
+
+func v4key(v uint32) tree.Key { return tree.Key{Hi: uint64(v)} }
+
+func checkRanges4(t *testing.T, got []format.RangeRecordV4, want []format.RangeRecordV4) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("ranges = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ranges = %v, want %v", got, want)
+		}
+	}
+}
+
+func checkRanges6(t *testing.T, got []format.RangeRecordV6, want []format.RangeRecordV6) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("ranges = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ranges = %v, want %v", got, want)
+		}
+	}
+}

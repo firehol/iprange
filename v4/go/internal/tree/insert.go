@@ -557,3 +557,31 @@ func replaceFirstBranch(codec Codec, store Store, frame Frame, key Key) (*branch
 	work.FirstFenceUpdate(1)
 	return split, nil
 }
+
+// SplitLeafAtEdge splits the target private leaf, keeping the side that
+// holds the new edge cell (Rust split_leaf_at_edge). The edit is an
+// insertion at the first or last position of the leaf.
+func SplitLeafAtEdge(codec Codec, store Store, root *uint32, target *LeafTarget, leafCell []byte, edge Edge) error {
+	edit := Edit{index: 0, replace: false, cell: leafCell}
+	total := int(target.Header.ItemCount) + 1
+	middle := 1
+	if edge == EdgeLast {
+		edit.index = total - 1
+		middle = total - 1
+	}
+	return splitLeafAt(codec, store, root, target, edit, middle, total)
+}
+
+// locatePrivatePosition re-descends the private tree and returns the leaf
+// position of key without retiring any page (Rust locate_private_position).
+func locatePrivatePosition(codec Codec, store Store, root *uint32, key Key) (*PrivatePosition, error) {
+	retired := NewRetiredPages()
+	leaf, err := PrivatePath(codec, store, root, key, retired)
+	if err != nil {
+		return nil, err
+	}
+	if retired.Len() != 0 {
+		return nil, corrupt("private B+tree position retired a page")
+	}
+	return &PrivatePosition{Path: leaf.Path, PageNumber: leaf.PageNumber}, nil
+}

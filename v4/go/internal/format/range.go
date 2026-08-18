@@ -113,3 +113,33 @@ func RangeRecordKeyV6(b []byte) (uint64, uint64, error) {
 	hi, lo := U128(b[0:16])
 	return hi, lo, nil
 }
+
+// EncodeRangeRecordV4 writes one 12-byte IPv4 range record into b,
+// mirroring range_tree.rs encode_record (little-endian from, to, value).
+func EncodeRangeRecordV4(r RangeRecordV4, b []byte) error {
+	if r.From > r.To {
+		return &Error{Code: CodeInvalidArgument, Detail: "range start is after its end"}
+	}
+	if len(b) < RangeRecordV4Size {
+		return &Error{Code: CodeOSUnsupported, Detail: "range record buffer is too small"}
+	}
+	PutU32(b[0:4], r.From)
+	PutU32(b[4:8], r.To)
+	PutU32(b[8:12], r.Value)
+	return nil
+}
+
+// EncodeRangeRecordV6 writes one 36-byte IPv6 range record into b,
+// mirroring range_tree.rs encode_record (little-endian from, to, value).
+func EncodeRangeRecordV6(r RangeRecordV6, b []byte) error {
+	if r.FromHi > r.ToHi || (r.FromHi == r.ToHi && r.FromLo > r.ToLo) {
+		return &Error{Code: CodeInvalidArgument, Detail: "range start is after its end"}
+	}
+	if len(b) < RangeRecordV6Size {
+		return &Error{Code: CodeOSUnsupported, Detail: "range record buffer is too small"}
+	}
+	PutU128(b[0:16], r.FromHi, r.FromLo)
+	PutU128(b[16:32], r.ToHi, r.ToLo)
+	PutU32(b[32:36], r.Value)
+	return nil
+}

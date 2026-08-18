@@ -34,6 +34,10 @@ type counters struct {
 	bytesMoved        atomic.Uint64
 	bytesZeroed       atomic.Uint64
 	firstFenceUpdates atomic.Uint64
+	edgePathChecks    atomic.Uint64
+	rangesEmitted     atomic.Uint64
+	rangesSplit       atomic.Uint64
+	rangesCoalesced   atomic.Uint64
 }
 
 var current counters
@@ -93,6 +97,10 @@ type Snapshot struct {
 	BytesMoved        uint64
 	BytesZeroed       uint64
 	FirstFenceUpdates uint64
+	EdgePathChecks    uint64
+	RangesEmitted     uint64
+	RangesSplit       uint64
+	RangesCoalesced   uint64
 }
 
 // Read returns a consistent snapshot of the counters.
@@ -124,6 +132,10 @@ func Read() Snapshot {
 		BytesMoved:        current.bytesMoved.Load(),
 		BytesZeroed:       current.bytesZeroed.Load(),
 		FirstFenceUpdates: current.firstFenceUpdates.Load(),
+		EdgePathChecks:    current.edgePathChecks.Load(),
+		RangesEmitted:     current.rangesEmitted.Load(),
+		RangesSplit:       current.rangesSplit.Load(),
+		RangesCoalesced:   current.rangesCoalesced.Load(),
 	}
 }
 
@@ -139,7 +151,22 @@ func Reset() {
 		&current.pagesCopied, &current.pagesSplit, &current.pagesRetired,
 		&current.pagesReclaimed, &current.pagesSealed, &current.bytesMoved,
 		&current.bytesZeroed, &current.firstFenceUpdates,
+		&current.edgePathChecks, &current.rangesEmitted, &current.rangesSplit,
+		&current.rangesCoalesced,
 	} {
 		atomic.Store(0)
 	}
 }
+
+// EdgePathCheck counts one cached-edge position verification (Rust
+// edge_path_check).
+func EdgePathCheck(n uint64) { current.edgePathChecks.Add(n) }
+
+// RangeEmitted counts one range record written during a range edit.
+func RangeEmitted(n uint64) { current.rangesEmitted.Add(n) }
+
+// RangeSplit counts one range record split into two during a rewrite.
+func RangeSplit(n uint64) { current.rangesSplit.Add(n) }
+
+// RangeCoalesced counts one adjacency merge of two same-value ranges.
+func RangeCoalesced(n uint64) { current.rangesCoalesced.Add(n) }

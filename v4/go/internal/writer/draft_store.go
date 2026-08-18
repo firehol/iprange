@@ -618,10 +618,18 @@ func corrupt(detail string) error {
 	return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
 }
 
+func invalid(detail string) error {
+	return &format.Error{Code: format.CodeInvalidArgument, Detail: detail}
+}
+
 func budgetExceeded(detail string) error {
 	return &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: detail}
 }
 
 func overflow(detail string) error {
 	return &format.Error{Code: format.CodeArithmeticOverflow, Detail: detail}
+}
+
+func unsupported(detail string) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: detail}
 }

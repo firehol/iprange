@@ -61,7 +61,42 @@ type visitedBranch struct {
 // PrivatePath descends from the root, privatizing every committed page
 // along the path for the draft transaction, and returns the private leaf
 // plus the lower-bound selection of key (Rust private_path + KeySelector).
+// The descent itself is the single authoritative privatePathSelect loop.
 func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *RetiredPages) (*PrivateLeaf, error) {
+	leaf, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header *Header, path *Path) (any, error) {
+		index, exists, err := lowerBound(codec, page, header, key, true)
+		if err != nil {
+			return nil, err
+		}
+		return keySelection{index: index, exists: exists}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sel := leaf.Selection.(keySelection)
+	return &PrivateLeaf{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: sel.index, Exists: sel.exists}, nil
+}
+
+// PrivateLeafSelect is the outcome of a selector-based COW descent: the
+// private leaf page, its header, the descent path, and the leaf selection
+// (Rust private_path_select PrivateLeaf<L::Selection>).
+type PrivateLeafSelect struct {
+	Path       Path
+	PageNumber uint32
+	Header     Header
+	Selection  any
+}
+
+// leafSelector decides the leaf position during one COW descent (Rust
+// LeafSelector::select). It receives the page view, the parsed header, and
+// the descent path; only the leaf page is presented.
+type leafSelector func(page []byte, header *Header, path *Path) (any, error)
+
+// privatePathSelect is the single authoritative COW root-to-leaf descent
+// (Rust private_path_select). It descends from the root, privatizing every
+// committed page along the path for the draft transaction, and returns the
+// private leaf plus the custom leaf selection.
+func privatePathSelect(codec Codec, store Store, root *uint32, key Key, retired *RetiredPages, selectLeaf leafSelector) (*PrivateLeafSelect, error) {
 	work.TreeLookup(1)
 	var path Path
 	pageNumber := *root
@@ -74,8 +109,8 @@ func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *Retir
 		var header *Header
 		var born uint64
 		isLeaf := false
+		var selection any
 		index := 0
-		exists := false
 		child := uint32(0)
 		if err := store.Inspect(pageNumber, func(page []byte) error {
 			h, err := parse(codec, page, store.TargetTxn(), expectedLevel)
@@ -86,7 +121,7 @@ func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *Retir
 			born = format.U64(page[format.HeaderBorn:])
 			if h.Level == 0 {
 				isLeaf = true
-				index, exists, err = lowerBound(codec, page, h, key, true)
+				selection, err = selectLeaf(page, h, &path)
 				return err
 			}
 			index, _, err = lowerBound(codec, page, h, key, false)
@@ -115,7 +150,7 @@ func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *Retir
 			}
 		}
 		if isLeaf {
-			return &PrivateLeaf{Path: path, PageNumber: activePage, Header: *header, Index: index, Exists: exists}, nil
+			return &PrivateLeafSelect{Path: path, PageNumber: activePage, Header: *header, Selection: selection}, nil
 		}
 		if err := path.Push(Frame{PageNumber: activePage, Index: index, ItemCount: int(header.ItemCount)}); err != nil {
 			return nil, err
@@ -128,6 +163,12 @@ func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *Retir
 		expectedLevel = &level
 		work.TreeDescent(1)
 	}
+}
+
+// keySelection is the standard lower-bound leaf selection.
+type keySelection struct {
+	index  int
+	exists bool
 }
 
 // touch allocates a private copy of a committed page and records the
