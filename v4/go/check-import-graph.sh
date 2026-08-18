@@ -84,7 +84,7 @@ scanner_bin=${GATE_SCANNER_BIN:-}
 if [ -z "$scanner_bin" ]; then
 	scanner_dir=$(cd "$PWD/../go-gate" && pwd)
 	scanner_bin=$(mktemp /tmp/iprange-gatescan.XXXXXX)
-	if ! go -C "$scanner_dir" build -o "$scanner_bin" .; then
+	if ! nice go -C "$scanner_dir" build -o "$scanner_bin" .; then
 		echo "gate scanner build failed"
 		exit 1
 	fi
@@ -175,7 +175,7 @@ done
 # Typed content-transfer scan: banned imports/selectors, the *os.File
 # capability surface, and the complete-page ownership rule, over every
 # production file (all build contexts).
-if ! "$scanner_bin" .; then
+if ! nice "$scanner_bin" .; then
 	echo "content-transfer violation in production sources"
 	fail=1
 fi
@@ -320,7 +320,7 @@ if [ "$self_test" -eq 1 ]; then
 	# The source-mutation battery is table data inside the gatescan tool;
 	# the tool prints the exact case counts on every self-test run. It
 	# runs every case against its own private copy of this tree.
-	if ! "$scanner_bin" --self-test .; then
+	if ! nice "$scanner_bin" --self-test .; then
 		echo "gatescan self-test failed"
 		fail=1
 	fi

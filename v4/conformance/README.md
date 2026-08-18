@@ -34,13 +34,13 @@ committed corpus.
 Run the read-only proof:
 
 ```bash
-cargo test --manifest-path v4/rust/Cargo.toml --test conformance
+nice cargo test --manifest-path v4/rust/Cargo.toml --test conformance
 ```
 
 Regenerate only the Rust-produced files explicitly:
 
 ```bash
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   --test conformance regenerate_rust_fixtures -- --ignored --exact
 ```
 

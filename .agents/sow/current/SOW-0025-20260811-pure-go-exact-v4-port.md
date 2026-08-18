@@ -26,6 +26,20 @@ re-read after every compaction.
 Recorded as Review Process step 6 below.
 
 ## Status
+
+### 2026-08-18 - user decision: all builds, tests, and benchmarks run under nice
+
+The user requires every test, benchmark, and heavy build invocation to run
+under `nice` so toolchain work never competes with the interactive desktop.
+Applied repo-wide: run-tests.sh, run-unit-tests.sh, run-build-tests.sh,
+run-sanitizer-tests.sh, the Makefile check target (Makefile.am; Makefile.in is generated and gitignored),
+v4/go/check-import-graph.sh, v4/rust/check-source-graph.sh,
+v4/rust/check-mmap-runtime.sh, and the tests.build.d harnesses now prefix
+`nice` internally; every documented command in AGENTS.md, README.md,
+v4/rust/README.md, v4/conformance/README.md, tests.d/README.md, and the
+project-v4-rust skill references `nice` explicitly. SOW historical records
+are dated narrative and remain as written.
+
 Status: in-progress
 
 Sub-state: milestone 1 external-review rework IMPLEMENTED and validated

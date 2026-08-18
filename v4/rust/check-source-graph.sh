@@ -137,7 +137,7 @@ for target in "${targets[@]}"; do
     run env \
         CARGO_INCREMENTAL=0 \
         RUSTFLAGS="$rustflags" \
-        cargo check \
+        nice cargo check \
         --manifest-path "$workspace/Cargo.toml" \
         --workspace \
         --all-features \

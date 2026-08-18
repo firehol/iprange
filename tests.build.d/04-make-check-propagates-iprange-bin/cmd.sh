@@ -64,7 +64,7 @@ if ! "$srcdir/configure" --disable-man >"$log" 2>&1; then
     exit 1
 fi
 
-if ! make check >>"$log" 2>&1; then
+if ! nice make check >>"$log" 2>&1; then
     cat "$log"
     exit 1
 fi

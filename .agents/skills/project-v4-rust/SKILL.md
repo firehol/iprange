@@ -28,7 +28,7 @@ Every Rust source must belong to at least one supported Cargo compiler graph or
 the one exact native fixture compiled at test runtime. Run the repository gate:
 
 ```bash
-./v4/rust/check-source-graph.sh
+nice ./v4/rust/check-source-graph.sh
 ```
 
 The gate uses fresh Cargo dependency files for Linux, Windows, macOS, and
@@ -42,15 +42,15 @@ calls it. Never delete a file without user approval and a preservation commit.
 Use these baseline gates:
 
 ```bash
-./v4/rust/check-architecture.sh
-./v4/rust/check-mmap-storage.sh
-./v4/rust/check-mmap-runtime.sh
-./v4/rust/check-source-graph.sh
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice ./v4/rust/check-architecture.sh
+nice ./v4/rust/check-mmap-storage.sh
+nice ./v4/rust/check-mmap-runtime.sh
+nice ./v4/rust/check-source-graph.sh
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --no-default-features --all-targets
-cargo clippy --manifest-path v4/rust/Cargo.toml \
+nice cargo clippy --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets -- -D warnings
 cargo fmt --manifest-path v4/rust/Cargo.toml --all -- --check
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
@@ -197,13 +197,13 @@ Build the exact fault worker in the benchmark profile, then run the public-SDK
 benchmark:
 
 ```bash
-cargo build --manifest-path v4/rust/Cargo.toml \
+nice cargo build --manifest-path v4/rust/Cargo.toml \
   --profile bench -p iprange-livedb --bin iprange-v4-worker
-cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- smoke
-cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- scale
-cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- local
-cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- ci
-cargo bench --manifest-path v4/rust/Cargo.toml --bench component_floors -- suite
+nice cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- smoke
+nice cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- scale
+nice cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- local
+nice cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets -- ci
+nice cargo bench --manifest-path v4/rust/Cargo.toml --bench component_floors -- suite
 ```
 
 `smoke` and `scale` are single-pass investigation matrices. `local` is the

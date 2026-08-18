@@ -65,7 +65,7 @@ run_unit_test() {
 
     echo -e "${YELLOW}Running unit test: $name${NC}"
 
-    if ! "$CC_BIN" \
+    if ! nice "$CC_BIN" \
         -DHAVE_CONFIG_H \
         -I"$BUILD_DIR" \
         -I"$ROOT_DIR" \
@@ -82,7 +82,7 @@ run_unit_test() {
 
     ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=1} \
     UBSAN_OPTIONS=${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1} \
-    "$bin"
+    nice "$bin"
     rc=$?
 
     if [ $rc -ne 0 ]; then

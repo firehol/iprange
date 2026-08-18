@@ -444,25 +444,30 @@ Build (CMake): `cmake -S . -B build-cmake && cmake --build build-cmake` (see `CM
 Test (Rust v4):
 
 ```bash
-./v4/rust/check-source-graph.sh
-cargo test --manifest-path v4/rust/Cargo.toml
-cargo test --manifest-path v4/rust/Cargo.toml --all-features
+nice ./v4/rust/check-source-graph.sh
+nice cargo test --manifest-path v4/rust/Cargo.toml
+nice cargo test --manifest-path v4/rust/Cargo.toml --all-features
 ```
 
 Test (Go v4):
 
 ```bash
-go -C v4/go test ./...
+nice go -C v4/go test ./...
 ```
 
 Legacy C tests (not v4):
 
 ```bash
-./run-tests.sh            # canonical test suite (tests.d/)
-./run-unit-tests.sh       # unit tests (tests.unit/)
-./run-build-tests.sh      # build-matrix tests
-./run-sanitizer-tests.sh  # ASan/MSan/TSan/valgrind variants (tests.sanitizers.d/, tests.tsan.d/)
+nice ./run-tests.sh            # canonical test suite (tests.d/)
+nice ./run-unit-tests.sh       # unit tests (tests.unit/)
+nice ./run-build-tests.sh      # build-matrix tests
+nice ./run-sanitizer-tests.sh  # ASan/MSan/TSan/valgrind variants (tests.sanitizers.d/, tests.tsan.d/)
 ```
+
+> Always run builds, tests, and benchmarks with `nice` (user workstation
+> policy): heavy toolchain jobs must never compete with interactive desktop
+> work. Scripts in this repo apply `nice` internally; use it explicitly for
+> any ad-hoc invocation too.
 
 > Many untracked `build-*/` directories and autotools-generated files exist in the
 > working tree. Never `git add -A`/`git add .`; add specific files by name.
@@ -470,8 +475,8 @@ Legacy C tests (not v4):
 **Multi-language v4 libraries:** the C CLI remains the released legacy tool; the
 new database engine lives under `v4/` in Rust and Go. During SOW-0016, only the
 exact current unsigned Phase-1 v4 contract is supported. Rust:
-`cargo test --manifest-path v4/rust/Cargo.toml`;
-Go: `go -C v4/go test ./...`. Shared cross-language artifacts live in
+`nice cargo test --manifest-path v4/rust/Cargo.toml`;
+Go: `nice go -C v4/go test ./...`. Shared cross-language artifacts live in
 `v4/conformance/` and must be opened by both readers.
 
 ### Project-specific overrides

@@ -53,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-run cargo build \
+run nice cargo build \
     --manifest-path "$workspace/Cargo.toml" \
     -p iprange-livedb \
     --bin iprange-v4-worker \
@@ -62,7 +62,7 @@ run cargo build \
 syscalls='mmap,msync,read,readv,pread64,preadv,preadv2,write,writev,pwrite64,pwritev,pwritev2,copy_file_range,sendfile'
 run env IPRANGE_V4_MMAP_PROBE_DIR="$storage" \
     strace -f -qq -yy -o "$trace" -e "trace=$syscalls" \
-    cargo test \
+    nice cargo test \
     --manifest-path "$workspace/Cargo.toml" \
     -p iprange-livedb \
     --lib \

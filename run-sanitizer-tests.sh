@@ -76,11 +76,11 @@ mkdir -p "$TSAN_BUILD_DIR"
     CFLAGS="$SAN_CFLAGS" \
     LDFLAGS="$SAN_LDFLAGS" \
     "$SRC_DIR/configure" --disable-man
-    make -j"$(get_make_jobs)"
+    nice make -j"$(get_make_jobs)"
 )
 
-env BUILD_DIR="$BUILD_DIR" TEST_DIRS="tests.sanitizers.d" IPRANGE_BIN="$BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"
-env BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="$SAN_LDFLAGS" "$ROOT_DIR/run-unit-tests.sh"
+env BUILD_DIR="$BUILD_DIR" TEST_DIRS="tests.sanitizers.d" IPRANGE_BIN="$BUILD_DIR/iprange" nice "$ROOT_DIR/run-tests.sh"
+env BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="$SAN_LDFLAGS" nice "$ROOT_DIR/run-unit-tests.sh"
 
 (
     cd "$TSAN_BUILD_DIR"
@@ -88,7 +88,7 @@ env BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="
     CFLAGS="$TSAN_CFLAGS" \
     LDFLAGS="$TSAN_LDFLAGS" \
     "$SRC_DIR/configure" --disable-man
-    make -j"$(get_make_jobs)"
+    nice make -j"$(get_make_jobs)"
 )
 
-env BUILD_DIR="$TSAN_BUILD_DIR" TEST_DIRS="tests.tsan.d" IPRANGE_BIN="$TSAN_BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"
+env BUILD_DIR="$TSAN_BUILD_DIR" TEST_DIRS="tests.tsan.d" IPRANGE_BIN="$TSAN_BUILD_DIR/iprange" nice "$ROOT_DIR/run-tests.sh"

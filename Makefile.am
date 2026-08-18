@@ -146,7 +146,7 @@ EXTRA_DIST = \
 	$(NULL)
 
 check-local:
-	IPRANGE_BIN='$(abs_builddir)/iprange' $(SHELL) $(top_srcdir)/run-tests.sh
+	IPRANGE_BIN='$(abs_builddir)/iprange' nice $(SHELL) $(top_srcdir)/run-tests.sh
 	IPRANGE_BIN='$(abs_builddir)/iprange' $(SHELL) $(top_srcdir)/run-build-tests.sh
 
 check-sanitizers:

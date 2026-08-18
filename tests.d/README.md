@@ -15,7 +15,7 @@ Each test is in its own subdirectory and contains:
 To run all tests, use the master test script from the main directory:
 
 ```
-./run-tests.sh
+nice ./run-tests.sh
 ```
 
 The script will:

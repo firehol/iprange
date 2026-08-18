@@ -357,11 +357,11 @@ To skip the man page: `./configure --disable-man`
 
 | Command | What it tests |
 |---------|---------------|
-| `make check` | Full test suite (CLI + build) |
-| `./run-tests.sh` | CLI regression tests |
+| `nice make check` | Full test suite (CLI + build) |
+| `nice ./run-tests.sh` | CLI regression tests |
 | `./run-build-tests.sh` | Build and layout regressions |
 | `./run-sanitizer-tests.sh` | ASAN/UBSAN/TSAN coverage |
-| `make check-sanitizers` | Sanitizer-integrated path |
+| `nice make check-sanitizers` | Sanitizer-integrated path |
 
 ## Repository layout
 

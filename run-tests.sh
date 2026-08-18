@@ -91,7 +91,7 @@ run_test() {
         return 1
     fi
 
-    (cd "$test_dir" && ./cmd.sh > "$temp_output" 2>&1)
+    (cd "$test_dir" && nice ./cmd.sh > "$temp_output" 2>&1)
     local exit_code=$?
 
     if [ $exit_code -ne 0 ]; then

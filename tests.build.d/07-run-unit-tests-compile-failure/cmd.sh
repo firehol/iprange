@@ -42,7 +42,7 @@ exit 1
 EOF
 chmod +x "$fakebin/fake-cc"
 
-if CC="$fakebin/fake-cc" BUILD_DIR="$root" UNIT_TESTS_DIR=tests.unit "$root/run-unit-tests.sh" >"$log" 2>&1; then
+if CC="$fakebin/fake-cc" BUILD_DIR="$root" UNIT_TESTS_DIR=tests.unit nice "$root/run-unit-tests.sh" >"$log" 2>&1; then
     echo "run-unit-tests.sh unexpectedly succeeded after a compile failure"
     cat "$log"
     exit 1

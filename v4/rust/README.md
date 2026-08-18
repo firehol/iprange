@@ -164,15 +164,15 @@ cleanup before discarding the obligation.
 The minimum supported Rust version is 1.74.
 
 ```bash
-./v4/rust/check-architecture.sh
-./v4/rust/check-mmap-storage.sh
-./v4/rust/check-mmap-runtime.sh
-./v4/rust/check-source-graph.sh
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice ./v4/rust/check-architecture.sh
+nice ./v4/rust/check-mmap-storage.sh
+nice ./v4/rust/check-mmap-runtime.sh
+nice ./v4/rust/check-source-graph.sh
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --no-default-features --all-targets
-cargo clippy --manifest-path v4/rust/Cargo.toml \
+nice cargo clippy --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets -- -D warnings
 cargo fmt --manifest-path v4/rust/Cargo.toml --all -- --check
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
@@ -201,7 +201,7 @@ Normal conformance tests are read-only and explicitly validate every committed
 fixture. Fixture regeneration is an ignored, manually selected test:
 
 ```bash
-cargo test --manifest-path v4/rust/Cargo.toml \
+nice cargo test --manifest-path v4/rust/Cargo.toml \
   -p iprange-livedb --test conformance -- --nocapture
 ```
 
@@ -226,17 +226,17 @@ Build the fault worker in the same optimized profile, then run the desired
 matrix:
 
 ```bash
-cargo build --manifest-path v4/rust/Cargo.toml \
+nice cargo build --manifest-path v4/rust/Cargo.toml \
   --profile bench -p iprange-livedb --bin iprange-v4-worker
-cargo bench --manifest-path v4/rust/Cargo.toml \
+nice cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- smoke
-cargo bench --manifest-path v4/rust/Cargo.toml \
+nice cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
-cargo bench --manifest-path v4/rust/Cargo.toml \
+nice cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- local
-cargo bench --manifest-path v4/rust/Cargo.toml \
+nice cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- ci
-cargo bench --manifest-path v4/rust/Cargo.toml \
+nice cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench component_floors -- suite
 ```
 
