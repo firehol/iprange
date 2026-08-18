@@ -1396,6 +1396,56 @@ benign), P372 (negative-internal all-owned store launder reject), P373
 import-graph boundary check all green.
 
 
+### 2026-08-18 - level-2 gate round 3 re-review at f86f8f3: glm FAIL claims refuted, one real over-rejection found and fixed (battery 683 -> 686)
+
+The round-7 code-only review at f86f8f3 returned glm FAIL with three
+claims; every claim was probe-verified by the lead:
+
+- glm P1 (TypeParam recording mis-slots non-byte arguments, corrupting
+  liar and honest enforcement): REFUTED. The captured-carrier launder
+  sketch (pass[T](b.n, closure) with the closure laundering through a
+  captured box.cb) is ALREADY rejected at both f86f8f3 and 39a1956
+  (field-call fence at the captured b.cb call plus the store fence),
+  and the honest int-through-generic-wrapper probe
+  (wrap(len(p), func(n int) int { return n + 1 })) does not flag. The
+  store-callback composition cannot instantiate T non-byte anyway: the
+  fence only applies when the forwarded callback is the store formal,
+  which forces T to the callback's byte types.
+- glm P2-1 (indexed container calls misclassified as generic
+  instantiations): REFUTED. Package-level func-array slot calls
+  (arr[0](page)) still resolve nil through funcVarCallee and stay in
+  the unproven-callee path (probe flags "mapped page view passed to ?"
+  exactly like pre-fix).
+- glm P2-2 (generic method summary-key mismatch / wrong body): REFUTED.
+  Ordinary generic-method calls (wrapRM[[]byte].apply) resolve the
+  correct summary (append fence fires), method expressions on
+  instantiated generic receivers are rejected, and the summary key is
+  receiver-type-name scoped per package, so same-name collisions are
+  impossible.
+
+Lead probing of the method-expression variants surfaced one REAL
+over-rejection, pre-existing at 39a1956 and still present at f86f8f3:
+a DIRECT method-expression call of a scanned method with a func-typed
+formal ((*app).apply(&a, closure, page[:16]) or
+wrapRM[[]byte].apply(w, closure, page[:16])) was falsely rejected with
+"func-typed argument to ....apply is not a scanned callback" because
+callFormals omits the receiver type that method-expression calls carry
+as an explicit first argument, shifting every formal by one. The
+receiver value was checked against the func-typed formal and every
+func-typed argument against the next formal. FIXED: callFormals now
+prepends sig.Recv().Type() when the selector selection is
+types.MethodExpr (rules.go), which also aligns checkInterfaceErasure.
+
+Battery: 683 -> 686 cases (570 rejections, 116 benign acceptances),
+zero misses under --self-test-jobs 24. New durable pins: P374 (direct
+method-expression call with a func-typed formal and a bounded span,
+benign), P375 (direct method-expression on an instantiated generic
+receiver with a bounded span, benign), P376 (same spelling with a full
+mapped page and a copying closure, reject). Real module scan rc=0 (5
+OS); go test (both tag sets), -race, vet (module and gate), gofmt,
+import-graph boundary check all green.
+
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

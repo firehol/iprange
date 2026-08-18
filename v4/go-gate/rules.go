@@ -3131,6 +3131,25 @@ func (w *fileRules) callFormals(fun ast.Expr) []types.Type {
 	case *ast.SelectorExpr:
 		if fn, ok := w.pc.info.Uses[f.Sel].(*types.Func); ok {
 			sig, _ = fn.Type().(*types.Signature)
+			// A method EXPRESSION call (T.M(recv, args...)) carries the
+			// receiver as an explicit first argument, unlike a method
+			// VALUE call (recv.M(args...)); the formal list must line
+			// up with the arguments, so the receiver type is prepended.
+			// Without this, checkFuncTypedArgs and checkInterfaceErasure
+			// shift by one: the receiver value is checked against a
+			// func-typed formal and every func-typed argument is
+			// misread as a callback or a carrier, falsely rejecting
+			// honest direct method-expression calls.
+			if sig != nil && sig.Recv() != nil {
+				if selRecv, isSel := w.pc.info.Selections[f]; isSel && selRecv.Kind() == types.MethodExpr {
+					out := make([]types.Type, 0, sig.Params().Len()+1)
+					out = append(out, sig.Recv().Type())
+					for i := 0; i < sig.Params().Len(); i++ {
+						out = append(out, sig.Params().At(i).Type())
+					}
+					return out
+				}
+			}
 		}
 	}
 	if sig == nil || sig.Params() == nil {
