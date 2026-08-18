@@ -60,6 +60,18 @@ func (m *Mapping) Shrink(newSize uint64) error {
 }
 
 // Flush satisfies the common surface; unreachable on Windows in milestone 1.
+func (m *Mapping) FlushRange(offset, length uint64) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping is not supported"}
+}
+
+// FlushPage is unsupported on windows (FlushRange stub).
+func (m *Mapping) FlushPage(pgno uint32) error { return m.FlushRange(0, 0) }
+
+// FileSize is unsupported on windows.
+func (m *Mapping) FileSize() (uint64, error) {
+	return 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping is not supported"}
+}
+
 func (m *Mapping) Flush() error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }

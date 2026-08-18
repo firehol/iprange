@@ -4474,6 +4474,39 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 		})
 		return exempts
 	}
+	if strings.HasSuffix(path, "internal/writer/reclaim.go") {
+		// The commit nonce needs the OS CSPRNG (Rust random::nonzero_128
+		// over getrandom). crypto/rand.Read is the only API for it and the
+		// name collides with the content-transfer Read ban, but the call
+		// fills an owned 16-byte buffer and can never move mapped bytes.
+		// Only the exact single-argument crypto/rand.Read shape is
+		// exempt here; any other receiver (an aliased non-crypto rand)
+		// or any other Read shape must still be rejected.
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Read" || len(call.Args) != 1 {
+				return true
+			}
+			recv, ok := unparen(sel.X).(*ast.Ident)
+			if !ok || recv.Name != "rand" {
+				return true
+			}
+			// The receiver ident must resolve to crypto/rand: an aliased
+			// import of any other package under the name rand must not
+			// inherit the exemption.
+			if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok && obj.Pkg() != nil &&
+				obj.Pkg().Path() != "crypto/rand" {
+				return true
+			}
+			exempts[sel.Pos()] = true
+			return true
+		})
+		return exempts
+	}
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {
 		return exempts
 	}

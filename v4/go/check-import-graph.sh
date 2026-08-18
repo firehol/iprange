@@ -156,7 +156,7 @@ check "github.com/firehol/iprange/v4/go/internal/mapping" "github.com/firehol/ip
 check "github.com/firehol/iprange/v4/go/internal/tree" "github.com/firehol/iprange/v4/go/internal/\(format\|tree\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/bitmap" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|format\|tree\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/retire" "github.com/firehol/iprange/v4/go/internal/\(format\|retire\|tree\)"
-check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|bootstrap\|format\|mapping\|retire\|tree\|work\)"
+check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|bootstrap\|fault\|format\|mapping\|retire\|tree\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
 check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
 

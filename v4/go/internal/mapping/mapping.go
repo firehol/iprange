@@ -361,6 +361,50 @@ func (m *Mapping) Flush() error {
 	return nil
 }
 
+// FlushRange synchronizes the mapped pages of [offset, offset+length) to
+// the file (msync MS_SYNC over the subrange), mirroring Rust mapping.rs
+// flush_range. The range must be page-aligned and inside the mapped
+// extent, exactly like Rust checked_range + flush_range; the caller is
+// the publication path (data flush of the committed extent, meta-page
+// flush).
+func (m *Mapping) FlushRange(offset, length uint64) error {
+	if m.data == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	if offset%format.PageSize != 0 || length%format.PageSize != 0 {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "flush range not page-aligned"}
+	}
+	if offset > m.size || length > m.size-offset {
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "flush range out of mapped extent"}
+	}
+	if err := unix.Msync(m.data[offset:offset+length], unix.MS_SYNC); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
+	}
+	work.MappingFlush(1)
+	return nil
+}
+
+// FlushPage synchronizes one mapped page to the file (Rust mapping.rs
+// flush_page: flush_range over one page at page_number).
+func (m *Mapping) FlushPage(pgno uint32) error {
+	return m.FlushRange(uint64(pgno)<<format.PageShift, format.PageSize)
+}
+
+// FileSize re-stats the locked file and returns its physical length (Rust
+// mapping.rs file().metadata().len()). The tracked PhysicalSize is kept in
+// sync by Grow/Shrink, but the publication and close paths must observe
+// the real locked extent after external truncation.
+func (m *Mapping) FileSize() (uint64, error) {
+	if m.file == nil {
+		return 0, &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+	}
+	st, err := m.file.Stat()
+	if err != nil {
+		return 0, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	return uint64(st.Size()), nil
+}
+
 // SyncFile forces the file's data to stable storage, mirroring Rust
 // mapping.rs sync_file: fsync on POSIX platforms, fcntl(F_FULLFSYNC) on
 // macOS (plain fsync on macOS can return before the drive's volatile cache

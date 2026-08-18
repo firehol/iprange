@@ -1474,4 +1474,12 @@ var batteryCases = []batteryCase{
 	{name: "313: benign appended FcntlInt F_FULLFSYNC darwin call", desc: "an additional exact F_FULLFSYNC call inside the darwin sync file stays legal", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "append", path: "internal/mapping/mapping_sync_darwin.go", content: "//go:build darwin\n\nfunc gateFullfsync2(fd uintptr) error {\n\t_, err := unix.FcntlInt(fd, unix.F_FULLFSYNC, 0)\n\treturn err\n}\n"},
 	}},
+
+	{name: "314: rand.Read aliased to a non-crypto package in the nonce file", desc: "an aliased rand.Read that is not crypto/rand must not inherit the CSPRNG exemption", expectFail: true, expectRule: "banned content-transfer selector .Read", allowTypeCheck: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/writer/gatemut_nonce_alias.go", content: "package writer\n\nimport rand \"crypto/sha256\"\n\nfunc gateNonceAlias() {\n\tvar n [16]byte\n\t_, _ = rand.Read(n[:])\n}\n"},
+	}},
+
+	{name: "315: benign rand.Read CSPRNG fill in the nonce file", desc: "the exact production-shaped crypto/rand.Read fill of an owned 16-byte buffer stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/writer/reclaim.go", content: "func gateNonceBenign() ([16]byte, error) {\n\tvar n [16]byte\n\tif _, err := rand.Read(n[:]); err != nil {\n\t\treturn n, err\n\t}\n\treturn n, nil\n}\n"},
+	}},
 }

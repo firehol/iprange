@@ -47,6 +47,13 @@ type Core struct {
 	m      *mapping.Mapping
 	base   bootstrap.Result
 	budget PageBudget
+	// draft is the open COW transaction, or nil (Rust WriterCore::draft;
+	// installed by the workflows and by reclamation).
+	draft *Draft
+	// unprovedTailEnd remembers a tail length observed before cleanup so
+	// crash-recovery tooling can reason about abandoned tails (Rust
+	// WriterCore::unproved_tail_end).
+	unprovedTailEnd *uint64
 }
 
 // OpenWriter maps path read-write under the exclusive lifetime lock and

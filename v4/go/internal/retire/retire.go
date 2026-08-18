@@ -301,6 +301,15 @@ func After(store tree.Store, root uint32, extent Extent) (*Extent, error) {
 // SelectReclamation selects the reclamation-safe prefix of the retirement
 // tree (Rust select_reclamation_with_checkpoint): transaction groups not
 // older than any live reader, bounded by the work limits.
+// runCheckpoint invokes the optional checkpoint hook; a nil hook is a no-op
+// (offline reclamation performs no live-reader checkpoint).
+func runCheckpoint(checkpoint func() error) error {
+	if checkpoint == nil {
+		return nil
+	}
+	return checkpoint()
+}
+
 func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldestReader *uint64, maxTransactions, maxPages uint64, checkpoint func() error) (*Reclamation, error) {
 	if maxTransactions == 0 || maxPages == 0 {
 		return nil, invalid("reclamation work limits must be nonzero")
@@ -311,7 +320,7 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 	}
 	selected := Reclamation{}
 	for selected.Transactions < maxTransactions {
-		if err := checkpoint(); err != nil {
+		if err := runCheckpoint(checkpoint); err != nil {
 			return nil, err
 		}
 		if next == nil {
@@ -381,7 +390,7 @@ func scanGroup(store tree.Store, root uint32, firstExtent Extent, selectedTxn ui
 	extent := firstExtent
 	var pages uint64
 	for {
-		if err := checkpoint(); err != nil {
+		if err := runCheckpoint(checkpoint); err != nil {
 			return 0, nil, err
 		}
 		if err := validateSelected(store, extent, selectedTxn); err != nil {

@@ -1624,6 +1624,65 @@ f85574d): five aspect reviewers; four PASS, one FAIL with one P2:
 Validation: go test ./... (both tag sets), -race, vet, gofmt,
 import-graph, 11/11 cross-builds, 694-case gate battery - all green.
 
+Milestone 2 chunk 4 - publication, commit, abort, close, and bounded
+reclamation (2026-08-18; committed at 0963218 -> working tree): the
+physical publication path over the chunk 2/3 COW storage surface,
+implemented and locally validated:
+- internal/mapping: FlushRange (msync subrange, Rust flush_range),
+  FlushPage (one page), FileSize (re-stat of the locked file).
+- internal/format: Meta.EncodeMapped writes the meta image directly
+  into the alternate mapped page at its final offset (Rust
+  contract.rs MetaV4::encode_mapped): every field at its wire offset,
+  the reserved bytes zeroed in place (clear(), the Go form of Rust
+  page.fill(0)), then the exact meta CRC. No owned page buffer exists.
+- internal/fault (new): test-only crash-point injection; the v4work
+  build exits 86 at IPRANGE_V4_TEST_CRASH_AT, production builds
+  compile the Crash call to a no-op (Rust live_crash_tests.rs
+  commit.before_private_sync / after_private_sync / after_meta_write
+  / after_meta_sync parity).
+- internal/writer: StartDraft/Draft/commitAttempt/Prepare (Rust
+  prepare_with_checkpoint: releasePrivatePages/replenishReserve/
+  drainPrivateStack/finishBitmapShape/sealPrivatePages),
+  RequireDraftLength, Publish (the exact Rust shrink-or-retain,
+  flush-data-range, sync, alternate-meta encode+flush, sync again,
+  then adopt sequence; OutcomeUnknown abandons the draft),
+  ClosePlan/PrepareClose/FinishClose/DiscardUnpublished (close.rs:
+  trim any unpublished tail, verify discard geometry),
+  PrepareReclamation/select/apply (reclaim.rs: select the oldest
+  reader-safe retired transactions within the work limits, replay
+  and verify, reclaimExtent frees every page and removes the extent,
+  re-retiring removal COW victims). DraftStore.SelectReclamation and
+  ApplyReclamation compose retire.SelectReclamation with a nil-
+  checkpoint-safe hook (a nil checkpoint is a no-op, the offline
+  reclamation shape).
+- Tests: commit alternates the meta page across reader re-opens
+  (fresh txn-1 DB opens on meta page 1, Rust
+  identical_creation_metas_are_proven_current parity; each commit
+  toggles to 1-base), abort discards unpublished tail bytes, close
+  trims the unpublished tail and re-opens clean, bounded reclamation
+  frees the oldest retired generation (Rust
+  reclamation_counts_each_released_page_once: the reclaimed-page
+  work counter pins the freed pages; the retirement extent count
+  does not shrink for a single-record tree because removal COW
+  victims are re-retired under the new generation - Rust parity,
+  recorded in the test), publish state gates (no draft /
+  double-draft).
+- Gate: new content-transfer false-positive dispositions - the
+  Windows stub used a nonexistent CodeUnsupported class (fixed to
+  CodeOSUnsupported); EncodeMapped zeroes the mapped page with
+  clear() instead of an element-wise loop the source tripwire treats
+  as a complete-page transfer; crypto/rand.Read for the commit nonce
+  (Rust random::nonzero_128 over getrandom) is exempted ONLY inside
+  internal/writer/reclaim.go and only when the receiver resolves to
+  crypto/rand (battery 314 pins an aliased non-crypto rand.Read,
+  315 pins the benign exact call); internal/fault joined the
+  writer-approved import boundary. Battery 694 -> 696 cases (575
+  fail, 121 benign).
+Validation: go test ./... (both tag sets), -race (writer/mapping/
+reader), vet, gofmt, import-graph check incl. the 696-case battery
+with zero misses, 11/11 cross-builds - all green. Level-2 gate for
+chunk 3b (glm, kimi, minimax, mimo) still pending at this record.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
