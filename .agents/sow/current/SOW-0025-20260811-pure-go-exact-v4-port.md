@@ -1303,6 +1303,51 @@ gofmt, import-graph boundary check all green. Remaining level-2
 verdicts outstanding: glm re-review of this fix, minimax, qwen; kimi
 PASS at 427c3c7.
 
+### 2026-08-18 - level-1 final-gate round at 6041aff: two verified callback-composition misses fixed (HEAD 6041aff -> working tree)
+
+The four level-1 reviewers returned FAIL at 6041aff with seven distinct
+claims about the store-callback composition fences. Each claim was
+reprobed against the real store shape (tree.Store implementations with
+CopyPage, exactly like battery cases P297-P307). Verified results:
+
+- Sartre P1 (field-held callback as helper ARGUMENT, runCb(s.cb, s.buf,
+  s.buf), silent): CONFIRMED MISS. moduleFieldCarrier records s.cb = fn,
+  so checkFuncTypedArgs whitelists the argument and checkCallbackInvokeCalls
+  could not follow a FieldVal fnArg (forwardedCallback/aliasCallback
+  accept only Ident). FIXED: checkCallbackInvokeCalls now resolves a
+  FieldVal argument through the module carrier record and checks its
+  byte views (rules.go).
+- Peirce P2 (paramAliases -1 fail-closed marker dropped): CONFIRMED
+  MISS. A callee that invokes an un-attributable callback value
+  (method value through an identity passthrough) records
+  callbackInvokes[-1]; the store-site fence dropped the record because
+  argAt(-1) can never resolve. FIXED: negative fnSlot records now fail
+  closed on their byte slots: the views handed to the un-attributable
+  value must be mapped at the call site (rules.go).
+- Linnaeus P2-2/P2-3/P2-4 (setter-then-return constructor, two-hop
+  carrier delegation, struct field assigned from a call result): ALL
+  REFUTED by probes - every liar shape is already rejected with the
+  store-callback fence diagnostics.
+- Jason P2-1 (variable-index container dispatch with owned buffers
+  silent): REFUTED - the liar flags (generic unproven-callee fence,
+  callee "?"), the const-index control flags, and the map variant
+  flags. Jason P2-2 (honest twins over-rejected: variable-index and
+  passthrough mapped dispatch): CONFIRMED but ACCEPTED DOCTRINE - the
+  unprovable-callee over-rejection for mapped views is explicitly
+  accepted conservatism, pinned by battery P304 ("pointer-dereferenced
+  callback calls fail closed even with mapped views"); honest code must
+  use the scanned forms (direct formal, identity alias, scanned helper).
+- Sartre P3 (local field carrier honest over-rejected): not reproduced
+  for the store shapes; those honest twins pass.
+
+Battery: 673 -> 676 cases (565 rejections, 111 benign acceptances),
+zero misses under --self-test-jobs 24 (~2:30 wall). New durable pins:
+P364 (field-argument forwarding with owned buffers, reject), P365
+(honest field-argument twin with mapped views, benign), P366
+(un-attributable method-value passthrough with owned buffers, reject).
+Real module scan rc=0 (5 OS); go test (both tag sets), -race, vet
+(module and gate), gofmt, import-graph boundary check all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

@@ -1240,6 +1240,26 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		return i < len(al.forwarded) && al.forwarded[i]
 	}
 	for fnSlot, byteSlots := range fs.callbackInvokes {
+		if fnSlot < 0 {
+			// paramAliases -1: the callee invoked a callback VALUE it
+			// could not attribute to a named parameter (a method value
+			// through an identity passthrough, an unresolved local).
+			// The value may be this store's own callback formal, so the
+			// views handed to it must be mapped views at this call site;
+			// an owned buffer would launder a complete page into owned
+			// memory through an invocation the scan cannot trace.
+			for _, bs := range byteSlots {
+				ba, ok := argAt(bs)
+				if !ok {
+					continue
+				}
+				if pv := w.pageValue(ba); !pv.mapped && !w.compositeCarrierMapped(ba) {
+					w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
+					break
+				}
+			}
+			continue
+		}
 		fnArg, ok := argAt(fnSlot)
 		if !ok {
 			continue
@@ -1253,11 +1273,26 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		mvForwards, mvInternal := w.methodValueCarriesCallback(fnArg)
 		var al *callbackAlias
 		if !forwardedCallback(fnArg) && !mvForwards {
-			a, aok := aliasCallback(fnArg)
-			if !aok {
-				continue
+			// A struct-field argument (runCb(s.cb, x, y)) whose field
+			// key a store implementation bound to its callback formal
+			// (s.cb = fn) forwards the formal exactly like a direct
+			// alias: the byte arguments at this call site must be
+			// mapped views. The binding record is the module-wide
+			// carrier record, so a field bound in another store method
+			// of the same module is followed too; an unbound field is
+			// not a store callback and stays outside the contract.
+			if sel, isSel := unparen(fnArg).(*ast.SelectorExpr); isSel {
+				if key, kk := w.pc.pf.fieldSlotKeyOf(w.pc.info, sel); kk && w.moduleFieldCarrier(key) {
+					al = &callbackAlias{slot: -2, forwarded: nil}
+				}
 			}
-			al = &a
+			if al == nil {
+				a, aok := aliasCallback(fnArg)
+				if !aok {
+					continue
+				}
+				al = &a
+			}
 		}
 		if fs.callbackInvokesInternal[fnSlot] || mvInternal {
 			w.fail(v.Pos(), "store callback forwarded through %s is invoked inside it with buffers the scan cannot prove mapped (complete pages into owned memory)", calleeText(v.Fun))
