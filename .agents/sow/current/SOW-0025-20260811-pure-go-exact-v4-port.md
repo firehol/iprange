@@ -1625,7 +1625,8 @@ Validation: go test ./... (both tag sets), -race, vet, gofmt,
 import-graph, 11/11 cross-builds, 694-case gate battery - all green.
 
 Milestone 2 chunk 4 - publication, commit, abort, close, and bounded
-reclamation (2026-08-18; committed at 0963218 -> working tree): the
+reclamation (2026-08-18; committed at e1c8aeb, corrected from the
+initial working-tree heading below): the
 physical publication path over the chunk 2/3 COW storage surface,
 implemented and locally validated:
 - internal/mapping: FlushRange (msync subrange, Rust flush_range),
@@ -1727,11 +1728,36 @@ one FAIL with two P2 (Sartre). Fix wave committed at 818691f:
   physical_bytes under the exclusive lifetime lock.
 - Level-1 re-review at the fix-wave tree: 5/5 PASS (Linnaeus, Jason,
   Peirce, Sartre, Leibniz). The regression pin for the scanGroup
-  shadowing fails on the pre-fix build (local proof). Level-2 gate
-  (glm, kimi, minimax, mimo) for chunk 4 dispatched at 818691f.
+  shadowing fails on the pre-fix build (local proof).
 Validation (fix wave): go test ./... (both tag sets), -race, vet,
 gofmt, import-graph, 11/11 cross-builds, 697-case gate battery
 (576 fail, 121 benign) - all green, zero misses.
+
+Level-2 gate for chunk 4 (2026-08-18, HEAD d26662f/code 818691f):
+kimi PASS, mimo PASS, minimax PASS, glm FAIL with one P1 and two P2.
+Dispositions:
+- glm P1 (Publish committed_bytes unchecked): REFUTED with direct
+  evidence. Rust writer_core/publication.rs publish computes
+  committed_bytes with an unchecked `page_count * PAGE_SIZE as u64`
+  (same as Go publication.go:130); the checked_mul lives in
+  require_draft_length on both sides (Go checkedMul at
+  publication.go:100, Rust publication.rs:50-55), which the workflow
+  runs before publish. Go matches the authority exactly; a
+  malformed PageCount cannot reach Publish without failing the
+  length gate first.
+- glm P2a (StartDraft zero-nonce class): the all-zero nonce refusal
+  uses CodeFormatInvalid, the module-wide mapping of Rust
+  Error::Corrupt (the same class Rust nonzero_128 returns for an
+  all-zero draw); the caller-supplied-nonce API shape is recorded
+  in the code comment and the SOW; kept as the uniform module
+  mapping, documented, accepted.
+- glm P2b (randomNonce IO mapping): Rust Error::Random(getrandom)
+  maps to ErrorCode::Io; Go returns CodeIO - numeric parity. The
+  mapping is now recorded here; no code change needed.
+- glm P3 (post-sync FileSize, crash tests pending, previousTxn=0,
+  unprovedTailEnd) - accepted as already recorded; the stale
+  chunk-4 header GLM flagged is corrected in this record.
+Re-review with glm dispatched at the corrected record.
 
 ### Gate execution record (2026-08-12)
 
