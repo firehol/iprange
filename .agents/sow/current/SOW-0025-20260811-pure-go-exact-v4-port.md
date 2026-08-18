@@ -1217,6 +1217,47 @@ regression. Real module scan rc=0; go test ./..., -race, vet, gofmt,
 import-graph boundary check, and GOOS=windows/darwin cross builds all
 green. Committed with this SOW record.
 
+### 2026-08-18 - level-2 gate round 1: open-ended slice false positive and fix (HEAD f615d52 -> working tree)
+
+The user directed a level-2 final-gate review of the milestone-1 rework
+with glm, kimi, minimax, and qwen at HEAD f615d52 (all four kept open as
+the level-2 set). kimi returned FAIL with one P2: the gate falsely
+rejected the honest split of ONE mapped page into TWO separate owned
+buffers (a = append(a, page[:2048]...); b = append(b, page[2048:]...),
+the copy() twins, and the helper-mediated forms). The lead reproduced
+all three shapes in probe modules (/tmp/jas5d, /tmp/jas5e) and
+instrumented the gate to print the accumulation keys: the reviewer's
+causal theory (bounded-span accumulation collapsing distinct buffers
+onto one key) is FALSE - accumulation keys stayed per-object with
+correct totals (obj=a, obj=b, obj=c). The real cause is the flow pass's
+sliceLenSym: an OPEN-ENDED slice (x[lo:] with no high bound) of a
+mapped page view returned maxUnknown, so ANY sub-page open-ended view
+was treated as a complete page, rejecting even a 2048-byte copy into a
+2048-cap destination. Fixed in pageflow.go: sliceLenSym now bounds
+x[a:] by base.maxLen - constLow when the base view has a definite
+maximum length; bases with unknown length stay unknown (fail-closed).
+Same-failure search: the copy-parameter helper rule
+(rules.go checkParamCopyCalls) had been catching one-buffer two-half
+assembly through a helper (fr(dst, src) { copy(dst, src) } twice into
+the same caller buffer) ONLY through the same open-ended confusion;
+after the slice fix it went silent, so checkParamCopyCalls now
+accumulates bounded spans onto the CALLER's destination key (mirroring
+checkCopy/checkAppend), rejecting genuine one-buffer assemblies through
+helpers while accepting distinct-buffer splits. Probes: every honest
+split shape (append/copy/helper, two and three buffers, open-ended and
+explicit bounds) passes; every one-buffer assembly liar fails with the
+semantic accumulation messages. Battery: 666 -> 670 cases (561
+rejections, 109 benign acceptances), zero misses under
+--self-test-jobs 24 (~1:50 wall). New durable pins: P357 (open-ended
+two-half append assembly into one buffer, reject), P358 (honest split
+copy + append into separate buffers, benign), P359 (helper-mediated
+one-buffer assembly, reject with expectRule on the call-site span
+message), P360 (honest helper split, benign). Real module scan rc=0
+(5 OS configs); go test (both tag sets), -race, vet, gofmt,
+import-graph boundary check, linux/windows/darwin builds all green.
+Level-2 verdict at f615d52: FAIL (one P2, now fixed); re-review of the
+fixed tree is the next level-2 round.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

@@ -1112,8 +1112,21 @@ func (w *fileRules) checkParamCopyCalls(v *ast.CallExpr, fn *types.Func) {
 				continue
 			}
 			spv := w.pageValue(srcArg)
-			if spv.tainted && pageFull(spv) {
+			if !spv.tainted {
+				continue
+			}
+			if pageFull(spv) {
 				w.fail(v.Pos(), "copy of a mapped page view into an owned buffer through %s (complete page)", calleeText(v.Fun))
+				continue
+			}
+			if spv.maxLen > 0 && spv.maxLen < pageSize {
+				// A bounded span through a copy-parameter helper into an
+				// owned destination: two calls assembling disjoint halves
+				// into ONE caller buffer copy a complete page, exactly
+				// like bounded copies in the calling function.
+				if obj, path := w.boundedCopyKey(dstArg); obj != nil {
+					w.accumulateBoundedSpan(obj, path, spv.maxLen, v.Pos(), "bounded mapped-page spans copied through "+calleeText(v.Fun)+" into one owned buffer (complete page)")
+				}
 			}
 		}
 	}

@@ -4427,7 +4427,7 @@ func (pf *pageFlow) evalExpr(st *stmtState, e ast.Expr) pageValue {
 	case *ast.SliceExpr:
 		base := pf.evalExpr(st, v.X)
 		if base.tainted {
-			sym := sliceLenSym(v, st)
+			sym := sliceLenSym(v, st, base.maxLen)
 			maxLen := int64(maxUnknown)
 			if c, ok := sym.isConst(); ok {
 				maxLen = c
@@ -7776,7 +7776,7 @@ func identOf(e ast.Expr) *ast.Ident {
 }
 
 // sliceLenSym computes the symbolic length of a slice expression.
-func sliceLenSym(v *ast.SliceExpr, st *stmtState) symbol {
+func sliceLenSym(v *ast.SliceExpr, st *stmtState, baseMax int64) symbol {
 	a, okA := symbolOf(v.Low, st)
 	b, okB := symbolOf(v.High, st)
 	switch {
@@ -7785,8 +7785,17 @@ func sliceLenSym(v *ast.SliceExpr, st *stmtState) symbol {
 	case v.Low == nil && okB:
 		return b
 	case v.High == nil && okA:
-		// x[a:] — bounded only when the base bound is known; the
-		// interpreter pages this as unknown (-1).
+		// x[a:] — the remainder of the base view: bounded by the base's
+		// definite maximum length minus a constant offset. Bases whose
+		// length is unknown (params, unbound locals) stay unknown so the
+		// complete-page fence fails closed. A negative or over-long
+		// constant offset cannot name a non-empty remainder.
+		if c, ok := a.isConst(); ok && c >= 0 && baseMax >= 0 {
+			if c >= baseMax {
+				return symConst(0)
+			}
+			return symConst(baseMax - c)
+		}
 		return symConst(maxUnknown)
 	}
 	return symConst(maxUnknown)
