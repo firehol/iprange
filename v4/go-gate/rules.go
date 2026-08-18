@@ -604,7 +604,11 @@ func isFileNamed(n *types.Named) bool {
 // scanned source satisfies their method sets today: Codec, LocalGap and
 // rangeFamily reference module-internal types (tree.Key, tree.LocalPrevious,
 // LocalNext, rangeRecord), and the Store-family method names plus exact
-// signatures exist nowhere in the standard library or x/sys. Any new
+// signatures exist nowhere in the standard library or x/sys. LocalGap
+// dispatch is additionally bounded by construction: the tree core hands
+// it exactly codec.LeafSize() cells (12/36 bytes for the range families),
+// never a whole page - a future codec family whose leaf size approaches
+// page size must re-verify this property. Any new
 // interface must be added here together with its satisfier argument
 // before its dispatch becomes approved; otherwise it keeps failing
 // closed everywhere.

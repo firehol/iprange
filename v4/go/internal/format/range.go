@@ -23,10 +23,12 @@ const (
 	RangeEntryV6Size  = 20
 )
 
-// DecodeRangeRecordV4 parses one 12-byte IPv4 range record.
+// DecodeRangeRecordV4 parses one 12-byte IPv4 range record. The record
+// size is exact, like Rust range_tree.rs decode_fields (a longer cell is
+// malformed, not a prefix).
 func DecodeRangeRecordV4(b []byte) (RangeRecordV4, error) {
-	if len(b) < RangeRecordV4Size {
-		return RangeRecordV4{}, headerErr("short range record %d", len(b))
+	if len(b) != RangeRecordV4Size {
+		return RangeRecordV4{}, headerErr("range record has the wrong size %d", len(b))
 	}
 	r := RangeRecordV4{From: U32(b[0:4]), To: U32(b[4:8]), Value: U32(b[8:12])}
 	if r.From > r.To {
@@ -35,10 +37,12 @@ func DecodeRangeRecordV4(b []byte) (RangeRecordV4, error) {
 	return r, nil
 }
 
-// DecodeRangeRecordV6 parses one 36-byte IPv6 range record.
+// DecodeRangeRecordV6 parses one 36-byte IPv6 range record. The record
+// size is exact, like Rust range_tree.rs decode_fields (a longer cell is
+// malformed, not a prefix).
 func DecodeRangeRecordV6(b []byte) (RangeRecordV6, error) {
-	if len(b) < RangeRecordV6Size {
-		return RangeRecordV6{}, headerErr("short range record %d", len(b))
+	if len(b) != RangeRecordV6Size {
+		return RangeRecordV6{}, headerErr("range record has the wrong size %d", len(b))
 	}
 	fromHi, fromLo := U128(b[0:16])
 	toHi, toLo := U128(b[16:32])

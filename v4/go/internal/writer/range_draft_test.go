@@ -104,8 +104,25 @@ func TestDraftStoreRangeAccountingFailsClosedOnMembershipKinds(t *testing.T) {
 	}
 	budget := PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}
 	_, store, _ := openDraftStore(t, path, budget, [16]byte{6})
+	rootBefore := store.draft.meta.RangeRoot
+	countBefore := store.draft.meta.RangeRecordCount
 	if _, err := store.AssignV4(0, 10, 1); err == nil {
 		t.Fatal("membership-kind range assign did not fail closed")
+	}
+	// Rust draft_store.rs snapshots root/count into locals and commits
+	// them only after the edit succeeds: a failed assign must leave the
+	// draft meta at its pre-call state, and retrying the same edit must
+	// be clean (chunk 3b level-1 F-1 regression pin).
+	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
+		t.Fatalf("failed assign mutated draft meta: root %d->%d count %d->%d",
+			rootBefore, store.draft.meta.RangeRoot, countBefore, store.draft.meta.RangeRecordCount)
+	}
+	if _, err := store.AssignV4(0, 10, 1); err == nil {
+		t.Fatal("membership-kind range assign retry did not fail closed")
+	}
+	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
+		t.Fatalf("failed assign retry mutated draft meta: root %d->%d count %d->%d",
+			rootBefore, store.draft.meta.RangeRoot, countBefore, store.draft.meta.RangeRecordCount)
 	}
 }
 

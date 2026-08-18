@@ -1550,8 +1550,8 @@ storage surface, implemented and locally validated:
   LocalInsert, CachedInsert, EdgeInsert, PrivatePosition, PrivateEdge,
   RootEdge, FlushEdge, InsertIfLocalGap, InsertIfCachedInteriorGap,
   InsertRejectedGap, InsertIfEdgeGap, ReplaceLocalPredecessorWith,
-  ReplaceLocalRun); SplitLeafAtEdge + locatePrivatePosition in
-  insert.rs parity.
+  ReplaceLocalRun, LocalReject, LocalRun); SplitLeafAtEdge +
+  locatePrivatePosition in insert.rs parity.
 - internal/writer: range_codec.go (rangeFamily/rangeRecord,
   rangeCodec4/rangeCodec6 with 32-bit and 128-bit checked next/
   previous arithmetic); range_edit.go (Rust range_mutation.rs +
@@ -1585,6 +1585,44 @@ Validation: go test ./... (both tag sets), -race on
 tree/bitmap/retire/writer/format, vet, gofmt, import-graph check,
 11/11 cross-builds, and the 694-case gate battery (574 fail forms,
 120 benign forms) - all green, battery with zero misses.
+
+Level-1 review round (2026-08-18, chunk 3b; reviewed at HEAD
+f85574d): five aspect reviewers; four PASS, one FAIL with one P2:
+- Leibniz F-1 (P2, durability): the Go range entry points mutated
+  draft meta in place through pointers (rangeCtx root/count into
+  s.draft.meta), while Rust draft_store.rs assign/clear snapshot
+  range_root/range_record_count into locals and commit them to meta
+  only after the state machine returns. A mid-edit failure (e.g. the
+  membership/structured accounting fence) therefore left Go meta
+  partially mutated, so a retry of the same edit would observe the
+  record already present instead of replaying cleanly. Fixed: assign/
+  clear now snapshot root/count into locals and commit on success only
+  (range_draft.go); the regression is pinned in
+  TestDraftStoreRangeAccountingFailsClosedOnMembershipKinds (meta
+  unchanged after failed assign, retry stays clean).
+- F-2 (P3) folded into F-1: multi-step rewrites abandon partial
+  mutations on mid-sequence errors; byte-for-byte parity with Rust
+  sequencing; with the local-snapshot fix the draft meta stays at the
+  pre-call state, matching Rust.
+- P3 dispositions: wire decode guards tightened to exact record size
+  (Rust decode_fields parity) with an IPv6 literal vector pin added;
+  the BigEndian test name is inherited from the Rust test name
+  (big_endian_portable_range_record_matches_literal_bytes) and the
+  comment states little-endian - accepted with record; no battery
+  pins yet for the three new interface approvals (P242-style control)
+  - tracked for the gate follow-up; unguarded internal type
+  assertions (pred.(rangeRecord), leaf.Selection.(gapDecision)) are
+  internal-consistency style and fail closed by panic - accepted with
+  record; LocalGap bounded-by-construction depends on codec LeafSize
+  staying small - recorded in the gate comment.
+- Re-review: Leibniz PASS at the fixed working tree (no P0-P2). The
+  regression pin fails on the pre-fix build (local-ctx proof in the
+  test record). Residual P3 accepted: a failed membership-kind assign
+  still strands one private page on the draft dirty chain (meta never
+  names it); same accepted abort-on-error class; the draft-level abort
+  surface arrives at chunk 4 close/reclaim.
+Validation: go test ./... (both tag sets), -race, vet, gofmt,
+import-graph, 11/11 cross-builds, 694-case gate battery - all green.
 
 ### Gate execution record (2026-08-12)
 

@@ -13,6 +13,17 @@ func corrupt(pattern string, args ...any) error {
 	return &format.Error{Code: format.CodeFormatInvalid, Detail: fmt.Sprintf(pattern, args...)}
 }
 
+// exactRecordView bounds a page-end record view to its exact record
+// size. The wire record decoders require exact cells (Rust
+// decode_fields parity), while SlottedPage.Record returns a view that
+// runs to the end of the page.
+func exactRecordView(b []byte, size int) ([]byte, error) {
+	if len(b) < size {
+		return nil, corrupt("short range record %d", len(b))
+	}
+	return b[:size], nil
+}
+
 // Range tree access (binary-format-v4.md sections 5.3 and 6). Lookup
 // allocates no heap bytes: branch and leaf records are decoded from checked
 // mapped views into bounded scalars, and descent verifies the exact one-level
@@ -218,6 +229,10 @@ func rangeLeafLookup4(leaf format.SlottedPage, addr uint32) (format.RangeRecordV
 	if err != nil {
 		return format.RangeRecordV4{}, false, err
 	}
+	b, err = exactRecordView(b, format.RangeRecordV4Size)
+	if err != nil {
+		return format.RangeRecordV4{}, false, err
+	}
 	rec, err := format.DecodeRangeRecordV4(b)
 	if err != nil {
 		return format.RangeRecordV4{}, false, err
@@ -249,6 +264,10 @@ func rangeLeafLookup6(leaf format.SlottedPage, addrHi, addrLo uint64) (format.Ra
 	}
 	work.LeafValidation(1)
 	b, err := leaf.Record(best)
+	if err != nil {
+		return format.RangeRecordV6{}, false, err
+	}
+	b, err = exactRecordView(b, format.RangeRecordV6Size)
 	if err != nil {
 		return format.RangeRecordV6{}, false, err
 	}
@@ -379,6 +398,10 @@ func (r *ImmutableReader) walkRangeLeaf4(sl format.SlottedPage, visit func(Range
 		if err != nil {
 			return err
 		}
+		b, err = exactRecordView(b, format.RangeRecordV4Size)
+		if err != nil {
+			return err
+		}
 		rec, err := format.DecodeRangeRecordV4(b)
 		if err != nil {
 			return err
@@ -491,6 +514,10 @@ func (r *ImmutableReader) walkRangeDescend6(pgno uint32, expectedLevel uint16, v
 func (r *ImmutableReader) walkRangeLeaf6(sl format.SlottedPage, visit func(RangeVisit6) error) error {
 	for i := 0; i < int(sl.Header.ItemCount); i++ {
 		b, err := sl.Record(i)
+		if err != nil {
+			return err
+		}
+		b, err = exactRecordView(b, format.RangeRecordV6Size)
 		if err != nil {
 			return err
 		}

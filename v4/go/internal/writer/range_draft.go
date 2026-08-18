@@ -8,31 +8,30 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// rangeTree returns the per-family range edit context over the draft meta
-// (Rust draft_store.rs range_tree_private dispatch).
-func (s *DraftStore) rangeTree() (*rangeCtx, error) {
-	var family rangeFamily
+// rangeFamily returns the per-family range codec for the draft (Rust
+// draft_store.rs RangeCodec selection). The range root and record count
+// are snapshotted into locals by assign/clear and committed to the draft
+// meta only after the edit succeeds, exactly like Rust draft_store.rs
+// assign/clear (locals written back after the state machine returns).
+func (s *DraftStore) rangeFamily() (rangeFamily, error) {
 	switch s.draft.meta.AddressFamily {
 	case format.AddressFamilyIPv4:
-		family = rangeCodec4{}
+		return rangeCodec4{}, nil
 	case format.AddressFamilyIPv6:
-		family = rangeCodec6{}
+		return rangeCodec6{}, nil
 	default:
 		return nil, corrupt("draft has no supported address family")
 	}
-	return &rangeCtx{
-		family: family,
-		store:  s,
-		root:   &s.draft.meta.RangeRoot,
-		count:  &s.draft.meta.RangeRecordCount,
-	}, nil
 }
 
 func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
-	ctx, err := s.rangeTree()
+	family, err := s.rangeFamily()
 	if err != nil {
 		return false, err
 	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
 	var changed bool
 	if s.draft.rangeTreePrivate {
 		changed, err = rangeAssignPrivate(ctx, from, to, value)
@@ -42,19 +41,26 @@ func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }
 
 func (s *DraftStore) clear(from, to tree.Key) (bool, error) {
-	ctx, err := s.rangeTree()
+	family, err := s.rangeFamily()
 	if err != nil {
 		return false, err
 	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
 	changed, err := rangeClear(ctx, from, to)
 	if err != nil {
 		return false, err
 	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }

@@ -157,6 +157,44 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 	}
 }
 
+// TestIpv6RangeRecordMatchesLiteralBytes pins the IPv6 wire vector: the
+// 128-bit keys encode little-endian with the low limb first (Rust
+// key.rs write_le), followed by the value (Rust range_tree.rs
+// encode_record).
+func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
+	r := rangeRecord{
+		from:  tree.Key{Hi: 0x0102030405060708, Lo: 0x090a0b0c0d0e0f10},
+		to:    tree.Key{Hi: 0x1112131415161718, Lo: 0x191a1b1c1d1e1f20},
+		value: 0x2a2b2c2d,
+	}
+	encoded, err := newEncodedRange(rangeCodec6{}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{
+		0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+		0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+		0x20, 0x1f, 0x1e, 0x1d, 0x1c, 0x1b, 0x1a, 0x19,
+		0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
+		0x2d, 0x2c, 0x2b, 0x2a,
+	}
+	if len(encoded.slice()) != len(want) {
+		t.Fatalf("encoded length = %d, want %d", len(encoded.slice()), len(want))
+	}
+	for i := range want {
+		if encoded.slice()[i] != want[i] {
+			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded.slice()[i], want[i])
+		}
+	}
+	decoded, err := rangeCodec6{}.ReadLeaf(encoded.slice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.(rangeRecord) != r {
+		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
+	}
+}
+
 // TestOverlappingRangesApplyInArrivalOrder mirrors the Rust test.
 func TestOverlappingRangesApplyInArrivalOrder(t *testing.T) {
 	m := newRangeMemoryStore()
