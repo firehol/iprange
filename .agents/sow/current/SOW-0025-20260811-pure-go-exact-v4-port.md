@@ -1681,7 +1681,12 @@ implemented and locally validated:
 Validation: go test ./... (both tag sets), -race (writer/mapping/
 reader), vet, gofmt, import-graph check incl. the 696-case battery
 with zero misses, 11/11 cross-builds - all green. Level-2 gate for
-chunk 3b (glm, kimi, minimax, mimo) still pending at this record.
+chunk 3b (glm, kimi, minimax, mimo) closed at 818691f: all four
+reviewers PASS with no P0-P2 (kimi verified assign/clear state
+machine, gap machinery, wire parity; mimo verified local-commit,
+exact-size decode, gate approvals; glm verified gap/assign/wire
+parity end to end; minimax verified the full edit core, durability
+fix, fail-closed accounting, and record accuracy).
 
 Chunk 4 level-1 review round (2026-08-18; reviewed at HEAD e1c8aeb):
 five aspect reviewers; four PASS (Linnaeus, Peirce, Jason, Leibniz),
