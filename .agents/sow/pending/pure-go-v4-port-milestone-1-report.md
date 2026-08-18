@@ -1612,3 +1612,41 @@ user separately. Lead re-verification at close: gate production scan
 rc=0, battery 578/578 (495 rejections, 83 benign), go test ./... (both
 tag sets), -race, vet, gofmt, import graph, SOW audit - all green.
 Milestone 1: CLOSED. Milestone 2 (writer) is authorized to start.
+
+Round-7 final re-verification (2026-08-18): after the 4f11e3d close, the
+user restarted the review swarm under the SOW's level-1/level-2 operating
+rules (five aspect subagents as level-1; glm, kimi, minimax, mimo as
+level-2) and requested a final check before closing milestone 1. The
+round-7 swarm delivered nine reviews: PASS kimi, mimo, minimax, qwen,
+Linnaeus; FAIL Sartre (P1: store callback forwarded as a getter CALL
+RESULT, runCbG(st.cbGet(), x, st.buf) laundered an owned buffer), Jason
+(P2-1: variable-index dispatch through a composite-literal func
+container, fns[i](out, out) with a non-constant index), and Peirce (P2:
+variadic/slice element-wise callback invocation, fireCbsV(out, fn) and
+fireCbsIdxV(out, []func{fn})). GLM's FAIL was probe-refuted on every
+claim: P1 (TypeParam recording mis-slots) and P2a (indexed container
+calls misclassified as generic instantiations) reproduce nothing at the
+reviewed binary, and P2b (type-param receiver T.Close(v)) is a
+pre-existing doctrine-accepted conservatism that fails for every
+receiver shape, not a round-7 delta. Jason P3 (func-typed receiver
+method-expression) and Linnaeus P3 (interface-erasure receiver slot)
+were recorded as accepted-conservatism without pins: honest isolated
+runs fail identically to the plain func-typed-formal control.
+
+All three confirmed gaps were fixed at the round-7 final HEAD
+(storeCbSlots: a module-wide fixpoint marking function parameter slots
+that provably receive the store callback formal; composite-literal
+func-container forwards; getter call-result resolution through the
+callee summary's returnFieldKeys/returnSlotAliases). During the fixes,
+the lead's first admission attempt (any func-container formal) was
+probe-detected as a P68 regression and re-scoped to provable
+store-callback carriers only. The durable battery is now 694 cases
+(574 rejections, 120 benign acceptances) plus 9 shell environment
+mutations, zero misses under --self-test-jobs 24, with the four new
+round-7 shapes pinned as P377-P384 (each liar with its honest twin).
+
+Lead re-verification at this close: gate production scan rc=0 (5 OS
+targets), battery 694/694, go test ./... (both tag sets), -race, vet
+(module and gate), gofmt, import-graph boundary check - all green.
+Milestone 1: CLOSED (round-7 final, 2026-08-18). Milestone 2 (writer)
+remains authorized and in progress.

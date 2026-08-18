@@ -1446,6 +1446,64 @@ OS); go test (both tag sets), -race, vet (module and gate), gofmt,
 import-graph boundary check all green.
 
 
+### 2026-08-18 - round-7 final: three confirmed gate gaps fixed; the container admission scoped to provable store-callback carriers; GLM claims refuted (battery 686 -> 694)
+
+The round-7 swarm delivered nine reviews: PASS kimi, mimo, minimax,
+qwen, Linnaeus; FAIL Sartre (P1: getter call-result carrier), Jason
+(P2-1: variable-index composite dispatch), Peirce (P2: variadic/slice
+element-wise callback invocation). GLM FAIL was probe-refuted on every
+claim: P1 (TypeParam recording mis-slots) and P2a (indexed container
+calls misclassified as generic instantiations) reproduce nothing at the
+reviewed binary, and P2b (type-param receiver `T.Close(v)`) is a
+pre-existing doctrine-accepted conservatism that fails for every
+receiver shape, not a round-7 delta. Jason P3 (func-typed receiver
+method-expression) and Linnaeus P3 (interface-erasure on the receiver
+slot) were recorded as accepted-conservatism without pins: honest
+isolated runs fail identically to the plain func-typed-formal control.
+
+Lead probing during the fixes found that the first admission attempt
+(admitting ANY func-container formal as a scanned callback container)
+introduced a REGRESSION: `fs[0](page)` with `fs []func([]byte) int` a
+non-store formal stopped failing (battery P68 MISS at the intermediate
+build; the committed HEAD binary passes 686/686). Root cause: the
+element admission must apply only to containers that PROVABLY carry
+the store callback, never to an arbitrary func-container formal whose
+call sites are not policed.
+
+FIXED (rules.go, pageflow.go, main.go):
+
+1. `storeCbSlots`: a module-wide fixpoint (`computeStoreCbSlots`) marks
+   every function parameter slot that receives the store callback
+   formal from a store implementation, directly or through forwarding
+   chains (aliases, carrier fields, indexed holders, container
+   elements, and composite-literal containers). `rangeVarHoldsCallback`
+   and `indexCalleeOverFuncFormal` now admit only marked containers:
+   the P68 class is fail-closed again, while the honest
+   store-sanctioned helpers (`fireCbs(x, fn)` and alike) stay admitted.
+2. Composite-literal container forwards at store call sites
+   (`fireCbsIdx(out, []func(page []byte) error{fn})`) were STILL silent
+   after the first fixes (probe var.go:44). `slotOfExpr` and
+   `callbackSlotOf` now resolve func-container composite literals
+   through their elements, and `forwardedCallback` accepts them, so the
+   owned buffer fails at the store site exactly like a direct forward.
+3. Sartre P1 (getter call-result carrier:
+   `runCbT1(st.cbGet(), x, st.buf)`): `callbackArgAlias` resolves call
+   results through the callee summary's `returnFieldKeys` /
+   `returnSlotAliases` and fails closed on un-attributable results, so
+   the owned `st.buf` handed to the getter-produced callback is
+   rejected at the store site.
+
+Honest twins for all four shapes verified clean in isolation (8-file
+honest module scans rc=0); the four liar shapes flag exactly at the
+store sites with the store-fence rules.
+
+Battery: 686 -> 694 cases (574 rejections, 120 benign acceptances),
+zero misses under --self-test-jobs 24, full shell-side mutation suite
+green. New durable pins P377-P384 (the four round-7 store-callback
+container shapes, each with its honest twin). Real module scan rc=0
+(5 OS); go test (both tag sets), -race, vet (module and gate), gofmt,
+import-graph boundary check all green.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
@@ -4941,8 +4999,10 @@ Artifact maintenance gate:
   project record, not published product documentation.
 - End-user/operator skills: none exist and no public workflow changed.
 - SOW lifecycle: this file remains `in-progress` under `current/`; Milestone 1
-  is CLOSED at HEAD 4f11e3d after the final check (2026-08-17); Milestone 2
-  (writer) is authorized to start; SOW-0017 remains the separate Phase-2 item.
+  is CLOSED after the final check (2026-08-17, HEAD 4f11e3d) and re-closed
+  after the round-7 final re-verification (2026-08-18, 694-case battery,
+  entry in Status above); Milestone 2 (writer) is authorized and in
+  progress; SOW-0017 remains the separate Phase-2 item.
 
 Specs update:
 

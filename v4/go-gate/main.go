@@ -246,6 +246,12 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 			pc.pf.summaries = sums
 			checks[di.pkg] = pc
 		}
+		// The store-callback carrier slots are a module-wide property
+		// (which function parameters receive the store callback formal
+		// from a store implementation, directly or through forwarding
+		// chains): computed once after every package's summaries
+		// stabilize, read by the rules pass.
+		store.computeStoreCbSlots(checks)
 		for _, di := range dirs {
 			pc := checks[di.pkg]
 			if pc == nil {

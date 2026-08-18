@@ -781,13 +781,32 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			if w.approvedFuncParamVar(o) {
 				return true
 			}
+			// A func-typed range variable over a callback container
+			// (for _, cb := range cbs { cb(v) }) is an element of the
+			// container, whose call sites bind scanned callbacks: the
+			// loop value is a scanned callee exactly like the formal
+			// itself, so calls through it are approved transfers.
+			if w.rangeVarHoldsCallback(o) {
+				return true
+			}
 			return w.approvedFuncVar(o, 0)
 		}
 		return false
 	case *ast.IndexExpr:
-		return w.approvedGenericCallee(f.X)
+		if w.approvedGenericCallee(f.X) {
+			return true
+		}
+		// An indexed element of a func-typed FORMAL container
+		// (cbs[i](v) with cbs ...func(page []byte) error) is a scanned
+		// callback: the container's call sites bind scanned callbacks,
+		// so the element call is an approved transfer like the formal
+		// itself.
+		return w.indexCalleeOverFuncFormal(f)
 	case *ast.IndexListExpr:
-		return w.approvedGenericCallee(f.X)
+		if w.approvedGenericCallee(f.X) {
+			return true
+		}
+		return w.indexCalleeOverFuncFormal(f)
 	case *ast.SelectorExpr:
 		obj := w.pc.info.Uses[f.Sel]
 		fn, ok := obj.(*types.Func)
@@ -1192,44 +1211,6 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 	// the views the callee hands it. A wrapper literal forwards only
 	// the closure parameter positions recorded in its alias; identity
 	// aliases forward every position.
-	forwardedCallback := func(e ast.Expr) bool {
-		id, ok := unparen(e).(*ast.Ident)
-		if !ok {
-			return false
-		}
-		obj, ok := w.pc.info.Uses[id].(*types.Var)
-		return ok && w.approvedFuncParamVar(obj)
-	}
-	// aliasCallback resolves a local func-typed argument through the
-	// enclosing store implementation's recorded aliases: the local must
-	// wrap the implementation's own callback formal for the fence to
-	// follow it.
-	aliasCallback := func(e ast.Expr) (callbackAlias, bool) {
-		id, ok := unparen(e).(*ast.Ident)
-		if !ok {
-			return callbackAlias{}, false
-		}
-		obj, ok := w.pc.info.Uses[id].(*types.Var)
-		if !ok || w.pc.pf == nil || w.curFunc == nil {
-			return callbackAlias{}, false
-		}
-		encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
-		if !ok {
-			return callbackAlias{}, false
-		}
-		if al, ok := encl.callbackAliases[obj]; ok {
-			return al, ok
-		}
-		// An alias recorded only in paramAliases survives instability
-		// (reassignment, branch install, address taken): the value may
-		// still hold the formal, so the invocation fence follows it
-		// fail-closed (-1 marks a proven-formal-returning call result
-		// whose argument could not be attributed).
-		if ps, ok := encl.paramAliases[obj]; ok {
-			return callbackAlias{slot: ps, forwarded: nil}, true
-		}
-		return callbackAlias{}, false
-	}
 	fail := func(fnArg ast.Expr) {
 		w.fail(v.Pos(), "store callback %s must receive mapped page views through %s (an owned callback buffer launders complete pages into owned memory)", calleeText(fnArg), calleeText(v.Fun))
 	}
@@ -1280,22 +1261,23 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		// views itself) fails closed.
 		mvForwards, mvInternal := w.methodValueCarriesCallback(fnArg)
 		var al *callbackAlias
-		if !forwardedCallback(fnArg) && !mvForwards {
+		if !w.forwardedCallback(fnArg) && !mvForwards {
 			// A struct-field argument (runCb(s.cb, x, y)) whose field
 			// key a store implementation bound to its callback formal
-			// (s.cb = fn) forwards the formal exactly like a direct
-			// alias: the byte arguments at this call site must be
+			// (s.cb = fn), a call-result argument (runCb(s.cbGet(), x,
+			// y)) whose getter returns the carrier field or
+			// identity-returns its own func-typed parameter, and a
+			// local alias all forward the formal exactly like a direct
+			// pass: the byte arguments at this call site must be
 			// mapped views. The binding record is the module-wide
 			// carrier record, so a field bound in another store method
-			// of the same module is followed too; an unbound field is
-			// not a store callback and stays outside the contract.
-			if sel, isSel := unparen(fnArg).(*ast.SelectorExpr); isSel {
-				if key, kk := w.pc.pf.fieldSlotKeyOf(w.pc.info, sel); kk && w.moduleFieldCarrier(key) {
-					al = &callbackAlias{slot: -2, forwarded: nil}
-				}
-			}
-			if al == nil {
-				a, aok := aliasCallback(fnArg)
+			// of the same module is followed too; an unbound field or
+			// an un-attributable call result is not a store callback
+			// and stays outside the contract.
+			if ok, al2 := w.callbackArgAlias(fnArg, 0); ok {
+				al = al2
+			} else {
+				a, aok := w.aliasCallback(fnArg)
 				if !aok {
 					continue
 				}
@@ -1337,8 +1319,8 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 		if !ok {
 			continue
 		}
-		if !forwardedCallback(fnArg) {
-			if _, aok := aliasCallback(fnArg); !aok {
+		if !w.forwardedCallback(fnArg) {
+			if _, aok := w.aliasCallback(fnArg); !aok {
 				continue
 			}
 		}
@@ -1453,6 +1435,114 @@ func (w *fileRules) checkCallbackInvokeCalls(v *ast.CallExpr, fn *types.Func) {
 			}
 		}
 	}
+}
+
+// forwardedCallback reports whether a func-typed argument is the
+// enclosing store implementation's own callback formal, directly or
+// assembled into a func-container composite literal ([]func{fn, fn}):
+// an element of the literal is the formal, so the byte views at this
+// call site must be mapped exactly like a direct forward.
+func (w *fileRules) forwardedCallback(e ast.Expr) bool {
+	if lit, isLit := unparen(e).(*ast.CompositeLit); isLit && elemFuncType(w.typeOf(lit)) {
+		for _, el := range lit.Elts {
+			if w.callbackSlotOf(el) {
+				return true
+			}
+		}
+		return false
+	}
+	id, ok := unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	obj, ok := w.pc.info.Uses[id].(*types.Var)
+	return ok && w.approvedFuncParamVar(obj)
+}
+
+// aliasCallback resolves a local func-typed argument through the
+// enclosing store implementation's recorded aliases: the local must
+// wrap the implementation's own callback formal for the fence to
+// follow it.
+func (w *fileRules) aliasCallback(e ast.Expr) (callbackAlias, bool) {
+	id, ok := unparen(e).(*ast.Ident)
+	if !ok {
+		return callbackAlias{}, false
+	}
+	obj, ok := w.pc.info.Uses[id].(*types.Var)
+	if !ok || w.pc.pf == nil || w.curFunc == nil {
+		return callbackAlias{}, false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok {
+		return callbackAlias{}, false
+	}
+	if al, ok := encl.callbackAliases[obj]; ok {
+		return al, ok
+	}
+	// An alias recorded only in paramAliases survives instability
+	// (reassignment, branch install, address taken): the value may
+	// still hold the formal, so the invocation fence follows it
+	// fail-closed (-1 marks a proven-formal-returning call result
+	// whose argument could not be attributed).
+	if ps, ok := encl.paramAliases[obj]; ok {
+		return callbackAlias{slot: ps, forwarded: nil}, true
+	}
+	return callbackAlias{}, false
+}
+
+// callbackArgAlias resolves a func-typed argument of a store-callback
+// forward to its alias marker, following direct formals, recorded
+// aliases, carrier fields, and call results that return them: a getter
+// returning the carrier field (cbGet() returning s.cb) forwards the
+// stored callback exactly like the direct selector spelling, and an
+// identity getter returning one of its own func-typed parameters
+// (fwd(fn) returning f) forwards that argument position. A result the
+// scan cannot attribute stays outside the contract: the argument is
+// not provably the store's callback formal.
+func (w *fileRules) callbackArgAlias(e ast.Expr, depth int) (bool, *callbackAlias) {
+	if depth > 2 {
+		return false, nil
+	}
+	switch a := unparen(e).(type) {
+	case *ast.Ident:
+		if w.forwardedCallback(a) {
+			return true, nil
+		}
+		al, ok := w.aliasCallback(a)
+		return ok, &al
+	case *ast.SelectorExpr:
+		if w.pc.pf != nil {
+			if key, kk := w.pc.pf.fieldSlotKeyOf(w.pc.info, a); kk && w.moduleFieldCarrier(key) {
+				return true, &callbackAlias{slot: -2, forwarded: nil}
+			}
+		}
+		return false, nil
+	case *ast.CallExpr:
+		if w.pc.pf == nil {
+			return false, nil
+		}
+		fs := w.calleeSummary(a.Fun)
+		if fs == nil {
+			return false, nil
+		}
+		if p, ok := fs.returnSlotAliases[0]; ok {
+			if p == -2 {
+				// Different branches return different parameters: the
+				// result is one of them, so the fence follows it
+				// fail-closed.
+				return true, &callbackAlias{slot: -2, forwarded: nil}
+			}
+			if p < 0 || p >= len(a.Args) {
+				return false, nil
+			}
+			return w.callbackArgAlias(a.Args[p], depth+1)
+		}
+		if fk, ok := fs.returnFieldKeys[0]; ok && fk != multiReturnKey && w.moduleFieldCarrier(fk) {
+			return true, &callbackAlias{slot: -2, forwarded: nil}
+		}
+		return false, nil
+	}
+	return false, nil
 }
 
 // paramOf reports whether e names a []byte-typed parameter of the
@@ -1938,6 +2028,19 @@ func (w *fileRules) callbackSlotOf(e ast.Expr) bool {
 		return w.indexHoldsCallbackFormal(t)
 	case *ast.TypeAssertExpr:
 		return w.callbackSlotOf(t.X)
+	case *ast.CompositeLit:
+		// A func-container composite literal ([]func{fn, fn}) assembles
+		// the container from its elements: a composite whose element
+		// resolves to the store formal is a container of the callback
+		// (the flow-side slotOfExpr agrees). Any element can be
+		// selected by an index, so one formal-bound element is enough.
+		if elemFuncType(w.typeOf(t)) {
+			for _, el := range t.Elts {
+				if w.callbackSlotOf(el) {
+					return true
+				}
+			}
+		}
 	case *ast.CallExpr:
 		// A conversion (any(s.cb), (cbSig)(fn)) is an identity on the
 		// bound value; a real call result resolves through the callee
@@ -1974,6 +2077,103 @@ func (w *fileRules) indexHoldsCallbackFormal(e ast.Expr) bool {
 		return ok
 	}
 	return false
+}
+
+// rangeVarHoldsCallback reports whether a func-typed local is a range
+// variable over a container of the current function that holds the
+// store callback formal (for _, cb := range cbs with cbs a func-typed
+// formal, or fns a local slice whose elements hold the formal): an
+// invocation through the loop value is an element invocation of the
+// callback, so the byte views it receives are policed by the same
+// fences as a direct formal call.
+func (w *fileRules) rangeVarHoldsCallback(v *types.Var) bool {
+	if w.pc.pf == nil || w.curFunc == nil || v == nil || funcSignature(v.Type()) == nil {
+		return false
+	}
+	encl, ok := w.pc.pf.summaries[funcKey(w.curFunc)]
+	if !ok || encl.rangeVars == nil {
+		return false
+	}
+	c, ok := encl.rangeVars[v]
+	if !ok {
+		return false
+	}
+	if id, isID := unparen(c).(*ast.Ident); isID {
+		if obj, isVar := w.pc.info.Uses[id].(*types.Var); isVar && elemFuncType(obj.Type()) {
+			// A func-CONTAINER formal (for _, cb := range cbs): the
+			// container is a scanned callback container exactly like
+			// the formal itself only when it provably receives the
+			// store callback (storeCbBoundParam): then the binding call
+			// sites are policed by the store fence. Any other
+			// func-container formal has unproven elements and keeps the
+			// fail-closed rule.
+			if w.storeCbBoundParam(obj) {
+				return true
+			}
+			// A local func-CONTAINER (fns := []func{fn, fn}) holds the
+			// formal when the flow recorded any formal-bound element
+			// for it: a variable-index or ranged dispatch can name the
+			// callback.
+			for k := range encl.indexAliases {
+				if k.root == obj {
+					return true
+				}
+			}
+		}
+	}
+	return w.callbackSlotOf(c)
+}
+
+// storeCbBoundParam reports whether a func-typed (or func-container)
+// formal parameter of the enclosing function provably receives the
+// store callback formal: a store implementation binds its own callback
+// formal into the slot, directly or through a chain of forwarding
+// helpers (summaryStore.storeCbSlots, computed module-wide after the
+// summaries stabilize). Only such containers are scanned callback
+// containers at their definition site; any other func-container formal
+// keeps the unproven-indirection fail-closed rule, because nothing
+// guarantees its call sites bind scanned callbacks.
+func (w *fileRules) storeCbBoundParam(obj *types.Var) bool {
+	if obj == nil || w.curFunc == nil || w.pc.pf == nil || w.pc.pf.store == nil || w.pc.pf.store.storeCbSlots == nil {
+		return false
+	}
+	if w.curFunc.Type.Params == nil {
+		return false
+	}
+	idx := 0
+	if w.curFunc.Recv != nil && len(w.curFunc.Recv.List) > 0 {
+		idx = 1
+	}
+	for _, f := range w.curFunc.Type.Params.List {
+		for _, name := range f.Names {
+			if w.pc.info.ObjectOf(name) == obj {
+				return w.pc.pf.store.storeCbSlots[funcKey(w.curFunc)][idx]
+			}
+			idx++
+		}
+	}
+	return false
+}
+
+// indexCalleeOverFuncFormal reports whether an indexed callee names an
+// element of a func-typed container formal that provably receives the
+// store callback (cbs[i](v) with cbs ...func(page []byte) error bound
+// by a store implementation): the container is a scanned callback
+// container exactly like the formal itself (storeCbBoundParam), so the
+// element invocation is a scanned call rather than an unproven
+// indirection. Any other func-container formal has unproven elements
+// and keeps the fail-closed rule (fs[0](page) with fs a plain
+// []func([]byte) int parameter must stay an unproven callee).
+func (w *fileRules) indexCalleeOverFuncFormal(e ast.Expr) bool {
+	key, ok := indexSlotKeyOf(w.pc.info, e)
+	if !ok {
+		return false
+	}
+	obj, isVar := key.root.(*types.Var)
+	if !isVar || !elemFuncType(obj.Type()) {
+		return false
+	}
+	return w.storeCbBoundParam(obj)
 }
 
 // callResultHoldsCallbackFormal reports whether a call-typed callee
@@ -2545,10 +2745,17 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// scanned callback.
 			formalLike := w.approvedFuncParamVar(obj)
 			aliasLike := w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj)
-			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike {
+			// A func-typed range variable over a callback container
+			// (for _, cb := range cbs { cb(x) }) is an element
+			// invocation of the callback: the container's call sites
+			// bind scanned callbacks, so the loop value is a scanned
+			// callee exactly like the formal itself, and the store
+			// counter-check demands mapped views for its byte args.
+			rangeLike := w.rangeVarHoldsCallback(obj)
+			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike && !rangeLike {
 				varIndirect = true
 			}
-			if w.isStoreCallbackImpl() && (formalLike || aliasLike || w.forwardsCallbackFormal(v)) {
+			if w.isStoreCallbackImpl() && (formalLike || aliasLike || rangeLike || w.forwardsCallbackFormal(v)) {
 				w.checkStoreCallbackViews(v, fun)
 			}
 		}
@@ -2612,6 +2819,18 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		// so the counter-check demands mapped views like every holder.
 		if w.isStoreCallbackImpl() && w.indexHoldsCallbackFormal(f) {
 			w.checkStoreCallbackViews(v, f)
+		}
+		// An indexed element of a func-typed FORMAL container
+		// (cbs[i](v) with cbs ...func(page []byte) error) is a scanned
+		// callback exactly like the container itself: the call sites
+		// binding the container are policed, so the element call is not
+		// an unproven indirection, and the store counter-check applies
+		// to the views it receives.
+		if w.indexCalleeOverFuncFormal(f) {
+			if w.isStoreCallbackImpl() {
+				w.checkStoreCallbackViews(v, f)
+			}
+			break
 		}
 		varIndirect = true
 	case *ast.StarExpr:

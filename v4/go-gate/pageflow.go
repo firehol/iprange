@@ -175,6 +175,15 @@ type funcSummary struct {
 	// alias so the helper's byte arguments are still required to be
 	// mapped views.
 	callbackAliases map[types.Object]callbackAlias
+	// rangeVars records func-typed range variables bound from a
+	// container expression (for _, cb := range cbs): the loop value is
+	// one of the container's elements, so an invocation through it
+	// (cb(v)) is an element invocation of the container. Callee
+	// resolution follows the container through the normal slot paths
+	// (formal, alias, field, indexed composite), so the store-callback
+	// fence at the call sites that bind the container polices the byte
+	// views the element invocations receive.
+	rangeVars map[types.Object]ast.Expr
 	// fieldAliases records struct-field storage slots the body (or a
 	// caller passing a carrier struct) associates with a func-typed
 	// formal parameter (h.f = fn, o := outer{in: car{cb: fn}}): keyed
@@ -751,10 +760,213 @@ func (fs *funcSummary) evalResults(args []pageValue, argVals []symbol, argFlows 
 // summaryStore holds the computed summaries of every module package.
 type summaryStore struct {
 	pkgs map[string]map[string]*funcSummary // import path -> summaries
+	// storeCbSlots marks, per function key, the parameter slots that
+	// provably receive the store callback formal: a store
+	// implementation binds its own func-typed callback formal into the
+	// slot, directly or through a chain of forwarding helpers
+	// (computeStoreCbSlots). Only func-container formals in marked
+	// slots are admitted as scanned callback containers at their
+	// definition site (their element calls are policed by the store
+	// fence at the binding call sites); every other func-container
+	// formal keeps the unproven-indirection fail-closed rule, because
+	// nothing guarantees its call sites bind scanned callbacks.
+	storeCbSlots map[string]map[int]bool
 }
 
 func newSummaryStore() *summaryStore {
 	return &summaryStore{pkgs: map[string]map[string]*funcSummary{}}
+}
+
+// computeStoreCbSlots computes the module-wide set of function
+// parameter slots that receive the store callback formal, as a fixpoint
+// over the call graph: a store implementation marks its own func-typed
+// callback formals, and a function that passes a marked slot (directly,
+// through a recorded alias, carrier field, indexed holder, container
+// element, or func-container composite literal) into another function's
+// func-typed or func-container slot marks that callee slot. The result
+// gates the scanned-callback element admission: a func-container
+// formal is only treated as a scanned callback container when a store
+// implementation provably binds the callback into it, so its element
+// invocations are policed by the store fence at the binding call sites.
+// Any other func-container formal keeps the unproven-indirection
+// fail-closed rule. The computation runs once after all package
+// summaries stabilize; the rules pass reads the finished result.
+func (store *summaryStore) computeStoreCbSlots(checks map[string]*packageCheck) {
+	type fnInfo struct {
+		path string
+		key  string
+		fd   *ast.FuncDecl
+		pc   *packageCheck
+	}
+	var fns []fnInfo
+	paths := make([]string, 0, len(checks))
+	for p := range checks {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		pc := checks[path]
+		sums := store.pkgs[path]
+		if sums == nil {
+			continue
+		}
+		for _, f := range pc.files {
+			for _, decl := range f.ast.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+				key := funcKey(fd)
+				if _, ok := sums[key]; !ok {
+					continue
+				}
+				fns = append(fns, fnInfo{path: path, key: key, fd: fd, pc: pc})
+			}
+		}
+	}
+	marked := map[string]map[int]bool{}
+	isStoreImpl := func(fi fnInfo) bool {
+		fd := fi.fd
+		if fd.Recv == nil || len(fd.Recv.List) == 0 || !storeCallbackMethod(fd.Name.Name) {
+			return false
+		}
+		rt := fi.pc.info.TypeOf(fd.Recv.List[0].Type)
+		if rt == nil {
+			return false
+		}
+		for _, iface := range fi.pc.approvedStoreInterfaces() {
+			if types.Implements(rt, iface) {
+				return true
+			}
+		}
+		return false
+	}
+	// A store implementation's own func-typed formal parameters are the
+	// callback slots the store contract blesses.
+	initSlots := func(fi fnInfo) map[int]bool {
+		m := map[int]bool{}
+		if !isStoreImpl(fi) {
+			return m
+		}
+		fd := fi.fd
+		idx := 0
+		if fd.Recv != nil && len(fd.Recv.List) > 0 {
+			idx = 1
+		}
+		if fd.Type.Params != nil {
+			for _, f := range fd.Type.Params.List {
+				for _, name := range f.Names {
+					if obj := fi.pc.info.ObjectOf(name); obj != nil && funcSignature(obj.Type()) != nil {
+						m[idx] = true
+					}
+					idx++
+				}
+			}
+		}
+		return m
+	}
+	for _, fi := range fns {
+		if m := initSlots(fi); len(m) > 0 {
+			marked[fi.key] = m
+		}
+	}
+	funcLikeSlot := func(t types.Type) bool {
+		return funcSignature(t) != nil || elemFuncType(t)
+	}
+	// Fixpoint: a function holding a marked slot forwards the callback
+	// when its body passes that parameter (or a recorded alias, carrier
+	// field, indexed holder, or container element of it) into another
+	// module function's func-typed or func-container slot.
+	for changed := true; changed; {
+		changed = false
+		for _, fi := range fns {
+			own := marked[fi.key]
+			if len(own) == 0 {
+				continue
+			}
+			pf := &pageFlow{pc: fi.pc, path: fi.path, store: store, summaries: store.pkgs[fi.path]}
+			st := newStmtState(pf, fi.fd, nil, nil)
+			fs := store.pkgs[fi.path][fi.key]
+			ast.Inspect(fi.fd.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if pf.calleeSummaryOfCall(st, call) == nil {
+					return true
+				}
+				fn, ok := pf.calleeExprFunc(st, call.Fun)
+				if !ok {
+					return true
+				}
+				sig, ok := fn.Type().(*types.Signature)
+				if !ok {
+					return true
+				}
+				recvExpr := ast.Expr(nil)
+				if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+					if selRecv, isSel := pf.pc.info.Selections[sel]; isSel && selRecv.Kind() == types.MethodVal {
+						recvExpr = sel.X
+					}
+				}
+				argOff := 0
+				if recvExpr != nil {
+					argOff = 1
+				}
+				argAt := func(slot int) ast.Expr {
+					if recvExpr != nil && slot == 0 {
+						return recvExpr
+					}
+					ai := slot - argOff
+					if ai < 0 || ai >= len(call.Args) {
+						return nil
+					}
+					return call.Args[ai]
+				}
+				nSlots := sig.Params().Len()
+				if sig.Recv() != nil {
+					nSlots++
+				}
+				ckey := fn.Name()
+				if sig.Recv() != nil {
+					ckey = recvTypeNameFromTypes(sig.Recv().Type()) + "." + fn.Name()
+				}
+				for slot := 0; slot < nSlots; slot++ {
+					var pt *types.Var
+					if sig.Recv() != nil {
+						if slot == 0 {
+							continue
+						}
+						pt = sig.Params().At(slot - 1)
+					} else {
+						pt = sig.Params().At(slot)
+					}
+					if pt == nil || !funcLikeSlot(pt.Type()) {
+						continue
+					}
+					arg := argAt(slot)
+					if arg == nil {
+						continue
+					}
+					idx, ok := pf.slotOfExpr(st, fs, arg)
+					if !ok || !own[idx] {
+						continue
+					}
+					cm := marked[ckey]
+					if cm == nil {
+						cm = map[int]bool{}
+						marked[ckey] = cm
+					}
+					if !cm[slot] {
+						cm[slot] = true
+						changed = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	store.storeCbSlots = marked
 }
 
 // pageFlow is the interpreter for one package's rules pass.
@@ -3083,6 +3295,18 @@ func (pf *pageFlow) analyzeStmts(st *stmtState, list []ast.Stmt, fs *funcSummary
 						}
 					}
 				}
+				// A func-typed range VALUE (for _, cb := range cbs)
+				// binds an element of the container: record the
+				// container so an invocation through the loop value
+				// (cb(v)) resolves to the container's callback slot and
+				// the store-site fence polices the byte views it
+				// receives.
+				if valObj := objOf(st, v.Value); valObj != nil && v.X != nil && elemFuncType(pf.pc.info.TypeOf(v.X)) {
+					if fs.rangeVars == nil {
+						fs.rangeVars = map[types.Object]ast.Expr{}
+					}
+					fs.rangeVars[valObj] = v.X
+				}
 			}
 			pre := st.clone()
 			st.loopBound = saturatingMul(innerBound, max64(pf.constRangeDestination(v.X), 0))
@@ -5223,6 +5447,22 @@ func (pf *pageFlow) funcTypeOf(e ast.Expr) *types.Signature {
 	return funcSignature(t)
 }
 
+// elemFuncType reports whether t is a slice or map whose element type
+// is a function signature (a func-typed callback container).
+func elemFuncType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	switch u := t.(type) {
+	case *types.Slice:
+		return funcSignature(u.Elem()) != nil
+	case *types.Map:
+		return funcSignature(u.Elem()) != nil
+	}
+	return false
+}
+
 // slotOfExpr resolves a func-typed expression to a store-callback
 // formal slot of the current function: the formal itself, a local
 // identity or type-assertion alias, a struct field that holds the
@@ -5245,6 +5485,26 @@ func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int,
 		if al, ok := fs.callbackAliases[obj]; ok {
 			return al.slot, true
 		}
+		// A func-typed range variable over a callback container (for
+		// _, cb := range cbs): the loop value is one of the container's
+		// elements, so it resolves to the container's slot.
+		if rv, ok := fs.rangeVars[obj]; ok {
+			if idx, ok := pf.slotOfExpr(st, fs, rv); ok {
+				return idx, true
+			}
+			// A local composite container (fns := []func{fn, fn}) has
+			// no direct slot: any recorded element holding a formal
+			// makes every element a possible callback.
+			if id, isID := unparen(rv).(*ast.Ident); isID {
+				if robj := pf.pc.info.ObjectOf(id); robj != nil {
+					for k, v := range fs.indexAliases {
+						if k.root == robj {
+							return v, true
+						}
+					}
+				}
+			}
+		}
 	case *ast.SelectorExpr:
 		if key, ok := pf.fieldSlotKeyOf(pf.pc.info, t); ok {
 			for _, r := range fs.fieldAliases[key] {
@@ -5263,9 +5523,39 @@ func (pf *pageFlow) slotOfExpr(st *stmtState, fs *funcSummary, e ast.Expr) (int,
 					return idx, true
 				}
 			}
+			// An indexed element of a func-typed FORMAL container
+			// (cbs[i] with cbs ...func): the element is one of the
+			// container's callbacks, so the callee slot is the
+			// container's own slot.
+			if v, isVar := key.root.(*types.Var); isVar && elemFuncType(v.Type()) {
+				if idx, ok := st.params[key.root]; ok {
+					return idx, true
+				}
+				if idx, ok := fs.paramAliases[key.root]; ok {
+					return idx, true
+				}
+				if al, ok := fs.callbackAliases[key.root]; ok {
+					return al.slot, true
+				}
+			}
 		}
 	case *ast.TypeAssertExpr:
 		return pf.slotOfExpr(st, fs, t.X)
+	case *ast.CompositeLit:
+		// A func-container composite literal ([]func{fn, fn}) assembles
+		// the container from its elements: a composite whose element
+		// resolves to the store formal is a container of the callback
+		// and resolves to the same slot (the rules-side callbackSlotOf
+		// agrees on the shape). Any element can be selected by an
+		// index, so one formal-bound element is enough for the
+		// container to be a possible callback holder.
+		if elemFuncType(pf.pc.info.TypeOf(t)) {
+			for _, el := range t.Elts {
+				if idx, ok := pf.slotOfExpr(st, fs, el); ok {
+					return idx, true
+				}
+			}
+		}
 	case *ast.CallExpr:
 		// A conversion (any(fn), (cbSig)(fn), any(s.cb)) is an identity
 		// on the bound value: the callback slot survives it. A real
@@ -6439,6 +6729,14 @@ func (pf *pageFlow) noteCallbackInvokes(st *stmtState, fs *funcSummary, body *as
 					fs.indexAliases = map[indexSlotKey]int{}
 				}
 				fs.indexAliases[key] = slot
+				// A non-constant index dispatch (fns[i]) can name any
+				// element: the catch-all key records that the container
+				// holds the callback, so the store-site counter-check
+				// applies to variable-index invocations exactly like the
+				// constant spellings.
+				if index != "" {
+					fs.indexAliases[indexSlotKey{root: root, path: path}] = slot
+				}
 			}
 		}
 		pos := 0
