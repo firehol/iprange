@@ -1272,6 +1272,37 @@ import-graph boundary check, linux/windows/darwin builds all green.
 Level-2 verdict at f615d52: FAIL (one P2, now fixed); re-review of the
 fixed tree is the next level-2 round.
 
+### 2026-08-18 - level-2 gate round 2: cyclic pointer carrier crash and fix (HEAD 427c3c7 -> working tree)
+
+GLM (level-2) returned FAIL at 427c3c7 with a P1: the scanner crashed
+with a stack overflow (rc=2, no verdict) on a self-referential pointer
+carrier used as a container element: type chainRec struct { inner
+*chainRec; leaf func(src, output []byte) error } with a []chainRec or
+map[string]chainRec parameter. Reproduced independently with probes:
+the container-element expansion in paramLeafPaths
+(v4/go-gate/pageflow.go:10568-10571) calls paramLeafPaths(et) with a
+FRESH walkSeen per call, and containerElemType unwraps pointers
+(pageflow.go:9145), so the element walk of the pointer field re-enters
+the same struct through a new call forever; the direct-field guard
+(pageflow.go:10528) only protects one call's path. Fixed by threading
+one seen set through nested element calls
+(paramLeafPaths -> paramLeafPathsSeen, pageflow.go:10524-10533): the
+container and map-key element walks stop at the revisiting type with
+the same documented semantics as the direct-field guard. The
+call-flow matcher resolves r.inner.leaf independently of the leaf-path
+walk, so cyclic depth-two callback coverage is preserved (verified by
+probe: full page to it.inner.leaf still rejected, bounded span to the
+same leaf accepted). Battery: 670 -> 673 cases (563 rejections, 110
+benign acceptances), zero misses under --self-test-jobs 24 (~2:30
+wall). New durable pins: P361 (cyclic container element passes full
+page to element leaf, reject), P362 (same carrier, bounded page half
+to the leaf, benign), P363 (depth-two cyclic branch leaf receives full
+page, reject with expectRule on it.inner.leaf). Real module scan rc=0
+(5 OS configs); go test (both tag sets), -race, vet (module and gate),
+gofmt, import-graph boundary check all green. Remaining level-2
+verdicts outstanding: glm re-review of this fix, minimax, qwen; kimi
+PASS at 427c3c7.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

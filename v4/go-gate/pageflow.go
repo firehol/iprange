@@ -10521,18 +10521,27 @@ func isStructPtrTyped(t types.Type) bool {
 }
 
 func paramLeafPaths(t types.Type) map[string]types.Type {
+	return paramLeafPathsSeen(t, map[types.Type]bool{})
+}
+
+// paramLeafPathsSeen is the recursive core of paramLeafPaths with one seen
+// set shared across nested element calls. A struct reached through its own
+// container element ([]self with type self struct { inner *self }) must stop
+// at the revisiting type: the direct-field guard only protects one call's
+// path, while a fresh per-call set would let the pointer-unwrapping element
+// walk recurse forever.
+func paramLeafPathsSeen(t types.Type, seen map[types.Type]bool) map[string]types.Type {
 	out := map[string]types.Type{}
-	walkSeen := map[types.Type]bool{}
 	var walk func(t types.Type, prefix string)
 	walk = func(t types.Type, prefix string) {
 		st, ok := derefStruct(t)
 		if !ok {
 			return
 		}
-		if walkSeen[st] {
+		if seen[st] {
 			return // recursion through a self-referencing pointer field
 		}
-		walkSeen[st] = true
+		seen[st] = true
 		for i := 0; i < st.NumFields(); i++ {
 			f := st.Field(i)
 			p := f.Name()
@@ -10567,7 +10576,7 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 			fieldSeen := map[types.Type]bool{}
 			for et := containerElemType(f.Type()); et != nil && !fieldSeen[et]; et = containerElemType(et) {
 				fieldSeen[et] = true
-				for path, ft := range paramLeafPaths(et) {
+				for path, ft := range paramLeafPathsSeen(et, seen) {
 					if !paramCanCarryPage(ft) {
 						continue
 					}
@@ -10576,7 +10585,7 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 			}
 			if mft := mapUnderlying(f.Type()); mft != nil {
 				keySeen := map[types.Type]bool{}
-				for path, ft := range paramLeafPaths(mft.Key()) {
+				for path, ft := range paramLeafPathsSeen(mft.Key(), seen) {
 					if !paramCanCarryPage(ft) {
 						continue
 					}
@@ -10584,7 +10593,7 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 				}
 				for et := containerElemType(mft.Key()); et != nil && !keySeen[et]; et = containerElemType(et) {
 					keySeen[et] = true
-					for path, ft := range paramLeafPaths(et) {
+					for path, ft := range paramLeafPathsSeen(et, seen) {
 						if !paramCanCarryPage(ft) {
 							continue
 						}
@@ -10593,7 +10602,7 @@ func paramLeafPaths(t types.Type) map[string]types.Type {
 				}
 			}
 		}
-		walkSeen[st] = false
+		seen[st] = false
 	}
 	walk(t, "")
 	return out
