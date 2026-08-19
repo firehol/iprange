@@ -11,15 +11,17 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
-// commitOne assigns [10,20] value 123 and commits the draft through the
-// real publication sequence, returning the committed transaction ID.
-func commitOne(t *testing.T, c *Core, nonce byte) uint64 {
+// commitRange commits one direct range assignment in a fresh draft over
+// the committed generation and asserts the publication lands. It is the
+// canonical commit orchestration shared by every test that publishes a
+// direct-edit draft (the crash suite included).
+func commitRange(t *testing.T, c *Core, nonce byte, from, to, value uint32) {
 	t.Helper()
 	if err := c.StartDraft([16]byte{nonce}); err != nil {
 		t.Fatal(err)
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
-	if _, err := store.AssignV4(10, 20, 123); err != nil {
+	if _, err := store.AssignV4(from, to, value); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Prepare(nil); err != nil {
@@ -32,6 +34,13 @@ func commitOne(t *testing.T, c *Core, nonce byte) uint64 {
 	if res.Status != PublishCommitted {
 		t.Fatalf("publish status = %v (%v), want committed", res.Status, res.Err)
 	}
+}
+
+// commitOne assigns [10,20] value 123 and commits the draft through the
+// real publication sequence, returning the committed transaction ID.
+func commitOne(t *testing.T, c *Core, nonce byte) uint64 {
+	t.Helper()
+	commitRange(t, c, nonce, 10, 20, 123)
 	return c.base.Meta.TxnID
 }
 

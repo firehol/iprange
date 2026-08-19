@@ -14,25 +14,25 @@
 package writer
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
 const (
-	crashChildTest   = "^TestCrashChild$"
-	crashChildAction = "IPRANGE_V4_TEST_ACTION"
-	crashChildPath   = "IPRANGE_V4_TEST_PATH"
+	crashChildTest    = "^TestCrashChild$"
+	crashChildSpawned = "IPRANGE_V4_TEST_SPAWNED"
+	crashChildAction  = "IPRANGE_V4_TEST_ACTION"
+	crashChildPath    = "IPRANGE_V4_TEST_PATH"
+	crashChildTimeout = 60 * time.Second
 )
-
-// crashBudget is the publication-budget shape used by the child actions
-// (the shape the rest of the publication tests use).
-func crashBudget() PageBudget {
-	return PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}
-}
 
 // runCrashChild spawns this test binary as the action's child process and
 // requires it to die with exit code 86 (Rust live_crash_tests.rs
@@ -44,8 +44,23 @@ func runCrashChild(t *testing.T, path, action, crashPoint string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe, "-test.run="+crashChildTest)
-	cmd.Env = append(os.Environ(),
+	ctx, cancel := context.WithTimeout(context.Background(), crashChildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "-test.run="+crashChildTest)
+	// Strip any inherited crash-control variables so a stray developer
+	// environment cannot redirect the child to a different crash point
+	// or action (the inherited value would win in the child's environ).
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "IPRANGE_V4_TEST_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	// The spawn marker is the child entry gate: without it a normal
+	// suite run skips TestCrashChild regardless of ambient variables.
+	cmd.Env = append(env,
+		crashChildSpawned+"=1",
 		crashChildAction+"="+action,
 		crashChildPath+"="+path,
 	)
@@ -70,11 +85,19 @@ func runCrashChild(t *testing.T, path, action, crashPoint string) {
 
 // TestCrashChild is the subprocess entry point (the Rust
 // #[ignore]-marked crash_child). It runs only when spawned by
-// runCrashChild; in a normal suite run it skips.
+// runCrashChild, which sets the spawn marker; a normal suite run skips
+// regardless of ambient variables.
 func TestCrashChild(t *testing.T) {
+	if os.Getenv(crashChildSpawned) != "1" {
+		t.Skip("subprocess entry point")
+	}
+	// Self-deadline: if an action hangs (for example a leaked lifetime
+	// lock), exit instead of lingering - also when the parent already
+	// died and can no longer kill us (the go-test timeout path).
+	time.AfterFunc(crashChildTimeout, func() { os.Exit(1) })
 	action := os.Getenv(crashChildAction)
 	if action == "" {
-		t.Skip("subprocess entry point")
+		t.Fatal("missing " + crashChildAction)
 	}
 	path := os.Getenv(crashChildPath)
 	if path == "" {
@@ -91,7 +114,7 @@ func TestCrashChild(t *testing.T) {
 		}
 		os.Exit(86)
 	case "writer":
-		if _, err := Open(path, crashBudget(), nil); err != nil {
+		if _, err := Open(path, testBudget(), nil); err != nil {
 			t.Fatal(err)
 		}
 		os.Exit(86)
@@ -106,18 +129,18 @@ func TestCrashChild(t *testing.T) {
 // [10,20] value 123 then committing).
 func crashChildCommit(t *testing.T, path string) {
 	t.Helper()
-	c, err := Open(path, crashBudget(), nil)
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	commitAssign(t, c, 7, 10, 20, 123)
+	commitRange(t, c, 7, 10, 20, 123)
 }
 
 // crashChildReclaim runs one bounded reclamation publish in the child
 // (Rust crash_child "reclaim": writer.reclaim(10, 10_000)).
 func crashChildReclaim(t *testing.T, path string) {
 	t.Helper()
-	c, err := Open(path, crashBudget(), nil)
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,28 +153,6 @@ func crashChildReclaim(t *testing.T, path string) {
 	}
 	if res := c.Publish(nil); res.Status != PublishCommitted {
 		t.Fatalf("reclamation publish = %v (%v)", res.Status, res.Err)
-	}
-}
-
-// commitAssign commits one direct range assignment in a fresh draft over
-// the committed generation.
-func commitAssign(t *testing.T, c *Core, nonce byte, from, to, value uint32) {
-	t.Helper()
-	if err := c.StartDraft([16]byte{nonce}); err != nil {
-		t.Fatal(err)
-	}
-	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
-	if _, err := store.AssignV4(from, to, value); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Prepare(nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.RequireDraftLength(); err != nil {
-		t.Fatal(err)
-	}
-	if res := c.Publish(nil); res.Status != PublishCommitted {
-		t.Fatalf("publish = %v (%v)", res.Status, res.Err)
 	}
 }
 
@@ -172,6 +173,10 @@ func TestCrashCommitSelectsCompleteGeneration(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.point, func(t *testing.T) {
+			// The fixture's meta has FreeBitmapRoot=0 (no free pages), so
+			// every draft allocation grows the file; the
+			// before/after_private_sync refusals below depend on that
+			// growth being present before the meta write.
 			path := makeEmptyDBPages(t, 64)
 			runCrashChild(t, path, "commit", tc.point)
 
@@ -183,10 +188,13 @@ func TestCrashCommitSelectsCompleteGeneration(t *testing.T) {
 				// ImmutableReader::open (ImmutableLengthMismatch), and
 				// the writer open is the recovery surface (committed
 				// bootstrap + tail trim, Rust live_writer open_locked).
-				if _, err := reader.OpenImmutable(path); err == nil {
+				if r, err := reader.OpenImmutable(path); err == nil {
+					r.Close()
 					t.Fatalf("immutable reader accepted the unpublished tail after %s", tc.point)
+				} else if errCode(err) != format.CodeFormatInvalid {
+					t.Fatalf("immutable reader after %s: want the length-mismatch refusal, got %v", tc.point, err)
 				}
-				c, err := Open(path, crashBudget(), nil)
+				c, err := Open(path, testBudget(), nil)
 				if err != nil {
 					t.Fatalf("writer open after %s: %v", tc.point, err)
 				}
@@ -246,12 +254,12 @@ func TestCrashReclamationPreservesCompleteGeneration(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.point, func(t *testing.T) {
 			path := makeEmptyDBPages(t, 64)
-			c, err := Open(path, crashBudget(), nil)
+			c, err := Open(path, testBudget(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			commitAssign(t, c, 1, 10, 20, 1)
-			commitAssign(t, c, 2, 12, 18, 2)
+			commitRange(t, c, 1, 10, 20, 1)
+			commitRange(t, c, 2, 12, 18, 2)
 			if c.base.Meta.TxnID != 3 {
 				c.Close()
 				t.Fatalf("setup txn = %d, want 3", c.base.Meta.TxnID)
@@ -262,6 +270,25 @@ func TestCrashReclamationPreservesCompleteGeneration(t *testing.T) {
 			}
 
 			runCrashChild(t, path, "reclaim", tc.point)
+
+			if tc.wantTxn == 3 {
+				// Same recovery shape as the commit test: whether or not
+				// the reclamation draft grew an unpublished tail, a
+				// crash before the meta write must leave generation 3
+				// selectable through the writer open, which trims any
+				// tail before the immutable read below.
+				rc, err := Open(path, testBudget(), nil)
+				if err != nil {
+					t.Fatalf("writer open after %s: %v", tc.point, err)
+				}
+				if rc.base.Meta.TxnID != 3 {
+					rc.Close()
+					t.Fatalf("writer txn after %s = %d, want 3", tc.point, rc.base.Meta.TxnID)
+				}
+				if err := rc.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			r, err := reader.OpenImmutable(path)
 			if err != nil {
@@ -300,7 +327,7 @@ func TestProcessDeathReleasesLocks(t *testing.T) {
 	}
 
 	runCrashChild(t, path, "writer", "")
-	c, err := Open(path, crashBudget(), nil)
+	c, err := Open(path, testBudget(), nil)
 	if err != nil {
 		t.Fatalf("writer re-open after writer death: %v", err)
 	}
