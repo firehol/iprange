@@ -1806,6 +1806,68 @@ Validation: go test ./... (both tag sets), -race (both tag sets on
 internal/writer), vet (both tag sets), gofmt, import-graph check, direct
 scanner run, 697-case gate battery, 11/11 cross-builds - all green.
 
+Chunk 5 level-1 review round (2026-08-19; reviewed at HEAD 6be81c2):
+five aspect reviewers; four PASS (Jason, Sartre, Peirce, Leibniz), one
+FAIL with two P2 (Linnaeus, test mechanics). Fix wave committed at
+2869a68 (+ timeout diagnostics at 18da163):
+- Linnaeus P2-1 (hermeticity): TestCrashChild skipped on the ambient
+  action environment, so a stray developer IPRANGE_V4_TEST_ACTION could
+  execute a child action in-process and kill the whole test binary
+  (os.Exit 86) or red the package. runCrashChild now sets a spawn-only
+  marker (IPRANGE_V4_TEST_SPAWNED=1) and TestCrashChild skips unless it
+  is present; the child env also strips every inherited
+  IPRANGE_V4_TEST_* variable so an ambient crash point cannot redirect
+  the child (verified locally: ambient variables in a normal suite run
+  produce the skip and nothing is touched).
+- Linnaeus P2-2 (hang/orphan): a lock regression would stall cmd.Run
+  until the go-test timeout and orphan the child with the lifetime lock
+  held. The child is now spawned via exec.CommandContext with a 60s
+  context (the parent kills a hung child and reports the timeout class,
+  18da163) and the child carries a portable self-deadline
+  (time.AfterFunc -> os.Exit(1)) so it cannot linger past 60s even when
+  the parent already died.
+- Linnaeus P3-1 / Peirce P3-1 (allocator dynamics): the reclamation
+  txn-3 cases now run the writer-open recovery shape first (committed
+  bootstrap + tail trim) instead of relying on a no-growth invariant;
+  the commit-test fixture dependency (FreeBitmapRoot=0 forces every
+  draft allocation to the file tail) is pinned in a comment at the
+  assertion site.
+- Jason P3-1 (drift hazard): the canonical commit orchestration moved
+  to an untagged commitRange helper in publication_test.go; commitOne
+  and every crash child delegate to it, so a future commit-flow change
+  cannot silently diverge the crash suite from the publication tests.
+- Linnaeus P3-2 / Jason P3-2: crashBudget removed; the child actions
+  reuse the existing testBudget helper.
+- Linnaeus P3-3 / Sartre P3-1: the tail-refusal assertion pins the
+  exact CodeFormatInvalid class (errCode) and closes the reader on the
+  unexpected-accept path.
+- Jason P3-3: inherited IPRANGE_V4_TEST_* variables are stripped from
+  the child environment (folded into the P2-1 fix).
+Level-1 re-review at the fix-wave tree (HEAD 2869a68/18da163): 5/5 PASS
+(Linnaeus, Jason, Peirce, Sartre, Leibniz).
+Validation (fix wave): go test ./... (both tag sets), -race, vet (both
+tag sets), gofmt, import-graph, 11/11 cross-builds, 697-case gate
+battery (576 fail, 121 benign) - all green at HEAD 18da163.
+
+Level-2 gate for chunk 5 (2026-08-19, HEAD 18da163): kimi PASS, minimax
+PASS, mimo PASS. glm unavailable for this gate: its long-lived session
+hit the provider context-length limit on both attempts (technical, not
+a review finding) and a fresh-session respawn was blocked by the agent
+thread limit; per the swarm rules it was skipped and does not count in
+the denominator (coverage 3/4, reported to the user). All three
+available reviewers ran full-scope adversarial review of the crash
+suite, the shared-helper refactor, and the SOW record: kimi verified
+mechanically by driving the child binary (exit 86 at the armed point,
+exit 1 with none armed - the suite is non-vacuous); minimax verified
+every fix-wave item, both crash-state bootstrap selections, the
+lock-release semantics (OFD/flock kernel release on death), and the
+record; mimo verified the 1:1 fault-point parity, spawn-marker
+hermeticity, exit-code dispatch, and the not-ported list. No P0-P2;
+only the recorded P3 notes (v4work-only placement by design, the
+FreeBitmapRoot=0 fixture dependency pinned in a comment, os.Exit(86)
+bypassing Go-style cleanup exactly like Rust _exit(86)). Chunk 5
+level-2 gate closes 3/3 available PASS.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
