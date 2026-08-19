@@ -2148,8 +2148,64 @@ glm: kimi, minimax, mimo, qwen):
 - Chunk 6 level-2 gate verdict: 4/4 PASS (kimi, minimax, mimo,
   qwen). The chunk-6 milestone-2 gate is CLOSED and the chunk is
   committed at eb8c128 (signed); the SOW stays in-progress because
-  milestone 3 (complete logical SDK) is still pending; its chunk
-  plan is the next record.
+  milestone 3 (complete logical SDK) is the next unit; its chunk
+  plan is recorded below (Milestone 3 plan record, 2026-08-19).
+
+Milestone 3 plan record (2026-08-19, grounded in the Rust authority at
+v4/rust/iprange-livedb/src: workflow.rs, cancellation.rs, snapshot/*,
+membership_query/* (aggregation, algebra, join, decode),
+feed_catalog.rs, feed_range_cursor.rs, range_cursor.rs, history.rs,
+cardinality.rs; Go baseline = committed milestone-2 tree). Scope per
+the approved Plan line: advanced transactions, typed workflows,
+metadata, queries, joins, algebra, snapshots, reports, cancellation,
+cleanup, randomized public models over the internal core. All chunks
+stay mmap-only, one-authority, counter-instrumented in test builds
+only; the five level-1 reviewers are re-aimed per chunk with new
+aspects (1: reader logical surface vs Rust; 2: joins/algebra/snapshot
+output semantics; 3: writer workflows/reports/cancellation/cleanup;
+4: mmap-only/lifetime/zero-alloc; 5: cross-language parity and
+records), and the level-2 gate stays kimi/minimax/mimo/qwen (glm
+unavailable). Chunks:
+- M3 chunk 1 - logical read SDK foundation: CancellationToken,
+  FeedCursor (feed iteration), range cursors (DirectCursorV4/V6,
+  DirectRange, RangeDirection, FeedRangeCursorV4/V6), MembershipQuery
+  (all_feeds/named_feeds/matching_feeds_v4/v6/feed_count/feeds),
+  MembershipScope, budgets, MatchingFeedsReport/Sink, FeedPair, plus
+  the report data types (AddressRange, WorkflowKind, LogicalChange,
+  WorkflowReport, FirstSeenRemoval, FirstSeenRemovalSink,
+  HistoryWindow/HistoryWindowReport/HistoryProjectionReport) and full
+  Cardinality129 parity checks - all read-only over the existing
+  reader core, with zero-alloc and work-counter evidence.
+- M3 chunk 2 - joins and aggregation: MembershipAggregation (modes,
+  FeedCardinality, FeedOverlap, sink, report), DirectJoin (source,
+  budget, cells, sink, report), MembershipCross (cells, UncoveredSide,
+  report) - read-only, allocation-free sinks, budgets enforced.
+- M3 chunk 3 - algebra set operations and output: FeedSelection,
+  AlgebraSetOperation (Union/Intersection/Exclusion),
+  AlgebraOutputMode (PreserveFeeds/Flat), AlgebraCountReport,
+  AlgebraComparisonReport, AlgebraOutputBudget/MembershipAlgebraBudget,
+  AlgebraSetOutcome, and the materialized-result output machinery
+  shared with snapshot publication; snapshot_to Immutable mode
+  (pinned generation to compact unsigned snapshot),
+  SnapshotBudget/SourceMode/PublicationPolicy/Result/PreparationFailure.
+- M3 chunk 4 - typed writer workflows and live snapshots:
+  CreateFeed/ReplaceFeed/MembershipImport workflows on the writer
+  core with pre-publication WorkflowReport statistics (input counts,
+  before/after range records, Cardinality129 comparisons),
+  DirectReplacement parity, FirstSeenRefresh/LastSeenRefresh with
+  FirstSeenRemovalSink batching, history-window creation, cancellation
+  checkpoints in every bounded mutation op, cleanup paths, and
+  snapshot_to Live mode.
+- M3 chunk 5 - randomized public models and final gate: randomized
+  cross-language conformance (Go vs Rust random databases and random
+  logical operations, budget and cancellation injection), v4work
+  fault probes through the workflows, necessary-work audit and
+  zero-alloc proof for all new surfaces, five-reviewer level-1 round,
+  level-2 gate, records, close-out.
+Each chunk closes with its own gate evidence like milestone 2; the
+chunk order is authoritative and a later chunk never reopens an
+earlier one without a regression record.
+
 
 ### Gate execution record (2026-08-12)
 
