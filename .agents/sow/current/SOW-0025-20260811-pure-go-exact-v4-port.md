@@ -1761,6 +1761,51 @@ Re-review at the corrected record: glm PASS, confirming the P1
 refutation (Rust publication.rs publish unchecked multiply) and the
 corrected header; chunk 4 level-2 gate closes 4/4 PASS.
 
+
+Milestone 2 chunk 5 - crash/recovery child-process tests (2026-08-19;
+committed at a9a67e5): the crash-consistency suite tracked from the
+chunk-4 close. The four commit crash points and the fault machinery
+were parity-exact since chunk 4; this chunk proves each crash state on
+the real mapped publication path in a spawned child of the test binary
+(Rust live_crash_tests.rs, every child dies with Rust's code 86 at the
+exact physical step named by IPRANGE_V4_TEST_CRASH_AT):
+- v4/go/internal/writer/crash_v4work_test.go (v4work-only, the build
+  the fault machinery lives in): TestCrashChild is the subprocess entry
+  point (skips in a normal suite run; the Rust #[ignore] shape), and
+  runCrashChild spawns os.Executable() with the action and crash-point
+  environment and requires exit code 86.
+- TestCrashCommitSelectsCompleteGeneration (Rust
+  commit_crashes_select_only_a_complete_generation): one [10,20] -> 123
+  commit crashing at each of the four points. before/after_private_sync:
+  the unpublished tail the draft grew is refused by the immutable reader
+  (Rust ImmutableReader::open ImmutableLengthMismatch parity), the
+  writer open is the recovery surface (committed bootstrap + tail trim,
+  Rust live_writer open_locked) and re-selects txn 1, then the reader
+  sees txn 1 with the value absent. after_meta_write/after_meta_sync:
+  shrink ran before the meta write, the alternate meta page is complete
+  in the page cache (or durable after the sync); the reader opens
+  directly on txn 2 with the value present.
+- TestCrashReclamationPreservesCompleteGeneration (Rust
+  reclamation_crashes_preserve_a_complete_readable_generation): two
+  commits ([10,20] -> 1, then [12,18] -> 2, txn 3), then a reclamation
+  publish crashing at the four points; the reader selects txn 3 (meta
+  untouched) or txn 4 (meta written) and both committed ranges stay
+  readable at 11 -> 1 and 15 -> 2.
+- TestProcessDeathReleasesLocks (Rust
+  process_death_releases_reader_and_writer_locks): a child holding the
+  reader or writer lifetime claim exits; the parent re-opens the same
+  shape immediately.
+- Not ported with reason: Rust create/initialize/reset crash groups and
+  metadata_crashes_select_absence_or_the_complete_value exercise live
+  surfaces Go does not have yet (create_live/initialize_live/
+  reset_live_coordination and the metadata-JSON writer API); the Go
+  metadata JSON read surface exists but nothing can write metadata yet.
+  They are tracked to the live-lifecycle/outer-workflow chunks that add
+  those surfaces.
+Validation: go test ./... (both tag sets), -race (both tag sets on
+internal/writer), vet (both tag sets), gofmt, import-graph check, direct
+scanner run, 697-case gate battery, 11/11 cross-builds - all green.
+
 ### Gate execution record (2026-08-12)
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
