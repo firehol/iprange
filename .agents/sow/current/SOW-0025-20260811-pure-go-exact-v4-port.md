@@ -2148,8 +2148,8 @@ glm: kimi, minimax, mimo, qwen):
 - Chunk 6 level-2 gate verdict: 4/4 PASS (kimi, minimax, mimo,
   qwen). The chunk-6 milestone-2 gate is CLOSED and the chunk is
   committed at eb8c128 (signed); the SOW stays in-progress because
-  milestone 3 (writer durability/reclamation hardening and release
-  evidence) is still pending.
+  milestone 3 (complete logical SDK) is still pending; its chunk
+  plan is the next record.
 
 ### Gate execution record (2026-08-12)
 
