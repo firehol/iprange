@@ -78,7 +78,10 @@ func (c *Core) FinishClose(plan ClosePlan) error {
 // verify the committed generation is intact (Rust
 // WriterCore::discard_unpublished).
 func (c *Core) DiscardUnpublished() error {
-	if err := c.requireUnchangedBase(); err != nil {
+	if err := c.requireHealthy(); err != nil {
+		return err
+	}
+	if err := c.RequireUnchangedBase(); err != nil {
 		return err
 	}
 	physical, err := c.trimUnpublishedTail()
@@ -157,7 +160,7 @@ func (c *Core) trimUnpublishedTail() (uint64, error) {
 // page-aligned, the locked file must match it, and the mapping must sit
 // exactly at the committed extent.
 func (c *Core) verifyDiscardResult(physicalBytes uint64) error {
-	if err := c.requireUnchangedBase(); err != nil {
+	if err := c.RequireUnchangedBase(); err != nil {
 		return err
 	}
 	if physicalBytes < c.base.CommittedBytes || physicalBytes%format.PageSize != 0 {
@@ -175,7 +178,7 @@ func (c *Core) verifyDiscardResult(physicalBytes uint64) error {
 
 // requireUnchangedBase re-selects the committed generation and verifies
 // it still equals the base (Rust WriterCore::require_unchanged_base).
-func (c *Core) requireUnchangedBase() error {
+func (c *Core) RequireUnchangedBase() error {
 	physical, err := c.m.FileSize()
 	if err != nil {
 		return err

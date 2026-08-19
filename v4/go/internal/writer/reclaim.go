@@ -25,6 +25,9 @@ type PreparedReclamation struct {
 // oldestReader, when non-nil, is the oldest active reader transaction;
 // extents retired by that transaction or later are never reclaimed.
 func (c *Core) PrepareReclamation(oldestReader *uint64, maxTransactions, maxPages uint64, checkpoint func() error) (*PreparedReclamation, error) {
+	if err := c.requireHealthy(); err != nil {
+		return nil, err
+	}
 	nonce, err := randomNonce()
 	if err != nil {
 		return nil, err

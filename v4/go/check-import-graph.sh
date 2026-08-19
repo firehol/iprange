@@ -25,7 +25,9 @@
 #     the traversal paths carry no per-call synchronization
 #     (design-iprange-engine.md).
 #   - the module root (public facade) imports only stdlib + internal/format
-#     + internal/reader. Nothing else may import internal/*.
+#     + internal/reader + internal/writer. Nothing else may import
+#     internal/* (the writer boundary joined the root facade in SOW-0025
+#     chunk 6 so the public SDK stays the single iprangedb package).
 #   - golang.org/x/sys is the mapping owner's surface only: every package,
 #     on every target, must not import it (checked in the per-target loop
 #     below, so a build-tagged new package cannot bypass the owner rule).
@@ -158,7 +160,7 @@ check "github.com/firehol/iprange/v4/go/internal/bitmap" "github.com/firehol/ipr
 check "github.com/firehol/iprange/v4/go/internal/retire" "github.com/firehol/iprange/v4/go/internal/\(format\|retire\|tree\)"
 check "github.com/firehol/iprange/v4/go/internal/writer" "github.com/firehol/iprange/v4/go/internal/\(bitmap\|bootstrap\|fault\|format\|mapping\|retire\|tree\|work\)"
 check "github.com/firehol/iprange/v4/go/internal/reader" "github.com/firehol/iprange/v4/go/internal/\(bootstrap\|format\|mapping\|work\)"
-check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\)"
+check "github.com/firehol/iprange/v4/go" "github.com/firehol/iprange/v4/go/internal/\(format\|reader\|writer\)"
 
 # The reader and its import closure (format, bootstrap) are the
 # synchronization-free zone: no sync, sync/atomic, or unsafe in any of

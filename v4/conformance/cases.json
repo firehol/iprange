@@ -540,6 +540,58 @@
      "feeds": []
     }
    ]
+  },
+  {
+   "file": "go/direct-ipv4.iprdb",
+   "producer": "go",
+   "family": "ipv4",
+   "kind": "direct",
+   "tag": "asn",
+   "metadata": {
+    "state": "text",
+    "value": "{\"fixture\":\"go-direct-ipv4\",\"producer\":\"go\"}"
+   },
+   "address_count": "16",
+   "direct_ranges": [
+    {
+     "from": "10.0.0.10",
+     "to": "10.0.0.14",
+     "value": 2
+    },
+    {
+     "from": "10.0.0.15",
+     "to": "10.0.0.17",
+     "value": 3
+    },
+    {
+     "from": "10.0.0.18",
+     "to": "10.0.0.21",
+     "value": 2
+    },
+    {
+     "from": "10.0.0.28",
+     "to": "10.0.0.31",
+     "value": 1
+    }
+   ]
+  },
+  {
+   "file": "go/first-seen-ipv6.iprdb",
+   "producer": "go",
+   "family": "ipv6",
+   "kind": "direct",
+   "tag": "first_seen",
+   "metadata": {
+    "state": "empty"
+   },
+   "address_count": "340282366920938463463374607431768211456",
+   "direct_ranges": [
+    {
+     "from": "::",
+     "to": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "value": 1700000000
+    }
+   ]
   }
  ],
  "invalid_cases": [

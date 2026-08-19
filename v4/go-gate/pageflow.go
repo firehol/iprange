@@ -8258,9 +8258,25 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 	// scanned module store, so a callback argument could escape mapped
 	// data into owned memory.
 	storeCallback := false
-	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && isInterfaceType(sig.Recv().Type()) &&
-		approvedModuleInternalInterface(sig.Recv().Type()) && storeCallbackMethod(fn.Name()) {
-		storeCallback = true
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && storeCallbackMethod(fn.Name()) {
+		rt := sig.Recv().Type()
+		if isInterfaceType(rt) {
+			storeCallback = approvedModuleInternalInterface(rt)
+		} else {
+			// Concrete receiver (e.g. *writer.DraftStore): the call is
+			// store-surface only when the receiver provably implements
+			// one of the approved store interfaces, whose implementation
+			// bodies the module scan owns. A concrete type that shares
+			// the method names but implements no approved store
+			// interface never receives mapped page views, so its
+			// callback literals must not be seeded.
+			for _, iface := range pf.pc.approvedStoreInterfaces() {
+				if types.Implements(rt, iface) {
+					storeCallback = true
+					break
+				}
+			}
+		}
 	}
 	// Mints: the mmap call returns the mapped bytes; the mapping owner's
 	// Page/View hand out views of those bytes; the metadata chunk codec
@@ -8412,11 +8428,15 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 		}
 		pf.promoteFullPageFields(st, a)
 		pv := pf.evalExpr(st, a)
+		sv, _ := symbolOf(a, st)
+		af := pf.argFlowOf(st, a)
+		// The seeds must outlive argFlowOf: it re-evaluates the literal
+		// (and the rule pass reads the last cached body values), so
+		// deleting before it would leave the callback formals'
+		// mapped-taint erased.
 		for _, obj := range seeded {
 			delete(st.stmtVars, obj)
 		}
-		sv, _ := symbolOf(a, st)
-		af := pf.argFlowOf(st, a)
 		if vi >= 0 && slot >= vi {
 			// Variadic parameter: every trailing argument can name the
 			// slot, so the summary binding joins them (xs[1] inside the

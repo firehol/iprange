@@ -67,7 +67,8 @@ var bannedSelectors = map[string]bool{
 	"Fprint": true, "Fprintf": true, "Fprintln": true, "Fscan": true,
 	"Fscanf": true, "Fscanln": true, "Method": true, "MethodByName": true, "Msync": true,
 	"Sync": true, "SyncFileRange": true, "Syncfs": true,
-	"NewDecoder": true, "NewWriter": true, "Peek": true, "Pread": true,
+	"NewDecoder": true, "NewWriter": true, "NewWriterDict": true,
+	"Peek": true, "Pread": true,
 	"Preadv": true, "Print": true, "Printf": true, "Println": true,
 	"Preadv2": true, "Pwrite": true, "Pwritev": true, "Pwritev2": true,
 	"RawSyscall": true, "RawSyscall6": true, "RawSyscall9": true,
@@ -3038,7 +3039,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		}
 		pageArg := w.pageValue(arg)
 		if pageArg.tainted && pageFull(pageArg) && !w.storeCarrierTracedFieldCall(v, fun) && !w.storeCallbackCallee(v) &&
-			(transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
+			!exempt && (transfer || varIndirect || (w.unprovenVarCallee(fun) && w.pageFieldPromoted(arg))) {
 			w.fail(v.Pos(), "mapped page view passed to %s (complete page into owned memory)", calleeText(fun))
 		}
 		// The owned byte-builder family copies its argument into an owned
@@ -3047,7 +3048,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 		// mapped view reaching them is the complete-page violation even
 		// though their result types are structs or scalar counts the
 		// transfer rule cannot see.
-		if pageArg.tainted && pageFull(pageArg) && w.ownedCopySink(fun) {
+		if pageArg.tainted && pageFull(pageArg) && !exempt && w.ownedCopySink(fun) {
 			w.fail(v.Pos(), "mapped page view copied into an owned byte builder (%s)", calleeText(fun))
 		}
 	}
@@ -3460,6 +3461,13 @@ func (w *fileRules) checkInterfaceErasure(v *ast.CallExpr, formals []types.Type)
 //     summary makes the call sites fail an owned destination bound with a
 //     mapped full-page source.
 func (w *fileRules) checkCopy(v *ast.CallExpr) {
+	// The exact-shape findExemptions branch (writer metadata chain
+	// geometry) may sanction one precise copy position; positions are
+	// unique, so a mutation cannot inherit the exemption by editing the
+	// expression at the exempted site.
+	if w.exempts[v.Pos()] {
+		return
+	}
 	if len(v.Args) != 2 {
 		return
 	}
@@ -3527,7 +3535,16 @@ func (w *fileRules) checkCopy(v *ast.CallExpr) {
 		return // slice-header copy, not page-byte ownership
 	}
 	if dstCap := w.ownedCap(dst); dstCap >= 0 && dstCap < pageSize {
-		return // statically bounded record destination
+		// A destination-bounded copy of a full mapped source is
+		// sub-page by itself, but repeated calls can still assemble a
+		// complete page into one owned buffer (e.g. page[48:] then
+		// page[:48] from the tail of the same mapped page); count the
+		// span exactly like the source-bounded branch so the assembly
+		// accumulator sees the full picture (battery 321).
+		if obj, path := w.boundedCopyKey(dst); obj != nil {
+			w.accumulateBoundedSpan(obj, path, dstCap, v.Pos(), "bounded mapped-page spans copied into one owned buffer (complete page)")
+		}
+		return
 	}
 	w.fail(v.Pos(), "copy of a mapped page view into an owned buffer (complete page)")
 }
@@ -4011,7 +4028,14 @@ func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 		}
 		w.checkLaunderValue(v.Lhs[i].Pos(), rhs, w.typeOf(v.Lhs[i]))
 		if pv := w.pageValue(rhs); pv.tainted && pageFull(pv) {
-			w.checkArrayConversionSink(v.Lhs[i].Pos(), lhsTypeForCheck(w, v.Lhs[i]), pv)
+			dst := lhsTypeForCheck(w, v.Lhs[i])
+			if dst == nil {
+				// Short-var LHS idents do not always carry a type in
+				// info.Types; the conversion expression's own type is
+				// the same string/array shape.
+				dst = w.typeOf(rhs)
+			}
+			w.checkArrayConversionSink(v.Lhs[i].Pos(), dst, pv)
 		}
 		// An element write into a page-sourced buffer (marked by the
 		// pageflow engine inside a page-sourcing loop) is a complete-page
@@ -4160,7 +4184,14 @@ func (w *fileRules) checkArrayConversionSink(pos token.Pos, dst types.Type, pv p
 	if arr, ok := dst.(*types.Array); ok && arr.Len() >= pageSize && pv.tainted && pageFull(pv) {
 		w.fail(pos, "array conversion of a mapped page view into an owned [%d]byte", arr.Len())
 	}
-	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && !pv.hasSrc && !definiteSubPage(pv) {
+	// string(page) materializes a complete mapped page in owned memory.
+	// hasSrc values are normally caller-bound (the copy-parameter and
+	// string-parameter call-site rules decide), but a PROVABLY mapped
+	// parameter-sourced value - a seeded store-callback formal, whose
+	// every invocation receives a mapped view by contract - has no
+	// caller-supplied bound to decide anything: the conversion fails
+	// here like any other full mapped page (round-8 qwen P2 shape).
+	if b, ok := dst.(*types.Basic); ok && b.Kind() == types.String && pv.tainted && (!pv.hasSrc || pv.mapped) && !definiteSubPage(pv) {
 		w.fail(pos, "string conversion of a full-page view")
 	}
 }
@@ -4510,6 +4541,140 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 				return true
 			}
 			exempts[sel.Pos()] = true
+			return true
+		})
+		return exempts
+	}
+	if strings.HasSuffix(path, "internal/writer/metadata.go") {
+		// The writer metadata compressor is the second legal bounded
+		// in-memory payload (Rust metadata.rs compress; SOW-0025 D4):
+		// caller-owned metadata bytes move through a zlib-framed deflate
+		// stream and the stored-zlib fallback into an owned buffer whose
+		// length is capped by MetadataCompressedBound, then land through
+		// the exact chunk geometry into mapped pages. Exact shapes
+		// exempted in THIS file only:
+		//
+		//   - flate.NewWriter on the compress/flate package ident;
+		//   - Write/Close on a non-tainted variable receiver whose
+		//     static type is *flate.Writer (the compressor local);
+		//   - Write/WriteByte on a non-tainted variable receiver whose
+		//     static type is *bytes.Buffer (the owned output local; a
+		//     concrete in-memory container can never hide a file);
+		//   - copy(page[48:], chunk) where page is the mapped view
+		//     formal of a store.Update callback in this file and the
+		//     destination is the fixed 48-byte-header slice (the chunk
+		//     is bounded by MaxMetadataChunkLen, so the mapping-side
+		//     write can never mint an owned complete page).
+		//
+		// Every other selector and every other builtin call in the file
+		// keeps failing closed; battery pins pin the boundary.
+		// The exemption is binding-keyed: only the actual Update-callback
+		// formal variables are exempt, resolved through go/types var
+		// identity. A same-file owned local that merely shares the
+		// formal's NAME (e.g. page := make([]byte, format.PageSize))
+		// must not inherit the mapped-page copy exemption (battery 321).
+		updatePageVars := map[*types.Var]bool{}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Update" {
+				return true
+			}
+			lit, ok := unparen(call.Args[1]).(*ast.FuncLit)
+			if !ok || lit.Type == nil || lit.Type.Params == nil || len(lit.Type.Params.List) != 1 {
+				return true
+			}
+			field := lit.Type.Params.List[0]
+			at, ok := field.Type.(*ast.ArrayType)
+			if !ok || at.Len != nil {
+				return true
+			}
+			elt, ok := at.Elt.(*ast.Ident)
+			if !ok || elt.Name != "byte" {
+				return true
+			}
+			for _, name := range field.Names {
+				if tv, ok := w.pc.info.Defs[name].(*types.Var); ok {
+					updatePageVars[tv] = true
+				}
+			}
+			return true
+		})
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := unparen(call.Fun).(*ast.Ident); ok && id.Name == "copy" && len(call.Args) == 2 {
+				sl, ok := unparen(call.Args[0]).(*ast.SliceExpr)
+				if !ok {
+					return true
+				}
+				pid, ok := unparen(sl.X).(*ast.Ident)
+				if !ok || sl.High != nil || sl.Slice3 {
+					return true
+				}
+				tv, ok := w.pc.info.Uses[pid].(*types.Var)
+				if !ok || !updatePageVars[tv] {
+					return true
+				}
+				low, ok := sl.Low.(*ast.BasicLit)
+				if !ok || low.Kind != token.INT || low.Value != "48" {
+					return true
+				}
+				exempts[call.Pos()] = true
+				return true
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "NewWriter":
+				if id, ok := unparen(sel.X).(*ast.Ident); ok && id.Name == "flate" && len(call.Args) == 2 {
+					if obj, ok := w.pc.info.Uses[sel.Sel].(*types.Func); ok && obj.Pkg() != nil && obj.Pkg().Path() == "compress/flate" {
+						exempts[sel.Pos()] = true
+					}
+				}
+			case "Write", "WriteByte", "Close":
+				if sel.Sel.Name == "Write" || sel.Sel.Name == "WriteByte" {
+					if len(call.Args) != 1 {
+						return true
+					}
+				} else if len(call.Args) != 0 {
+					return true
+				}
+				if !isVariableRef(sel.X) || w.pageValue(sel.X).tainted {
+					return true
+				}
+				// The byte argument must not provably alias the mapping
+				// (a store-callback page view would be a complete-page
+				// copy into the owned compressor/buffer) and must not be
+				// a file-bearing value: only the caller-owned metadata
+				// payload and small literal headers/trailers qualify.
+				if len(call.Args) == 1 {
+					a0 := call.Args[0]
+					if w.pageValue(a0).mapped {
+						return true
+					}
+					if t := w.typeOf(a0); t != nil && fileValueType(t, map[types.Type]bool{}) {
+						return true
+					}
+				}
+				switch concreteTypeName(w.typeOf(sel.X)) {
+				case "flate.Writer":
+					if sel.Sel.Name == "Write" || sel.Sel.Name == "Close" {
+						exempts[sel.Pos()] = true
+					}
+				case "bytes.Buffer":
+					if sel.Sel.Name == "Write" || sel.Sel.Name == "WriteByte" {
+						exempts[sel.Pos()] = true
+					}
+				}
+			}
 			return true
 		})
 		return exempts

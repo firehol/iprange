@@ -54,6 +54,22 @@ type Core struct {
 	// crash-recovery tooling can reason about abandoned tails (Rust
 	// WriterCore::unproved_tail_end).
 	unprovedTailEnd *uint64
+	// unresolved records a publication failure after the alternate meta
+	// write whose durability is unknown (Rust WriterCore's
+	// State::OutcomeUnknown): every mutating entry point fails closed
+	// with WrongState until Close, because a retried transaction would
+	// reuse the same transaction id over an abandoned commit.
+	unresolved error
+}
+
+// requireHealthy fails closed after an unresolved commit outcome (Rust
+// require_healthy, live_writer.rs:311): only the close family remains
+// legal, mirroring WrongMode("writer has an unresolved commit outcome").
+func (c *Core) requireHealthy() error {
+	if c.unresolved != nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer has an unresolved commit outcome"}
+	}
+	return nil
 }
 
 // OpenWriter maps path read-write under the exclusive lifetime lock and

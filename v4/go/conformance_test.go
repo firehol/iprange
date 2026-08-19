@@ -337,9 +337,20 @@ type invalidExpect struct {
 	ExpectedError string `json:"expected_error"`
 }
 
+// corpusDir returns the conformance corpus root. The regeneration gate
+// (conformance_generate_test.go) overrides it with IPRANGE_V4_GO_CORPUS so
+// the staged corpus is verified by the exact same suite before publish; a
+// normal run always uses the committed corpus.
+func corpusDir() string {
+	if dir := os.Getenv("IPRANGE_V4_GO_CORPUS"); dir != "" {
+		return dir
+	}
+	return filepath.Join("..", "conformance")
+}
+
 func loadManifest(t *testing.T) conformanceManifest {
 	t.Helper()
-	raw, err := os.ReadFile("../conformance/cases.json")
+	raw, err := os.ReadFile(filepath.Join(corpusDir(), "cases.json"))
 	if err != nil {
 		t.Fatal("read cases.json:", err)
 	}
@@ -364,12 +375,12 @@ func loadManifest(t *testing.T) conformanceManifest {
 		manifestFiles[fx.File] = true
 	}
 	var diskFiles []string
-	err = filepath.Walk("../conformance", func(path string, fi os.FileInfo, err error) error {
+	err = filepath.Walk(corpusDir(), func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !fi.IsDir() && strings.HasSuffix(path, ".iprdb") {
-			rel, err := filepath.Rel("../conformance", path)
+			rel, err := filepath.Rel(corpusDir(), path)
 			if err != nil {
 				return err
 			}
@@ -378,16 +389,16 @@ func loadManifest(t *testing.T) conformanceManifest {
 		return nil
 	})
 	if err != nil {
-		t.Fatal("walk conformance dir:", err)
+		t.Fatal("walk corpus dir:", err)
 	}
 	for _, f := range diskFiles {
 		if !manifestFiles[f] {
 			t.Fatalf("committed fixture %s not in manifest", f)
 		}
 	}
-	// Enforce the exact fixture inventory and producer coverage: all six
-	// committed Rust fixtures must be present with producer "rust", and
-	// no extra fixtures may appear.
+	// Enforce the exact fixture inventory and producer coverage: the six
+	// committed Rust fixtures plus the two Go-produced direct fixtures,
+	// and no extra fixtures may appear.
 	want := []string{
 		"rust/direct-ipv4.iprdb",
 		"rust/first-seen-ipv6.iprdb",
@@ -395,14 +406,16 @@ func loadManifest(t *testing.T) conformanceManifest {
 		"rust/membership-ipv6.iprdb",
 		"rust/structured-ipv4.iprdb",
 		"rust/structured-ipv4-nothreat.iprdb",
+		"go/direct-ipv4.iprdb",
+		"go/first-seen-ipv6.iprdb",
 	}
 	if len(m.Fixtures) != len(want) {
 		t.Fatalf("fixture count %d, want %d", len(m.Fixtures), len(want))
 	}
 	seen := map[string]bool{}
 	for _, fx := range m.Fixtures {
-		if fx.Producer != "rust" {
-			t.Fatalf("fixture %s: producer %q, want rust", fx.File, fx.Producer)
+		if fx.Producer != "rust" && fx.Producer != "go" {
+			t.Fatalf("fixture %s: producer %q, want rust or go", fx.File, fx.Producer)
 		}
 		seen[fx.File] = true
 	}
@@ -693,7 +706,7 @@ func loadManifest(t *testing.T) conformanceManifest {
 }
 
 func fixturePath(rel string) string {
-	return filepath.Join("..", "conformance", filepath.FromSlash(rel))
+	return filepath.Join(corpusDir(), filepath.FromSlash(rel))
 }
 
 func mustOpen(t *testing.T, rel string) *ImmutableReader {

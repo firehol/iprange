@@ -1,0 +1,424 @@
+// Public live-writer facade: create, open, direct transactions, metadata,
+// commit, abort, close. The facade composes the internal writer owner; it
+// never touches bytes or pages itself (SOW-0025 chunk-6 design record D1
+// extends the module-root boundary to internal/writer so the public SDK
+// stays the single `iprangedb` package, mirroring the Rust lib). The
+// sidecar, cancellation, and coordination surfaces are milestone-4 gaps
+// recorded in the SOW (D3).
+
+package iprangedb
+
+import (
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/writer"
+)
+
+// PageBudget declares the draft resource limits of one opened writer
+// (Rust live_writer::TransactionBudget minus the sidecar file bound):
+// MaxHeapBytes bounds owned scratch (metadata compression), MaxPrivatePages
+// bounds the COW draft extent, MaxGrowthPages bounds the file growth one
+// transaction may claim.
+type PageBudget struct {
+	MaxHeapBytes    uint64
+	MaxPrivatePages uint64
+	MaxGrowthPages  uint64
+}
+
+// DefaultBudget returns the budget proven by the committed corpus
+// generation (the Rust conformance transaction_budget values for the
+// writer work the fixtures exercise).
+func DefaultBudget() PageBudget {
+	return PageBudget{MaxHeapBytes: 32 << 20, MaxPrivatePages: 200_000, MaxGrowthPages: 200_000}
+}
+
+func (b PageBudget) internal() writer.PageBudget {
+	return writer.PageBudget{MaxHeapBytes: b.MaxHeapBytes, MaxPrivatePages: b.MaxPrivatePages, MaxGrowthPages: b.MaxGrowthPages}
+}
+
+// writerNamespaceCheck is the module-root namespace hook: the SDK's
+// namespace surface is a milestone-4 gap, so the hook is a scanned
+// package-level no-op that satisfies the internal/writer callback fence
+// (an unscanned nil could launder a mapped page through the writer
+// owner's hook formal).
+func writerNamespaceCheck(clean string) error { return nil }
+
+// noopCheckpoint is the module-root durability checkpoint hook: the
+// coordination surface is a milestone-4 gap, so the hook is a scanned
+// package-level no-op that satisfies the internal/writer callback fence.
+func noopCheckpoint() error { return nil }
+
+// CreateResult is the factual identity of one created database (Rust
+// CreateResult minus the sidecar/namespace/cleanup surface, milestone-4
+// gap). TransactionID is always 1 for a fresh database.
+type CreateResult struct {
+	Family        AddressFamily
+	ValueKind     ValueKind
+	StructureKind StructureKind
+	ValueTag      ValueTag
+	DatabaseID    [16]byte
+	CommitNonce   [16]byte
+	TransactionID uint64
+}
+
+// Create writes a brand-new empty transaction-1 database at path (Rust
+// create_live minus the sidecar, SOW-0025 chunk-6 design record D2): an
+// existing destination is refused (ErrorNameExists), the value-kind and
+// structure-kind combination is validated (ErrorWrongStructureKind), the
+// database id and commit nonce are drawn, the identical txn-1 meta is
+// written to both meta pages, flushed and synced. The file is left
+// committed and readable by both readers; open it with OpenWriter to
+// mutate it.
+func Create(path string, family AddressFamily, kind ValueKind, structure StructureKind, tag ValueTag) (CreateResult, error) {
+	created, err := writer.Create(path, uint8(family), uint8(kind), uint8(structure), tag.Wire(), writerNamespaceCheck)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	return CreateResult{
+		Family:        family,
+		ValueKind:     kind,
+		StructureKind: structure,
+		ValueTag:      tag,
+		DatabaseID:    created.DatabaseID,
+		CommitNonce:   created.CommitNonce,
+		TransactionID: 1,
+	}, nil
+}
+
+// Writer is one opened live writer: the exclusive-lifetime-locked
+// read-write mapping of the committed generation (Rust LiveWriter). At
+// most one direct transaction is open at a time.
+type Writer struct {
+	core *writer.Core
+}
+
+// OpenWriter opens path as the single live writer (Rust LiveWriter::open
+// minus the sidecar coordination, which milestone 4 adds; the mapping
+// owner's exclusive lifetime lock is the writer claim). Readers block on
+// the writer's lock until Close. budget declares the draft resource
+// limits; use DefaultBudget for the proven values.
+func OpenWriter(path string, budget PageBudget) (*Writer, error) {
+	core, err := writer.Open(path, budget.internal(), writerNamespaceCheck)
+	if err != nil {
+		return nil, err
+	}
+	return &Writer{core: core}, nil
+}
+
+// Info reports the selected committed generation (Rust
+// WriterCore::base_info mapped to the public DatabaseInfo; after a
+// successful open the selection is always ProvenCurrent).
+func (w *Writer) Info() (DatabaseInfo, error) {
+	if w.core == nil {
+		return DatabaseInfo{}, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	wi := w.core.BaseInfo()
+	return DatabaseInfo{
+		Family:           AddressFamily(wi.AddressFamily),
+		ValueKind:        ValueKind(wi.ValueKind),
+		StructureKind:    StructureKind(wi.StructureKind),
+		ValueTag:         ValueTag{wire: wi.ValueTag},
+		DatabaseID:       wi.DatabaseID,
+		TransactionID:    wi.TransactionID,
+		CommitNonce:      wi.CommitNonce,
+		PageCount:        wi.PageCount,
+		RangeRecordCount: wi.RangeRecordCount,
+		ActiveFeedCount:  wi.ActiveFeedCount,
+		MetaSelection:    MetaSelectionProvenCurrent,
+	}, nil
+}
+
+// BeginDirect opens one ordered direct transaction on a clean writer
+// (Rust LiveWriter::begin_direct_transaction): a direct database is
+// required, the commit nonce is drawn inside the writer core, and the
+// transaction owns every later mutation until Commit or Abort.
+func (w *Writer) BeginDirect() (*DirectTransaction, error) {
+	if w.core == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	if w.core.BaseInfo().ValueKind != format.ValueKindDirect {
+		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "direct transaction requires a direct database"}
+	}
+	if err := w.core.BeginDraft(); err != nil {
+		return nil, err
+	}
+	return &DirectTransaction{w: w, active: true}, nil
+}
+
+// Close finishes the writer (Rust LiveWriter::close): any open draft is
+// discarded with its unpublished tail, the committed generation is
+// re-selected and trimmed, and the exclusive lifetime lock is released.
+// A second Close is idempotent success exactly like Rust close() on
+// State::Closed; every later Writer call reports ErrorWrongState.
+func (w *Writer) Close() error {
+	if w.core == nil {
+		return nil
+	}
+	plan, err := w.core.PrepareClose()
+	if err == nil {
+		err = w.core.FinishClose(plan)
+	}
+	closeErr := w.core.Close()
+	w.core = nil
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+// DirectTransaction is one ordered advanced direct transaction (Rust
+// DirectTransaction). Every mutation applies in exact call order; the
+// draft is discarded by Commit and Abort and by Writer.Close.
+type DirectTransaction struct {
+	w      *Writer
+	active bool
+}
+
+// requireActive mirrors Rust DirectState::require_active: every op and the
+// terminal transitions refuse a spent transaction.
+func (t *DirectTransaction) requireActive() error {
+	if !t.active || t.w == nil || t.w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+	}
+	if t.w.core.Draft() == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+	}
+	return nil
+}
+
+// requireMutation mirrors Rust LiveWriter::require_direct: no staged
+// metadata yet, ordered range, direct value kind, matching family.
+func (t *DirectTransaction) requireMutation(family uint8, ordered bool) error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if t.w.core.Draft().MetadataStaged() {
+		return &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+	}
+	if !ordered {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+	}
+	if t.w.core.BaseInfo().ValueKind != format.ValueKindDirect {
+		return &format.Error{Code: format.CodeWrongValueKind, Detail: "direct mutation requires a direct database"}
+	}
+	if t.w.core.BaseInfo().AddressFamily != family {
+		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "direct mutation does not match the database family"}
+	}
+	return nil
+}
+
+// AssignV4 assigns one inclusive IPv4 interval in exact call order (Rust
+// DirectTransaction::assign_v4).
+func (t *DirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, error) {
+	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
+		return false, err
+	}
+	return t.w.core.AssignV4(uint32(from), uint32(to), value)
+}
+
+// AssignV6 assigns one inclusive IPv6 interval in exact call order (Rust
+// DirectTransaction::assign_v6).
+func (t *DirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, error) {
+	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
+		return false, err
+	}
+	return t.w.core.AssignV6(from.Hi, from.Lo, to.Hi, to.Lo, value)
+}
+
+// ClearV4 clears one inclusive IPv4 interval (Rust
+// DirectTransaction::clear_v4).
+func (t *DirectTransaction) ClearV4(from, to IPv4) (bool, error) {
+	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
+		return false, err
+	}
+	return t.w.core.ClearV4(uint32(from), uint32(to))
+}
+
+// ClearV6 clears one inclusive IPv6 interval (Rust
+// DirectTransaction::clear_v6).
+func (t *DirectTransaction) ClearV6(from, to IPv6) (bool, error) {
+	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
+		return false, err
+	}
+	return t.w.core.ClearV6(from.Hi, from.Lo, to.Hi, to.Lo)
+}
+
+// SetMetadataJSON stages one exact metadata replacement in this
+// transaction (Rust DirectTransaction::set_metadata_json): the payload is
+// bounded by the 20 MiB cap, compressed, and stored as the exact metadata
+// chain. At most one metadata stage is allowed per transaction.
+func (t *DirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
+	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	if t.w.core.Draft().MetadataStaged() {
+		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+	}
+	return t.w.core.SetMetadata(input)
+}
+
+// ClearMetadataJSON stages metadata absence in this transaction (Rust
+// DirectTransaction::clear_metadata_json); an already-absent database
+// reports false.
+func (t *DirectTransaction) ClearMetadataJSON() (bool, error) {
+	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	if t.w.core.Draft().MetadataStaged() {
+		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+	}
+	return t.w.core.ClearMetadata()
+}
+
+// CommitStatus classifies one commit outcome (Rust CommitDurability).
+type CommitStatus uint8
+
+const (
+	CommitNotCommitted   CommitStatus = iota // the commit never reached the file
+	CommitCommitted                          // the commit landed durably
+	CommitOutcomeUnknown                     // the file may have advanced past this commit
+)
+
+// CommitResult is the factual outcome of one commit attempt (Rust
+// CommitResult minus the sidecar/cleanup/coordination surface,
+// milestone-4 gap).
+type CommitResult struct {
+	Status        CommitStatus
+	DatabaseID    [16]byte
+	TransactionID uint64
+	CommitNonce   [16]byte
+	Err           error
+}
+
+// Commit publishes this transaction (Rust DirectTransaction::commit). An
+// unchanged transaction is discarded and reports ErrorNoPendingTransaction
+// (Rust commit_attempt parity). A preparation failure returns a
+// CommitNotCommitted result carrying the cause with the draft discarded; a
+// publication failure reports CommitNotCommitted before the meta write or
+// CommitOutcomeUnknown after it.
+func (t *DirectTransaction) Commit() (CommitResult, error) {
+	if err := t.requireActive(); err != nil {
+		return CommitResult{}, err
+	}
+	draft := t.w.core.Draft()
+	if !draft.Changed() {
+		if err := t.w.core.DiscardUnpublished(); err != nil {
+			t.active = false
+			return CommitResult{}, err
+		}
+		t.active = false
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+	}
+	attempt, err := t.w.core.CommitAttempt()
+	if err != nil {
+		t.active = false
+		return CommitResult{}, err
+	}
+	if err := t.w.core.Prepare(noopCheckpoint); err != nil {
+		// Rust commit_with: a preparation failure aborts the draft and
+		// reports the NotCommitted result carrying the cause wrapped in
+		// the TransactionAborted class (code 22); a failed discard
+		// nests the CleanupIncomplete class (code 64) exactly like
+		// Rust abort_after_source.
+		return t.abortAfter(attempt, err), nil
+	}
+	// Rust commit_locked runs the prepublication checks immediately
+	// before publish: the base must be unchanged and the locked file
+	// must cover the draft length. A failure is a BeforePublication
+	// abort, same class as a preparation failure.
+	if err := t.w.core.RequireDraftLength(); err != nil {
+		return t.abortAfter(attempt, err), nil
+	}
+	if err := t.w.core.RequireUnchangedBase(); err != nil {
+		return t.abortAfter(attempt, err), nil
+	}
+	res := t.w.core.Publish(noopCheckpoint)
+	t.active = false
+	result := CommitResult{DatabaseID: attempt.DatabaseID, TransactionID: attempt.TransactionID, CommitNonce: attempt.CommitNonce, Err: res.Err}
+	switch res.Status {
+	case writer.PublishCommitted:
+		result.Status = CommitCommitted
+	case writer.PublishBeforePublication:
+		result.Status = CommitNotCommitted
+	default:
+		result.Status = CommitOutcomeUnknown
+	}
+	return result, nil
+}
+
+// abortAfter reports an aborted commit the Rust way
+// (abort_after/abort_after_source): the result error class is
+// TransactionAborted (code 22); when the abandonment discard also fails,
+// the chain carries the CleanupIncomplete class (code 64) around the
+// combined cause. The original cause stays reachable through Unwrap.
+func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
+	discardErr := t.w.core.DiscardUnpublished()
+	t.active = false
+	inner := cause
+	if discardErr != nil {
+		inner = &chainError{
+			text:  cause.Error() + "; discard failed: " + discardErr.Error(),
+			cause: cause,
+		}
+	}
+	return CommitResult{
+		Status:        CommitNotCommitted,
+		DatabaseID:    attempt.DatabaseID,
+		TransactionID: attempt.TransactionID,
+		CommitNonce:   attempt.CommitNonce,
+		Err: &abortError{
+			class: &format.Error{Code: format.CodeTransactionAborted, Detail: "commit aborted after a preparation failure"},
+			cause: inner,
+		},
+	}
+}
+
+// chainError preserves a cause chain without formatting an
+// interface-typed error through fmt (the gate treats an interface error
+// value as a possible page carrier, so the message is joined eagerly
+// from the concrete Error() strings).
+type chainError struct {
+	text  string
+	cause error
+}
+
+func (e *chainError) Error() string { return e.text }
+
+func (e *chainError) Unwrap() error { return e.cause }
+
+// abortError carries the transaction-aborted error class while keeping
+// the wrapped cause chain inspectable: errors.As sees the class as a
+// *format.Error first, and Unwrap exposes the original preparation or
+// cleanup cause (Rust TransactionAborted(Box<cause>)).
+type abortError struct {
+	class *format.Error
+	cause error
+}
+
+func (e *abortError) Error() string {
+	if e.cause == nil {
+		return e.class.Error()
+	}
+	return e.class.Error() + ": " + e.cause.Error()
+}
+
+func (e *abortError) Unwrap() error { return e.cause }
+
+func (e *abortError) As(target any) bool {
+	fe, ok := target.(**format.Error)
+	if !ok {
+		return false
+	}
+	*fe = e.class
+	return true
+}
+
+// Abort discards this transaction and its unpublished tail (Rust
+// DirectTransaction::abort); the writer stays open and healthy.
+func (t *DirectTransaction) Abort() error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	err := t.w.core.DiscardUnpublished()
+	t.active = false
+	return err
+}

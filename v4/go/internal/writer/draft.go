@@ -37,6 +37,10 @@ type Draft struct {
 	// changed reports whether the draft mutated persistent content
 	// (Rust Draft::changed; set by the edit workflows and prepare).
 	changed bool
+	// metadataStaged reports one metadata stage was already applied to
+	// this draft (Rust Draft::metadata_staged; set by the metadata edit
+	// core and enforced by requireMetadataAvailable).
+	metadataStaged bool
 	// rangeTreePrivate reports the range tree is draft-private (Rust
 	// Draft::range_tree_private; true when the committed base has no
 	// range tree). Public range edits on a private tree take the gap
@@ -66,3 +70,7 @@ func (d *Draft) Meta() format.Meta { return d.meta }
 
 // Changed reports whether the draft mutated persistent content.
 func (d *Draft) Changed() bool { return d.changed }
+
+// MetadataStaged reports one metadata stage was already applied (Rust
+// Draft::metadata_staged).
+func (d *Draft) MetadataStaged() bool { return d.metadataStaged }

@@ -310,7 +310,7 @@ func TestPublishRequiresPreparedDraft(t *testing.T) {
 	if res := c.Publish(nil); res.Status != PublishBeforePublication {
 		t.Fatalf("publish without draft status = %v, want BeforePublication", res.Status)
 	}
-	if _, err := c.commitAttempt(); err == nil {
+	if _, err := c.CommitAttempt(); err == nil {
 		t.Fatal("commitAttempt without draft did not fail")
 	}
 	if err := c.StartDraft([16]byte{1}); err != nil {
@@ -319,7 +319,7 @@ func TestPublishRequiresPreparedDraft(t *testing.T) {
 	if err := c.StartDraft([16]byte{2}); err == nil {
 		t.Fatal("second StartDraft did not fail")
 	}
-	if _, err := c.commitAttempt(); err == nil {
+	if _, err := c.CommitAttempt(); err == nil {
 		t.Fatal("commitAttempt on unchanged draft did not fail")
 	}
 }

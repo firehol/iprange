@@ -4,6 +4,11 @@ package format
 
 const MaxMetadataChunkLen = 4048
 
+// MaxMetadataChainPages is the fixed bound on one metadata chain (Rust
+// metadata.rs MAX_PAGES: the compressed bound of the 20 MiB cap divided by
+// the chunk capacity, rounded up).
+const MaxMetadataChainPages = 5182
+
 // MetadataChunk is one parsed metadata-chunk page body. Data aliases the page
 // view and must not outlive the operation.
 type MetadataChunk struct {

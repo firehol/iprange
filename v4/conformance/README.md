@@ -5,11 +5,14 @@ The normative wire contract is
 The former unreleased and incompatible experimental fixtures were deleted; they
 are not compatibility inputs.
 
-## Rust-first foundation
+## Corpus
 
-`cases.json` is the language-neutral semantic manifest. The current foundation
-contains six compact immutable snapshots produced through the public Rust live
-writer and public snapshot operation:
+`cases.json` is the language-neutral semantic manifest. The corpus contains
+eight compact immutable snapshots produced through the public writers of both
+implementations. The Rust-produced files come from the public Rust live writer
+and public snapshot operation; the Go-produced files come from the public Go
+writer (`v4/go` `Create`/`OpenWriter`/`BeginDirect`/`Commit`, no snapshot
+operation yet - Go writes the compact main file directly):
 
 - `rust/direct-ipv4.iprdb`: arrival-order direct assignments and clearing;
 - `rust/first-seen-ipv6.iprdb`: full IPv6 first-seen coverage and empty metadata;
@@ -18,10 +21,14 @@ writer and public snapshot operation:
 - `rust/membership-ipv6.iprdb`: full IPv6 membership and a 1 MiB compressed
   metadata payload;
 - `rust/structured-ipv4.iprdb`: typed network enrichment, named threat feeds,
-  arrival-order overwrites, clearing, lazy membership, and exact metadata; and
+  arrival-order overwrites, clearing, lazy membership, and exact metadata;
 - `rust/structured-ipv4-nothreat.iprdb`: structured values without threat
   feeds (membership id zero), pinning the canonical absence result in both
-  readers.
+  readers;
+- `go/direct-ipv4.iprdb`: the same direct IPv4 semantics produced by the Go
+  writer; and
+- `go/first-seen-ipv6.iprdb`: the same first-seen IPv6 coverage produced by the
+  Go writer.
 
 The Rust test actually opens and explicitly validates every listed file. It
 compares every direct or structured range, typed enrichment field, feed
@@ -40,8 +47,7 @@ nice cargo test --manifest-path v4/rust/Cargo.toml --test conformance
 Regenerate only the Rust-produced files explicitly:
 
 ```bash
-nice cargo test --manifest-path v4/rust/Cargo.toml \
-  --test conformance regenerate_rust_fixtures -- --ignored --exact
+nice cargo test --manifest-path v4/rust/Cargo.toml   --test conformance regenerate_rust_fixtures -- --ignored --exact
 ```
 
 Regeneration has no test-only wire encoder. It creates live files with the
@@ -50,20 +56,43 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 
 ## Cross-language gate
 
-The corpus is currently Rust-first. The accepted Rust result authorized the
-pure-Go port under pending SOW-0025. When that Go implementation exists:
+Both producer sets are now committed, and each reader opens and semantically
+verifies both producer sets (Rust conformance opens all eight files; the Go
+conformance inventory lists each fixture file with its producer and the Go
+reader verifies both sets).
 
-- Go adds independently produced files to this same manifest;
-- both readers must open and semantically verify both producer sets;
-- malformed transformations must produce equivalent public errors; and
-- mixed Rust/Go subprocess tests must prove external reader-slot locks, writer
-  exclusion, reclamation, sidecar identity/replacement handling, and live
-  transition/publication resolution in both directions.
+- Mixed subprocess smoke gates run the same cross-open verdicts from a
+  fresh process: `v4/go/subprocess_cross_open_test.go` spawns the Go test
+  binary as a child that opens the Rust fixture, the Go fixture, and runs
+  one full create-commit-read-back roundtrip;
+  `v4/rust/iprange-livedb/tests/mixed_subprocess.rs` spawns the Rust test
+  binary as a child that opens both `rust/direct-ipv4.iprdb` and
+  `go/direct-ipv4.iprdb` with `ImmutableReader`. The full manifest
+  verdicts (every range, metadata state, cardinality, and invalid
+  mutation) are proven in-process by the Go and Rust conformance suites.
+- Malformed transformations must produce equivalent public errors (the
+  invalid-cases checks in both conformance suites cover this).
+- Byte-identical files are not required. Page placement, mutable tree shape,
+  membership IDs, and compressed bytes may differ when observable data is
+  equal. At the cross-language gate, a missing required producer or skipped
+  cross-open is a failure.
 
-Byte-identical files are not required. Page placement, mutable tree shape,
-membership IDs, and compressed bytes may differ when observable data is equal.
-At the cross-language gate, a missing required producer or skipped cross-open is
-a failure.
+Regenerate the Go-produced files explicitly with the Go conformance test
+(instead of a committed encoder, it creates a live file through the public
+writer, verifies the staged output against `cases.json`, and only then
+replaces the committed file):
+
+```bash
+cd v4/go && IPRANGE_V4_GO_REGENERATE_FIXTURES=1 nice go test . -run TestRegenerateGoFixtures
+```
+
+The Rust regeneration command above only replaces the Rust-produced files.
+Mixed subprocess gates run with the normal suites:
+
+```bash
+nice go test . -run 'TestGoSubprocess' -v   # from v4/go
+nice cargo test --manifest-path v4/rust/Cargo.toml --test mixed_subprocess
+```
 
 Reachable empty leaves are malformed. An empty logical tree uses root page zero.
 Live reader coordination is external to the database and uses OS-held locks; it

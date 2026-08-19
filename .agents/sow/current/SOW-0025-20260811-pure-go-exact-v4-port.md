@@ -27,6 +27,8 @@ Recorded as Review Process step 6 below.
 
 ## Status
 
+Status: in-progress
+
 ### 2026-08-18 - user decision: all builds, tests, and benchmarks run under nice
 
 The user requires every test, benchmark, and heavy build invocation to run
@@ -40,7 +42,6 @@ v4/rust/README.md, v4/conformance/README.md, tests.d/README.md, and the
 project-v4-rust skill references `nice` explicitly. SOW historical records
 are dated narrative and remain as written.
 
-Status: in-progress
 
 Sub-state: milestone 1 external-review rework IMPLEMENTED and validated
 (2026-08-14); the six-resident swarm PASSes at HEAD 93b0f07; the swarm
@@ -1867,6 +1868,286 @@ only the recorded P3 notes (v4work-only placement by design, the
 FreeBitmapRoot=0 fixture dependency pinned in a comment, os.Exit(86)
 bypassing Go-style cleanup exactly like Rust _exit(86)). Chunk 5
 level-2 gate closes 3/3 available PASS.
+
+Chunk 6 design record - public Go generation API + Go-produced corpus +
+Rust cross-open + mixed subprocess gates (2026-08-19; decisions recorded
+before implementation, per the SOW process):
+- D1 (facade boundary): the module-root import boundary extends to
+  stdlib + internal/format + internal/reader + internal/writer
+  (check-import-graph.sh root rule and header comment). The public SDK
+  stays one `iprangedb` package mirroring the single Rust lib; the
+  writer facade is a thin composition over the internal owner. Every
+  other package still may not import internal/*; the per-target loop
+  package list is unchanged (internal/writer already listed).
+- D2 (create without sidecar): Go has no sidecar until milestone 4, so
+  the public Create mirrors only the main-file half of Rust
+  create_live: O_CREATE|O_EXCL destination refusal (Rust require_absent
+  parity, fail closed on existing files), exclusive lifetime lock, a
+  2-page extent with the identical txn-1 meta on both pages (Rust
+  EmptySpec::live + write_empty: page_count 2, all roots 0,
+  feed_index_limit 0, membership_id_limit 1 for membership/structured,
+  structure_id_limit 1 for structured), flush + sync, then close.
+  reader_capacity, the sidecar, cleanup IDs, and the private-then-
+  publish namespace stage are milestone-4 gaps recorded here, not
+  defects of this chunk.
+- D3 (public workflow shape): Create(path, family, kind, structure,
+  tag) -> CreateResult{DatabaseID, CommitNonce, TxnID=1}; OpenWriter
+  (Go writer.Open; default budget = the fixture-proved values
+  32 MiB heap / 200k private / 200k growth pages, exported
+  DefaultBudget); Writer.Info (DatabaseInfo over the selected
+  committed generation); Writer.BeginDirect (direct-only ValueKind
+  gate, Rust begin_direct_state parity; the commit nonce is drawn
+  inside the writer core via Core.BeginDraft -> randomNonce, keeping
+  the crypto/rand exemption path in internal/writer/reclaim.go);
+  DirectTransaction.AssignV4/AssignV6/ClearV4/ClearV6/
+  SetMetadataJSON/ClearMetadataJSON/Commit/Abort; Writer.Close
+  (PrepareClose + FinishClose + mapping close; an open draft is
+  discarded like Rust close with had_pending). No CancellationToken:
+  the Go writer has no cancellation machinery (milestone-4 workflow
+  concern; recorded gap). CommitResult mirrors the Rust facts minus
+  the sidecar/coordination/cleanup surface (recorded gap): Status
+  (Committed / BeforePublication / OutcomeUnknown), DatabaseID,
+  TransactionID, CommitNonce, Err; an unchanged draft commits to
+  CodeNoPendingTransaction and is discarded (Rust commit_attempt
+  parity).
+- D4 (metadata edit core): internal/writer gains the draft metadata
+  surface mirroring Rust draft_store/metadata.rs exactly: 20 MiB
+  uncompressed cap, compressed_bound + heap-budget guard, deflate into
+  the bound with a stored-zlib fallback when deflate cannot finish
+  inside it (Rust compress), chunk-chain write with the exact chain
+  geometry (each page: header type 13 born=target txn item_count 1
+  level 0 lower 48+len upper 4096 aux 0, next at 32, length at 36,
+  reserved zero at 38, logical offset at 40, data at 48; stale chain
+  pages retired), metadata_staged state gate (one metadata stage per
+  transaction, Rust require_metadata_available/finish_metadata_stage
+  parity), and clear_metadata root-0 no-op. Compressed bytes may
+  differ from Rust (corpus rule); every reader contract (chain
+  geometry, offset continuity, full-chunk nonfinal pages, zlib stream
+  exactness) is pinned by the existing readers on both sides.
+- D5 (Go-produced corpus): two direct fixtures committed under
+  v4/conformance/go/: direct-ipv4.iprdb (the direct-ipv4 op sequence
+  with Go producer metadata text) and first-seen-ipv6.iprdb (whole-
+  space v6 assign value 1_700_000_000, empty metadata payload via
+  SetMetadataJSON([]) - the exact Rust commit_changed shape; the
+  existing rust/first-seen-ipv6 fixture carries present-empty
+  metadata, probe-verified). Membership/structured Go fixtures are
+  blocked on their edit cores (later milestones) and are recorded as
+  such, not as a gap in this chunk's gate. Manifest entries are added;
+  both reader inventory tests are updated (Rust keeps its 6-fixture
+  rust-count assertion, add the go set; Go stops asserting all-rust
+  and asserts the exact combined inventory).
+- D6 (mixed subprocess gates, both directions, no sidecar): Go suite
+  spawns fresh Go processes (the test binary, chunk-5 pattern) that
+  (a) open and verify a Rust-produced fixture, (b) open and verify a
+  Go-produced fixture, (c) create + commit a database through the
+  public API and verify it read-back; the Rust conformance suite
+  spawns a fresh Rust process (current_exe child, fork_ownership
+  pattern, no external toolchain dependency) that opens a Go-produced
+  fixture in the child. Both sides prove fresh-process opens over both
+  producer sets. The sidecar/reader-table/reclamation mixed directions
+  of section 21 are milestone-4 gates (unchanged).
+- D7 (work counters): no new counters; Rust metadata.rs and the Go
+  work package add none for metadata (mirror authority), and the
+  existing v4work counters already cover the range/alloc paths the
+  fixtures exercise.
+
+Chunk 6 close-out (2026-08-19; implementation + validation):
+- Public Go writer facade shipped: Create (O_EXCL + lifetime lock +
+  txn-1 2-page meta pair), OpenWriter, Writer.Info, BeginDirect,
+  DirectTransaction.AssignV4/AssignV6/ClearV4/ClearV6/
+  SetMetadataJSON/ClearMetadataJSON/Commit/Abort, Writer.Close; the
+  internal writer core owns all persistent bytes (mmap-only, no
+  complete page in owned memory), metadata core mirrors Rust
+  metadata.rs (20 MiB cap, bounded zlib-deflate with stored fallback,
+  chunk chain, one stage/txn).
+- Go-produced corpus: v4/conformance/go/direct-ipv4.iprdb and
+  first-seen-ipv6.iprdb committed; cases.json records producer=go for
+  both; Go conformance inventory covers all 8 fixtures with
+  rust|go producer; regeneration is env-gated
+  (IPRANGE_V4_GO_REGENERATE_FIXTURES=1) and verifies staged output
+  against cases.json before replacing files.
+- Cross-open proven both directions: Rust conformance opens the Go
+  fixtures (passed); Go conformance opens the Rust fixtures (passed);
+  mixed subprocess gates added on both sides
+  (v4/go/subprocess_cross_open_test.go - child opens rust fixture +
+  go fixture + create-commit-read-back roundtrip; Rust
+  tests/mixed_subprocess.rs - child opens both direct-ipv4 fixtures
+  via ImmutableReader) and pass.
+- Gate tooling: rules.go gained the file-scoped metadata.go
+  exemption (flate/bytes.Buffer shapes with taint + static-type
+  guards; copy(page[48:], chunk) only for Update-callback page
+  formals); battery 317-321 pin the file-scope edges; battery
+  self-test 702/702 OK (580 fail forms, 122 benign forms), 0 MISS;
+  module scan on the reviewed tree: SCAN EXIT 0, 0 violations.
+- Full validation at the closing commit: go test ./... including
+  -race and -tags v4work, go vet, gofmt -l, check-import-graph.sh,
+  11-target cross-compile matrix (linux amd64/386/arm/arm64/loong64,
+  darwin amd64/arm64, freebsd amd64, netbsd amd64, windows
+  amd64/arm64), SOW audit, Rust all-features cargo test, Rust
+  check-source-graph.sh - all green. README (v4/conformance/README.md)
+  documents both producer sets and the regeneration/subprocess
+  commands. Milestone 2 (public writer + corpus + cross-open) is
+  complete; a swarm final gate closes it in the next record.
+
+Chunk 6 level-1 gate round (2026-08-19, five adversarial reviewers on
+the uncommitted chunk-6 diff; every finding reproduced by the lead
+before any change; fixes implemented and validated in this session):
+- Peirce (corpus/conformance): P2-1 regeneration was one-shot (Create's
+  O_EXCL refused the committed fixtures, so the documented regeneration
+  command could never run post-commit) and P2-2 it neither staged nor
+  verified (two spot lookups only). Fixed with the Rust two-phase
+  contract: generate both fixtures into a staging corpus, verify the
+  staging corpus with the exact same conformance suite in a subprocess
+  (IPRANGE_V4_GO_CORPUS override), and only then publish each file next
+  to its target and rename over it. P3s: subprocess diagnostics said
+  "want (2, ...)" for the fixture's actual value 3 (fixed); the child
+  now strips the IPRANGE_V4_TEST_* crash controls alongside the GO_
+  controls; Rust mixed_subprocess gained a parent try_wait deadline and
+  a child self-deadline (90 s, Go parity); README wording now states the
+  subprocess gates are smoke gates and the full manifest verdicts are
+  proven in-process.
+- Linnaeus (metadata core + gate shaping): P2 - the metadata.go copy
+  exemption was name-keyed (any same-file local named like the
+  Update-callback formal inherited the exemption). Probe-verified with a
+  name-shadowed owned local: the scan returned EXIT 0 on a complete-page
+  copy. Fixed two layers: (a) the exemption is now binding-keyed on the
+  types.Var identity of the actual callback formals; (b) checkCopy now
+  accumulates destination-bounded spans (ownedCap < pageSize) of full
+  mapped sources into the assembly accumulator, closing the
+  page[48:]+page[:48] complete-page assembly shape (also probe-verified:
+  an array-based assembly that previously passed is now rejected).
+  Battery pin 321 pins the name-shadow shape (its first version used an
+  Update-formal source the scanner does not taint; the pinned mutation
+  now copies a real mapping.Page view). P3 notes: the deflate bound is
+  enforced post-hoc rather than mid-stream like Rust (Go pre-Grows to
+  the bound plus a dedicated 512 KiB headroom, so the physical budget
+  holds; accepted as recorded); retirement-reuse and
+  MaxMetadataChainPages boundary tests are not yet present on the Go
+  side (recorded, not milestone-blocking).
+- Jason (public facade): P1 - after CommitOutcomeUnknown the Go writer
+  stayed fully usable while Rust brands the writer unusable until
+  close. Fixed with Rust require_healthy parity: outcomeUnknown now
+  records an unresolved marker on the Core and every mutating entry
+  point (BeginDraft/StartDraft/CommitAttempt/Prepare/Publish/
+  DiscardUnpublished/AssignV4/V6/ClearV4/V6/SetMetadata/ClearMetadata/
+  PrepareReclamation) fails closed with WrongState until Close; a new
+  fault.Fail point (v4work-only, one-shot, compiled out of production)
+  past the alternate meta write drives the new v4work subprocess test
+  TestWriterOutcomeUnknownFailClosed (outcome_unknown + abort_class
+  children; the abort_class child also proves a preparation failure
+  keeps the writer healthy). P2 - a failed Create left the partial
+  destination in place and poisoned retries; mapping.Create now removes
+  the exclusively-created file on every error path (Rust
+  live_cleanup::remove parity) and create_test.go pins the retry.
+  P3a - second Close was CodeHandleClosed; now idempotent success and
+  post-close calls report WrongState (Rust State::Closed parity; public
+  pins updated). P3b - facade Commit now runs RequireDraftLength and
+  RequireUnchangedBase (exported from the core) immediately before
+  Publish, mirroring Rust prepublication_checks. P3c - preparation
+  failures now surface the TransactionAborted class (code 22) with the
+  cause chain preserved (chainError), and a failed abandon discard
+  nests the CleanupInProgress class (code 64), mirroring Rust
+  abort_after_source.
+- Sartre (mmap/taint integrity) FAIL and Leibniz (records/hygiene)
+  FAIL, both fixed and pinned this session:
+  - Sartre P2-1/P3-1 (concrete-receiver store callbacks never
+    seeded): only interface-dispatch call sites seeded the mapped
+    callback formals; s.Inspect/Update on the CONCRETE *DraftStore
+    (the writer's whole store surface) analyzed callback literals
+    with no mapped provenance, so copy(owned, page) inside a concrete
+    callback exited the scan silently (probe-verified before any
+    fix). Two root layers: (a) evalCall approved store-callback calls
+    only when the static receiver type was one of the approved
+    interfaces; (b) even with the widening, the args loop deleted the
+    seeds BEFORE argFlowOf re-evaluated the literal, so the LAST
+    cached body values were the unseeded ones and the rule pass saw a
+    clean source. FIXED: the seed now applies to any receiver that
+    provably implements one of the approved store interfaces
+    (types.Implements over approvedStoreInterfaces), and the deletion
+    moved after argFlowOf so the final body analysis carries the
+    mapped taint. Probes: copy(owned[:], p) in a concrete Inspect
+    callback now fails with "copy of a mapped page view into an owned
+    buffer"; the honest twin (copy INTO the mapped param) stays
+    clean; the whole module scan stays rc=0 (5 OS). Pins P385 (fail)
+    and P386 (benign) pin both shapes.
+  - Sartre P3-3 (flate.NewWriterDict): the dictionary compressor
+    constructor was neither banned nor exempted, and its
+    *flate.Writer Write calls would match the metadata.go exemption
+    once a mapped argument is involved. FIXED: NewWriterDict added to
+    bannedSelectors; pin P387 pins the rejection.
+  - Leibniz P2-1 (create.go dropped closeErr): a writeEmptyMeta
+    failure discarded the mapping close error. FIXED with joinError
+    in internal/writer (cause chain preserved through Unwrap, no
+    interface-typed fmt formatting); create_work_test.go pins the
+    write_empty fault path (fault.Fail("create.write_empty"),
+    v4work-only: partial file removed, retry succeeds) and
+    create_test.go pins the joinError surface. Both partial-file
+    removals (the mapping-create deferred cleanup and the
+    post-writeEmptyMeta removal) are identity-guarded like Rust
+    remove_exact: a path that no longer names the created file is
+    never removed (SameFile / Mapping.VerifyIdentity).
+  - Leibniz P3-1 (stale battery counts): the chunk-6 close-out record
+    above now carries the real numbers (702 pre-round-8, 705
+    post-round-8).
+  - Leibniz P3-2 (.gitignore): v4/go-gate/.gitignore now covers
+    go-gate-local and go-gate.exe (the locally built gate binaries).
+  - Leibniz P3-3 (Windows regeneration rename): the Go fixture
+    regeneration removes an existing target on windows before the
+    rename, mirroring the Rust cfg(windows) publish branch.
+  Final validation on the reviewed tree: battery 705/705 (582 fail
+  forms, 123 benign forms), 0 MISS under --self-test-jobs 24; module
+  scan rc=0 (5 OS); go test ./... both tag sets, -race, vet, gofmt,
+  check-import-graph.sh, 11-target cross-compile matrix, Rust
+  all-features cargo test (incl. mixed_subprocess), Rust
+  check-source-graph.sh - all green. Chunk 6 records are now
+  complete; the level-2 gate verdicts land in the next record.
+
+Chunk 6 level-2 gate round (2026-08-19, the open level-2 set minus
+glm: kimi, minimax, mimo, qwen):
+- kimi PASS, minimax PASS, mimo PASS on the round-8 tree (705/705).
+  The only notes were non-blocking P3 records-hygiene items: the
+  chunk-6 close-out still carried the historical 702 battery figure;
+  corrected inline in the level-1 record below (702 pre-round-8, 705
+  post-round-8).
+- qwen FAIL with one real P2: string(p) inside a seeded store-callback
+  formal silently escaped the gate. Root cause: checkArrayConversionSink
+  only rejected string(page) when the value had no caller-supplied
+  bound (hasSrc false); seeded callback formals carry hasSrc=true
+  because the store call site seeds their taint, so the provably mapped
+  formal converted the full page into an owned string unchecked
+  (probe gateStr exited 0 before the fix). FIXED on two layers in
+  rules.go: (a) the string sink now fails whenever the value is a
+  provably mapped parameter (mapped flag set) or has no caller bound,
+  unless the conversion is a definite sub-page slice
+  (string(p[:16])); (b) checkAssign now falls back to the conversion
+  expression's own type when the short-var LHS ident has no type
+  record, so the sink receives a non-nil destination for the common
+  q := string(p) shape. Probe-verified: the failing twin
+  (string(p) in a concrete *DraftStore Inspect callback) is now
+  flagged on all 5 OS with "string conversion of a full-page view",
+  the honest twin (string(p[:16]) same shape) stays clean, and the
+  module scan stays rc=0. Battery pins P388 (fail) and P389 (benign)
+  pin both shapes in internal/writer/.
+- Level-2 final validation on the fixed tree: battery 707/707 (583
+  fail forms, 124 benign forms), 0 MISS under --self-test-jobs 24;
+  module scan rc=0 (5 OS); go test ./... both tag sets, -race both
+  tag sets, vet, gofmt, check-import-graph.sh, 11-target cross-compile
+  matrix, Rust all-features cargo test (incl. mixed_subprocess), Rust
+  check-source-graph.sh, SOW audit - all green.
+- qwen re-review of the fix: ACCEPT (verified against the rebuilt
+  gate: the escape is closed in every shape probed - interface and
+  concrete receivers, short-var and assign-to-existing LHS, named
+  string types, CopyPage src param - the honest twin string(p[:16])
+  stays clean, the caller-side string-params fence (strHelper4
+  shape) still fires, and the mapped-flag logic is confirmed
+  false-positive-free because mapped=true is set only by Mapping
+  page mints and seedMappedCallbackParams). One non-blocking P3 note
+  (pre-existing): a helper returning string(formal) may report two
+  diagnostics at the same site (caller-side fence + local sink);
+  redundant but never fired on honest code, recorded not changed.
+- Chunk 6 level-2 gate verdict: 4/4 PASS (kimi, minimax, mimo,
+  qwen). The chunk-6 milestone-2 gate is CLOSED; chunk 6 remains
+  uncommitted until the milestone-3 hand-off commit below.
 
 ### Gate execution record (2026-08-12)
 
@@ -6163,7 +6444,6 @@ review detail: rounds 1-54 of the gate hardening, the milestone-1 review
 history, and the close-out attempts that were later invalidated. Current
 truth lives in ## Status; this appendix is context, not authority.
 
-Status: in-progress
 
 Sub-state: milestone 1 REOPENED pending re-review. The round-10 PASS at HEAD
 253f9d5 and the closure commit at HEAD 1c71299 were invalidated by a fresh

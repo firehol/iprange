@@ -1486,4 +1486,24 @@ var batteryCases = []batteryCase{
 	{name: "316: struct-field rand.Read shadow in the nonce file", desc: "a local struct whose Read field is a func must not inherit the CSPRNG exemption (the receiver must resolve to crypto/rand)", expectFail: true, expectRule: "banned content-transfer selector .Read", ops: []batteryOp{
 		batteryOp{kind: "append", path: "internal/writer/reclaim.go", content: "func gateNonceFieldShadow() ([16]byte, error) {\n\trand := struct{ Read func([]byte) (int, error) }{func([]byte) (int, error) { return 0, nil }}\n\tvar n [16]byte\n\tif _, err := rand.Read(n[:]); err != nil {\n\t\treturn n, err\n\t}\n\treturn n, nil\n}\n"},
 	}},
+
+	{name: "317: compressor shape outside the writer metadata file", desc: "the exact production compressor and buffer-writer shape in a SECOND writer-package file must not inherit the metadata.go-only exemption", expectFail: true, expectRule: "banned content-transfer selector .NewWriter", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/writer/gatemut_metaother.go", content: "package writer\n\nimport (\n\t\"bytes\"\n\t\"compress/flate\"\n)\n\nfunc gateOtherCompressor() bool {\n\tvar output bytes.Buffer\n\toutput.Write([]byte{0x78, 0x01})\n\tencoder, err := flate.NewWriter(&output, flate.DefaultCompression)\n\tif err != nil {\n\t\treturn false\n\t}\n\tif _, err := encoder.Write([]byte(\"gate\")); err != nil {\n\t\treturn false\n\t}\n\tif err := encoder.Close(); err != nil {\n\t\treturn false\n\t}\n\toutput.WriteByte(1)\n\treturn output.Len() > 0\n}\n"},
+	}},
+
+	{name: "318: byte-builder selector outside the exempt set in the writer metadata file", desc: "a bytes.Buffer WriteRune (not Write/WriteByte) in metadata.go must not inherit the buffer exemption", expectFail: true, expectRule: "banned content-transfer selector .WriteRune", ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/writer/metadata.go", content: "func gateBadBufferWriteRune() (int, error) {\n\tvar output bytes.Buffer\n\treturn output.WriteRune('x')\n}\n"},
+	}},
+
+	{name: "319: aliased flate import in the writer package", desc: "flate.NewWriter through an aliased import name must not inherit the metadata.go exemption (the receiver ident must resolve to the flate package)", expectFail: true, expectRule: "banned content-transfer selector .NewWriter", allowTypeCheck: true, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/writer/gatemut_metaalias.go", content: "package writer\n\nimport (\n\t\"bytes\"\n\tflate2 \"compress/flate\"\n)\n\nfunc gateAliasedFlate() bool {\n\tvar output bytes.Buffer\n\tencoder, err := flate2.NewWriter(&output, flate2.DefaultCompression)\n\tif err != nil {\n\t\treturn false\n\t}\n\tif _, err := encoder.Write([]byte(\"gate\")); err != nil {\n\t\treturn false\n\t}\n\treturn encoder.Close() == nil\n}\n"},
+	}},
+
+	{name: "320: benign additional compressor shape in the writer metadata file", desc: "one more exact-shape flate compressor and buffer writer with owned literal bytes stays legal", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/writer/metadata.go", content: "func gateCompressorBenign() bool {\n\tvar output bytes.Buffer\n\toutput.Write([]byte{0x78, 0x01})\n\tencoder, err := flate.NewWriter(&output, flate.DefaultCompression)\n\tif err != nil {\n\t\treturn false\n\t}\n\tif _, err := encoder.Write([]byte(\"gate\")); err != nil {\n\t\treturn false\n\t}\n\tif err := encoder.Close(); err != nil {\n\t\treturn false\n\t}\n\tvar b bytes.Buffer\n\tb.WriteByte(1)\n\tb.Write([]byte(\"gate\"))\n\treturn output.Len() > 0 && b.Len() > 0\n}\n"},
+	}},
+
+	{name: "321: name-shadowed owned page local in the writer metadata file", desc: "a same-file owned local sharing the Update callback formal's NAME must not inherit the copy exemption (the exemption is binding-keyed, not name-keyed)", expectFail: true, expectRule: "copy of a mapped page view into an owned buffer", allowTypeCheck: true, ops: []batteryOp{
+		batteryOp{kind: "append", path: "internal/writer/metadata.go", content: "func gateShadowPageCopy(s *DraftStore) error {\n\tpage := make([]byte, format.PageSize)\n\tmapped, err := s.mapping.Page(1)\n\tif err != nil {\n\t\treturn err\n\t}\n\tcopy(page[48:], mapped)\n\tcopy(page[:48], mapped[4048:])\n\treturn nil\n}\n"},
+	}},
 }

@@ -10,3 +10,9 @@ package fault
 
 // Crash no-ops in production builds (Rust fault::crash compiled out).
 func Crash(point string) {}
+
+// Fail no-ops in production builds: v4work builds return an error when
+// the environment names this fault point, so state-machine tests can
+// drive a non-fatal failure at an exact physical step without a process
+// exit (the OutcomeUnknown writer state test).
+func Fail(point string) error { return nil }

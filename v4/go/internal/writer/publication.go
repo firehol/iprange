@@ -47,6 +47,9 @@ type PublishResult struct {
 // class Rust's API cannot produce. The public workflows draw the nonce
 // from randomNonce when they arrive.
 func (c *Core) StartDraft(nonce [16]byte) error {
+	if err := c.requireHealthy(); err != nil {
+		return err
+	}
 	if c.draft != nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "a draft is already open"}
 	}
@@ -61,14 +64,33 @@ func (c *Core) StartDraft(nonce [16]byte) error {
 	return nil
 }
 
+// BeginDraft starts one COW draft over the committed generation and
+// draws the commit nonce (Rust WriterCore::begin_transaction: nonzero_128
+// then Draft::new). The public workflows use this instead of accepting a
+// caller nonce; the all-zero draw refusal of StartDraft stays in force
+// (Rust random::nonzero_128 parity).
+func (c *Core) BeginDraft() error {
+	if err := c.requireHealthy(); err != nil {
+		return err
+	}
+	nonce, err := randomNonce()
+	if err != nil {
+		return err
+	}
+	return c.StartDraft(nonce)
+}
+
 // Draft returns the open draft, or nil (Rust WriterCore::draft).
 func (c *Core) Draft() *Draft { return c.draft }
 
-// commitAttempt names the pending commit while the workflow input is
+// CommitAttempt names the pending commit while the workflow input is
 // closed (Rust WriterCore::commit_attempt). The workflow-input-open gate
 // is structurally closed: editor workflow states arrive with their public
-// workflows.
-func (c *Core) commitAttempt() (CommitAttempt, error) {
+// workflows. Exported for the public facade's commit orchestration.
+func (c *Core) CommitAttempt() (CommitAttempt, error) {
+	if err := c.requireHealthy(); err != nil {
+		return CommitAttempt{}, err
+	}
 	if c.draft == nil || !c.draft.changed {
 		return CommitAttempt{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
@@ -83,6 +105,12 @@ func (c *Core) commitAttempt() (CommitAttempt, error) {
 // the draft store runs the full prepare-with-checkpoint sequence (private
 // page release, bitmap shape, checksum sealing).
 func (c *Core) Prepare(checkpoint func() error) error {
+	if err := c.requireHealthy(); err != nil {
+		return err
+	}
+	if err := fault.Fail("commit.prepare"); err != nil {
+		return err
+	}
 	if c.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
@@ -118,6 +146,9 @@ func (c *Core) RequireDraftLength() error {
 // untouched, a failure after it reports OutcomeUnknown with the draft
 // abandoned (no further use of this Core is safe).
 func (c *Core) Publish(checkpoint func() error) PublishResult {
+	if err := c.requireHealthy(); err != nil {
+		return PublishResult{Status: PublishBeforePublication, Err: err}
+	}
 	if checkpoint != nil {
 		if err := checkpoint(); err != nil {
 			return PublishResult{Status: PublishBeforePublication, Err: err}
@@ -157,6 +188,9 @@ func (c *Core) Publish(checkpoint func() error) PublishResult {
 		return c.outcomeUnknown(err)
 	}
 	fault.Crash("commit.after_meta_write")
+	if err := fault.Fail("commit.after_meta_write"); err != nil {
+		return c.outcomeUnknown(err)
+	}
 	if err := c.m.FlushPage(uint32(target)); err != nil {
 		return c.outcomeUnknown(err)
 	}
@@ -181,10 +215,13 @@ func (c *Core) Publish(checkpoint func() error) PublishResult {
 }
 
 // outcomeUnknown abandons the draft after a publication step whose effect
-// on the file is unknown (Rust WriterCore::outcome_unknown).
+// on the file is unknown (Rust WriterCore::outcome_unknown) and brands
+// the core unusable: the durability state of the file is unknown, so
+// every mutating entry point fails closed until Close.
 func (c *Core) outcomeUnknown(err error) PublishResult {
 	c.draft = nil
 	c.unprovedTailEnd = nil
+	c.unresolved = err
 	return PublishResult{Status: PublishOutcomeUnknown, Err: err}
 }
 
