@@ -70,6 +70,9 @@ func runCrashChild(t *testing.T, path, action, crashPoint string) {
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("crash child %s at %q timed out after %s", action, crashPoint, crashChildTimeout)
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if exitErr.ExitCode() == 86 {
