@@ -2146,8 +2146,10 @@ glm: kimi, minimax, mimo, qwen):
   diagnostics at the same site (caller-side fence + local sink);
   redundant but never fired on honest code, recorded not changed.
 - Chunk 6 level-2 gate verdict: 4/4 PASS (kimi, minimax, mimo,
-  qwen). The chunk-6 milestone-2 gate is CLOSED; chunk 6 remains
-  uncommitted until the milestone-3 hand-off commit below.
+  qwen). The chunk-6 milestone-2 gate is CLOSED and the chunk is
+  committed at eb8c128 (signed); the SOW stays in-progress because
+  milestone 3 (writer durability/reclamation hardening and release
+  evidence) is still pending.
 
 ### Gate execution record (2026-08-12)
 
