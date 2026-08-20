@@ -8,38 +8,44 @@ import "sync/atomic"
 const Enabled = true
 
 type counters struct {
-	treeLookups       atomic.Uint64
-	treeDescents      atomic.Uint64
-	pagesVisited      atomic.Uint64
-	pagesParsed       atomic.Uint64
-	keyProbes         atomic.Uint64
-	leafValidations   atomic.Uint64
-	wordReads         atomic.Uint64
-	membershipDecodes atomic.Uint64
-	structureDecodes  atomic.Uint64
-	mappingRemaps     atomic.Uint64
-	mappingGrowths    atomic.Uint64
-	mappingFlushes    atomic.Uint64
-	fileSyncs         atomic.Uint64
-	cellProbes        atomic.Uint64
-	slotReads         atomic.Uint64
-	slotScanSteps     atomic.Uint64
-	editFitProbes     atomic.Uint64
-	bitmapProbes      atomic.Uint64
-	pagesCreated      atomic.Uint64
-	pagesCopied       atomic.Uint64
-	pagesSplit        atomic.Uint64
-	pagesRetired      atomic.Uint64
-	pagesReclaimed    atomic.Uint64
-	pagesSealed       atomic.Uint64
-	bytesMoved        atomic.Uint64
-	bytesZeroed       atomic.Uint64
-	firstFenceUpdates atomic.Uint64
-	edgePathChecks    atomic.Uint64
-	rangesConsumed    atomic.Uint64
-	rangesEmitted     atomic.Uint64
-	rangesSplit       atomic.Uint64
-	rangesCoalesced   atomic.Uint64
+	treeLookups               atomic.Uint64
+	treeDescents              atomic.Uint64
+	pagesVisited              atomic.Uint64
+	pagesParsed               atomic.Uint64
+	keyProbes                 atomic.Uint64
+	leafValidations           atomic.Uint64
+	wordReads                 atomic.Uint64
+	membershipDecodes         atomic.Uint64
+	structureDecodes          atomic.Uint64
+	mappingRemaps             atomic.Uint64
+	mappingGrowths            atomic.Uint64
+	mappingFlushes            atomic.Uint64
+	fileSyncs                 atomic.Uint64
+	cellProbes                atomic.Uint64
+	slotReads                 atomic.Uint64
+	slotScanSteps             atomic.Uint64
+	editFitProbes             atomic.Uint64
+	bitmapProbes              atomic.Uint64
+	pagesCreated              atomic.Uint64
+	pagesCopied               atomic.Uint64
+	pagesSplit                atomic.Uint64
+	pagesRetired              atomic.Uint64
+	pagesReclaimed            atomic.Uint64
+	pagesSealed               atomic.Uint64
+	bytesMoved                atomic.Uint64
+	bytesZeroed               atomic.Uint64
+	firstFenceUpdates         atomic.Uint64
+	edgePathChecks            atomic.Uint64
+	rangesConsumed            atomic.Uint64
+	rangesEmitted             atomic.Uint64
+	rangesSplit               atomic.Uint64
+	rangesCoalesced           atomic.Uint64
+	inputSourcePasses         atomic.Uint64
+	membershipDecodeCacheHits atomic.Uint64
+	membershipWordReads       atomic.Uint64
+	aggregationContributions  atomic.Uint64
+	aggregationResults        atomic.Uint64
+	joinAdvances              atomic.Uint64
 }
 
 var current counters
@@ -74,75 +80,87 @@ func FirstFenceUpdate(n uint64) { current.firstFenceUpdates.Add(n) }
 
 // Snapshot is a consistent point-in-time copy of every counter.
 type Snapshot struct {
-	TreeLookups       uint64
-	TreeDescents      uint64
-	PagesVisited      uint64
-	PagesParsed       uint64
-	KeyProbes         uint64
-	LeafValidations   uint64
-	WordReads         uint64
-	MembershipDecodes uint64
-	StructureDecodes  uint64
-	MappingRemaps     uint64
-	MappingGrowths    uint64
-	MappingFlushes    uint64
-	FileSyncs         uint64
-	CellProbes        uint64
-	SlotReads         uint64
-	SlotScanSteps     uint64
-	EditFitProbes     uint64
-	BitmapProbes      uint64
-	PagesCreated      uint64
-	PagesCopied       uint64
-	PagesSplit        uint64
-	PagesRetired      uint64
-	PagesReclaimed    uint64
-	PagesSealed       uint64
-	BytesMoved        uint64
-	BytesZeroed       uint64
-	FirstFenceUpdates uint64
-	EdgePathChecks    uint64
-	RangesConsumed    uint64
-	RangesEmitted     uint64
-	RangesSplit       uint64
-	RangesCoalesced   uint64
+	TreeLookups               uint64
+	TreeDescents              uint64
+	PagesVisited              uint64
+	PagesParsed               uint64
+	KeyProbes                 uint64
+	LeafValidations           uint64
+	WordReads                 uint64
+	MembershipDecodes         uint64
+	StructureDecodes          uint64
+	MappingRemaps             uint64
+	MappingGrowths            uint64
+	MappingFlushes            uint64
+	FileSyncs                 uint64
+	CellProbes                uint64
+	SlotReads                 uint64
+	SlotScanSteps             uint64
+	EditFitProbes             uint64
+	BitmapProbes              uint64
+	PagesCreated              uint64
+	PagesCopied               uint64
+	PagesSplit                uint64
+	PagesRetired              uint64
+	PagesReclaimed            uint64
+	PagesSealed               uint64
+	BytesMoved                uint64
+	BytesZeroed               uint64
+	FirstFenceUpdates         uint64
+	EdgePathChecks            uint64
+	RangesConsumed            uint64
+	RangesEmitted             uint64
+	RangesSplit               uint64
+	RangesCoalesced           uint64
+	InputSourcePasses         uint64
+	MembershipDecodeCacheHits uint64
+	MembershipWordReads       uint64
+	AggregationContributions  uint64
+	AggregationResults        uint64
+	JoinAdvances              uint64
 }
 
 // Read returns a consistent snapshot of the counters.
 func Read() Snapshot {
 	return Snapshot{
-		TreeLookups:       current.treeLookups.Load(),
-		TreeDescents:      current.treeDescents.Load(),
-		PagesVisited:      current.pagesVisited.Load(),
-		PagesParsed:       current.pagesParsed.Load(),
-		KeyProbes:         current.keyProbes.Load(),
-		LeafValidations:   current.leafValidations.Load(),
-		WordReads:         current.wordReads.Load(),
-		MembershipDecodes: current.membershipDecodes.Load(),
-		StructureDecodes:  current.structureDecodes.Load(),
-		MappingRemaps:     current.mappingRemaps.Load(),
-		MappingGrowths:    current.mappingGrowths.Load(),
-		MappingFlushes:    current.mappingFlushes.Load(),
-		FileSyncs:         current.fileSyncs.Load(),
-		CellProbes:        current.cellProbes.Load(),
-		SlotReads:         current.slotReads.Load(),
-		SlotScanSteps:     current.slotScanSteps.Load(),
-		EditFitProbes:     current.editFitProbes.Load(),
-		BitmapProbes:      current.bitmapProbes.Load(),
-		PagesCreated:      current.pagesCreated.Load(),
-		PagesCopied:       current.pagesCopied.Load(),
-		PagesSplit:        current.pagesSplit.Load(),
-		PagesRetired:      current.pagesRetired.Load(),
-		PagesReclaimed:    current.pagesReclaimed.Load(),
-		PagesSealed:       current.pagesSealed.Load(),
-		BytesMoved:        current.bytesMoved.Load(),
-		BytesZeroed:       current.bytesZeroed.Load(),
-		FirstFenceUpdates: current.firstFenceUpdates.Load(),
-		EdgePathChecks:    current.edgePathChecks.Load(),
-		RangesConsumed:    current.rangesConsumed.Load(),
-		RangesEmitted:     current.rangesEmitted.Load(),
-		RangesSplit:       current.rangesSplit.Load(),
-		RangesCoalesced:   current.rangesCoalesced.Load(),
+		TreeLookups:               current.treeLookups.Load(),
+		TreeDescents:              current.treeDescents.Load(),
+		PagesVisited:              current.pagesVisited.Load(),
+		PagesParsed:               current.pagesParsed.Load(),
+		KeyProbes:                 current.keyProbes.Load(),
+		LeafValidations:           current.leafValidations.Load(),
+		WordReads:                 current.wordReads.Load(),
+		MembershipDecodes:         current.membershipDecodes.Load(),
+		StructureDecodes:          current.structureDecodes.Load(),
+		MappingRemaps:             current.mappingRemaps.Load(),
+		MappingGrowths:            current.mappingGrowths.Load(),
+		MappingFlushes:            current.mappingFlushes.Load(),
+		FileSyncs:                 current.fileSyncs.Load(),
+		CellProbes:                current.cellProbes.Load(),
+		SlotReads:                 current.slotReads.Load(),
+		SlotScanSteps:             current.slotScanSteps.Load(),
+		EditFitProbes:             current.editFitProbes.Load(),
+		BitmapProbes:              current.bitmapProbes.Load(),
+		PagesCreated:              current.pagesCreated.Load(),
+		PagesCopied:               current.pagesCopied.Load(),
+		PagesSplit:                current.pagesSplit.Load(),
+		PagesRetired:              current.pagesRetired.Load(),
+		PagesReclaimed:            current.pagesReclaimed.Load(),
+		PagesSealed:               current.pagesSealed.Load(),
+		BytesMoved:                current.bytesMoved.Load(),
+		BytesZeroed:               current.bytesZeroed.Load(),
+		FirstFenceUpdates:         current.firstFenceUpdates.Load(),
+		EdgePathChecks:            current.edgePathChecks.Load(),
+		RangesConsumed:            current.rangesConsumed.Load(),
+		RangesEmitted:             current.rangesEmitted.Load(),
+		RangesSplit:               current.rangesSplit.Load(),
+		RangesCoalesced:           current.rangesCoalesced.Load(),
+		InputSourcePasses:         current.inputSourcePasses.Load(),
+		MembershipDecodeCacheHits: current.membershipDecodeCacheHits.Load(),
+		MembershipWordReads:       current.membershipWordReads.Load(),
+		AggregationContributions:  current.aggregationContributions.Load(),
+		AggregationResults:        current.aggregationResults.Load(),
+		JoinAdvances:              current.joinAdvances.Load(),
 	}
 }
 
@@ -160,6 +178,9 @@ func Reset() {
 		&current.bytesZeroed, &current.firstFenceUpdates,
 		&current.edgePathChecks, &current.rangesConsumed, &current.rangesEmitted, &current.rangesSplit,
 		&current.rangesCoalesced,
+		&current.inputSourcePasses, &current.membershipDecodeCacheHits,
+		&current.membershipWordReads, &current.aggregationContributions,
+		&current.aggregationResults, &current.joinAdvances,
 	} {
 		atomic.Store(0)
 	}
@@ -182,3 +203,10 @@ func RangeSplit(n uint64) { current.rangesSplit.Add(n) }
 
 // RangeCoalesced counts one adjacency merge of two same-value ranges.
 func RangeCoalesced(n uint64) { current.rangesCoalesced.Add(n) }
+
+func InputSourcePass(n uint64)          { current.inputSourcePasses.Add(n) }
+func MembershipDecodeCacheHit(n uint64) { current.membershipDecodeCacheHits.Add(n) }
+func MembershipWordRead(n uint64)       { current.membershipWordReads.Add(n) }
+func AggregationContribution(n uint64)  { current.aggregationContributions.Add(n) }
+func AggregationResult(n uint64)        { current.aggregationResults.Add(n) }
+func JoinAdvance(n uint64)              { current.joinAdvances.Add(n) }

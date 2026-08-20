@@ -2227,8 +2227,8 @@ write/lseek on any database descriptor) and the MemStats size-class
 assertion (mmap_page_alloc_test.go: no heap allocation >= 4096 bytes
 during lookups) - all run at nice. The durable battery (battery.go +
 battery_page.go; 711 forms at the 2026-08-19 decision - the chunk-6
-"707/707" figure was the inventory of that earlier run - and 714 forms
-after the M3 chunk-1 review added B5-B7 for the generic-erasure and
+"707/707" figure was the inventory of that earlier run - and 715 forms
+after the M3 chunk-1 review added B5-B8 for the generic-erasure and
 root-boundary shapes) stays in the tool as the archived regression
 net, run only on request or at the M3 close if explicitly scheduled;
 all recorded historical runs stay valid. The gate's allocation/GC
@@ -2508,6 +2508,176 @@ evidence for this chunk.
   final binary; production import-graph scan passed rc=0 with
   GATESCAN_CONFIGS unset; go test ./..., go test -race ./..., go vet
   ./..., go-gate test, and go-gate vet all pass.
+
+## Milestone 3 chunk 2 - joins and aggregation (design record, 2026-08-20)
+
+Scope (from the M3 plan record): MembershipAggregation (modes,
+FeedCardinality, FeedOverlap, sink, report), DirectJoin (source, budget,
+cells, sink, report), MembershipCross (cells, UncoveredSide, report) -
+read-only, allocation-free sinks, budgets enforced. The Rust authority
+is v4/rust/iprange-livedb/src/membership_query/ (aggregation.rs,
+selected.rs, decode.rs, cache.rs, scope.rs, join.rs, join/direct.rs,
+join/membership.rs) and reader_core/cursor.rs (membership range
+cursor). The Go chunk-1 reader (membership_query.go, direct_cursor.go,
+cursor.go, membership.go) already provides the tree cursor, the
+membership dictionary by ID (lookupMembershipID), MembershipView word
+reads, and the bounded scope charges; chunk 2 adds the remaining
+authoritative primitives.
+
+Design decisions (2026-08-20, long-term-best per the working
+principles):
+
+1. Public API mirrors the Rust types with Go idioms: aggregation mode
+   is one value (MembershipAggregationMode with unexported tag plus
+   constructors Cardinalities/AllPairs/TargetAgainstScope/SelectedPairs);
+   sinks are per-channel batch funcs (feedYield/overlapYield,
+   cellYield/uncoveredYield) matching the ABI's separate per-channel
+   sink callbacks; nil yields discard. Batched delivery uses one
+   reusable fixed-size (32) batch buffer per operation, so sink
+   delivery is allocation-free per result and the per-operation
+   allocation count is constant in database size (Rust pins the same
+   property by asserting equal allocation counts for small and large
+   range counts).
+2. Budget model stays the chunk-1 modeled-heap accounting: operation
+   heap = scope maxHeap - heapUsed (Rust operation_heap); every Rust
+   heap charge (entries, index map, totals, pair cells/offsets,
+   scratch present/flags, sequence cache slots/positions, join result
+   cells/slots and cross arrays) is charged with the exact Rust
+   size_of values (Cardinality129=24, PairCell=40, Cell=40, Slot=24,
+   cache Slot=24, usize=8, u32=4, u8=1), pinned by a test comparing
+   the constants against Go unsafe.Sizeof. Budget failure reports
+   CodeInsufficientResourceBudget with the exact Rust detail strings;
+   result-cell overruns during a direct join report the same code
+   (Rust BudgetExceeded) with detail "direct join result cells".
+3. One authoritative low-level owner per primitive: the new
+   internal/reader membership range cursors (MembershipRangeCursor4/6)
+   reuse the existing treeCursor; the selected-ranges decoder
+   (scratch + SequenceCache keyed by membership ID) and the
+   SelectedRanges lookahead merger mirror Rust exactly, including the
+   all-catalog lookahead disable. The direct join open-addressing
+   Table and the membership join cross arrays are implemented once in
+   internal/reader; the public facade only composes.
+4. Error and corruption parity: WrongValueKind/WrongAddressFamily on
+   source mismatch, NameNotFound for a target name absent from the
+   catalog, InvalidArgument for a target outside the scope, empty or
+   non-unique selected pairs, self-pairs; Corrupt for range-count
+   disagreements and absent membership IDs (exact Rust messages).
+5. Test-only necessary-work counters added to internal/work mirroring
+   Rust work.rs for these paths: input_source_pass,
+   membership_decode_cache_hit, membership_word_read,
+   aggregation_contribution, aggregation_result, join_advance (all
+   no-ops unless -tags v4work).
+6. Validation strategy for cross-language parity without a Go catalog
+   writer (chunk 4 owns CreateFeed/MembershipImport): semantic tests
+   derive exact expected aggregation/join results from the
+   language-neutral conformance manifest (cases.json membership_ranges
+   + feeds arrays and direct_ranges) for the committed
+   rust/membership-ipv4, rust/membership-ipv6 and rust/direct-ipv4
+   fixtures; error/budget/cancellation/zero-alloc/work-counter tests
+   pin operation behavior on the same fixtures. A Go catalog writer is
+   explicitly out of scope for this chunk (tracked to chunk 4).
+
+Chunk order and gate: M3 chunk-1 stays closed; this chunk builds on
+it. Gate evidence at close: go test ./... (both tag sets), vet, race,
+mmap-trace, gatescan linux scan rc=0, zero-alloc and work-counter pins,
+level-2 review round (kimi/minimax/mimo/qwen).
+
+### 2026-08-20 - M3 chunk-2 implementation record: joins and aggregation
+
+- Implemented the chunk-2 surface under the Rust authority
+  (v4/rust/iprange-livedb/src/membership_query/ - aggregation.rs,
+  selected.rs, decode.rs, cache.rs, scope.rs, join.rs and
+  reader_core/cursor.rs):
+  - internal/reader: family range primitives and concrete iterators
+    (range_ops.go), the selected-ranges lookahead merger
+    (selected_ranges.go), membership scratch decoder and sequence cache
+    (membership_scratch.go), one-pass aggregation with all four modes
+    (aggregation.go), the direct join table and sweep (join_direct.go),
+    and the membership cross/uncovered join (join_membership.go, with
+    the membership_ranges.go sweep);
+  - module root: MembershipAggregation* constructors, Aggregate,
+    JoinDirect, JoinMembership with bounded batch sinks, budgets,
+    reports, and boundary-owned string conversion
+    (aggregation_public.go, join_public.go).
+- P1 semantic fix found by the new chunk-2 model tests: the selected
+  bitmap decoder extracted set bits with `word >>= 1` inside the bit
+  loop, shifting every bit above position 5 down (bit 63 surfaced as
+  58) and mis-mapping feeds. Fixed to exact Rust parity:
+  bits.TrailingZeros64(word) plus word &= word - 1, with the u32
+  feed-index overflow guard (membership_scratch.go decodeAll). The
+  semantic and v4work pins now hold on rust/membership-ipv4 (70 feeds,
+  2415 pairs, exact 384/256 centroids, 46 contributions, 2485 results).
+- Gate-compliance refactor: the reader is the sync-free owner and may
+  not import internal/tree, so the chunk-2 streaming code uses concrete
+  iterators over the existing treeCursor (family switch on record
+  decode) instead of interface streams; checkpoint state is threaded as
+  a parameter (the s.check field is gone); feed/pair names travel as
+  mapped []byte views and are converted to owned strings only at the
+  module root, once per delivered record (the internal reader stays
+  zero-allocation per result).
+- Test-only observability: internal/work counters input_source_pass,
+  membership_decode_cache_hit, membership_word_read,
+  aggregation_contribution, aggregation_result, join_advance were added
+  (no-ops without -tags v4work) and pinned by
+  aggregation_join_v4work_test.go against the Rust work.rs model
+  (passes 1/2/2, decodes 3/3/6, word reads 6/6/12, contributions
+  46/44/14, results 2485/22/141, join advances 0/9/3).
+- Validation: aggregation_join_test.go derives exact expected
+  aggregation and join results from the language-neutral conformance
+  manifest (cases.json membership_ranges/feeds/direct_ranges) for the
+  committed rust fixtures; error/budget/cancellation pins cover the
+  WrongValueKind/WrongAddressFamily/NameNotFound/InvalidArgument/corrupt
+  and budget-exceeded paths; aggregation_join_zeroalloc_test.go pins no
+  heap object >= 4096 bytes across 256 warmed aggregate/join runs.
+  go test ./... and go test -tags v4work ./... and go vet ./... and
+  go test -race ./... all pass at nice.
+- Gate record: check-import-graph.sh passes rc=0 with GATESCAN_CONFIGS
+  unset (boundary checks plus the full typed production scan). One
+  analyzer tripwire artifact had to be worked around in production
+  shape, not by weakening the gate: two sequential loops appending
+  result structs carrying mapped name views into one shared batch
+  variable made the flow pass aggregate-taint the destination after the
+  first loop, so the second append reported "append into a complete
+  mapped page view" (a false positive: the owned batch contains mapped
+  views; no mapped page is copied). The uncovered emitter now uses one
+  batch per side (join_membership.go emitUncoveredFeeds), the same
+  one-batch-per-loop shape every other emitter uses. The analyzer
+  conflation (aggregated-element taint vs. mapped destination) is
+  tracked to the SOW-0026 type-aware ownership-analyzer rework.
+
+### 2026-08-20 - M3 chunk-2 level-2 review round and zero-membership-ID fix
+
+- Chunk-2 level-2 round over the working tree (adversarial, real-issues
+  only): kimi PASS, minimax PASS (one P1-candidate / unchecked AllPairs
+  index, resolved not-blocking), qwen PASS after one finding, glm and
+  mimo unavailable (glm-5.3 backend rejects its grown context with
+  "Prompt exceeds max length"; mimo's stream drops with transport
+  errors, twice on short requests). Findings disposition:
+  1. qwen P2 - "membership ID 0 short-circuits in Go, fails Corrupt in
+     Rust": the Go scratch's fresh state uses membershipID 0 as its
+     never-loaded marker, so the identity short-circuit returned nil for
+     a corrupt range record naming membership 0 without consulting the
+     dictionary; Rust's Scratch keeps Option<MembershipToken> (None
+     until a real load) and membership_view.rs by_id refuses id 0 with
+     Corrupt("range names the empty membership ID"). Fixed: the scratch
+     now carries a loaded flag (clear resets it, both cache-hit and
+     decode paths set it), so id 0 always reaches lookupMembershipID;
+     the Go zero-id detail string was aligned to the exact Rust message.
+     Regression test zero_membership_test.go patches the leftmost range
+     record's value to 0 in a fixture copy and pins CodeFormatInvalid +
+     the Rust message through AggregateScope (the same scratch serves
+     the direct and membership joins). Verified the test fails without
+     the fix.
+  2. kimi P3 - pairCount's hand-rolled 64x64->128 multiply deserves a
+     comment documenting the Rust u128 equivalence: added.
+  3. minimax P1-candidate - AllPairs index arithmetic
+     offsets[left] + right - left - 1 was unchecked while Rust uses
+     checked_add and returns ArithmeticOverflow("membership pair
+     index"): added the same bounds/overflow guard (code and detail
+     string match Rust; unreachable before, now parity-exact).
+- Final chunk-2 battery at nice on the reviewed tree: go test ./...,
+  go test -tags v4work ./..., go vet ./..., go test -race ./... all
+  pass; import-graph gate passes rc=0 (see the gate line below).
 
 ### Gate execution record (2026-08-12)
 

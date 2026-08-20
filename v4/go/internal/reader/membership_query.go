@@ -22,11 +22,61 @@ type checkpoint func() error
 type MembershipPointMatch func(name []byte) error
 
 // ScopeData is the reusable SDK-owned feed list plus the budget that
-// bounded its construction (Rust MembershipScopeState/ScopeData).
+// bounded its construction (Rust MembershipScopeState/ScopeData). The
+// index map resolves feed indices to ascending scope positions; the
+// selected word count and the all-catalog flag drive the selected-range
+// decoder and the lookahead merger (Rust scope.rs / selected.rs).
 type ScopeData struct {
-	entries  []FeedEntry
-	maxHeap  uint64
-	heapUsed uint64
+	entries           []FeedEntry
+	maxHeap           uint64
+	heapUsed          uint64
+	index             scopeIndex
+	selectedWordCount uint32
+	allCatalog        bool
+}
+
+// scopeIndex maps one feed index to its ascending position inside the
+// scope (Rust IndexMap: dense u32 positions when they fit, else sparse
+// open-addressed slots, whichever is smaller).
+type scopeIndex struct {
+	dense  []uint32 // position+1 per feed index; zero = absent
+	slots  []scopeSlot
+	mask   uint64
+	sparse bool
+}
+
+type scopeSlot struct {
+	key   uint32
+	value uint32 // position+1; zero = empty
+}
+
+// position resolves one feed index to its scope position (Rust
+// IndexMap::get). Feeding out-of-range or absent indices reports false.
+func (idx *scopeIndex) position(feedIndex uint32) (int, bool) {
+	if idx == nil {
+		return 0, false
+	}
+	if !idx.sparse {
+		if uint64(feedIndex) >= uint64(len(idx.dense)) {
+			return 0, false
+		}
+		v := idx.dense[feedIndex]
+		if v == 0 {
+			return 0, false
+		}
+		return int(v - 1), true
+	}
+	slot := uint64(uint32(feedIndex*0x9e37_79b1)) & idx.mask
+	for {
+		e := idx.slots[slot]
+		if e.value == 0 {
+			return 0, false
+		}
+		if e.key == feedIndex {
+			return int(e.value - 1), true
+		}
+		slot = (slot + 1) & idx.mask
+	}
 }
 
 // resolveAllFeeds reads every active catalog entry into a bounded scope
@@ -68,7 +118,7 @@ func (r *ImmutableReader) ResolveAllFeeds(maxHeapBytes uint64, check checkpoint)
 	if uint64(len(data.entries)) != r.meta.ActiveFeedCount {
 		return nil, corrupt("feed catalog count changed during scope")
 	}
-	if err := data.chargeIndexMap(); err != nil {
+	if err := data.finish(true, check); err != nil {
 		return nil, err
 	}
 	return data, nil
@@ -128,7 +178,7 @@ func (r *ImmutableReader) ResolveNamedFeeds(names []string, maxHeapBytes uint64,
 			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "membership scope feed names are not unique"}
 		}
 	}
-	if err := data.chargeIndexMap(); err != nil {
+	if err := data.finish(false, check); err != nil {
 		return nil, err
 	}
 	return data, nil
@@ -153,12 +203,45 @@ func (d *ScopeData) chargeEntries(count uint64) error {
 	return d.chargeHeap(bytes, "membership scope heap")
 }
 
-// chargeIndexMap applies the feed-index map charge (Rust IndexMap::new):
-// dense positions (last index + 1) * 4 when no larger than the sparse
-// slots layout, sparse next_power_of_two(2 * count) * 8 otherwise; an
-// entry count beyond u32 position values overflows the position encoding
-// and is refused.
-func (d *ScopeData) chargeIndexMap() error {
+// finish applies the Rust ScopeData::finish tail: the selected word
+// count (distinct bitmap words touched by the selected feeds), the
+// feed-index map charge and construction, all at cancellation
+// checkpoints every 4096 steps.
+func (d *ScopeData) finish(allCatalog bool, check checkpoint) error {
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	var previousWord uint32
+	havePrevious := false
+	for i := range d.entries {
+		if i&4095 == 4095 && check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		word := d.entries[i].FeedIndex / 64
+		if !havePrevious || previousWord != word {
+			d.selectedWordCount++
+			previousWord = word
+			havePrevious = true
+		}
+	}
+	d.allCatalog = allCatalog
+	if err := d.buildIndexMap(check); err != nil {
+		return err
+	}
+	return nil
+}
+
+// buildIndexMap charges and constructs the feed-index position map (Rust
+// IndexMap::new): dense positions (last index + 1) * 4 when no larger
+// than the sparse slots layout, sparse next_power_of_two(2 * count) * 8
+// otherwise; an entry count beyond u32 position values overflows the
+// position encoding and is refused. Slots keep position+1 so an empty
+// slot is zero (Rust Slot::default).
+func (d *ScopeData) buildIndexMap(check checkpoint) error {
 	if len(d.entries) == 0 {
 		return nil // Rust IndexMap::Empty
 	}
@@ -175,11 +258,104 @@ func (d *ScopeData) chargeIndexMap() error {
 	if !ok {
 		return &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "membership scope index heap"}
 	}
-	bytes := sparseBytes
 	if denseBytes <= sparseBytes {
-		bytes = denseBytes
+		if err := d.chargeHeap(denseBytes, "membership scope index heap"); err != nil {
+			return err
+		}
+		d.index.dense = make([]uint32, last+1)
+		for position, entry := range d.entries {
+			if position&4095 == 4095 && check != nil {
+				if err := check(); err != nil {
+					return err
+				}
+			}
+			d.index.dense[entry.FeedIndex] = positionValue(position)
+		}
+		return nil
 	}
-	return d.chargeHeap(bytes, "membership scope index heap")
+	if err := d.chargeHeap(sparseBytes, "membership scope index heap"); err != nil {
+		return err
+	}
+	d.index.sparse = true
+	d.index.slots = make([]scopeSlot, sparseLen)
+	d.index.mask = sparseLen - 1
+	for position, entry := range d.entries {
+		if position&4095 == 4095 && check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		slot := uint64(uint32(entry.FeedIndex*0x9e37_79b1)) & d.index.mask
+		var probes uint64
+		for {
+			if probes&4095 == 4095 && check != nil {
+				if err := check(); err != nil {
+					return err
+				}
+			}
+			if d.index.slots[slot].value == 0 {
+				d.index.slots[slot] = scopeSlot{key: entry.FeedIndex, value: positionValue(position)}
+				break
+			}
+			slot = (slot + 1) & d.index.mask
+			probes++
+		}
+	}
+	return nil
+}
+
+// positionValue encodes one scope position as u32 position+1 (Rust
+// IndexMap position_value).
+func positionValue(position int) uint32 {
+	return uint32(position) + 1
+}
+
+// position resolves one feed index to its scope position through the
+// index map (Rust ScopeData::position).
+func (d *ScopeData) position(feedIndex uint32) (int, bool) {
+	return d.index.position(feedIndex)
+}
+
+// positionName resolves one caller feed name to its scope position
+// (Rust ScopeData::position_name): unknown names are NameNotFound, names
+// outside the scope are InvalidArgument.
+func (d *ScopeData) positionName(r *ImmutableReader, name string) (int, error) {
+	entry, found, err := r.LookupFeed(name)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name not in the catalog"}
+	}
+	position, ok := d.position(entry.FeedIndex)
+	if !ok {
+		return 0, &format.Error{Code: format.CodeInvalidArgument, Detail: "feed is outside the membership scope"}
+	}
+	return position, nil
+}
+
+// operationHeapReserved returns the remaining operation-heap budget of
+// one scope, minus an externally reserved byte count (Rust
+// ScopeData::operation_heap_reserved). A negative remainder is
+// BudgetExceeded with the aggregation label exactly like Rust.
+func (d *ScopeData) operationHeapReserved(reserved uint64) (uint64, error) {
+	remaining, ok := subChecked(d.maxHeap, d.heapUsed)
+	if !ok {
+		return 0, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "membership aggregation heap"}
+	}
+	remaining, ok = subChecked(remaining, reserved)
+	if !ok {
+		return 0, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "membership aggregation heap"}
+	}
+	return remaining, nil
+}
+
+// subChecked subtracts with underflow detection.
+func subChecked(a, b uint64) (uint64, bool) {
+	if b > a {
+		return 0, false
+	}
+	return a - b, true
 }
 
 // chargeHeap reserves bytes against the scope budget (Rust

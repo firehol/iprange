@@ -173,7 +173,7 @@ func (r *ImmutableReader) LookupMembership6(addrHi, addrLo uint64) (MembershipVi
 // lookupMembershipID resolves one nonzero membership ID through the ID tree.
 func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) {
 	if id == 0 {
-		return MembershipView{}, corrupt("zero membership id lookup")
+		return MembershipView{}, corrupt("range names the empty membership ID")
 	}
 	root := r.meta.MembershipIDRoot
 	if root == 0 {

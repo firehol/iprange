@@ -12,10 +12,9 @@ type MembershipQueryBudget struct {
 	MaxHeapBytes uint64
 }
 
-// FeedPair is one caller-selected pair of feed names (join inputs).
-type FeedPair struct {
-	Left, Right []byte
-}
+// FeedPair is one caller-selected pair of feed names (join inputs; the
+// canonical definition lives in internal/reader).
+type FeedPair = reader.FeedPair
 
 // MatchingFeedsReport is the exact point-match outcome after all matching
 // names were emitted.
@@ -129,4 +128,9 @@ func (s *MembershipScope) Feeds() []FeedEntry {
 		output[i] = FeedEntry{Index: entry.FeedIndex, Name: string(entry.Name)}
 	}
 	return output
+}
+
+// family returns the address family of the scope's pinned reader.
+func (s *MembershipScope) family() uint8 {
+	return s.r.inner.Meta().AddressFamily
 }

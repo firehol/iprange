@@ -117,3 +117,29 @@ func RangeSplit(uint64) {}
 
 // RangeCoalesced counts one adjacency merge of two same-value ranges.
 func RangeCoalesced(uint64) {}
+
+// InputSourcePass counts one logical pass over one input source (Rust
+// work::input_source_pass: one for a membership aggregation scan, two for
+// a two-source join).
+func InputSourcePass(uint64) {}
+
+// MembershipDecodeCacheHit counts one selected-membership sequence served
+// from the bounded decode cache (Rust work::membership_decode_cache_hit).
+func MembershipDecodeCacheHit(uint64) {}
+
+// MembershipWordRead counts one membership bitmap word read by the
+// selected-membership decoder (Rust work::membership_word_read).
+func MembershipWordRead(uint64) {}
+
+// AggregationContribution counts one exact contribution folded into a
+// feed total, pair total, cross cell, or uncovered total (Rust
+// work::aggregation_contribution).
+func AggregationContribution(uint64) {}
+
+// AggregationResult counts one emitted aggregation or join result record
+// (Rust work::aggregation_result).
+func AggregationResult(uint64) {}
+
+// JoinAdvance counts one sweep step of an ordered join (Rust
+// work::join_advance).
+func JoinAdvance(uint64) {}
