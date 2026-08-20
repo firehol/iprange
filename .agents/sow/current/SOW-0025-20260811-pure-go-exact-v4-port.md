@@ -2988,6 +2988,174 @@ port contract:
   respond to the delta (known-flaky models).
 
 
+### 2026-08-20 - M3 chunk-3b exploration record: output machinery (five level-1 passes, working tree 49948e0)
+
+Five read-only passes (Jason, Linnaeus, Peirce, Sartre, Leibniz) over
+the Rust authority and the Go writer substrate established the exact
+chunk-3b contract. Consolidated facts:
+
+- OUTPUT BUILDER (Jason): the one-shot append-only Builder state
+  machine (immutable_output.rs) with OutputSpec{family, value_kind,
+  structure_kind, value_tag, database_id, commit_nonce, txn_id=1,
+  feed_index_limit}, fresh() random identity, NewFailure/FinishFailure
+  wrappers, the require_active latch ("immutable output construction
+  failed"), reserve_page single authority (page_count == 2^32 ->
+  PageSpaceExhausted, >= max_output_pages -> BudgetExceeded "immutable
+  output pages", page 0/1 are the meta pair, pages 2.. are data), the
+  append-only Store (discard_private -> Corrupt "immutable output
+  attempted to discard an append-only page", retire non-empty ->
+  Corrupt "immutable output attempted to retire an existing page"),
+  post-update ownership check ("immutable output page ownership is
+  invalid"), seal_pages (ownership + CRC32C per data page), exact
+  finish order (flush structure refs -> flush membership refs ->
+  ranges.finish -> seal -> resize to page_count*PAGE_SIZE -> dual meta
+  encode inside one probe -> flush_range(0, bytes) -> sync_file), and
+  the full verbatim error-string table with classes and locations.
+- RANGE BULK BUILDER (Jason/Leibniz): range_bulk.rs 6-level bottom-up
+  builder (BRANCH_LEVELS=6, leaf level 0 aux=family, branch level
+  level_index+1, only_child collapse, finish -> (root, record_count),
+  work counters page_created/range_emitted/output_pass, can_append
+  rules "ordered output ranges are not canonical"/"range start is
+  after its end"/"indirect range value is zero", merge adjacent
+  same-value, "range branch cell does not fit", "range record does not
+  fit an empty leaf", depth overflow PageSpaceExhausted).
+- CATALOG CODECS (Linnaeus/Peirce): name tree (types 3/4) and index
+  tree (5/6) share one 12+name_len record layout (u16 len @0, reserved
+  @2, u32 feed index @4, u8 name len @8, 3 reserved @9, name @12);
+  name branches are full records with the child in the index slot
+  (write_branch/read_branch_child overrides); index branches fixed 8B
+  (u32 first_index + u32 child); KeySize 0/4 respectively; insert
+  into name then index tree with "feed name already exists"/"feed
+  index already exists" Corrupt classes and work::catalog_intern.
+- MEMBERSHIP DICTIONARY (Linnaeus/Leibniz): State{id_root, hash_root,
+  used_root, entry_count, id_limit}; ID tree (7/8): key u32, leaf
+  record fixed head 64B (len u16, storage u8 inline/blob, id u32,
+  refcount u64, word_count u32, bitmap_len u32, blob_root u32, 4
+  reserved, SHA-256[32]) + inline words to 512B (56 words) or blob
+  tree; HASH tree (9/10): 40B key (digest[32], wc u32, id u32), 40B
+  leaf, 44B branch; SHA-256 over LE-u64 words in <=64-word chunks;
+  intern = require_word_count -> digest -> hash-tree at_or_after +
+  equal_words -> insert_new (allocate lowest free id via used bitmap
+  Kind::Membership, encode inline/blob, insert id then hash tree);
+  refcount deltas applied in place at REFCOUNT_OFFSET with the
+  ReferenceBatch (entries<=1024, add/Full flush/retry, Direct apply,
+  "empty membership reference batch stayed full"); error strings
+  verbatim (membership dictionary record is malformed, membership
+  refcount, membership entry count, ID namespace limit is zero,
+  membership used bit is missing, membership word count is outside
+  the v4 limit, hash/ID record decode classes).
+- ALGEBRA OUTPUT (Linnaeus): publish pipeline validate_budget ->
+  Prepared::new -> workflow::create -> build -> workflow::publish;
+  AlgebraOutputBudget (max_output_pages >= 2, required files 2/3 ->
+  "membership algebra output pages"/"membership algebra output
+  files"); build_mapped PreserveFeeds (push_feed per catalog global,
+  output index == position) vs Flat (one feed index 0, bitmaps
+  single-bit); global_to_output map; OutputSink::segment qualify /
+  collect positions (u32::MAX -> "membership algebra output feed
+  disappeared") / coalesce / flush with PositionWords -> intern ->
+  push_interned_membership; SequenceCache dedup with
+  membership_intern_cache_hit work counter; output feed count gates
+  ("membership algebra output feeds"); per-4096 cancellation
+  checkpoints.
+- PUBLICATION (Sartre/Linnaeus): workflow::create (ReplaceExisting
+  requires atomic name exchange -> DurabilityUnsupported "rollback-safe
+  replacement requires atomic name exchange"; FailIfExists ->
+  create_absent), secure() binds private file identity (dev+inode) to
+  the destination directory identity, prepare_cancellable (custody
+  verify, sha512 digest, finish sync), publish per policy
+  (fail_if_exists_cancellable / replacement bind / bind_no_rollback),
+  main-file rename_noreplace/exchange/plain + dir sync + proof +
+  retirement, discard_attempt cleanup with Point checkpoints, and the
+  snapshot-specific identity rule "source and snapshot output
+  identities match" (not applied by algebra publish). Go gate note:
+  x/sys is mapping-owned only, so renameat2/exchange/dir-sync live in
+  internal/mapping like every other syscall surface.
+- SNAPSHOT_TO (Sartre): snapshot/api.rs entry (Live gate -> chunk 4),
+  budget.validate ("snapshot output pages"/"snapshot open files"),
+  open_source + reject_live_self (Live only) + identity rule, copy
+  loop build.rs copy_logical (feeds, per-family range cursors incl.
+  structured threat_membership, metadata last with
+  "snapshot metadata input heap"/"metadata length changed while
+  copying"/"membership length changed while copying"), per-iteration
+  cancellation, finish order identical to the output builder;
+  SnapshotPreparationFailure shapes (early/new/discarded/
+  from_publication) with Clean vs ResiduePossible cleanup_state.
+- GO SUBSTRATE GAPS (Peirce): missing = catalog name/index write
+  codecs, membership id/hash/used write codecs, the one-shot output
+  builder, publication attempt staging, publish_set, snapshot_to;
+  present = draft store + tree.Insert (fixed-range only), metadata
+  chain writer, dual-meta encode, bitmap SetUsed/AllocateLowestID/
+  ShrinkMembership, publication.go in-place commit, range codecs,
+  reader side of catalog/membership (bespoke walkers).
+- CRITICAL DESIGN FINDING (Peirce, verified by the lead): the Go tree
+  core (tree.Codec) requires fixed KeySize/LeafSize and a two-limb
+  Key{Hi,Lo}; catalog name keys (up to 255B), membership hash keys
+  (40B), and all variable-length leaf records (name records 12+len,
+  ID records 64+bitmap) CANNOT be inserted through tree.Insert today.
+  Rust mirrors this with KEY_SIZE=0/LEAF_SIZE=0 codecs + overridable
+  leaf_cell/branch_cell/write_branch/read_branch_child + a generic Key
+  type; Go must gain the same variable-record/variable-key capability
+  in the tree core (the page machinery - splitBySize, lowerBoundBy,
+  variable truncate, codecCell - already exists and is byte-identical
+  to Rust; only requireCodec, the cell readers, and the key
+  abstraction need the variable branch). The Go reader never uses the
+  tree core for these trees (bespoke walkers), so the extension is
+  writer-side only and cannot regress reader hot paths.
+
+Design decisions (2026-08-20, long-term-best; extends the chunk-3
+design record decisions with the exploration finding):
+
+A. Extend the Go tree core Rust-shaped instead of building dedicated
+   page assemblers: one authoritative tree machinery for every v4
+   tree, exactly like fixed_tree. The Codec gains an optional
+   variable mode (KeySize()==0/LeafSize()==0 allowed when the codec
+   provides explicit max sizes and cell/branch accessors); searches
+   route through lowerBoundBy/codecCell (already present) with
+   codec-provided cell readers and byte-key comparison (bytes.Compare
+   for names; digest->word_count->id for hash keys, mirroring Rust
+   derived Ord). The fixed-size path (range/retirement trees) stays
+   byte-identical. Member: range_bulk is a separate bottom-up builder
+   exactly as in Rust (it is not tree-core insert).
+B. The output builder is one Go owner in internal/writer mirroring
+   immutable_output.rs: append-only Store over a fresh mapping
+   (allocate=reserve_page, update=page_mut+ownership, copy for
+   splits, discard/retire refusals), reserve_page at meta.page_count,
+   the mutate latch, and the exact finish order. It reuses
+   writer/metadata.go (write chain) and format.Meta.EncodeMapped for
+   the dual meta; page sealing reuses format.SealPageChecksum.
+C. Publication staging is minimal-complete per the chunk-3 design
+   record: attempt file naming (.iprange-publish-<hex>.tmp), attempt
+   identity (dir identity device+inode via stat + basename), sha512
+   digest over the finished mapping bytes read through mapped views,
+   fail-if-exists rename, exchange/plain replacement, discard cleanup
+   with ResiduePossible carried by the PreparationFailure error type.
+   All new syscalls (renameat2 RENAME_NOREPLACE/RENAME_EXCHANGE,
+   dir sync, stat identity) are added to internal/mapping - the gate's
+   syscall owner - as small exported primitives; no gate exemption.
+D. publish_set mirrors algebra/output.rs: validate budget -> prepare
+   -> create attempt -> build_mapped (feeds, global map, the N-way
+   scan with OutputSink segment walk, intern + push_interned, cache)
+   -> finish -> publish; error mapping to the Go PreparationFailure
+   surface with Rust detail strings verbatim.
+E. snapshot_to Immutable mirrors snapshot/{api,build,source,terminal}:
+   source guard over an existing immutable path, identity rules,
+   per-iteration copy loop with per-4096 cancellation, metadata last,
+   publication policies; Live mode stays chunk 4.
+F. Budget calibration moves into 3b: the Rust size_of probes for the
+   modeled heap charges (Source/SourceState/Event/FeedName/InputState/
+   output vectors and the reference-batch slots) are pinned by a Rust
+   test and mirrored by Go admission-equality tests, closing the 3a
+   working-theory item.
+G. Sub-rounds inside chunk 3b, each closing its own gate evidence:
+   3b-1 tree-core variable codecs + catalog/membership write codecs +
+   range_bulk + the output builder with reopen-verify round trips;
+   3b-2 publication staging + publish_set + snapshot_to + public
+   surface + budget calibration + final gates. Level-1 reviewers are
+   re-aimed: Jason output-builder vs Rust, Linnaeus codecs/wire
+   parity, Peirce publication/identity, Sartre mmap-only/lifetimes,
+   Leibniz records; level-2 stays kimi/minimax/mimo/qwen.
+
+
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
   (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; only P3 cosmetics,
   fixed in 8e0f413).
