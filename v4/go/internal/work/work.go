@@ -35,6 +35,10 @@ func LeafValidation(uint64) {}
 // WordRead counts one 8-byte membership bitmap word read.
 func WordRead(uint64) {}
 
+// MembershipDecode counts one point-match membership decode (one whole
+// matching-feeds scan; Rust work::membership_decode parity).
+func MembershipDecode(uint64) {}
+
 // StructureDecode counts one structured payload decode.
 func StructureDecode(uint64) {}
 
@@ -99,6 +103,11 @@ func FirstFenceUpdate(uint64) {}
 // EdgePathCheck counts one cached-edge position verification during a
 // monotonic edge insertion (Rust edge_path_check).
 func EdgePathCheck(uint64) {}
+
+// RangeConsumed counts one range record read by a reader cursor (Rust
+// range_consumed; written records are counted separately by
+// RangeEmitted).
+func RangeConsumed(uint64) {}
 
 // RangeEmitted counts one range record written during a range edit.
 func RangeEmitted(uint64) {}

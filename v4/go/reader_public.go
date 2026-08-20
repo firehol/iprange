@@ -206,6 +206,18 @@ func (r *ImmutableReader) requireMembershipCapable() error {
 	return nil
 }
 
+// requireMembershipQuery applies the strict membership-query gate: the
+// query capability decodes address bitmaps, which only a membership
+// database defines (Rust membership_query::Query::new; structured
+// databases are refused).
+func (r *ImmutableReader) requireMembershipQuery() error {
+	m := r.inner.Meta()
+	if m.ValueKind != format.ValueKindMembership {
+		return &Error{Code: ErrorWrongValueKind, Detail: "membership query requires a membership database"}
+	}
+	return nil
+}
+
 // Close releases the mapping. A reader with live pins reports HandleBusy
 // without closing; a second Close reports WrongState. Close must not race
 // reader work.

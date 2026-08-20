@@ -154,3 +154,94 @@ func TestMultiLevelRangeTree(t *testing.T) {
 		t.Errorf("enumerated %d records, want %d", count, multilevelRecordCount)
 	}
 }
+
+// TestMultiLevelSeekBelowMinimum pins the Rust seek semantics for a
+// forward target below the tree's minimum key on a multi-level tree:
+// the seek descends into the first child and yields the first range,
+// while a backward seek finishes (fixed_tree cursor.rs seek_inner:
+// (None, Forward) => 0, (None, Backward) => Finished). The old Go code
+// mapped the "no branch key qualifies" case to finished, silently
+// returning an empty result.
+func TestMultiLevelSeekBelowMinimum(t *testing.T) {
+	path := buildMultiLevelDatabase(t)
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	c, err := r.NewDirectCursor4(RangeForward)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Seek(500); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := c.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || rec.From != 1000 || rec.To != 1999 {
+		t.Fatalf("forward seek below minimum: got (%+v, %v), want first range 1000-1999", rec, ok)
+	}
+
+	// A backward seek strictly below the minimum finishes (Rust
+	// (None, Backward)).
+	b, err := r.NewDirectCursor4(RangeBackward)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Seek(999); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := b.Next(); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("backward seek below minimum must be finished")
+	}
+}
+
+// TestMultiLevelSeekCorruptChild pins the Rust require_child contract:
+// a branch record whose child is invalid is corruption, never a silent
+// empty result. The corrupted child sits on the forward edge, so the
+// cursor construction itself (edge descent) reports it; a seek into any
+// other part of the tree would do the same when that record is
+// selected.
+func TestMultiLevelSeekCorruptChild(t *testing.T) {
+	path := buildMultiLevelDatabase(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Page 2 is the level-1 branch; record 0's child field sits at
+	// offset 4068. Zero it: child 0 is never a valid page.
+	format.PutU32(raw[2*format.PageSize+4068:2*format.PageSize+4072], 0)
+	dir := t.TempDir()
+	corruptPath := filepath.Join(dir, "corrupt-child.iprdb")
+	if err := os.WriteFile(corruptPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(corruptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	_, err = r.NewDirectCursor4(RangeForward)
+	if err == nil {
+		t.Fatal("an invalid branch child must report corruption")
+	}
+	// The format layer classifies the bad child as a header error and
+	// the public boundary maps it to ErrorFormatInvalid; inside the
+	// reader the corrupt() class is CodeFormatInvalid. Either class is
+	// the corruption contract - never a silent empty result.
+	switch err.(type) {
+	case *format.HeaderError:
+	case *format.Error:
+		if !isFormatError(err, format.CodeFormatInvalid) {
+			t.Fatalf("invalid branch child: want CodeFormatInvalid, got %v", err)
+		}
+	default:
+		t.Fatalf("invalid branch child: unexpected error class %T: %v", err, err)
+	}
+}

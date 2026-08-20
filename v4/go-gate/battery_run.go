@@ -16,6 +16,114 @@ func allBatteryCases() []batteryCase {
 	return append(append([]batteryCase{}, batteryCases...), batteryPageCases...)
 }
 
+// boundaryCaseNames is the routine boundary corpus (SOW-0025 decision
+// 2026-08-19): one representative form per launder family and per
+// view-holder package, a small fraction of the full durable battery
+// (which remains the archived regression net via
+// --self-test/--self-test-jobs). Per-form scans run in parallel; the
+// measured cost of one module scan is ~6-12 min (decision record), so
+// the corpus is not a seconds-scale check on the grown tree.
+var boundaryCaseNames = []string{
+	// descriptor / content-transfer families
+	"direct io.ReadAll call", "io.ReadAll function alias",
+	"os.File.Read method value", "os.File.Seek call",
+	"os.ReadFile in a new package directory",
+	"unix.Readv descriptor read in the mapping owner",
+	"bufio.NewReader(file).ReadByte", "dot-imported os.ReadFile",
+	"fmt.Fscan over a file", "reflection-invoked Read",
+	"raw unix.Syscall", "unix.CopyFileRange",
+	"encoding/json decoder over a file", "os.File.WriteString",
+	"log package writing to a file", "os.StartProcess",
+	"flate.NewWriter over a file", "unsafe import anywhere in the module",
+	// complete-page ownership families (holder packages)
+	"P1: copy of a full mapped page", "P2: append of a full mapped page",
+	"P4: array conversion of a full mapped page",
+	"P8: full mapped page through a function variable",
+	"P11: full page copied inside a defer closure",
+	"P13: full page copied inside a go closure",
+	"P16: full page through a func-literal variable",
+	"P24: append through a same-package pass-through helper",
+	"P33: named string conversion of a full page",
+	"P42: void unknown callback receiving a full page",
+	"P47: interface boxing conversion keeps page taint",
+	// P49 (channel round trip) is back in the routine corpus: the
+	// paramLeafPathsSeen walk is memoized per struct (2026-08-20), so
+	// the container/key recursion that previously diverged with
+	// ever-growing prefixes now terminates deterministically.
+	"P49: channel round trip keeps page taint",
+	"P62: string conversion of a definite full-page view",
+	"P63: append into a multi-page mapped view",
+	"P74: string conversion of a page view with an unknown bound",
+	"P85: fmt variadic spread of a concrete page collection",
+	"P111: complete-page copy through the reader exemption",
+	"P138: store CopyPage callback laundering a mapped page",
+	"P243: store callback invocation with an owned buffer",
+	"P75: reflect byte extraction over a mapped view",
+	// benign twins (must stay legal)
+	"P6: benign bounded record copy",
+	"P7: benign bounded metadata-chunk append",
+	"P9: benign function variable without a page argument",
+	"P10: benign same-package call carries a mapped page",
+	"P14: benign bounded copy inside a defer closure",
+	"P35: bounded View(0, 64) copy stays legal",
+	"P36: bounded slice through a local closure stays legal",
+	"P55: named result with a bounded view stays legal",
+	"P137: store CopyPage callback copying between mapped pages stays benign",
+	// view-holder whitelist boundary (new rule)
+	"B1: minted page export from internal/tree",
+	"B2: minted page export from a new package",
+	"B3: minted page export from internal/bitmap",
+	"B4: holder export of a mapped page stays benign",
+	"B5: interface-method helper laundering a minted page",
+	"B8: type-parameter helper laundering a minted page",
+	"B6: public facade exporting a mapped page view",
+	"B7: public facade bounded export stays benign",
+}
+
+// boundaryCases selects the routine boundary corpus from the durable
+// battery by name substring.
+func boundaryCases() []batteryCase {
+	var sel []batteryCase
+	for _, c := range allBatteryCases() {
+		for _, n := range boundaryCaseNames {
+			if strings.Contains(c.name, n) {
+				sel = append(sel, c)
+				break
+			}
+		}
+	}
+	return sel
+}
+
+// runBoundarySelfTest runs only the boundary corpus, the routine gate
+// check for every chunk and gate change.
+func runBoundarySelfTest(root string) bool {
+	cases := boundaryCases()
+	ok, ran := runSelfTestCases(root, cases)
+	if ok {
+		fmt.Printf("gatescan boundary self-test passed (%d cases, %d fail forms, %d benign forms)\n", ran, failForms(cases), passForms(cases))
+	} else {
+		fmt.Printf("gatescan boundary self-test FAILED (%d cases)\n", ran)
+	}
+	return ok
+}
+
+// failForms counts the fail-expecting cases in a selection.
+func failForms(cases []batteryCase) int {
+	n := 0
+	for _, c := range cases {
+		if c.expectFail {
+			n++
+		}
+	}
+	return n
+}
+
+// passForms counts the benign cases in a selection.
+func passForms(cases []batteryCase) int {
+	return len(cases) - failForms(cases)
+}
+
 // runSelfTest applies the durable mutation battery to a private copy of
 // the module: every fail case must make the scan reject the tree, every
 // pass case must stay clean. The reviewed tree is never modified.
@@ -135,6 +243,71 @@ func runSelfTestParallel(root string, jobs int) bool {
 	return allOK
 }
 
+// runBoundaryParallel runs the boundary corpus across jobs worker
+// processes, each in its own private module copy.
+func runBoundaryParallel(root string, jobs int) bool {
+	cases := boundaryCases()
+	if jobs > len(cases) {
+		jobs = len(cases)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gatescan: executable: %v\n", err)
+		return false
+	}
+	type result struct {
+		k    int
+		ok   bool
+		note string
+	}
+	results := make(chan result, jobs)
+	for k := 0; k < jobs; k++ {
+		k := k
+		go func() {
+			cmd := exec.Command(exe, "--boundary-chunk", fmt.Sprintf("%d/%d", k, jobs))
+			cmd.Args = append(cmd.Args, root)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			note := "ok"
+			ok := true
+			if err := cmd.Run(); err != nil {
+				ok = false
+				note = err.Error()
+			}
+			results <- result{k: k, ok: ok, note: note}
+		}()
+	}
+	allOK := true
+	for k := 0; k < jobs; k++ {
+		r := <-results
+		if !r.ok {
+			allOK = false
+			fmt.Fprintf(os.Stderr, "gatescan: boundary worker %d/%d failed: %s\n", r.k+1, jobs, r.note)
+		}
+	}
+	if allOK {
+		fmt.Printf("gatescan boundary self-test passed (%d cases, %d fail forms, %d benign forms)\n", len(cases), failForms(cases), passForms(cases))
+	} else {
+		fmt.Printf("gatescan boundary self-test FAILED (%d cases)\n", len(cases))
+	}
+	return allOK
+}
+
+// runBoundaryChunk runs worker k of n over the boundary corpus.
+func runBoundaryChunk(root string, k, n int) bool {
+	cases := boundaryCases()
+	if n > len(cases) {
+		if k >= len(cases) {
+			return true
+		}
+		n = len(cases)
+	}
+	start, end := chunkRange(len(cases), k, n)
+	ok, ran := runSelfTestCases(root, cases[start:end])
+	fmt.Printf("[boundary worker %d/%d] %s (%d cases)\n", k+1, n, map[bool]string{true: "ok", false: "FAILED"}[ok], ran)
+	return ok
+}
+
 func failFormsAll() int {
 	n := 0
 	for _, c := range allBatteryCases() {
@@ -163,6 +336,17 @@ func copyTree(root, dst string) error {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		// Symlinks (CLAUDE.md -> AGENTS.md and the like) must be
+		// re-created as symlinks: copying through them would dereference
+		// relative targets outside the copy, and copy_file_range cannot
+		// open a symlinked directory.
+		if d.Type()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(target, filepath.Join(dst, rel))
 		}
 		return copyFile(path, filepath.Join(dst, rel))
 	})

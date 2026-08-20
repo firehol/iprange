@@ -2609,6 +2609,89 @@ func isMappingOwnerPath(pkgPath string) bool {
 	return strings.HasSuffix(pkgPath, "/internal/mapping")
 }
 
+// viewHolderPackages is the mapped-view whitelist (SOW-0025 decision
+// 2026-08-19): only these packages may handle mapped page views. The
+// descriptor owner (internal/mapping), the wire codec (internal/format),
+// the reader core, the writer core, and the public facade (module root)
+// are the holders; every other package receives at most bounded record
+// values. The import graph already stops non-holders from importing the
+// mapping owner; this rule fails closed on mapped-view exports from any
+// other package, so a launder that smuggles a minted page into a
+// non-holder and returns it cannot go silent.
+var viewHolderPackages = map[string]bool{
+	"github.com/firehol/iprange/v4/go":                  true,
+	"github.com/firehol/iprange/v4/go/internal/mapping": true,
+	"github.com/firehol/iprange/v4/go/internal/format":  true,
+	"github.com/firehol/iprange/v4/go/internal/reader":  true,
+	"github.com/firehol/iprange/v4/go/internal/writer":  true,
+}
+
+// isViewHolderPath reports whether pkgPath may handle mapped page views.
+func isViewHolderPath(pkgPath string) bool {
+	return viewHolderPackages[pkgPath]
+}
+
+// fieldTaintMapped reports whether a summary field taint provably
+// aliases the mapping. The summary machinery records mapped provenance
+// on the per-source maxSrc records (maxSrcOf propagates pv.mapped);
+// fieldTaint.mapped itself is joined as an AND across records and is
+// false for single-source results, so the source-level flag is the
+// authoritative signal here.
+func fieldTaintMapped(r fieldTaint) bool {
+	if r.mapped {
+		return true
+	}
+	for _, s := range r.srcs {
+		if s.mapped {
+			return true
+		}
+	}
+	return false
+}
+
+// checkViewHolderExports fails every function summary in a non-holder
+// package whose results or result fields alias the mapping. A mapped
+// view must never leave the holder set, not even as a return value or a
+// returned struct field; bounded record values (tainted but not mapped)
+// stay legal, so honest value flow into tree/bitmap/retire/bootstrap is
+// unaffected. The public facade (module root) is the LAST holder:
+// everything it exports reaches application code, so its exported
+// results must never alias the mapping either (a root debug accessor
+// handing out a page view would be gate-silent otherwise); unexported
+// root helpers may still pass views between holders internally.
+func checkViewHolderExports(fail func(pos token.Pos, format string, args ...any), pkgPath string, sums map[string]*funcSummary) {
+	root := pkgPath == moduleImportPrefix
+	if !root && isViewHolderPath(pkgPath) {
+		return
+	}
+	const msg = "mapped page view exported from %s by %s (%s); view-holder whitelist: internal/mapping, internal/format, internal/reader, internal/writer, public facade"
+	for fn, sum := range sums {
+		if root && !token.IsExported(symbolBase(fn)) {
+			continue
+		}
+		for i, r := range sum.results {
+			if fieldTaintMapped(r) {
+				fail(token.NoPos, msg, pkgPath, fn, fmt.Sprintf("result %d", i))
+			}
+		}
+		for k, r := range sum.fields {
+			if fieldTaintMapped(r) {
+				fail(token.NoPos, msg, pkgPath, fn, "field "+k)
+			}
+		}
+	}
+}
+
+// symbolBase returns the final identifier of a summary key
+// ("ImmutableReader.LookupDirectV4" -> "LookupDirectV4"), the part that
+// decides exportedness.
+func symbolBase(fn string) string {
+	if i := strings.LastIndex(fn, "."); i >= 0 {
+		return fn[i+1:]
+	}
+	return fn
+}
+
 // approvedFuncPkg applies the callee package policy: the current package,
 // module-internal packages, and the pinned x/sys syscall surface.
 func (w *fileRules) approvedFuncPkg(fn *types.Func) bool {
@@ -2707,7 +2790,13 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 	}
 	// Type conversion: X(f) where X is a type. A file-typed source
 	// converted into a non-file-bearing target erases the descriptor.
+	// The exact-shape findExemptions branch may sanction one precise
+	// conversion position (Scope.Feeds' owned name copy); positions are
+	// unique, so a mutation cannot inherit the exemption.
 	if w.isTypeExpr(fun) {
+		if w.exempts[v.Pos()] {
+			return
+		}
 		if len(v.Args) == 1 {
 			src := w.typeOf(v.Args[0])
 			dst := w.typeOf(v)
@@ -4020,11 +4109,17 @@ func (w *fileRules) pageDerivedByte(e ast.Expr) bool {
 	return w.pageValue(e).tainted
 }
 
-// checkAssign flags assignment-side launders and page conversions.
+// checkAssign flags assignment-side launders and page conversions. The
+// exact-shape findExemptions branch may sanction one precise assignment
+// position (Scope.Feeds' owned name copy); positions are unique, so a
+// mutation cannot inherit the exemption by editing the site expression.
 func (w *fileRules) checkAssign(v *ast.AssignStmt) {
 	for i, rhs := range v.Rhs {
 		if i >= len(v.Lhs) {
 			break
+		}
+		if w.exempts[v.Lhs[i].Pos()] {
+			continue
 		}
 		w.checkLaunderValue(v.Lhs[i].Pos(), rhs, w.typeOf(v.Lhs[i]))
 		if pv := w.pageValue(rhs); pv.tainted && pageFull(pv) {
@@ -4677,6 +4772,103 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 			}
 			return true
 		})
+		return exempts
+	}
+	if strings.HasSuffix(path, "cursors_public.go") {
+		// Public cursor Seek methods mirror the Rust cursor authority
+		// (range_cursor.rs seek). The banned-selector list contains Seek
+		// because os.File.Seek moves file content into owned memory; the
+		// cursor receivers are pure module types whose scanned method
+		// bodies only reposition a traversal over mapped pages. Only the
+		// exact module cursor receiver types are exempt: any other Seek
+		// receiver in this file stays banned.
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Seek" {
+				return true
+			}
+			switch concreteTypeName(w.typeOf(sel.X)) {
+			case "reader.DirectCursor4", "reader.DirectCursor6":
+				exempts[sel.Pos()] = true
+			}
+			return true
+		})
+		return exempts
+	}
+	if strings.HasSuffix(path, "membership_query_public.go") {
+		// MembershipScope.Feeds copies the scope's resolved entry names
+		// into owned strings (the documented LookupFeed contract: the
+		// entries originate from decoded catalog records, grammar-bounded
+		// below one page, but the type-light flow cannot see the bound
+		// through the ScopeData slice). Only the exact Feeds assignment
+		// shape is exempt - a FeedEntry literal whose Index field is a
+		// .FeedIndex selector and whose Name field is string(.Name) - so
+		// any other page-derived assignment in the file stays flagged.
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Name.Name != "Feeds" || fd.Recv == nil || len(fd.Recv.List) != 1 {
+				continue
+			}
+			if concreteTypeName(w.typeOf(fd.Recv.List[0].Type)) != "iprangedb.MembershipScope" {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				as, ok := n.(*ast.AssignStmt)
+				if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					return true
+				}
+				if _, ok := as.Lhs[0].(*ast.IndexExpr); !ok {
+					return true
+				}
+				lit, ok := unparen(as.Rhs[0]).(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				for _, el := range lit.Elts {
+					kv, ok := el.(*ast.KeyValueExpr)
+					if !ok {
+						return true
+					}
+					key, ok := kv.Key.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					switch key.Name {
+					case "Index":
+						if _, ok := kv.Value.(*ast.SelectorExpr); !ok {
+							return true
+						}
+					case "Name":
+						cv, ok := unparen(kv.Value).(*ast.CallExpr)
+						if !ok || len(cv.Args) != 1 {
+							return true
+						}
+						id, ok := cv.Fun.(*ast.Ident)
+						if !ok || id.Name != "string" {
+							return true
+						}
+						if _, ok := cv.Args[0].(*ast.SelectorExpr); !ok {
+							return true
+						}
+					default:
+						return true
+					}
+				}
+				exempts[as.Lhs[0].Pos()] = true
+				// The string conversion itself is a separate call node;
+				// mark it too so the conversion sink rule at the call
+				// position stays silent for this one owned copy.
+				ast.Inspect(as.Rhs[0], func(n ast.Node) bool {
+					if cv, ok := n.(*ast.CallExpr); ok {
+						if id, ok := cv.Fun.(*ast.Ident); ok && id.Name == "string" {
+							exempts[cv.Pos()] = true
+						}
+					}
+					return true
+				})
+				return true
+			})
+		}
 		return exempts
 	}
 	if !strings.HasSuffix(path, "internal/reader/metadata.go") {

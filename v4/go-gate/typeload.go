@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // osConfigs are the file sets the module compiles for. The mapping owner
@@ -65,11 +66,15 @@ const moduleImportPrefix = "github.com/firehol/iprange/v4/go"
 // stdlibSrcCache is the cross-scan cache of type-checked standard-library
 // packages per OS config. Battery mutations never touch GOROOT, so one
 // closure per config serves every self-test case; without it the 280+
-// cases would re-type-check the stdlib each time.
+// cases would re-type-check the stdlib each time. The mutex protects the
+// cache across the parallel per-config scans (scanRoot runs every OS
+// config concurrently).
 var stdlibSrcCache = map[string]map[string]*types.Package{}
+var stdlibSrcMu sync.Mutex
 
 // xsysDirCache resolves golang.org/x/sys once per scan invocation series.
 var xsysDirCache = map[string]string{}
+var xsysDirCacheMu sync.Mutex
 
 // loader type-checks one OS file set of the module. Standard library,
 // module packages, and golang.org/x/sys are read from source with the
@@ -115,6 +120,8 @@ func newLoader(modRoot string, cfg osConfig, fset *token.FileSet) (*loader, erro
 // resolves to (the go toolchain's own loader is the single authority for
 // module resolution; the gate never walks a module it cannot resolve).
 func resolveXsysDir(modRoot string) (string, error) {
+	xsysDirCacheMu.Lock()
+	defer xsysDirCacheMu.Unlock()
 	if dir, ok := xsysDirCache[modRoot]; ok {
 		return dir, nil
 	}
@@ -132,6 +139,18 @@ func resolveXsysDir(modRoot string) (string, error) {
 }
 
 // Import satisfies types.Importer.
+// cachePackage registers an already type-checked module package in the
+// loader's import cache so dependents reuse it instead of re-checking
+// its source (scanConfig checks every directory explicitly and seeds
+// the cache with each result). The first object created for a path
+// wins: overwriting would orphan the type identities already bound
+// inside packages that imported the earlier object.
+func (l *loader) cachePackage(path string, pkg *types.Package) {
+	if _, ok := l.cache[path]; !ok {
+		l.cache[path] = pkg
+	}
+}
+
 func (l *loader) Import(path string) (*types.Package, error) {
 	if pkg, ok := l.cache[path]; ok {
 		return pkg, nil
@@ -165,17 +184,26 @@ func (l *loader) Import(path string) (*types.Package, error) {
 		// syscall.Rlimit). Type-checking stdlib from GOROOT source with
 		// the target build context keeps every OS config self-consistent.
 		key := l.cfg.GOOS + "/" + l.cfg.GOARCH
+		// The per-config stdlib cache is shared across the parallel
+		// scans; the lock covers only the map maintenance. checkDir
+		// runs OUTSIDE the lock: type-checking one stdlib package
+		// recursively imports others through this same Import, which
+		// would deadlock a non-reentrant mutex.
+		stdlibSrcMu.Lock()
 		shared := stdlibSrcCache[key]
 		if shared == nil {
 			shared = map[string]*types.Package{}
 			stdlibSrcCache[key] = shared
 		}
 		pkg = shared[path]
+		stdlibSrcMu.Unlock()
 		if pkg == nil {
 			srcDir := filepath.Join(runtime.GOROOT(), "src", filepath.FromSlash(path))
 			pkg, err = l.checkDir(path, srcDir)
 			if err == nil {
+				stdlibSrcMu.Lock()
 				shared[path] = pkg
+				stdlibSrcMu.Unlock()
 			}
 		}
 	}

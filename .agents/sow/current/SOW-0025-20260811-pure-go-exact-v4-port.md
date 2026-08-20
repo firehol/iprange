@@ -2206,6 +2206,308 @@ Each chunk closes with its own gate evidence like milestone 2; the
 chunk order is authoritative and a later chunk never reopens an
 earlier one without a regression record.
 
+Decision (2026-08-19, resolved with the user, replacing the earlier
+battery policy): boundary enforcement replaces the heavy battery as
+the routine gate. The view-holder whitelist is now the architectural
+contract: only internal/mapping (descriptor + mmap owner), internal/
+format (wire codec), internal/reader, internal/writer, and the public
+facade (module root) may handle mapped page views - enforced by the
+import graph plus a new gate rule that fails any mapped-view export
+from a non-holder package (unit-pinned in v4/go-gate/viewholder_test.go;
+end-to-end battery forms B1-B4 stay in the archived battery table).
+Measured gate reality (2026-08-19): a single-config module scan costs
+~6-12 min on the grown tree (the analyzer is GC-bound, profiled:
+~55% runtime marking; the loader is now per-config instead of per-
+directory, and the stdlib cache is shared, but the page-flow
+allocation volume dominates), so per-case battery runs are unusable at
+any routine frequency. The routine gate check for every chunk is
+therefore: one real-module linux scan (rc=0) plus the dynamic mmap-only
+evidence - strace (v4/go/check-mmap-trace.sh: no read/pread64/readv/
+write/lseek on any database descriptor) and the MemStats size-class
+assertion (mmap_page_alloc_test.go: no heap allocation >= 4096 bytes
+during lookups) - all run at nice. The durable battery (battery.go +
+battery_page.go; 711 forms at the 2026-08-19 decision - the chunk-6
+"707/707" figure was the inventory of that earlier run - and 714 forms
+after the M3 chunk-1 review added B5-B7 for the generic-erasure and
+root-boundary shapes) stays in the tool as the archived regression
+net, run only on request or at the M3 close if explicitly scheduled;
+all recorded historical runs stay valid. The gate's allocation/GC
+cost (per-config loader, shared FileSet, page-flow allocation volume;
+measured ~6-12 min per linux scan) is tracked by pending SOW-0026
+(typed ownership analyzer / allocation reduction), not M3 scope. Performance is a hard constraint of this decision:
+every enforcement mechanism is static analysis or test-only;
+production code paths are unchanged, so the SDK cannot become slower.
+
+Milestone 3 chunk 1 - logical read SDK foundation (2026-08-19, HEAD
+pending-commit): the read-only logical surface over the committed
+milestone-2 core. New public types and APIs: CancellationToken,
+DirectCursorV4/V6 with RangeDirection and DirectRange, FeedRangeCursor
+V4/V6, MembershipQuery (all_feeds/named_feeds/matching_feeds_v4/v6)
+with MembershipScope, budgets, MatchingFeedsReport/MatchingFeedsSink,
+FeedPair, and the workflow/report value types (AddressRange,
+WorkflowKind, LogicalChange, WorkflowReport, FirstSeenRemoval,
+FirstSeenRemovalSink, HistoryWindow/HistoryWindowReport/
+HistoryProjectionReport), plus full Cardinality129 parity checks - all
+read-only over the existing reader core, zero-alloc on warm paths
+(5 new cursor/query zero-alloc sub-tests in zeroalloc_test.go all
+PASS), and necessary-work counted under the v4work tag only
+(internal/work + work_v4work pins). The DirectCursor4/6 seek state is
+dispatched through explicit struct fields (branchChild, leafSeekPolicy,
+branchSelectPolicy); MembershipQuery resolves named feeds through
+ResolveNamedFeeds; cancellation.check is nil-receiver-safe and passed
+through without a checkpoint indirection.
+The 2026-08-19 boundary decision (above) is implemented in this chunk:
+the view-holder whitelist rule checkViewHolderExports fails closed on
+mapped-view exports from non-holder packages (unit-pinned in
+v4/go-gate/viewholder_test.go; end-to-end forms B1-B4 join the archived
+battery table), the gate's loader is now per-OS-config instead of
+per-directory with first-object-wins cache seeding (type identity
+across the module preserved; measured linux scan rc=0 in ~12 min,
+GC-bound, allocation reduction tracked as follow-up), the routine
+per-chunk gate evidence is the module scan + dynamic mmap-only proof
+(v4/go/check-mmap-trace.sh strace: no read/pread64/readv/write/lseek on
+any database descriptor; TestNoPageSizedHeapAllocations: no heap size
+class >= 4096 allocates during lookups), and check-import-graph.sh
+documents the holder whitelist. Validation: go test ./... both tag
+sets + -race both + vet + gofmt clean, import-graph check clean,
+production linux gate scan rc=0, Rust check-source-graph.sh (459
+sources) + cargo test --all-features clean, 11/11 cross-compiles, SOW
+audit clean. Level-1/level-2 review rounds for this chunk are recorded
+below (or in the next records) and committed together with the chunk.
+
+### 2026-08-19 - M3 chunk-1 level-1 adversarial round: reader fixes and boundary-level gate fixes (working tree, pending commit)
+
+The five level-1 reviewers (Jason: public logical facade; Linnaeus:
+internal reader core and lifetimes; Peirce: cross-language parity and
+work counters; Sartre: mmap-only / ownership / zero-alloc + holder
+boundary; Leibniz: records hygiene) reviewed the chunk-1 delta. Two P1
+and eleven P2/P3 were confirmed; all reader findings are fixed in the
+working tree:
+
+- P1 empty-db cursors: newTreeCursor refused root==0 as corruption;
+  Rust treats a zero root as a finished cursor
+  (fixed_tree/cursor.rs::unpositioned). Fixed in
+  v4/go/internal/reader/cursor.go (finished cursor for root==0 +
+  seekPosition empty-tree return); the dead empty-root guard in
+  index.go NewFeedCursor was removed. Pinned by
+  TestEmptyDatabaseCursors (v4/go/logical_query_test.go).
+- P1 feed-range warm-path allocations: nextInner/merge/contains
+  returned heap pointers (pending, merged, membership cache);
+  the zeroalloc pin was vacuous (AllocsPerRun's warm-up exhausted the
+  shared cursor, so measured runs hit the finished path only). The
+  projection is now all value-typed (pending+hasPending,
+  membershipCache fields, merge returning (value, bool)); the pins
+  measure an open-vs-open+scan delta so per-interval work is really
+  measured (zeroalloc_test.go feedrange-cursor-v4/v6-delta).
+- P2 seek-below-minimum: a forward seek below the tree's first key
+  returned finished instead of the first range on multi-level trees
+  (rangeBranchSelect returned (0,0,nil); seekPosition mapped next==0
+  to finished). Rewritten as rangeBranchSeek4/6 mirroring Rust
+  seek_inner: lower-bound, exact/sub-1 selection, (None, Forward) => 0,
+  (None, Backward) => Finished, and require_child validation
+  (2 <= child < pageLimit) at the branch step. Pinned by
+  TestMultiLevelSeekBelowMinimum.
+- P2 corrupt child: a branch child outside [2, pageLimit) now reports
+  corruption at the branch selection (Rust require_child parity),
+  never a silent empty result. Pinned by
+  TestMultiLevelSeekCorruptChild (the child==0 shape was already a
+  format header error via DecodeRangeEntry*; the seek-empty collapse
+  was the real silent path).
+- P2 counter mislabel: reader cursors counted work.RangeEmitted
+  (writer semantics); Rust readers count range_consumed. Added
+  RangeConsumed/RangesConsumed (work.go + work_v4work.go), writer
+  RangeEmitted unchanged, pins renamed in query_work_test.go.
+- P2 MembershipQuery gate: the query surface admitted Structured
+  databases; Rust membership_query::Query::new requires Membership
+  only. requireMembershipQuery (strict) added in reader_public.go.
+- P2 HistoryProjectionReport shape: the Go type carried per-window
+  fields (minus Created); Rust history.rs reports aggregates plus
+  windows. Replaced to field-for-field parity (logical_change,
+  source_range_count, source_addresses, created_feed_count, before/
+  after aggregates, windows).
+- P2 sorted scope: sortEntries was insertion sort (O(n^2) on
+  caller-chosen order); replaced with sort.Slice (Rust
+  sort_unstable_by_key parity).
+- P2 scope budget parity: Go accounted 32+nameLen per entry while Rust
+  pre-accounts count * size_of::<FeedEntry>() (24) plus the feed-index
+  map (dense u32 vs sparse slots, smaller wins); identical inputs now
+  admit identically (membership_query.go chargeEntries/chargeIndexMap/
+  chargeHeap, checked arithmetic, checkpoint every 4096 steps, empty
+  scope argument error precedes budget refusal like Rust).
+- P2/P3 merge MAX guard: mergeRange6's adjacency condition was
+  inverted (MAX endpoint merged instead of refusing); now mirrors
+  checked_next (mergeRange4 + mergeRange6). emitWord uses checked
+  u32/u64 arithmetic (Rust ArithmeticOverflow parity) for the feed
+  index and the match count.
+- P2 docs: name-yielding surfaces (NextFeed, MatchingFeeds yields,
+  Feeds) copy names to owned strings by design at the root boundary
+  (Go cannot borrow); the API docs now state the per-name allocation,
+  and the MembershipScope "names alias the mapping" doc contradiction
+  is fixed (they are copies).
+- Verified-not-changed: the membership_word_read counter concern was a
+  false positive - Go counts WordRead per word inside
+  MembershipView.readWordsInner, which totals identically to Rust's
+  per-batch membership_word_read; the v4work pin (WordReads: 2) holds.
+- Boundary-level gate fixes (Sartre Part 2 + Leibniz):
+  - The public facade (last holder) may no longer EXPORT mapped views:
+    checkViewHolderExports now checks exported symbols of the module
+    root (unit-pinned in viewholder_test.go; B6 fail form + B7 benign
+    twin in the battery).
+  - Generic type-parameter erasure: an unproven callee (interface
+    method / type-param receiver) now inherits the receiver's and
+    arguments' provenance, so a generic helper forwarding a minted
+    page summaries mapped and the holder rule fails closed
+    (pageflow.go indirect-callee branch; B5 fail form added).
+  - Battery copyTree now re-creates symlinks (CLAUDE.md -> AGENTS.md)
+    instead of failing the copy; the 707/711/714 inventory and the
+    measured gate cost are recorded honestly (SOW-0026 pending
+    tracks the typed ownership analyzer / allocation reduction).
+  - check-mmap-trace.sh: writev/pwrite64 were grepped but never
+    traced (dead check); the trace set now matches the violation
+    pattern, and the test log uses a private mktemp path.
+Validation at fix time: go test ./... (all packages), -race both tag
+sets, v4work counter pins, gofmt/vet clean, multilevel and empty-db
+pins PASS. Full-module production gate scan (check-import-graph.sh
+non-self-test, 5 configs) PASSED at nice on the final tree
+(import-graph check passed, 2026-08-19 22:28); check-mmap-trace.sh
+PASS (no read/pread64/readv/write/writev/pwrite64/lseek on any .iprdb
+descriptor; openat=5438 mmap=524). Battery verification of the new
+B-forms at nice:
+
+- B4 (holder export benign) PASS, B7 (public-facade benign twin) PASS,
+  B6 (public-facade mapped export) PASS after the case was made
+  self-contained: the first B6 form referenced HolderPage, a method
+  only B4's mutation file creates, so B6's private module copy did not
+  compile and the harness reported "missing expected rule" instead of
+  the whitelist diagnostic. B6 now creates its own helper
+  (internal/reader/gatemut_b6helper.go) in the same case.
+- B5 first form (generic type-parameter helper) DOES NOT TERMINATE and
+  was rewritten to the interface-receiver form (PeekC(m pager5) ->
+  LeakC(m *mapping.Mapping)); the type-parameter termination defect is
+  tracked in SOW-0026. See the SOW-0026 record for the diagnosis
+  (fresh instantiated type identities defeat the walk seen-set;
+  depth > 120 with 10.7M diagnostic hits in 40 s, never terminating).
+  The interface form TERMINATES and the launder tree is rejected by
+  the view-holder whitelist export rule itself: the first verification
+  run showed only the call-site fail-closed rules firing ("mapped page
+  view passed to m.Page on an unprovable receiver", "file-bearing
+  argument laundered into an interface parameter (type erasure)")
+  because the module-interface miss path summarized the unproven call
+  result as tainted without mapped provenance. The pageflow.go
+  unproven-callee handling now carries the mapped flag when the erased
+  receiver could be the mapping owner itself (couldBeMappingOwner:
+  types.Implements(*mapping.Mapping, receiver-interface)), so
+  PeekC/LeakC summarize mapped and the whitelist fires; interfaces the
+  mapping cannot implement (tree.Codec.ReadKey, external error/
+  Stringer/io.Reader) keep tainted-only results, so bounded record
+  copies stay legal. Verified on a mutation copy: "mapped page view
+  exported from .../internal/tree by LeakC (result 0); view-holder
+  whitelist" plus the two call-site rules, all at once.
+- The type-parameter (generic) form of the helper still DOES NOT
+  TERMINATE (defect tracked in SOW-0026) and is not a usable battery
+  case until the analyzer caches instantiated summaries or keys the
+  walk cycle-set on type origins.
+- Harness invocation note: --self-test* battery workers must run with
+  root = the Go module directory (v4/go), exactly like
+  check-import-graph.sh does (cd "$(dirname "$0")"; scanner "."). A
+  repo-root copy carries v4/rust/target release .s objects, and
+  scanRoot rejects ANY assembly object (assembly body invisible to the
+  source scan), which poisons every case with a false rejection.
+
+Full go test ./... (all packages, both tag sets), go vet, go test
+-race ./..., and the go-gate unit tests all pass at nice on the final
+tree.
+
+### 2026-08-20 - M3 chunk-1 level-2 round (open L2 set; glm unavailable, k3 removed)
+
+- mimo: PASS with one P2 - captureDiagnostics saves/restores the
+  global diagnosticCapture slice header without gateOutMu while
+  reporter.fail appends under it (structurally unsafe; today the
+  battery runs capture single-threaded). Fixed: the swap, the restore,
+  and the read all take gateOutMu; fn() itself runs unlocked because
+  fail re-enters the lock from the scanning goroutines. go-gate unit
+  tests pass with the fix.
+- minimax: FAIL with one P0 - the unproven-callee provenance branch
+  marked results tainted but never mapped for interface receivers, so
+  the view-holder whitelist could not fire on the B5 launder shape
+  (the tree was still rejected, but by the pre-existing call-site
+  rules). Fixed: the module-interface summary-miss path now carries
+  the mapped flag when the erased receiver could be the mapping owner
+  (couldBeMappingOwner = types.Implements(*mapping.Mapping,
+  receiver-interface)); the indirect-callee branch applies the same
+  check. Interfaces the mapping cannot implement (tree.Codec.ReadKey,
+  external error/Stringer/io.Reader) keep tainted-only results, so
+  bounded record copies stay legal. Verified on a mutation copy: the
+  whitelist violation fires for PeekC and LeakC, and the full
+  production scan (check-import-graph.sh, 5 configs) still passes
+  rc=0, so no false positive landed in the real tree.
+- kimi: FAIL with one P1 - a scalar-result interface method on an
+  unapproved interface param (lenIface.Len) is flagged by the
+  unprovable-receiver rule. Baseline proof (gatescan built from HEAD
+  2f2a975): the identical violation fires on the pre-chunk analyzer,
+  so this is pre-existing fail-closed conservatism (unapproved
+  interface parameters are treated as possibly page-carrying; only
+  approved store/codec interfaces and concrete flows stay benign),
+  not a chunk regression. The production tree contains no such shape
+  (scan rc=0). Recorded here as a known conservative behavior of the
+  summary-based analyzer; the typed ownership analyzer (SOW-0026) is
+  the planned cure. kimi's P3 (stale 355e log) is superseded by the
+  record above: 355e ran the pre-correction binary, and the final
+  verification (below) supersedes it.
+- qwen: FAIL with one P2 - asserted the whitelist can never fire for
+  the B5 shape; superseded by the miss-path fix above (whitelist now
+  fires; verified on the mutation copy). qwen's P3 stands and is
+  fixed: GATESCAN_CONFIGS could silently narrow the authoritative
+  production scan from a polluted environment; check-import-graph.sh
+  now unsets it before the scan.
+- Remaining tracked unknowns from this round: shared *token.FileSet
+  across parallel per-config scans (go/token does not document AddFile
+  as thread-safe; not reproduced under -race; recorded in SOW-0026),
+  and the type-parameter termination defect (SOW-0026).
+
+Boundary corpus run (2026-08-20, final binary, v4/go root, 44 workers
+at nice): 53 of 54 routine cases passed, including all seven B-forms
+(B1-B3 direct minted-page exports rejected with the whitelist rule, B4
+holder export accepted, B5 interface launder rejected with the whitelist
+rule, B6 root export rejected, B7 root bounded export accepted) and the
+launder/ownership P-form representatives. The one failure is the P49
+channel round-trip case: it drives the PRE-EXISTING paramLeafPathsSeen
+walk into a non-terminating recursion (see SOW-0026; the walk is
+byte-identical to HEAD 2f2a975, so this is not a chunk regression). P49
+is excluded from the routine boundary corpus with an explicit comment
+and stays in the archived full battery as the regression pin for the
+SOW-0026 fix; the corpus re-run after the exclusion is the final
+evidence for this chunk.
+
+
+### 2026-08-20 - M3 chunk-1 final re-run: walk termination fix, P49 restored, B8 added
+
+- The final boundary re-run (54-case corpus, 44 workers at nice) hung
+  twice on the SAME pre-existing paramLeafPathsSeen non-terminating
+  walk (see SOW-0026): once on P49 (worker 26, 73+ min; SIGQUIT
+  evidence in battery-chunk-355c.log) and once on routine cases 5 and 6
+  in chunk 2 (os.ReadFile in a new package directory; unix.Readv
+  descriptor read in the mapping owner; 37+ min; SIGQUIT in
+  battery-boundary-final.log and -final2.log). All three dumps share
+  one stack: pageflow.go paramLeafPathsSeen recursion over two struct
+  classes with fresh object identities per revolution, so map-order
+  randomness made the hang nondeterministic across runs.
+- Fixed: paramLeafPathsSeen is now a per-struct memoized leaf walk
+  (keyed on the dereferenced *types.Struct; an in-progress nil marker
+  stops revisiting structs on cycles; a fail-closed leafWalkBudget of
+  1<<20 panics leafWalkDivergence on exhaustion). scanRoot recovers
+  the panic per OS config and marks that config failed closed.
+  Previously-hanging cases now finish in seconds; P49 passes in ~20 s.
+- P49 (previously excluded after the first hang) is restored to the
+  routine boundary corpus; battery B8 was added (the type-parameter
+  helper laundering a minted page - the generic form that originally
+  diverged; it now terminates and fires the m.Page-on-unprovable-
+  receiver rule). Boundary corpus: 55 cases. Full battery: 715 cases
+  (589 fail forms, 126 benign forms).
+- Final chunk-gate evidence (all at nice): full battery passed with the
+  final binary; production import-graph scan passed rc=0 with
+  GATESCAN_CONFIGS unset; go test ./..., go test -race ./..., go vet
+  ./..., go-gate test, and go-gate vet all pass.
 
 ### Gate execution record (2026-08-12)
 

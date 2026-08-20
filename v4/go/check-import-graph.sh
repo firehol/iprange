@@ -32,6 +32,14 @@
 #     on every target, must not import it (checked in the per-target loop
 #     below, so a build-tagged new package cannot bypass the owner rule).
 #
+# Mapped-view holder whitelist (SOW-0025 decision 2026-08-19): only
+# internal/mapping, internal/format, internal/reader, internal/writer,
+# and the module root may handle mapped page views. The import rules
+# above stop every other package from importing the mapping owner, and
+# the gatescan rule checkViewHolderExports fails closed on any mapped
+# view exported from a non-holder package (unit-pinned in
+# v4/go-gate/viewholder_test.go; end-to-end battery forms B1-B4).
+#
 # In addition to import boundaries, production sources are mechanically
 # banned from content-transfer I/O so the mmap-only contract cannot regress.
 # The content scan is the typed gatescan tool (v4/go-gate, stdlib-only): it
@@ -176,7 +184,11 @@ done
 
 # Typed content-transfer scan: banned imports/selectors, the *os.File
 # capability surface, and the complete-page ownership rule, over every
-# production file (all build contexts).
+# production file (all build contexts). The GATESCAN_CONFIGS developer
+# knob is a local iteration aid only: it must never narrow the
+# authoritative production scan, so a polluted environment cannot make
+# the gate report success on a subset of the OS set.
+unset GATESCAN_CONFIGS
 if ! nice "$scanner_bin" .; then
 	echo "content-transfer violation in production sources"
 	fail=1

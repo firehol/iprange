@@ -15,6 +15,7 @@ type counters struct {
 	keyProbes         atomic.Uint64
 	leafValidations   atomic.Uint64
 	wordReads         atomic.Uint64
+	membershipDecodes atomic.Uint64
 	structureDecodes  atomic.Uint64
 	mappingRemaps     atomic.Uint64
 	mappingGrowths    atomic.Uint64
@@ -35,6 +36,7 @@ type counters struct {
 	bytesZeroed       atomic.Uint64
 	firstFenceUpdates atomic.Uint64
 	edgePathChecks    atomic.Uint64
+	rangesConsumed    atomic.Uint64
 	rangesEmitted     atomic.Uint64
 	rangesSplit       atomic.Uint64
 	rangesCoalesced   atomic.Uint64
@@ -49,6 +51,7 @@ func PageParse(n uint64)        { current.pagesParsed.Add(n) }
 func KeyProbe(n uint64)         { current.keyProbes.Add(n) }
 func LeafValidation(n uint64)   { current.leafValidations.Add(n) }
 func WordRead(n uint64)         { current.wordReads.Add(n) }
+func MembershipDecode(n uint64) { current.membershipDecodes.Add(n) }
 func StructureDecode(n uint64)  { current.structureDecodes.Add(n) }
 func MappingRemap(n uint64)     { current.mappingRemaps.Add(n) }
 func MappingGrowth(n uint64)    { current.mappingGrowths.Add(n) }
@@ -78,6 +81,7 @@ type Snapshot struct {
 	KeyProbes         uint64
 	LeafValidations   uint64
 	WordReads         uint64
+	MembershipDecodes uint64
 	StructureDecodes  uint64
 	MappingRemaps     uint64
 	MappingGrowths    uint64
@@ -98,6 +102,7 @@ type Snapshot struct {
 	BytesZeroed       uint64
 	FirstFenceUpdates uint64
 	EdgePathChecks    uint64
+	RangesConsumed    uint64
 	RangesEmitted     uint64
 	RangesSplit       uint64
 	RangesCoalesced   uint64
@@ -113,6 +118,7 @@ func Read() Snapshot {
 		KeyProbes:         current.keyProbes.Load(),
 		LeafValidations:   current.leafValidations.Load(),
 		WordReads:         current.wordReads.Load(),
+		MembershipDecodes: current.membershipDecodes.Load(),
 		StructureDecodes:  current.structureDecodes.Load(),
 		MappingRemaps:     current.mappingRemaps.Load(),
 		MappingGrowths:    current.mappingGrowths.Load(),
@@ -133,6 +139,7 @@ func Read() Snapshot {
 		BytesZeroed:       current.bytesZeroed.Load(),
 		FirstFenceUpdates: current.firstFenceUpdates.Load(),
 		EdgePathChecks:    current.edgePathChecks.Load(),
+		RangesConsumed:    current.rangesConsumed.Load(),
 		RangesEmitted:     current.rangesEmitted.Load(),
 		RangesSplit:       current.rangesSplit.Load(),
 		RangesCoalesced:   current.rangesCoalesced.Load(),
@@ -144,14 +151,14 @@ func Reset() {
 	for _, atomic := range []*atomic.Uint64{
 		&current.treeLookups, &current.treeDescents, &current.pagesVisited,
 		&current.pagesParsed, &current.keyProbes, &current.leafValidations,
-		&current.wordReads, &current.structureDecodes, &current.mappingRemaps,
+		&current.wordReads, &current.membershipDecodes, &current.structureDecodes, &current.mappingRemaps,
 		&current.mappingGrowths, &current.mappingFlushes, &current.fileSyncs,
 		&current.cellProbes, &current.slotReads, &current.slotScanSteps,
 		&current.editFitProbes, &current.bitmapProbes, &current.pagesCreated,
 		&current.pagesCopied, &current.pagesSplit, &current.pagesRetired,
 		&current.pagesReclaimed, &current.pagesSealed, &current.bytesMoved,
 		&current.bytesZeroed, &current.firstFenceUpdates,
-		&current.edgePathChecks, &current.rangesEmitted, &current.rangesSplit,
+		&current.edgePathChecks, &current.rangesConsumed, &current.rangesEmitted, &current.rangesSplit,
 		&current.rangesCoalesced,
 	} {
 		atomic.Store(0)
@@ -161,6 +168,11 @@ func Reset() {
 // EdgePathCheck counts one cached-edge position verification (Rust
 // edge_path_check).
 func EdgePathCheck(n uint64) { current.edgePathChecks.Add(n) }
+
+// RangeConsumed counts one range record read by a reader cursor (Rust
+// range_consumed; written records are counted separately by
+// RangeEmitted).
+func RangeConsumed(n uint64) { current.rangesConsumed.Add(n) }
 
 // RangeEmitted counts one range record written during a range edit.
 func RangeEmitted(n uint64) { current.rangesEmitted.Add(n) }

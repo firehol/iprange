@@ -975,6 +975,7 @@ type pageFlow struct {
 	path       string
 	summaries  map[string]*funcSummary // current package
 	store      *summaryStore
+	mappingT   *types.Named // resolved mapping owner, cached
 	values     map[ast.Expr]pageValue
 	callFields map[*ast.CallExpr]map[string]pageValue // struct-result fields of the last evaluated calls
 	// callFieldsFailClosed records calls whose callFields are worst-case
@@ -8231,6 +8232,60 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 				pf.callFields[call] = fields
 			}
 			if resultHoldsPage(pf.pc.info.Types[call].Type) {
+				// An unproven callee (interface method, type-parameter
+				// receiver, func field) can hand back a view of its
+				// inputs, so the result inherits the receiver's and
+				// arguments' provenance: mapped when any of them
+				// aliases the mapping, otherwise the first tainted
+				// source (so the call-site binding keeps the caller's
+				// page source). This closes the generic-erasure gap: a
+				// generic helper in a non-holder calling m.Page(0) on
+				// a type-parameter receiver bound to a minted page
+				// summarizes its result with the caller's mapped
+				// provenance, and the view-holder export rule fails
+				// closed on the leak.
+				mapped := false
+				var src pageValue
+				take := func(pv pageValue) {
+					if pv.mapped {
+						mapped = true
+					}
+					if !src.tainted && !src.hasSrc && (pv.tainted || pv.hasSrc) {
+						src = pv
+					}
+				}
+				if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+					if _, isSel := pf.pc.info.Selections[sel]; isSel {
+						rv := pf.evalExpr(st, sel.X)
+						take(rv)
+						// Erased receiver admitted by the mapping owner:
+						// the value behind the interface can be the
+						// mapping itself even when this body's parameter
+						// summary is untainted. Fail closed on mapped so
+						// the result carries mapping provenance into the
+						// summary and the view-holder export rule fires;
+						// interfaces the mapping cannot implement
+						// (Codec.ReadKey, external Stringer/error) keep
+						// tainted-only results and bounded record copies
+						// stay legal.
+						if !mapped && pf.couldBeMappingOwner(sel.X) {
+							mapped = true
+						}
+					}
+				}
+				for _, a := range call.Args {
+					take(pf.evalExpr(st, a))
+				}
+				if src.tainted || src.hasSrc {
+					out := pageValue{tainted: true, maxLen: maxUnknown, srcParam: src.srcParam, srcField: src.srcField, hasSrc: true}
+					if mapped {
+						out.mapped = true
+					}
+					return out
+				}
+				if mapped {
+					return pageValue{tainted: true, mapped: true, maxLen: maxUnknown}
+				}
 				return pageValue{tainted: true, maxLen: maxUnknown}
 			}
 		}
@@ -8370,6 +8425,16 @@ func (pf *pageFlow) evalCall(st *stmtState, call *ast.CallExpr) pageValue {
 				pf.promoteFullPageFields(st, recvExpr)
 			}
 			if resultHoldsPage(pf.pc.info.Types[call].Type) {
+				// Carry the mapped provenance when the erased receiver
+				// could be the mapping owner itself (pager5.Page has
+				// the mint signature, so *mapping.Mapping implements
+				// it): the launder-helper shape PeekC(m pager5) then
+				// summarizes mapped and the view-holder export rule
+				// fails closed. Interfaces the mapping cannot
+				// implement keep tainted-only results.
+				if pf.couldBeMappingOwner(recvExpr) {
+					return pageValue{tainted: true, maxLen: maxUnknown, mapped: true}
+				}
 				return pageValue{tainted: true, maxLen: maxUnknown}
 			}
 			// A struct result whose byte-bearing fields the
@@ -10298,6 +10363,54 @@ func resultHoldsPageSeen(t types.Type, seen map[types.Type]bool) bool {
 	return false
 }
 
+// couldBeMappingOwner reports whether a receiver expression's static
+// type admits the mapping owner as an implementation: only then can an
+// unproven call's erased value BE the mapping and hand back a mapped
+// view without any argument carrying it. pager5.Page(uint32)([]byte,
+// error) qualifies (the mint signature of *mapping.Mapping); tree.Codec
+// and every external interface (error, io.Reader, fmt.Stringer) do not,
+// so their results stay tainted-only and bounded record copies remain
+// legal. Handing a mapped value to any other interface is policed
+// separately by the type-erasure launder rule at the argument site.
+func (pf *pageFlow) couldBeMappingOwner(recvExpr ast.Expr) bool {
+	if recvExpr == nil {
+		return false
+	}
+	var iface *types.Interface
+	switch u := types.Unalias(pf.pc.info.TypeOf(recvExpr)).(type) {
+	case *types.Named:
+		i, ok := u.Underlying().(*types.Interface)
+		if !ok {
+			return false
+		}
+		iface = i
+	case *types.Interface:
+		iface = u
+	default:
+		return false
+	}
+	mapping := pf.mappingOwnerType()
+	return mapping != nil && types.Implements(types.NewPointer(mapping), iface)
+}
+
+// mappingOwnerType resolves the module's *mapping.Mapping owner type,
+// cached per page flow.
+func (pf *pageFlow) mappingOwnerType() *types.Named {
+	if pf.mappingT != nil {
+		return pf.mappingT
+	}
+	pkg, err := pf.pc.loader.Import(mappingImportPath)
+	if err != nil {
+		return nil
+	}
+	tn, ok := pkg.Scope().Lookup("Mapping").(*types.TypeName)
+	if !ok {
+		return nil
+	}
+	pf.mappingT, _ = tn.Type().(*types.Named)
+	return pf.mappingT
+}
+
 // indirectCallee reports whether a call's function position is a callee
 // the scan cannot resolve to a scanned body: an unproven function-typed
 // variable, a struct function field, an interface method (only reachable
@@ -10878,91 +10991,127 @@ func isStructPtrTyped(t types.Type) bool {
 }
 
 func paramLeafPaths(t types.Type) map[string]types.Type {
-	return paramLeafPathsSeen(t, map[types.Type]bool{})
+	return paramLeafPathsSeen(t, map[*types.Struct]*leafPathsMemo{})
 }
 
-// paramLeafPathsSeen is the recursive core of paramLeafPaths with one seen
-// set shared across nested element calls. A struct reached through its own
-// container element ([]self with type self struct { inner *self }) must stop
-// at the revisiting type: the direct-field guard only protects one call's
-// path, while a fresh per-call set would let the pointer-unwrapping element
-// walk recurse forever.
-func paramLeafPathsSeen(t types.Type, seen map[types.Type]bool) map[string]types.Type {
-	out := map[string]types.Type{}
-	var walk func(t types.Type, prefix string)
-	walk = func(t types.Type, prefix string) {
-		st, ok := derefStruct(t)
-		if !ok {
-			return
-		}
-		if seen[st] {
-			return // recursion through a self-referencing pointer field
-		}
-		seen[st] = true
-		for i := 0; i < st.NumFields(); i++ {
-			f := st.Field(i)
-			p := f.Name()
-			if prefix != "" {
-				p = prefix + "." + f.Name()
-			}
-			if _, isSt := derefStruct(f.Type()); isSt {
-				walk(f.Type(), p)
-				if f.Anonymous() {
-					// Promoted leaves of an embedded struct also bind
-					// without the type-name segment (o.Data with Data
-					// declared on an embedded inner struct, through any
-					// number of embedding levels): the callee's
-					// paramField sources name the promoted path the
-					// field read resolved, so the fallback must expose
-					// the alias or take(o) loses the caller's taint.
-					walk(f.Type(), prefix)
-				}
-			} else if paramCanCarryPage(f.Type()) {
-				out[p] = f.Type()
-			}
-			// A CONTAINER-typed field keeps its ELEMENT leaves under the
-			// field prefix: h.Items with holder.Items []box exposes
-			// "Items.Data" so h.Items[0].Data, take(h.Items[0]), and
-			// for _, x := range h.Items resolve the same parameter
-			// source as a container parameter's own elements. Every
-			// container depth of the field contributes, element structs
-			// recurse for their own container fields, and a MAP field
-			// also exposes its KEY leaves for key-only ranges. The seen
-			// set is per field so repeated element types on sibling
-			// fields keep their prefixed paths.
-			fieldSeen := map[types.Type]bool{}
-			for et := containerElemType(f.Type()); et != nil && !fieldSeen[et]; et = containerElemType(et) {
-				fieldSeen[et] = true
-				for path, ft := range paramLeafPathsSeen(et, seen) {
-					if !paramCanCarryPage(ft) {
-						continue
-					}
-					out[p+"."+path] = ft
-				}
-			}
-			if mft := mapUnderlying(f.Type()); mft != nil {
-				keySeen := map[types.Type]bool{}
-				for path, ft := range paramLeafPathsSeen(mft.Key(), seen) {
-					if !paramCanCarryPage(ft) {
-						continue
-					}
-					out[p+"."+path] = ft
-				}
-				for et := containerElemType(mft.Key()); et != nil && !keySeen[et]; et = containerElemType(et) {
-					keySeen[et] = true
-					for path, ft := range paramLeafPathsSeen(et, seen) {
-						if !paramCanCarryPage(ft) {
-							continue
-						}
-						out[p+"."+path] = ft
-					}
-				}
-			}
-		}
-		seen[st] = false
+// paramLeafPathsSeen is the recursive core of paramLeafPaths with a
+// per-struct memo shared across nested element calls. Each struct is
+// walked once per top-level call: its relative leaf paths are identical
+// for every caller prefix, so completed entries are reused by every
+// later re-walk (sibling fields, promoted aliases, container elements)
+// and the walk stays polynomial and deterministic. The former
+// backtracking seen set re-walked shared subtrees and could diverge on
+// type shapes whose walk regenerates the same relative leaves under
+// ever-growing prefixes (observed as unbounded paramLeafPathsSeen
+// recursion in the mutation battery; SOW-0026 tracks the typed-analyzer
+// follow-up).
+func paramLeafPathsSeen(t types.Type, memo map[*types.Struct]*leafPathsMemo) map[string]types.Type {
+	st, ok := derefStruct(t)
+	if !ok {
+		return nil // not a struct: no leaves (range over nil is empty)
 	}
-	walk(t, "")
+	if m := memo[st]; m != nil {
+		if m.paths == nil {
+			return nil // recursion through a self-referencing field
+		}
+		return m.paths
+	}
+	if len(memo) >= leafWalkBudget {
+		panic(leafWalkDivergence{steps: len(memo)})
+	}
+	m := &leafPathsMemo{}
+	memo[st] = m
+	out := map[string]types.Type{}
+	// add copies a memoized relative-leaf set into out, prepending the
+	// caller prefix exactly like the former prefix-threaded walk did.
+	add := func(prefix string, rel map[string]types.Type) {
+		for path, ft := range rel {
+			if prefix != "" {
+				out[prefix+"."+path] = ft
+			} else {
+				out[path] = ft
+			}
+		}
+	}
+	for i := 0; i < st.NumFields(); i++ {
+		f := st.Field(i)
+		p := f.Name()
+		if _, isSt := derefStruct(f.Type()); isSt {
+			add(p, paramLeafPathsSeen(f.Type(), memo))
+			// Promoted leaves of an embedded struct also bind without
+			// the type-name segment (o.Data with Data declared on an
+			// embedded inner struct, through any number of embedding
+			// levels): the callee's paramField sources name the promoted
+			// path the field read resolved, so the fallback must expose
+			// the alias or take(o) loses the caller's taint.
+			if f.Anonymous() {
+				add("", paramLeafPathsSeen(f.Type(), memo))
+			}
+		} else if paramCanCarryPage(f.Type()) {
+			out[p] = f.Type()
+		}
+		// A CONTAINER-typed field keeps its ELEMENT leaves under the
+		// field prefix: h.Items with holder.Items []box exposes
+		// "Items.Data" so h.Items[0].Data, take(h.Items[0]), and
+		// for _, x := range h.Items resolve the same parameter
+		// source as a container parameter's own elements. Every
+		// container depth of the field contributes, element structs
+		// recurse for their own container fields, and a MAP field
+		// also exposes its KEY leaves for key-only ranges.
+		fieldSeen := map[types.Type]bool{}
+		for et := containerElemType(f.Type()); et != nil && !fieldSeen[et]; et = containerElemType(et) {
+			fieldSeen[et] = true
+			for path, ft := range paramLeafPathsSeen(et, memo) {
+				if !paramCanCarryPage(ft) {
+					continue
+				}
+				out[p+"."+path] = ft
+			}
+		}
+		if mft := mapUnderlying(f.Type()); mft != nil {
+			for path, ft := range paramLeafPathsSeen(mft.Key(), memo) {
+				if !paramCanCarryPage(ft) {
+					continue
+				}
+				out[p+"."+path] = ft
+			}
+			keySeen := map[types.Type]bool{}
+			for et := containerElemType(mft.Key()); et != nil && !keySeen[et]; et = containerElemType(et) {
+				keySeen[et] = true
+				for path, ft := range paramLeafPathsSeen(et, memo) {
+					if !paramCanCarryPage(ft) {
+						continue
+					}
+					out[p+"."+path] = ft
+				}
+			}
+		}
+	}
+	m.paths = out
 	return out
+}
+
+// leafWalkBudget bounds one top-level paramLeafPaths call. The memo
+// keeps every terminating type graph polynomial (one walk per distinct
+// struct), so the budget only fires when a scanned or dependency type
+// family fabricates a fresh identity on every descent (for example a
+// pointer-parameterized self-reference such as Sub []P[*T]) and would
+// otherwise grow the memo without bound. Exceeding it aborts the scan
+// of the affected OS config fail-closed (no silent partial results).
+const leafWalkBudget = 1 << 20
+
+// leafWalkDivergence is the sentinel panic for a budget-exhausted leaf
+// walk; scanRoot recovers it per OS config and reports the scan as
+// failed.
+type leafWalkDivergence struct{ steps int }
+
+// leafPathsMemo caches the relative page-carrying leaf paths of one
+// struct. A nil paths value marks the struct as in progress on the
+// current walk path: a cycle edge returns nothing, exactly like the
+// former per-walk seen set, while completed entries are reused by every
+// later re-walk instead of regenerating the same relative paths.
+type leafPathsMemo struct {
+	paths map[string]types.Type
 }
 
 // assertLeafType resolves a dotted field path against a TYPE

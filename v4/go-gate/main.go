@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // gatescan scans every production file under the module root for the
@@ -39,16 +40,32 @@ type reporter struct {
 	failed bool
 }
 
+// gateOutMu serializes violation output from the parallel per-config
+// scans so one line never interleaves with another.
+var gateOutMu sync.Mutex
+
 // diagnosticCapture collects violation text for battery cases that must
 // prove a gate diagnostic rather than pass on an unrelated type error.
 var diagnosticCapture []string
 
 func captureDiagnostics(fn func()) []string {
+	// The swap and restore cross the parallel per-config scan phase
+	// (reporter.fail appends under gateOutMu), so the slice header is
+	// only touched under the same mutex; fn itself runs unlocked
+	// because fail re-enters the lock on the scanning goroutines.
+	gateOutMu.Lock()
 	old := diagnosticCapture
-	diagnosticCapture = []string{}
+	diagnosticCapture = nil
+	gateOutMu.Unlock()
+	defer func() {
+		gateOutMu.Lock()
+		diagnosticCapture = old
+		gateOutMu.Unlock()
+	}()
 	fn()
+	gateOutMu.Lock()
 	out := diagnosticCapture
-	diagnosticCapture = old
+	gateOutMu.Unlock()
 	return out
 }
 
@@ -58,8 +75,10 @@ func (r *reporter) fail(pos token.Pos, format string, args ...any) {
 		where = r.fset.Position(pos).String() + ": "
 	}
 	msg := fmt.Sprintf("content-transfer violation (%s): %s%s\n", r.config, where, fmt.Sprintf(format, args...))
+	gateOutMu.Lock()
 	fmt.Print(msg)
 	diagnosticCapture = append(diagnosticCapture, msg)
+	gateOutMu.Unlock()
 	r.failed = true
 }
 
@@ -74,9 +93,22 @@ func main() {
 		return
 	}
 	selfTest := false
+	boundary := false
 	jobs := 1
 	chunkK, chunkN := -1, -1
 	root := "."
+	if len(args) > 0 && args[0] == "--boundary" {
+		// Routine gate check (SOW-0025 decision 2026-08-19): the
+		// boundary corpus only - one representative form per launder
+		// family and holder package. Per-form scans run in parallel
+		// with one worker each; the corpus is a small fraction of the
+		// full durable battery (which is measured in 6-12 min per
+		// single-config scan on the grown tree; see the decision
+		// record). The full battery stays available via --self-test*.
+		selfTest = true
+		boundary = true
+		args = args[1:]
+	}
 	if len(args) > 0 && args[0] == "--self-test" {
 		selfTest = true
 		args = args[1:]
@@ -89,6 +121,16 @@ func main() {
 		}
 		selfTest = true
 		jobs = n
+		args = args[2:]
+	}
+	if len(args) > 0 && args[0] == "--boundary-chunk" && len(args) > 1 {
+		var err error
+		if chunkK, chunkN, err = parseChunk(args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "gatescan: invalid --boundary-chunk %q\n", args[1])
+			os.Exit(2)
+		}
+		selfTest = true
+		boundary = true
 		args = args[2:]
 	}
 	if len(args) > 0 && args[0] == "--self-test-chunk" && len(args) > 1 {
@@ -104,6 +146,24 @@ func main() {
 		root = args[0]
 	}
 	if selfTest {
+		if boundary && chunkK >= 0 {
+			if runBoundaryChunk(root, chunkK, chunkN) {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		}
+		if boundary {
+			if jobs > 1 {
+				if runBoundaryParallel(root, jobs) {
+					os.Exit(0)
+				}
+				os.Exit(1)
+			}
+			if runBoundarySelfTest(root) {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		}
 		if chunkK >= 0 {
 			// Worker mode: run one disjoint chunk of the battery in a
 			// private module copy; the parent aggregates the totals.
@@ -123,7 +183,23 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	if scanRoot(root, osConfigs, false) {
+	configs := osConfigs
+	if env := os.Getenv("GATESCAN_CONFIGS"); env != "" {
+		// Developer iteration knob: limit the scanned OS set (e.g.
+		// "linux" alone) for fast local loops. CI and the battery never
+		// set it, so the authoritative runs keep the full config set.
+		var filtered []osConfig
+		for _, c := range osConfigs {
+			for _, want := range strings.Split(env, ",") {
+				if c.GOOS == strings.TrimSpace(want) {
+					filtered = append(filtered, c)
+					break
+				}
+			}
+		}
+		configs = filtered
+	}
+	if scanRoot(root, configs, false) {
 		os.Exit(0)
 	}
 	os.Exit(1)
@@ -195,11 +271,6 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 	for _, list := range byDir {
 		sort.Strings(list)
 	}
-	type dirInfo struct {
-		dir   string
-		pkg   string
-		files []string
-	}
 	var dirs []dirInfo
 	for dir, list := range byDir {
 		pkg, err := packagePathOf(root, dir)
@@ -215,59 +286,133 @@ func scanRoot(root string, configs []osConfig, battery bool) bool {
 		return dirs[i].dir < dirs[j].dir
 	})
 
+	// Every OS config is independent: the package types, page-taint
+	// summaries, and rule pass are computed per config. The configurations
+	// run concurrently (the module is type-checked once per config, which
+	// dominates the runtime); the FileSet and output are mutex-guarded.
+	type configResult struct {
+		cfg    osConfig
+		failed bool
+	}
+	results := make(chan configResult, len(configs))
 	for _, cfg := range configs {
-		store := newSummaryStore()
-		checks := map[string]*packageCheck{} // pkg path -> check
-		for _, di := range dirs {
-			loader, err := newLoader(root, cfg, fset)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "gatescan: %s: %v\n", cfg, err)
-				failed = true
-				continue
-			}
-			parsed := parseFilesForConfig(di.files, cfg, fset)
-			if len(parsed) == 0 {
-				continue
-			}
-			tc := &typesChecker{loader: loader, fset: fset}
-			pc, err := tc.check(di.pkg, parsed)
-			if err != nil {
-				// A package that fails type-checking fails the gate: the
-				// mutation battery expects every violation to be visible;
-				// the production tree always type-checks.
-				rep := &reporter{path: strings.Join(di.files, ","), config: cfg.String(), fset: fset}
-				rep.fail(token.NoPos, "package %s does not type-check: %v", di.pkg, err)
-				failed = true
-				continue
-			}
-			pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, fieldPromoted: map[ast.Expr]bool{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageSpans: map[boundedSpanKey]int{}, appendAliases: map[types.Object]types.Object{}, appendCallRoots: map[*ast.CallExpr]types.Object{}}
-			sums, pf := summarizePackage(pc, di.pkg, store, parsed, pc.pf)
-			pc.pf = pf
-			pc.pf.summaries = sums
-			checks[di.pkg] = pc
-		}
-		// The store-callback carrier slots are a module-wide property
-		// (which function parameters receive the store callback formal
-		// from a store implementation, directly or through forwarding
-		// chains): computed once after every package's summaries
-		// stabilize, read by the rules pass.
-		store.computeStoreCbSlots(checks)
-		for _, di := range dirs {
-			pc := checks[di.pkg]
-			if pc == nil {
-				continue
-			}
-			for _, f := range pc.files {
-				path := filepath.Join(di.dir, f.name)
-				rep := &reporter{path: path, config: cfg.String(), fset: fset}
-				runRules(rep, f.ast, pc, path)
-				if rep.failed {
+		cfg := cfg
+		go func() {
+			failed := false
+			defer func() {
+				// A leaf-path walk divergence (memo budget exhausted
+				// by a type family that fabricates a fresh identity
+				// per descent) aborts only this config's scan and
+				// fails it closed: a hung or partial analysis must
+				// never read as a clean pass.
+				if r := recover(); r != nil {
+					if _, ok := r.(leafWalkDivergence); !ok {
+						panic(r)
+					}
+					gateOutMu.Lock()
+					fmt.Printf("gatescan: paramLeafPaths walk divergence in config %s: analysis aborted, scan fails closed\n", cfg)
+					gateOutMu.Unlock()
 					failed = true
 				}
-			}
+				results <- configResult{cfg: cfg, failed: failed}
+			}()
+			failed = scanConfig(root, cfg, fset, dirs)
+		}()
+	}
+	for range configs {
+		if r := <-results; r.failed {
+			failed = true
 		}
 	}
 	return !failed
+}
+
+// dirInfo is one package directory of the scanned module: its files and
+// its import path under the module prefix.
+type dirInfo struct {
+	dir   string
+	pkg   string
+	files []string
+}
+
+// scanConfig runs the full package type-check, summary, and rules pass for
+// one OS configuration.
+func scanConfig(root string, cfg osConfig, fset *token.FileSet, dirs []dirInfo) (failed bool) {
+	store := newSummaryStore()
+	checks := map[string]*packageCheck{} // pkg path -> check
+	// One loader per OS config, reused for every package directory: the
+	// loader caches type-checked imports, so the stdlib closure, x/sys,
+	// and every already-checked module package are type-checked exactly
+	// once per scan instead of once per directory (11x). The mutation
+	// battery depends on this: without it every battery case re-checks
+	// the whole dependency closure per directory. Measured cost of one
+	// scan of the grown tree: ~6-12 min (SOW-0025 decision record
+	// 2026-08-19); the per-config loader and the shared FileSet are
+	// the tracked allocation/GC follow-up, not M3 scope.
+	loader, err := newLoader(root, cfg, fset)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gatescan: %s: %v\n", cfg, err)
+		return true
+	}
+	for _, di := range dirs {
+		parsed := parseFilesForConfig(di.files, cfg, fset)
+		if len(parsed) == 0 {
+			continue
+		}
+		tc := &typesChecker{loader: loader, fset: fset}
+		pc, err := tc.check(di.pkg, parsed)
+		if err != nil {
+			// A package that fails type-checking fails the gate: the
+			// mutation battery expects every violation to be visible;
+			// the production tree always type-checks.
+			rep := &reporter{path: strings.Join(di.files, ","), config: cfg.String(), fset: fset}
+			rep.fail(token.NoPos, "package %s does not type-check: %v", di.pkg, err)
+			failed = true
+			continue
+		}
+		pc.pf = &pageFlow{pc: pc, path: di.pkg, store: store, values: map[ast.Expr]pageValue{}, callFields: map[*ast.CallExpr]map[string]pageValue{}, callResults: map[*ast.CallExpr][]pageValue{}, fieldPromoted: map[ast.Expr]bool{}, callMethodValues: map[*ast.CallExpr]methodValueCall{}, pageSinkCalls: map[*ast.CallExpr][]ast.Expr{}, destAggregated: map[ast.Expr]bool{}, boundedPageSpans: map[boundedSpanKey]int{}, appendAliases: map[types.Object]types.Object{}, appendCallRoots: map[*ast.CallExpr]types.Object{}}
+		sums, pf := summarizePackage(pc, di.pkg, store, parsed, pc.pf)
+		pc.pf = pf
+		pc.pf.summaries = sums
+		checks[di.pkg] = pc
+		// The checked package joins the loader import cache when no
+		// earlier import created it: dependents checked later then
+		// import one object per path instead of re-checking source per
+		// directory. The first (importer-created) object wins: an
+		// explicit check that overwrites it would orphan the types
+		// already bound inside earlier packages and break type
+		// identity across the module.
+		loader.cachePackage(di.pkg, pc.pkg)
+		// View-holder whitelist (SOW-0025 decision 2026-08-19): a
+		// non-holder package may never export mapped page views, not
+		// even as return values. Bounded record values stay legal.
+		repB := &reporter{path: strings.Join(di.files, ","), config: cfg.String(), fset: fset}
+		checkViewHolderExports(repB.fail, di.pkg, sums)
+		if repB.failed {
+			failed = true
+		}
+	}
+	// The store-callback carrier slots are a module-wide property
+	// (which function parameters receive the store callback formal
+	// from a store implementation, directly or through forwarding
+	// chains): computed once after every package's summaries
+	// stabilize, read by the rules pass.
+	store.computeStoreCbSlots(checks)
+	for _, di := range dirs {
+		pc := checks[di.pkg]
+		if pc == nil {
+			continue
+		}
+		for _, f := range pc.files {
+			path := filepath.Join(di.dir, f.name)
+			rep := &reporter{path: path, config: cfg.String(), fset: fset}
+			runRules(rep, f.ast, pc, path)
+			if rep.failed {
+				failed = true
+			}
+		}
+	}
+	return failed
 }
 
 // topoRank orders the module packages by dependency: callees first.

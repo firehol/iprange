@@ -1779,4 +1779,43 @@ func honestProbeM316(x *ImmutableReader, src, dst uint32) error {
 	{name: "P389 benign: string conversion of a sub-page slice inside a concrete store callback passes", desc: "the honest twin of P388: converting only p[:16] stays far below a page, so the gate must accept the spelling (round-8 qwen P2 honest twin)", expectFail: false, ops: []batteryOp{
 		batteryOp{kind: "create", path: "internal/writer/gatemut_qwen389.go", content: "package writer\n\n// gateQwen389 converts a 16-byte slice of the mapped page handed to a\n// concrete *DraftStore Inspect callback; far below a page, this is an\n// ordinary sub-page read.\nfunc gateQwen389(s *DraftStore, pgno uint32) error {\n\treturn s.Inspect(pgno, func(p []byte) error {\n\t\tq := string(p[:16])\n\t\t_ = q\n\t\treturn nil\n\t})\n}\n"},
 	}},
+
+	// View-holder whitelist boundary (SOW-0025 decision 2026-08-19):
+	// a mapped page view minted in a non-holder package must fail even
+	// when it is only returned, never copied; the import graph stops
+	// non-holders from importing the mapping owner in real code, so
+	// these forms prove the gate alone also fails closed. Holder
+	// exports (reader.page) stay benign.
+	{name: "B1: minted page export from internal/tree", desc: "tree mints and returns a full mapped page", expectFail: true, expectRule: "view-holder whitelist", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/tree/gatemut_mint.go", content: "package tree\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\nfunc MintedPage(m *mapping.Mapping) ([]byte, error) {\n\treturn m.Page(0)\n}"},
+	}},
+
+	{name: "B2: minted page export from a new package", desc: "a brand-new package mints and returns a full mapped page", expectFail: true, expectRule: "view-holder whitelist", ops: []batteryOp{
+		batteryOp{kind: "create", path: "gatemut_leak/mut.go", content: "package gatemut_leak\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\nfunc Leak(m *mapping.Mapping) ([]byte, error) { return m.Page(0) }"},
+	}},
+
+	{name: "B3: minted page export from internal/bitmap", desc: "bitmap mints and returns a full mapped page", expectFail: true, expectRule: "view-holder whitelist", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/bitmap/gatemut_mint.go", content: "package bitmap\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\nfunc MintedPage(m *mapping.Mapping) ([]byte, error) {\n\treturn m.Page(0)\n}"},
+	}},
+
+	{name: "B4: holder export of a mapped page stays benign", desc: "reader.page returns a mapped view; holders may export views", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_holderexport.go", content: "package reader\n\nfunc HolderPage(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\treturn r.page(pgno)\n}"},
+	}},
+
+	{name: "B5: interface-method helper laundering a minted page", desc: "a non-holder helper calling m.Page(0) on an interface-typed receiver bound to a minted page: the unproven-callee result inherits the receiver provenance (an interface admitting the mapping owner fails closed on mapped) and the view-holder whitelist rejects the export (round-1 Sartre P2-1 shape; the type-parameter twin is covered by B8 since the memoized leaf walk, 2026-08-20)", expectFail: true, expectRule: "view-holder whitelist", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/tree/gatemut_generic.go", content: "package tree\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\ntype pager5 interface{ Page(uint32) ([]byte, error) }\n\nfunc PeekC(m pager5) ([]byte, error) { return m.Page(0) }\n\nfunc LeakC(m *mapping.Mapping) ([]byte, error) { return PeekC(m) }"},
+	}},
+
+	{name: "B8: type-parameter helper laundering a minted page", desc: "a non-holder generic helper calling m.Page(0) on a type-parameter receiver bound to a minted page: the unprovable-receiver rule rejects the call-site and the export fails closed. The type-parameter form previously drove the paramLeafPathsSeen walk divergence (SOW-0026); the memoized leaf walk (2026-08-20) terminates it", expectFail: true, expectRule: "m.Page on an unprovable receiver", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/tree/gatemut_genparam.go", content: "package tree\n\nimport \"github.com/firehol/iprange/v4/go/internal/mapping\"\n\ntype pagerT interface{ Page(uint32) ([]byte, error) }\n\nfunc PeekT[T interface{ Page(uint32) ([]byte, error) }](m T) ([]byte, error) {\n\treturn m.Page(0)\n}\n\nfunc LeakT(m *mapping.Mapping) ([]byte, error) { return PeekT(m) }"},
+	}},
+
+	{name: "B6: public facade exporting a mapped page view", desc: "an exported module-root function returning a reader page view hands the mapping to application code; the root-boundary check must fail it (round-1 Sartre P2-2 shape)", expectFail: true, expectRule: "view-holder whitelist", ops: []batteryOp{
+		batteryOp{kind: "create", path: "internal/reader/gatemut_b6helper.go", content: "package reader\n\n// B6HolderPage exposes the mapped page view for the root-boundary probe.\nfunc (r *ImmutableReader) B6HolderPage(pgno uint32) ([]byte, error) {\n\treturn r.page(pgno)\n}"},
+		batteryOp{kind: "create", path: "zz_gatemut_root.go", content: "package iprangedb\n\n// RootPageBytes hands a mapped reader page view to application code.\nfunc RootPageBytes(r *ImmutableReader, pgno uint32) ([]byte, error) {\n\treturn r.inner.B6HolderPage(pgno)\n}"},
+	}},
+
+	{name: "B7: public facade bounded export stays benign", desc: "an exported module-root function returning owned copied data stays legal under the root-boundary check (round-1 Sartre P2-2 honest twin)", expectFail: false, ops: []batteryOp{
+		batteryOp{kind: "create", path: "zz_gatemut_root_benign.go", content: "package iprangedb\n\n// RootFeedName returns a copied name string, never a mapped view.\nfunc RootFeedName(r *ImmutableReader) string {\n\tentry, found, err := r.LookupFeed(\"feed-000\")\n\tif err != nil || !found {\n\t\treturn \"\"\n\t}\n\treturn entry.Name\n}"},
+	}},
 }

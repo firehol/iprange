@@ -86,6 +86,25 @@ func TestZeroAllocationLookups(t *testing.T) {
 	// One feed-name buffer reused across the measured loop.
 	feedBuf := make([]byte, 16)
 
+	// Cursor and query handles are opened once outside the measured loop:
+	// seek+next steps are self-restoring per iteration, so every measured
+	// iteration repeats the real work. Feed-range projections scan to
+	// exhaustion and are pinned separately as an open-vs-open+scan delta
+	// below; name-yielding surfaces (NextFeed, MatchingFeeds yields) copy
+	// names to owned strings by design at the root boundary and are not
+	// zero-alloc.
+	directCur, err := direct.DirectCursorV4(RangeDirectionForward)
+	if err != nil {
+		t.Fatal("direct cursor:", err)
+	}
+	v6Cur, err := v6.DirectCursorV6(RangeDirectionForward)
+	if err != nil {
+		t.Fatal("v6 cursor:", err)
+	}
+	memberQuery, err := member.MembershipQuery()
+	if err != nil {
+		t.Fatal("membership query:", err)
+	}
 	checks := []struct {
 		name string
 		fn   func() error
@@ -194,6 +213,36 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 			return nil
 		}},
+		{"direct-cursor-v4", func() error {
+			for _, ip := range probe {
+				if err := directCur.Seek(ip); err != nil {
+					return err
+				}
+				if _, _, err := directCur.NextRange(); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"direct-cursor-v6", func() error {
+			for _, ip := range probe64 {
+				if err := v6Cur.Seek(IPv6{Hi: ip.hi, Lo: ip.lo}); err != nil {
+					return err
+				}
+				if _, _, err := v6Cur.NextRange(); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"matching-feeds-v4-nil", func() error {
+			for _, ip := range probe {
+				if _, err := memberQuery.MatchingFeedsV4(ip, nil, nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
 	}
 	for _, check := range checks {
 		check := check
@@ -208,4 +257,62 @@ func TestZeroAllocationLookups(t *testing.T) {
 			}
 		})
 	}
+
+	// Feed-range projections are single-scan cursors: a handle shared
+	// across measured runs would pin only the finished path (the
+	// AllocsPerRun warm-up consumes the only full scan). The honest pin
+	// is the delta between opening a fresh projection and opening and
+	// scanning it to exhaustion: the open cost is identical in both
+	// runs, so any per-scan or per-interval allocation surfaces as a
+	// nonzero delta.
+	t.Run("feedrange-cursor-v4-delta", func(t *testing.T) {
+		openAllocs := testing.AllocsPerRun(200, func() {
+			cur, err := member.FeedRangeCursorV4("feed-000", RangeDirectionForward)
+			if err != nil {
+				t.Fatal("open:", err)
+			}
+			_ = cur
+		})
+		scanAllocs := testing.AllocsPerRun(200, func() {
+			cur, err := member.FeedRangeCursorV4("feed-000", RangeDirectionForward)
+			if err != nil {
+				t.Fatal("open:", err)
+			}
+			for {
+				if _, ok, err := cur.NextRange(); err != nil {
+					t.Fatal(err)
+				} else if !ok {
+					break
+				}
+			}
+		})
+		if delta := scanAllocs - openAllocs; delta != 0 {
+			t.Errorf("v4 feed-range scan allocated %f allocations per scan (open %.3f, open+scan %.3f); contract: exactly zero", delta, openAllocs, scanAllocs)
+		}
+	})
+	t.Run("feedrange-cursor-v6-delta", func(t *testing.T) {
+		openAllocs := testing.AllocsPerRun(200, func() {
+			cur, err := member6.FeedRangeCursorV6("global", RangeDirectionForward)
+			if err != nil {
+				t.Fatal("open:", err)
+			}
+			_ = cur
+		})
+		scanAllocs := testing.AllocsPerRun(200, func() {
+			cur, err := member6.FeedRangeCursorV6("global", RangeDirectionForward)
+			if err != nil {
+				t.Fatal("open:", err)
+			}
+			for {
+				if _, ok, err := cur.NextRange(); err != nil {
+					t.Fatal(err)
+				} else if !ok {
+					break
+				}
+			}
+		})
+		if delta := scanAllocs - openAllocs; delta != 0 {
+			t.Errorf("v6 feed-range scan allocated %f allocations per scan (open %.3f, open+scan %.3f); contract: exactly zero", delta, openAllocs, scanAllocs)
+		}
+	})
 }
