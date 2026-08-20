@@ -2679,7 +2679,314 @@ level-2 review round (kimi/minimax/mimo/qwen).
   go test -tags v4work ./..., go vet ./..., go test -race ./... all
   pass; import-graph gate passes rc=0 (see the gate line below).
 
-### Gate execution record (2026-08-12)
+## Milestone 3 chunk 3 - algebra set operations and output (design record, 2026-08-20)
+
+Scope (from the M3 plan record): FeedSelection, AlgebraSetOperation
+(Union/Intersection/Exclusion), AlgebraOutputMode (PreserveFeeds/Flat),
+AlgebraCountReport, AlgebraComparisonReport, AlgebraSetReport,
+AlgebraSetResult, MembershipAlgebraBudget/AlgebraOutputBudget,
+AlgebraSetOutcome/PreparationFailure, the materialized-result output
+machinery shared with snapshot publication, and snapshot_to Immutable
+(SnapshotBudget/SourceMode/PublicationPolicy/PreparationFailure). Live
+snapshot mode stays in chunk 4.
+
+The Rust authority: v4/rust/iprange-livedb/src/membership_query/algebra/
+(selection.rs, analysis.rs, scan.rs, output.rs), membership_query/
+algebra.rs, immutable_output.rs (ranges.rs, membership.rs, setup.rs),
+membership_dictionary.rs, feed_catalog.rs, range_bulk.rs,
+snapshot/{api.rs,build.rs,source.rs,terminal.rs} and
+publication/workflow.rs. Four level-1 exploration passes (Peirce,
+Sartre, Jason, Linnaeus, 2026-08-20) produced the capability inventory
+and the exact semantics/error-string references this record summarizes.
+
+Design decisions (2026-08-20, long-term-best):
+
+1. Two implementation sub-rounds inside the chunk, each with its own
+   gate evidence (one chunk, one close): 3a the read-side algebra
+   (MembershipAlgebra construction, Selection, count, compare, the N-way
+   event scan, work counters, semantic + v4work tests - all over the
+   existing Rust fixtures, no writer dependency); 3b the output side
+   (the Go one-shot immutable output builder with catalog name/index
+   trees, membership dictionary with SHA-256 dedup and refcounts, used
+   bitmap, range bulk builder, metadata chain, dual-meta finish; the
+   publication attempt staging (identity, fail-if-exists vs
+   ReplaceExisting/NoRollback policies); publish_set and snapshot_to
+   Immutable; reopen-and-verify round-trip tests). 3b has no precedent
+   fixture path in Go (membership-valued files cannot be produced yet),
+   so 3b tests build, reopen, and re-scan their own outputs and
+   cross-check semantic results against the Rust authority on the same
+   inputs.
+2. Public API mirrors the Rust shapes with Go idioms: MembershipAlgebra
+   constructed from []*MembershipScope + MembershipAlgebraBudget
+   (max_heap_bytes, max_sources); unexported-tag value types
+   FeedSelection (All/Named constructors), AlgebraSetOperation
+   (Union/Intersection/Exclusion), AlgebraOutputMode
+   (PreserveFeeds/Flat); Count/Compare return the exact reports;
+   PublishSet(destination, valueTag, operation, mode, metadataJSON,
+   publicationPolicy, budget, cancellation) returns
+   (AlgebraSetResult, error) with the PreparationFailure-typed error
+   surface; SnapshotTo(sourcePath, mode, destinationPath, policy,
+   budget, cancellation) mirrors snapshot/api.rs. Errors keep the
+   Rust detail strings verbatim (the exploration record below lists
+   them) and map to the Go published error classes.
+3. The read-side scan is the Rust N-way event sweep, NOT the chunk-2
+   two-source joins: per-source SelectedRanges (the chunk-2 Go mirror)
+   feed Start/End events into one ordered queue (small linear for
+   <= 4 sources, heap for larger), a GlobalState counts/present/slots
+   triple with the exact Rust corrupt classes ("global feed source
+   count underflow", "global feed presence slot is absent", "global
+   feed presence slot disagrees"), emit_before/emit_terminal/
+   finish_sources with the "membership algebra ... disagrees"/"range
+   count disagrees"/"event queue ended early" checks, and the same
+   4096-unit checkpoint cadence. Work counters: input_source_pass
+   (== source count) and join_advance per event, matching Rust.
+4. The output builder is a new internal/reader-adjacent owner: the
+   one-shot append-only builder lives in internal/writer (it owns page
+   allocation, checksums, meta publication; the reader stays read-only)
+   following the immutable_output.rs state machine (require_active
+   latch, reserve_page at the single authority, retire/discard
+   refusals, page bounds and ownership checks after every update,
+   seal-then-resize-then-dual-meta-then-flush-sync finish order).
+   Catalog name/index codecs, membership id/hash codecs, and the used
+   bitmap codec are implemented once over the existing tree core
+   (tree.Codec), mirroring feed_catalog.rs and membership_dictionary.rs
+   exactly (SHA-256 over little-endian words, hash-tree dedup,
+   refcount deltas with the batch rule). The Go writer substrate
+   (create, draft store, range edit, metadata chain, publication
+   basics) is present and tested from milestone 2; the new code
+   composes it, never reimplements it.
+5. Publication staging: a minimal attempt layer in internal/writer
+   matching publication/workflow.rs create/publish for the policies in
+   scope (FailIfExists, ReplaceExisting, ReplaceExistingNoRollback):
+   per-attempt private file, attempt identity (digest + dir identity),
+   fail-if-exists rename and rollback-safe/plain replacement, discard
+   cleanup with the ResiduePossible semantics carried by
+   PreparationFailure. The dynamic mmap-only evidence (no
+   read/write/seek on the database descriptor) and zero-alloc pins
+   apply to the builder as they do to the reader; the builder itself
+   deliberately performs file I/O only through the mapping
+   (resize/ftruncate/msync/fsync), matching the v4 contract.
+6. Cancellation lives at the caller layers exactly like Rust: every
+   scan/selection/copy loop checks every 4096 work units; the builder
+   has no token and fails closed on any prior error (WrongState
+   "immutable output construction failed").
+7. Validation: 3a semantic tests derive expected union/intersection/
+   exclusion counts and comparisons from the language-neutral
+   conformance manifest (cases.json coverage model, the same tables the
+   chunk-2 tests use) across the committed Rust fixtures (multi-source
+   combinations incl. duplicate global names and disjoint families);
+   error/budget/cancellation pins cover every Rust string; v4work pins
+   input_source_pass and join_advance. 3b round-trip tests build from
+   algebra publish_set (PreserveFeeds and Flat) and snapshot_to
+   Immutable from the Rust fixtures, reopen the outputs, and verify
+   catalog, ranges, membership semantics, identity (fresh vs preserved
+   per mode), metadata, and CRC/seal validity; budget refusal and
+   policy behavior per Rust message; cross-language parity by scanning
+   the same operation through the Rust authority outputs on the shared
+   corpus.
+
+Gate evidence at chunk close (both sub-rounds): go test ./... (both
+tag sets), vet, race, import-graph gate rc=0, zero-alloc and v4work
+pins for the new surfaces, level-2 review round (kimi/minimax/mimo/
+qwen), records.
+
+### 2026-08-20 - M3 chunk-3 level-1 exploration record
+
+Four parallel read-only passes over the Rust authority and the Go
+surface (level-1 agents, working tree 4389451) established the exact
+port contract:
+
+- Jason - algebra analysis/scan/selection: count/compare are one
+  ordered pass per selection; the N-way event sweep (Start/End events,
+  small linear for <= 4 sources else heap) consumes one
+  SelectedRanges per source with expected-ranges agreement; GlobalState
+  add/remove carry the exact Corrupt classes; checkpoint cadence 4096
+  everywhere; work counters input_source_pass(source_count) and
+  join_advance(1) per event; aggregation counters are NOT used on this
+  path. Error strings verbatim: "membership algebra feed selection is
+  empty"/"is not unique", "membership algebra has no sources",
+  "membership algebra sources", "membership algebra source families
+  differ", "membership algebra source heap"/"catalog heap"/"scan
+  heap"/"event heap"/"selection heap", "membership algebra feeds",
+  "membership algebra heap", "global feed source count" (overflow) /
+  "global feed source count underflow", "global feed presence slot is
+  absent"/"disagrees", "membership algebra boundary", "membership
+  algebra segments", "membership algebra event source is invalid",
+  "membership algebra event has no range", "membership algebra start
+  event disagrees", "membership algebra end event disagrees",
+  "membership algebra range count disagrees", "membership algebra has
+  no terminal range", "membership algebra event queue ended early",
+  "active membership algebra source has no range", "membership algebra
+  source remained active", "membership algebra source range count",
+  "global feed name disappeared", "membership algebra source
+  disappeared"/"input disappeared", "membership algebra addresses".
+- Linnaeus - output machinery and snapshot: output.rs publish order
+  (validate budget, Prepared::new, workflow::create, build,
+  workflow::publish, failure mapping), the immutable_output::Builder
+  state machine (append-only pages, reserve_page single authority,
+  feed catalog name+index trees, used bitmap Kind::Feed, membership
+  dictionary SHA-256 dedup + refcount batches, range_bulk 6-level
+  builder, metadata chain, finish = seal -> resize -> dual meta ->
+  flush_range -> sync), the 13-item writer capability checklist, and
+  the snapshot_to Immutable flow (identity PRESERVED from the source
+  vs fresh identity for algebra output - a behavioral delta the Go
+  port must mirror), reject_live_self, identity-mismatch refusal,
+  per-iteration copy checkpoints, and the terminal failure shapes.
+  Error strings verbatim: "membership algebra output pages"/"output
+  files", "membership algebra output feeds", "membership algebra
+  intersection is empty", "membership algebra output feed
+  disappeared", "membership algebra selected empty output
+  membership", "membership algebra output addresses"/"output range
+  count", "membership algebra output heap", "membership algebra word
+  range"/"bit range", "membership word count exceeds the feed-index
+  limit", "membership bitmap is not canonical", "membership
+  references an inactive feed", "snapshot output pages"/"snapshot
+  open files", "snapshot metadata input heap", "metadata length
+  changed while copying", "membership length changed while copying",
+  "a live snapshot cannot replace its own source path", "source and
+  snapshot output identities match", "immutable output file is not
+  empty", "immutable output identity is invalid", "immutable output
+  value and structure kinds do not match", "immutable output pages",
+  "immutable output feed-index limit is invalid", "immutable output
+  capacity"/"immutable construction extent"/"immutable construction
+  extent is invalid", "immutable output construction failed",
+  "immutable output attempted to retire an existing page"/"to
+  discard an append-only page", "immutable output page is outside
+  bounds", "immutable output page ownership is invalid", "feed index
+  exceeds the preserved limit", "feed catalog exceeds its index
+  limit", "immutable feed output requires a membership-capable value
+  kind", "immutable output metadata is already set", "metadata
+  exceeds 20 MiB", "metadata compression heap", "immutable output
+  pages", "ordered output ranges are not canonical", "range start is
+  after its end", "indirect range value is zero", "immutable range
+  page is outside bounds", "empty membership reference batch stayed
+  full", "rollback-safe replacement requires atomic name exchange",
+  "snapshot publication is not implemented on this platform",
+  "operating-system randomness returned an all-zero identity".
+- Peirce - Go writer capability inventory: create/draft/range-edit/
+  metadata/commit/reclaim complete and tested (direct databases);
+  missing for chunk 3: catalog name/index write codecs, membership
+  id/hash/used write codecs, the one-shot immutable output builder,
+  the publication attempt staging, publish_set, snapshot_to. The Go
+  tree core (tree.Codec + tree.Insert) is the substrate the missing
+  codecs plug into; budget/error classes already align numerically
+  with Rust.
+- Sartre - Go reader composition map: the chunk-2 primitives
+  (selectedRanges, scratch, operationHeap, membershipIterator,
+  rangeOps, MembershipView word reads), ScopeData accessors, the
+  JoinMembership multi-owner validation template, and the root-package
+  facade pattern the algebra API will follow (membership_algebra_
+  public.go), with the exact Rust public signatures to mirror.
+
+
+### 2026-08-20 - M3 chunk-3a implementation record: read-side algebra
+
+- Implemented the chunk-3a surface under the Rust authority
+  (v4/rust/iprange-livedb/src/membership_query/algebra.rs and
+  algebra/{selection,analysis,scan}.rs):
+  - internal/reader/algebra.go: MembershipAlgebra construction with the
+    exact Rust ordering and labels (require_source_count, source-heap
+    admission charge, inspect_sources family agreement with the 4096
+    checkpoint cadence, collect_names sort/dedup under the catalog
+    charge, build_inputs local-to-global maps under the input-state
+    charges); FeedSelection All/Named constructors;
+    resolveAlgebraSelection (empty/unique/NameNotFound rules, sorted
+    positions, presence flags, selection-heap labels);
+    AlgebraCountReport/AlgebraComparisonReport; the one ordered N-way
+    event sweep (algebra/scan.rs parity: per-source SelectedRanges over
+    the chunk-2 membership cursors, Start/End event queue with the
+    linear <= 4 / heap ordering and the End-before-Start tie-break,
+    GlobalState counts/slots/present with swap-remove slot repair,
+    emit_before with the "membership algebra boundary" overflow label,
+    apply_boundary same-at grouping, emit_terminal with the "event
+    queue ended early" check, finish_sources with the range-count
+    agreement); the modeled-heap charges mirror the Rust size_of labels
+    ("membership algebra source heap"/"catalog heap"/"scan heap"/
+    "event heap"/"selection heap"/"membership algebra feeds"/"heap").
+  - module root membership_algebra_public.go: MembershipAlgebraBudget,
+    FeedSelection with AlgebraFeedSelectionAll/Named constructors,
+    NewMembershipAlgebra (per-scope open check, reader conversion),
+    Count, Compare, FeedCount, Feeds (owned strings with the global
+    catalog position), AddressFamily, and the boundary name validation
+    (Rust FeedName::new parity: invalid spellings fail NameInvalid
+    before resolution).
+- Work counters: input_source_pass(source_count) and join_advance(1)
+  per event, matching Rust work.rs; the aggregation counters are not
+  touched on this path (Rust parity). Pins:
+  - membership_algebra_v4work_test.go: two all-catalog sources over
+    rust/membership-ipv4 - passes 2, join advances 12 (three fixture
+    rows x two sources x Start+End, the rows do not reach the family
+    maximum), decodes 6, decodes+hits == source_range_count (6),
+    segments 3; the named feed-001 selection merges the two adjacent
+    rows into one run per source (4 join advances) while still reading
+    every physical range (6 decodes, 6 source ranges).
+- Semantic tests (membership_algebra_test.go) derive every expected
+  cardinality from the language-neutral conformance manifest
+  (cases.json membership_ranges through the chunk-2 interval model):
+  v4 two-source compounds (All = 512 with Exact segments/ranges,
+  per-feed unions 384/256/256/384/0 and set unions, compare buckets
+  all/all, all/named, named/named including the shared-middle-row
+  overlap of 128 and empty-side cases) and v6 two-source compounds
+  (All = 2^128, global vs special with the exact 65536-only row).
+  Error pins cover every Rust string: no sources, max sources, family
+  disagreement, empty/duplicate selection, NameNotFound, invalid
+  spelling, source-heap exhaustion, scan-heap exhaustion after a
+  tight-but-buildable construction, cancellation, and the closed-reader
+  guard.
+- Zero-alloc evidence: membership_algebra_zeroalloc_test.go pins no
+  heap object >= 4096 bytes across 256 warmed Count/Compare runs
+  (All and Named selections).
+- Known working-theory item (budget calibration): the modeled Rust
+  struct sizes (Source 224, SourceState 1664/1720, Event 16/32,
+  FeedName 256, InputState 32) are provisional estimates and are NOT
+  exercised by any admission-equality test in this sub-round; the
+  budget tests use wide margins (1 << 20 and the 19000-byte
+  tight-but-buildable construction). Calibrating every constant with a
+  Rust size_of probe (tests.rs small/large allocation-equality shape)
+  is tracked to chunk 3b, where the output builder must admit
+  identically to Rust.
+- Gate note: the import-graph gate passes rc=0 on the reviewed tree
+  (full record below). Battery at nice: go test ./...,
+  go test -tags v4work ./..., go vet ./..., go test -race ./... all
+  pass.
+- Gate fix round (2026-08-20, same sub-round): the first chunk-3a
+  implementation failed the content-transfer gate on five shape
+  families. The code was restructured to pass the ownership gate
+  honestly (no gate exemptions were added):
+  1. the algebraSegmentSink interface dispatch was replaced by a single
+     concrete algebraSink struct (Go has no traits; nil right selects
+     the count mode, a set right the comparison mode) so every segment
+     call is a provably scanned concrete receiver;
+  2. the internal FeedSelection.names changed [][]byte -> []string
+     (Rust &str parity) and resolveAlgebraSelection resolves each name
+     through sort.Search over the struct-carrier catalog, removing the
+     byte-container formal loop that the gate treats as a full-page
+     source;
+  3. the catalog sort/dedup moved into dedupAlgebraNames(names
+     []FeedEntry) - a struct-element container parameter, which the
+     gate keeps bounded - so the gathered local never appends
+     page-tainted elements into an owned slice;
+  4. the public Feeds() facade reads the catalog through the one-hop
+     pointer accessor State().Names() and converts string(entry.Name)
+     field-by-field, exactly the gate-accepted MembershipScope.Feeds
+     shape (the previous two-hop method result was unprovable).
+  Evidence: the full ./check-import-graph.sh (five OS configs) passes
+  rc=0 with "import-graph check passed", and a final
+  GATESCAN_CONFIGS=linux gatescan-fix . on the exact committed tree
+  returns rc=0 with zero violations (clean runs print no violation
+  lines, exactly like the earlier clean linux-only runs).
+- Dead-code clean-up (same sub-round): the Rust-parity
+  algebraSelection.allPresent helper had no caller in this sub-round
+  (the output round needs it in chunk 3b); per the no-dead-code rule it
+  was removed and will return with its callers in 3b.
+- Level-2 verdicts on the first tree version (before the gate fix
+  round): kimi FAIL (the gate violations above, now fixed), minimax
+  PASS (P2-1 gate false positives, now restructured away without
+  exemptions; P2-2 gate-claim record, corrected above), mimo PASS (P3
+  dead code, removed). kimi's delta re-review of the fixed tree was
+  requested and is pending model availability; qwen and glm did not
+  respond to the delta (known-flaky models).
+
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
   (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; only P3 cosmetics,
