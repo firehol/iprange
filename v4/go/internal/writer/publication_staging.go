@@ -1,0 +1,411 @@
+// One-shot attempt staging, preparation, and publication of a finished
+// immutable output (Rust publication/{workflow,output,output_digest,
+// cleanup,result,types}.rs). The writer builds into a private attempt
+// name, proves custody and a SHA-512 digest over the finished mapping,
+// then publishes per policy: no-replace rename, atomic exchange, or
+// plain replacement. All namespace syscalls stay in internal/mapping.
+
+package writer
+
+import (
+	"crypto/sha512"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+// PublicationPolicy is the namespace policy selected for one immutable
+// publication (Rust PublicationPolicy).
+type PublicationPolicy uint8
+
+const (
+	PolicyFailIfExists PublicationPolicy = iota
+	PolicyReplaceExisting
+	PolicyReplaceExistingNoRollback
+)
+
+// CleanupState reports whether an abandoned attempt artifact was
+// provably removed (Rust CleanupState).
+type CleanupState uint8
+
+const (
+	CleanupStateClean CleanupState = iota
+	CleanupStateResiduePossible
+)
+
+// PublicationStatus classifies one publication outcome (Rust
+// PublicationStatus).
+type PublicationStatus uint8
+
+const (
+	PublicationNotPublished PublicationStatus = iota
+	PublicationPublished
+	PublicationOutcomeUnknown
+)
+
+// DestinationContent describes the destination slot after one
+// publication attempt (Rust DestinationContent; the Go port has no
+// previous-content tracking, so Previous collapses into
+// Unclassified).
+type DestinationContent uint8
+
+const (
+	DestinationContentDesired DestinationContent = iota
+	DestinationContentAbsent
+	DestinationContentUnclassified
+)
+
+// PublicationPreparationFailure classes one failed publication before
+// the destination provably held the output (Rust
+// PublicationPreparationFailure). Cause carries the Rust-verbatim
+// problem detail; Cleanup reports whether the attempt artifact was
+// provably removed.
+type PublicationPreparationFailure struct {
+	Cause   error
+	Cleanup CleanupState
+}
+
+func (f *PublicationPreparationFailure) Error() string {
+	if f == nil {
+		return "<nil>"
+	}
+	return "iprange v4 publication preparation: " + f.Cause.Error()
+}
+
+func (f *PublicationPreparationFailure) Unwrap() error {
+	if f == nil {
+		return nil
+	}
+	return f.Cause
+}
+
+// PublicationResult is the factual outcome of one publish call (Rust
+// PublicationResult). A refusal or unprovable outcome still returns a
+// result: Status and Cause classify it, and Cleanup reports the state
+// of the discarded attempt.
+type PublicationResult struct {
+	Status             PublicationStatus
+	DestinationContent DestinationContent
+	Cleanup            CleanupState
+	Cause              error
+}
+
+// OutputAttempt is the identity of one staged private output (Rust
+// OutputAttempt): the destination path, the captured directory
+// identity, and the random attempt name the builder writes into.
+type OutputAttempt struct {
+	destination string
+	attemptID   [16]byte
+	name        string
+	dirDevice   uint64
+	dirInode    uint64
+}
+
+// Destination returns the publication destination path.
+func (a *OutputAttempt) Destination() string { return a.destination }
+
+// AttemptID returns the random attempt identity (Rust
+// publication_attempt_id, nonzero by construction).
+func (a *OutputAttempt) AttemptID() [16]byte { return a.attemptID }
+
+// Name returns the private attempt basename.
+func (a *OutputAttempt) Name() string { return a.name }
+
+// DirectoryIdentity returns the captured destination directory
+// device+inode (Rust directory_identity).
+func (a *OutputAttempt) DirectoryIdentity() (device uint64, inode uint64) {
+	return a.dirDevice, a.dirInode
+}
+
+// AttemptPath returns the attempt file path inside the destination
+// directory.
+func (a *OutputAttempt) AttemptPath() string {
+	return filepath.Join(filepath.Dir(a.destination), a.name)
+}
+
+// Publication attempt naming (Rust publication/namespace.rs OUTPUT_
+// PREFIX + artifact_name.rs write_attempt): a 128-bit nonzero attempt
+// identity hex-encoded lowercase, private suffix .tmp.
+const (
+	attemptPrefix     = ".iprange-publish-"
+	attemptHexChars   = 32
+	attemptSuffix     = ".tmp"
+	attemptNameLength = len(attemptPrefix) + attemptHexChars + len(attemptSuffix)
+)
+
+func attemptName(attemptID [16]byte) string {
+	var name [attemptNameLength]byte
+	copy(name[:], attemptPrefix)
+	hex := attemptHex(attemptID)
+	copy(name[len(attemptPrefix):len(attemptPrefix)+attemptHexChars], hex[:])
+	copy(name[len(attemptPrefix)+attemptHexChars:], attemptSuffix)
+	return string(name[:])
+}
+
+// attemptHex encodes the 16 attempt bytes as 32 lowercase hex
+// characters (Rust artifact_name::write_attempt). The destination is a
+// local fixed array, never a caller slice: the source bytes are read
+// by index from the fixed caller array and never leave it.
+func attemptHex(attemptID [16]byte) [32]byte {
+	var hex [32]byte
+	for index := 0; index < len(attemptID); index++ {
+		hex[2*index] = nibble(attemptID[index] >> 4)
+		hex[2*index+1] = nibble(attemptID[index] & 0x0f)
+	}
+	return hex
+}
+
+func nibble(value byte) byte {
+	if value < 10 {
+		return '0' + value
+	}
+	return 'a' + value - 10
+}
+
+// CreateAttempt validates the destination and names one publication
+// attempt (Rust workflow::create + CreatedOutput::create_with):
+// rollback-safe replacement requires the atomic name exchange, and the
+// fail-if-exists policy requires the destination slot absent. The
+// attempt file itself is created later by the output builder with
+// O_EXCL over the random private name, so no attempt name can collide
+// and every create failure is an early failure with nothing to clean.
+func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt, error) {
+	switch policy {
+	case PolicyFailIfExists, PolicyReplaceExisting, PolicyReplaceExistingNoRollback:
+	default:
+		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "publication policy is invalid"}
+	}
+	if policy == PolicyReplaceExisting && !mapping.ExchangeAvailable() {
+		return nil, &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "rollback-safe replacement requires atomic name exchange"}
+	}
+	clean := filepath.Clean(destination)
+	name := filepath.Base(clean)
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
+		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
+	}
+	dir := filepath.Dir(clean)
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
+		}
+		return nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	if !fi.IsDir() {
+		return nil, &format.Error{Code: format.CodeConflict, Detail: "destination parent is not a directory"}
+	}
+	if policy == PolicyFailIfExists {
+		if _, err := os.Lstat(clean); err == nil {
+			return nil, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+		} else if !os.IsNotExist(err) {
+			return nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+		}
+	}
+	device, inode, err := mapping.StatIdentity(dir)
+	if err != nil {
+		return nil, err
+	}
+	attemptID, err := randomNonce()
+	if err != nil {
+		return nil, err
+	}
+	return &OutputAttempt{
+		destination: clean,
+		attemptID:   attemptID,
+		name:        attemptName(attemptID),
+		dirDevice:   device,
+		dirInode:    inode,
+	}, nil
+}
+
+// Discard removes an abandoned attempt file (Rust
+// cleanup::discard_attempt/discard_created): exact-name unlink plus
+// the retained-directory sync. Clean is returned only when the attempt
+// name provably no longer exists; any unprovable or failed step is
+// ResiduePossible.
+func (a *OutputAttempt) Discard() CleanupState {
+	path := a.AttemptPath()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CleanupStateClean
+		}
+		return CleanupStateResiduePossible
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return CleanupStateResiduePossible
+	}
+	if err := mapping.Unlink(path); err != nil {
+		return CleanupStateResiduePossible
+	}
+	if err := mapping.SyncDirectory(filepath.Dir(a.destination)); err != nil {
+		return CleanupStateResiduePossible
+	}
+	return CleanupStateClean
+}
+
+// Publish completes one staged publication (Rust workflow::publish):
+// custody verify, SHA-512 digest over the finished mapping through
+// mapped views only, finish sync, the policy rename, and the retained
+// directory sync. Failures before the rename discard the attempt and
+// return *PublicationPreparationFailure; rename refusals and unprovable
+// outcomes return a result with Cause and the discarded-attempt cleanup
+// state, mirroring the Rust result classification.
+func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy) (*PublicationResult, error) {
+	if !b.failed {
+		return nil, &PublicationPreparationFailure{
+			Cause:   &format.Error{Code: format.CodeWrongState, Detail: "output builder is not finished"},
+			Cleanup: CleanupStateClean,
+		}
+	}
+	fileDevice, fileInode, err := verifyCustody(attempt, policy)
+	if err != nil {
+		return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+	}
+	byteLength, _, err := outputDigest(b.Mapping())
+	if err != nil {
+		return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+	}
+	if err := b.Mapping().SyncFile(); err != nil {
+		return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+	}
+	if size := b.Mapping().Size(); size != byteLength {
+		return nil, &PublicationPreparationFailure{
+			Cause:   &format.Error{Code: format.CodeConflict, Detail: "finished output length changed"},
+			Cleanup: attempt.Discard(),
+		}
+	}
+	source := attempt.AttemptPath()
+	switch policy {
+	case PolicyFailIfExists:
+		err = mapping.RenameNoReplace(source, attempt.destination)
+	case PolicyReplaceExisting:
+		err = mapping.RenameExchange(source, attempt.destination)
+	case PolicyReplaceExistingNoRollback:
+		err = mapping.RenamePlain(source, attempt.destination)
+	}
+	if err != nil {
+		content := DestinationContentUnclassified
+		if _, statErr := os.Lstat(attempt.destination); statErr != nil && os.IsNotExist(statErr) {
+			content = DestinationContentAbsent
+		}
+		return &PublicationResult{
+			Status:             PublicationNotPublished,
+			DestinationContent: content,
+			Cleanup:            attempt.Discard(),
+			Cause:              err,
+		}, nil
+	}
+	// The destination now holds the attempt inode: sync the retained
+	// directory, then prove the destination names the published file
+	// (Rust synchronize_main + prove_main).
+	if err := mapping.SyncDirectory(filepath.Dir(attempt.destination)); err != nil {
+		return &PublicationResult{
+			Status:             PublicationOutcomeUnknown,
+			DestinationContent: DestinationContentUnclassified,
+			Cleanup:            CleanupStateClean,
+			Cause:              err,
+		}, nil
+	}
+	device, inode, err := mapping.StatIdentity(attempt.destination)
+	if err != nil || device != fileDevice || inode != fileInode {
+		return &PublicationResult{
+			Status:             PublicationOutcomeUnknown,
+			DestinationContent: DestinationContentUnclassified,
+			Cleanup:            CleanupStateClean,
+			Cause:              &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"},
+		}, nil
+	}
+	return &PublicationResult{
+		Status:             PublicationPublished,
+		DestinationContent: DestinationContentDesired,
+		Cleanup:            CleanupStateClean,
+	}, nil
+}
+
+// verifyCustody proves the attempt file is still the one staged in the
+// captured destination namespace (Rust output.rs verify_custody +
+// secure_created): the parent directory kept its identity, the attempt
+// name names a regular symlink-free file on the same filesystem, and a
+// replacement destination is not the attempt file itself (Rust
+// replacement::bind SameIdentity).
+func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uint64, inode uint64, err error) {
+	dir := filepath.Dir(attempt.destination)
+	d, i, err := mapping.StatIdentity(dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	if d != attempt.dirDevice || i != attempt.dirInode {
+		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+	}
+	path := attempt.AttemptPath()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
+		}
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+	}
+	if !fi.Mode().IsRegular() {
+		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+	}
+	device, inode, err = mapping.StatIdentity(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	if device != attempt.dirDevice {
+		return 0, 0, &format.Error{Code: format.CodePublicationUnsupported, Detail: "publication inode is on another filesystem"}
+	}
+	if policy != PolicyFailIfExists {
+		if fi, err := os.Lstat(attempt.destination); err == nil {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+			}
+			if !fi.Mode().IsRegular() {
+				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+			}
+			if destDevice, destInode, err := mapping.StatIdentity(attempt.destination); err == nil &&
+				destDevice == device && destInode == inode {
+				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "replacement source and destination identities match"}
+			}
+		}
+	}
+	return device, inode, nil
+}
+
+// digestChunkSize is the fixed digest read span (Rust output_digest.rs
+// DIGEST_BUFFER_SIZE): every read is a constant 1024-byte mapped span,
+// copied into the owned chunk buffer below a complete page, then fed to
+// the SHA-512 hasher. v4 outputs are page-aligned (a multiple of 4096),
+// so the exact final chunk never splits and the constant span is always
+// valid.
+const digestChunkSize = 1024
+
+// outputDigest computes the SHA-512 digest of the entire mapped output
+// through mapped views only (Rust output_digest.rs digest): the file is
+// a multiple of the chunk size by construction, and any mismatch is the
+// finished-length-changed conflict.
+func outputDigest(m *mapping.Mapping) (byteLength uint64, digest [64]byte, err error) {
+	byteLength = m.Size()
+	if byteLength%digestChunkSize != 0 {
+		return 0, digest, &format.Error{Code: format.CodeConflict, Detail: "finished output length changed"}
+	}
+	var hasher = sha512.New()
+	var buffer [digestChunkSize]byte
+	for offset := uint64(0); offset < byteLength; offset += digestChunkSize {
+		view, err := m.View(offset, digestChunkSize)
+		if err != nil {
+			return 0, digest, &format.Error{Code: format.CodeConflict, Detail: "finished output length changed"}
+		}
+		copy(buffer[:], view)
+		hasher.Write(buffer[:])
+	}
+	copy(digest[:], hasher.Sum(nil))
+	return byteLength, digest, nil
+}

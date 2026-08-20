@@ -8,9 +8,9 @@ import "github.com/firehol/iprange/v4/go/internal/format"
 // the publication namespace primitives refuse with the same contract
 // code. Every consumer fails closed on Windows.
 
-// exchangeAvailable reports whether the target has an atomic name
-// exchange.
-func exchangeAvailable() bool { return false }
+// ExchangeAvailable reports whether the target has an atomic name
+// exchange (Rust require_exchange_available: linux and apple only).
+func ExchangeAvailable() bool { return false }
 
 // RenameNoReplace refuses on Windows.
 func RenameNoReplace(oldpath, newpath string) error {

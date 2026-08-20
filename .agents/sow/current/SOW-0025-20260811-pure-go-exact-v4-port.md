@@ -3309,6 +3309,82 @@ the same four platform files. FreeBSD/NetBSD keep real rename(2)+unlink;
 Windows refuses both with CodeOSUnsupported to keep the writer's
 no-rollback path explicit. Same gate.
 
+### 2026-08-20 - M3 chunk-3b-2 slice 2 implementation record:
+publication staging layer
+
+Second 3b-2 slice (decision C): the staging layer a publish_set /
+snapshot_to compose. Two parts:
+
+- mapping primitives upgraded to the Rust errno classification
+  (namespace_mutation.rs rename_result + problem.rs, verbatim detail):
+  rename_noreplace EEXIST -> NameExists "publication name already
+  exists"; exchange/plain ENOENT -> NameNotFound "publication name is
+  missing"; EINVAL/ENOSYS/EOPNOTSUPP -> DurabilityUnsupported
+  "filesystem lacks required durable namespace operations"; every other
+  errno -> CodeIo with the Rust operation detail ("publish name without
+  replacement", "atomically exchange publication names", "atomically
+  replace and discard publication destination", "unlink exact file",
+  "synchronize retained directory", "publication filesystem operation
+  failed"). SyncDirectory EINVAL re-mapped to DurabilityUnsupported
+  (was CodeOSUnsupported) per problem.rs; exchangeAvailable() exported
+  as ExchangeAvailable().
+- internal/writer/publication_staging.go (411 lines): PublicationPolicy
+  (FailIfExists/ReplaceExisting/ReplaceExistingNoRollback), CleanupState
+  (Clean/ResiduePossible), PublicationStatus, DestinationContent,
+  PublicationPreparationFailure (Cause + Cleanup, Error/Unwrap),
+  PublicationResult, and OutputAttempt with the decision-C attempt
+  identity: destination path, captured directory device+inode, nonzero
+  128-bit attempt id hex-encoded lowercase (artifact_name.rs
+  write_attempt), name .iprange-publish-<32hex>.tmp. CreateAttempt
+  mirrors workflow::create: policy validation, ReplaceExisting requires
+  ExchangeAvailable else DurabilityUnsupported "rollback-safe
+  replacement requires atomic name exchange", invalid destination name
+  "invalid destination name", missing parent "publication name is
+  missing", non-directory parent "destination parent is not a
+  directory", FailIfExists refuses an existing slot "publication name
+  already exists". Discard mirrors cleanup::discard_attempt: exact-name
+  Lstat + Unlink + retained-dir sync; Clean only when the name provably
+  no longer exists, else ResiduePossible. Publish mirrors
+  workflow::publish: unfinished-builder guard, custody verify (dir
+  identity "publication inode identity changed", missing attempt
+  "publication name is missing", symlink "publication name is a
+  symlink", non-regular "publication name is not a regular file",
+  cross-filesystem "publication inode is on another filesystem",
+  replacement same-identity "replacement source and destination
+  identities match", replacement non-regular destination), SHA-512
+  digest over the finished mapping through constant 1024-byte mapped
+  views only (output_digest.rs DIGEST_BUFFER_SIZE, page-aligned files
+  make the constant chunk exact; no read()/copy of full pages), finish
+  sync + length recheck "finished output length changed", the policy
+  rename, retained-dir sync, and the post-rename identity proof.
+  Failure classification mirrors attempt.rs: pre-rename failures return
+  *PublicationPreparationFailure with the discard cleanup state;
+  rename refusals (EEXIST/ENOENT) and unprovable post-rename outcomes
+  return Ok(PublicationResult) with Cause, NotPublished /
+  OutcomeUnknown, and the discard cleanup state. The attempt file is
+  created by the output builder (mapping.Create O_EXCL over the random
+  name), so every create failure is early with nothing to clean; the
+  writer calls no syscalls (all primitives in internal/mapping).
+- Gate: findExemptions digest-branch generalized to cover
+  publication_staging.go with the stdlib sha512 hasher (same
+  binding-keyed exact shape as the sha256 digestWords exemption); the
+  attempt-hex encoder writes only into a local fixed array (the
+  element-wise page-sourcing rule treats byte-array params as
+  potentially page-carrying, so a range-over-param + caller-slice
+  destination shape fails closed - the used shape is the codes.go
+  indexed-local-array pattern).
+- Tests: mapping_publish_test.go pins the errno classification and
+  RenamePlain/Unlink; publication_staging_test.go (538 lines) pins
+  naming/validation, FailIfExists publish + create-time and rename-time
+  refusal (destination untouched), exchange replacement and
+  missing-destination, plain replacement, same-identity refusal,
+  non-regular replacement destination, missing attempt, unfinished
+  builder, discard Clean/ResiduePossible states (read-only directory),
+  residue carried by refused publish, and the Rust-verbatim error
+  surface. Gate: go test ./... both tag sets, vet, race, gofmt,
+  cross-builds (linux/darwin/freebsd/netbsd/windows, darwin v4work),
+  and the full check-import-graph.sh all pass.
+
   copy).
 
 

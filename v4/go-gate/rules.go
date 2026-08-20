@@ -4783,7 +4783,8 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 		return exempts
 	}
 	if strings.HasSuffix(path, "internal/writer/catalog_codec.go") ||
-		strings.HasSuffix(path, "internal/writer/membership_codec.go") {
+		strings.HasSuffix(path, "internal/writer/membership_codec.go") ||
+		strings.HasSuffix(path, "internal/writer/publication_staging.go") {
 		// The codec key writes (nameCodec.WriteKey/WriteBranch, hashCodec.
 		// WriteKey) copy the key's record bytes into the tree core's owned
 		// branch-cell buffer. The bytes are always partial wire cells:
@@ -4871,22 +4872,29 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 			exempts[call.Pos()] = true
 			return true
 		})
-		if !strings.HasSuffix(path, "internal/writer/membership_codec.go") {
+		// digestWords (membership_codec.go) and the staging output digest
+		// (publication_staging.go) hash with the stdlib sha256/sha512
+		// hashers (Rust hash_words / output_digest.rs); stdlib hashes
+		// only ingest through hash.Hash.Write, whose name collides with
+		// the content-transfer Write ban. The exempted calls always feed
+		// owned buffers: digestWords feeds an owned 8-byte
+		// little-endian word encoding copied out of a caller-owned
+		// uint64 word source (OutputWords is a concrete []uint64 - no
+		// mapped page view can reach it), and the staging digest feeds
+		// an owned 1024-byte chunk buffer filled by constant-bound
+		// copies of 1024-byte mapped spans (each below a complete page,
+		// output_digest.rs DIGEST_BUFFER_SIZE). No mapped byte ever
+		// moves into the hasher. Exact shape only, binding-keyed: a
+		// single-argument .Write on the exact local variable
+		// initialized by sha256.New()/sha512.New() in the same file,
+		// with an argument that is neither page-tainted nor
+		// file-bearing. Any other Write receiver or argument keeps
+		// failing closed (battery-pinned).
+		digestFiles := strings.HasSuffix(path, "internal/writer/membership_codec.go") ||
+			strings.HasSuffix(path, "internal/writer/publication_staging.go")
+		if !digestFiles {
 			return exempts
 		}
-		// digestWords hashes the caller-owned membership bitmap with the
-		// stdlib sha256 hasher (Rust hash_words); the SHA-256 digest is
-		// the persisted membership dictionary key, and stdlib SHA-256
-		// only ingests through hash.Hash.Write, whose name collides with
-		// the content-transfer Write ban. The exempted calls feed an
-		// owned 8-byte little-endian word encoding copied out of a
-		// caller-owned word source: OutputWords is a concrete []uint64
-		// (no mapped page view can reach it after the writer restructure),
-		// so no mapped byte ever moves. Exact shape only, binding-keyed:
-		// a single-argument .Write on the exact local variable
-		// initialized by sha256.New() in this file, with an argument
-		// that is neither page-tainted nor file-bearing. Any other
-		// Write receiver or argument keeps failing closed (battery-pinned).
 		digesterVars := map[*types.Var]bool{}
 		mark := func(lhs ast.Expr, rhs ast.Expr) {
 			call, ok := unparen(rhs).(*ast.CallExpr)
@@ -4898,11 +4906,12 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 				return
 			}
 			id, ok := unparen(sel.X).(*ast.Ident)
-			if !ok || id.Name != "sha256" {
+			if !ok || (id.Name != "sha256" && id.Name != "sha512") {
 				return
 			}
 			fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
-			if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "crypto/sha256" {
+			if !ok || fn.Pkg() == nil ||
+				(fn.Pkg().Path() != "crypto/sha256" && fn.Pkg().Path() != "crypto/sha512") {
 				return
 			}
 			lhsIdent, ok := unparen(lhs).(*ast.Ident)
@@ -4920,7 +4929,7 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 					mark(d.Lhs[0], d.Rhs[0])
 				}
 			case *ast.ValueSpec:
-				// var hasher = sha256.New()
+				// var hasher = sha256.New() / sha512.New()
 				if len(d.Names) == 1 && len(d.Values) == 1 {
 					mark(d.Names[0], d.Values[0])
 				}
