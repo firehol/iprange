@@ -167,19 +167,68 @@ func nibble(value byte) byte {
 
 // invalidDestinationName mirrors Rust path::validate_main_name: one
 // exact path component, never the reserved .iprange- prefix or the
-// .readers coordination suffix (Rust "invalid destination name").
+// .readers coordination suffix (Rust "invalid destination name"). The
+// reserved matches are byte-wise ASCII-case-insensitive (Rust
+// eq_ignore_ascii_case); Unicode folding is not applied, so spellings
+// Rust accepts (for example ".İPRANGE-" with the Turkish dotted I) are
+// accepted here too.
 func invalidDestinationName(name string) bool {
 	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
 		return true
 	}
-	lower := strings.ToLower(name)
-	if strings.HasPrefix(lower, ".iprange-") {
+	if asciiFoldHasPrefix(name, ".iprange-") {
 		return true
 	}
-	if strings.HasSuffix(lower, ".readers") {
+	if asciiFoldHasSuffix(name, coordinationSuffix) {
 		return true
 	}
 	return false
+}
+
+// destinationNameMax is the component-length bound of the targeted
+// POSIX filesystems (Rust _PC_NAME_MAX: 255 on the supported linux,
+// darwin, freebsd, and netbsd filesystems). The Windows stub refuses
+// opens, so no Windows bound is needed.
+const destinationNameMax = 255
+
+// coordinationSuffix is the reader-coordination twin suffix the
+// publication namespace reserves (Rust platform::destination_names).
+const coordinationSuffix = ".readers"
+
+// asciiFoldLower folds one ASCII byte to lowercase (Rust
+// eq_ignore_ascii_case).
+func asciiFoldLower(value byte) byte {
+	if 'A' <= value && value <= 'Z' {
+		return value + 'a' - 'A'
+	}
+	return value
+}
+
+// asciiFoldHasPrefix reports an ASCII-case-insensitive prefix match.
+func asciiFoldHasPrefix(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for index := range len(prefix) {
+		if asciiFoldLower(s[index]) != prefix[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiFoldHasSuffix reports an ASCII-case-insensitive suffix match.
+func asciiFoldHasSuffix(s, suffix string) bool {
+	if len(s) < len(suffix) {
+		return false
+	}
+	offset := len(s) - len(suffix)
+	for index := range len(suffix) {
+		if asciiFoldLower(s[offset+index]) != suffix[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // CreateAttempt validates the destination and names one publication
@@ -201,6 +250,13 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 	clean := filepath.Clean(destination)
 	name := filepath.Base(clean)
 	if invalidDestinationName(name) {
+		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
+	}
+	// Rust Directory::require_name_lengths: the main component and its
+	// .readers coordination twin must both fit the directory name bound;
+	// an overlong basename refuses here with the name error instead of
+	// failing at the rename with a generic IO class.
+	if len(name) > destinationNameMax || len(name)+len(coordinationSuffix) > destinationNameMax {
 		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := filepath.Dir(clean)
@@ -272,7 +328,7 @@ func (a *OutputAttempt) Discard() CleanupState {
 // outcomes return a result with Cause and the discarded-attempt cleanup
 // state, mirroring the Rust result classification.
 func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy) (*PublicationResult, error) {
-	if !b.failed {
+	if !b.finished {
 		return nil, &PublicationPreparationFailure{
 			Cause:   &format.Error{Code: format.CodeWrongState, Detail: "output builder is not finished"},
 			Cleanup: CleanupStateClean,

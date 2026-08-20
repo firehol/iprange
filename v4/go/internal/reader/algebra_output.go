@@ -426,8 +426,14 @@ func (a *MembershipAlgebra) BuildAlgebraOutput(prepared *AlgebraOutputPrepared, 
 		}
 	}
 	capacity := prepared.outputFeedCount
-	if err := prepared.heap.filled(uint64(capacity), rustU32Size, "membership algebra output heap"); err != nil {
-		return report, err
+	// The three sweep vectors mirror the three Rust heap.vector charges
+	// (output.rs current / pending_positions / interned_positions): each
+	// charges capacity * u32 under the output-heap label, so the
+	// admission and metadata budgets match the authority exactly.
+	for range 3 {
+		if err := prepared.heap.filled(uint64(capacity), rustU32Size, "membership algebra output heap"); err != nil {
+			return report, err
+		}
 	}
 	output := &algebraOutputSink{
 		feed:              feed,

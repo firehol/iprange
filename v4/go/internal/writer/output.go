@@ -73,7 +73,13 @@ type OutputBuilder struct {
 	// metadataStaged mirrors the Rust output metadata latch: one
 	// WriteMetadata per output.
 	metadataStaged bool
-	failed         bool
+	// failed latches a failed mutation (Rust require_active); after a
+	// successful Finish the latch is also set so the consumed builder
+	// refuses further mutation exactly like the Rust Finished value.
+	failed bool
+	// finished records a successful Finish: the publish gate requires
+	// it, so a failed Finish can never be published as if it sealed.
+	finished bool
 }
 
 // MaxOutputPages returns the page budget.
@@ -541,6 +547,7 @@ func (b *OutputBuilder) Finish() error {
 		return err
 	}
 	b.failed = true
+	b.finished = true
 	return nil
 }
 

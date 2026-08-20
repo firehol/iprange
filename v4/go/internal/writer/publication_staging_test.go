@@ -143,6 +143,80 @@ func TestCreateAttemptInvalidDestination(t *testing.T) {
 	}
 }
 
+func TestCreateAttemptReservedNameASCIIFoldAndLength(t *testing.T) {
+	dir := t.TempDir()
+	// The reserved matches are ASCII-case-insensitive exactly like Rust
+	// eq_ignore_ascii_case: mixed-case spellings refuse.
+	for _, name := range []string{".IpRange-mixed", "OUTPUT.READERS", ".iprange-x", "name.readers"} {
+		destination := filepath.Join(dir, name)
+		_, err := writer.CreateAttempt(destination, writer.PolicyReplaceExisting)
+		if err == nil {
+			t.Fatalf("CreateAttempt(%q) with a reserved ASCII spelling succeeded", destination)
+		}
+		if code := errorCode(t, err); code != format.CodeNameInvalid {
+			t.Fatalf("CreateAttempt(%q) code = %d, want NameInvalid", destination, code)
+		}
+	}
+	// Unicode folding is NOT applied: U+0130 (Turkish dotted capital I)
+	// lowercases to 'i' under Go's Unicode ToLower but is not an ASCII
+	// 'i' to eq_ignore_ascii_case, so Rust accepts this spelling and Go
+	// must too. The attempt is created at the reserved-check stage, so an
+	// accepted name proceeds past validation (the parent dir exists).
+	destination := filepath.Join(dir, ".\u0130PRANGE-fine")
+	attempt, err := writer.CreateAttempt(destination, writer.PolicyFailIfExists)
+	if err != nil {
+		t.Fatalf("CreateAttempt with the dotted-I spelling: %v (the ASCII-only fold must accept it)", err)
+	}
+	_ = attempt
+	// The main component and its .readers coordination twin must both fit
+	// the 255-byte name bound (Rust require_name_lengths): the main name
+	// alone may reach 255 bytes, but with the 8-byte coordination suffix
+	// the twin overflows, so 255-byte and 256-byte mains refuse before
+	// any filesystem work, and 247 (255-8) is the last accepted length.
+	long255 := strings.Repeat("a", 255)
+	_, err = writer.CreateAttempt(filepath.Join(dir, long255), writer.PolicyFailIfExists)
+	if err == nil {
+		t.Fatal("CreateAttempt(255-byte name) succeeded, want NameInvalid")
+	}
+	if code := errorCode(t, err); code != format.CodeNameInvalid {
+		t.Fatalf("CreateAttempt(255-byte name) code = %d, want NameInvalid", code)
+	}
+	long256 := strings.Repeat("a", 256)
+	_, err = writer.CreateAttempt(filepath.Join(dir, long256), writer.PolicyFailIfExists)
+	if err == nil {
+		t.Fatal("CreateAttempt(256-byte name) succeeded, want NameInvalid")
+	}
+	if code := errorCode(t, err); code != format.CodeNameInvalid {
+		t.Fatalf("CreateAttempt(256-byte name) code = %d, want NameInvalid", code)
+	}
+	// The coordination twin bound: a 251-byte main name leaves no room
+	// for the 8-byte .readers suffix, so it refuses like the Rust
+	// require_name_lengths check.
+	long251 := strings.Repeat("a", 251)
+	_, err = writer.CreateAttempt(filepath.Join(dir, long251), writer.PolicyFailIfExists)
+	if err == nil {
+		t.Fatal("CreateAttempt(251-byte name) succeeded, want NameInvalid")
+	}
+	if code := errorCode(t, err); code != format.CodeNameInvalid {
+		t.Fatalf("CreateAttempt(251-byte name) code = %d, want NameInvalid", code)
+	}
+	// 251-255 refuse through the twin bound; 255-8 = 247 is the last
+	// accepted main-component length (255 main bytes + 8 .readers bytes
+	// would overflow the same 255-byte directory bound).
+	long250 := strings.Repeat("a", 250)
+	_, err = writer.CreateAttempt(filepath.Join(dir, long250), writer.PolicyFailIfExists)
+	if err == nil {
+		t.Fatal("CreateAttempt(250-byte name) succeeded, want NameInvalid")
+	}
+	if code := errorCode(t, err); code != format.CodeNameInvalid {
+		t.Fatalf("CreateAttempt(250-byte name) code = %d, want NameInvalid", code)
+	}
+	long247 := strings.Repeat("a", 247)
+	if _, err := writer.CreateAttempt(filepath.Join(dir, long247), writer.PolicyFailIfExists); err != nil {
+		t.Fatalf("CreateAttempt(247-byte name) = %v, want success", err)
+	}
+}
+
 func TestCreateAttemptFailIfExistsRefusesExisting(t *testing.T) {
 	dir := t.TempDir()
 	destination := filepath.Join(dir, "output.iprdb")
