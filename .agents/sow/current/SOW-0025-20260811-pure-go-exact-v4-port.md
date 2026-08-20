@@ -3281,6 +3281,30 @@ reopen-verify round trips through the public immutable reader:
   shape- and binding-keyed and stays fail-closed for any other
   copy).
 
+### 2026-08-20 - M3 chunk-3b-2 slice 1 implementation record:
+publication namespace primitives
+
+First 3b-2 slice (decision C foundation): the atomic name-exchange,
+directory-sync, and identity primitives the publication staging layer
+composes. All new syscalls live in internal/mapping (the gate's
+syscall owner; no exemption): RenameNoReplace (linux renameat2
+RENAME_NOREPLACE, darwin renameatx_np RENAME_EXCL), RenameExchange
+(linux RENAME_EXCHANGE, darwin RENAME_SWAP), SyncDirectory (fsync on
+the directory descriptor, EINVAL -> CodeOSUnsupported mirroring the
+Rust sync_all mapping), StatIdentity (device+inode, the Rust
+Identity), and the exchangeAvailable() probe (linux+apple true,
+elsewhere false, mirroring Rust require_exchange_available). FreeBSD/
+NetBSD/Windows refuse the atomic renames with CodeOSUnsupported (no
+primitive in the pinned x/sys v0.35.0 surface); their dir sync and
+identity stay real on the POSIX pair. Tests (mapping_publish_test.go)
+pin no-replace refusal over an existing destination (destination
+untouched, source preserved), the atomic exchange, directory sync,
+and identity stability. Gate: go test ./... both tag sets, vet,
+gofmt, per-OS cross-builds (linux/darwin/freebsd/netbsd/windows), and
+the linux gatescan all pass.
+
+  copy).
+
 
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
