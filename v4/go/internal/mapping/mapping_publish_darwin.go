@@ -56,6 +56,25 @@ func SyncDirectory(dir string) error {
 	return nil
 }
 
+// RenamePlain renames oldpath to newpath, replacing an existing
+// destination (rename(2)): the no-rollback replacement path.
+func RenamePlain(oldpath, newpath string) error {
+	err := unix.Rename(oldpath, newpath)
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "rename: " + err.Error()}
+	}
+	return nil
+}
+
+// Unlink removes one attempt-file name (unlink(2)).
+func Unlink(path string) error {
+	err := unix.Unlink(path)
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "unlink publication attempt: " + err.Error()}
+	}
+	return nil
+}
+
 // StatIdentity returns the device+inode identity of path (Rust
 // Identity{device, inode}); the Apple device number is a 32-bit value.
 func StatIdentity(path string) (device uint64, inode uint64, err error) {

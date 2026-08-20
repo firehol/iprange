@@ -33,6 +33,25 @@ func RenameExchange(oldpath, newpath string) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "rename_exchange is not available on this target"}
 }
 
+// RenamePlain renames oldpath to newpath, replacing an existing
+// destination (rename(2)): the no-rollback replacement path.
+func RenamePlain(oldpath, newpath string) error {
+	err := unix.Rename(oldpath, newpath)
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "rename: " + err.Error()}
+	}
+	return nil
+}
+
+// Unlink removes one attempt-file name (unlink(2)).
+func Unlink(path string) error {
+	err := unix.Unlink(path)
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "unlink publication attempt: " + err.Error()}
+	}
+	return nil
+}
+
 // SyncDirectory forces the directory-entry changes into stable storage
 // (fsync on the directory descriptor). EINVAL maps to the unsupported
 // contract code.

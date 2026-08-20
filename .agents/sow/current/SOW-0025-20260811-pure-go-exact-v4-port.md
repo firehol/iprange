@@ -3303,6 +3303,12 @@ and identity stability. Gate: go test ./... both tag sets, vet,
 gofmt, per-OS cross-builds (linux/darwin/freebsd/netbsd/windows), and
 the linux gatescan all pass.
 
+Follow-up slice-1 addition (2026-08-20): RenamePlain (rename(2), the
+Rust bind_no_rollback path) and Unlink (attempt-cleanup path) added to
+the same four platform files. FreeBSD/NetBSD keep real rename(2)+unlink;
+Windows refuses both with CodeOSUnsupported to keep the writer's
+no-rollback path explicit. Same gate.
+
   copy).
 
 

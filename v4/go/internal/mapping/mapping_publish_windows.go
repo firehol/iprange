@@ -22,6 +22,16 @@ func RenameExchange(oldpath, newpath string) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "rename_exchange is not available on windows"}
 }
 
+// RenamePlain refuses on Windows.
+func RenamePlain(oldpath, newpath string) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "rename is not available on windows"}
+}
+
+// Unlink refuses on Windows.
+func Unlink(path string) error {
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "unlink is not available on windows"}
+}
+
 // SyncDirectory refuses on Windows.
 func SyncDirectory(dir string) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "synchronize publication directory is not available on windows"}
