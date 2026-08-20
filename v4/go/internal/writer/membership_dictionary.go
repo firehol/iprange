@@ -426,7 +426,10 @@ func newMembershipReferenceBatch(capacity int) membershipReferenceBatch {
 	return batch
 }
 
-const referenceBatchEntryLimit = 1024
+// ReferenceBatchEntryLimit is the Rust reference-batch entry cap
+// (immutable_output/reference_batch.rs ENTRY_LIMIT: up to 1024
+// recurring-reference entries, two 16-byte slots each).
+const ReferenceBatchEntryLimit = 1024
 
 // addReference records one reference to id (Rust add). The outcome
 // selects the caller's action: added, direct, or full.

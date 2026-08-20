@@ -495,7 +495,10 @@ func TestPublishSetValidatesDestinationAndBudget(t *testing.T) {
 	_, err = helpers.alg.PublishSet(filepath.Join(t.TempDir(), "missing", "out.iprdb"), tag, operation, mode, nil, PolicyFailIfExists, outputBudget(), nil)
 	requireDetail(t, err, "publication name is missing")
 
-	// Existing destination refused under FailIfExists.
+	// Existing destination refused under FailIfExists: the Rust
+	// workflow creates the attempt with create_absent, so the occupied
+	// destination refuses EARLY (AlgebraPreparationFailure), exactly
+	// like the attempt-creation gate here.
 	destination := publishDest(t, "exists.iprdb")
 	if _, err := publishV4(t, helpers, destination, operation, mode, nil, PolicyFailIfExists, outputBudget()); err != nil {
 		t.Fatal("seed publish:", err)

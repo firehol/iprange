@@ -176,9 +176,12 @@ func (f *AlgebraPreparationFailure) Unwrap() error {
 // PublishSet materializes one set operation directly into its final
 // immutable v4 file (Rust MembershipAlgebra::publish_set): validate
 // budget -> prepare -> create attempt -> build (feeds, metadata, the
-// ordered output sweep) -> finish -> publish. Every failure is the
-// typed AlgebraPreparationFailure surface; the attempt artifact is
-// discarded per the Rust shapes.
+// ordered output sweep) -> finish -> publish. Early and preparation
+// failures are the typed AlgebraPreparationFailure surface with the
+// attempt artifact discarded per the Rust shapes; a publish that was
+// attempted but refused or left unprovable returns the result with its
+// Publication status, destination content, and Cause exactly like the
+// Rust Ok(AlgebraSetResult) classification.
 func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, operation AlgebraSetOperation, mode AlgebraOutputMode, metadataJSON []byte, policy PublicationPolicy, budget AlgebraOutputBudget, cancellation *CancellationToken) (AlgebraSetResult, error) {
 	zero := AlgebraSetResult{}
 	if err := a.openOK(); err != nil {
@@ -213,7 +216,15 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
 	}
-	builder, err := writer.NewOutputBuilder(attempt.AttemptPath(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, nil)
+	// The immutable reference batch is sized and charged from the
+	// operation heap exactly like Rust ReferenceBatch::new at builder
+	// construction: the metadata budget below and the admission
+	// decisions stay byte-identical with the authority.
+	refEntries, err := prepared.ChargeReferenceBatch()
+	if err != nil {
+		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+	}
+	builder, err := writer.NewOutputBuilder(attempt.AttemptPath(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, refEntries, nil)
 	if err != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
 	}
@@ -224,7 +235,10 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 		closeErr := builder.Close()
 		cleanup := attempt.Discard()
 		if closeErr != nil {
-			cause = publicError(closeErr)
+			// Keep the primary cause and attach the close error: a
+			// cleanup-side close failure must not erase why the
+			// operation failed.
+			cause = mergeErrors(cause, closeErr)
 		}
 		return zero, &AlgebraPreparationFailure{Cause: publicError(cause), Cleanup: cleanup}
 	}
@@ -242,6 +256,13 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err := builder.Finish(); err != nil {
 		return discarded(err)
 	}
+	// Rust publish re-checks cancellation at the publication gate
+	// (workflow::publish prepare_cancellable and the policy
+	// *_cancellable steps): a token cancelled during the build must not
+	// proceed to the rename.
+	if err := cancellation.check(); err != nil {
+		return discarded(err)
+	}
 	result, err := writer.Publish(attempt, builder, policy)
 	closeErr := builder.Close()
 	if err != nil {
@@ -254,9 +275,9 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if closeErr != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(closeErr), Cleanup: CleanupStateClean}
 	}
-	if result.Cause != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(result.Cause), Cleanup: result.Cleanup}
-	}
+	// A refused or outcome-unknown publish is a Rust Ok result carrying
+	// its Cause, not an error: the caller inspects Status,
+	// DestinationContent, and Cleanup.
 	return AlgebraSetResult{
 		Report: AlgebraSetReport{
 			SourceCount:        built.SourceCount,
@@ -269,6 +290,32 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 		Publication: *result,
 	}, nil
 }
+
+// mergeErrors keeps the primary cause of a failed publication and
+// attaches a cleanup-side close error as the secondary. A module-scoped
+// scanned function is used instead of errors.Join because the mmap gate
+// treats stdlib calls as unproven callees: the closure parameter is
+// bounded-fail-safe, and errors.Join would be flagged as a potential
+// complete-page transfer even though the values are error objects.
+func mergeErrors(primary, secondary error) error {
+	if secondary == nil {
+		return primary
+	}
+	return &mergedError{primary: primary, secondary: secondary}
+}
+
+// mergedError is the two-error value of mergeErrors; Unwrap reports the
+// primary so errors.As/Is keep the original failure class.
+type mergedError struct {
+	primary   error
+	secondary error
+}
+
+func (e *mergedError) Error() string {
+	return e.primary.Error() + "; " + e.secondary.Error()
+}
+
+func (e *mergedError) Unwrap() error { return e.primary }
 
 // setOperation converts one public operation into the reader operation
 // (Rust FeedName::new parity: invalid selection names fail before the

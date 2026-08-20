@@ -812,7 +812,7 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			// scanned package function is a scanned callee: its body is
 			// part of this package, so calls through it are direct
 			// approved transfers like calls through the literal itself.
-			if w.approvedLocalFuncVar(o, 0) {
+			if w.approvedLocalFuncVar(o) {
 				return true
 			}
 			return w.approvedFuncVar(o, 0)
@@ -2387,7 +2387,7 @@ func (w *fileRules) scannedCallback(arg ast.Expr) bool {
 			p := obj.Pkg().Path()
 			return p == w.pc.pkg.Path() || moduleInternalPackage(p)
 		case *types.Var:
-			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj, 0) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj)
+			return w.approvedFuncVar(obj, 0) || w.approvedFuncParamVar(obj) || w.approvedLocalFuncVar(obj) || w.paramAliasedFuncVar(obj, 0) || w.recordedCallbackAlias(obj) || w.formalAliasedLocal(obj) || w.localMethodCarrier(obj)
 		}
 		return false
 	case *ast.SelectorExpr:
@@ -2530,14 +2530,22 @@ func (w *fileRules) approvedFuncVar(v *types.Var, depth int) bool {
 }
 
 // approvedLocalFuncVar reports whether a local function variable
-// provably binds a scanned callback from its declaration initializer: a
-// func literal (its body is part of this package), a scanned package
-// function, or a chain of never-reassigned local aliases to either. A
-// local written after declaration or declared without an initializer has
-// no provable binding; the callback fence treats it like any other
-// opaque local.
-func (w *fileRules) approvedLocalFuncVar(v *types.Var, depth int) bool {
-	if v == nil || depth > 2 || w.pc.localReassigned[v] || funcSignature(v.Type()) == nil {
+// provably binds a scanned callback from its declaration initializer:
+// a func literal (its body is part of this package) or a concrete
+// module method value/expression. A local initialized from ANY other
+// identifier is NOT approved: the flow pass resolves calls through
+// local function variables only to direct literal bindings
+// (localFuncs) and package-level initializer chains (varInits), so an
+// alias (cb2 := cb, cb2 := pkgFn, cb2 := pkgVar) would approve a call
+// the flow pass cannot follow and let a complete mapped page reach a
+// copying body undetected. Alias chains fail closed as unproven
+// variable indirections; the formal-parameter alias predicates below
+// cover the callback-fence shapes the flow composition does resolve.
+// A local written after declaration or declared without an
+// initializer has no provable binding; the callback fence treats it
+// like any other opaque local.
+func (w *fileRules) approvedLocalFuncVar(v *types.Var) bool {
+	if v == nil || w.pc.localReassigned[v] || funcSignature(v.Type()) == nil {
 		return false
 	}
 	init, ok := w.pc.localFuncInits[v]
@@ -2548,15 +2556,9 @@ func (w *fileRules) approvedLocalFuncVar(v *types.Var, depth int) bool {
 	case *ast.FuncLit:
 		return true
 	case *ast.Ident:
-		switch o := w.pc.info.Uses[i].(type) {
-		case *types.Func:
-			return w.approvedFuncPkg(o)
-		case *types.Var:
-			if o.Parent() == w.pc.pkg.Scope() {
-				return w.approvedFuncVar(o, 0)
-			}
-			return w.approvedLocalFuncVar(o, depth+1)
-		}
+		// Any identifier alias (a local literal, a package function, a
+		// package variable, or a further local alias) is unresolvable
+		// by the flow pass at this call site: fail closed.
 		return false
 	case *ast.SelectorExpr:
 		fn, ok := w.pc.info.Uses[i.Sel].(*types.Func)
@@ -2873,7 +2875,7 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// callee exactly like the formal itself, and the store
 			// counter-check demands mapped views for its byte args.
 			rangeLike := w.rangeVarHoldsCallback(obj)
-			localLike := w.approvedLocalFuncVar(obj, 0)
+			localLike := w.approvedLocalFuncVar(obj)
 			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike && !rangeLike && !localLike {
 				varIndirect = true
 			}
@@ -4093,7 +4095,7 @@ func (w *fileRules) unprovenVarCallee(fun ast.Expr) bool {
 		// not an unproven indirection. Every other function-typed
 		// variable - a formal parameter callback, a package binding, an
 		// opaque local - keeps fail-closed treatment.
-		if w.approvedLocalFuncVar(obj, 0) {
+		if w.approvedLocalFuncVar(obj) {
 			return false
 		}
 		return true

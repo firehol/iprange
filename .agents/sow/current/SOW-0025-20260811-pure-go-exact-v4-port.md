@@ -1540,6 +1540,64 @@ tag sets, -race, checkptr, vet, gofmt, 5-OS cross-builds plus darwin
 v4work, and the Rust suite all green. No production mmap-only behavior
 changed; the full 718-case battery runs as the milestone-close gate.
 
+### 2026-08-21 - M3 chunk-3b-2 slice 3 round-2 review: three level-1 findings fixed
+
+Round-1 level-1 swarm review of the publish_set surface (five resident
+reviewers, commits dabeb83/1d5461d) returned: Linnaeus PASS (3 P3
+parity notes), Leibniz FAIL (P2-1 output-vector heap accounting: Rust
+charges the three sweep vectors once each, Go charged a single fill),
+Jason FAIL (same P2-1 plus P2-2: Rust charges the immutable reference
+batch against the operation heap at builder construction,
+entries*2*size_of Slot, Go charged nothing), Peirce FAIL (P1: the
+rules pass approved 1-2 hop LOCAL function-variable alias chains while
+the flow pass cannot resolve them, so a complete mapped page passed
+through cb := func...; cb2 := cb; cb2(page) undetected), Sartre FAIL
+(P1: PublishSet converted the Rust Ok refusal/outcome-unknown
+PublicationResult into an error, erasing its classification; P2: no
+cancellation re-check at the publish gate; P3: a builder close error
+substituted the primary cause on the discard path).
+
+Round-2 fixes (commits 1d5461d + this round):
+
+- P2-1: algebra_output.go now charges the three sweep vectors
+  individually (for range 3), matching Rust output.rs current /
+  pending_positions / interned_positions vector charges.
+- P3 parity: reserved-name comparison uses the ASCII-only fold (Rust
+  eq_ignore_ascii_case; dotted-I parity), destination-name and
+  .readers-coordination lengths are checked against the 255-byte
+  bound, and the builder finished latch gates Publish (a failed Finish
+  can never publish as sealed).
+- P2-2: ChargeReferenceBatch on AlgebraOutputPrepared sizes and
+  charges the immutable reference batch exactly like Rust
+  ReferenceBatch::new (slot pair floor power of two, 16-byte Slot
+  verified with rustc, 1024 entry cap, disabled with no charge when
+  the heap fits nothing); NewOutputBuilder now takes the batch entry
+  capacity from the caller, and PublishSet charges before the metadata
+  budget so admission and metadata budgets match the authority.
+- P1 (gate): approvedLocalFuncVar no longer follows local alias
+  chains - the flow pass resolves calls through local function
+  variables only to direct literal bindings and package-level
+  initializer chains, so any identifier-initialized local alias
+  (cb2 := cb, cb2 := pkgFn) fails closed as an unproven variable
+  indirection. Reproduced the launder (gate exit 0 before, exit 1
+  after with the honest bounded-slice twins still accepted), durable
+  battery pins 325-328 added.
+- P1/P2 (surface): PublishSet returns the Rust Ok classification for
+  refused/outcome-unknown publications (result with Cause, never an
+  error; the fail-if-exists occupied-destination refusal stays an
+  early AlgebraPreparationFailure because Rust workflow::create uses
+  create_absent, verified in publication/workflow.rs), re-checks
+  cancellation after Finish before Publish like the Rust cancellable
+  publish steps, and joins the close error onto the primary cause on
+  the discard path instead of substituting it.
+
+Validation in progress (all niced): go test both tag sets, -race,
+checkptr, vet, gofmt, 5-OS cross-builds green; linux-config real-tree
+gatescan rc=0; writer staging refusal tests pin the result-with-Cause
+classification; the full 718-case battery (old binary) is finishing as
+round-1 evidence and the authoritative battery re-runs on the new
+binary before the milestone closes.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

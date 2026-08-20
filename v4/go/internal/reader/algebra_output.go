@@ -352,6 +352,41 @@ func (p *AlgebraOutputPrepared) OutputFeedCount() int {
 	return p.outputFeedCount
 }
 
+// referenceBatchSlotSize and referenceBatchEntryLimit are the Rust
+// immutable reference-batch shape constants
+// (immutable_output/reference_batch.rs: Slot{id: u32, count: i64} is 16
+// bytes; ENTRY_LIMIT is 1024).
+const (
+	referenceBatchSlotSize   = 16
+	referenceBatchEntryLimit = 1024
+)
+
+// ChargeReferenceBatch sizes and charges the immutable output reference
+// batch against the operation heap exactly like Rust ReferenceBatch::new
+// (immutable_output/reference_batch.rs): the entry capacity is the floor
+// power of two of the affordable slot pairs (two 16-byte slots per
+// entry), capped at 1024; a heap that cannot fit one entry disables the
+// batch with no charge. The returned entry count is the batch capacity
+// the output builder must construct, so the admission and metadata
+// budgets match the authority.
+func (p *AlgebraOutputPrepared) ChargeReferenceBatch() (int, error) {
+	// The cap is applied in uint64 before the platform-int conversion so
+	// a 32-bit int cannot overflow on a very large heap (Rust sizes the
+	// entry count with usize: afford / 32, capped at ENTRY_LIMIT).
+	affordable := p.heap.remainingBytes() / (2 * referenceBatchSlotSize)
+	if affordable > referenceBatchEntryLimit {
+		affordable = referenceBatchEntryLimit
+	}
+	entries := floorPowerOfTwo(int(affordable))
+	if entries == 0 {
+		return 0, nil
+	}
+	if err := p.heap.filled(uint64(entries*2), referenceBatchSlotSize, "immutable reference batch"); err != nil {
+		return 0, err
+	}
+	return entries, nil
+}
+
 // algebraOutputFeedCount is the output catalog size of one mode (Rust
 // output_feed_count): preserved selections keep one feed per global
 // position, Flat materializes one feed.

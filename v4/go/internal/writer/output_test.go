@@ -73,11 +73,18 @@ func generousBudget() writer.OutputBudget {
 	return writer.OutputBudget{MaxOutputPages: 100_000}
 }
 
-// newOutput builds one fresh output at a unique path.
+// newOutput builds one fresh output at a unique path. The reference
+// batch is configured like the Rust test builder() helper (a 2 MiB
+// operation heap): membership and structured specs get the full
+// 1024-entry batch, direct specs get none.
 func newOutput(t *testing.T, spec writer.OutputSpec, budget writer.OutputBudget) (*writer.OutputBuilder, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "output.iprdb")
-	b, err := writer.NewOutputBuilder(path, spec, budget, nil)
+	entries := 0
+	if spec.ValueKind == format.ValueKindMembership || spec.ValueKind == format.ValueKindStructured {
+		entries = writer.ReferenceBatchEntryLimit
+	}
+	b, err := writer.NewOutputBuilder(path, spec, budget, entries, nil)
 	if err != nil {
 		t.Fatalf("NewOutputBuilder: %v", err)
 	}
@@ -676,7 +683,7 @@ func TestOutputRefusesExistingPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := writer.NewOutputBuilder(path, directSpec(format.AddressFamilyIPv4), generousBudget(), nil)
+	_, err := writer.NewOutputBuilder(path, directSpec(format.AddressFamilyIPv4), generousBudget(), 0, nil)
 	if !isWriterCode(err, format.CodeNameExists) {
 		t.Fatalf("existing path error %v", err)
 	}

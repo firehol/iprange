@@ -32,7 +32,7 @@ func publishSetCorpus(t *testing.T, blocks uint32) string {
 	if err != nil {
 		t.Fatal("spec:", err)
 	}
-	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, nil)
+	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, writer.ReferenceBatchEntryLimit, nil)
 	if err != nil {
 		t.Fatal("builder:", err)
 	}

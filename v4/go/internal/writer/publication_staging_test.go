@@ -28,7 +28,7 @@ func stagedBuilder(t *testing.T, destination string, policy writer.PublicationPo
 	if err != nil {
 		t.Fatalf("CreateAttempt: %v", err)
 	}
-	b, err := writer.NewOutputBuilder(attempt.AttemptPath(), directSpec(format.AddressFamilyIPv4), generousBudget(), nil)
+	b, err := writer.NewOutputBuilder(attempt.AttemptPath(), directSpec(format.AddressFamilyIPv4), generousBudget(), 0, nil)
 	if err != nil {
 		t.Fatalf("NewOutputBuilder: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestPublishUnfinishedBuilderRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAttempt: %v", err)
 	}
-	b, err := writer.NewOutputBuilder(attempt.AttemptPath(), directSpec(format.AddressFamilyIPv4), generousBudget(), nil)
+	b, err := writer.NewOutputBuilder(attempt.AttemptPath(), directSpec(format.AddressFamilyIPv4), generousBudget(), 0, nil)
 	if err != nil {
 		t.Fatalf("NewOutputBuilder: %v", err)
 	}

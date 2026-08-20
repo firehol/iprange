@@ -96,8 +96,14 @@ func (b *OutputBuilder) PageCount() uint64 { return b.meta.PageCount }
 
 // NewOutputBuilder starts one immutable output over the empty file at
 // path (Rust new_owned_with_extent; the file is created exclusively,
-// ftruncated to the budget extent, and mapped read-write).
-func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, check func(clean string) error) (*OutputBuilder, error) {
+// ftruncated to the budget extent, and mapped read-write). The
+// referenceBatchEntries capacity is the membership/structured
+// reference-batch entry count computed from the operation heap by the
+// caller (Rust ReferenceBatch::new sizes and charges the batch from
+// heap.remaining() at builder construction): a power of two up to
+// ReferenceBatchEntryLimit, or 0 to disable batching. Direct-value
+// outputs never batch regardless of the argument.
+func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, referenceBatchEntries int, check func(clean string) error) (*OutputBuilder, error) {
 	if err := requireNewOutput(spec, budget); err != nil {
 		return nil, err
 	}
@@ -112,7 +118,13 @@ func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, check f
 	meta := outputEmptyMeta(spec)
 	batchCapacity := 0
 	if spec.ValueKind == format.ValueKindMembership || spec.ValueKind == format.ValueKindStructured {
-		batchCapacity = referenceBatchEntryLimit
+		if referenceBatchEntries > ReferenceBatchEntryLimit {
+			referenceBatchEntries = ReferenceBatchEntryLimit
+		}
+		if referenceBatchEntries < 0 {
+			referenceBatchEntries = 0
+		}
+		batchCapacity = referenceBatchEntries
 	}
 	return &OutputBuilder{
 		mapping:        m,
