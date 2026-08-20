@@ -46,6 +46,12 @@ type counters struct {
 	aggregationContributions  atomic.Uint64
 	aggregationResults        atomic.Uint64
 	joinAdvances              atomic.Uint64
+	catalogInterns            atomic.Uint64
+	outputPasses              atomic.Uint64
+	membershipInternCacheHits atomic.Uint64
+	membershipLookups         atomic.Uint64
+	membershipInterns         atomic.Uint64
+	membershipRefcountBatches atomic.Uint64
 }
 
 var current counters
@@ -118,6 +124,12 @@ type Snapshot struct {
 	AggregationContributions  uint64
 	AggregationResults        uint64
 	JoinAdvances              uint64
+	CatalogInterns            uint64
+	OutputPasses              uint64
+	MembershipInternCacheHits uint64
+	MembershipLookups         uint64
+	MembershipInterns         uint64
+	MembershipRefcountBatches uint64
 }
 
 // Read returns a consistent snapshot of the counters.
@@ -161,6 +173,12 @@ func Read() Snapshot {
 		AggregationContributions:  current.aggregationContributions.Load(),
 		AggregationResults:        current.aggregationResults.Load(),
 		JoinAdvances:              current.joinAdvances.Load(),
+		CatalogInterns:            current.catalogInterns.Load(),
+		OutputPasses:              current.outputPasses.Load(),
+		MembershipInternCacheHits: current.membershipInternCacheHits.Load(),
+		MembershipLookups:         current.membershipLookups.Load(),
+		MembershipInterns:         current.membershipInterns.Load(),
+		MembershipRefcountBatches: current.membershipRefcountBatches.Load(),
 	}
 }
 
@@ -181,6 +199,9 @@ func Reset() {
 		&current.inputSourcePasses, &current.membershipDecodeCacheHits,
 		&current.membershipWordReads, &current.aggregationContributions,
 		&current.aggregationResults, &current.joinAdvances,
+		&current.catalogInterns, &current.outputPasses, &current.membershipInternCacheHits,
+		&current.membershipLookups, &current.membershipInterns,
+		&current.membershipRefcountBatches,
 	} {
 		atomic.Store(0)
 	}
@@ -210,3 +231,9 @@ func MembershipWordRead(n uint64)       { current.membershipWordReads.Add(n) }
 func AggregationContribution(n uint64)  { current.aggregationContributions.Add(n) }
 func AggregationResult(n uint64)        { current.aggregationResults.Add(n) }
 func JoinAdvance(n uint64)              { current.joinAdvances.Add(n) }
+func CatalogIntern(n uint64)            { current.catalogInterns.Add(n) }
+func OutputPass(n uint64)               { current.outputPasses.Add(n) }
+func MembershipInternCacheHit(n uint64) { current.membershipInternCacheHits.Add(n) }
+func MembershipLookup(n uint64)         { current.membershipLookups.Add(n) }
+func MembershipIntern(n uint64)         { current.membershipInterns.Add(n) }
+func MembershipRefcountBatch(n uint64)  { current.membershipRefcountBatches.Add(n) }

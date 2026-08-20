@@ -585,3 +585,90 @@ func locatePrivatePosition(codec Codec, store Store, root *uint32, key Key) (*Pr
 	}
 	return &PrivatePosition{Path: leaf.Path, PageNumber: leaf.PageNumber}, nil
 }
+
+// LeafU64Mutation is the outcome of one leaf u64 field decision (Rust
+// LeafU64Mutation).
+type LeafU64Mutation struct {
+	// Replace names the new u64 field value written in place.
+	Replace uint64
+	// DoReplace selects Replace; Delete removes the whole record.
+	DoReplace bool
+}
+
+// existingLeaf is the selector output of MutateLeafU64: the record
+// position inside its private leaf plus the decoded value.
+type existingLeaf struct {
+	position existingLeafPosition
+	value    any
+}
+
+// existingLeafPosition locates one leaf cell inside its page: the logical
+// index, the physical offset of the cell, and the cell length.
+type existingLeafPosition struct {
+	index   int
+	offset  int
+	cellLen int
+}
+
+// MutateLeafU64 reads one existing leaf record, runs decide, and either
+// writes one u64 field in place at fieldOffset or deletes the record
+// (Rust fixed_tree::mutate_leaf_u64). The key must exist; the returned
+// value is the decoded leaf (Rust C::Leaf). The field write happens on
+// the private leaf page at the exact cell offset, so variable-length
+// records are handled by construction.
+func MutateLeafU64(codec Codec, store Store, root *uint32, key Key, fieldOffset int, retired *RetiredPages, decide func(leaf any) (LeafU64Mutation, error)) (any, error) {
+	leaf, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header *Header, path *Path) (any, error) {
+		index, exists, err := lowerBound(codec, page, header, key, true)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, corrupt("B+tree update key is missing")
+		}
+		cell, err := codecCell(codec, page, header, index)
+		if err != nil {
+			return nil, err
+		}
+		value, err := codec.ReadLeaf(cell)
+		if err != nil {
+			return nil, err
+		}
+		offset, ok := format.SlottedCellOffset(page, header, index)
+		if !ok {
+			return nil, corrupt("B+tree update cell offset is invalid")
+		}
+		return existingLeaf{
+			position: existingLeafPosition{index: index, offset: offset, cellLen: len(cell)},
+			value:    value,
+		}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	found := leaf.Selection.(existingLeaf)
+	mutation, err := decide(found.value)
+	if err != nil {
+		return nil, err
+	}
+	if mutation.DoReplace {
+		if fieldOffset < 0 || fieldOffset+8 > found.position.cellLen {
+			return nil, corrupt("B+tree update field is outside its leaf")
+		}
+		if err := store.Update(leaf.PageNumber, func(page []byte) error {
+			format.PutU64(page[found.position.offset+fieldOffset:], mutation.Replace)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return found.value, nil
+	}
+	if err := DeleteTarget(codec, store, root, &Target{
+		Path:       leaf.Path,
+		PageNumber: leaf.PageNumber,
+		Header:     leaf.Header,
+		Index:      found.position.index,
+	}); err != nil {
+		return nil, err
+	}
+	return found.value, nil
+}

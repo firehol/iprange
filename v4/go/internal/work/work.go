@@ -143,3 +143,27 @@ func AggregationResult(uint64) {}
 // JoinAdvance counts one sweep step of an ordered join (Rust
 // work::join_advance).
 func JoinAdvance(uint64) {}
+
+// CatalogIntern counts one feed catalog internment (Rust
+// work::catalog_intern).
+func CatalogIntern(uint64) {}
+
+// MembershipLookup counts one membership dictionary lookup (Rust
+// work::membership_lookup).
+func MembershipLookup(uint64) {}
+
+// MembershipIntern counts one membership dictionary intern attempt (Rust
+// work::membership_intern).
+func MembershipIntern(uint64) {}
+
+// MembershipRefcountBatch counts one applied dictionary refcount batch
+// (Rust work::membership_refcount_batch).
+func MembershipRefcountBatch(uint64) {}
+
+// OutputPass counts one whole output-build pass over an input source
+// (Rust work::output_pass).
+func OutputPass(uint64) {}
+
+// MembershipInternCacheHit counts one membership intern served from the
+// bounded sequence cache (Rust work::membership_intern_cache_hit).
+func MembershipInternCacheHit(uint64) {}

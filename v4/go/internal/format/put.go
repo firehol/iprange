@@ -346,6 +346,53 @@ func (b *SlottedBuilder) Finish(page []byte) error {
 	return nil
 }
 
+// SlottedAppender mirrors slotted_page.rs Appender: a fresh page under
+// construction whose records are appended one by one with tryPush,
+// reporting whether the pushed record fits without failing the page
+// (Rust try_push). The range bulk builder uses it to roll a full page
+// upward without re-encoding.
+type SlottedAppender struct {
+	count int
+	upper int
+}
+
+// NewSlottedAppender initializes one fresh slotted page with the common
+// header and empty geometry (Rust Appender::new).
+func NewSlottedAppender(page []byte, pageType PageType, bornTxn uint64, level uint16, aux uint32) *SlottedAppender {
+	InitializePageHeader(page, pageType, bornTxn, 0, level, SlottedHeaderSize, PageSize, aux)
+	return &SlottedAppender{count: 0, upper: PageSize}
+}
+
+// TryPush appends one record when it fits and reports whether it was
+// appended (Rust Appender::try_push).
+func (a *SlottedAppender) TryPush(page []byte, cell []byte) (bool, error) {
+	if len(cell) == 0 {
+		return false, headerErr("slotted-page record is empty")
+	}
+	lower := SlottedHeaderSize + (a.count+1)*2
+	upper := a.upper - len(cell)
+	if lower > upper {
+		return false, nil
+	}
+	copy(page[upper:], cell)
+	PutU16(page[SlottedHeaderSize+a.count*2:], uint16(upper))
+	a.count++
+	a.upper = upper
+	return true, nil
+}
+
+// Finish stamps the final count and bounds of the page under construction
+// (Rust Appender::finish).
+func (a *SlottedAppender) Finish(page []byte) error {
+	if a.count == 0 {
+		return headerErr("reachable slotted page cannot be empty")
+	}
+	PutU16(page[HeaderCount:], uint16(a.count))
+	PutU16(page[HeaderLower:], uint16(SlottedHeaderSize+a.count*2))
+	PutU16(page[HeaderUpper:], uint16(a.upper))
+	return nil
+}
+
 // physicalRecord is one (start, logical index) pair used to re-pack records
 // in physical order (Rust slotted_page::PhysicalRecord).
 type physicalRecord struct {
@@ -487,4 +534,36 @@ func SlottedShapeValid(header *PageHeader) bool {
 		int(header.Lower) == SlottedHeaderSize+int(header.ItemCount)*2 &&
 		header.Lower <= header.Upper &&
 		int(header.Upper) < PageSize
+}
+
+// SlottedCellOffset resolves the physical offset of one logical record
+// slot (the slot table start value). Both fixed cells and variable
+// records are returned by the read helpers as page[start:end] slices, so
+// this offset is the cell's position inside the page.
+func SlottedCellOffset(page []byte, header *PageHeader, index int) (int, bool) {
+	return slotStart(page, header, index)
+}
+
+// SlottedRecord reads one variable-length record at logical index,
+// mirroring slotted_page.rs record: the persisted record length is checked
+// against [minimumLen, maximumLen] on every probe. The caller has already
+// validated the page shape.
+func SlottedRecord(page []byte, header *PageHeader, index, minimumLen, maximumLen int) ([]byte, error) {
+	work.CellProbe(1)
+	start, ok := slotStart(page, header, index)
+	if !ok {
+		return nil, headerErr("slotted-page record is outside the record area")
+	}
+	if start < int(header.Upper) || start+2 > PageSize {
+		return nil, headerErr("slotted-page record is outside the record area")
+	}
+	recordLen := int(U16(page[start:]))
+	if recordLen < minimumLen || recordLen > maximumLen {
+		return nil, headerErr("slotted-page record length is invalid")
+	}
+	end := start + recordLen
+	if end > PageSize {
+		return nil, headerErr("slotted-page record is outside the record area")
+	}
+	return page[start:end], nil
 }

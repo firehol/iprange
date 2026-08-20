@@ -152,8 +152,8 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.(rangeRecord) != r {
-		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
+	if got := decoded.(rangeRecord); !got.from.Equal(r.from) || !got.to.Equal(r.to) || got.value != r.value {
+		t.Fatalf("round-trip = %#v, want %#v", got, r)
 	}
 }
 
@@ -190,8 +190,8 @@ func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.(rangeRecord) != r {
-		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
+	if got := decoded.(rangeRecord); !got.from.Equal(r.from) || !got.to.Equal(r.to) || got.value != r.value {
+		t.Fatalf("round-trip = %#v, want %#v", got, r)
 	}
 }
 

@@ -435,6 +435,16 @@ func (m *Mapping) View(off, length uint64) ([]byte, error) {
 }
 
 // Page returns the checked full page at pgno.
+// VisitPage runs fn over one mapped page view, keeping the underlying
+// mapping alive for the callback (used by the output builder's seal loop).
+func (m *Mapping) VisitPage(pgno uint32, fn func(page []byte) error) error {
+	page, err := m.Page(pgno)
+	if err != nil {
+		return err
+	}
+	return fn(page)
+}
+
 func (m *Mapping) Page(pgno uint32) ([]byte, error) {
 	off := uint64(pgno) << format.PageShift
 	return m.View(off, format.PageSize)

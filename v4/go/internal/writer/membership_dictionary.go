@@ -1,0 +1,487 @@
+// Membership dictionary write state and interning (Rust
+// membership_dictionary.rs): the ID namespace (used bitmap, id limit,
+// entry count), the id/hash tree pair, word interning with SHA-256
+// deduplication, and live refcount maintenance through the bounded
+// reference batch.
+
+package writer
+
+import (
+	"encoding/binary"
+	"slices"
+
+	"github.com/firehol/iprange/v4/go/internal/bitmap"
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
+)
+
+// OutputWords is one membership bitmap source (Rust MembershipWords): the
+// caller's own words in canonical order. The concrete type keeps every
+// writer-side read inside the scanned package: the content-transfer gate
+// cannot trace words through an interface receiver, so no mapped page
+// view can reach a membership read.
+type OutputWords []uint64
+
+// WordCount returns the canonical bitmap word count (Rust word_count).
+func (w OutputWords) WordCount() uint32 { return uint32(len(w)) }
+
+// ReadWords copies the sequential words starting at start into output
+// (Rust read_words: bounded by len(output); the caller's chunked buffers
+// are stack arrays or caller-owned slices).
+func (w OutputWords) ReadWords(start uint32, output []uint64) error {
+	startIndex := int(start)
+	end := startIndex + len(output)
+	if startIndex < 0 || end > len(w) {
+		return corrupt("membership words are outside the source bounds")
+	}
+	copy(output, w[startIndex:end])
+	return nil
+}
+
+// membershipState is the writable dictionary state (Rust State).
+type membershipState struct {
+	idRoot     uint32
+	hashRoot   uint32
+	usedRoot   uint32
+	entryCount uint64
+	idLimit    uint64
+}
+
+// membershipInterned is the outcome of one intern (Rust Interned).
+type membershipInterned struct {
+	id        uint32
+	wordCount uint32
+	created   bool
+}
+
+// internMembership returns the dictionary ID for one membership bitmap,
+// creating the record when the bitmap is new (Rust
+// membership_dictionary::intern).
+func internMembership(store tree.RetiringStore, state *membershipState, words OutputWords) (membershipInterned, error) {
+	work.MembershipIntern(1)
+	wordCount := words.WordCount()
+	if wordCount == 0 || wordCount > membershipMaxWordCount {
+		return membershipInterned{}, invalid("membership word count is outside the v4 limit")
+	}
+	digest, err := digestWords(words)
+	if err != nil {
+		return membershipInterned{}, err
+	}
+	if id, found, err := findEqualMembership(store, state, words, digest); err != nil {
+		return membershipInterned{}, err
+	} else if found {
+		return membershipInterned{id: id, wordCount: wordCount, created: false}, nil
+	}
+	return insertNewMembership(store, state, words, digest)
+}
+
+// insertNewMembership allocates the lowest free ID and inserts both tree
+// records (Rust insert_new).
+func insertNewMembership(store tree.RetiringStore, state *membershipState, words OutputWords, digest [32]byte) (membershipInterned, error) {
+	id, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
+		bitmap.KindMembership, membershipIDExhausted())
+	if err != nil {
+		return membershipInterned{}, err
+	}
+	record, err := encodeMembershipRecord(store, words, id, digest)
+	if err != nil {
+		return membershipInterned{}, err
+	}
+	if err := insertMembershipRecord(store, idCodec{}, &state.idRoot, record.Slice()); err != nil {
+		return membershipInterned{}, err
+	}
+	key := hashKey(digest, words.WordCount(), id)
+	if err := insertMembershipRecord(store, hashCodec{}, &state.hashRoot, key[:]); err != nil {
+		return membershipInterned{}, err
+	}
+	state.entryCount++
+	return membershipInterned{id: id, wordCount: words.WordCount(), created: true}, nil
+}
+
+func membershipIDExhausted() error {
+	return &format.Error{Code: format.CodeMembershipIdExhausted, Detail: "membership ID namespace exhausted"}
+}
+
+// findEqualMembership searches the hash tree for an equal bitmap (Rust
+// find_equal): at_or_after over (digest, word_count, id), word-for-word
+// comparison against the candidate record.
+func findEqualMembership(store tree.Store, state *membershipState, words OutputWords, digest [32]byte) (uint32, bool, error) {
+	// Rust find_equal does not count membership_lookup; only record::find
+	// and apply_delta do (membership_dictionary.rs + record.rs).
+	if state.hashRoot == 0 {
+		return 0, false, nil
+	}
+	key := hashKey(digest, words.WordCount(), 1)
+	for {
+		value, err := tree.AtOrAfter(hashCodec{}, store, state.hashRoot, tree.VarKey(key[:]))
+		if err != nil {
+			return 0, false, err
+		}
+		if value == nil {
+			return 0, false, nil
+		}
+		candidate := value.(membershipHashRecord)
+		if candidate.digest != digest || candidate.wordCount != words.WordCount() {
+			return 0, false, nil
+		}
+		equal, err := equalMembershipWords(store, state.idRoot, candidate.id, words)
+		if err != nil {
+			return 0, false, err
+		}
+		if equal {
+			return candidate.id, true, nil
+		}
+		if candidate.id == ^uint32(0) {
+			return 0, false, nil
+		}
+		key = hashKey(digest, words.WordCount(), candidate.id+1)
+	}
+}
+
+// equalMembershipWords compares one stored record's bitmap with the
+// source words in 64-word chunks (Rust equal_words): one located find,
+// then chunked reads that reuse the located record.
+func equalMembershipWords(store tree.Store, idRoot uint32, id uint32, words OutputWords) (bool, error) {
+	found, err := findMembership(store, idRoot, id)
+	if err != nil {
+		return false, err
+	}
+	if found.record.wordCount != words.WordCount() {
+		return false, nil
+	}
+	var actual [64]uint64
+	var wanted [64]uint64
+	var start uint32
+	for start < found.record.wordCount {
+		count := found.record.wordCount - start
+		if count > 64 {
+			count = 64
+		}
+		actualSlice := actual[:count]
+		wantedSlice := wanted[:count]
+		if err := readFoundMembershipWords(store, found, start, actualSlice); err != nil {
+			return false, err
+		}
+		if err := words.ReadWords(start, wantedSlice); err != nil {
+			return false, err
+		}
+		if !slices.Equal(actualSlice, wantedSlice) {
+			return false, nil
+		}
+		start += count
+	}
+	return true, nil
+}
+
+// encodeMembershipRecord builds the ID-tree record for one bitmap:
+// inline when it fits the record limit, otherwise a blob tree (Rust
+// record::encode).
+func encodeMembershipRecord(store tree.Store, words OutputWords, id uint32, digest [32]byte) (membershipEncoded, error) {
+	var blobRoot uint32
+	if words.WordCount() > membershipInlineWords {
+		root, err := buildMembershipBlob(store, words)
+		if err != nil {
+			return membershipEncoded{}, err
+		}
+		blobRoot = root
+	}
+	encoded, err := newMembershipEncoded(id, words.WordCount(), digest, blobRoot)
+	if err != nil {
+		return membershipEncoded{}, err
+	}
+	if blobRoot == 0 {
+		// Read the words in bounded batches directly into the record
+		// (Rust encode_inline WORD_BATCH=32).
+		const batch = 32
+		var values [batch]uint64
+		var start uint32
+		for start < words.WordCount() {
+			count := words.WordCount() - start
+			if count > batch {
+				count = batch
+			}
+			if err := words.ReadWords(start, values[:count]); err != nil {
+				return membershipEncoded{}, err
+			}
+			for offset, word := range values[:count] {
+				if err := encoded.putInlineWord(int(start)+offset, word); err != nil {
+					return membershipEncoded{}, err
+				}
+			}
+			start += count
+		}
+	}
+	return encoded, nil
+}
+
+// insertMembershipRecord inserts one record into one dictionary tree
+// with its own codec, retiring the COW pages (Rust mutate_insert, which
+// is generic over the tree codec: the ID tree and the hash tree each use
+// their own).
+func insertMembershipRecord(store tree.RetiringStore, codec tree.Codec, root *uint32, record []byte) error {
+	retired := tree.NewRetiredPages()
+	changed, err := tree.Insert(codec, store, root, record, retired)
+	if err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	if !changed {
+		return corrupt("membership dictionary key already exists")
+	}
+	return nil
+}
+
+// membershipFound is one located ID-tree record (Rust record::Found):
+// the decoded record plus the leaf location, so repeated word reads reuse
+// the located cell instead of re-descending the tree.
+type membershipFound struct {
+	record   membershipRecord
+	location *tree.LeafLocation
+}
+
+// findMembership locates one ID-tree record (Rust record::find).
+func findMembership(store tree.Store, root uint32, id uint32) (membershipFound, error) {
+	work.MembershipLookup(1)
+	if id == 0 || root == 0 {
+		return membershipFound{}, corrupt("membership ID is missing")
+	}
+	value, location, err := tree.PredecessorLocated(idCodec{}, store, root, tree.Key{Hi: uint64(id)})
+	if err != nil {
+		return membershipFound{}, err
+	}
+	if value == nil {
+		return membershipFound{}, corrupt("membership ID is missing")
+	}
+	record := value.(membershipRecord)
+	if record.id != id {
+		return membershipFound{}, corrupt("membership ID is missing")
+	}
+	return membershipFound{record: record, location: location}, nil
+}
+
+// readMembershipWords reads sequential words of one stored membership
+// record (Rust read_words: find once, then the located read).
+func readMembershipWords(store tree.Store, idRoot uint32, id uint32, start uint32, output []uint64) error {
+	found, err := findMembership(store, idRoot, id)
+	if err != nil {
+		return err
+	}
+	return readFoundMembershipWords(store, found, start, output)
+}
+
+// readFoundMembershipWords reads sequential words from one located record
+// (Rust record::read_record_words): the inline bitmap is re-verified
+// through the located cell with one inspect_leaf; blob bitmaps read
+// through the blob tree. No dictionary lookup is counted per chunk.
+func readFoundMembershipWords(store tree.Store, found membershipFound, start uint32, output []uint64) error {
+	end := uint64(start) + uint64(len(output))
+	if end > uint64(found.record.wordCount) {
+		return corrupt("membership word range exceeds its bitmap")
+	}
+	for index := range output {
+		output[index] = 0
+	}
+	switch found.record.storage {
+	case membershipStorageInline:
+		location := found.location
+		if location == nil {
+			return corrupt("membership inline record lost its leaf location")
+		}
+		return tree.InspectLeaf(idCodec{}, store, location.PageNumber, location.Header.ItemCount, location.Index, func(cell []byte) error {
+			current, err := decodeMembershipRecord(cell)
+			if err != nil {
+				return err
+			}
+			if current.id != found.record.id || current.wordCount != found.record.wordCount ||
+				current.storage != membershipStorageInline {
+				return corrupt("membership record changed during read")
+			}
+			for index := range output {
+				at := membershipIDBase + int(start+uint32(index))*8
+				output[index] = u64LE(cell[at : at+8])
+			}
+			return nil
+		})
+	case membershipStorageBlob:
+		return readMembershipBlobWords(store, found.record.blobRoot, found.record.wordCount, start, output)
+	default:
+		return corrupt("membership dictionary storage is malformed")
+	}
+}
+
+// applyMembershipDelta applies one refcount change to one membership
+// record, removing the record (and its blob, hash entry, and used bit)
+// when the refcount reaches zero (Rust apply_delta +
+// finish_record_removal).
+func applyMembershipDelta(store tree.RetiringStore, state *membershipState, id uint32, change int64) error {
+	work.MembershipLookup(1)
+	var nextRefcount uint64
+	retired := tree.NewRetiredPages()
+	value, err := tree.MutateLeafU64(idCodec{}, store, &state.idRoot, tree.Key{Hi: uint64(id)},
+		membershipRefcountOffset, retired, func(leaf any) (tree.LeafU64Mutation, error) {
+			record := leaf.(membershipRecord)
+			next, err := changedRefcount(record.refcount, change)
+			if err != nil {
+				return tree.LeafU64Mutation{}, err
+			}
+			nextRefcount = next
+			if next == 0 {
+				return tree.LeafU64Mutation{DoReplace: false}, nil
+			}
+			return tree.LeafU64Mutation{DoReplace: true, Replace: next}, nil
+		})
+	if err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	if nextRefcount != 0 {
+		return nil
+	}
+	return finishMembershipRemoval(store, state, value.(membershipRecord))
+}
+
+func changedRefcount(current uint64, change int64) (uint64, error) {
+	if change >= 0 {
+		next := current + uint64(change)
+		if next < current {
+			return 0, overflow("membership refcount")
+		}
+		return next, nil
+	}
+	amount := uint64(-change)
+	if amount > current {
+		return 0, overflow("membership refcount")
+	}
+	return current - amount, nil
+}
+
+// finishMembershipRemoval deletes the hash entry, releases the blob,
+// clears the used bit, and shrinks the ID limit (Rust
+// finish_record_removal).
+func finishMembershipRemoval(store tree.RetiringStore, state *membershipState, record membershipRecord) error {
+	key := hashKey(record.digest, record.wordCount, record.id)
+	retired := tree.NewRetiredPages()
+	if err := tree.DeleteExisting(hashCodec{}, store, &state.hashRoot, tree.VarKey(key[:]), retired); err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	if record.storage == membershipStorageBlob {
+		if err := releaseMembershipBlob(store, record.blobRoot, record.wordCount); err != nil {
+			return err
+		}
+	}
+	retired = tree.NewRetiredPages()
+	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindMembership, record.id, retired)
+	if err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	if !cleared {
+		return corrupt("membership used bit is missing")
+	}
+	if state.entryCount == 0 {
+		return corrupt("membership entry count underflow")
+	}
+	state.entryCount--
+	limit, err := bitmap.ShrinkMembership(store, &state.usedRoot, state.idLimit)
+	if err != nil {
+		return err
+	}
+	state.idLimit = limit
+	return nil
+}
+
+// membershipReferenceBatch is the fixed-memory recurring-reference table
+// (Rust immutable_output/reference_batch.rs): a power-of-two slot table
+// (<=1024 entries) with linear probing; recurring ids accumulate a count
+// and are applied as one delta on flush. When the batch is disabled the
+// caller applies every reference directly.
+type membershipReferenceBatch struct {
+	slots   []referenceSlot
+	entries int
+	enabled bool
+}
+
+type referenceSlot struct {
+	id    uint32
+	count int64
+}
+
+// newMembershipReferenceBatch builds the batch with the given entry
+// capacity (a power of two).
+func newMembershipReferenceBatch(capacity int) membershipReferenceBatch {
+	batch := membershipReferenceBatch{enabled: capacity > 0}
+	if batch.enabled {
+		batch.slots = make([]referenceSlot, capacity*2)
+	}
+	return batch
+}
+
+const referenceBatchEntryLimit = 1024
+
+// addReference records one reference to id (Rust add). The outcome
+// selects the caller's action: added, direct, or full.
+type referenceAdd uint8
+
+const (
+	referenceAdded referenceAdd = iota
+	referenceDirect
+	referenceFull
+)
+
+func (b *membershipReferenceBatch) addReference(id uint32) (referenceAdd, error) {
+	if id == 0 {
+		return 0, corrupt("dictionary reference ID is zero")
+	}
+	if !b.enabled {
+		return referenceDirect, nil
+	}
+	entryLimit := len(b.slots) / 2
+	index := int(id*0x9e3779b1) & (len(b.slots) - 1)
+	for probe := 0; probe < len(b.slots); probe++ {
+		slot := &b.slots[index]
+		if slot.id == id {
+			slot.count++
+			return referenceAdded, nil
+		}
+		if slot.id == 0 {
+			if b.entries == entryLimit {
+				return referenceFull, nil
+			}
+			*slot = referenceSlot{id: id, count: 1}
+			b.entries++
+			return referenceAdded, nil
+		}
+		index = (index + 1) & (len(b.slots) - 1)
+	}
+	return referenceFull, nil
+}
+
+// takeReference removes one slot's delta (Rust take).
+func (b *membershipReferenceBatch) takeReference(index int) (id uint32, count int64, ok bool) {
+	slot := b.slots[index]
+	if slot.id == 0 {
+		return 0, 0, false
+	}
+	b.slots[index] = referenceSlot{}
+	return slot.id, slot.count, true
+}
+
+// finishFlush empties the entry count (Rust finish_flush).
+func (b *membershipReferenceBatch) finishFlush() { b.entries = 0 }
+
+// isEmpty reports no pending entries (Rust is_empty).
+func (b *membershipReferenceBatch) isEmpty() bool { return b.entries == 0 }
+
+// capacity reports the slot table length (Rust len).
+func (b *membershipReferenceBatch) capacity() int { return len(b.slots) }
+func u64LE(b []byte) uint64                       { return binary.LittleEndian.Uint64(b) }

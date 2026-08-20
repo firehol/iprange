@@ -590,26 +590,33 @@ func isFileNamed(n *types.Named) bool {
 }
 
 // approvedModuleInterfaces is the explicit set of module-internal
-// interfaces whose dispatch is an approved indirection. The seven names
+// interfaces whose dispatch is an approved indirection. The eight names
 // are the writer's whole store/codec surface: tree.Store and
 // RetiringStore (COW mutation), tree.LocalGap (gap-callback cells),
-// bitmap.BitmapStore (free-page authority), tree.Codec (per-tree wire
-// contract), writer.rangeFamily (per-family range codec over Codec),
-// and writer.RangeStore (range value accounting over RetiringStore).
+// bitmap.BitmapStore (free-page authority), tree.Codec plus
+// tree.VariableCodec (per-tree wire contract), writer.rangeFamily
+// (per-family range codec over Codec), and writer.RangeStore (range
+// value accounting over RetiringStore).
 // Approval is by (package, name), never by declaration site: an
 // interface declared in a module-internal package can be satisfied by an
 // OUT-OF-MODULE type (stdlib or a future dependency) whose method body
 // the gate cannot scan, so a general declaration-based approval would
 // let a full mapped page launder into owned memory with no diagnostics.
 // The named interfaces are safe to approve because no type outside the
-// scanned source satisfies their method sets today: Codec, LocalGap and
-// rangeFamily reference module-internal types (tree.Key, tree.LocalPrevious,
-// LocalNext, rangeRecord), and the Store-family method names plus exact
-// signatures exist nowhere in the standard library or x/sys. LocalGap
+// scanned source satisfies their method sets today: Codec, VariableCodec,
+// LocalGap and rangeFamily reference module-internal types (tree.Key,
+// tree.LocalPrevious, LocalNext, rangeRecord), and the Store-family
+// method names plus exact signatures exist nowhere in the standard
+// library or x/sys. LocalGap
 // dispatch is additionally bounded by construction: the tree core hands
 // it exactly codec.LeafSize() cells (12/36 bytes for the range families),
 // never a whole page - a future codec family whose leaf size approaches
-// page size must re-verify this property. Any new
+// page size must re-verify this property. VariableCodec is bounded the
+// same way: the tree core reads variable records through the concrete
+// format.SlottedRecord helper using the codec's integer length bounds,
+// and the only dispatched methods carry partial records/keys
+// (WriteBranch, ReadBranchChild, ReadKey, WriteKey), never a whole page.
+// Any new
 // interface must be added here together with its satisfier argument
 // before its dispatch becomes approved; otherwise it keeps failing
 // closed everywhere.
@@ -618,6 +625,7 @@ var approvedModuleInterfaces = []struct {
 	name string
 }{
 	{"github.com/firehol/iprange/v4/go/internal/tree", "Codec"},
+	{"github.com/firehol/iprange/v4/go/internal/tree", "VariableCodec"},
 	{"github.com/firehol/iprange/v4/go/internal/tree", "Store"},
 	{"github.com/firehol/iprange/v4/go/internal/tree", "RetiringStore"},
 	{"github.com/firehol/iprange/v4/go/internal/tree", "LocalGap"},
@@ -4774,6 +4782,181 @@ func findExemptions(w *fileRules, f *ast.File, path string) map[token.Pos]bool {
 		})
 		return exempts
 	}
+	if strings.HasSuffix(path, "internal/writer/catalog_codec.go") ||
+		strings.HasSuffix(path, "internal/writer/membership_codec.go") {
+		// The codec key writes (nameCodec.WriteKey/WriteBranch, hashCodec.
+		// WriteKey) copy the key's record bytes into the tree core's owned
+		// branch-cell buffer. The bytes are always partial wire cells:
+		// tree keys are built from codec cells bounded by the core's
+		// maxTreeCell (512) - the copy can never mint an owned complete
+		// page. The flow cannot measure the bound through the tree.Key
+		// struct (the subslice provenance is lost at the VarKey boundary),
+		// so the exact shapes are exempted, binding-keyed: a copy whose
+		// destination is (a slice of) the function's OWN output parameter
+		// and whose source is exactly the key parameter's Bytes() method
+		// result. Any other copy shape in these files keeps failing closed
+		// (battery-pinned). The parameter identity is resolved from the
+		// file's own FuncDecls: the exemptions run before the walk sets
+		// curFunc, so the codec parameter pairs (key, output) are
+		// collected per declaration up front.
+		codecParams := map[*types.Var]bool{}
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Type.Params == nil {
+				continue
+			}
+			hasKey, hasOutput := false, false
+			for _, group := range fd.Type.Params.List {
+				for _, name := range group.Names {
+					switch name.Name {
+					case "key":
+						hasKey = true
+					case "output":
+						hasOutput = true
+					}
+				}
+			}
+			if !hasKey || !hasOutput {
+				continue
+			}
+			for _, group := range fd.Type.Params.List {
+				for _, name := range group.Names {
+					if tv, ok := w.pc.info.Defs[name].(*types.Var); ok {
+						codecParams[tv] = true
+					}
+				}
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 2 {
+				return true
+			}
+			id, ok := unparen(call.Fun).(*ast.Ident)
+			if !ok || id.Name != "copy" {
+				return true
+			}
+			dst := unparen(call.Args[0])
+			var dstBase ast.Expr
+			switch d := dst.(type) {
+			case *ast.Ident:
+				dstBase = d
+			case *ast.SliceExpr:
+				// output[catalogNameOffset:length]: destination is a
+				// slice of the output parameter.
+				dstBase = unparen(d.X)
+			}
+			dv, ok := w.pc.info.Uses[identOf(dstBase)].(*types.Var)
+			if !ok || dv.Name() != "output" || !codecParams[dv] {
+				return true
+			}
+			// key.Bytes() is a call expression whose function position
+			// is the selector; the argument must unwrap the call, not
+			// the selector.
+			srcCall, ok := unparen(call.Args[1]).(*ast.CallExpr)
+			if !ok || len(srcCall.Args) != 0 {
+				return true
+			}
+			srcSel, ok := unparen(srcCall.Fun).(*ast.SelectorExpr)
+			if !ok || srcSel.Sel.Name != "Bytes" {
+				return true
+			}
+			rv, ok := unparen(srcSel.X).(*ast.Ident)
+			if !ok || rv.Name != "key" {
+				return true
+			}
+			if kv, ok := w.pc.info.Uses[rv].(*types.Var); !ok || !codecParams[kv] {
+				return true
+			}
+			exempts[call.Pos()] = true
+			return true
+		})
+		if !strings.HasSuffix(path, "internal/writer/membership_codec.go") {
+			return exempts
+		}
+		// digestWords hashes the caller-owned membership bitmap with the
+		// stdlib sha256 hasher (Rust hash_words); the SHA-256 digest is
+		// the persisted membership dictionary key, and stdlib SHA-256
+		// only ingests through hash.Hash.Write, whose name collides with
+		// the content-transfer Write ban. The exempted calls feed an
+		// owned 8-byte little-endian word encoding copied out of a
+		// caller-owned word source: OutputWords is a concrete []uint64
+		// (no mapped page view can reach it after the writer restructure),
+		// so no mapped byte ever moves. Exact shape only, binding-keyed:
+		// a single-argument .Write on the exact local variable
+		// initialized by sha256.New() in this file, with an argument
+		// that is neither page-tainted nor file-bearing. Any other
+		// Write receiver or argument keeps failing closed (battery-pinned).
+		digesterVars := map[*types.Var]bool{}
+		mark := func(lhs ast.Expr, rhs ast.Expr) {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || len(call.Args) != 0 {
+				return
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "New" {
+				return
+			}
+			id, ok := unparen(sel.X).(*ast.Ident)
+			if !ok || id.Name != "sha256" {
+				return
+			}
+			fn, ok := w.pc.info.Uses[sel.Sel].(*types.Func)
+			if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "crypto/sha256" {
+				return
+			}
+			lhsIdent, ok := unparen(lhs).(*ast.Ident)
+			if !ok {
+				return
+			}
+			if tv, ok := w.pc.info.Defs[lhsIdent].(*types.Var); ok {
+				digesterVars[tv] = true
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.AssignStmt:
+				if d.Tok == token.DEFINE && len(d.Lhs) == 1 && len(d.Rhs) == 1 {
+					mark(d.Lhs[0], d.Rhs[0])
+				}
+			case *ast.ValueSpec:
+				// var hasher = sha256.New()
+				if len(d.Names) == 1 && len(d.Values) == 1 {
+					mark(d.Names[0], d.Values[0])
+				}
+			}
+			return true
+		})
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Write" {
+				return true
+			}
+			recv, ok := unparen(sel.X).(*ast.Ident)
+			if !ok {
+				return true
+			}
+			rv, ok := w.pc.info.Uses[recv].(*types.Var)
+			if !ok || !digesterVars[rv] {
+				return true
+			}
+			a0 := call.Args[0]
+			if w.pageValue(a0).mapped {
+				return true
+			}
+			if t := w.typeOf(a0); t != nil && fileValueType(t, map[types.Type]bool{}) {
+				return true
+			}
+			exempts[sel.Pos()] = true
+			return true
+		})
+		return exempts
+	}
+
 	if strings.HasSuffix(path, "cursors_public.go") {
 		// Public cursor Seek methods mirror the Rust cursor authority
 		// (range_cursor.rs seek). The banned-selector list contains Seek

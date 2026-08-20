@@ -139,13 +139,22 @@ func keyAt(codec Codec, page []byte, header *Header, index int) (Key, error) {
 }
 
 // branchChild reads and validates one branch child page number (Rust
-// branch_child).
+// branch_child). Variable branch records name the child through the
+// codec's ReadBranchChild override.
 func branchChild(codec Codec, page []byte, header *Header, index int, pageLimit uint64) (uint32, error) {
 	cell, err := codecCell(codec, page, header, index)
 	if err != nil {
 		return 0, err
 	}
-	child := readChild(cell, codec.KeySize())
+	var child uint32
+	if variable, ok := codec.(VariableCodec); ok && codec.KeySize() == 0 {
+		child, err = variable.ReadBranchChild(cell)
+	} else {
+		child = readChild(cell, codec.KeySize())
+	}
+	if err != nil {
+		return 0, err
+	}
 	if child < 2 || uint64(child) >= pageLimit {
 		return 0, corrupt("B+tree child page is invalid")
 	}
@@ -157,11 +166,32 @@ func readChild(cell []byte, keySize int) uint32 {
 }
 
 // codecCell reads one leaf or branch cell by level (Rust codec_cell).
+// Page levels with variable-size records (codec size zero) read through
+// the concrete slotted record helper with the codec's length bounds;
+// fixed-size levels keep the fast slotted path. Cell bytes are always
+// slices of the caller's page (never copied).
 func codecCell(codec Codec, page []byte, header *Header, index int) ([]byte, error) {
+	variable, hasVariable := codec.(VariableCodec)
 	if header.Level == 0 {
+		if hasVariable && codec.LeafSize() == 0 {
+			minimum, maximum := variable.LeafRecordBounds()
+			cell, err := format.SlottedRecord(page, header, index, minimum, maximum)
+			if err != nil {
+				return nil, err
+			}
+			return cell, nil
+		}
 		cell, err := format.SlottedCell(page, header, index, codec.LeafSize())
 		if err != nil {
 			return nil, corrupt("slotted-page cell is outside the record area")
+		}
+		return cell, nil
+	}
+	if hasVariable && codec.KeySize() == 0 {
+		minimum, maximum := variable.BranchRecordBounds()
+		cell, err := format.SlottedRecord(page, header, index, minimum, maximum)
+		if err != nil {
+			return nil, err
 		}
 		return cell, nil
 	}
@@ -178,15 +208,25 @@ type CellBuf struct {
 	len   int
 }
 
-// newBranchCell encodes one branch cell (key + child).
+// newBranchCell encodes one branch cell (key + child). Variable branch
+// records (catalog name branches) route through the codec's WriteBranch
+// override, which returns the encoded length.
 func newBranchCell(codec Codec, key Key, child uint32) (*CellBuf, error) {
 	var cell CellBuf
-	cell.len = codec.KeySize() + 4
+	if variable, ok := codec.(VariableCodec); ok && codec.KeySize() == 0 {
+		length, err := variable.WriteBranch(key, child, cell.bytes[:])
+		if err != nil {
+			return nil, err
+		}
+		cell.len = length
+	} else {
+		cell.len = codec.KeySize() + 4
+		codec.WriteKey(key, cell.bytes[:codec.KeySize()])
+		format.PutU32(cell.bytes[codec.KeySize():cell.len], child)
+	}
 	if cell.len == 0 || cell.len > MaxBranchSize(codec) || cell.len > maxTreeCell {
 		return nil, unsupported("B+tree branch encoding is invalid")
 	}
-	codec.WriteKey(key, cell.bytes[:codec.KeySize()])
-	format.PutU32(cell.bytes[codec.KeySize():cell.len], child)
 	return &cell, nil
 }
 

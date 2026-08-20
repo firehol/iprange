@@ -7,22 +7,50 @@
 package tree
 
 import (
+	"bytes"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// Key is an ordered two-limb tree key: numeric order is (Hi, Lo). The v4
-// ordered keys (retirement transaction extents, IPv4/IPv6 range bounds)
-// all fit this single comparison primitive.
+// Key is one ordered tree key (Rust Key: Copy + Ord). Fixed keys compare
+// numerically as (Hi, Lo) and cover the v4 ordered keys (retirement
+// transaction extents, IPv4/IPv6 range bounds). Variable keys (catalog
+// names, membership hash keys) carry their ordered bytes and compare
+// lexicographically; the codec returns the bytes in its canonical order
+// (digest -> word count -> id for hash keys), so one byte comparison is
+// the whole ordering. bytes views the caller's or the live page's record
+// and is only read within the operation that produced it.
 type Key struct {
-	Hi uint64
-	Lo uint64
+	Hi    uint64
+	Lo    uint64
+	bytes []byte
 }
 
-// Less reports k < other.
-func (k Key) Less(other Key) bool { return k.Hi < other.Hi || (k.Hi == other.Hi && k.Lo < other.Lo) }
+// IsVar reports whether the key is a variable-size byte key.
+func (k Key) IsVar() bool { return k.bytes != nil }
+
+// Bytes returns the variable key bytes, or nil for fixed keys.
+func (k Key) Bytes() []byte { return k.bytes }
+
+// Less reports k < other. A variable key compares greater than any fixed
+// key, but codecs never mix the two forms.
+func (k Key) Less(other Key) bool {
+	if k.bytes != nil || other.bytes != nil {
+		return bytes.Compare(k.bytes, other.bytes) < 0
+	}
+	return k.Hi < other.Hi || (k.Hi == other.Hi && k.Lo < other.Lo)
+}
 
 // Equal reports k == other.
-func (k Key) Equal(other Key) bool { return k.Hi == other.Hi && k.Lo == other.Lo }
+func (k Key) Equal(other Key) bool {
+	if k.bytes != nil || other.bytes != nil {
+		return bytes.Equal(k.bytes, other.bytes)
+	}
+	return k.Hi == other.Hi && k.Lo == other.Lo
+}
+
+// VarKey builds a variable key from its ordered bytes.
+func VarKey(bytes []byte) Key { return Key{bytes: bytes} }
 
 // Codec is the per-tree wire contract (Rust fixed_tree::Codec). Branch
 // cells are key bytes followed by a 4-byte child page number; leaf cells
@@ -43,11 +71,59 @@ type Codec interface {
 	WriteKey(key Key, output []byte)
 }
 
-// MaxBranchSize is the largest branch cell (Rust MAX_BRANCH_SIZE).
-func MaxBranchSize(codec Codec) int { return codec.KeySize() + 4 }
+// MaxBranchSize is the largest branch cell (Rust MAX_BRANCH_SIZE; codecs
+// with variable-size branch records override it).
+func MaxBranchSize(codec Codec) int {
+	if variable, ok := codec.(VariableCodec); ok {
+		return variable.MaxBranchCell()
+	}
+	return codec.KeySize() + 4
+}
 
-// MaxLeafSize is the largest leaf cell (Rust MAX_LEAF_SIZE).
-func MaxLeafSize(codec Codec) int { return codec.LeafSize() }
+// MaxLeafSize is the largest leaf cell (Rust MAX_LEAF_SIZE; codecs with
+// variable-size leaf records override it).
+func MaxLeafSize(codec Codec) int {
+	if variable, ok := codec.(VariableCodec); ok {
+		return variable.MaxLeafCell()
+	}
+	return codec.LeafSize()
+}
+
+// VariableCodec extends Codec for variable-size records or keys (Rust
+// codecs with KEY_SIZE == 0 or LEAF_SIZE == 0). The tree core routes every
+// variable record READ through one concrete slotted helper using the
+// codec's record-length bounds, and only the branch WRITE hooks dispatch
+// through the interface (partial records and keys, exactly like the
+// approved Codec methods). No page view ever dispatches through this
+// interface: the content-transfer gate fails closed on unprovable
+// receivers with complete pages, and the concrete read keeps the record
+// slices provably partial.
+type VariableCodec interface {
+	Codec
+	// MaxBranchCell is the largest encoded branch cell (Rust
+	// MAX_BRANCH_SIZE override; e.g. the full name record with the child
+	// in the index slot).
+	MaxBranchCell() int
+	// MaxLeafCell is the largest encoded leaf cell (Rust MAX_LEAF_SIZE
+	// override; e.g. the name record or the membership ID record).
+	MaxLeafCell() int
+	// LeafRecordBounds returns the [minimum, maximum] byte length of one
+	// variable leaf record (Rust LEAF_SIZE == 0 codecs; the record
+	// carries its own u16 length prefix, so the tree core validates and
+	// slices it concretely).
+	LeafRecordBounds() (minimum, maximum int)
+	// BranchRecordBounds returns the bounds of one variable branch
+	// record (Rust KEY_SIZE == 0 codecs; the branch record is the full
+	// record with the child inside it).
+	BranchRecordBounds() (minimum, maximum int)
+	// WriteBranch encodes one variable branch record and returns its byte
+	// count (Rust write_branch override).
+	WriteBranch(key Key, child uint32, output []byte) (int, error)
+	// ReadBranchChild decodes the child page of one variable branch
+	// record (Rust read_branch_child override; the child is not at the
+	// keySize offset of a full record).
+	ReadBranchChild(cell []byte) (uint32, error)
+}
 
 // FixedCellSize reports the fixed cell length for one level: leaf cells at
 // level 0, branch cells above (Rust Codec::fixed_cell_size). A zero size

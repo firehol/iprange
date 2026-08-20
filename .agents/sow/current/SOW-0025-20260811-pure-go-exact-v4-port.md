@@ -3155,6 +3155,133 @@ G. Sub-rounds inside chunk 3b, each closing its own gate evidence:
    parity, Peirce publication/identity, Sartre mmap-only/lifetimes,
    Leibniz records; level-2 stays kimi/minimax/mimo/qwen.
 
+### 2026-08-20 - M3 chunk-3b-1 implementation record: tree variable
+codecs + catalog/membership write codecs + range_bulk + output builder
+
+Implemented the complete 3b-1 surface under the Rust authority, with
+reopen-verify round trips through the public immutable reader:
+
+- Tree-core variable extension (internal/tree, decisions A + G):
+  Key gains byte-key support (VarKey constructor; Less/Equal compare
+  the byte keys when either side is variable); the optional
+  VariableCodec interface (MaxBranchCell/MaxLeafCell,
+  LeafRecordBounds/BranchRecordBounds, WriteBranch, ReadBranchChild)
+  routes the cell readers, the branch-cell writer, and the max-size
+  checks when KeySize()==0/LeafSize()==0, mirroring the Rust
+  fixed_tree.rs overridables; leaf and branch record reads go through
+  the concrete format.SlottedRecord helper with the codec's integer
+  length bounds (no full-page interface dispatch in the tree core); MutateLeafU64 (fixed_tree::mutate_leaf_u64) with the
+  private-path select, exact lowerBound, in-place u64 field write at
+  the exact cell offset, or record delete; format.SlottedRecord
+  (slotted_page::record with the length envelope check) and
+  format.SlottedAppender (slotted_page::Appender try_push/finish).
+  The fixed-size path is byte-identical; the reader never uses these
+  trees through the tree core (bespoke walkers), so reader hot paths
+  are untouched.
+- Work counters: CatalogIntern, OutputPass, MembershipInternCacheHit,
+  MembershipLookup, MembershipIntern, MembershipRefcountBatch in both
+  build variants, exactly matching Rust work.rs names.
+- Catalog write codecs (internal/writer/catalog_codec.go): the shared
+  12+name_len record wire (u16 len @0, u16 zero @2, u32 index @4, u8
+  name len @8, three zero bytes @9, name @12); nameCodec (types 3/4,
+  KeySize 0, full-record branch cells with the child in the index
+  slot, WriteBranch pads the full record) and indexCodec (types 5/6,
+  KeySize 4, fixed 8-byte branches); insertCatalogEntry inserts name
+  then index, retires through the store, counts CatalogIntern, and
+  reports the exact Rust strings "feed name already exists"/"feed
+  index already exists".
+- Membership dictionary write codecs (membership_codec.go): the ID
+  tree (types 7/8, fixed u32 keys, variable leaf records: 64-byte
+  head + inline words to the 512-byte record limit, or blob head) and
+  the hash tree (types 9/10, fixed 40-byte keys/leaves, 44-byte
+  branches); the hash key is the raw record bytes (digest, word
+  count, id) mirroring the Rust derived Ord; digestWords runs SHA-256
+  over LE-u64 words in <=64-word chunks (Rust hash_words).
+- Membership dictionary (membership_dictionary.go): intern ->
+  find_equal (hash-tree AtOrAfter + located word-for-word compare,
+  counting lookups exactly as Rust: find_equal does NOT count,
+  record::find and apply_delta do) -> insert_new (bitmap
+  AllocateLowestID KindMembership, encode inline/blob, insert ID then
+  hash tree with their own codecs, entry_count++);
+  applyMembershipDelta with in-place refcount mutation and
+  deletion-on-zero; finishMembershipRemoval (hash delete, blob
+  release, ClearUsed, ShrinkMembership); membershipReferenceBatch
+  (power-of-two <=1024 slots, linear probing, Added/Direct/Full,
+  flush with the exact "empty membership reference batch stayed full"
+  string); readMembershipWords through the located record (Rust
+  record::Found), one counted lookup per read not per chunk.
+- Blob tree (membership_blob.go): bottom-up 5-level builder,
+  4048-byte payload leaves (aux 1, leaf data at 48, start u64 @32,
+  length u16 @40), 16-byte branch records (offset u64 @0, child u32
+  @8, reserved @12), only-child collapse, BRANCH_ITEMS=226,
+  writeMembershipBlobLeaf with 64-word chunks, release walk with
+  geometry/coverage checks, readMembershipBlobWords /
+  findMembershipBlobLeaf with the exact expected-level plumbing.
+  Initialization bug fixed during testing: initializeMembershipBlob-
+  Leaf wrote the tail fields but not the page magic (Rust
+  blob_tree::initialize_leaf calls page_header::initialize first);
+  now uses format.InitializePageHeader.
+- Range bulk builder (range_bulk.go): the exact range_bulk.rs
+  6-level bottom-up builder with only-child collapse, PackedPage
+  (no heap pointers), tryPush/canAppend, pushNode, finish/finishLevel
+  and the verbatim error strings ("ordered output ranges are not
+  canonical", "range start is after its end", "indirect range value
+  is zero", "range record does not fit an empty leaf", "range branch
+  cell does not fit", PageSpaceExhausted); v4/v6 record and branch
+  cell encoders over format.SlottedAppender.
+- Output builder (output.go): OutputSpec/FreshOutputSpec, OutputBudget
+  (extent = budget x 4096 via mapping.Create O_EXCL), the mutable
+  latch ("immutable output construction failed"), PushFeed /
+  PushDirectV4/V6 / PushMembershipV4/V6 / PushInternedMembershipV4/V6
+  / InternMembership with checkedOutputWords (every supplied word vs
+  the feed used bitmap: "membership references an inactive feed") and
+  requireOutputShape (word count vs the feed-index limit, canonical
+  final word: "membership bitmap is not canonical"); the append-only
+  Store (reserve_page PageSpaceExhausted/BudgetExceeded
+  "immutable output pages", post-update page ownership check
+  "immutable output page ownership is invalid" against the 4-byte page
+  magic + born txn, RetirePages/DiscardPrivate refusals); Finish in
+  the exact Rust order (membership refs flush, ranges.finish, seal
+  pages with ownership + CRC32C, shrink to page_count*4096, dual meta,
+  FlushRange, SyncFile). Ownership-magic bug fixed during testing:
+  outputPageOwned compared 8 bytes against MainMagic; the page header
+  magic is the 4-byte PageMagic (Rust page_header::owned_by).
+- Reopen-verify round trips (output_test.go): direct v4 (identity,
+  dual meta pair, CRC seals on every data page, range scans, lookups),
+  full-space v6, empty direct/membership state, 2000-record
+  multi-level direct, the v6 branch-overflow one-child right edge
+  (leafCapacity*branchCapacity+1 = 19505 records), sparse 501-word
+  membership with the three-feed catalog (active feeds, entry count 2,
+  id limit 3, dedup bitmap reuse), 512-interned-reference run, budget
+  refusal, malformed-order/permanent-poison, inactive-bit and
+  trailing-zero-word refusals, leaf rollover, store guardrails, and
+  existing-path refusal. Work pins (output_work_test.go, v4work):
+  the reference run counts exactly 1 refcount batch, 1 membership
+  lookup, 512 emitted ranges, 1 output pass, 1 catalog intern; the
+  membership run counts 3 interns and 3 lookups (one refcount apply
+  per range).
+- Gate status (routine gate per the 2026-08-19 user decision: the
+  heavy mutation battery is archived and runs only on request; the
+  routine chunk gate is the boundary scan plus the dynamic mmap-only
+  evidence): go test ./... and go test -tags v4work ./... pass, go
+  vet clean, go test -race clean on writer+tree, gofmt clean, the
+  typed gatescan passes on all five OS configs, the full
+  check-import-graph.sh boundary gate passes (per-package import
+  boundaries, content-transfer scan, module-graph pins, per-target
+  import boundaries, the reader sync-free zone), the mmap-trace
+  evidence shows no read/pread64/readv/write/lseek on any database
+  descriptor, and the MemStats size-class assertion holds (no heap
+  allocation >= 4096 bytes during lookups). Gate tooling grew with
+  the codec surface: VariableCodec joined approvedModuleInterfaces
+  (its dispatched methods carry only partial records/keys; leaf/
+  branch reads go through the concrete format.SlottedRecord with the
+  codec's integer bounds), and the codec key copies plus the sha256
+  digester .Write are exempted as exact file-scoped shapes (a
+  tripwire for the writer's bounded key cells; the exemption is
+  shape- and binding-keyed and stays fail-closed for any other
+  copy).
+
+
 
 - Iterative pass: six narrow reviewers all PASS at HEAD 52f7a39/e02dee9
   (Peirce, Gauss, Faraday, Ampere, Kant, Bernoulli; only P3 cosmetics,

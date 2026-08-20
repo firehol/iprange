@@ -22,6 +22,13 @@ func Predecessor(codec Codec, store Store, root uint32, key Key) (any, error) {
 	return output, err
 }
 
+// PredecessorLocated is Predecessor plus the selected leaf location
+// (Rust fixed_tree::predecessor_located): callers that need to re-inspect
+// the record's cell later keep the location instead of re-descending.
+func PredecessorLocated(codec Codec, store Store, root uint32, key Key) (any, *LeafLocation, error) {
+	return cursorLookup(codec, store, root, key, backward, seekPrevious)
+}
+
 // AtOrAfter returns the first leaf value at or after key, mirroring
 // fixed_tree::at_or_after.
 func AtOrAfter(codec Codec, store Store, root uint32, key Key) (any, error) {

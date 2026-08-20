@@ -1,0 +1,253 @@
+// Feed-catalog write codecs and atomic dual-index maintenance (Rust
+// feed_catalog/codec.rs + mutation.rs). Both indexes share one record
+// wire format: u16 record length @0, u16 zero @2, u32 feed index (or
+// child page in name branches) @4, u8 name length @8, three zero bytes
+// @9, then the name @12.
+
+package writer
+
+import (
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
+)
+
+const (
+	catalogRecordBase  = 12
+	catalogMinRecord   = catalogRecordBase + 1
+	catalogMaxRecord   = catalogRecordBase + format.MaxFeedNameLen
+	catalogIndexBranch = 8
+	catalogNameOffset  = 12
+	catalogIndexOffset = 4
+	catalogNameLenOff  = 8
+)
+
+// CatalogRecord is one encoded catalog record (Rust
+// feed_catalog::codec::Encoded): the caller-owned bounded buffer holds
+// the exact record bytes for one tree insert.
+type CatalogRecord struct {
+	bytes [catalogMaxRecord]byte
+	len   int
+}
+
+// EncodeCatalogRecord writes one name record into the bounded buffer
+// (Rust encode: len + index + name). The name must already satisfy the
+// v4 feed-name grammar; the encoder re-checks it so a caller bug cannot
+// plant an invalid key. The name is the caller's string (never a mapped
+// view), so no owned copy of page bytes can happen here.
+func EncodeCatalogRecord(name string, index uint32) (CatalogRecord, error) {
+	var record CatalogRecord
+	if !format.FeedNameValidString(name) {
+		return record, corrupt("feed catalog name is invalid")
+	}
+	length := catalogRecordBase + len(name)
+	putU16 := func(offset int, v uint16) { format.PutU16(record.bytes[offset:], v) }
+	putU32 := func(offset int, v uint32) { format.PutU32(record.bytes[offset:], v) }
+	putU16(0, uint16(length))
+	putU16(2, 0)
+	putU32(catalogIndexOffset, index)
+	record.bytes[catalogNameLenOff] = byte(len(name))
+	record.bytes[9] = 0
+	record.bytes[10] = 0
+	record.bytes[11] = 0
+	copy(record.bytes[catalogNameOffset:length], name)
+	record.len = length
+	return record, nil
+}
+
+// Len reports the encoded record length.
+func (r *CatalogRecord) Len() int { return r.len }
+
+// Slice returns the encoded record bytes.
+func (r *CatalogRecord) Slice() []byte { return r.bytes[:r.len] }
+
+// catalogDecodeName extracts the name from one catalog record (Rust
+// decode_entry): the returned slice aliases the input record and lives
+// only as long as it. Zero copies on the hot codec path; keys are only
+// compared inside the tree operation that read them.
+func catalogDecodeName(record []byte) ([]byte, uint32, error) {
+	if len(record) < catalogMinRecord {
+		return nil, 0, corrupt("feed catalog record is malformed")
+	}
+	nameLen := int(record[catalogNameLenOff])
+	if int(format.U16(record[0:2])) != catalogRecordBase+nameLen ||
+		format.U16(record[2:4]) != 0 ||
+		record[9] != 0 || record[10] != 0 || record[11] != 0 {
+		return nil, 0, corrupt("feed catalog record is malformed")
+	}
+	name := record[catalogNameOffset : catalogNameOffset+nameLen]
+	if !format.FeedNameValid(name) {
+		return nil, 0, corrupt("feed catalog name is invalid")
+	}
+	return name, format.U32(record[catalogIndexOffset : catalogIndexOffset+4]), nil
+}
+
+// nameCodec is the catalog name tree (Rust NameCodec): variable keys (the
+// name bytes, lexicographic order) and variable full-record branch cells
+// that carry the child in the index slot.
+type nameCodec struct{}
+
+func (nameCodec) BranchType() format.PageType { return format.PageTypeCatalogNameBranch }
+func (nameCodec) LeafType() format.PageType   { return format.PageTypeCatalogNameLeaf }
+func (nameCodec) Aux() uint32                 { return 0 }
+func (nameCodec) KeySize() int                { return 0 }
+func (nameCodec) LeafSize() int               { return 0 }
+func (nameCodec) MaxBranchCell() int          { return catalogMaxRecord }
+func (nameCodec) MaxLeafCell() int            { return catalogMaxRecord }
+
+func (nameCodec) LeafRecordBounds() (int, int) {
+	return catalogMinRecord, catalogMaxRecord
+}
+
+func (nameCodec) BranchRecordBounds() (int, int) {
+	return catalogMinRecord, catalogMaxRecord
+}
+
+func (nameCodec) WriteBranch(key tree.Key, child uint32, output []byte) (int, error) {
+	length := catalogRecordBase + len(key.Bytes())
+	if length > len(output) || length > catalogMaxRecord {
+		return 0, corrupt("feed catalog record buffer is too small")
+	}
+	// The record header fields are written one by one (Rust
+	// write_branch): the length prefix, the zero word, the child, the
+	// name length, and the three zero bytes.
+	format.PutU16(output[0:2], uint16(length))
+	format.PutU16(output[2:4], 0)
+	format.PutU32(output[catalogIndexOffset:catalogIndexOffset+4], child)
+	output[catalogNameLenOff] = byte(len(key.Bytes()))
+	output[9] = 0
+	output[10] = 0
+	output[11] = 0
+	copy(output[catalogNameOffset:length], key.Bytes())
+	return length, nil
+}
+
+func (nameCodec) ReadBranchChild(cell []byte) (uint32, error) {
+	if len(cell) < catalogMinRecord {
+		return 0, corrupt("feed catalog record is malformed")
+	}
+	child := format.U32(cell[catalogIndexOffset : catalogIndexOffset+4])
+	if !format.PageNumberValid(child, format.MaxPageCount) {
+		return 0, corrupt("catalog child out of range")
+	}
+	return child, nil
+}
+
+func (nameCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
+	name, _, err := catalogDecodeName(cell)
+	if err != nil {
+		return tree.Key{}, err
+	}
+	return tree.VarKey(name), nil
+}
+
+func (nameCodec) ReadLeaf(cell []byte) (any, error) {
+	name, index, err := catalogDecodeName(cell)
+	if err != nil {
+		return nil, err
+	}
+	return format.CatalogNameRecord{FeedIndex: index, Name: name}, nil
+}
+
+func (nameCodec) WriteKey(key tree.Key, output []byte) {
+	copy(output, key.Bytes())
+}
+
+// indexCodec is the catalog index tree (Rust IndexCodec): fixed u32 keys,
+// variable leaf records, fixed 8-byte branch cells.
+type indexCodec struct{}
+
+func (indexCodec) BranchType() format.PageType { return format.PageTypeCatalogIndexBranch }
+func (indexCodec) LeafType() format.PageType   { return format.PageTypeCatalogIndexLeaf }
+func (indexCodec) Aux() uint32                 { return 0 }
+func (indexCodec) KeySize() int                { return 4 }
+func (indexCodec) LeafSize() int               { return 0 }
+func (indexCodec) MaxBranchCell() int          { return catalogIndexBranch }
+func (indexCodec) MaxLeafCell() int            { return catalogMaxRecord }
+
+func (indexCodec) LeafRecordBounds() (int, int) {
+	return catalogMinRecord, catalogMaxRecord
+}
+
+// BranchRecordBounds reports the fixed 8-byte index branch cells; the
+// tree core only consults it for KeySize == 0 codecs, so the value is
+// the branch bound for completeness (Rust codecs implement the whole
+// trait).
+func (indexCodec) BranchRecordBounds() (int, int) {
+	return catalogIndexBranch, catalogIndexBranch
+}
+
+func (indexCodec) WriteBranch(key tree.Key, child uint32, output []byte) (int, error) {
+	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output[4:], child)
+	return catalogIndexBranch, nil
+}
+
+func (indexCodec) ReadBranchChild(cell []byte) (uint32, error) {
+	if len(cell) < catalogIndexBranch {
+		return 0, corrupt("feed index branch record is malformed")
+	}
+	return format.U32(cell[4:]), nil
+}
+
+func (indexCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
+	if level == 0 {
+		if len(cell) < catalogMinRecord {
+			return tree.Key{}, corrupt("feed catalog record is malformed")
+		}
+		return tree.Key{Hi: uint64(format.U32(cell[catalogIndexOffset : catalogIndexOffset+4]))}, nil
+	}
+	if len(cell) < catalogIndexBranch {
+		return tree.Key{}, corrupt("feed index branch record is malformed")
+	}
+	return tree.Key{Hi: uint64(format.U32(cell[0:4]))}, nil
+}
+
+func (indexCodec) ReadLeaf(cell []byte) (any, error) {
+	name, index, err := catalogDecodeName(cell)
+	if err != nil {
+		return nil, err
+	}
+	return format.CatalogNameRecord{FeedIndex: index, Name: name}, nil
+}
+
+func (indexCodec) WriteKey(key tree.Key, output []byte) {
+	format.PutU32(output, uint32(key.Hi))
+}
+
+// insertCatalogEntry inserts one entry into both catalog indexes, name
+// first, then index; either duplicate is a structural corruption (Rust
+// feed_catalog::mutation::insert). Every committed page COW-ed by the
+// inserts is retired through the store; on a fresh output store no page is
+// committed yet, so retirement stays empty. The name root and index root
+// always move together on success.
+func insertCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, name string, index uint32) error {
+	record, err := EncodeCatalogRecord(name, index)
+	if err != nil {
+		return err
+	}
+	retired := tree.NewRetiredPages()
+	changed, err := tree.Insert(nameCodec{}, store, nameRoot, record.Slice(), retired)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return corrupt("feed name already exists")
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	retired.Clear()
+	changed, err = tree.Insert(indexCodec{}, store, indexRoot, record.Slice(), retired)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return corrupt("feed index already exists")
+	}
+	if err := store.RetirePages(retired.Slice()); err != nil {
+		return err
+	}
+	work.CatalogIntern(1)
+	return nil
+}
