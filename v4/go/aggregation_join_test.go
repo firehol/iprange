@@ -21,8 +21,8 @@ import (
 
 type ipAddr struct{ hi, lo uint64 }
 
-func ip4(a IPv4) ipAddr       { return ipAddr{lo: uint64(a)} }
-func ip6(a IPv6) ipAddr       { return ipAddr{hi: a.Hi, lo: a.Lo} }
+func ip4(a IPv4) ipAddr { return ipAddr{lo: uint64(a)} }
+func ip6(a IPv6) ipAddr { return ipAddr{hi: a.Hi, lo: a.Lo} }
 func (a ipAddr) less(b ipAddr) bool {
 	if a.hi != b.hi {
 		return a.hi < b.hi
@@ -72,10 +72,16 @@ func contains(list []string, name string) bool {
 	return false
 }
 
-func fixtureRanges(t *testing.T, file string) []struct{ from, to ipAddr; feeds []string } {
+func fixtureRanges(t *testing.T, file string) []struct {
+	from, to ipAddr
+	feeds    []string
+} {
 	t.Helper()
 	fx := manifestFixture(t, file)
-	var out []struct{ from, to ipAddr; feeds []string }
+	var out []struct {
+		from, to ipAddr
+		feeds    []string
+	}
 	for _, r := range fx.MembershipRanges {
 		var from, to ipAddr
 		if fx.Family == "ipv4" {
@@ -92,7 +98,10 @@ func fixtureRanges(t *testing.T, file string) []struct{ from, to ipAddr; feeds [
 }
 
 // feedCoverage sums the inclusive length of every range selecting feed.
-func feedCoverage(rows []struct{ from, to ipAddr; feeds []string }, feed string) format.Cardinality129 {
+func feedCoverage(rows []struct {
+	from, to ipAddr
+	feeds    []string
+}, feed string) format.Cardinality129 {
 	var total format.Cardinality129
 	for _, row := range rows {
 		if contains(row.feeds, feed) {
@@ -103,7 +112,10 @@ func feedCoverage(rows []struct{ from, to ipAddr; feeds []string }, feed string)
 }
 
 // pairOverlap sums the inclusive length of every range selecting both feeds.
-func pairOverlap(rows []struct{ from, to ipAddr; feeds []string }, a, b string) format.Cardinality129 {
+func pairOverlap(rows []struct {
+	from, to ipAddr
+	feeds    []string
+}, a, b string) format.Cardinality129 {
 	var total format.Cardinality129
 	for _, row := range rows {
 		if contains(row.feeds, a) && contains(row.feeds, b) {
@@ -114,7 +126,10 @@ func pairOverlap(rows []struct{ from, to ipAddr; feeds []string }, a, b string) 
 }
 
 // scopeAddresses sums every range selecting at least one scope feed.
-func scopeAddresses(rows []struct{ from, to ipAddr; feeds []string }, feeds []string) format.Cardinality129 {
+func scopeAddresses(rows []struct {
+	from, to ipAddr
+	feeds    []string
+}, feeds []string) format.Cardinality129 {
 	var total format.Cardinality129
 	for _, row := range rows {
 		any := false
@@ -481,7 +496,10 @@ func TestAggregationErrorsAndCancellation(t *testing.T) {
 // ---------------------------------------------------------------------------
 // direct join
 
-type directRow struct{ from, to ipAddr; value uint32 }
+type directRow struct {
+	from, to ipAddr
+	value    uint32
+}
 
 func fixtureDirectRows(t *testing.T, file string) []directRow {
 	t.Helper()
@@ -495,7 +513,10 @@ func fixtureDirectRows(t *testing.T, file string) []directRow {
 
 // joinDirectExpect derives the exact direct-join outcome from the
 // membership and direct models.
-func joinDirectExpect(rows []struct{ from, to ipAddr; feeds []string }, directs []directRow, feeds []string) struct {
+func joinDirectExpect(rows []struct {
+	from, to ipAddr
+	feeds    []string
+}, directs []directRow, feeds []string) struct {
 	selected, mapped, unmapped format.Cardinality129
 	cells                      map[string]map[uint32]format.Cardinality129 // value 0 = unmapped
 	feedCoverage               map[string]format.Cardinality129
@@ -721,7 +742,10 @@ func TestJoinDirectErrors(t *testing.T) {
 // membership join
 
 // joinMembershipExpect derives the exact cross join from the model.
-func joinMembershipExpect(rows []struct{ from, to ipAddr; feeds []string }, left, right []string) struct {
+func joinMembershipExpect(rows []struct {
+	from, to ipAddr
+	feeds    []string
+}, left, right []string) struct {
 	leftAddr, rightAddr, overlap, leftUnc, rightUnc format.Cardinality129
 	cross                                           map[[2]int]format.Cardinality129
 	leftUncCells, rightUncCells                     map[string]format.Cardinality129
