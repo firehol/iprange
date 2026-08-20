@@ -808,6 +808,13 @@ func (w *fileRules) approvedCallee(fun ast.Expr) bool {
 			if w.rangeVarHoldsCallback(o) {
 				return true
 			}
+			// A never-reassigned local bound to a func literal or a
+			// scanned package function is a scanned callee: its body is
+			// part of this package, so calls through it are direct
+			// approved transfers like calls through the literal itself.
+			if w.approvedLocalFuncVar(o, 0) {
+				return true
+			}
 			return w.approvedFuncVar(o, 0)
 		}
 		return false
@@ -2366,6 +2373,12 @@ func (w *fileRules) scannedCallback(arg ast.Expr) bool {
 	case *ast.FuncLit:
 		return true
 	case *ast.Ident:
+		// nil has no body: a nil callback argument cannot launder a
+		// complete page into owned memory, so the scanned-callback
+		// fence accepts it as a clean sentinel.
+		if a.Name == "nil" {
+			return true
+		}
 		switch obj := w.pc.info.Uses[a].(type) {
 		case *types.Func:
 			if obj.Pkg() == nil {
@@ -2860,7 +2873,8 @@ func (w *fileRules) checkCall(v *ast.CallExpr) {
 			// callee exactly like the formal itself, and the store
 			// counter-check demands mapped views for its byte args.
 			rangeLike := w.rangeVarHoldsCallback(obj)
-			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike && !rangeLike {
+			localLike := w.approvedLocalFuncVar(obj, 0)
+			if !w.approvedFuncVar(obj, 0) && !formalLike && !aliasLike && !rangeLike && !localLike {
 				varIndirect = true
 			}
 			if w.isStoreCallbackImpl() && (formalLike || aliasLike || rangeLike || w.forwardsCallbackFormal(v)) {
@@ -4068,8 +4082,21 @@ func (w *fileRules) compositeCarrierMapped(e ast.Expr) bool {
 func (w *fileRules) unprovenVarCallee(fun ast.Expr) bool {
 	switch f := unparen(fun).(type) {
 	case *ast.Ident:
-		_, ok := w.pc.info.Uses[f].(*types.Var)
-		return ok
+		obj, ok := w.pc.info.Uses[f].(*types.Var)
+		if !ok {
+			return false
+		}
+		// A never-reassigned local bound to a func literal (or a chain
+		// of local aliases to one) resolves to a body this scan already
+		// polices, exactly like the literal itself: its own copies and
+		// conversions are caught inside the body, so the call site is
+		// not an unproven indirection. Every other function-typed
+		// variable - a formal parameter callback, a package binding, an
+		// opaque local - keeps fail-closed treatment.
+		if w.approvedLocalFuncVar(obj, 0) {
+			return false
+		}
+		return true
 	case *ast.SelectorExpr:
 		_, ok := w.pc.info.Uses[f.Sel].(*types.Var)
 		return ok

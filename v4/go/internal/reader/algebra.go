@@ -506,15 +506,32 @@ type algebraSink struct {
 	leftOnlyAddresses  format.Cardinality129
 	rightOnlyAddresses format.Cardinality129
 	unionAddresses     format.Cardinality129
+
+	// output selects the materialized-output mode (Rust output.rs
+	// OutputSink): nil in the count and comparison analyses. One
+	// concrete sink carries every algebra consumer so the sweep stays a
+	// single provably scanned concrete scanner; the output state is
+	// reader-owned and the writer calls travel through the output
+	// hooks.
+	output *algebraOutputSink
 }
 
 // enableCache reserves the sink's operation-heap share (Rust
-// SegmentSink::enable_cache; a no-op for both algebra sinks).
-func (s *algebraSink) enableCache(heap *operationHeap, maxBytes uint64) error { return nil }
+// SegmentSink::enable_cache; a no-op for both algebra sinks, the
+// output sink sizes its sequence cache).
+func (s *algebraSink) enableCache(heap *operationHeap, maxBytes uint64) error {
+	if s.output != nil {
+		return s.output.enableCache(heap, maxBytes)
+	}
+	return nil
+}
 
 // segment folds one maximal segment into the active analysis (Rust
 // CountSink::segment and ComparisonSink::segment).
 func (s *algebraSink) segment(from, to addrKey, present, counts []uint32, ops rangeOps, check checkpoint) error {
+	if s.output != nil {
+		return s.output.segment(from, to, present, counts, ops, check)
+	}
 	if s.right == nil {
 		selected, err := s.left.any(present, counts, check)
 		if err != nil {

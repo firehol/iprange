@@ -127,6 +127,20 @@ func TestCreateAttemptInvalidDestination(t *testing.T) {
 			t.Fatalf("CreateAttempt(%q) detail = %q, want the Rust detail", destination, detail)
 		}
 	}
+	dir := t.TempDir()
+	for _, name := range []string{".iprange-reserved", "output.readers"} {
+		destination := filepath.Join(dir, name)
+		_, err := writer.CreateAttempt(destination, writer.PolicyReplaceExisting)
+		if err == nil {
+			t.Fatalf("CreateAttempt(%q) with the reserved name succeeded", destination)
+		}
+		if code := errorCode(t, err); code != format.CodeNameInvalid {
+			t.Fatalf("CreateAttempt(%q) code = %d, want NameInvalid", destination, code)
+		}
+		if detail := errorDetail(t, err); detail != "invalid destination name" {
+			t.Fatalf("CreateAttempt(%q) detail = %q, want the Rust detail", destination, detail)
+		}
+	}
 }
 
 func TestCreateAttemptFailIfExistsRefusesExisting(t *testing.T) {

@@ -165,6 +165,23 @@ func nibble(value byte) byte {
 	return 'a' + value - 10
 }
 
+// invalidDestinationName mirrors Rust path::validate_main_name: one
+// exact path component, never the reserved .iprange- prefix or the
+// .readers coordination suffix (Rust "invalid destination name").
+func invalidDestinationName(name string) bool {
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
+		return true
+	}
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, ".iprange-") {
+		return true
+	}
+	if strings.HasSuffix(lower, ".readers") {
+		return true
+	}
+	return false
+}
+
 // CreateAttempt validates the destination and names one publication
 // attempt (Rust workflow::create + CreatedOutput::create_with):
 // rollback-safe replacement requires the atomic name exchange, and the
@@ -183,7 +200,7 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 	}
 	clean := filepath.Clean(destination)
 	name := filepath.Base(clean)
-	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
+	if invalidDestinationName(name) {
 		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := filepath.Dir(clean)

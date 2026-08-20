@@ -15,6 +15,7 @@ import (
 	"hash/adler32"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // deflateHeapOverhead mirrors Rust metadata.rs DEFLATE_HEAP_OVERHEAD: the
@@ -189,7 +190,7 @@ func writeStoredBlock(output *bytes.Buffer, data []byte, final bool) {
 // private pages and returns its root (Rust metadata.rs write_chain): every
 // page is the exact chunk geometry the readers enforce, the next pointer
 // links forward, and the final page carries next zero.
-func metadataWriteChain(s *DraftStore, compressed []byte) (uint32, error) {
+func metadataWriteChain(s tree.Store, compressed []byte) (uint32, error) {
 	if len(compressed) == 0 || uint64(len(compressed)) > format.MetadataCompressedBound(format.MaxMetadataUncompressed) {
 		return 0, invalid("compressed metadata length is invalid")
 	}
@@ -236,7 +237,7 @@ func metadataWriteChain(s *DraftStore, compressed []byte) (uint32, error) {
 // applies the exact reader chain contract: header identity, chunk
 // geometry, contiguous logical offsets, full non-final chunks, zero
 // reserved fields, and zero tail bytes.
-func metadataCollectPages(s *DraftStore, meta format.Meta) ([]uint32, error) {
+func metadataCollectPages(s tree.Store, meta format.Meta) ([]uint32, error) {
 	var pages []uint32
 	if meta.MetadataRoot == 0 {
 		return nil, nil
@@ -301,4 +302,30 @@ func metadataCollectPages(s *DraftStore, meta format.Meta) ([]uint32, error) {
 		return nil, corrupt(fmt.Sprintf("metadata chain ends at %d declared %d", offset, meta.MetadataCompressed))
 	}
 	return pages, nil
+}
+
+// WriteMetadata stages one exact metadata payload on a one-shot output
+// (Rust immutable_output::Builder::write_metadata_with_budget): the
+// caller heap budget bounds the compression workspace, the compressed
+// bytes land through the forward chunk chain, and one metadata stage is
+// allowed per output.
+func (b *OutputBuilder) WriteMetadata(input []byte, maxHeapBytes uint64) error {
+	return b.mutate(func() error {
+		if b.metadataStaged {
+			return wrongState("immutable output metadata is already set")
+		}
+		compressed, err := metadataCompress(input, maxHeapBytes)
+		if err != nil {
+			return err
+		}
+		root, err := metadataWriteChain(b, compressed)
+		if err != nil {
+			return err
+		}
+		b.meta.MetadataRoot = root
+		b.meta.MetadataUncompressed = uint64(len(input))
+		b.meta.MetadataCompressed = uint64(len(compressed))
+		b.metadataStaged = true
+		return nil
+	})
 }

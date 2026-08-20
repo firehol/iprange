@@ -70,6 +70,9 @@ type OutputBuilder struct {
 	// membershipRefs aggregates recurring membership references so each
 	// id is applied as one refcount delta (Rust ReferenceBatch).
 	membershipRefs membershipReferenceBatch
+	// metadataStaged mirrors the Rust output metadata latch: one
+	// WriteMetadata per output.
+	metadataStaged bool
 	failed         bool
 }
 

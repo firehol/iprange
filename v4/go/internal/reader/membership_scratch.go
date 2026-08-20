@@ -417,3 +417,111 @@ func addCheckedU32(a, b uint32) (uint32, bool) {
 	}
 	return c, true
 }
+
+// sequenceOf returns one cached entry's position span.
+func (c *sequenceCache) sequenceOf(slot seqCacheSlot) []uint32 {
+	start := int(slot.offset)
+	length := int(slot.lengthPlusOne) - 1
+	return c.positions[start : start+length]
+}
+
+// sequenceValue returns the cached membership id for one exact position
+// sequence (Rust SequenceCache::sequence_value): the hash is a 4096-
+// checkpoint fold over the sequence, and a match requires the exact
+// stored sequence.
+func (c *sequenceCache) sequenceValue(positions []uint32, check checkpoint) (uint32, bool, error) {
+	if len(c.slots) == 0 {
+		return 0, false, nil
+	}
+	hash, err := hashSequence(positions, check)
+	if err != nil {
+		return 0, false, err
+	}
+	index := hash & c.mask
+	for range c.slots {
+		slot := c.slots[index]
+		if slot.lengthPlusOne == 0 {
+			return 0, false, nil
+		}
+		if slot.hash == hash {
+			equal, err := sequencesEqual(c.sequenceOf(slot), positions, check)
+			if err != nil {
+				return 0, false, err
+			}
+			if equal {
+				return slot.membershipID, true, nil
+			}
+		}
+		index = (index + 1) & c.mask
+	}
+	return 0, false, nil
+}
+
+// insertSequence stores one position sequence with its membership id
+// (Rust SequenceCache::insert_sequence), dropping it silently when the
+// cache is full.
+func (c *sequenceCache) insertSequence(positions []uint32, value uint32, check checkpoint) error {
+	if value == 0 {
+		return corrupt("membership cache value is zero")
+	}
+	if len(c.slots) == 0 || c.entries == c.entryLimit ||
+		len(positions) > int(c.positionCap)-len(c.positions) {
+		return nil
+	}
+	hash, err := hashSequence(positions, check)
+	if err != nil {
+		return err
+	}
+	length := uint32(len(positions))
+	offset := uint32(len(c.positions))
+	index := hash & c.mask
+	for range c.slots {
+		if c.slots[index].lengthPlusOne == 0 {
+			c.positions = append(c.positions, positions...)
+			c.slots[index] = seqCacheSlot{
+				hash:          hash,
+				membershipID:  value,
+				offset:        offset,
+				lengthPlusOne: length + 1,
+			}
+			c.entries++
+			return nil
+		}
+		index = (index + 1) & c.mask
+	}
+	return nil
+}
+
+// hashSequence folds one position sequence into the cache hash with the
+// 4096-unit checkpoint cadence (Rust cache.rs hash_sequence).
+func hashSequence(positions []uint32, check checkpoint) (uint64, error) {
+	hash := mix(uint64(len(positions)))
+	for work, position := range positions {
+		if work&4095 == 4095 && check != nil {
+			if err := check(); err != nil {
+				return 0, err
+			}
+		}
+		hash = mix(hash ^ uint64(position))
+	}
+	return hash, nil
+}
+
+// sequencesEqual compares two position sequences exactly with the
+// 4096-unit checkpoint cadence (Rust cache.rs sequences_equal).
+func sequencesEqual(left, right []uint32, check checkpoint) (bool, error) {
+	if len(left) != len(right) {
+		return false, nil
+	}
+	for work := range left {
+		if work&4095 == 4095 && check != nil {
+			if err := check(); err != nil {
+				return false, err
+			}
+		}
+		if left[work] != right[work] {
+			return false, nil
+		}
+	}
+	return true, nil
+}

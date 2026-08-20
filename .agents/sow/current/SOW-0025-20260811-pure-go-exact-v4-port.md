@@ -1505,6 +1505,41 @@ container shapes, each with its honest twin). Real module scan rc=0
 (5 OS); go test (both tag sets), -race, vet (module and gate), gofmt,
 import-graph boundary check all green.
 
+### 2026-08-20 - M3 chunk-3b-2 slice 3 gatescan round: four gate false positives fixed in the gate tool itself
+
+The milestone-3 external gatescan (every committed and new production
+file under v4/go, all 5 OS configs) flagged four sites in the new
+publish_set surface. All four were proven gate-analysis false positives;
+the real code never copies a complete page (mmap-only holds). The gate
+tool (v4/go-gate) was fixed so the scans express the true contract, with
+three durable benign battery pins (322-324):
+
+- internal/reader/algebra_output.go:398 string(entry.Name): the decoded
+  catalog name is bounded to <=255 bytes by the v4 name grammar, but the
+  gate lost the bound when the analysis read a.state.names directly. The
+  production code decodes through the State().Names() accessor, whose
+  summary preserves the bounded provenance (pin 324).
+- membership_publish_set.go:216 NewOutputBuilder(..., nil): nil has no
+  body and cannot launder a mapped page; the scanned-callback fence
+  gained the nil-literal exemption (pin 322).
+- membership_publish_set.go:240/243 discarded(err): the local
+  `discarded := func(cause error)...` closure is a never-reassigned local
+  bound to a func literal - its body is part of the scanned file, so a
+  call through the variable is a proven callee, not an unproven
+  indirection. approvedCallee, the varIndirect exemption, and
+  unprovenVarCallee now treat approvedLocalFuncVar bindings as scanned
+  (pin 323); the summary-tainted error argument that triggered the flags
+  is an error value, not a page, so the call-site fence no longer misreads
+  it as a complete-page copy.
+
+Gate evidence for this round: real-module gatescan rc=0 on the linux
+config and on the full 5-config set (16 bytes of log = nothing but the
+exit marker); boundary corpus 55/55 (44 rejections, 11 benign
+acceptances); the three new pins accepted standalone; go test ./... both
+tag sets, -race, checkptr, vet, gofmt, 5-OS cross-builds plus darwin
+v4work, and the Rust suite all green. No production mmap-only behavior
+changed; the full 718-case battery runs as the milestone-close gate.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.
@@ -3384,6 +3419,100 @@ snapshot_to compose. Two parts:
   surface. Gate: go test ./... both tag sets, vet, race, gofmt,
   cross-builds (linux/darwin/freebsd/netbsd/windows, darwin v4work),
   and the full check-import-graph.sh all pass.
+
+### 2026-08-20 - M3 chunk-3b-2 slice 3 implementation record:
+publish_set
+
+Third 3b-2 slice (decision D): publish_set, the materialized algebra
+set output published as its own immutable v4 file. Architecture (the
+reader/writer import boundary forces the shape): the output sink is
+reader-owned machinery (selection, scan, cache, positions, address
+accounting) reached through the existing concrete algebraSink - the
+single-sink pattern from 3a, extended with one output mode whose
+writer calls travel as function values (the rangeOps adapter
+pattern); the one-shot builder stays writer-owned and is published
+through the slice-2 staging layer; the module root composes the
+pipeline exactly like Rust algebra/output.rs publish (validate
+budget -> prepare -> workflow::create -> build -> workflow::publish)
+with the AlgebraPreparationFailure error surface (early / discarded /
+from_publication shapes collapsed onto Cause + Cleanup at the Go
+boundary).
+
+- reader/algebra_output.go: AlgebraSetOperation (Union/Intersection/
+  Exclusion with the "membership algebra intersection is empty" rule),
+  AlgebraOutputMode (PreserveFeeds/Flat), AlgebraOutputPrepared
+  (operation heap, resolved plan, catalog positions, output feed
+  count with the "membership algebra output feeds" gate), the
+  algebraOutputPlan (union-any / intersection-all / exclusion
+  qualify, fill_output with the u32::MAX "membership algebra output
+  feed disappeared" corrupt class and the intersection-ordered /
+  present-sorted current vector), the concrete function-value writer
+  bridge (Feed/Intern/PushV4/PushV6 as separate func-typed formals of
+  BuildAlgebraOutput: the gate callback fence requires the writer
+  method values at the call site rather than a hooks struct),
+  BuildAlgebraOutput (feed pushes with per-4096 cancellation, the
+  global-to-output map, output-heap vectors, the family-dispatched
+  sweep into the output sink, sink finish), and the output sink
+  itself: per-segment qualify / coalesce / flush with PositionWords
+  (hasPending consumed at flush like the Rust pending.take(), so no
+  non-qualifying segment can flush an empty pending),
+  the sequence-keyed cache (reader cache.rs parity) with
+  membership_intern_cache_hit work counting, "membership algebra
+  selected empty output membership" and "algebra output membership
+  cache is empty" corrupt classes, and the "membership algebra output
+  addresses"/"output range count" overflow labels. Three selection
+  methods return with their 3b callers: all (the 3a-recorded
+  allPresent), forEachPosition, forEachPresent.
+- reader/membership_scratch.go: sequence-keyed cache surfaces
+  (sequenceValue/insertSequence with the Rust hash_sequence and
+  sequences_equal 4096-unit checkpoints) joined to the existing
+  keyed surface.
+- writer: OutputBuilder.WriteMetadata (metadata.go, under the
+  existing metadata-file exemption: metadataCompress with the caller
+  heap budget, the forward chain over tree.Store, "immutable output
+  metadata is already set"), metadataWriteChain/metadataCollectPages
+  widened from *DraftStore to tree.Store (approved dispatch; the
+  DraftStore call sites are unchanged), the builder metadataStaged
+  latch, and CreateAttempt gained the Rust path::validate_main_name
+  reserved-name rule (the .iprange- prefix and the .readers suffix
+  refuse with "invalid destination name"; the publish_set boundary
+  pins it). No new exemption: the hasher/buffer shapes
+  are the already-exempted metadata.go ones.
+- module root: public AlgebraSetOperation/AlgebraOutputMode
+  constructors, AlgebraOutputBudget, AlgebraSetReport/AlgebraSetResult
+  (with the writer PublicationResult aliased), PublicationPolicy
+  aliases, AlgebraPreparationFailure (Cause + Cleanup, Error/Unwrap),
+  and MembershipAlgebra.PublishSet mirroring algebra/output.rs publish
+  with the Rust failure mapping: budget/cancellation/prepare/create
+  errors are early (Clean), build/finish errors discard the attempt
+  and carry its cleanup state, publish refusals carry the result
+  cleanup state, and every detail string is Rust-verbatim through the
+  public Error classes. The builder mapping closes in every path
+  after creation: Rust drops the mapped writer after publish, and Go
+  must release the exclusive lifetime lock (Mapping.Close is
+  idempotent) before the caller can reopen the destination; the
+  success path reports a close failure, the failure paths prefer the
+  original cause.
+- Tests (membership_publish_set_test.go plus the v4work and zeroalloc
+  slices): publish -> reopen -> verify round trips over the committed
+  Rust fixtures (catalog feeds, membership ranges, CRC/seal, fresh
+  identity, metadata). The committed membership-ipv4 fixture carries
+  70 catalog feeds (feed-000..feed-069 with feed-005 published as
+  feed-reused), so preserve-mode reports 70 output feeds with only the
+  seven present feeds carrying ranges; the per-feed projection
+  coalesces adjacent same-feed intervals across membership rows, and
+  Flat union coalesces the three segments into one full range. The
+  Rust intern-pinning shape is pinned over a generated 1024-segment
+  corpus (2 interns, 1022 cache hits, 1 refcount batch), FailIfExists
+  budget files=2 and replacement files=3 admission, budget refusal
+  pins, empty intersection, empty selection, missing names,
+  destination-exists early refusal, replacement policies, closed
+  source (the SDK WrongState class), and zero-alloc (no >= 4096 heap
+  object) across the build path.
+- Gate: go test ./... both tag sets, vet, race, gofmt, cross-builds,
+  and the full check-import-graph.sh all pass (record at the slice
+  close, below).
+
 
   copy).
 
