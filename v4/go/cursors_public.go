@@ -30,10 +30,10 @@ func (r *ImmutableReader) DirectCursorV4(direction RangeDirection) (*DirectCurso
 		return nil, err
 	}
 	if r.inner.Meta().ValueKind != format.ValueKindDirect {
-		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct cursor requires a direct-value database"}
+		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct lookup requires a direct-value database"}
 	}
 	if r.inner.Meta().AddressFamily != 4 {
-		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "range cursor address family does not match the database"}
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "lookup address family does not match the database"}
 	}
 	inner, err := r.inner.NewDirectCursor4(reader.RangeDirection(direction))
 	if err != nil {
@@ -79,10 +79,10 @@ func (r *ImmutableReader) DirectCursorV6(direction RangeDirection) (*DirectCurso
 		return nil, err
 	}
 	if r.inner.Meta().ValueKind != format.ValueKindDirect {
-		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct cursor requires a direct-value database"}
+		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct lookup requires a direct-value database"}
 	}
 	if r.inner.Meta().AddressFamily != 6 {
-		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "range cursor address family does not match the database"}
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "lookup address family does not match the database"}
 	}
 	inner, err := r.inner.NewDirectCursor6(reader.RangeDirection(direction))
 	if err != nil {

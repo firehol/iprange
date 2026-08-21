@@ -49,9 +49,10 @@ CI-grade: well under a minute, at most a couple of minutes, single-core.
 The mutation corpora and the whole-program scanner that re-analyzed the
 entire module once per test case (~9 core-hours per run) are deleted with
 this entry: the scanner tool directory and its shell harness
-are removed, and every reference to them is purged from SOWs and documents
-(preserved only in git history per the user instruction to commit first,
-HEAD d16c88e).
+are removed, and every reference to them is purged from the live status
+and current guidance; dated historical entries remain in the execution
+log and the Status History appendix (preserved also in git history per
+the user instruction to commit first, HEAD d16c88e).
 
 The mmap-only and file-I/O policy gate is now a full-codebase adversarial
 review: four concurrent fresh reviewers on the lead's own model read the
@@ -84,9 +85,9 @@ Every .go file, every build-tagged variant, tests included.
     custody before publish and discard;
   - error-type consolidation: join/merge error chains are single
     fmt.Errorf wraps with the close-failure cause appended;
-  - abortAfter with unresolved state maps to CodeCleanupInProgress (77),
-    nested under the abort error exactly like Rust CleanupIncomplete
-    (sdk_error.rs);
+  - abortAfter with unresolved state maps to CodeCleanupInProgress
+    (64), nested under the abort error exactly like Rust CleanupIncomplete
+    (sdk_error.rs CleanupInProgress = 64);
   - the stale gate-era comment vocabulary is purged from production
     sources (zero non-test hits);
   - reserved-name checks use ASCII-only folding with NUL rejection from

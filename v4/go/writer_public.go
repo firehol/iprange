@@ -316,7 +316,7 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 		// Rust commit_with: a preparation failure aborts the draft and
 		// reports the NotCommitted result carrying the cause wrapped in
 		// the TransactionAborted class (code 22); a failed discard
-		// nests the CleanupInProgress class (code 77, Rust
+		// nests the CleanupInProgress class (code 64, Rust
 		// Error::CleanupIncomplete) exactly like Rust
 		// abort_after_source.
 		return t.abortAfter(attempt, err), nil
@@ -348,7 +348,7 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 // abortAfter reports an aborted commit the Rust way
 // (abort_after/abort_after_source): the result error class is
 // TransactionAborted (code 22); when the abandonment discard also fails,
-// the chain nests the CleanupInProgress class (code 77, Rust
+// the chain nests the CleanupInProgress class (code 64, Rust
 // CleanupIncomplete) around the original cause. Both classes stay
 // reachable through errors.As on the unwrapped chain.
 func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
@@ -357,7 +357,7 @@ func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error
 	inner := cause
 	if discardErr != nil {
 		// Rust abort_after_source nests Error::CleanupIncomplete (code
-		// CleanupInProgress, 77) around the original cause, brands the
+		// CleanupInProgress, 64) around the original cause, brands the
 		// writer unusable, and keeps the outer TransactionAborted class
 		// as the As target.
 		t.w.core.MarkUnresolved(discardErr)

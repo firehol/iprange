@@ -115,7 +115,7 @@ func TestOutcomeUnknownChild(t *testing.T) {
 	case "abort_nested":
 		// Both faults fire: the preparation failure aborts the commit and
 		// the abandonment discard fails too, so the chain nests the
-		// CleanupInProgress class (code 77, Rust CleanupIncomplete)
+		// CleanupInProgress class (code 64, Rust CleanupIncomplete)
 		// around the original cause, exactly like Rust abort_after_source.
 		if res.Status != CommitNotCommitted {
 			t.Fatalf("commit status = %v, want NotCommitted", res.Status)

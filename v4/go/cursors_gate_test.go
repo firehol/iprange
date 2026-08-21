@@ -9,8 +9,9 @@ import "testing"
 
 func TestDirectCursorKindGate(t *testing.T) {
 	// A membership database is not direct: the cursor must refuse with
-	// WrongValueKind (Rust cursor.rs direct(): "direct cursor requires
-	// a direct-value database"), never return cursor that decodes
+	// WrongValueKind (Rust public path Database::direct_cursor_v4 ->
+	// generation.rs require_direct: "direct lookup requires a
+	// direct-value database"), never return a cursor that decodes
 	// membership IDs as values.
 	db := mustOpen(t, "rust/membership-ipv4.iprdb")
 	defer db.Close()
