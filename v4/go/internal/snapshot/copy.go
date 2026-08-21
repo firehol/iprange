@@ -43,8 +43,14 @@ func chargeReferenceBatch(heap *uint64) int {
 	return entries
 }
 
-// floorPowerOfTwo returns the largest power of two at or below value.
+// floorPowerOfTwo returns the largest power of two at or below value,
+// or 0 for a non-positive value (Rust floor_power_of_two with its
+// explicit zero guard: a heap that cannot fit one entry disables the
+// batch with no charge).
 func floorPowerOfTwo(value int) int {
+	if value <= 0 {
+		return 0
+	}
 	power := 1
 	for power <= value>>1 {
 		power <<= 1

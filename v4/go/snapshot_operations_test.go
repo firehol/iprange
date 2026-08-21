@@ -24,8 +24,8 @@ import (
 // snapshotBudget returns one Rust-shaped snapshot budget with the given
 // open-file count (Rust tests budget(open_files)): 16 MiB heap, 100k
 // output pages.
-func snapshotBudget(openFiles uint32) SnapshotBudget {
-	return SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: openFiles}
+func snapshotBudget(openFiles uint32) *SnapshotBudget {
+	return &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: openFiles}
 }
 
 // snapshotDest returns one fresh destination path inside a fresh private
@@ -106,7 +106,7 @@ func TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata(t *
 	}
 
 	destination := snapshotDest(t, "direct-snapshot.iprdb")
-	result, err := SnapshotTo(fixture(t, "direct-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	result, err := SnapshotTo(fixture(t, "direct-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), nil)
 	if err != nil {
 		t.Fatal("snapshot:", err)
 	}
@@ -189,7 +189,7 @@ func TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata(t *t
 	}
 
 	destination := snapshotDest(t, "membership-snapshot.iprdb")
-	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), nil)
 	if err != nil {
 		t.Fatal("snapshot:", err)
 	}
@@ -287,7 +287,7 @@ func TestSnapshotImmutableStructuredPreservesRangesAndMetadata(t *testing.T) {
 			}
 
 			destination := snapshotDest(t, fixtureName+".snapshot")
-			result, err := SnapshotTo(fixture(t, fixtureName), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+			result, err := SnapshotTo(fixture(t, fixtureName), SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), nil)
 			if err != nil {
 				t.Fatal("snapshot:", err)
 			}
@@ -378,7 +378,7 @@ func TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing(t
 	cancelled := NewCancellationToken()
 	cancelled.Cancel()
 	destination := snapshotDest(t, "cancelled.iprdb")
-	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), cancelled)
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), cancelled)
 	if code := failureCode(t, err); code != ErrorCancelled {
 		t.Fatalf("cause code = %v, want cancelled", code)
 	}
@@ -392,7 +392,7 @@ func TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing(t
 	if err := os.WriteFile(foreign, []byte("foreign"), 0o644); err != nil {
 		t.Fatal("write foreign:", err)
 	}
-	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, foreign, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, foreign, PolicyFailIfExists, snapshotBudget(2), nil)
 	if code := failureCode(t, err); code != ErrorNameExists {
 		t.Fatalf("cause code = %v, want name exists", code)
 	}
@@ -406,7 +406,7 @@ func TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing(t
 
 	// The open-file budget refuses before anything is created.
 	destination = snapshotDest(t, "budget.iprdb")
-	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(0); return &b }(), nil)
+	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(0), nil)
 	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
 		t.Fatalf("cause code = %v, want insufficient resource budget", code)
 	}
@@ -436,7 +436,7 @@ func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T
 
 	// Establish the exact output page count of this source.
 	exact := snapshotDest(t, "exact.iprdb")
-	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, exact, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, exact, PolicyFailIfExists, snapshotBudget(2), nil)
 	if err != nil {
 		t.Fatal("exact snapshot:", err)
 	}
@@ -483,7 +483,7 @@ func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T
 func TestSnapshotLiveRefusedAtBoundary(t *testing.T) {
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "live.iprdb")
-	_, err := SnapshotTo(sourceFile, SnapshotSourceLive, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(0); return &b }(), nil)
+	_, err := SnapshotTo(sourceFile, SnapshotSourceLive, destination, PolicyFailIfExists, snapshotBudget(0), nil)
 	if code := failureCode(t, err); code != ErrorOSUnsupported {
 		t.Fatalf("cause code = %v, want os unsupported", code)
 	}
@@ -495,7 +495,7 @@ func TestSnapshotLiveRefusedAtBoundary(t *testing.T) {
 	if err := copyFixture(t, "direct-ipv4.iprdb", self); err != nil {
 		t.Fatal("copy fixture:", err)
 	}
-	_, err = SnapshotTo(self, SnapshotSourceLive, self, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	_, err = SnapshotTo(self, SnapshotSourceLive, self, supportedSnapshotReplacement(), snapshotBudget(3), nil)
 	if code := failureCode(t, err); code != ErrorOSUnsupported {
 		t.Fatalf("live self cause code = %v, want os unsupported", code)
 	}
@@ -510,7 +510,7 @@ func TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent(t *test
 	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
 		t.Fatal("write previous:", err)
 	}
-	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), snapshotBudget(3), nil)
 	if err != nil {
 		t.Fatal("replacement snapshot:", err)
 	}
@@ -536,7 +536,7 @@ func TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublicati
 	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
 		t.Fatal("write previous:", err)
 	}
-	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExistingNoRollback, func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExistingNoRollback, snapshotBudget(3), nil)
 	if err != nil {
 		t.Fatal("no-rollback snapshot:", err)
 	}
@@ -576,7 +576,7 @@ func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
 		t.Fatal("close before:", err)
 	}
 
-	result, err := SnapshotTo(sourcePath, SnapshotSourceImmutable, sourcePath, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	result, err := SnapshotTo(sourcePath, SnapshotSourceImmutable, sourcePath, supportedSnapshotReplacement(), snapshotBudget(3), nil)
 	if err != nil {
 		t.Fatal("self snapshot:", err)
 	}
@@ -610,7 +610,7 @@ func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
 func TestSnapshotReplacementRequiresExistingDestination(t *testing.T) {
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "missing.iprdb")
-	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), snapshotBudget(3), nil)
 	if code := failureCode(t, err); code != ErrorNameNotFound {
 		t.Fatalf("cause code = %v, want name not found", code)
 	}
@@ -633,7 +633,7 @@ func TestSnapshotStrictReplacementFailsBeforeChangingDestination(t *testing.T) {
 	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
 		t.Fatal("write previous:", err)
 	}
-	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExisting, func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExisting, snapshotBudget(3), nil)
 	if code := failureCode(t, err); code != ErrorDurabilityUnsupported {
 		t.Fatalf("cause code = %v, want durability unsupported", code)
 	}
@@ -669,7 +669,7 @@ func TestSnapshotMalformedTraversalFailsCleanlyButCRCDamageIsNotImplicitlyValida
 	opened.Close()
 
 	destination := snapshotDest(t, "malformed-out.iprdb")
-	_, err = SnapshotTo(malformed, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	_, err = SnapshotTo(malformed, SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), nil)
 	if code := failureCode(t, err); code != ErrorFormatInvalid {
 		t.Fatalf("cause code = %v, want format invalid", code)
 	}
@@ -688,7 +688,7 @@ func TestSnapshotMalformedTraversalFailsCleanlyButCRCDamageIsNotImplicitlyValida
 		page[28] ^= 0xff
 	})
 	destination = snapshotDest(t, "damaged-out.iprdb")
-	if _, err := SnapshotTo(damaged, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil); err != nil {
+	if _, err := SnapshotTo(damaged, SnapshotSourceImmutable, destination, PolicyFailIfExists, snapshotBudget(2), nil); err != nil {
 		t.Fatalf("CRC-damaged snapshot failed: %v", err)
 	}
 	output := openPublished(t, destination)
@@ -850,5 +850,79 @@ func buildLargeDirectSource(t *testing.T, path string, ranges int) {
 	}
 	if err := builder.Close(); err != nil {
 		t.Fatal("close:", err)
+	}
+}
+
+// TestSnapshotTinyHeapMembershipPublishesWithBatchDisabled pins the
+// Rust floor_power_of_two zero guard end-to-end: a snapshot heap under
+// one reference-batch slot pair (32 bytes) disables both batches with no
+// charge, so a membership source without metadata still publishes and a
+// structured source whose metadata exceeds the heap refuses with
+// InsufficientResourceBudget. Before the zero guard the charge wrapped
+// the heap arithmetic and bypassed the metadata bound (review P1).
+func TestSnapshotTinyHeapMembershipPublishesWithBatchDisabled(t *testing.T) {
+	destination := snapshotDest(t, "tiny-membership.iprdb")
+	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	if err != nil {
+		t.Fatal("tiny-heap membership snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+	output := openPublished(t, destination)
+	defer output.Close()
+	outputInfo, err := output.Info()
+	if err != nil {
+		t.Fatal("output info:", err)
+	}
+	source := openPublic(t, "membership-ipv4.iprdb")
+	defer source.Close()
+	sourceInfo, err := source.Info()
+	if err != nil {
+		t.Fatal("source info:", err)
+	}
+	if outputInfo.RangeRecordCount != sourceInfo.RangeRecordCount || outputInfo.ActiveFeedCount != sourceInfo.ActiveFeedCount {
+		t.Errorf("content diverged: ranges %d/%d feeds %d/%d", outputInfo.RangeRecordCount, sourceInfo.RangeRecordCount, outputInfo.ActiveFeedCount, sourceInfo.ActiveFeedCount)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotTinyHeapStructuredMetadataRefused pins the metadata heap
+// bound under the tiny heap: the structured fixture's 87-byte metadata
+// cannot fit a 16-byte heap after the (disabled) batches, so the copy
+// refuses before publication, while the metadata-free sibling publishes.
+func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
+	destination := snapshotDest(t, "tiny-structured.iprdb")
+	_, err := SnapshotTo(fixture(t, "structured-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
+		t.Fatalf("cause code = %v, want insufficient resource budget (err %v)", code, err)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("refused snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+
+	destination = snapshotDest(t, "tiny-structured-nothreat.iprdb")
+	result, err := SnapshotTo(fixture(t, "structured-ipv4-nothreat.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	if err != nil {
+		t.Fatal("tiny-heap nothreat snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+	output := openPublished(t, destination)
+	defer output.Close()
+	outputInfo, err := output.Info()
+	if err != nil {
+		t.Fatal("output info:", err)
+	}
+	source := openPublic(t, "structured-ipv4-nothreat.iprdb")
+	defer source.Close()
+	sourceInfo, err := source.Info()
+	if err != nil {
+		t.Fatal("source info:", err)
+	}
+	if outputInfo.RangeRecordCount != sourceInfo.RangeRecordCount {
+		t.Errorf("content diverged: ranges %d/%d", outputInfo.RangeRecordCount, sourceInfo.RangeRecordCount)
 	}
 }

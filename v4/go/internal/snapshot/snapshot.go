@@ -98,7 +98,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 		// mapping close is not).
 		if !released {
 			if closeErr := source.Close(); closeErr != nil {
-				cause = mergeSnapshotErrors(cause, closeErr)
+				cause = attachClose(cause, closeErr)
 			}
 			released = true
 		}
@@ -151,7 +151,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 		closeErr := builder.Close()
 		cleanup := attempt.Discard()
 		if closeErr != nil {
-			err = mergeSnapshotErrors(err, closeErr)
+			err = attachClose(err, closeErr)
 		}
 		return fail(err, cleanup)
 	}
@@ -162,7 +162,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 		closeErr := builder.Close()
 		cleanup := attempt.Discard()
 		if closeErr != nil {
-			cause = mergeSnapshotErrors(cause, closeErr)
+			cause = attachClose(cause, closeErr)
 		}
 		return fail(cause, cleanup)
 	}
@@ -207,16 +207,16 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 	if err != nil {
 		var failure *writer.PublicationPreparationFailure
 		if errors.As(err, &failure) {
-			return nil, &Failure{Cause: failure.Cause, Cleanup: failure.Cleanup}
+			return nil, &Failure{Cause: attachClose(failure.Cause, closeErr), Cleanup: failure.Cleanup}
 		}
-		return nil, &Failure{Cause: err, Cleanup: writer.CleanupStateClean}
+		return nil, &Failure{Cause: attachClose(err, closeErr), Cleanup: writer.CleanupStateClean}
 	}
 	if closeErr != nil {
 		// A refused or outcome-unknown publish keeps its Rust Ok
 		// classification; the close failure attaches as the secondary
 		// cause (publish_set precedent).
 		if result.Cause != nil {
-			if merged := mergeSnapshotErrors(result.Cause, closeErr); merged != nil {
+			if merged := attachClose(result.Cause, closeErr); merged != nil {
 				result.Cause = merged
 			}
 			return result, nil
@@ -236,14 +236,16 @@ func encodeIdentity(device, inode uint64) [32]byte {
 	return bytes
 }
 
-// mergeSnapshotErrors keeps the primary cause and attaches a cleanup-side
-// error as the secondary (the publish_set mergeErrors shape).
-func mergeSnapshotErrors(primary, secondary error) error {
-	if primary == nil {
-		return secondary
-	}
-	if secondary == nil {
+// attachClose attaches a cleanup-side close error to the primary cause
+// (the publish_set mergeErrors shape: the primary stays the
+// errors.As/Is/Unwrap target with the secondary present in the message
+// only).
+func attachClose(primary error, closeErr error) error {
+	if closeErr == nil {
 		return primary
 	}
-	return fmt.Errorf("%w; %v", primary, secondary)
+	if primary == nil {
+		return closeErr
+	}
+	return fmt.Errorf("%w; %v", primary, closeErr)
 }

@@ -69,7 +69,7 @@ func (f *SnapshotPreparationFailure) Error() string {
 	if f == nil {
 		return "<nil>"
 	}
-	return f.Cause.Error()
+	return "iprange v4 snapshot preparation: " + f.Cause.Error()
 }
 
 // Unwrap exposes the primary cause.
@@ -103,16 +103,22 @@ func SnapshotTo(sourcePath string, sourceMode SnapshotSourceMode, destinationPat
 	if err != nil {
 		return zero, &SnapshotPreparationFailure{Cause: err, Cleanup: CleanupStateClean}
 	}
-	check := func() error { return cancellation.check() }
-	result, failure := snapshot.To(sourcePath, internalMode, destinationPath, publicationPolicy, &snapshot.Budget{
-		MaxHeapBytes:   budget.MaxHeapBytes,
-		MaxOutputPages: budget.MaxOutputPages,
-		MaxOpenFiles:   budget.MaxOpenFiles,
-	}, check)
+	check := cancellation.check
+	result, failure := snapshot.To(sourcePath, internalMode, destinationPath, publicationPolicy, budget.internal(), check)
 	if failure != nil {
 		return zero, &SnapshotPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.Cleanup}
 	}
 	return SnapshotResult{Publication: *result}, nil
+}
+
+// internal converts the public budget onto the machine budget (the
+// PageBudget.internal() pattern).
+func (b SnapshotBudget) internal() *snapshot.Budget {
+	return &snapshot.Budget{
+		MaxHeapBytes:   b.MaxHeapBytes,
+		MaxOutputPages: b.MaxOutputPages,
+		MaxOpenFiles:   b.MaxOpenFiles,
+	}
 }
 
 // snapshotMode maps the public source mode onto the internal machine
