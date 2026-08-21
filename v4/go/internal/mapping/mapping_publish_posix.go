@@ -11,23 +11,20 @@ import (
 )
 
 // FreeBSD and NetBSD have no atomic name-exchange primitive in the
-// pinned x/sys surface: the exchange policies refuse (Rust
-// require_exchange_available), and rename-no-replace is unavailable
-// too, so PolicyFailIfExists publications always refuse on these
-// targets (failing closed: there is no overwrite race). The plain
-// replacement and the retained-directory sync keep working. Builds are
-// verified by the cross-compile matrix.
+// pinned x/sys surface: the exchange policies refuse early (Rust
+// require_exchange_available) and RenameExchange is unsupported. The
+// no-replace refuse differs per target: FreeBSD runs the crash-safe
+// linkat machine (mapping_publish_freebsd.go, Rust link_noreplace);
+// NetBSD has no no-replace primitive and refuses (Rust
+// rename_noreplace Unsupported on non-linux/non-apple/non-freebsd), so
+// PolicyFailIfExists publication is classified as a preparation
+// failure with the attempt discarded. The plain replacement and the
+// retained-directory sync keep working on both. Builds are verified by
+// the cross-compile matrix.
 
 // ExchangeAvailable reports whether the target has an atomic name
 // exchange (Rust require_exchange_available: linux and apple only).
 func ExchangeAvailable() bool { return false }
-
-// RenameNoReplace is unavailable without the atomic primitive; callers
-// must use an isolated attempt name so no-replace semantics are
-// preserved by construction.
-func RenameNoReplace(oldpath, newpath string) error {
-	return &format.Error{Code: format.CodeOSUnsupported, Detail: "rename_noreplace is not available on this target"}
-}
 
 // RenameExchange is unavailable without the atomic primitive (Rust
 // require_exchange_available failing closed).

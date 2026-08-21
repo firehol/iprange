@@ -13,7 +13,7 @@ import "github.com/firehol/iprange/v4/go/internal/format"
 func ExchangeAvailable() bool { return false }
 
 // RenameNoReplace refuses on Windows.
-func RenameNoReplace(oldpath, newpath string) error {
+func RenameNoReplace(oldpath, newpath string, expectedDevice, expectedInode uint64) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "rename_noreplace is not available on windows"}
 }
 

@@ -10,6 +10,7 @@ package writer
 import (
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -358,17 +359,25 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 	source := attempt.AttemptPath()
 	switch policy {
 	case PolicyFailIfExists:
-		err = mapping.RenameNoReplace(source, attempt.destination)
+		err = mapping.RenameNoReplace(source, attempt.destination, fileDevice, fileInode)
 	case PolicyReplaceExisting:
 		err = mapping.RenameExchange(source, attempt.destination)
 	case PolicyReplaceExistingNoRollback:
 		err = mapping.RenamePlain(source, attempt.destination)
 	}
 	if err != nil {
-		// Any rename refusal before the destination provably held the
-		// output is Rust outcome_unknown (attempt.rs from_armed:
-		// !desired_proven keeps the private artifact as recovery residue
-		// and reports CleanupState::Clean). The attempt file is retained.
+		// A target without the no-replace primitive refuses the first
+		// namespace operation with Unsupported: Rust classifies that as
+		// the preparation failure (state1_selected=false) with the
+		// attempt discarded, so no residue accumulates per attempt
+		// (netbsd and windows). Every other rename refusal before the
+		// destination provably held the output is Rust outcome_unknown
+		// (attempt.rs from_armed: !desired_proven keeps the private
+		// artifact as recovery residue and reports CleanupState::Clean).
+		var nsErr *format.Error
+		if errors.As(err, &nsErr) && nsErr.Code == format.CodeOSUnsupported {
+			return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+		}
 		return &PublicationResult{
 			Status:             PublicationOutcomeUnknown,
 			DestinationContent: DestinationContentUnclassified,
@@ -478,9 +487,18 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 		}
 		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
 	}
-	// Capture the attempt identity so a later Discard is identity-guarded
-	// (Rust binds cleanup to the captured identity).
-	attempt.SetFileIdentity(device, inode)
+	// The attempt identity must still be the one captured from the
+	// builder descriptor at creation (Rust verify_name compares the
+	// probed identity to the expected one; a path swap is a conflict,
+	// never a silent rebinding). Attempts created without a builder
+	// capture the probe here so Discard is still identity-guarded.
+	if attempt.fileProven {
+		if device != attempt.fileDevice || inode != attempt.fileInode {
+			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+		}
+	} else {
+		attempt.SetFileIdentity(device, inode)
+	}
 	return device, inode, nil
 }
 

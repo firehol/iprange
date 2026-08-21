@@ -24,7 +24,11 @@ func TestRenameNoReplaceRefusesExisting(t *testing.T) {
 	if err := os.WriteFile(dst, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := RenameNoReplace(src, dst)
+	device, inode, err := StatIdentity(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = RenameNoReplace(src, dst, device, inode)
 	if err == nil {
 		t.Fatal("rename_noreplace over an existing destination succeeded")
 	}
@@ -46,7 +50,7 @@ func TestRenameNoReplaceRefusesExisting(t *testing.T) {
 
 func TestRenameNoReplaceMissingSource(t *testing.T) {
 	dir := t.TempDir()
-	err := RenameNoReplace(filepath.Join(dir, "missing"), filepath.Join(dir, "dst"))
+	err := RenameNoReplace(filepath.Join(dir, "missing"), filepath.Join(dir, "dst"), 0, 0)
 	if err == nil {
 		t.Fatal("rename_noreplace of a missing source succeeded")
 	}

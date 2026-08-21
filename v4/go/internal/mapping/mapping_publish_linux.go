@@ -43,8 +43,10 @@ func renameErr(err error, existsErr, missingErr error, operation string) error {
 // RenameNoReplace atomically renames oldpath to newpath only when
 // newpath does not exist (renameat2 RENAME_NOREPLACE; Rust
 // Directory::rename_noreplace, operation "publish name without
-// replacement").
-func RenameNoReplace(oldpath, newpath string) error {
+// replacement"). expectedDevice/expectedInode are the FreeBSD machine's
+// proof parameters; the atomic syscall is its own no-replace proof, so
+// linux ignores them (the FreeBSD entry point uses them).
+func RenameNoReplace(oldpath, newpath string, expectedDevice, expectedInode uint64) error {
 	err := unix.Renameat2(unix.AT_FDCWD, oldpath, unix.AT_FDCWD, newpath, unix.RENAME_NOREPLACE)
 	if err != nil {
 		return renameErr(err, unix.EEXIST, nil, "publish name without replacement")

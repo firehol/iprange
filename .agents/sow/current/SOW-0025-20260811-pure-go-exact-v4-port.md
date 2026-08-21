@@ -60,6 +60,50 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
+### Status (2026-08-21) - re-review round: FreeBSD no-replace machine, NetBSD classification, records corrections
+
+- Re-review verdicts so far (same five reviewers, delta ae57dfa ->
+  adcbd90 -> HEAD): Ohm (APIs/docs) returned one P2 - CleanupInProgress
+  was recorded as code 77 but is 64 (codes.go line 77 vs sdk_error.rs:76
+  CleanupInProgress = 64) - plus two P3; Aquinas (wire/integrity)
+  returned one P2 - on the freebsd/netbsd targets the fail-if-exists
+  rename refusal now retained one residue attempt file per attempt,
+  while Rust refuses the unsupported primitive as the preparation
+  failure with the attempt discarded and implements no-replace on
+  FreeBSD with the crash-safe linkat machine - plus two P3. Pauli, Hume,
+  and Aristotle re-reviews still running.
+- Fixed with this entry:
+  - FreeBSD no-replace publication implemented as the crash-safe linkat
+    machine (Rust namespace_mutation.rs link_noreplace): identity-proved
+    source probe, linkat, link-state classification, directory syncs,
+    identity-proved alias unlink, and the destination-only proof; crash
+    points publication.freebsd.after_noreplace_{link,link_sync,
+    alias_unlink,alias_sync} at the exact Rust positions. The machine is
+    compiled on every non-Windows target so the exact syscall sequence
+    runs in build-host tests; the FreeBSD entry point
+    (mapping_publish_freebsd.go) is its only production caller.
+  - NetBSD keeps the no-replace refusal (mapping_publish_netbsd.go) and
+    the writer now classifies the Unsupported refusal like Rust's
+    first-namespace-op Unsupported: preparation failure with the attempt
+    discarded, so no residue accumulates per attempt (Rust attempt.rs
+    state1_selected=false -> preparation).
+  - Custody identity compare: verifyCustody compares the path probe to
+    the creation-time identity captured from the builder descriptor
+    instead of rebinding it (Rust verify_name); Discard stays
+    identity-guarded on the creation capture.
+  - Records: CleanupInProgress is code 64 everywhere; the direct-cursor
+    gate detail strings now match what the Rust public path emits
+    (require_direct: "direct lookup requires a direct-value database"
+    and "lookup address family does not match the database"); the
+    scanner-purge sentence is scoped to live guidance.
+- Validation: go test both tag sets, -race (both), vet, gofmt, 5-OS
+  cross-builds and cross-vet of the OS-tagged tests all green; ten new
+  machine unit tests plus a four-point child-process crash suite (each
+  FreeBSD crash point exits 86 in a spawned child, then the transition
+  recovers in-process to the destination-only state).
+- Re-review of this delta is with the same five reviewers; the slice
+  closes only when all five report no P0-P2.
+
 ### Status (2026-08-21) - slice 3 close gate: five-aspect review executed, findings fixed, re-review pending
 
 - M3 chunk-3b-2 slice 3 (publish_set surface) is at the close gate. The
@@ -3036,8 +3080,16 @@ Reviewer findings:
 - Single-level five-aspect review, 2026-08-21 (HEAD 2a5e78e): five
   reviewers, disjoint aspects, Rust authority baseline; verdicts FAIL x4
   plus PASS-with-P2 x1; all findings fixed and validated (Status entry
-  above). Delta re-review is in progress with the same five reviewers;
-  the slice closes only when all five report no P0-P2.
+  above).
+- Re-review round 1 (delta ae57dfa): Ohm FAILed one P2 (code 77 vs 64
+  records) plus two P3; Aquinas FAILed one P2 (freebsd/netbsd residue
+  regression and the missing FreeBSD no-replace capability) plus two P3;
+  Pauli, Hume, and Aristotle re-reviews were still running when this
+  entry was written. All round-1 findings are fixed and validated
+  (Status entry above, including the FreeBSD linkat machine, the NetBSD
+  preparation classification, and the custody identity compare).
+- The slice closes only when all five reviewers report no P0-P2 on the
+  final delta.
 - The earlier milestone-1 gate rounds and the retired scanner-era form
   narratives are preserved in git history and are not reproduced here;
   their dated execution-log entries remain below.
