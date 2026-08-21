@@ -271,10 +271,19 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 		return nil, &format.Error{Code: format.CodeConflict, Detail: "destination parent is not a directory"}
 	}
 	if policy == PolicyFailIfExists {
-		if _, err := os.Lstat(clean); err == nil {
-			return nil, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
-		} else if !os.IsNotExist(err) {
-			return nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+		// Rust require_fail_if_exists_available checks the main name
+		// and its .readers coordination twin (namespace.rs
+		// require_absent twice): a live sidecar or crash residue
+		// occupies the destination slot under the fail-if-exists
+		// contract, and the immutable reader refuses a published
+		// database next to a sidecar. Replace policies never check
+		// absence (Rust workflow::create uses create() for those).
+		for _, candidate := range []string{clean, clean + coordinationSuffix} {
+			if _, err := os.Lstat(candidate); err == nil {
+				return nil, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+			} else if !os.IsNotExist(err) {
+				return nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+			}
 		}
 	}
 	device, inode, err := mapping.StatIdentity(dir)

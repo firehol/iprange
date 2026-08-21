@@ -114,6 +114,33 @@ func TestCreateAttemptNamesAndValidates(t *testing.T) {
 	}
 }
 
+func TestCreateAttemptFailIfExistsChecksCoordinationTwin(t *testing.T) {
+	// Rust require_fail_if_exists_available refuses when EITHER the
+	// main name or its .readers coordination twin exists (namespace.rs
+	// require_absent twice); a live sidecar or crash residue occupies
+	// the destination slot even when the main name is free.
+	dir := t.TempDir()
+	twin := filepath.Join(dir, "output.iprdb.readers")
+	if err := os.WriteFile(twin, []byte("live"), 0o600); err != nil {
+		t.Fatal("write twin:", err)
+	}
+	if _, err := writer.CreateAttempt(filepath.Join(dir, "output.iprdb"), writer.PolicyFailIfExists); err == nil {
+		t.Fatal("CreateAttempt succeeded with the coordination twin present")
+	} else if code := errorCode(t, err); code != format.CodeNameExists {
+		t.Fatalf("CreateAttempt twin-present code = %d, want NameExists", code)
+	}
+	// The twin occupies the main slot too: the main name itself may
+	// also be present, and the refusal is the same class.
+	if _, err := writer.CreateAttempt(filepath.Join(dir, "output.iprdb"), writer.PolicyFailIfExists); err == nil {
+		t.Fatal("CreateAttempt succeeded with the coordination twin present")
+	}
+	// Replace policies never check absence (Rust workflow::create uses
+	// create() for replace): the twin is no obstacle there.
+	if _, err := writer.CreateAttempt(filepath.Join(dir, "output.iprdb"), writer.PolicyReplaceExisting); err != nil {
+		t.Fatalf("CreateAttempt replace with twin present: %v", err)
+	}
+}
+
 func TestCreateAttemptInvalidDestination(t *testing.T) {
 	for _, destination := range []string{"", "/", "..", "."} {
 		_, err := writer.CreateAttempt(destination, writer.PolicyReplaceExisting)
