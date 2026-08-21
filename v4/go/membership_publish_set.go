@@ -273,6 +273,32 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 		return zero, publicError(err)
 	}
 	if closeErr != nil {
+		if result.Cause != nil {
+			// A refused or outcome-unknown publish keeps its Rust Ok
+			// classification; the close failure is cleanup-side and is
+			// attached as the secondary cause (Rust has no fallible
+			// step after publish Ok - the builder drop is infallible).
+			// The caller still inspects Status, DestinationContent,
+			// and the result's own Cleanup state.
+			if merged := mergeErrors(result.Cause, closeErr); merged != nil {
+				result.Cause = merged
+			}
+			return AlgebraSetResult{
+				Report: AlgebraSetReport{
+					SourceCount:        built.SourceCount,
+					SourceRangeCount:   built.SourceRangeCount,
+					JoinedSegmentCount: built.JoinedSegmentCount,
+					OutputFeedCount:    built.OutputFeedCount,
+					OutputRangeCount:   built.OutputRangeCount,
+					OutputAddresses:    built.OutputAddresses,
+				},
+				Publication: *result,
+			}, nil
+		}
+		// The destination provably holds the published file; the close
+		// failure is still reported as a hard error, conservative and
+		// unchanged: the caller must not assume the sealed mapping was
+		// released.
 		return zero, &AlgebraPreparationFailure{Cause: publicError(closeErr), Cleanup: CleanupStateClean}
 	}
 	// A refused or outcome-unknown publish is a Rust Ok result carrying
@@ -298,6 +324,9 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 // bounded-fail-safe, and errors.Join would be flagged as a potential
 // complete-page transfer even though the values are error objects.
 func mergeErrors(primary, secondary error) error {
+	if primary == nil {
+		return secondary
+	}
 	if secondary == nil {
 		return primary
 	}

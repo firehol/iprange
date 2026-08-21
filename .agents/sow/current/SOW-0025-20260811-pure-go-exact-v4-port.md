@@ -1598,6 +1598,61 @@ classification; the full 718-case battery (old binary) is finishing as
 round-1 evidence and the authoritative battery re-runs on the new
 binary before the milestone closes.
 
+### 2026-08-21 - M3 chunk-3b-2 slice 3 round-3: fail-if-exists coordination-twin refusal
+
+Round-2 level-1 re-review (HEAD cb281bf): Jason PASS, Leibniz PASS
+(three P3 notes carried), Linnaeus FAIL with one new verified P2:
+CreateAttempt's FailIfExists check Lstat'ed only the main destination
+name, while Rust require_fail_if_exists_available requires BOTH main
+and coordination absence (publication/namespace.rs require_absent
+twice; workflow.rs FailIfExists -> create_absent). With the main name
+free but its .readers twin present (live session sidecar or crash
+residue), Go built and renamed the output and reported success, and
+the Go immutable reader then refused the published database next to
+the sidecar - a FailIfExists contract violation with an unusable
+published artifact.
+
+Fix (commit 76c5309): the FailIfExists branch of CreateAttempt now
+Lstat'ing both candidate names (main and main.readers), refusing
+NameExists "publication name already exists" when either exists and
+IO when the probe itself fails, mirroring require_absent twice.
+Replace policies keep the Rust create() semantics: no absence check.
+Regression test pins the twin-present refusal, the main-present
+refusal under the same class, and the replace-policy twin tolerance.
+
+Validation: go test -count=1 ./... both tag sets, -race writer+root,
+vet, gofmt all green; the round-3 delta re-reviewed by all five
+level-1 reviewers; the authoritative 718-case battery on the fixed
+gate binary is running (session, niced) and is the milestone-close
+gate.
+
+### 2026-08-21 - M3 chunk-3b-2 slice 3 round-3b: refused-publish close-error merge
+
+Round-3 delta review (HEAD 76c5309): Peirce no new issue (round-2
+PASS stands); Sartre reported one new P2: when writer.Publish
+returned a refused/outcome-unknown PublicationResult (Cause != nil)
+and the post-publish builder.Close() then failed, PublishSet
+returned a hard AlgebraPreparationFailure{closeErr,
+CleanupStateClean}, discarding the result classification - the exact
+contract this round's P1 fix was meant to preserve, and internally
+inconsistent with the discard path's mergeErrors behavior. Rust
+parity: after workflow::publish Ok no fallible step exists (the
+builder drop is infallible).
+
+Fix (commit 7812bb9): when the close fails after a refused/outcome-
+unknown publish, the close error is attached as the secondary cause
+(mergeErrors keeps the primary) and Ok(AlgebraSetResult) with the
+result's own Cleanup state is returned; the proven-publish close
+failure keeps the existing conservative hard error (the mapping was
+not provably released). mergeErrors is now total (nil primary
+returns the secondary) and is pinned by a unit test: primary stays
+the errors.As/Is/Unwrap target with both details visible in Error().
+
+Validation: go test -count=1 ./... both tag sets, -race root+writer,
+vet (go and gate) all green; the round-3 delta re-reviewed by all
+five level-1 reviewers; the authoritative battery on the fixed gate
+binary is running and is the milestone-close gate.
+
 ## Review Process (user decision, 2026-08-12)
 
 1. Implement the milestone work, always long-term-best and minimal-complete.

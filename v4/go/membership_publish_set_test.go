@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -602,5 +603,34 @@ func TestPublishSetEmptyIntersection(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); err != nil {
 		t.Fatal("intersection output missing:", err)
+	}
+}
+
+// TestMergeErrorsKeepsPrimaryCause pins the close-error merge on the
+// refuse/outcome-unknown publication path: the primary cause must stay
+// the errors.As/Is/Unwrap target with the secondary attached only in
+// the message, mirroring the discard path of PublishSet.
+func TestMergeErrorsKeepsPrimaryCause(t *testing.T) {
+	primary := &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+	secondary := errors.New("close failed")
+	if merged := mergeErrors(primary, nil); merged != primary {
+		t.Fatal("mergeErrors(primary, nil) must return the primary unchanged")
+	}
+	if merged := mergeErrors(nil, secondary); merged != secondary {
+		t.Fatal("mergeErrors(nil, secondary) must return the secondary (the only failure)")
+	}
+	merged := mergeErrors(primary, secondary)
+	var fe *format.Error
+	if !errors.As(merged, &fe) || fe.Code != format.CodeNameExists {
+		t.Fatalf("errors.As through the merged error lost the primary class: %v", merged)
+	}
+	if !errors.Is(merged, primary) {
+		t.Fatal("errors.Is on the primary must hold through the merged error")
+	}
+	if errors.Unwrap(merged) != primary {
+		t.Fatal("Unwrap must report the primary cause")
+	}
+	if got := merged.Error(); !strings.Contains(got, "already exists") || !strings.Contains(got, "close failed") {
+		t.Fatalf("Error() = %q, want both the primary and the secondary details", got)
 	}
 }
