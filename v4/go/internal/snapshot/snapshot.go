@@ -104,6 +104,13 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 		}
 		return nil, &Failure{Cause: cause, Cleanup: cleanup}
 	}
+	// A pre-cancelled snapshot refuses before any destination artifact
+	// exists (Rust source_guard/basic.rs lock_file_cancellable refuses
+	// at the source-open cancellation lock): the attempt is never
+	// created, so there is nothing to discard.
+	if err := checkCancellation(check); err != nil {
+		return fail(err, writer.CleanupStateClean)
+	}
 	attempt, err := writer.CreateAttempt(destinationPath, policy)
 	if err != nil {
 		return fail(err, writer.CleanupStateClean)

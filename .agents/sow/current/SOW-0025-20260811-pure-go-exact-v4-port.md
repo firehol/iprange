@@ -159,6 +159,32 @@ Every .go file, every build-tagged variant, tests included.
   storedZlib fallback remains the honest layout when the budget fits the
   bound but not the deflate workspace.
 
+- Post-gate P3 parity round (all five reviewers PASS at HEAD 8749f99;
+  applied before the slice close-out): the exchange retirement machine
+  is now Rust-exact. verifyCustody binds the replacement destination
+  (previousCustody: identity + byte length + an open descriptor to the
+  old main inode, replacement.rs PreviousMain parity) and
+  retireExchangedPrevious mirrors verify_private_or_retired and
+  unlink_exact: the bound inode must keep its captured byte length, a
+  zero-link inode is already retired and requires the private name
+  absent, a multi-link inode is the link-count conflict, the private
+  name must still name the captured inode with exactly one link, and
+  the identity-guarded unlink must drop the last link (CleanupConflict
+  "retired previous destination still has a link" residue). The two
+  "retired ..." detail strings became the Rust-verbatim problem texts.
+  The three retirement crash points (publication.after_main_rename /
+  after_previous_unlink / after_retirement_sync) are injected with the
+  existing fault machinery and pinned by
+  TestCrashPublishReplacePreservesExactPreviousOrDesiredState (Rust
+  replacement_crashes_preserve_exact_previous_or_desired_state): after
+  the exchange the main holds the complete new generation and the
+  private name holds the exchanged previous; after the unlink no
+  private artifact survives. A pre-cancelled snapshot now refuses
+  before any destination artifact exists (Rust lock_file_cancellable
+  order); the metadata copy charge includes the reader's length+1
+  overflow probe; the flate workspace test uses runtime.KeepAlive
+  instead of the dead `_ = enc`.
+
 ### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
 
 - Next M3 chunk after the 3b-2 close: the compact-snapshot surface.

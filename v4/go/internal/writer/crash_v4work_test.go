@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,38 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
+
+// crashFixedTag and crashFixed16 build the fixed 16-byte identity fields
+// of one direct output (the writer_test package owns its own copies of
+// these helpers; this v4work suite needs them in the internal package).
+func crashFixedTag(text string) [16]byte {
+	var tag [16]byte
+	copy(tag[:], text)
+	return tag
+}
+
+func crashFixed16(value byte) [16]byte {
+	var out [16]byte
+	for index := range out {
+		out[index] = value
+	}
+	return out
+}
+
+// crashDirectSpec is one direct IPv4 output spec with a fixed identity
+// (Rust test output_spec parity).
+func crashDirectSpec() OutputSpec {
+	return OutputSpec{
+		AddressFamily:  format.AddressFamilyIPv4,
+		ValueKind:      format.ValueKindDirect,
+		StructureKind:  format.StructureKindNone,
+		ValueTag:       crashFixedTag("first-seen"),
+		DatabaseID:     crashFixed16(3),
+		TxnID:          7,
+		CommitNonce:    crashFixed16(4),
+		FeedIndexLimit: 0,
+	}
+}
 
 const (
 	crashChildTest    = "^TestCrashChild$"
@@ -121,6 +154,8 @@ func TestCrashChild(t *testing.T) {
 			t.Fatal(err)
 		}
 		os.Exit(86)
+	case "publish_replace":
+		crashChildPublishReplace(t, path)
 	default:
 		t.Fatalf("unknown crash child action %q", action)
 	}
@@ -336,5 +371,111 @@ func TestProcessDeathReleasesLocks(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// crashChildPublishReplace replaces one existing main through the
+// exchange publication path (Rust crash_child "replace": the replacement
+// family crash window lives between the exchange rename and the
+// retirement sync, main_file.rs rename_main/unlink_previous/
+// sync_retirement). The previous generation is the committed range
+// [10,20]=123; the replacement output carries [0,42]=2. The armed crash
+// point decides how much of the retirement ran before the child died.
+func crashChildPublishReplace(t *testing.T, path string) {
+	t.Helper()
+	attempt, err := CreateAttempt(path, PolicyReplaceExisting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewOutputBuilder(attempt.AttemptPath(), crashDirectSpec(), OutputBudget{MaxOutputPages: 100_000}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PushDirectV4(0, 42, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Publish(attempt, b, PolicyReplaceExisting)
+	if err != nil || result.Status != PublicationPublished {
+		t.Fatalf("publish replace = %v (%v), want Published", result, err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCrashPublishReplacePreservesExactPreviousOrDesiredState pins the
+// replacement-family crash contract (Rust replacement_crashes_preserve_
+// exact_previous_or_desired_state): after the exchange rename the main
+// holds the complete new output and the private name still holds the
+// exchanged previous; once the retirement unlinked it, no private
+// artifact survives - the main is always the complete new generation,
+// never a torn mix.
+func TestCrashPublishReplacePreservesExactPreviousOrDesiredState(t *testing.T) {
+	for _, point := range []string{
+		"publication.after_main_rename",
+		"publication.after_previous_unlink",
+		"publication.after_retirement_sync",
+	} {
+		t.Run(point, func(t *testing.T) {
+			path := makeEmptyDBPages(t, 64)
+			dir := filepath.Dir(path)
+			c, err := Open(path, testBudget(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commitRange(t, c, 7, 10, 20, 123)
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+			runCrashChild(t, path, "publish_replace", point)
+
+			r, err := reader.OpenImmutable(path)
+			if err != nil {
+				t.Fatalf("%s: main does not reopen: %v", point, err)
+			}
+			if v, ok, err := r.LookupDirect4(0); err != nil || !ok || v != 2 {
+				t.Fatalf("%s: main lookup = %d ok %v err %v, want 2", point, v, ok, err)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var privates []string
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if len(entry.Name()) >= len(attemptPrefix) && entry.Name()[:len(attemptPrefix)] == attemptPrefix {
+					privates = append(privates, filepath.Join(dir, entry.Name()))
+				}
+			}
+			if point == "publication.after_main_rename" {
+				if len(privates) != 1 {
+					t.Fatalf("%s: private outputs = %d, want 1", point, len(privates))
+				}
+				// The reader refuses reserved basenames by policy; the
+				// test inspects the exchanged previous under a neutral
+				// name in the same directory.
+				neutral := filepath.Join(dir, "previous-copy.v4")
+				if err := os.Rename(privates[0], neutral); err != nil {
+					t.Fatalf("%s: rename private artifact: %v", point, err)
+				}
+				prev, err := reader.OpenImmutable(neutral)
+				if err != nil {
+					t.Fatalf("%s: exchanged previous does not reopen: %v", point, err)
+				}
+				if v, ok, err := prev.LookupDirect4(15); err != nil || !ok || v != 123 {
+					t.Fatalf("%s: previous lookup = %d ok %v err %v, want 123", point, v, ok, err)
+				}
+				if err := prev.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if len(privates) != 0 {
+				t.Fatalf("%s: private outputs = %d, want none", point, len(privates))
+			}
+		})
 	}
 }

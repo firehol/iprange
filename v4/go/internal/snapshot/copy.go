@@ -350,7 +350,11 @@ func copyMetadata(source *reader.ImmutableReader, builder *writer.OutputBuilder,
 	if err := checkCancellation(check); err != nil {
 		return err
 	}
-	if length > budget.MaxHeapBytes {
+	// The reader's overflow probe allocates length+1 owned bytes, so the
+	// honest charge is the probe, not the declared chain length
+	// (reader/metadata.go ReadMetadataJSON; Rust has no +1 allocation,
+	// Go's charge mirrors its own allocation).
+	if length+1 > budget.MaxHeapBytes {
 		return &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "snapshot metadata input heap"}
 	}
 	input, present, err := source.ReadMetadataJSON()
@@ -366,5 +370,5 @@ func copyMetadata(source *reader.ImmutableReader, builder *writer.OutputBuilder,
 	if err := checkCancellation(check); err != nil {
 		return err
 	}
-	return builder.WriteMetadata(input, budget.MaxHeapBytes-length)
+	return builder.WriteMetadata(input, budget.MaxHeapBytes-length-1)
 }

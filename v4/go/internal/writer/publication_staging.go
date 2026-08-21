@@ -319,9 +319,12 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 			Cleanup: CleanupStateClean,
 		}
 	}
-	fileDevice, fileInode, previousDevice, previousInode, err := verifyCustody(attempt, policy)
+	fileDevice, fileInode, previous, err := verifyCustody(attempt, policy)
 	if err != nil {
 		return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+	}
+	if previous != nil && previous.file != nil {
+		defer previous.file.Close()
 	}
 	byteLength, _, err := outputDigest(b.Mapping())
 	if err != nil {
@@ -429,6 +432,10 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 			Cause:              err,
 		}, nil
 	}
+	// The rename is durable in the namespace; the retirement stages
+	// follow (Rust rename_main crash point publication.after_main_rename,
+	// before synchronize_main and retire_steps).
+	fault.Crash("publication.after_main_rename")
 	// The destination now holds the attempt inode: sync the retained
 	// directory, then prove the destination names the published file
 	// (Rust synchronize_main + prove_main).
@@ -450,7 +457,7 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 		}, nil
 	}
 	if policy == PolicyReplaceExisting {
-		if err := retireExchangedPrevious(attempt, previousDevice, previousInode); err != nil {
+		if err := retireExchangedPrevious(attempt, previous); err != nil {
 			// Rust retirement preserves the already-proven main and
 			// reports the exact cleanup state (main_file.rs
 			// retire_with): the output is published; the residue is
@@ -470,44 +477,101 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 	}, nil
 }
 
+// previousCustody is one bound replacement destination (Rust
+// replacement.rs PreviousMain): the captured identity and byte length of
+// the old main plus an open descriptor to its inode, so the exchange
+// retirement can prove link counts before and after the unlink. The
+// plain-rename policy binds the identity only (its previous loses its
+// last link inside the rename and is never retired).
+type previousCustody struct {
+	device, inode uint64
+	byteLength    uint64
+	file          *os.File // nil when the policy does not retire the previous
+}
+
 // retireExchangedPrevious removes the previous destination that the
 // atomic exchange swapped onto the private attempt name (Rust
 // main_file.rs unlink_previous + sync_retirement after the successful
-// rename_main): the unlink is identity-guarded against the captured
-// previous inode, and the retained directory sync makes the removal
-// durable. The plain rename policy never reaches this helper - its
-// previous inode lost its last link inside the rename; the exchange
-// keeps the old destination reachable at the private name until it is
-// unlinked here.
-func retireExchangedPrevious(attempt *OutputAttempt, previousDevice, previousInode uint64) error {
+// rename_main). The retirement mirrors Rust verify_private_or_retired
+// and unlink_exact: the bound inode must still be the captured inode
+// with its captured byte length, a zero-link inode is already retired
+// and only requires the private name absent, a multi-link inode is the
+// link-count conflict, and the identity-guarded unlink must drop the
+// last link (CleanupConflict residue when a foreign hard link
+// survives). The retained directory sync makes the removal durable.
+func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) error {
+	if previous == nil || previous.file == nil {
+		return nil
+	}
+	fi, err := previous.file.Stat()
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	// Rust verify_private_or_retired: the bound inode must still be the
+	// captured inode with its captured byte length (an open descriptor
+	// cannot change inode, but a foreign writer can change length).
+	if uint64(fi.Size()) != previous.byteLength {
+		return &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+	}
+	links, ok := regularLinkCount(fi)
+	if !ok {
+		// Windows stub: publication is refused before custody proofs, so
+		// the retirement checks never run there (nlink_windows.go).
+		return nil
+	}
 	source := attempt.AttemptPath()
-	fi, err := os.Lstat(source)
+	switch {
+	case links == 0:
+		// Already fully retired: the private name must have vanished
+		// with the last link (Rust require_absent); a name still there
+		// names a foreign file and keeps the residue.
+		if _, err := os.Lstat(source); os.IsNotExist(err) {
+			return nil
+		}
+		return &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+	case links > 1:
+		return &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
+	}
+	// One link: the private name must still name the captured inode with
+	// exactly one hard link (Rust unlink_exact: entry regular, expected
+	// identity, single link), or the namespace moved and the residue is
+	// kept, never a blind unlink.
+	lfi, err := os.Lstat(source)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// The private name already vanished; nothing to retire.
-			return nil
+			return &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
 		}
 		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
-	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
-		return &format.Error{Code: format.CodeConflict, Detail: "retired publication name is not a regular file"}
+	if lfi.Mode()&os.ModeSymlink != 0 || !lfi.Mode().IsRegular() {
+		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 	}
 	device, inode, err := mapping.StatIdentity(source)
 	if err != nil {
 		return err
 	}
-	// Rust unlink_exact: the private name must still name the captured
-	// previous inode; a different inode means the namespace moved and
-	// the residue is kept, never a blind unlink.
-	if device != previousDevice || inode != previousInode {
-		return &format.Error{Code: format.CodeConflict, Detail: "retired publication inode identity changed"}
+	if device != previous.device || inode != previous.inode {
+		return &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+	}
+	if links, ok := regularLinkCount(lfi); !ok || links != 1 {
+		return &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
 	}
 	if err := mapping.Unlink(source); err != nil {
 		return err
 	}
+	// The unlink must have dropped the last link of the bound inode
+	// (Rust regular_link_count proof after unlink_previous:
+	// PreviousLinkCount).
+	if fi, err := previous.file.Stat(); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	} else if links, ok := regularLinkCount(fi); ok && links != 0 {
+		return &format.Error{Code: format.CodeCleanupConflict, Detail: "retired previous destination still has a link"}
+	}
+	fault.Crash("publication.after_previous_unlink")
 	if err := mapping.SyncDirectory(filepath.Dir(attempt.destination)); err != nil {
 		return err
 	}
+	fault.Crash("publication.after_retirement_sync")
 	return nil
 }
 
@@ -519,35 +583,35 @@ func retireExchangedPrevious(attempt *OutputAttempt, previousDevice, previousIno
 // replacement::bind SameIdentity). previousDevice/previousInode are the
 // captured replacement destination identity (Rust replacement::bind
 // PreviousMain.identity), which the exchange cleanup unlinks with.
-func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uint64, inode uint64, previousDevice uint64, previousInode uint64, err error) {
+func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uint64, inode uint64, previous *previousCustody, err error) {
 	dir := filepath.Dir(attempt.destination)
 	d, i, err := mapping.StatIdentity(dir)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, nil, err
 	}
 	if d != attempt.dirDevice || i != attempt.dirInode {
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+		return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
 	}
 	path := attempt.AttemptPath()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
+			return 0, 0, nil, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
 		}
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+		return 0, 0, nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+		return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
 	}
 	if !fi.Mode().IsRegular() {
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+		return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 	}
 	device, inode, err = mapping.StatIdentity(path)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, nil, err
 	}
 	if device != attempt.dirDevice {
-		return 0, 0, 0, 0, &format.Error{Code: format.CodePublicationUnsupported, Detail: "publication inode is on another filesystem"}
+		return 0, 0, nil, &format.Error{Code: format.CodePublicationUnsupported, Detail: "publication inode is on another filesystem"}
 	}
 	if policy != PolicyFailIfExists {
 		// Rust replacement::bind refuses the coordination twin and the
@@ -556,30 +620,48 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 		// or Missing): both are early preparation failures with the
 		// attempt discarded.
 		if _, twinErr := os.Lstat(attempt.destination + format.CoordinationSuffix); twinErr == nil {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+			return 0, 0, nil, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
 		} else if !os.IsNotExist(twinErr) {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+			return 0, 0, nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 		}
 		dfi, err := os.Lstat(attempt.destination)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return 0, 0, 0, 0, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
+				return 0, 0, nil, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
 			}
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+			return 0, 0, nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 		}
 		if dfi.Mode()&os.ModeSymlink != 0 {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+			return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
 		}
 		if !dfi.Mode().IsRegular() {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+			return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 		}
 		destDevice, destInode, idErr := mapping.StatIdentity(attempt.destination)
 		if idErr != nil {
-			return 0, 0, 0, 0, idErr
+			return 0, 0, nil, idErr
 		}
-		previousDevice, previousInode = destDevice, destInode
 		if destDevice == device && destInode == inode {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "replacement source and destination identities match"}
+			return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "replacement source and destination identities match"}
+		}
+		// Bind the replacement destination (Rust replacement.rs
+		// PreviousMain): the exchange keeps the old inode reachable at
+		// the private name, so the exchange policy also opens its
+		// inode now - the retirement link-count proofs run against this
+		// descriptor after the namespace move.
+		previous = &previousCustody{device: destDevice, inode: destInode}
+		if policy == PolicyReplaceExisting {
+			file, openErr := os.Open(attempt.destination)
+			if openErr != nil {
+				return 0, 0, nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+			}
+			fi, statErr := file.Stat()
+			if statErr != nil {
+				file.Close()
+				return 0, 0, nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+			}
+			previous.file = file
+			previous.byteLength = uint64(fi.Size())
 		}
 	}
 	// Rust verify_name requires the attempt file to be a regular file
@@ -588,9 +670,9 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 	// way). A changed link count is a conflict class.
 	if nlink, ok := regularLinkCount(fi); !ok || nlink != 1 {
 		if ok && nlink == 0 {
-			return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode has no links"}
+			return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication inode has no links"}
 		}
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
+		return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
 	}
 	// The attempt identity must still be the one captured from the
 	// builder descriptor at creation (Rust verify_name compares the
@@ -599,12 +681,12 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 	// capture the probe here so Discard is still identity-guarded.
 	if !attempt.fileProven {
 		attempt.SetFileIdentity(device, inode)
-		return device, inode, previousDevice, previousInode, nil
+		return device, inode, previous, nil
 	}
 	if device != attempt.fileDevice || inode != attempt.fileInode {
-		return 0, 0, 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
+		return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
 	}
-	return device, inode, previousDevice, previousInode, nil
+	return device, inode, previous, nil
 }
 
 // digestChunkSize is the fixed digest read span (Rust output_digest.rs

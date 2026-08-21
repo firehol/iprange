@@ -304,7 +304,7 @@ func TestMetadataDeflateHeapOverheadCoversWorkspace(t *testing.T) {
 		if err != nil || written != len(input) {
 			t.Fatalf("flate write n=%d err=%v, want full input", written, err)
 		}
-		_ = enc // keep the pinned workspace live until the sample
+		runtime.KeepAlive(enc) // keep the pinned workspace live until the sample
 		runtime.ReadMemStats(&ms)
 		workspace := ms.HeapAlloc - base - uint64(bound)
 		if workspace > peak {
