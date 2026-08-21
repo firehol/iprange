@@ -523,6 +523,9 @@ func TestPublishExchangeReplaces(t *testing.T) {
 	if result.DestinationContent != writer.DestinationContentDesired {
 		t.Fatalf("content = %v, want Desired", result.DestinationContent)
 	}
+	if result.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean (Rust retire_steps unlinks the exchanged previous)", result.Cleanup)
+	}
 	closeBuilder(t, b)
 	r, err := iprangedb.OpenImmutable(destination)
 	if err != nil {
@@ -530,6 +533,19 @@ func TestPublishExchangeReplaces(t *testing.T) {
 	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
+	}
+	// Rust retire_steps unlink_previous: the exchange swapped the
+	// previous destination onto the private attempt name, and the
+	// retirement must remove it so no private artifact survives a
+	// successful replacement.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal("read directory:", err)
+	}
+	for _, entry := range entries {
+		if len(entry.Name()) >= len(".iprange-") && entry.Name()[:len(".iprange-")] == ".iprange-" {
+			t.Errorf("private artifact remained after the exchange: %s", entry.Name())
+		}
 	}
 }
 

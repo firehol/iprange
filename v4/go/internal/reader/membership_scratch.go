@@ -283,7 +283,7 @@ func (s *scratch) load(r *ImmutableReader, membershipID uint32, scope *ScopeData
 		work.MembershipDecodeCacheHit(1)
 		return nil
 	}
-	view, err := r.lookupMembershipID(membershipID)
+	view, err := r.LookupMembershipID(membershipID)
 	if err != nil {
 		return err
 	}

@@ -149,7 +149,7 @@ func (r *ImmutableReader) LookupMembership4(addr uint32) (MembershipView, bool, 
 	if err != nil || !found {
 		return MembershipView{}, false, err
 	}
-	view, err := r.lookupMembershipID(value)
+	view, err := r.LookupMembershipID(value)
 	if err != nil {
 		return MembershipView{}, false, err
 	}
@@ -163,15 +163,18 @@ func (r *ImmutableReader) LookupMembership6(addrHi, addrLo uint64) (MembershipVi
 	if err != nil || !found {
 		return MembershipView{}, false, err
 	}
-	view, err := r.lookupMembershipID(value)
+	view, err := r.LookupMembershipID(value)
 	if err != nil {
 		return MembershipView{}, false, err
 	}
 	return view, true, nil
 }
 
-// lookupMembershipID resolves one nonzero membership ID through the ID tree.
-func (r *ImmutableReader) lookupMembershipID(id uint32) (MembershipView, error) {
+// LookupMembershipID resolves one nonzero membership ID through the ID
+// tree (Rust membership_view::by_id; GenerationReader::membership). The
+// snapshot source machine resolves each membership-range record the same
+// way the structured cursor resolves threat memberships.
+func (r *ImmutableReader) LookupMembershipID(id uint32) (MembershipView, error) {
 	if id == 0 {
 		return MembershipView{}, corrupt("range names the empty membership ID")
 	}

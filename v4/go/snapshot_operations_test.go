@@ -1,0 +1,736 @@
+// Milestone 3 chunk 3b-3 snapshot parity tests (Rust
+// tests/snapshot_operations.rs): one pinned immutable generation copied
+// into a fresh published output under budget, preserving identity,
+// generation, ranges, feeds, memberships, structures, and metadata. Every
+// failure shape is asserted through the public Cause+Cleanup surface, and
+// the no-implicit-validation rule is pinned by snapshotting a
+// CRC-damaged source that traversal alone cannot catch.
+
+package iprangedb
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
+)
+
+// snapshotBudget returns one Rust-shaped snapshot budget with the given
+// open-file count (Rust tests budget(open_files)): 16 MiB heap, 100k
+// output pages.
+func snapshotBudget(openFiles uint32) SnapshotBudget {
+	return SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: openFiles}
+}
+
+// snapshotDest returns one fresh destination path inside a fresh private
+// directory of the test's temporary tree.
+func snapshotDest(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name)
+}
+
+// snapshotDir returns the parent directory of one snapshot destination.
+func snapshotDir(destination string) string {
+	return filepath.Dir(destination)
+}
+
+// assertNoSnapshotArtifacts fails when any private publication artifact
+// remains in the destination directory (Rust assert_no_private_artifacts).
+func assertNoSnapshotArtifacts(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read directory: %v", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if len(name) >= len(".iprange-") && name[:len(".iprange-")] == ".iprange-" {
+			t.Errorf("private snapshot artifact remained: %s", name)
+		}
+	}
+}
+
+// snapshotSidecar returns the coordination twin path of one main file.
+func snapshotSidecar(path string) string {
+	return path + format.CoordinationSuffix
+}
+
+// supportedSnapshotReplacement selects the replace policy the platform
+// can honor (Rust supported_replacement): rollback-safe exchange where
+// available, the explicit no-rollback rename elsewhere.
+func supportedSnapshotReplacement() SnapshotPublicationPolicy {
+	if mapping.ExchangeAvailable() {
+		return PolicyReplaceExisting
+	}
+	return PolicyReplaceExistingNoRollback
+}
+
+// failureCode returns the public ErrorCode of one preparation failure.
+func failureCode(t *testing.T, err error) ErrorCode {
+	t.Helper()
+	var failure *SnapshotPreparationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("not a *SnapshotPreparationFailure: %v", err)
+	}
+	var public *Error
+	if !errors.As(failure.Cause, &public) {
+		t.Fatalf("cause not a public *Error: %v", failure.Cause)
+	}
+	return public.Code
+}
+
+// TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata
+// snapshots the committed direct-ipv4 fixture with the fail-if-exists
+// policy and verifies the published output byte-for-byte in identity,
+// ranges, and metadata (Rust immutable_direct_snapshot_preserves_...).
+func TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata(t *testing.T) {
+	source := openPublic(t, "direct-ipv4.iprdb")
+	defer source.Close()
+	sourceInfo, err := source.Info()
+	if err != nil {
+		t.Fatal("source info:", err)
+	}
+	sourceMetadata, ok, err := source.MetadataJSON()
+	if err != nil || !ok {
+		t.Fatalf("source metadata: ok=%v err=%v", ok, err)
+	}
+	sourceStat, err := os.Stat(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal("source stat:", err)
+	}
+
+	destination := snapshotDest(t, "direct-snapshot.iprdb")
+	result, err := SnapshotTo(fixture(t, "direct-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	if err != nil {
+		t.Fatal("snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished {
+		t.Fatalf("status = %v, want published", result.Publication.Status)
+	}
+	if result.CleanupState() != CleanupStateClean {
+		t.Fatalf("cleanup = %v, want clean", result.CleanupState())
+	}
+	if _, err := os.Lstat(snapshotSidecar(destination)); !os.IsNotExist(err) {
+		t.Fatalf("sidecar exists after snapshot: %v", err)
+	}
+
+	output := openPublished(t, destination)
+	defer output.Close()
+	outputInfo, err := output.Info()
+	if err != nil {
+		t.Fatal("output info:", err)
+	}
+	if outputInfo.DatabaseID != sourceInfo.DatabaseID {
+		t.Errorf("database id preserved: %x != %x", outputInfo.DatabaseID, sourceInfo.DatabaseID)
+	}
+	if outputInfo.TransactionID != sourceInfo.TransactionID {
+		t.Errorf("transaction id preserved: %d != %d", outputInfo.TransactionID, sourceInfo.TransactionID)
+	}
+	if outputInfo.CommitNonce != sourceInfo.CommitNonce {
+		t.Errorf("commit nonce preserved: %x != %x", outputInfo.CommitNonce, sourceInfo.CommitNonce)
+	}
+	for _, probe := range []struct {
+		address string
+		value   uint32
+		want    bool
+	}{
+		{"10.0.0.9", 0, false},
+		{"10.0.0.10", 2, true},
+		{"10.0.0.15", 3, true},
+		{"10.0.0.18", 2, true},
+		{"10.0.0.22", 0, false},
+		{"10.0.0.28", 1, true},
+		{"10.0.0.31", 1, true},
+		{"10.0.0.32", 0, false},
+	} {
+		got, found, err := output.LookupDirectV4(parseV4(probe.address))
+		if err != nil {
+			t.Fatalf("lookup %s: %v", probe.address, err)
+		}
+		if found != probe.want || got != probe.value {
+			t.Errorf("lookup %s = (%d, %v), want (%d, %v)", probe.address, got, found, probe.value, probe.want)
+		}
+	}
+	outputMetadata, ok, err := output.MetadataJSON()
+	if err != nil || !ok {
+		t.Fatalf("output metadata: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(outputMetadata, sourceMetadata) {
+		t.Errorf("metadata not preserved: %q != %q", outputMetadata, sourceMetadata)
+	}
+	t.Logf("source length %d, output length %d (page count %d)", sourceStat.Size(), outputInfo.PageCount*4096, outputInfo.PageCount)
+	if outputInfo.PageCount*4096 > uint64(sourceStat.Size()) {
+		t.Errorf("snapshot output %d bytes exceeds the source %d bytes", outputInfo.PageCount*4096, sourceStat.Size())
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata
+// snapshots the committed membership-ipv4 fixture and verifies the feed
+// catalog and the per-range bitmaps (Rust
+// live_membership_snapshot_preserves_..., adapted to the immutable
+// source that the Go boundary accepts).
+func TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testing.T) {
+	source := openPublic(t, "membership-ipv4.iprdb")
+	defer source.Close()
+	sourceInfo, err := source.Info()
+	if err != nil {
+		t.Fatal("source info:", err)
+	}
+	_, sourceOK, err := source.MetadataJSON()
+	if err != nil {
+		t.Fatal("source metadata:", err)
+	}
+
+	destination := snapshotDest(t, "membership-snapshot.iprdb")
+	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	if err != nil {
+		t.Fatal("snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+
+	output := openPublished(t, destination)
+	defer output.Close()
+	outputInfo, err := output.Info()
+	if err != nil {
+		t.Fatal("output info:", err)
+	}
+	if outputInfo.ActiveFeedCount != sourceInfo.ActiveFeedCount {
+		t.Errorf("feed count preserved: %d != %d", outputInfo.ActiveFeedCount, sourceInfo.ActiveFeedCount)
+	}
+	beta, found, err := output.LookupFeed("feed-001")
+	if err != nil || !found || beta.Index != 1 {
+		t.Errorf("feed-001 preserved: index=%d found=%v err=%v", beta.Index, found, err)
+	}
+	reused, found, err := output.LookupFeed("feed-reused")
+	if err != nil || !found {
+		t.Errorf("feed-reused preserved: found=%v err=%v", found, err)
+	}
+	_ = reused
+	pin, err := output.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	defer pin.Close()
+
+	// Range 10.0.0.0/24 carries feeds 000, reused, 063, 064, 069; range
+	// 10.0.1.128/25 carries only feeds 001 and 065.
+	first, found, err := pin.LookupMembershipV4(parseV4("10.0.0.5"))
+	if err != nil || !found {
+		t.Fatalf("first membership: found=%v err=%v", found, err)
+	}
+	for _, probe := range []struct {
+		index uint32
+		want  bool
+	}{
+		{0, true}, {1, false}, {63, true}, {64, true}, {65, false}, {69, true},
+	} {
+		has, err := first.ContainsIndex(probe.index)
+		if err != nil {
+			t.Fatal("contains:", err)
+		}
+		if has != probe.want {
+			t.Errorf("first range contains %d = %v, want %v", probe.index, has, probe.want)
+		}
+	}
+	last, found, err := pin.LookupMembershipV4(parseV4("10.0.1.200"))
+	if err != nil || !found {
+		t.Fatalf("last membership: found=%v err=%v", found, err)
+	}
+	for _, probe := range []struct {
+		index uint32
+		want  bool
+	}{
+		{0, false}, {1, true}, {63, false}, {64, false}, {65, true}, {69, false},
+	} {
+		has, err := last.ContainsIndex(probe.index)
+		if err != nil {
+			t.Fatal("contains:", err)
+		}
+		if has != probe.want {
+			t.Errorf("last range contains %d = %v, want %v", probe.index, has, probe.want)
+		}
+	}
+	outputMetadata, outputOK, err := output.MetadataJSON()
+	if err != nil {
+		t.Fatal("output metadata:", err)
+	}
+	if outputOK != sourceOK {
+		t.Errorf("metadata presence differs: output %v, source %v", outputOK, sourceOK)
+	}
+	if outputOK {
+		t.Errorf("membership fixture gained metadata %q", outputMetadata)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotImmutableStructuredPreservesRangesAndMetadata snapshots
+// the structured fixtures, with and without threat memberships, and
+// verifies payloads, locations, and the linked bitmaps (Rust structured
+// snapshot coverage via copy_structured_v4/v6).
+func TestSnapshotImmutableStructuredPreservesRangesAndMetadata(t *testing.T) {
+	for _, fixtureName := range []string{"structured-ipv4.iprdb", "structured-ipv4-nothreat.iprdb"} {
+		t.Run(fixtureName, func(t *testing.T) {
+			source := openPublic(t, fixtureName)
+			defer source.Close()
+			sourceMetadata, sourceOK, err := source.MetadataJSON()
+			if err != nil {
+				t.Fatal("source metadata:", err)
+			}
+
+			destination := snapshotDest(t, fixtureName+".snapshot")
+			result, err := SnapshotTo(fixture(t, fixtureName), SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+			if err != nil {
+				t.Fatal("snapshot:", err)
+			}
+			if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+				t.Fatalf("publication = %+v", result.Publication)
+			}
+			output := openPublished(t, destination)
+			defer output.Close()
+			pin, err := output.Pin()
+			if err != nil {
+				t.Fatal("pin:", err)
+			}
+			defer pin.Close()
+
+			if fixtureName == "structured-ipv4.iprdb" {
+				view, found, err := pin.LookupNetworkEnrichmentV1V4(parseV4("10.1.0.10"))
+				if err != nil || !found {
+					t.Fatalf("lookup 10.1.0.10: found=%v err=%v", found, err)
+				}
+				value, err := view.Value()
+				if err != nil {
+					t.Fatal("value:", err)
+				}
+				if value.ASN != 64512 || value.CountryID != 1 || value.StateID != 2 || value.CityID != 3 {
+					t.Errorf("payload = %+v, want ASN 64512 country 1 state 2 city 3", value)
+				}
+				if !value.HasLocation || value.Location.LatitudeMicrodegrees != 37983810 || value.Location.LongitudeMicrodegrees != 23727539 {
+					t.Errorf("location = %+v, want 37983810/23727539", value.Location)
+				}
+				threats, found, err := view.ThreatMembership()
+				if err != nil || !found {
+					t.Fatalf("threat membership: found=%v err=%v", found, err)
+				}
+				has, err := threats.ContainsIndex(0)
+				if err != nil {
+					t.Fatal("contains:", err)
+				}
+				if !has {
+					t.Errorf("botnet feed not set in the preserved threat bitmap")
+				}
+				// The range without a location keeps HasLocation off.
+				view, found, err = pin.LookupNetworkEnrichmentV1V4(parseV4("10.1.0.70"))
+				if err != nil || !found {
+					t.Fatalf("lookup 10.1.0.70: found=%v err=%v", found, err)
+				}
+				value, err = view.Value()
+				if err != nil {
+					t.Fatal("value:", err)
+				}
+				if value.HasLocation {
+					t.Errorf("range 10.1.0.70 gained a location: %+v", value)
+				}
+			} else {
+				view, found, err := pin.LookupNetworkEnrichmentV1V4(parseV4("10.2.0.10"))
+				if err != nil || !found {
+					t.Fatalf("lookup 10.2.0.10: found=%v err=%v", found, err)
+				}
+				value, err := view.Value()
+				if err != nil {
+					t.Fatal("value:", err)
+				}
+				if value.ASN != 64514 || value.CountryID != 7 {
+					t.Errorf("payload = %+v, want ASN 64514 country 7", value)
+				}
+				if _, found, err := view.ThreatMembership(); err != nil || found {
+					t.Errorf("nothreat fixture gained a membership: found=%v err=%v", found, err)
+				}
+			}
+			outputMetadata, outputOK, err := output.MetadataJSON()
+			if err != nil {
+				t.Fatal("output metadata:", err)
+			}
+			if outputOK != sourceOK || (outputOK && !bytes.Equal(outputMetadata, sourceMetadata)) {
+				t.Errorf("metadata not preserved: source ok=%v output ok=%v", sourceOK, outputOK)
+			}
+			assertNoSnapshotArtifacts(t, snapshotDir(destination))
+		})
+	}
+}
+
+// TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing
+// pins the three Rust early-refusal shapes (cancelled, name exists with a
+// foreign destination preserved, and the open-file budget refusal).
+func TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+
+	// Cancellation before the operation starts publishes nothing.
+	cancelled := NewCancellationToken()
+	cancelled.Cancel()
+	destination := snapshotDest(t, "cancelled.iprdb")
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), cancelled)
+	if code := failureCode(t, err); code != ErrorCancelled {
+		t.Fatalf("cause code = %v, want cancelled", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("cancelled snapshot produced an output: %v", statErr)
+	}
+
+	// An existing destination with the fail-if-exists policy refuses and
+	// leaves the foreign file untouched.
+	foreign := snapshotDest(t, "foreign.iprdb")
+	if err := os.WriteFile(foreign, []byte("foreign"), 0o644); err != nil {
+		t.Fatal("write foreign:", err)
+	}
+	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, foreign, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorNameExists {
+		t.Fatalf("cause code = %v, want name exists", code)
+	}
+	bytes, err := os.ReadFile(foreign)
+	if err != nil {
+		t.Fatal("read foreign:", err)
+	}
+	if string(bytes) != "foreign" {
+		t.Errorf("foreign destination changed: %q", bytes)
+	}
+
+	// The open-file budget refuses before anything is created.
+	destination = snapshotDest(t, "budget.iprdb")
+	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(0); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
+		t.Fatalf("cause code = %v, want insufficient resource budget", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("budget-refused snapshot produced an output: %v", statErr)
+	}
+}
+
+// TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication pins the
+// heap input refusal and the exact output-page boundary (Rust
+// heap_and_exact_output_page_budgets_fail_before_publication): a heap
+// smaller than the metadata input fails before publication, page
+// budget-1 fails before publication, and the exact page count publishes.
+func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+
+	// The direct fixture carries a 46-byte metadata payload; a 4-byte
+	// heap cannot hold it.
+	destination := snapshotDest(t, "heap.iprdb")
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 4, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
+		t.Fatalf("heap cause code = %v, want insufficient resource budget", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("heap-refused snapshot produced an output: %v", statErr)
+	}
+
+	// Establish the exact output page count of this source.
+	exact := snapshotDest(t, "exact.iprdb")
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, exact, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	if err != nil {
+		t.Fatal("exact snapshot:", err)
+	}
+	output := openPublished(t, exact)
+	info, err := output.Info()
+	if err != nil {
+		t.Fatal("info:", err)
+	}
+	output.Close()
+	pages := info.PageCount
+	t.Logf("exact page count %d, cleanup %v", pages, result.CleanupState())
+	if pages < 3 {
+		t.Fatalf("fixture unexpectedly small: %d pages", pages)
+	}
+
+	// One page short fails before publication.
+	short := snapshotDest(t, "short.iprdb")
+	_, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, short, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: pages - 1, MaxOpenFiles: 2}, nil)
+	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
+		t.Fatalf("page-short cause code = %v, want insufficient resource budget", code)
+	}
+	if _, statErr := os.Lstat(short); !os.IsNotExist(statErr) {
+		t.Fatalf("page-short snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(short))
+
+	// The exact page count publishes.
+	complete := snapshotDest(t, "complete.iprdb")
+	result, err = SnapshotTo(sourceFile, SnapshotSourceImmutable, complete, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: pages, MaxOpenFiles: 2}, nil)
+	if err != nil {
+		t.Fatal("complete snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished {
+		t.Fatalf("complete status = %v", result.Publication.Status)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(complete))
+}
+
+// TestSnapshotLiveRefusedAtBoundary pins the approved Go divergence: the
+// live source refuses at the API boundary with ErrorOSUnsupported before
+// budget validation (Rust require_live_supported position), so even a
+// zero-budget live snapshot reports the refusal, and a live self
+// replacement can never reach Rust's reject_live_self InvalidArgument.
+func TestSnapshotLiveRefusedAtBoundary(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+	destination := snapshotDest(t, "live.iprdb")
+	_, err := SnapshotTo(sourceFile, SnapshotSourceLive, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(0); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorOSUnsupported {
+		t.Fatalf("cause code = %v, want os unsupported", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("live snapshot produced an output: %v", statErr)
+	}
+
+	self := snapshotDest(t, "live-self.iprdb")
+	if err := copyFixture(t, "direct-ipv4.iprdb", self); err != nil {
+		t.Fatal("copy fixture:", err)
+	}
+	_, err = SnapshotTo(self, SnapshotSourceLive, self, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorOSUnsupported {
+		t.Fatalf("live self cause code = %v, want os unsupported", code)
+	}
+}
+
+// TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent
+// pins the replace policy over a pre-existing destination (Rust
+// replacement_accepts_arbitrary_previous_bytes_...).
+func TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+	destination := snapshotDest(t, "replace.iprdb")
+	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
+		t.Fatal("write previous:", err)
+	}
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if err != nil {
+		t.Fatal("replacement snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+	output := openPublished(t, destination)
+	defer output.Close()
+	value, found, err := output.LookupDirectV4(parseV4("10.0.0.10"))
+	if err != nil || !found || value != 2 {
+		t.Errorf("replaced destination lookup = (%d, %v, %v), want (2, true, nil)", value, found, err)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublication
+// pins the explicit no-rollback policy (Rust
+// no_rollback_replacement_is_explicit_...): the destination provably holds
+// the published content and the operation reports Clean.
+func TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublication(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+	destination := snapshotDest(t, "no-rollback.iprdb")
+	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
+		t.Fatal("write previous:", err)
+	}
+	result, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExistingNoRollback, func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if err != nil {
+		t.Fatal("no-rollback snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+	published, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal("read published:", err)
+	}
+	if bytes.Equal(published, []byte("previous")) {
+		t.Errorf("destination still holds the previous bytes")
+	}
+	output := openPublished(t, destination)
+	defer output.Close()
+	value, found, err := output.LookupDirectV4(parseV4("10.0.0.28"))
+	if err != nil || !found || value != 1 {
+		t.Errorf("published lookup = (%d, %v, %v), want (1, true, nil)", value, found, err)
+	}
+}
+
+// TestSnapshotImmutableCanCompactItsOwnPathByReplacement snapshots one
+// immutable file onto its own path (Rust
+// immutable_snapshot_can_compact_its_own_path_by_replacement): the
+// identity survives, the ranges survive, and no sidecar artifact remains.
+func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
+	sourcePath := snapshotDest(t, "self.iprdb")
+	if err := copyFixture(t, "direct-ipv4.iprdb", sourcePath); err != nil {
+		t.Fatal("copy fixture:", err)
+	}
+	before := openPublished(t, sourcePath)
+	beforeInfo, err := before.Info()
+	if err != nil {
+		t.Fatal("before info:", err)
+	}
+	if err := before.Close(); err != nil {
+		t.Fatal("close before:", err)
+	}
+
+	result, err := SnapshotTo(sourcePath, SnapshotSourceImmutable, sourcePath, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if err != nil {
+		t.Fatal("self snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+	if _, err := os.Lstat(snapshotSidecar(sourcePath)); !os.IsNotExist(err) {
+		t.Fatalf("sidecar exists after self snapshot: %v", err)
+	}
+	after := openPublished(t, sourcePath)
+	defer after.Close()
+	afterInfo, err := after.Info()
+	if err != nil {
+		t.Fatal("after info:", err)
+	}
+	if afterInfo.DatabaseID != beforeInfo.DatabaseID || afterInfo.TransactionID != beforeInfo.TransactionID || afterInfo.CommitNonce != beforeInfo.CommitNonce {
+		t.Errorf("identity changed by self compaction: before %x/%d/%x after %x/%d/%x",
+			beforeInfo.DatabaseID, beforeInfo.TransactionID, beforeInfo.CommitNonce,
+			afterInfo.DatabaseID, afterInfo.TransactionID, afterInfo.CommitNonce)
+	}
+	value, found, err := after.LookupDirectV4(parseV4("10.0.0.15"))
+	if err != nil || !found || value != 3 {
+		t.Errorf("post-compaction lookup = (%d, %v, %v), want (3, true, nil)", value, found, err)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(sourcePath))
+}
+
+// TestSnapshotReplacementRequiresExistingDestination pins the NameNotFound
+// classification of a replace policy over a missing destination (Rust
+// replacement_requires_an_existing_destination...).
+func TestSnapshotReplacementRequiresExistingDestination(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+	destination := snapshotDest(t, "missing.iprdb")
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorNameNotFound {
+		t.Fatalf("cause code = %v, want name not found", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("missing-destination snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotStrictReplacementFailsBeforeChangingDestination pins the
+// DurabilityUnsupported refusal of the rollback-safe exchange on the
+// platforms without the primitive (Rust strict_replacement_fails_...,
+// cfg windows/freebsd); Linux implements the exchange and skips.
+func TestSnapshotStrictReplacementFailsBeforeChangingDestination(t *testing.T) {
+	if mapping.ExchangeAvailable() {
+		t.Skip("atomic name exchange is available; the strict refusal does not apply")
+	}
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+	destination := snapshotDest(t, "strict.iprdb")
+	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
+		t.Fatal("write previous:", err)
+	}
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyReplaceExisting, func() *SnapshotBudget { b := snapshotBudget(3); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorDurabilityUnsupported {
+		t.Fatalf("cause code = %v, want durability unsupported", code)
+	}
+	bytes, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal("read destination:", err)
+	}
+	if string(bytes) != "previous" {
+		t.Errorf("destination changed by the strict refusal: %q", bytes)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotMalformedTraversalFailsCleanlyButCRCDamageIsNotImplicitlyValidated
+// pins the Rust traversal/CRC pair: a corrupted range root fails the copy
+// with FormatInvalid and publishes nothing, while a CRC-damaged root page
+// copies without any implicit validation pass, exactly like the normal
+// hot path.
+func TestSnapshotMalformedTraversalFailsCleanlyButCRCDamageIsNotImplicitlyValidated(t *testing.T) {
+	// Corrupted range root: traversal fails with FormatInvalid.
+	malformed := snapshotDest(t, "malformed.iprdb")
+	if err := copyFixture(t, "direct-ipv4.iprdb", malformed); err != nil {
+		t.Fatal("copy fixture:", err)
+	}
+	mutateSelectedRangeRoot(t, malformed, func(page []byte) {
+		copy(page[:4], []byte("BAD!"))
+	})
+	// The open refuses nothing: the damage is on a data page.
+	opened, err := OpenImmutable(malformed)
+	if err != nil {
+		t.Fatalf("open malformed source: %v", err)
+	}
+	opened.Close()
+
+	destination := snapshotDest(t, "malformed-out.iprdb")
+	_, err = SnapshotTo(malformed, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil)
+	if code := failureCode(t, err); code != ErrorFormatInvalid {
+		t.Fatalf("cause code = %v, want format invalid", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("malformed snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+
+	// CRC damage on the same page: the snapshot copies without implicit
+	// validation and the output opens normally.
+	damaged := snapshotDest(t, "damaged.iprdb")
+	if err := copyFixture(t, "direct-ipv4.iprdb", damaged); err != nil {
+		t.Fatal("copy fixture:", err)
+	}
+	mutateSelectedRangeRoot(t, damaged, func(page []byte) {
+		page[28] ^= 0xff
+	})
+	destination = snapshotDest(t, "damaged-out.iprdb")
+	if _, err := SnapshotTo(damaged, SnapshotSourceImmutable, destination, PolicyFailIfExists, func() *SnapshotBudget { b := snapshotBudget(2); return &b }(), nil); err != nil {
+		t.Fatalf("CRC-damaged snapshot failed: %v", err)
+	}
+	output := openPublished(t, destination)
+	defer output.Close()
+	value, found, err := output.LookupDirectV4(parseV4("10.0.0.15"))
+	if err != nil || !found || value != 3 {
+		t.Errorf("damaged-source output lookup = (%d, %v, %v), want (3, true, nil)", value, found, err)
+	}
+}
+
+// copyFixture copies one committed corpus fixture to a writable path.
+func copyFixture(t *testing.T, fixtureName, destination string) error {
+	t.Helper()
+	bytes, err := os.ReadFile(fixture(t, fixtureName))
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destination, bytes, 0o644)
+}
+
+// mutateSelectedRangeRoot applies one mutation to the selected
+// generation's range root page (Rust mutate_selected_range_root): the
+// meta pair selects the newer transaction, whose RangeRoot names the
+// first data page.
+func mutateSelectedRangeRoot(t *testing.T, path string, mutate func(page []byte)) {
+	t.Helper()
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("read source:", err)
+	}
+	leftTxn := binary.LittleEndian.Uint64(bytes[48:56])
+	rightTxn := binary.LittleEndian.Uint64(bytes[4096+48 : 4096+56])
+	metaOffset := 0
+	if rightTxn > leftTxn {
+		metaOffset = 4096
+	}
+	root := binary.LittleEndian.Uint32(bytes[metaOffset+144 : metaOffset+148])
+	if root < 2 {
+		t.Fatalf("range root %d not on a data page", root)
+	}
+	start := int(root) * 4096
+	mutate(bytes[start : start+4096])
+	if err := os.WriteFile(path, bytes, 0o644); err != nil {
+		t.Fatal("write source:", err)
+	}
+}

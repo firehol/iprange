@@ -60,6 +60,138 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
+### Status (2026-08-21) - chunk 3b-3 slices A+B COMMITTED: reader cursor surface and writer structure dictionary (HEAD 172c472)
+
+- Slice A (internal/reader): exported NewMembershipRangeCursor4/6,
+  NetworkEnrichmentV1Range4/6 + NewNetworkEnrichmentV1Cursor4/6
+  (structured_value/cursor.rs), MetadataJSONLen, FileIdentity, and
+  ConfirmUnchanged (source final-check: VerifyIdentity + meta re-read,
+  mirroring BasicSource::final_check/bind_current, RecoveryCandidateChanged
+  51 wrapping identical to Rust candidate_changed).
+- Slice B (internal/writer): structure dictionary
+  (structure_table/structure_codec/structure_dictionary.go),
+  PushNetworkEnrichmentV1V4/V6 with structure-mode guards and membership
+  interning (immutable_output/structured.rs), and the structure reference
+  batch through NewStructuredOutputBuilder (immutable_output/
+  reference_batch.rs; membership batch charged first, structure batch
+  second from the remaining heap).
+- Real bug fixed in slice B: the Go membership hash tree compared raw
+  little-endian digest bytes while Rust Ord compares (digest, word_count,
+  id) numerically, so dedup broke at membership id >= 256 (two records
+  hashing to the same first-le-8 could share one ID). The hash probe now
+  compares big-endian digests (hashProbe) while the wire cells stay
+  little-endian; readers are unaffected (they use the ID tree). Verified
+  against Rust structure_value/codec.rs and membership_tree.rs.
+- All four test modes green (test, -tags v4work, both -race), vet,
+  gofmt; all five platform builds compile.
+
+### Status (2026-08-21) - chunk 3b-3 slices C+D COMMITTED: snapshot machine and public facade (HEAD 172c472+)
+
+- Slice C (internal/snapshot): the machine mirroring api.rs + build.rs +
+  terminal.rs - Live refusal at the API layer (OsUnsupported 58, detail
+  per recorded decision), budget validation with Rust-verbatim details
+  (pages >= 2; open files 3 for replace/Live else 2), source open BEFORE
+  the destination create, identity compare (source vs private output,
+  32-byte LE device+inode encode), heap-charged reference batches (slot
+  16 bytes, ENTRY_LIMIT 1024, floor power of two), the six family copy
+  loops with per-item cancellation checks, SnapshotWords exact-count
+  verify ("membership length changed while copying"), metadata copy under
+  the remaining heap budget, ConfirmUnchanged between finish and publish,
+  source release before publish, cancellation gate, and the writer
+  publish mapping to Cause+CleanupState. Reader gained the exported
+  LookupMembershipID (Rust GenerationReader::membership).
+- Slice D (public v4/go): SnapshotTo, SnapshotSourceMode,
+  SnapshotPublicationPolicy alias, SnapshotBudget, SnapshotResult,
+  SnapshotPreparationFailure (Cause+Cleanup collapse), plus tests
+  mirroring snapshot_operations.rs over the committed Rust fixtures
+  (direct/membership/structured/structured-nothreat), the
+  zeroalloc/v4work pins, and the malformed-traversal vs CRC-damage pair.
+- Real writer bug fixed in slice C validation: after a successful
+  exchange (PolicyReplaceExisting) the Go writer never removed the
+  previous destination that RENAME_EXCHANGE swapped onto the private
+  attempt name; Rust retire_steps unlink_previous does
+  (main_file.rs:296-320). The writer now captures the previous
+  destination identity in verifyCustody and, after the destination proof,
+  unlinks the private name identity-guarded and syncs the retained
+  directory (retireExchangedPrevious); a failed retirement keeps the
+  already-proven main published and reports ResiduePossible. Regression
+  pinned in TestPublishExchangeReplaces and the snapshot replacement
+  tests (assert_no_private_artifacts parity).
+- Live-specific Rust tests (sidecar budgets, live generation pinning,
+  live self replacement) are deliberately not ported: the Go boundary
+  refuses the live source before any of them can run, per the recorded
+  decision. The Go adaptation pins the refusal itself
+  (TestSnapshotLiveRefusedAtBoundary) including the Rust api.rs ordering
+  (refusal precedes budget validation).
+- All four test modes green, vet, gofmt, all five platform builds; the
+  v4work pins assert the one-pass copy (RangeConsumed == source range
+  count) and copy determinism (identical generations, identical
+  WordReads).
+
+### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
+
+- Next M3 chunk after the 3b-2 close: the compact-snapshot surface.
+  Rust authority: v4/rust/iprange-livedb/src/snapshot/{api.rs,build.rs,
+  terminal.rs,source.rs,snapshot.rs} and its dependencies
+  immutable_output/structured.rs + structured_value/{table.rs,manager.rs,
+  codec.rs,network_enrichment_v1.rs,cursor.rs}; tests in
+  tests/snapshot_operations.rs. Go has no counterpart: the public
+  facade, the machine, the reader structured cursor, and the writer
+  structure dictionary are all missing.
+- Slices (disjoint write scopes, exact Rust baseline):
+  - A (internal/reader): exported membership-range cursor
+    constructors, NetworkEnrichmentV1Cursor4/6 ordered structured
+    cursor (structured_value/cursor.rs), MetadataJSONLen,
+    FileIdentity, and ConfirmUnchanged (source final-check for the
+    snapshot: VerifyIdentity + meta re-read compare, mirroring
+    BasicSource::final_check/bind_current).
+  - B (internal/writer): structure dictionary on the one-shot output
+    builder - intern/apply_delta/flush over the structure-ID fixed
+    tree (structured_value/table.rs+manager.rs+codec.rs geometry
+    already in internal/format/structure.go), the structure reference
+    batch (immutable_output/reference_batch.rs), and
+    PushNetworkEnrichmentV1V4/V6 (immutable_output/structured.rs)
+    including structure-mode family guards and membership interning.
+  - C (internal/snapshot): the snapshot machine mirroring api.rs and
+    build.rs: Live refusal, budget validation (max_output_pages>=2,
+    open-files 3 for the replace policies / Live else 2, Rust-verbatim
+    InsufficientResourceBudget details), source open through the
+    reader, identity compare, heap-charged reference batches, the six
+    family copy loops with per-item cancellation checks, metadata copy
+    with the heap budget, source final-check + release before publish,
+    and the publish mapping to the terminal shapes.
+  - D (public v4/go): SnapshotTo, SnapshotSourceMode, SnapshotBudget,
+    SnapshotResult, SnapshotPreparationFailure collapse (early/new/
+    discarded/from_publication into Cause+Cleanup, live-only fields
+    dropped), plus tests mirroring snapshot_operations.rs and the
+    zeroalloc/v4work pins.
+- Recorded decisions (no open user decision):
+  1. Live source mode refuses honestly at the boundary with the Rust
+     Unsupported class (OsUnsupported 58) and detail "live snapshot
+     source requires the live sidecar coordination (Milestone 4)";
+     live coordination is the approved M4 scope and the Rust
+     non-unix cfg path refuses the whole surface the same way.
+     reject_live_self is therefore unreachable and not ported.
+  2. The output identity is preserved from the source meta verbatim
+     (database id, transaction id, commit nonce - Rust
+     GenerationReader::output_spec), unlike the fresh identity of
+     algebra publish_set.
+  3. The source is opened BEFORE the destination create and released
+     (reader Close) BEFORE the publish rename, and the source
+     final-check runs between builder finish and publish, exactly like
+     Rust finish_current (changed source refuses publication).
+  4. Reference-batch heap accounting mirrors Rust: membership batch
+     charged for membership/structured kinds, then the structure
+     batch charged from the remaining heap for structured; metadata
+     charged under "snapshot metadata input heap" and written with
+     the remaining budget.
+  5. Failure shapes collapse to Cause+CleanupState on the Go boundary
+     (AlgebraPreparationFailure precedent); source_cleanup/
+     coordination_cleanup/housekeeping fields are always empty while
+     Live is refused and are documented, not carried.
+- Next: slices A and B run in parallel; then C, then D; then the
+  five-aspect review at the close gate like every slice.
+
 ### Status (2026-08-21) - slice 3 CLOSED: five-aspect PASS at HEAD 8345891
 
 - M3 chunk-3b-2 slice 3 (publish_set surface) closes with all five

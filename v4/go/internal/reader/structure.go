@@ -39,7 +39,7 @@ func (v NetworkEnrichmentV1View) ThreatMembership() (MembershipView, error) {
 	if v.value.MembershipID == 0 {
 		return MembershipView{}, nil
 	}
-	return v.r.lookupMembershipID(v.value.MembershipID)
+	return v.r.LookupMembershipID(v.value.MembershipID)
 }
 
 // LookupNetworkEnrichmentV14 returns the structure covering addr, or false

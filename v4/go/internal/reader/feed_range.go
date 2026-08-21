@@ -139,7 +139,7 @@ func (c *FeedRangeProjection4) contains(value uint32) (bool, error) {
 	}
 	contains := false
 	if id != 0 {
-		view, err := c.r.lookupMembershipID(id)
+		view, err := c.r.LookupMembershipID(id)
 		if err != nil {
 			return false, err
 		}
@@ -300,7 +300,7 @@ func (c *FeedRangeProjection6) contains(value uint32) (bool, error) {
 	}
 	contains := false
 	if id != 0 {
-		view, err := c.r.lookupMembershipID(id)
+		view, err := c.r.LookupMembershipID(id)
 		if err != nil {
 			return false, err
 		}
