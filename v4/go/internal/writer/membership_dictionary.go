@@ -112,7 +112,7 @@ func findEqualMembership(store tree.Store, state *membershipState, words OutputW
 	if state.hashRoot == 0 {
 		return 0, false, nil
 	}
-	key := hashKey(digest, words.WordCount(), 1)
+	key := hashProbe(digest, words.WordCount(), 1)
 	for {
 		value, err := tree.AtOrAfter(hashCodec{}, store, state.hashRoot, tree.VarKey(key[:]))
 		if err != nil {
@@ -135,7 +135,7 @@ func findEqualMembership(store tree.Store, state *membershipState, words OutputW
 		if candidate.id == ^uint32(0) {
 			return 0, false, nil
 		}
-		key = hashKey(digest, words.WordCount(), candidate.id+1)
+		key = hashProbe(digest, words.WordCount(), candidate.id+1)
 	}
 }
 
@@ -364,9 +364,9 @@ func changedRefcount(current uint64, change int64) (uint64, error) {
 // clears the used bit, and shrinks the ID limit (Rust
 // finish_record_removal).
 func finishMembershipRemoval(store tree.RetiringStore, state *membershipState, record membershipRecord) error {
-	key := hashKey(record.digest, record.wordCount, record.id)
+	probe := hashProbe(record.digest, record.wordCount, record.id)
 	retired := tree.NewRetiredPages()
-	if err := tree.DeleteExisting(hashCodec{}, store, &state.hashRoot, tree.VarKey(key[:]), retired); err != nil {
+	if err := tree.DeleteExisting(hashCodec{}, store, &state.hashRoot, tree.VarKey(probe[:]), retired); err != nil {
 		return err
 	}
 	if err := store.RetirePages(retired.Slice()); err != nil {

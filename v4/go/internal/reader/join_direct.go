@@ -173,7 +173,7 @@ func (r *ImmutableReader) JoinDirect(scope *ScopeData, family uint8, source *Imm
 	var membership *selectedRanges
 	var sweep *joinDirectSweep
 	if family == format.AddressFamilyIPv4 {
-		cursor, err := r.newMembershipRangeCursor4()
+		cursor, err := r.NewMembershipRangeCursor4()
 		if err != nil {
 			return DirectJoinReport{}, err
 		}
@@ -194,7 +194,7 @@ func (r *ImmutableReader) JoinDirect(scope *ScopeData, family uint8, source *Imm
 			return DirectJoinReport{}, err
 		}
 	} else {
-		cursor, err := r.newMembershipRangeCursor6()
+		cursor, err := r.NewMembershipRangeCursor6()
 		if err != nil {
 			return DirectJoinReport{}, err
 		}

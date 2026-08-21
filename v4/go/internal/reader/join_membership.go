@@ -120,11 +120,11 @@ func (r *ImmutableReader) JoinMembership(scope, right *ScopeData, family uint8, 
 
 	var stats membershipJoinStats
 	if family == format.AddressFamilyIPv4 {
-		leftCursor, err := r.newMembershipRangeCursor4()
+		leftCursor, err := r.NewMembershipRangeCursor4()
 		if err != nil {
 			return MembershipJoinReport{}, err
 		}
-		rightCursor, err := rightReader.newMembershipRangeCursor4()
+		rightCursor, err := rightReader.NewMembershipRangeCursor4()
 		if err != nil {
 			return MembershipJoinReport{}, err
 		}
@@ -135,11 +135,11 @@ func (r *ImmutableReader) JoinMembership(scope, right *ScopeData, family uint8, 
 			return MembershipJoinReport{}, err
 		}
 	} else {
-		leftCursor, err := r.newMembershipRangeCursor6()
+		leftCursor, err := r.NewMembershipRangeCursor6()
 		if err != nil {
 			return MembershipJoinReport{}, err
 		}
-		rightCursor, err := rightReader.newMembershipRangeCursor6()
+		rightCursor, err := rightReader.NewMembershipRangeCursor6()
 		if err != nil {
 			return MembershipJoinReport{}, err
 		}

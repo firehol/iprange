@@ -8,7 +8,10 @@ package reader
 // direction) and require a membership database of the matching family.
 // Unlike the direct cursor, visiting a record does not count
 // RangeConsumed: the aggregation and join scans count physical ranges
-// themselves (Rust does the same).
+// themselves (Rust does the same). NewMembershipRangeCursor4/6 are the
+// exported constructors (Rust GenerationReader::membership_ranges): the
+// shared joins use them internally, and snapshot sources open them the
+// same way.
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -26,7 +29,9 @@ type MembershipRange6 struct {
 	Membership                 uint32
 }
 
-func (r *ImmutableReader) newMembershipRangeCursor4() (*MembershipRangeCursor4, error) {
+// NewMembershipRangeCursor4 opens one ordered IPv4 membership range
+// cursor over the committed generation, requiring a membership database.
+func (r *ImmutableReader) NewMembershipRangeCursor4() (*MembershipRangeCursor4, error) {
 	if err := r.requireMembershipFamilyLocked(format.AddressFamilyIPv4); err != nil {
 		return nil, err
 	}
@@ -37,7 +42,9 @@ func (r *ImmutableReader) newMembershipRangeCursor4() (*MembershipRangeCursor4, 
 	return &MembershipRangeCursor4{state: state}, nil
 }
 
-func (r *ImmutableReader) newMembershipRangeCursor6() (*MembershipRangeCursor6, error) {
+// NewMembershipRangeCursor6 opens one ordered IPv6 membership range
+// cursor over the committed generation, requiring a membership database.
+func (r *ImmutableReader) NewMembershipRangeCursor6() (*MembershipRangeCursor6, error) {
 	if err := r.requireMembershipFamilyLocked(format.AddressFamilyIPv6); err != nil {
 		return nil, err
 	}

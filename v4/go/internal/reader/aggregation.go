@@ -102,14 +102,14 @@ func (r *ImmutableReader) AggregateScope(scope *ScopeData, family uint8, mode Ag
 	var stream *membershipIterator
 	var ops rangeOps
 	if family == format.AddressFamilyIPv4 {
-		cursor, err := r.newMembershipRangeCursor4()
+		cursor, err := r.NewMembershipRangeCursor4()
 		if err != nil {
 			return MembershipAggregationReport{}, err
 		}
 		stream = &membershipIterator{cursor: cursor.state, family: format.AddressFamilyIPv4}
 		ops = ops4
 	} else {
-		cursor, err := r.newMembershipRangeCursor6()
+		cursor, err := r.NewMembershipRangeCursor6()
 		if err != nil {
 			return MembershipAggregationReport{}, err
 		}

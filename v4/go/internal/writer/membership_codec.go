@@ -237,13 +237,31 @@ func (idCodec) WriteKey(key tree.Key, output []byte) {
 	binary.LittleEndian.PutUint32(output, uint32(key.Hi))
 }
 
-// hashKey encodes one hash-tree key (Rust encode_hash): digest bytes,
-// word count, id; the raw bytes are the total order.
+// hashKey encodes one hash-tree LEAF record (Rust encode_hash): the
+// wire bytes are the digest, the little-endian word count, and the
+// little-endian id. The tree orders keys by the typed Rust HashKey Ord
+// (digest bytes, then the numeric word count and id), so the tree Key
+// keeps word count and id big-endian (hashProbe) while the cells on
+// disk stay exactly the Rust wire layout.
 func hashKey(digest [32]byte, wordCount, id uint32) [membershipHashKeySize]byte {
 	var key [membershipHashKeySize]byte
 	copy(key[hashDigestOffset:], digest[:])
 	binary.LittleEndian.PutUint32(key[hashWordCountOffset:], wordCount)
 	binary.LittleEndian.PutUint32(key[hashIDOffset:], id)
+	return key
+}
+
+// hashProbe encodes one hash-tree search key in the numeric total order
+// of the Rust HashKey Ord: the digest bytes followed by the big-endian
+// word count and id. The tree compares these probe bytes with the keys
+// it decodes from wire cells (ReadKey normalizes to the same
+// orientation), so (digest, 255) < (digest, 256) exactly like the Rust
+// derived Ord.
+func hashProbe(digest [32]byte, wordCount, id uint32) [membershipHashKeySize]byte {
+	var key [membershipHashKeySize]byte
+	copy(key[hashDigestOffset:], digest[:])
+	binary.BigEndian.PutUint32(key[hashWordCountOffset:], wordCount)
+	binary.BigEndian.PutUint32(key[hashIDOffset:], id)
 	return key
 }
 
@@ -278,8 +296,8 @@ func (hashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 	if err != nil {
 		return tree.Key{}, err
 	}
-	key := hashKey(digest, wordCount, id)
-	return tree.VarKey(key[:]), nil
+	probe := hashProbe(digest, wordCount, id)
+	return tree.VarKey(probe[:]), nil
 }
 
 func (hashCodec) ReadLeaf(cell []byte) (any, error) {
@@ -291,7 +309,19 @@ func (hashCodec) ReadLeaf(cell []byte) (any, error) {
 }
 
 func (hashCodec) WriteKey(key tree.Key, output []byte) {
-	copy(output, key.Bytes())
+	// Branch cells carry the wire layout (digest, little-endian word
+	// count and id); the tree Key is the numeric orientation, so the
+	// trailing eight bytes reverse.
+	bytes := key.Bytes()
+	copy(output[hashDigestOffset:hashWordCountOffset], bytes[:hashWordCountOffset])
+	output[hashWordCountOffset] = bytes[hashWordCountOffset+3]
+	output[hashWordCountOffset+1] = bytes[hashWordCountOffset+2]
+	output[hashWordCountOffset+2] = bytes[hashWordCountOffset+1]
+	output[hashWordCountOffset+3] = bytes[hashWordCountOffset]
+	output[hashIDOffset] = bytes[hashIDOffset+3]
+	output[hashIDOffset+1] = bytes[hashIDOffset+2]
+	output[hashIDOffset+2] = bytes[hashIDOffset+1]
+	output[hashIDOffset+3] = bytes[hashIDOffset]
 }
 
 // membershipHashRecord is one decoded hash-tree leaf (Rust HashKey).

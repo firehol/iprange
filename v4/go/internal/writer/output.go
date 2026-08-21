@@ -70,6 +70,10 @@ type OutputBuilder struct {
 	// membershipRefs aggregates recurring membership references so each
 	// id is applied as one refcount delta (Rust ReferenceBatch).
 	membershipRefs membershipReferenceBatch
+	// structureRefs aggregates recurring structure references so each id
+	// is applied as one refcount delta (Rust ReferenceBatch; only
+	// structured outputs enable it).
+	structureRefs structureReferenceBatch
 	// metadataStaged mirrors the Rust output metadata latch: one
 	// WriteMetadata per output.
 	metadataStaged bool
@@ -109,8 +113,29 @@ func (b *OutputBuilder) PageCount() uint64 { return b.meta.PageCount }
 // caller (Rust ReferenceBatch::new sizes and charges the batch from
 // heap.remaining() at builder construction): a power of two up to
 // ReferenceBatchEntryLimit, or 0 to disable batching. Direct-value
-// outputs never batch regardless of the argument.
+// outputs never batch regardless of the argument. Structured outputs
+// built through this constructor run with the structure reference batch
+// disabled (references apply directly), which is byte-identical in
+// behavior; callers that can charge a structure batch from the remaining
+// operation heap use NewStructuredOutputBuilder like the Rust
+// new_owned_with_extent sequence (membership batch first, structure
+// batch second).
 func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, referenceBatchEntries int, check func(clean string) error) (*OutputBuilder, error) {
+	return newOutputBuilder(path, spec, budget, referenceBatchEntries, 0, check)
+}
+
+// NewStructuredOutputBuilder starts one structured immutable output with
+// both reference batches sized from the operation heap exactly like Rust
+// new_owned_with_extent: membershipBatchEntries is charged first and
+// structureBatchEntries second from the remaining heap (each a power of
+// two up to ReferenceBatchEntryLimit, 0 disables that batch). The
+// existing membership publish_set callers keep the five-argument
+// NewOutputBuilder unchanged.
+func NewStructuredOutputBuilder(path string, spec OutputSpec, budget OutputBudget, membershipBatchEntries, structureBatchEntries int, check func(clean string) error) (*OutputBuilder, error) {
+	return newOutputBuilder(path, spec, budget, membershipBatchEntries, structureBatchEntries, check)
+}
+
+func newOutputBuilder(path string, spec OutputSpec, budget OutputBudget, membershipBatchEntries, structureBatchEntries int, check func(clean string) error) (*OutputBuilder, error) {
 	if err := requireNewOutput(spec, budget); err != nil {
 		return nil, err
 	}
@@ -125,13 +150,23 @@ func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, referen
 	meta := outputEmptyMeta(spec)
 	batchCapacity := 0
 	if spec.ValueKind == format.ValueKindMembership || spec.ValueKind == format.ValueKindStructured {
-		if referenceBatchEntries > ReferenceBatchEntryLimit {
-			referenceBatchEntries = ReferenceBatchEntryLimit
+		if membershipBatchEntries > ReferenceBatchEntryLimit {
+			membershipBatchEntries = ReferenceBatchEntryLimit
 		}
-		if referenceBatchEntries < 0 {
-			referenceBatchEntries = 0
+		if membershipBatchEntries < 0 {
+			membershipBatchEntries = 0
 		}
-		batchCapacity = referenceBatchEntries
+		batchCapacity = membershipBatchEntries
+	}
+	structureCapacity := 0
+	if spec.ValueKind == format.ValueKindStructured {
+		if structureBatchEntries > ReferenceBatchEntryLimit {
+			structureBatchEntries = ReferenceBatchEntryLimit
+		}
+		if structureBatchEntries < 0 {
+			structureBatchEntries = 0
+		}
+		structureCapacity = structureBatchEntries
 	}
 	return &OutputBuilder{
 		mapping:        m,
@@ -140,6 +175,7 @@ func NewOutputBuilder(path string, spec OutputSpec, budget OutputBudget, referen
 		budget:         budget,
 		ranges:         newRangeBulkBuilder(meta.TxnID, meta.ValueKind, meta.AddressFamily),
 		membershipRefs: newMembershipReferenceBatch(batchCapacity),
+		structureRefs:  newMembershipReferenceBatch(structureCapacity),
 	}, nil
 }
 
@@ -516,6 +552,12 @@ func requireOutputShape(words OutputWords, feedLimit uint64) error {
 // builders refuse further mutation.
 func (b *OutputBuilder) Finish() error {
 	if err := b.requireActive(); err != nil {
+		return err
+	}
+	// Rust finish flushes the structure references before the membership
+	// references, then the ranges.
+	if err := b.flushStructureReferences(); err != nil {
+		b.failed = true
 		return err
 	}
 	if err := b.flushMembershipReferences(); err != nil {

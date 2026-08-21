@@ -1046,13 +1046,13 @@ func newAlgebraSelectedRanges(input algebraInput, ops rangeOps, heap *operationH
 // one reader.
 func newMembershipIterator(r *ImmutableReader, ipv4 bool) (*membershipIterator, error) {
 	if ipv4 {
-		cursor, err := r.newMembershipRangeCursor4()
+		cursor, err := r.NewMembershipRangeCursor4()
 		if err != nil {
 			return nil, err
 		}
 		return &membershipIterator{cursor: cursor.state, family: format.AddressFamilyIPv4}, nil
 	}
-	cursor, err := r.newMembershipRangeCursor6()
+	cursor, err := r.NewMembershipRangeCursor6()
 	if err != nil {
 		return nil, err
 	}
