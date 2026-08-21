@@ -1,3 +1,5 @@
+//go:build !windows
+
 package mapping
 
 // FreeBSD link_noreplace machine tests (Rust publication namespace

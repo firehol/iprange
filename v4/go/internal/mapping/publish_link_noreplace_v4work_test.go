@@ -1,4 +1,4 @@
-//go:build v4work
+//go:build v4work && !windows
 
 // Child-process crash-consistency tests for the four FreeBSD no-replace
 // crash points (Rust namespace_mutation.rs link_noreplace:

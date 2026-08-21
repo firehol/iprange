@@ -330,26 +330,6 @@ func TestOpenImmutableRefusesPathUnlinkedDuringOpen(t *testing.T) {
 	}
 }
 
-// makePagesFile creates a page-aligned file of pageCount zero pages.
-func makePagesFile(t *testing.T, dir string, pageCount int) string {
-	t.Helper()
-	path := filepath.Join(dir, "writer.iprdb")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zeros := make([]byte, format.PageSize)
-	for i := 0; i < pageCount; i++ {
-		if _, err := f.Write(zeros); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 // TestOpenMutableWritesVisible pins the writer mapping contract: bytes
 // written through a mutable View land in the file-backed mapping (visible to
 // an independent mapping of the same file before any flush) and survive
