@@ -60,6 +60,72 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
+### Status (2026-08-21) - slice 3 CLOSED: five-aspect PASS at HEAD 8345891
+
+- M3 chunk-3b-2 slice 3 (publish_set surface) closes with all five
+  aspect reviewers at PASS, no P0-P2 findings. Delta reviewed:
+  3897b4b (F-1 typing/probe/crash fixes) -> 45d453f (NetBSD cause
+  translation) -> 8345891 (test portability). Pauli (Rust parity),
+  Hume (Go idioms), Aristotle (performance), Aquinas (wire/integrity)
+  PASSed at 3897b4b; Ohm (APIs/docs) FAILed at 3897b4b with three
+  findings, all fixed and re-reviewed to PASS at 45d453f; the
+  test-portability delta at 8345891 (test-only build tags and helper
+  placement, no production semantics) was verified across the full
+  matrix and Ohm re-confirmed PASS including the close records.
+- Fixed with this entry:
+  - The NetBSD no-replace refusal now surfaces the Rust-verbatim
+    public cause: CodeDurabilityUnsupported (34) with the exact
+    problem.rs detail "filesystem lacks required durable namespace
+    operations" (problem.rs:62-64), instead of the Go-internal
+    CodeOSUnsupported marker (58). The staging classifier still keys
+    on the internal marker (publication_staging.go:410) and translates
+    only at the public Cause; the marker never leaves the mapping
+    owner. Ruling verified against Rust: re-keying the classifier on
+    code 34 would misclassify the FreeBSD mid-machine SyncDirectory
+    EINVAL (linkat machine, publish_link_noreplace.go) as NotPublished
+    while Rust classifies the main-rename-stage Unsupported as
+    outcome_unknown (attempt.rs from_armed) - the marker encodes the
+    acquire position, which code 34 alone cannot.
+  - Comments corrected: neither mapping_publish_netbsd.go nor
+    mapping_publish_posix.go claims a "preparation failure" anymore;
+    the writer returns the not-published result (attempt discarded).
+    The publication_staging.go rename-refusal comment names netbsd as
+    the only refusal target (Rust rename_noreplace Unsupported on
+    non-linux/apple/freebsd; Windows implements the primitive through
+    NtSetInformationFile, windows_mutation.rs:24-39). The Go Windows
+    stubs stay documented Go-platform refusals.
+  - Pre-existing test portability debt fixed (Ohm P3): makePagesFile
+    lived in the linux-tagged mapping_test.go but is referenced by the
+    untagged v4work pins, and the FreeBSD linkat-machine tests carried
+    no !windows tag while testing the !windows machine - so
+    GOOS!=linux cross-vet/cross-test builds of internal/mapping failed
+    to compile. makePagesFile moved to an untagged portable helper
+    file; both machine test files gained the !windows tag. Every 5-OS
+    cross-vet and cross-build on both tag sets now compiles.
+- Known edge recorded for the sidecar milestone, not a blocker: on a
+  Linux filesystem without the RENAME_NOREPLACE primitive the staged
+  Go flow classifies the main-rename EINVAL as OutcomeUnknown, while
+  Rust refuses earlier at the coordination acquire (NotPublished). The
+  Go staging deliberately has no coordination rename yet (the
+  reservation-sidecar machinery lands with the M4 sidecar work per the
+  approved scope), so the acquire-position refusal cannot be
+  distinguished; the DurabilityUnsupported code is identical in both.
+  Closure of this edge is tracked with the M4 sidecar coordination
+  chunk, not deferred silently.
+- Validation at 8345891, all niced: go test ./... and -tags v4work
+  (9 packages ok each), -race both tag sets, vet and gofmt clean,
+  5-OS (linux/darwin/freebsd/netbsd/windows) build and vet of ./... on
+  both tag sets - all green, including GOOS=windows with v4work which
+  previously failed to compile for testing. Rust tree unchanged.
+- Next: chunk 3b-2 slice 3 done; the next M3 chunk is the snapshot
+  writer surface - Rust snapshot::snapshot_to with SnapshotBudget,
+  SnapshotSourceMode, SnapshotPublicationPolicy, SnapshotResult and
+  SnapshotPreparationFailure (v4/rust/iprange-livedb/src/lib.rs
+  snapshot export; no Go counterpart exists yet) - reusing the
+  publication staging and output builder closed by this slice, per the
+  Milestone-3 surface list (snapshots and reports). Slice 3 closes
+  with no open user decision.
+
 ### Status (2026-08-21) - re-review round: FreeBSD no-replace machine, NetBSD classification, records corrections
 
 - Re-review verdicts so far (same five reviewers, delta ae57dfa ->
@@ -3047,12 +3113,15 @@ Acceptance criteria evidence:
   three verified findings - duplicated search loops, overgrown gate
   machinery, stale records - were all fixed and pinned). Milestone 2
   (writer core) is implemented; Milestone 3 is in progress: chunks
-  1-3b-2 slice 3 are implemented; slice 3 is at its five-aspect close
-  gate (Status entry above).
+  1-3b-2 are implemented; chunk-3b-2 slice 3 (publish_set surface)
+  CLOSED at HEAD 8345891 with the five-aspect review at PASS, no
+  P0-P2 (Status entry above).
 - Slice-3 evidence: single-level five-aspect adversarial review at HEAD
   2a5e78e with the Rust implementation as the mandatory baseline; all
-  findings fixed (Status entry above); delta re-review pending with the
-  same five reviewers.
+  findings fixed and re-reviewed to no P0-P2 by the same five
+  reviewers (Pauli/Hume/Aristotle/Aquinas PASS at 3897b4b; Ohm FAIL at
+  3897b4b, PASS at 45d453f; test-portability delta 8345891 verified
+  across the full matrix).
 
 Tests or equivalent validation:
 
@@ -3173,14 +3242,22 @@ Lessons:
 Follow-up mapping:
 
 - Snapshot signing remains tracked by pending SOW-0017.
+- The Linux no-replace-primitive acquire/main classification edge
+  recorded in the slice-3 close entry is tracked to the M4 sidecar
+  coordination chunk (the staged Go flow has no coordination rename
+  until then); it is inside this SOW, so no separate SOW file is
+  warranted.
 - No other deferred item is created by this milestone.
 
 ## Outcome
 
 Milestone 1 (immutable reader) is closed. Milestone 2 (writer core) is
-implemented. Milestone 3 is in progress: chunks 1-3b-2 slice 3 are
-implemented and at the five-aspect review close gate. SOW completion
-remains pending final validation and user acceptance.
+implemented. Milestone 3 is in progress: chunks 1-3b-2 are implemented
+and closed at the five-aspect review gate (slice 3, the publish_set
+writer surface, closed at HEAD 8345891 with all five aspect reviewers
+at PASS). The next M3 chunk is the snapshot writer surface
+(snapshot::snapshot_to parity). SOW completion remains pending final
+validation and user acceptance.
 
 ## Lessons Extracted
 
