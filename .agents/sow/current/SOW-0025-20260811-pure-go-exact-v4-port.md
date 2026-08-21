@@ -60,6 +60,97 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
+### Status (2026-08-21) - chunk 3b-4 defined: history projection (draft_store/history.rs + live_writer/history_projection.rs)
+
+- Next M3 chunk after the 3b-3 snapshot close: the last-seen history
+  projection. Rust authority:
+  v4/rust/iprange-livedb/src/draft_store/history.rs (one-pass
+  last-seen map projection into named feeds: collect windows, unique
+  names, ensure feeds, cutoff ranking, feed-index ordering, prefix
+  interning, per-window before/after counts), its OrderedMerge base
+  (draft_store/range_merge.rs), the committed-range cursor
+  (range_store_cursor.rs), the draft membership algebra
+  (membership_dictionary/algebra.rs contains_indexes + combine,
+  draft_store/membership.rs ensure paths, draft_store/catalog.rs
+  ensure_feed), and the live workflow surface
+  (live_writer/history_projection.rs + workflow.rs prepared
+  operation, metadata staging, commit/abort); tests in
+  tests/history_projection.rs and
+  live_writer/history_projection/tests.rs. Go has only the value-free
+  report types (logical_types.go:82-119): no implementation calls
+  them, and the writer lacks the ordered merge, the committed-range
+  cursor, the draft feed catalog, the membership
+  combine/contains_indexes algebra, and the prepared-workflow state.
+- Slices (disjoint write scopes, exact Rust baseline):
+  - A (internal/writer foundations): MembershipOperation enum plus
+    dictionary contains_indexes and combine (membership_dictionary/
+    algebra.rs; identity shortcuts, canonical word counts, chunked
+    operand reads, HASH_WORDS-bounded scratch), the draft feed
+    catalog (feed_catalog.rs lookup/insert/allocate feed index over
+    the dual name/index trees and the feed used bitmap), the bounded
+    heap charge helper (heap.rs parity with the "history projection
+    heap" labels), range inclusive-cardinality helpers for both
+    families (key.rs inclusive_cardinality), and the three new
+    necessary-work counters source_passes, history_window_tests,
+    membership_combinations (no-ops in production).
+  - B (internal/writer merge + workflow state): the committed-range
+    forward cursor over the base generation through the draft
+    mapping (range_store_cursor.rs SelectedStore validation), the
+    ordered old/input merge (range_merge.rs: Incoming, OrderedMerge,
+    Policy, coalescing Output over the existing rangeBulkBuilder,
+    RefcountRun over the membership dictionary), the history
+    plan/merge/policy with prefix interning and per-window observe
+    (draft_store/history.rs verbatim, including cancellation
+    checkpoints and error classes), and the Draft/Core workflow
+    state machine (begin_membership_workflow, workflow_input_open/
+    active, abandon, draft finish, mutate semantics, no-change
+    discard).
+  - C (public v4/go): Writer.ProjectHistory with an immutable source
+    and cancellation, FinishedHistoryProjection (Report/Changed/
+    Commit/Abort, set/clear metadata on the changed handle),
+    CommitResult/AbortResult mapping, plus tests mirroring
+    tests/history_projection.rs and the module-work pins
+    (zeroalloc/v4work), and the Rust cross-open evidence at the
+    close gate.
+- Recorded decisions (no open user decision):
+  1. Live source refusal: the Go boundary takes the immutable reader
+     only and refuses Live with the Rust Unsupported class
+     (OsUnsupported 58) and detail "live history source requires the
+     live sidecar coordination (Milestone 4)", exactly like the
+     snapshot Live refusal; LiveReader is approved M4 scope.
+  2. The Rust FinishedHistoryProjection enum collapses to one Go
+     handle (DirectTransaction precedent): Report and Abort work on
+     both variants (Abort on a no-change result reports
+     NoPendingTransaction, Rust FinishedHistoryProjection::abort
+     parity), Commit/SetMetadataJSON/ClearMetadataJSON require the
+     changed variant and fail with the Rust class of the equivalent
+     unreachable call. The PreparedState captures the cancellation
+     token at prepare and checks it during commit exactly like Rust
+     commit_operation. Go has no Drop hook: a changed prepared
+     handle keeps the draft owned until Commit/Abort/Close, the
+     DirectTransaction ownership pattern (documented divergence).
+  3. Destination feeds for the Rust-parity multi-window scenario are
+     built white-box through the newly ported draft feed catalog and
+     membership interning (Go has no public create_feed workflow
+     yet; feed workflows are the next M3 surface). Public tests
+     cover the reachable surface: created feeds on empty
+     destinations, the no-change rerun, invalid request classes, the
+     full IPv6 space count, and the aborted-draft recovery.
+  4. Heap accounting mirrors Rust heap.rs: every retained plan
+     vector charges the draft budget MaxHeapBytes under the
+     "history projection heap" labels (BudgetExceeded class), and
+     the prefix bitmaps read through caller-owned word buffers only
+     (no mapped views reach the dictionary read), the OutputWords
+     contract.
+  5. The old-range cursor reads the committed base generation with
+     base-meta selection (Rust SelectedStore: selected txn and page
+     count from base.meta, never the draft), so the merge compares
+     the source scan against the committed destination exactly like
+     Rust; release_private is false (history never consumes the
+     base tree).
+- Next: slices A, then B (A's surfaces are B's prerequisites), then
+  C, then the five-aspect review at the close gate like every slice.
+
 ### Status (2026-08-21) - chunk 3b-3 slice C+D CLOSED: five-aspect PASS at HEAD 861aef8
 
 - M3 chunk-3b-3 slice C+D (snapshot writer surface) closes with all
