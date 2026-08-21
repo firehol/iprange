@@ -8,6 +8,9 @@ package writer
 
 import (
 	"bytes"
+	"compress/flate"
+	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -261,5 +264,60 @@ func TestMetadataMultiPageChain(t *testing.T) {
 	got, present, err := r.ReadMetadataJSON()
 	if err != nil || !present || !bytes.Equal(got, payload) {
 		t.Fatalf("multi-page metadata mismatch: present %v err %v len %d want %d", present, err, len(got), len(payload))
+	}
+}
+
+// TestMetadataDeflateHeapOverheadCoversWorkspace pins the honest deflate
+// heap charge: compress/flate at DefaultCompression keeps a pinned
+// workspace (~0.8 MiB) far larger than the Rust miniz backend's 512 KiB,
+// so the Go charge must be measured, not mirrored. GC is disabled while
+// measuring so every compressor buffer is still live at the second
+// sample; the peak across payload sizes must fit inside the declared
+// overhead, and a sanity floor stops a broken measurement from passing
+// vacuously (Rust metadata.rs: "allocation tests enforce it").
+func TestMetadataDeflateHeapOverheadCoversWorkspace(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race shadow memory inflates HeapAlloc; the charge pins the production workspace")
+	}
+	old := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(old)
+
+	var peak uint64
+	for _, n := range []int{1 << 10, 1 << 20, 8 << 20, format.MaxMetadataUncompressed} {
+		input := bytes.Repeat([]byte("deflate-workspace-probe-0123456789"), (n+33)/34)
+		input = input[:n]
+		bound := format.MetadataCompressedBound(uint64(n))
+
+		runtime.GC()
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		base := ms.HeapAlloc
+
+		var out bytes.Buffer
+		out.Grow(int(bound))
+		out.Write([]byte{0x78, 0x01})
+		enc, err := flate.NewWriter(&out, flate.DefaultCompression)
+		if err != nil {
+			t.Fatal(err)
+		}
+		written, err := enc.Write(input)
+		if err != nil || written != len(input) {
+			t.Fatalf("flate write n=%d err=%v, want full input", written, err)
+		}
+		_ = enc // keep the pinned workspace live until the sample
+		runtime.ReadMemStats(&ms)
+		workspace := ms.HeapAlloc - base - uint64(bound)
+		if workspace > peak {
+			peak = workspace
+		}
+		if err := enc.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if peak < 700*1024 {
+		t.Fatalf("deflate workspace measured %d bytes: measurement broken or the stdlib shrank", peak)
+	}
+	if peak > deflateHeapOverhead {
+		t.Fatalf("deflate workspace %d bytes exceeds declared overhead %d: the honest charge must cover it", peak, deflateHeapOverhead)
 	}
 }

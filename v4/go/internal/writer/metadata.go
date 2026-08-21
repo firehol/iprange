@@ -18,10 +18,15 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// deflateHeapOverhead mirrors Rust metadata.rs DEFLATE_HEAP_OVERHEAD: the
-// pinned miniz backend workspace that must fit inside the declared heap
-// budget before a deflate attempt is made.
-const deflateHeapOverhead = 512 * 1024
+// deflateHeapOverhead is the heap charge for one bounded deflate attempt:
+// the pinned compress/flate DefaultCompression workspace (~0.8 MiB on the
+// Go stdlib), measured and enforced by
+// TestMetadataDeflateHeapOverheadCoversWorkspace. It deliberately does not
+// mirror Rust metadata.rs DEFLATE_HEAP_OVERHEAD (512 KiB): that constant
+// covers the miniz backend's workspace, which is smaller than the Go
+// stdlib's, and an under-charge would let deflate exceed the caller's
+// declared heap budget.
+const deflateHeapOverhead = 840 * 1024
 
 // SetMetadata stages one exact metadata replacement and reports whether
 // the draft changed (Rust DraftStore::set_metadata). The 20 MiB cap, the

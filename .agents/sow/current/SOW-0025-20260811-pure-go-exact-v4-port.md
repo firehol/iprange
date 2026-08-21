@@ -142,6 +142,23 @@ Every .go file, every build-tagged variant, tests included.
   portable StatIdentity (mapping.StatIdentity exists on all five target
   platforms). The Rust Outcome collapse is named in the SnapshotTo doc.
 
+- Performance review fix (Aristotle P2-1, applied after the second
+  review round): the deflate heap charge under-charged the Go stdlib
+  workspace. The gate mirrored Rust metadata.rs DEFLATE_HEAP_OVERHEAD
+  (512 KiB, the miniz backend's pinned workspace), but compress/flate at
+  DefaultCompression pins ~821 KiB live heap (measured with GC disabled
+  across 1 KiB to 20 MiB payloads; stdlib layout: hashHead 512 KiB +
+  hashPrev 128 KiB inline, 64 KiB window, 64 KiB token queue). An
+  under-charge let the deflate attempt exceed the caller's declared heap
+  budget. The Go charge is now its own honest constant (840 KiB) and is
+  enforced by TestMetadataDeflateHeapOverheadCoversWorkspace, which
+  re-measures the peak workspace and pins both a sanity floor and the
+  upper bound (the Rust parity pattern: "allocation tests enforce it");
+  the test skips under -race because the detector's shadow memory
+  inflates HeapAlloc (race_disabled.go/race_enabled.go). The pre-existing
+  storedZlib fallback remains the honest layout when the budget fits the
+  bound but not the deflate workspace.
+
 ### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
 
 - Next M3 chunk after the 3b-2 close: the compact-snapshot surface.
