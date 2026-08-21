@@ -199,8 +199,10 @@ Every .go file, every build-tagged variant, tests included.
   no deterministic construction without a blocking checkpoint (Rust
   pins it via checkpoint observers; the Go fault machinery has no
   mutation hook and adding test-only production machinery is a defect
-  per project philosophy). The stale verifyCustody doc now describes
-  the previousCustody binding.
+  per project philosophy). The branch table skips where the atomic
+  name exchange is unavailable, like the crash suite (the exchange
+  policy refuses to create an attempt there). The stale verifyCustody
+  doc now describes the previousCustody binding.
 
 ### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
 

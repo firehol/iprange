@@ -58,6 +58,12 @@ func retireBranchState(t *testing.T) (*OutputAttempt, *previousCustody, string, 
 // it has no deterministic construction without a blocking checkpoint,
 // mirroring the Rust checkpoint tests.
 func TestRetireExchangedPreviousBranchClassification(t *testing.T) {
+	// CreateAttempt refuses the exchange policy where the atomic name
+	// exchange is unavailable; the retirement machine itself only ever
+	// runs there after a real exchange (same guard as the crash suite).
+	if !mapping.ExchangeAvailable() {
+		t.Skip("atomic name exchange unavailable")
+	}
 	cases := []struct {
 		name    string
 		setup   func(*testing.T, *OutputAttempt, *previousCustody, string, string)
