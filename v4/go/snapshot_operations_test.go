@@ -18,6 +18,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // snapshotBudget returns one Rust-shaped snapshot budget with the given
@@ -732,5 +733,122 @@ func mutateSelectedRangeRoot(t *testing.T, path string, mutate func(page []byte)
 	mutate(bytes[start : start+4096])
 	if err := os.WriteFile(path, bytes, 0o644); err != nil {
 		t.Fatal("write source:", err)
+	}
+}
+
+// TestSnapshotBoundaryGuards pins the two Go-boundary guards that have no
+// Rust counterpart (Rust passes the budget by value and its mode enum is
+// closed): a nil budget and an invalid source mode refuse with
+// ErrorInvalidArgument before any destination artifact exists.
+func TestSnapshotBoundaryGuards(t *testing.T) {
+	sourceFile := fixture(t, "direct-ipv4.iprdb")
+
+	destination := snapshotDest(t, "nil-budget.iprdb")
+	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, PolicyFailIfExists, nil, nil)
+	if code := failureCode(t, err); code != ErrorInvalidArgument {
+		t.Fatalf("nil budget cause code = %v, want invalid argument", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("nil-budget snapshot produced an output: %v", statErr)
+	}
+
+	destination = snapshotDest(t, "bad-mode.iprdb")
+	_, err = SnapshotTo(sourceFile, SnapshotSourceMode(255), destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	if code := failureCode(t, err); code != ErrorInvalidArgument {
+		t.Fatalf("invalid mode cause code = %v, want invalid argument", code)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid-mode snapshot produced an output: %v", statErr)
+	}
+}
+
+// TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication
+// ports the Rust immutable_source_replacement_during_copy_blocks_
+// publication race: a controller renames the source away as soon as the
+// private output appears, and the final ConfirmUnchanged between the
+// build and the publish must refuse with RecoveryCandidateChanged -
+// never a snapshot of a swapped-in generation, never an output, never a
+// private residue. The source is a 20k-range direct database so the copy
+// outlasts the controller's first poll.
+func TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.iprdb")
+	moved := filepath.Join(dir, "moved-source.iprdb")
+	destination := filepath.Join(dir, "output.iprdb")
+	buildLargeDirectSource(t, source, 20_000)
+
+	controllerDone := make(chan struct{})
+	controllerStarted := make(chan struct{})
+	controller := make(chan bool, 1)
+	go func() {
+		defer close(controller)
+		close(controllerStarted)
+		for {
+			select {
+			case <-controllerDone:
+				controller <- false
+				return
+			default:
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				controller <- false
+				return
+			}
+			for _, entry := range entries {
+				name := entry.Name()
+				if len(name) >= len(".iprange-publish-") && name[:len(".iprange-publish-")] == ".iprange-publish-" {
+					if err := os.Rename(source, moved); err != nil {
+						t.Errorf("controller rename: %v", err)
+						controller <- false
+						return
+					}
+					controller <- true
+					return
+				}
+			}
+		}
+	}()
+	<-controllerStarted
+
+	_, err := SnapshotTo(source, SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
+	close(controllerDone)
+	if !<-controller {
+		t.Fatalf("controller missed private-output creation")
+	}
+	if code := failureCode(t, err); code != ErrorRecoveryCandidateChanged {
+		t.Fatalf("cause code = %v, want recovery candidate changed (err %v)", code, err)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("blocked snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, dir)
+}
+
+// buildLargeDirectSource constructs one sealed 20k-range direct database
+// directly at path through the one-shot writer (the published-file
+// format, no Publish needed): the snapshot source race needs a copy that
+// outlasts the controller poll.
+func buildLargeDirectSource(t *testing.T, path string, ranges int) {
+	t.Helper()
+	spec, err := writer.FreshOutputSpec(format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, mustTag(t, "race-source").Wire(), 0)
+	if err != nil {
+		t.Fatal("spec:", err)
+	}
+	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, 0, nil)
+	if err != nil {
+		t.Fatal("builder:", err)
+	}
+	for index := 0; index < ranges; index++ {
+		address := uint32(index * 2)
+		if err := builder.PushDirectV4(address, address, uint32(index%251+1)); err != nil {
+			t.Fatal("push:", err)
+		}
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatal("finish:", err)
+	}
+	if err := builder.Close(); err != nil {
+		t.Fatal("close:", err)
 	}
 }

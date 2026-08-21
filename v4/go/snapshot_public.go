@@ -86,7 +86,11 @@ func (f *SnapshotPreparationFailure) Unwrap() error {
 // carries the publication; a refused or outcome-unknown publish is a
 // result with its own Status/Cause, not an error, exactly like the
 // publish_set surface. Every preparation failure returns
-// *SnapshotPreparationFailure.
+// *SnapshotPreparationFailure (the Rust Box<SnapshotPreparationFailure>
+// terminal collapses into (SnapshotResult, error) like
+// AlgebraPreparationFailure). A nil budget and an invalid source mode
+// are Go-boundary guards refused with ErrorInvalidArgument before any
+// destination artifact exists.
 func SnapshotTo(sourcePath string, sourceMode SnapshotSourceMode, destinationPath string, publicationPolicy SnapshotPublicationPolicy, budget *SnapshotBudget, cancellation *CancellationToken) (SnapshotResult, error) {
 	zero := SnapshotResult{}
 	if budget == nil {

@@ -9,10 +9,10 @@ package reader
 import (
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
 func TestMetadataJSONLen(t *testing.T) {
@@ -47,12 +47,15 @@ func TestFileIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var st syscall.Stat_t
-	if err := syscall.Stat(fixture(t, "direct-ipv4.iprdb"), &st); err != nil {
+	// The mapping owner is the single identity authority on every
+	// platform (Windows included); comparing against its probe keeps the
+	// test portable without syscall.Stat_t.
+	device2, inode2, err := mapping.StatIdentity(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if device != uint64(st.Dev) || inode != uint64(st.Ino) {
-		t.Fatalf("identity (%d,%d) want (%d,%d)", device, inode, st.Dev, st.Ino)
+	if device != device2 || inode != inode2 {
+		t.Fatalf("identity (%d,%d) want (%d,%d)", device, inode, device2, inode2)
 	}
 
 	// After Close the descriptor is gone: an IO-class error, never a

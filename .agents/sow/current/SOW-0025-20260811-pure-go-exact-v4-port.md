@@ -127,6 +127,20 @@ Every .go file, every build-tagged variant, tests included.
   v4work pins assert the one-pass copy (RangeConsumed == source range
   count) and copy determinism (identical generations, identical
   WordReads).
+- API-docs review fixes (Ohm P2s, applied after the first review round):
+  the nil-budget and invalid-mode boundary guards are now documented on
+  SnapshotTo and pinned by TestSnapshotBoundaryGuards (both refusals are
+  Go-boundary additions; Rust passes the budget by value and its mode
+  enum is closed); the immutable-source-replacement-during-copy race
+  (Rust snapshot_operations.rs:538) is now ported end-to-end
+  (TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication
+  over a 20k-range generated source, controller renames the source when
+  the private output appears, final ConfirmUnchanged refuses with
+  RecoveryCandidateChanged, no output, no private residue); the
+  slice-A reader test used syscall.Stat_t untagged and broke GOOS=windows
+  vet on both tag sets - the identity oracle is now the mapping owner's
+  portable StatIdentity (mapping.StatIdentity exists on all five target
+  platforms). The Rust Outcome collapse is named in the SnapshotTo doc.
 
 ### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
 
