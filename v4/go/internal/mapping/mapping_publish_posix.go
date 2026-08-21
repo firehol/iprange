@@ -17,8 +17,11 @@ import (
 // linkat machine (mapping_publish_freebsd.go, Rust link_noreplace);
 // NetBSD has no no-replace primitive and refuses (Rust
 // rename_noreplace Unsupported on non-linux/non-apple/non-freebsd), so
-// PolicyFailIfExists publication is classified as a preparation
-// failure with the attempt discarded. The plain replacement and the
+// PolicyFailIfExists publication on NetBSD is classified as the
+// not-published result with the attempt discarded (Rust
+// acquire-failure not_published), never a preparation failure; the
+// public cause carries Rust's DurabilityUnsupported problem, not the
+// internal platform marker. The plain replacement and the
 // retained-directory sync keep working on both. Builds are verified by
 // the cross-compile matrix.
 

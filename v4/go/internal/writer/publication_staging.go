@@ -394,17 +394,21 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 	}
 	if err != nil {
 		// A target without the no-replace primitive refuses the first
-		// namespace mutation with Unsupported (netbsd and windows; Rust
-		// rename_noreplace Unsupported on non-linux/apple/freebsd).
-		// That refusal is the acquire-failure classification: Rust
-		// from_private returns Ok(not_published(...)) with both
-		// artifacts discarded and the content computed from the main
-		// slot at cleanup time (attempt.rs not_published) - a result,
-		// never a preparation error and never retained residue. Every
-		// other rename refusal before the destination provably held
-		// the output is Rust outcome_unknown (attempt.rs from_armed:
-		// !desired_proven keeps the private artifact as recovery
-		// residue and reports CleanupState::Clean).
+		// namespace mutation (netbsd; Rust rename_noreplace Unsupported
+		// on non-linux/apple/freebsd, and Windows implements the
+		// primitive through NtSetInformationFile). That refusal is the
+		// Rust acquire-failure classification: from_private returns
+		// Ok(not_published(...)) with both artifacts discarded and the
+		// content computed from the main slot at cleanup time
+		// (attempt.rs not_published) - a result, never a preparation
+		// error and never retained residue. The public cause is the
+		// Rust-verbatim problem of that refusal (problem.rs
+		// NamespaceError::Unsupported: DurabilityUnsupported), never
+		// the Go-internal platform marker. Every other rename refusal
+		// before the destination provably held the output is Rust
+		// outcome_unknown (attempt.rs from_armed: !desired_proven
+		// keeps the private artifact as recovery residue and reports
+		// CleanupState::Clean).
 		var nsErr *format.Error
 		if errors.As(err, &nsErr) && nsErr.Code == format.CodeOSUnsupported {
 			content := DestinationContentUnclassified
@@ -415,7 +419,7 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 				Status:             PublicationNotPublished,
 				DestinationContent: content,
 				Cleanup:            attempt.Discard(),
-				Cause:              err,
+				Cause:              &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "filesystem lacks required durable namespace operations"},
 			}, nil
 		}
 		return &PublicationResult{
