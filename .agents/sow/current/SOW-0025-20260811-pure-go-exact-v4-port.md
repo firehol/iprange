@@ -1,29 +1,28 @@
 # SOW-0025 - Pure-Go Exact v4 Semantic Port
 
-## Lead swarm operating rules (user decision, 2026-08-17)
+## Lead review rules (user decision, 2026-08-21; overrides SWARM.md)
 
-These rules govern this SOW's review process and override the generic
-shared swarm guide for this work (the guide's "residents"/"sol" roles
-map to level-1/level-2 below). They are placed at the top so they are
-re-read after every compaction.
+These rules govern this SOW's review process and override the shared
+swarm guide. They are placed at the top so they are re-read after every
+compaction. SWARM.md is intentionally not updated: this SOW is the
+authority for its own review process.
 
-1. Level-1 reviewers: five aspect reviewers on the lead's own model
-   (copies), each holding one disjoint aspect of the milestone scope,
-   adversarial mode. Spawn all five once at first use; every later
-   round is a message to the same agents. Never respawn between rounds.
-2. Level-2 final gate (in place of sol): glm, kimi, minimax, mimo,
-   full-scope review after every available level-1 reviewer has
-   returned PASS. Spawn once at first use, then reuse.
-3. The milestone closes only when every available level-2 reviewer
-   reports no P0-P2 findings. Unavailable reviewers (technical/quota)
-   are skipped, do not count in the PASS denominator, and are reported
-   to the user as reduced coverage.
-4. Aspect split for milestone 2 (writer): (1) writer-core semantics vs
-   the Rust authority; (2) mmap-only/memory-safety/lifetime; (3) wire
-   format and integrity incl. Go<->Rust cross-open; (4) public API,
-   docs and records; (5) durability and crash/resource semantics.
+1. ONE review level only. No level-2 gate, no other models: only five
+   reviewers, all on the lead's own model, each holding one disjoint
+   aspect of the milestone scope, adversarial mode, running with the
+   final-review skill.
+2. Spawn all five once at first use; every later round is a message to
+   the same agents. Never respawn between rounds; restart them only
+   between milestones.
+3. The milestone closes only when all five reviewers report no P0-P2
+   findings. No reviewer is ever replaced by another model.
+4. Aspect split (writer/logical SDK milestone): (1) writer-core
+   semantics vs the Rust authority; (2) mmap-only/memory-safety/
+   lifetime; (3) wire format and integrity incl. Go<->Rust cross-open;
+   (4) public API, docs and records; (5) durability and crash/resource
+   semantics.
 
-Recorded as Review Process step 6 below.
+Recorded as Review Process below.
 
 ## Status
 
@@ -103,18 +102,17 @@ Every .go file, every build-tagged variant, tests included.
 
 ## Review Process (user decisions 2026-08-12, 2026-08-17, 2026-08-21)
 
-1. Level-1: five aspect reviewers on the lead's own model (copies),
-   disjoint aspects, adversarial mode; spawned once at first use, reused
-   by message for every delta round, never respawned between rounds.
-2. Level-2 final gate: glm, kimi, minimax, mimo, full-scope review after
-   every available level-1 reviewer has returned PASS; spawned once, then
-   reused. The milestone closes only when every available level-2
-   reviewer reports no P0-P2 findings. Unavailable reviewers (technical/
-   quota) are skipped, do not count in the PASS denominator, and are
-   reported to the user as reduced coverage.
-3. mmap-only / file-I/O policy gate (2026-08-21): four concurrent fresh
-   full-codebase reviewers on the lead's own model, as recorded above.
-   This replaces all scanner and mutation-corpus enforcement.
+1. Five aspect reviewers on the lead's own model (copies), disjoint
+   aspects, adversarial mode, running with the final-review skill;
+   spawned once at first use, reused by message for every delta round,
+   never respawned between rounds, restarted only between milestones.
+   One level only - there is no level-2 gate and no other model is used.
+2. The milestone closes only when all five reviewers report no P0-P2
+   findings.
+3. mmap-only / file-I/O policy gate (2026-08-21): enforced by the
+   five-aspect reviewers above (aspect 2) plus periodic full-codebase
+   sweeps when the surface under review requires them. No scanner or
+   mutation-corpus enforcement exists.
 4. All builds, tests, benchmarks, and scans run under nice; any step
    expected to exceed ~2 wall-minutes or ~10 core-minutes is named with
    its expected cost in the report and recorded in this SOW's validation
