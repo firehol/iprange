@@ -38,7 +38,7 @@
 # above stop every other package from importing the mapping owner, and
 # the gatescan rule checkViewHolderExports fails closed on any mapped
 # view exported from a non-holder package (unit-pinned in
-# v4/go-gate/viewholder_test.go; end-to-end battery forms B1-B4).
+# v4/go-gate/viewholder_test.go; the boundary corpus pins B1-B4).
 #
 # In addition to import boundaries, production sources are mechanically
 # banned from content-transfer I/O so the mmap-only contract cannot regress.
@@ -63,15 +63,12 @@
 # read/pread/readv/lseek on the database descriptor) is recorded in the
 # milestone report as the runtime half of the mmap-only evidence.
 #
-# Usage: ./check-import-graph.sh [--self-test]   (run from the v4/go
-# directory). --self-test runs the durable mutation battery: the typed
-# source-mutation battery lives in the gatescan tool itself (the tool
-# prints the exact case counts), and the shell keeps the module-graph /
-# boundary / environment shapes the Go table cannot express (internal-
-# import boundary, x/sys outside the mapping owner, bare assembly object,
-# go.mod replace, go.work, poisoned x/sys cache/proxy, unlistable module).
-# The self-test never writes to the reviewed tree: every mutation is
-# applied to a private temporary copy.
+# Usage: ./check-import-graph.sh   (run from the v4/go directory).
+# The heavy mutation battery was permanently retired by the
+# 2026-08-21 user decision and removed from both the gatescan tool and
+# this harness; the enforced guarantees are the view-holder code
+# isolation architecture, the gatescan boundary corpus (v4/go-gate
+# --boundary), and the full-module content-transfer scans below.
 #
 # The scanner tool lives outside this module (v4/go-gate) so the gate can
 # scan every file under v4/go without scanning itself.
@@ -79,17 +76,12 @@
 set -eu
 cd "$(dirname "$0")"
 
-self_test=0
-if [ "${1:-}" = "--self-test" ]; then
-	self_test=1
-fi
 
 fail=0
 
 # The typed content-transfer scanner. Built once per run into a private
-# temp path; inner self-test runs reuse it via GATE_SCANNER_BIN (they run
-# from a temp copy of the module, where the relative ../go-gate path does
-# not exist, so the build is skipped whenever the binary is supplied).
+# temp path; GATE_SCANNER_BIN supplies a prebuilt binary when a scan
+# must run from a tree without the relative ../go-gate path.
 scanner_bin=${GATE_SCANNER_BIN:-}
 if [ -z "$scanner_bin" ]; then
 	scanner_dir=$(cd "$PWD/../go-gate" && pwd)
@@ -330,260 +322,6 @@ for target in $targets; do
 	done
 done
 
-if [ "$self_test" -eq 1 ]; then
-	# The source-mutation battery is table data inside the gatescan tool;
-	# the tool prints the exact case counts on every self-test run. It
-	# runs every case against its own private copy of this tree.
-	if ! nice "$scanner_bin" --self-test .; then
-		echo "gatescan self-test failed"
-		fail=1
-	fi
-
-	# Shell-side durable mutations: module-graph and environment shapes the
-	# Go table cannot express. Each mutation is applied to a private copy
-	# of the module; the gate must reject it there. The reviewed tree is
-	# never modified.
-	self_tree=$(mktemp -d /tmp/iprange-gate-shell.XXXXXX)
-	mkdir -p "$self_tree/go"
-	cp -a . "$self_tree/go"
-	cd "$self_tree/go"
-
-	muts=""
-	mut_restores=""
-	cleanup_muts() {
-		for m in $muts; do
-			rm -r "$m" 2>/dev/null || true
-		done
-		muts=""
-		for f in $mut_restores; do
-			if [ -f "$f.gatemut-save" ]; then
-				cp "$f.gatemut-save" "$f"
-				rm -f "$f.gatemut-save" 2>/dev/null || true
-			fi
-		done
-		mut_restores=""
-	}
-
-	mutfail=0
-	mut_env=""
-
-	run_mut() {
-		name=$1
-		if env GATE_SCANNER_BIN="$scanner_bin" $mut_env ./check-import-graph.sh >/dev/null 2>&1; then
-			echo "self-test MISS: mutation $name did not fail the gate"
-			mutfail=1
-		fi
-		cleanup_muts
-	}
-
-	add_mut() {
-		muts="$muts $1"
-	}
-
-	# --- 238: x/sys imported outside the mapping owner ------------------
-	# The syscall surface is the mapping owner's alone; a new package
-	# importing golang.org/x/sys (even for an innocent call) breaks the
-	# owner rule and must fail in the per-target boundary loop.
-	mkdir -p gatemut_sysowner
-	cat > gatemut_sysowner/gatemut_sysowner_linux.go <<'MUTEOF'
-//go:build linux
-package gatemut_sysowner
-
-import "golang.org/x/sys/unix"
-
-func gateClose238(fd int) error {
-	return unix.Close(fd)
-}
-MUTEOF
-	add_mut gatemut_sysowner
-	run_mut "x/sys import outside the mapping owner"
-
-	# --- 239: assembly object without a Go declaration ------------------
-	# A .s file alone cannot be called without a bodyless declaration or
-	# //go:linkname (both banned), but the walk must fail closed on the
-	# object itself so no future relaxation silently attaches a syscall
-	# body. The probe is never compiled: the self-test tree is scanned,
-	# not built.
-	mkdir -p gatemut_asmfile
-	cat > gatemut_asmfile/gatemut_asmfile_linux.s <<'MUTEOF'
-//go:build linux
-
-TEXT ·gateAsmNop239(SB),NOSPLIT,$0
-	RET
-MUTEOF
-	add_mut gatemut_asmfile
-	run_mut "assembly object file"
-
-	# --- 18: windows-only package importing internal/mapping --------------
-	# Only the four approved packages may import internal/*; a new root
-	# package that exists only on one target must fail in the per-target
-	# boundary loop (a build-tagged package cannot bypass the boundary).
-	mkdir -p gatemut_winint
-	cat > gatemut_winint/mut.go <<'MUTEOF'
-//go:build windows
-
-package gatemut_winint
-
-import "github.com/firehol/iprange/v4/go/internal/mapping"
-
-var _ = mapping.Mapping{}
-MUTEOF
-	add_mut gatemut_winint
-	run_mut "windows-only package importing internal/mapping"
-
-	# --- 241: go.mod replace attaching an out-of-tree module -------------
-	# A replace directive can point the import graph at a directory the
-	# scanner never walks; the module graph itself must fail closed.
-	mkdir -p gatemut_wrap
-	cat > gatemut_wrap/go.mod <<'MUTEOF'
-module wrapper
-
-go 1.23.0
-MUTEOF
-	cat > gatemut_wrap/wrap.go <<'MUTEOF'
-package wrapper
-
-import "golang.org/x/sys/unix"
-
-func Fetch(fd int) error { return unix.Close(fd) }
-MUTEOF
-	add_mut gatemut_wrap
-	cp go.mod "$self_tree/gomod.sav"
-	printf '\nrequire wrapper v0.0.0\nreplace wrapper => ./gatemut_wrap\n' >> go.mod
-	run_mut "go.mod replace to an out-of-tree module"
-	cp "$self_tree/gomod.sav" go.mod
-	rm "$self_tree/gomod.sav"
-
-	# --- 242: go.work workspace attaching an out-of-tree module ----------
-	# A workspace can import modules by directory without touching go.mod;
-	# any active workspace fails closed.
-	cat > go.work <<'MUTEOF'
-go 1.23.0
-
-use .
-MUTEOF
-	add_mut go.work
-	run_mut "go.work workspace"
-
-	# --- 243: replace of golang.org/x/sys to an evil source --------------
-	# The allowed path survives in the module graph; the replace itself
-	# must fail closed because the replaced source is never walked.
-	mkdir -p gatemut_xsys/unix
-	cat > gatemut_xsys/go.mod <<'MUTEOF'
-module golang.org/x/sys
-
-go 1.23.0
-MUTEOF
-	cat > gatemut_xsys/unix/smuggle.go <<'MUTEOF'
-package unix
-
-func Smuggle(fd int, p []byte) (int, error) { return 0, nil }
-MUTEOF
-	cat > internal/mapping/gatemut_xsread_linux.go <<'MUTEOF'
-//go:build linux
-package mapping
-
-import "golang.org/x/sys/unix"
-
-func gateXsysRead243(fd uintptr, b []byte) (int, error) {
-	return unix.Smuggle(int(fd), b)
-}
-MUTEOF
-	add_mut gatemut_xsys
-	cp go.mod "$self_tree/gomod.sav"
-	printf '\nreplace golang.org/x/sys => ./gatemut_xsys\n' >> go.mod
-	run_mut "replace of golang.org/x/sys to an evil source"
-	cp "$self_tree/gomod.sav" go.mod
-	rm "$self_tree/gomod.sav"
-
-	# The evil x/sys module used by forms 245-246: a fake golang.org/x/sys
-	# whose unix package adds Pread2, a content-transfer function the ban
-	# list cannot know because the genuine module does not have it. Built
-	# once; hashes are computed with the scanner's own Hash1 so the forged
-	# go.sum is self-consistent.
-	mkdir -p gatemut_evil_src/unix
-	cat > gatemut_evil_src/go.mod <<'MUTEOF'
-module golang.org/x/sys
-
-go 1.23.0
-MUTEOF
-	cat > gatemut_evil_src/unix/smuggle.go <<'MUTEOF'
-package unix
-
-func Pread2(fd int, p []byte, offset int64) (int, error) { return 0, nil }
-MUTEOF
-	"$scanner_bin" --makezip golang.org/x/sys@v0.35.0 gatemut_evil_src gatemut_evil.zip
-	evil_sum=$("$scanner_bin" --dirhash golang.org/x/sys@v0.35.0 gatemut_evil_src)
-
-	# --- 245: poisoned module cache serving an evil x/sys checkout -------
-	# GOMODCACHE is an environment input. An evil extraction plus download
-	# cache at the allowed path resolves normally while smuggling a
-	# function the ban list has never heard of; the pinned content hash
-	# must fail closed.
-	mkdir -p gatemut_cache/cache/download/golang.org/x/sys/@v
-	cp gatemut_evil.zip gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.zip
-	cp gatemut_evil_src/go.mod gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.mod
-	printf '{"Version":"v0.35.0","Time":"2026-01-01T00:00:00Z"}\n' > gatemut_cache/cache/download/golang.org/x/sys/@v/v0.35.0.info
-	mkdir -p gatemut_cache/golang.org/x/sys@v0.35.0/unix
-	cp gatemut_evil_src/go.mod gatemut_cache/golang.org/x/sys@v0.35.0/go.mod
-	cp gatemut_evil_src/unix/smuggle.go gatemut_cache/golang.org/x/sys@v0.35.0/unix/smuggle.go
-	add_mut gatemut_cache
-	cp go.sum "$self_tree/gosum.sav"
-	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
-	mut_env="GOMODCACHE=$PWD/gatemut_cache GOPROXY=off GOSUMDB=off"
-	# Pre-verify the seeded cache exactly as the toolchain does: Go only
-	# treats a module as downloaded (go list -m resolves a Dir) after the
-	# zip is verified and the .ziphash marker is written. Without this the
-	# form rejected via the fail-closed listing fallback and the content
-	# pin never ran; with it, the checkout content-hash boundary fires.
-	env $mut_env go mod download golang.org/x/sys
-	run_mut "poisoned module cache with an evil x/sys checkout"
-	mut_env=""
-	cp "$self_tree/gosum.sav" go.sum
-	rm "$self_tree/gosum.sav"
-
-	# --- 246: file proxy serving an evil x/sys with a forged go.sum ------
-	# GOPROXY is an environment input. A file proxy plus a repo go.sum
-	# rewritten with the evil zip's self-consistent hashes launders the
-	# imposter into a fresh cache; the pinned official sums must fail
-	# closed.
-	mkdir -p gatemut_proxy/golang.org/x/sys/@v
-	cp gatemut_evil.zip gatemut_proxy/golang.org/x/sys/@v/v0.35.0.zip
-	cp gatemut_evil_src/go.mod gatemut_proxy/golang.org/x/sys/@v/v0.35.0.mod
-	printf '{"Version":"v0.35.0","Time":"2026-01-01T00:00:00Z"}\n' > gatemut_proxy/golang.org/x/sys/@v/v0.35.0.info
-	mkdir -p gatemut_proxycache
-	add_mut gatemut_proxy; add_mut gatemut_proxycache
-	cp go.sum "$self_tree/gosum.sav"
-	printf 'golang.org/x/sys v0.35.0 %s\ngolang.org/x/sys v0.35.0/go.mod %s\n' "$evil_sum" "h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=" > go.sum
-	mut_env="GOMODCACHE=$PWD/gatemut_proxycache GOPROXY=file://$PWD/gatemut_proxy GOSUMDB=off"
-	# Same pre-verification as form 245: the proxy zip is fetched and
-	# verified against the forged go.sum, writing the .ziphash marker so
-	# the resolved checkout reaches the content-hash boundary instead of
-	# dying in the listing fallback.
-	env $mut_env go mod download golang.org/x/sys
-	run_mut "file proxy serving an evil x/sys with a forged go.sum"
-	mut_env=""
-	cp "$self_tree/gosum.sav" go.sum
-	rm "$self_tree/gosum.sav"
-
-	# --- 248: module that cannot be listed or built ----------------------
-	# A module the go toolchain cannot list must fail closed, not pass
-	# vacuously. A directory holding two package names makes go list
-	# ./... fail, which trips the gate's per-target listing boundary.
-	cat > internal/mapping/gatemut_broken.go <<'MUTEOF'
-package mapping2
-
-var GateMutBroken int = 1
-MUTEOF
-	add_mut internal/mapping/gatemut_broken.go
-	run_mut "module that cannot be listed or built"
-
-	cd "$OLDPWD"
-	if [ "$mutfail" -ne 0 ]; then
-		echo "import-graph shell self-test FAILED"
-		fail=1
-	fi
-fi
 
 if [ "$fail" -ne 0 ]; then
 	echo "import-graph check FAILED"

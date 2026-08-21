@@ -1538,7 +1538,9 @@ exit marker); boundary corpus 55/55 (44 rejections, 11 benign
 acceptances); the three new pins accepted standalone; go test ./... both
 tag sets, -race, checkptr, vet, gofmt, 5-OS cross-builds plus darwin
 v4work, and the Rust suite all green. No production mmap-only behavior
-changed; the full 718-case battery runs as the milestone-close gate.
+changed; gate enforcement follows the 2026-08-19 and 2026-08-21 user
+decisions (static boundary corpus and full-module scans; the heavy
+mutation battery is permanently retired - see the 2026-08-21 entry).
 
 ### 2026-08-21 - M3 chunk-3b-2 slice 3 round-2 review: three level-1 findings fixed
 
@@ -1591,12 +1593,12 @@ Round-2 fixes (commits 1d5461d + this round):
   publish steps, and joins the close error onto the primary cause on
   the discard path instead of substituting it.
 
-Validation in progress (all niced): go test both tag sets, -race,
-checkptr, vet, gofmt, 5-OS cross-builds green; linux-config real-tree
-gatescan rc=0; writer staging refusal tests pin the result-with-Cause
-classification; the full 718-case battery (old binary) is finishing as
-round-1 evidence and the authoritative battery re-runs on the new
-binary before the milestone closes.
+Validation (all niced): go test both tag sets, -race, checkptr, vet,
+gofmt, 5-OS cross-builds green; linux-config real-tree gatescan rc=0;
+writer staging refusal tests pin the result-with-Cause
+classification. The heavy battery runs attempted at this close were
+stopped by the 2026-08-21 user decision and the battery was then
+removed from the tool (see the retirement entry below).
 
 ### 2026-08-21 - M3 chunk-3b-2 slice 3 round-3: fail-if-exists coordination-twin refusal
 
@@ -1622,9 +1624,9 @@ refusal under the same class, and the replace-policy twin tolerance.
 
 Validation: go test -count=1 ./... both tag sets, -race writer+root,
 vet, gofmt all green; the round-3 delta re-reviewed by all five
-level-1 reviewers; the authoritative 718-case battery on the fixed
-gate binary is running (session, niced) and is the milestone-close
-gate.
+level-1 reviewers. The battery run started as close evidence in this
+round was stopped by the 2026-08-21 user decision (heavy mutation
+battery permanently retired; see the retirement entry below).
 
 ### 2026-08-21 - M3 chunk-3b-2 slice 3 round-3b: refused-publish close-error merge
 
@@ -1652,6 +1654,97 @@ Validation: go test -count=1 ./... both tag sets, -race root+writer,
 vet (go and gate) all green; the round-3 delta re-reviewed by all
 five level-1 reviewers; the authoritative battery on the fixed gate
 binary is running and is the milestone-close gate.
+
+### 2026-08-21 - M3 chunk-3b-2 slice 3 level-1 round-3 and level-2 final gate
+
+Round-3 delta (94bf418, then cosmetic test fix 6ded376): all five
+level-1 aspect reviewers PASS. Linnaeus's round-2 P2 was closed by
+76c5309 (coordination-twin refusal) and re-verified by him with exact
+Rust parity (error class, detail, order, replace tolerance); Sartre's
+round-3 P2 (success path erasing the refused-publish classification
+on a post-publish Close failure) was closed by 5d9005c and re-verified
+by him (class discriminator sound against all nine writer.Publish
+returns; no nil-deref hazard). Remaining P3s are the recorded
+accepted items (positionWords buffer, per-feed name copy, publish_set
+benchmark ported at close, 255-byte bound hard-coded vs fpathconf).
+
+Level-2 final gate at HEAD 6ded376: minimax PASS and mimo PASS with
+independent Rust-authority line-by-line verification (heap charge
+order and sizes, reference batch math, twin refusal, cancellation
+cadence, outcome classification, mergeErrors semantics, gate delta
+with pins 325-328, zero-alloc and work-counter pins). glm was
+unavailable (context overflow on its model, retried once) and kimi
+unavailable (no response after one retry); reduced coverage reported
+to the user; both excluded from the PASS denominator per the restored
+SWARM rules. The two available level-2 reviewers passed, closing the
+gate for this slice.
+
+Close evidence collected (all niced): go test -count=1 ./... both
+tag sets, -race, vet (go and go-gate), gofmt, 5-OS cross-builds,
+Rust cargo test, and the real-tree gate scan rc=0 at 6ded376. The
+partial battery run (457/718 cases, one stale-pin failure) was
+stopped by the user decision retiring the battery; the stale pin it
+caught (322, a leftover of the round-2 NewOutputBuilder signature
+change) was fixed and is preserved in the boundary corpus. The close
+gate is the routine static evidence per the 2026-08-19/2026-08-21
+decisions (see the retirement entry below).
+
+### 2026-08-21 - user decision: heavy mutation battery permanently retired
+
+The heavy mutation battery (the gatescan --self-test corpus, 718+
+forms) is permanently retired by explicit user decision: it is the
+wrong test, wasteful, and the agreed enforcement is code isolating
+the data (the view-holder whitelist architecture: only internal/
+mapping, internal/format, internal/reader, internal/writer, and the
+public facade may handle mapped page views) plus static code review
+(the typed gatescan real-module scans and the small boundary corpus).
+It must never be run again, not even on request.
+
+Implemented in this entry (HEAD pending):
+
+- v4/go-gate: removed the --self-test, --self-test-jobs, and
+  --self-test-chunk entry points, the runSelfTest/runSelfTestChunk/
+  runSelfTestParallel machinery, and the battery.go + battery_page.go
+  case tables (718 forms). The routine static check is preserved:
+  --boundary runs the 55-case boundary corpus (one representative
+  form per launder family and view-holder package) in boundary_corpus
+  .go, with --boundary-jobs and --boundary-chunk for parallel runs.
+- v4/go/check-import-graph.sh: removed the --self-test mode (the
+  gatescan battery invocation and the shell-side mutations); the
+  routine import-boundary, content-transfer, and per-target scans
+  are unchanged.
+- The partial battery run at this close (457/718 cases) found one
+  real defect before it was stopped: battery pin 322 was stale - it
+  still called the pre-round-2 four-argument NewOutputBuilder, so its
+  embedded mutation no longer type-checks (a defect of the case, not
+  of the gate; the corrected five-argument form was verified to scan
+  clean). The nil-callback form is preserved in the boundary corpus
+  with the corrected call shape.
+- Records: this supersedes the 2026-08-19 decision's "archived
+  regression net, run on request" clause; earlier dated entries that
+  mention battery runs are history. The boundary corpus re-run and
+  the close evidence are recorded in the Validation section below.
+
+### 2026-08-21 - user decision: no repeated whole-program analysis; boundary re-run stopped
+
+The boundary-corpus re-run at this close (--boundary-jobs 8, 55 cases)
+was stopped mid-flight by explicit user decision. Cost model: each case
+copies the module and re-runs the full go/types whole-tree analysis
+(~9 min/case measured on the grown tree; ~8-9 core-hours for the whole
+corpus), and the user rejected the mechanical pattern of repeating a
+huge analysis to test a tiny aspect. The stopped run had 20/55 green,
+0 failures (evidence: /tmp/boundary-run.log, since removed from active
+use).
+
+Ruling (durable, in AGENTS.md "Resource budget"): a full-module static
+analysis may run at most once per gate on the real tree (per OS
+config); tripwire/sensitivity verification must be unit-scale or ride
+inside that single scan; gate designs that need heavy per-case
+re-analysis must be redesigned so the routine check is cheap. The
+planned close-out "boundary corpus 55/55 re-run" evidence is replaced:
+the close gate is the single real-tree scan (once) plus unit-level
+sensitivity checks; redesign of the gate tool is tracked by pending
+SOW-0026 and must land before the next routine gate run.
 
 ## Review Process (user decision, 2026-08-12)
 

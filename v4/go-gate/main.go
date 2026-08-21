@@ -92,35 +92,29 @@ func main() {
 		runDirHash(args[1:])
 		return
 	}
-	selfTest := false
 	boundary := false
 	jobs := 1
 	chunkK, chunkN := -1, -1
 	root := "."
 	if len(args) > 0 && args[0] == "--boundary" {
-		// Routine gate check (SOW-0025 decision 2026-08-19): the
-		// boundary corpus only - one representative form per launder
-		// family and holder package. Per-form scans run in parallel
-		// with one worker each; the corpus is a small fraction of the
-		// full durable battery (which is measured in 6-12 min per
-		// single-config scan on the grown tree; see the decision
-		// record). The full battery stays available via --self-test*.
-		selfTest = true
+		// Routine gate check (SOW-0025 decisions 2026-08-19 and
+		// 2026-08-21): the boundary corpus only - one representative
+		// form per launder family and holder package. The heavy
+		// mutation battery was permanently retired by the 2026-08-21
+		// user decision and removed from the tool; the enforced
+		// guarantees are the view-holder code-isolation architecture,
+		// this static corpus, and full-module scans.
 		boundary = true
 		args = args[1:]
 	}
-	if len(args) > 0 && args[0] == "--self-test" {
-		selfTest = true
-		args = args[1:]
-	}
-	if len(args) > 0 && args[0] == "--self-test-jobs" && len(args) > 1 {
+	if len(args) > 0 && args[0] == "--boundary-jobs" && len(args) > 1 {
 		n, err := strconv.Atoi(args[1])
 		if err != nil || n < 1 {
-			fmt.Fprintf(os.Stderr, "gatescan: invalid --self-test-jobs %q\n", args[1])
+			fmt.Fprintf(os.Stderr, "gatescan: invalid --boundary-jobs %q\n", args[1])
 			os.Exit(2)
 		}
-		selfTest = true
 		jobs = n
+		boundary = true
 		args = args[2:]
 	}
 	if len(args) > 0 && args[0] == "--boundary-chunk" && len(args) > 1 {
@@ -129,56 +123,26 @@ func main() {
 			fmt.Fprintf(os.Stderr, "gatescan: invalid --boundary-chunk %q\n", args[1])
 			os.Exit(2)
 		}
-		selfTest = true
 		boundary = true
-		args = args[2:]
-	}
-	if len(args) > 0 && args[0] == "--self-test-chunk" && len(args) > 1 {
-		var err error
-		if chunkK, chunkN, err = parseChunk(args[1]); err != nil {
-			fmt.Fprintf(os.Stderr, "gatescan: invalid --self-test-chunk %q\n", args[1])
-			os.Exit(2)
-		}
-		selfTest = true
 		args = args[2:]
 	}
 	if len(args) > 0 {
 		root = args[0]
 	}
-	if selfTest {
-		if boundary && chunkK >= 0 {
+	if boundary {
+		if chunkK >= 0 {
 			if runBoundaryChunk(root, chunkK, chunkN) {
 				os.Exit(0)
 			}
 			os.Exit(1)
 		}
-		if boundary {
-			if jobs > 1 {
-				if runBoundaryParallel(root, jobs) {
-					os.Exit(0)
-				}
-				os.Exit(1)
-			}
-			if runBoundarySelfTest(root) {
-				os.Exit(0)
-			}
-			os.Exit(1)
-		}
-		if chunkK >= 0 {
-			// Worker mode: run one disjoint chunk of the battery in a
-			// private module copy; the parent aggregates the totals.
-			if runSelfTestChunk(root, chunkK, chunkN) {
-				os.Exit(0)
-			}
-			os.Exit(1)
-		}
 		if jobs > 1 {
-			if runSelfTestParallel(root, jobs) {
+			if runBoundaryParallel(root, jobs) {
 				os.Exit(0)
 			}
 			os.Exit(1)
 		}
-		if runSelfTest(root) {
+		if runBoundarySelfTest(root) {
 			os.Exit(0)
 		}
 		os.Exit(1)

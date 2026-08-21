@@ -49,6 +49,15 @@ repository. The user does not want to repeat them.
 - **Test-only observability** — necessary-work counters, benchmarks, and
   profiles exist in test builds only; they compile to no-ops in production.
 
+- **Resource budget** — no wasted compute: every build/test/scan runs under
+  `nice`; any step expected to exceed ~2 wall-minutes or ~10 core-minutes must be
+  named with its expected cost in the report and recorded in the active SOW
+  validation plan before it runs; never test a tiny aspect by repeating a
+  whole-program analysis — full-module static analysis runs at most once per
+  gate on the real tree (per OS config), and tripwire/sensitivity cases must be
+  verified at unit scale or inside that single scan; if a gate design needs
+  heavy per-case re-analysis, redesign the gate so the routine check is cheap.
+
 When a design question arises, the answer must satisfy ALL of these
 simultaneously. If two options both satisfy them, prefer the one that matches
 the Rust reference implementation (the authority for v4 semantics).
