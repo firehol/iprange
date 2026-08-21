@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
@@ -414,6 +415,14 @@ func crashChildPublishReplace(t *testing.T, path string) {
 // artifact survives - the main is always the complete new generation,
 // never a torn mix.
 func TestCrashPublishReplacePreservesExactPreviousOrDesiredState(t *testing.T) {
+	// The exchange primitive is not atomic on every target (Rust guards
+	// the equivalent replacement crash test with
+	// cfg(any(target_os = "linux", target_vendor = "apple"))): where
+	// RENAME_EXCHANGE is unavailable the publish refuses before the
+	// rename and there is no crash window to pin.
+	if !mapping.ExchangeAvailable() {
+		t.Skip("atomic name exchange unavailable")
+	}
 	for _, point := range []string{
 		"publication.after_main_rename",
 		"publication.after_previous_unlink",

@@ -523,10 +523,13 @@ func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) 
 	switch {
 	case links == 0:
 		// Already fully retired: the private name must have vanished
-		// with the last link (Rust require_absent); a name still there
-		// names a foreign file and keeps the residue.
+		// with the last link (Rust require_absent probes and propagates
+		// IO); a name still there names a foreign file and keeps the
+		// residue.
 		if _, err := os.Lstat(source); os.IsNotExist(err) {
 			return nil
+		} else if err != nil {
+			return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 		}
 		return &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
 	case links > 1:
@@ -580,9 +583,10 @@ func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) 
 // secure_created): the parent directory kept its identity, the attempt
 // name names a regular symlink-free file on the same filesystem, and a
 // replacement destination is not the attempt file itself (Rust
-// replacement::bind SameIdentity). previousDevice/previousInode are the
-// captured replacement destination identity (Rust replacement::bind
-// PreviousMain.identity), which the exchange cleanup unlinks with.
+// replacement::bind SameIdentity). The returned previous binds the
+// replacement destination (Rust replacement::bind PreviousMain): its
+// captured identity and byte length, plus an open descriptor to the old
+// main inode when the exchange policy will retire it.
 func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uint64, inode uint64, previous *previousCustody, err error) {
 	dir := filepath.Dir(attempt.destination)
 	d, i, err := mapping.StatIdentity(dir)
