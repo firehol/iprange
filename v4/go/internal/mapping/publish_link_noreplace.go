@@ -4,6 +4,7 @@ package mapping
 
 import (
 	"errors"
+	"runtime"
 
 	"golang.org/x/sys/unix"
 
@@ -192,12 +193,21 @@ type linkEntry struct {
 }
 
 // entryIdentity probes one publication name. ENOENT is returned raw so
-// callers can classify absence; every other failure is the typed IO
-// error.
+// callers can classify absence; every other failure is the typed
+// problem error (Rust Directory::entry: ENOENT is Ok(None), and any
+// other fstatat errno becomes IoAt; the problem boundary classifies
+// the nofollow-symlink errno family as the symlink conflict and
+// everything else as Io with the retained-name operation detail).
 func entryIdentity(path string) (linkEntry, error) {
 	var st unix.Stat_t
 	if err := unix.Lstat(path, &st); err != nil {
-		return linkEntry{}, err
+		if errors.Is(err, unix.ENOENT) {
+			return linkEntry{}, err
+		}
+		if isNofollowSymlink(err) {
+			return linkEntry{}, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+		}
+		return linkEntry{}, &format.Error{Code: format.CodeIO, Detail: "inspect retained name"}
 	}
 	return linkEntry{
 		device:  uint64(st.Dev),
@@ -205,6 +215,17 @@ func entryIdentity(path string) (linkEntry, error) {
 		nlink:   uint64(st.Nlink),
 		regular: st.Mode&unix.S_IFMT == unix.S_IFREG,
 	}, nil
+}
+
+// isNofollowSymlink is the Rust problem-boundary nofollow-symlink
+// errno family (publication problem namespace mapping): ELOOP on every
+// unix target, and EMLINK on FreeBSD (the historical no-follow errno
+// there).
+func isNofollowSymlink(err error) bool {
+	if errors.Is(err, unix.ELOOP) {
+		return true
+	}
+	return runtime.GOOS == "freebsd" && errors.Is(err, unix.EMLINK)
 }
 
 // requireEntry is Rust require_entry: regular, expected identity, exact

@@ -22,8 +22,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -139,8 +137,6 @@ func TestLinkNoReplaceCrashChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var st unix.Stat_t
-	_ = st
 	if err := linkNoReplace(filepath.Dir(destination), source, destination, device, inode); err != nil {
 		t.Fatal(err)
 	}

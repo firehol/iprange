@@ -9,6 +9,7 @@ package mapping
 // the same machine with the production wiring.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,5 +214,63 @@ func TestLinkNoReplaceEntryPathRefusesCrashState(t *testing.T) {
 	e, ok := err.(*format.Error)
 	if !ok || e.Code != format.CodeConflict {
 		t.Fatalf("error = %v, want the require_source link-count conflict", err)
+	}
+}
+
+// TestEntryIdentityProbeFailureTyped pins the Rust problem boundary:
+// a non-ENOENT probe failure is the typed conflict/IO error, never a
+// raw errno escaping to the public API (Rust Directory::entry maps
+// every non-ENOENT fstatat errno to IoAt, and the problem boundary
+// classifies the nofollow-symlink family as the symlink conflict and
+// everything else as Io with the retained-name operation detail).
+func TestEntryIdentityProbeFailureTyped(t *testing.T) {
+	dir := t.TempDir()
+	// ELOOP via a symlink loop (probe of a path inside the loop).
+	if err := os.Symlink("loopb", filepath.Join(dir, "loopa")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loopa", filepath.Join(dir, "loopb")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := entryIdentity(filepath.Join(dir, "loopa", "name"))
+	e, ok := err.(*format.Error)
+	if !ok || e.Code != format.CodeConflict || e.Detail != "publication name is a symlink" {
+		t.Fatalf("ELOOP probe error = %v, want the typed symlink conflict", err)
+	}
+	// ENOTDIR via a regular file used as a directory (probe of a path
+	// below a file): the non-symlink failure class is the typed IO
+	// error with the Rust operation detail.
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = entryIdentity(filepath.Join(plain, "name"))
+	e, ok = err.(*format.Error)
+	if !ok || e.Code != format.CodeIO || e.Detail != "inspect retained name" {
+		t.Fatalf("ENOTDIR probe error = %v, want the typed IO error", err)
+	}
+	// ENOENT stays raw so callers can classify absence with errors.Is.
+	_, err = entryIdentity(filepath.Join(dir, "missing"))
+	if !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("missing probe error = %v, want raw ENOENT", err)
+	}
+}
+
+// TestLinkNoReplaceProbeErrorPropagates drives the machine through a
+// probe failure and proves the typed error reaches the caller: a
+// symlink loop in the source path is the symlink conflict, not a raw
+// errno and not a follow/read attempt.
+func TestLinkNoReplaceProbeErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink("loopb", filepath.Join(dir, "loopa")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loopa", filepath.Join(dir, "loopb")); err != nil {
+		t.Fatal(err)
+	}
+	err := linkNoReplace(dir, filepath.Join(dir, "loopa", "source"), filepath.Join(dir, "out.iprdb"), 1, 2)
+	e, ok := err.(*format.Error)
+	if !ok || e.Code != format.CodeConflict || e.Detail != "publication name is a symlink" {
+		t.Fatalf("machine probe error = %v, want the typed symlink conflict", err)
 	}
 }

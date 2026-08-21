@@ -345,9 +345,9 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 	// a rename-race outcome_unknown.
 	if policy == PolicyFailIfExists {
 		if _, statErr := os.Lstat(attempt.destination + format.CoordinationSuffix); statErr == nil {
-			content := DestinationContentAbsent
-			if _, mainErr := os.Lstat(attempt.destination); mainErr == nil {
-				content = DestinationContentUnclassified
+			content := DestinationContentUnclassified
+			if _, mainErr := os.Lstat(attempt.destination); os.IsNotExist(mainErr) {
+				content = DestinationContentAbsent
 			}
 			return &PublicationResult{
 				Status:             PublicationNotPublished,
@@ -407,9 +407,9 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 		// residue and reports CleanupState::Clean).
 		var nsErr *format.Error
 		if errors.As(err, &nsErr) && nsErr.Code == format.CodeOSUnsupported {
-			content := DestinationContentAbsent
-			if _, mainErr := os.Lstat(attempt.destination); mainErr == nil {
-				content = DestinationContentUnclassified
+			content := DestinationContentUnclassified
+			if _, mainErr := os.Lstat(attempt.destination); os.IsNotExist(mainErr) {
+				content = DestinationContentAbsent
 			}
 			return &PublicationResult{
 				Status:             PublicationNotPublished,
@@ -532,12 +532,12 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 	// probed identity to the expected one; a path swap is a conflict,
 	// never a silent rebinding). Attempts created without a builder
 	// capture the probe here so Discard is still identity-guarded.
-	if attempt.fileProven {
-		if device != attempt.fileDevice || inode != attempt.fileInode {
-			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
-		}
-	} else {
+	if !attempt.fileProven {
 		attempt.SetFileIdentity(device, inode)
+		return device, inode, nil
+	}
+	if device != attempt.fileDevice || inode != attempt.fileInode {
+		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
 	}
 	return device, inode, nil
 }

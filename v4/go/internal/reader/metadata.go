@@ -10,9 +10,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// The chain walk cap is the shared format authority bound (Rust
-// metadata.rs MAX_PAGES = 5_182; the section-11 compressed window).
-
 // ReadMetadataJSON returns the exact decompressed opaque metadata bytes.
 // present is false for absent metadata (root zero); an empty non-nil slice
 // with present true is the exact empty-payload state (section 11).
