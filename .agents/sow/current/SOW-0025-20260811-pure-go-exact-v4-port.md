@@ -16,13 +16,27 @@ authority for its own review process.
    between milestones.
 3. The milestone closes only when all five reviewers report no P0-P2
    findings. No reviewer is ever replaced by another model.
-4. Aspect split (writer/logical SDK milestone): (1) writer-core
-   semantics vs the Rust authority; (2) mmap-only/memory-safety/
-   lifetime; (3) wire format and integrity incl. Go<->Rust cross-open;
-   (4) public API, docs and records; (5) durability and crash/resource
-   semantics.
+4. The Rust implementation is the mandatory baseline for ALL five
+   aspects. The two implementations must be identical in logic,
+   operation order, system calls, errors, and philosophy; the smallest
+   divergence in how a thing is done is a performance and correctness
+   red flag. Go must follow exactly what Rust does, while expressing
+   that logic in natural, maintainer-grade Go.
+5. Aspect split (all aspects are judged against the Rust baseline):
+   (1) Rust parity - exact logic, operation order, syscalls, errors,
+   mmap-only, memory safety, lifetime, durability/crash semantics;
+   (2) Go idioms - identical logic and structure, but written as
+   natural Go, never foreign or translated-looking;
+   (3) absolute performance - the most performant form possible; even
+   a single unnecessary branch, copy, or allocation in the hot path is
+   a defect;
+   (4) wire format and integrity - on-disk bytes, locking, Go<->Rust
+   cross-open interoperability;
+   (5) APIs, docs, records - public API, errors, documentation, and
+   SOW records in sync with Rust.
 
 Recorded as Review Process below.
+
 
 ## Status
 
