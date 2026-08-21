@@ -1639,7 +1639,7 @@ inconsistent with the discard path's mergeErrors behavior. Rust
 parity: after workflow::publish Ok no fallible step exists (the
 builder drop is infallible).
 
-Fix (commit 7812bb9): when the close fails after a refused/outcome-
+Fix (commit 5d9005c): when the close fails after a refused/outcome-
 unknown publish, the close error is attached as the secondary cause
 (mergeErrors keeps the primary) and Ok(AlgebraSetResult) with the
 result's own Cleanup state is returned; the proven-publish close
