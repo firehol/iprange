@@ -13,8 +13,8 @@ import (
 // Publication namespace primitives (Rust publication/namespace.rs +
 // namespace_mutation.rs): the atomic name-exchange operations, the
 // retained-directory sync, and the device+inode identity probe. They
-// live in the mapping owner because the gate grants the syscall surface
-// to exactly one package; the writer's staging layer composes them.
+// live in the mapping owner because the syscall surface is confined to
+// exactly one package; the writer's staging layer composes them.
 // Errno classification and detail strings mirror Rust exactly
 // (rename_result + problem.rs).
 

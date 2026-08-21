@@ -372,10 +372,9 @@ func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error
 	}
 }
 
-// chainError preserves a cause chain without formatting an
-// interface-typed error through fmt (the gate treats an interface error
-// value as a possible page carrier, so the message is joined eagerly
-// from the concrete Error() strings).
+// chainError preserves a cause chain: the message is joined eagerly
+// from the concrete Error() strings so the text is fixed at construction
+// time, and Unwrap exposes the original cause for errors.Is/As.
 type chainError struct {
 	text  string
 	cause error

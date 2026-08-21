@@ -64,6 +64,43 @@ Every .go file, every build-tagged variant, tests included.
   detailed per-round narratives were purged with this entry; they remain
   in git history.
 
+### 2026-08-21 - close gate: four-reviewer full-codebase review (PASS, one P1 fixed)
+
+- Four concurrent fresh reviewers on the lead's model read the ENTIRE
+  pure-Go codebase file by file: 179 .go files each (production + tests +
+  every build-tagged variant), zero files skipped, committed at HEAD
+  d16c88e.
+- Verdicts: 4/4 PASS on the mmap-only / file-I/O policy:
+  - complete-page copies into or out of the mmap: none in production;
+    view-holder whitelist clean (only internal/mapping, internal/format,
+    internal/reader, internal/writer, and the public facade handle mapped
+    page views; internal/tree, internal/bitmap, internal/retire,
+    internal/bootstrap receive views only through the Store callbacks);
+  - file I/O on persistent content outside the mmap: none; the descriptor
+    surface is confined to internal/mapping (open, mmap, ftruncate, msync,
+    fsync, close); zero unsafe/reflect/exec laundering.
+- Unanimous P1, fixed with this entry: the metadata read path accumulated
+  the whole compressed stream (up to the section-11 bound) in owned heap
+  before inflating; the Rust authority streams mapped chunks into the
+  inflater. The reader now validates the chain in pass 1 while capturing
+  only the two header bytes and four trailer bytes, and inflates in pass 2
+  straight from the mapped chunk views through metadataStream (implements
+  ReadByte, so no bufio read-ahead and byte-exact stream-end detection).
+  The finding reviewer re-reviewed the delta: PASS.
+- The delta re-review caught one more P1 before commit: without ReadByte
+  the flate wrapper would read ahead and trailing-junk rejection would be
+  dead; now pinned by TestMetadataStreamFlateCounting (mechanism) and
+  TestMetadataJunkBeforeTrailerRejected (real-fixture corruption: junk
+  between the final DEFLATE block and the intact trailer).
+- Rulings recorded (accepted, Rust parity): the publication digest copies
+  1024-byte mapped spans into a sub-page stack buffer (exact output_
+  digest.rs parity); bounded record-scale cells and feed-name conversions
+  are the sanctioned logical boundaries; test-only page fixtures are not
+  production. The in-memory flate metadata decode is the sanctioned
+  logical-operation boundary for metadata (bounded by section 11).
+- Validation after the fix: go test ./... both tag sets, -race, vet,
+  gofmt, 5-OS cross-builds green; full suite ~8 s, niced. Rust unchanged.
+
 ## Review Process (user decisions 2026-08-12, 2026-08-17, 2026-08-21)
 
 1. Level-1: five aspect reviewers on the lead's own model (copies),

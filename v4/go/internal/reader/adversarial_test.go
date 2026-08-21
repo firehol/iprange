@@ -110,6 +110,56 @@ func TestMetadataTrailingBytesRejected(t *testing.T) {
 	}
 }
 
+// auditMetadataJunkBeforeTrailer: garbage between the final DEFLATE block
+// and the Adler-32 trailer must be rejected (binary-format-v4.md:1016). The
+// trailer itself is intact, so only the byte-exact stream-end check can
+// catch this; the Adler-32 check alone cannot.
+func TestMetadataJunkBeforeTrailerRejected(t *testing.T) {
+	path := copyFixture(t, "membership-ipv6.iprdb", "meta-junk.iprdb")
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	// Chunk page 9 holds the single 1039-byte stream; splice one junk byte
+	// between the DEFLATE stream and its four trailer bytes.
+	const chunkPage = 9
+	chunkLen := format.U16(mustRead(t, file, chunkPage, 36, 2))
+	if chunkLen != 1039 {
+		t.Fatalf("unexpected fixture chunk length %d", chunkLen)
+	}
+	data := mustRead(t, file, chunkPage, 48, int(chunkLen))
+	mutated := make([]byte, 0, len(data)+1)
+	mutated = append(mutated, data[:len(data)-4]...)
+	mutated = append(mutated, 0x00)
+	mutated = append(mutated, data[len(data)-4:]...)
+	if _, err := file.WriteAt(mutated, int64(chunkPage*format.PageSize+48)); err != nil {
+		t.Fatal(err)
+	}
+	// chunk_len + 1, lower + 1.
+	cl := chunkLen + 1
+	if _, err := file.WriteAt([]byte{byte(cl & 0xff), byte(cl >> 8)}, int64(chunkPage*format.PageSize+36)); err != nil {
+		t.Fatal(err)
+	}
+	lower := format.U16(mustRead(t, file, chunkPage, 20, 2))
+	if _, err := file.WriteAt([]byte{byte((lower + 1) & 0xff), byte((lower + 1) >> 8)}, int64(chunkPage*format.PageSize+20)); err != nil {
+		t.Fatal(err)
+	}
+	// Declared compressed length + 1 in both metas, CRCs repaired.
+	patchMetaEach(t, path, func(_ int, page []byte) {
+		comp := format.U64(page[128:136])
+		format.PutU64(page[128:136], comp+1)
+	})
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, _, err := r.ReadMetadataJSON(); err == nil {
+		t.Fatal("metadata accepted with junk before the trailer")
+	}
+}
+
 // auditMetadataChunkTailZero: bytes after each metadata chunk must be
 // zero (binary-format-v4.md:1051). Rust rejects the page as corrupt on the
 // read path (metadata.rs:274) and as PageReservedNonzero on validation;

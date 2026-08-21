@@ -121,9 +121,9 @@ func metadataCompress(input []byte, maxHeapBytes uint64) ([]byte, error) {
 // stream (Rust try_deflate): the 0x78 0x01 header, one raw DEFLATE
 // stream, and the Adler-32 trailer, exactly like the Rust miniz zlib
 // wrapper. The stream must end inside the bound with every input byte
-// consumed. compress/flate is the permitted in-memory codec; the zlib
-// framing is written by hand because compress/zlib itself is banned by
-// the import graph gate.
+// consumed. compress/flate is the in-memory codec; the zlib framing is
+// written by hand so the stream is fully controlled (fixed header,
+// bounded stored blocks, exact Adler-32 trailer).
 func tryMetadataDeflate(input []byte, bound uint64) ([]byte, bool) {
 	var output bytes.Buffer
 	output.Grow(int(bound))

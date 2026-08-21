@@ -318,11 +318,9 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 }
 
 // mergeErrors keeps the primary cause of a failed publication and
-// attaches a cleanup-side close error as the secondary. A module-scoped
-// scanned function is used instead of errors.Join because the mmap gate
-// treats stdlib calls as unproven callees: the closure parameter is
-// bounded-fail-safe, and errors.Join would be flagged as a potential
-// complete-page transfer even though the values are error objects.
+// attaches a cleanup-side close error as the secondary. It is hand-rolled
+// instead of errors.Join so the primary stays first for errors.As/Is
+// traversal (errors.Join would wrap the pair as a joined list).
 func mergeErrors(primary, secondary error) error {
 	if primary == nil {
 		return secondary
