@@ -60,6 +60,68 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
+### Status (2026-08-21) - chunk 3b-3 slice C+D CLOSED: five-aspect PASS at HEAD 861aef8
+
+- M3 chunk-3b-3 slice C+D (snapshot writer surface) closes with all
+  five aspect reviewers at PASS, no P0-P2 findings. Delta reviewed:
+  b0f785a -> 200798c -> 6cb88df -> 8749f99 -> 4e077a6 -> e2858bb ->
+  fcfc951 -> 861aef8. Aquinas (wire/integrity) PASSed at b0f785a
+  including the Rust cross-open of six Go-produced snapshots; Ohm
+  (APIs/docs) FAILed at b0f785a with three findings, all fixed at
+  200798c and re-reviewed PASS; Hume (Go idioms) FAILed at b0f785a
+  (the floor-of-zero heap-charge wrap and two P2s), fixed at 6cb88df
+  and e2858bb and 861aef8, PASS; Aristotle (performance) FAILed at
+  b0f785a (P2-1: the metadata deflate heap charge mirrored Rust's
+  512 KiB miniz constant while the Go stdlib workspace measures
+  ~821 KiB), fixed at 8749f99 with the honest 840 KiB charge and an
+  enforcement test, PASS; Pauli (Rust parity) PASSed the full slice at
+  8749f99 with the b0f785a P1 verified fixed in-range, then PASSed the
+  P3 parity round at fcfc951.
+- Fixed across the review rounds:
+  - floorPowerOfTwo(0) returned 1 (Rust reference_batch.rs:113-118 has
+    the zero guard), wrapping the snapshot heap charge for budgets
+    under 32 bytes and bypassing the metadata heap gate; fixed and
+    pinned by the tiny-heap tests (TestSnapshotTinyHeap*).
+  - Real writer bug discovered in slice C+D validation: after a
+    successful exchange the Go writer never removed the previous
+    destination that RENAME_EXCHANGE swapped onto the private attempt
+    name; Rust retire_steps unlink_previous does (main_file.rs:296-320).
+    The writer now retires it identity-guarded with the Rust-verbatim
+    classification surface.
+  - The metadata deflate heap charge under-charged the Go stdlib
+    workspace (measured peak 821,285 bytes with GC disabled vs the
+    mirrored 512 KiB miniz constant); the honest 840 KiB constant is
+    enforced by TestMetadataDeflateHeapOverheadCoversWorkspace
+    (race-skipped; the detector shadow inflates HeapAlloc).
+- P3 parity round before the close: retireExchangedPrevious and
+  verifyCustody now mirror Rust verify_private_or_retired + unlink_exact
+  (previousCustody binds identity + byte length + an open descriptor to
+  the old main inode; zero-link already-retired vs multi-link conflict
+  vs identity/byte-length proofs; post-unlink zero-link proof with
+  CodeCleanupConflict residue "retired previous destination still has a
+  link"; Rust-verbatim problem details). The three retirement crash
+  points are injected (publication.after_main_rename,
+  after_previous_unlink, after_retirement_sync) and pinned by
+  TestCrashPublishReplacePreservesExactPreviousOrDesiredState
+  (skip where the atomic exchange is unavailable, mirroring the Rust
+  cfg guard). TestRetireExchangedPreviousBranchClassification pins
+  every refusal branch deterministically; the post-unlink CleanupConflict
+  proof stays a documented race-window guarantee (no deterministic
+  construction without a blocking checkpoint; Rust pins it via
+  checkpoint observers, and the project rules ban test-only production
+  machinery). A pre-cancelled snapshot refuses before any destination
+  artifact exists (Rust lock_file_cancellable order); the metadata copy
+  charge includes the reader's length+1 overflow probe; the flate
+  workspace test uses runtime.KeepAlive. Accepted non-blocking items
+  recorded: probe-detail string divergence on unreachable EACCES
+  corners, the split-capture TOCTOU (conservative residue direction),
+  the fewer crash-checkpoint positions (the Go machine compresses the
+  intermediate steps), and the standing performance P3s (feed-name
+  string(), membership word passes, sha256 per intern) with their
+  documented OutputWords contract.
+- Cross-open evidence: all six Rust fixtures and the six Go-produced
+  snapshots cross-open byte-exact (Aquinas, wire/integrity aspect).
+
 ### Status (2026-08-21) - chunk 3b-3 slices A+B COMMITTED: reader cursor surface and writer structure dictionary (HEAD 172c472)
 
 - Slice A (internal/reader): exported NewMembershipRangeCursor4/6,
