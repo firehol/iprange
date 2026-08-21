@@ -129,10 +129,15 @@ func TestCreateAttemptFailIfExistsChecksCoordinationTwin(t *testing.T) {
 	} else if code := errorCode(t, err); code != format.CodeNameExists {
 		t.Fatalf("CreateAttempt twin-present code = %d, want NameExists", code)
 	}
-	// The twin occupies the main slot too: the main name itself may
-	// also be present, and the refusal is the same class.
-	if _, err := writer.CreateAttempt(filepath.Join(dir, "output.iprdb"), writer.PolicyFailIfExists); err == nil {
-		t.Fatal("CreateAttempt succeeded with the coordination twin present")
+	// The main name itself may also be present, and the refusal is the
+	// same class: write it and re-probe with both entries occupying
+	// the destination slot.
+	main := filepath.Join(dir, "output.iprdb")
+	if err := os.WriteFile(main, []byte("published"), 0o600); err != nil {
+		t.Fatal("write main:", err)
+	}
+	if _, err := writer.CreateAttempt(main, writer.PolicyFailIfExists); err == nil {
+		t.Fatal("CreateAttempt succeeded with the main and the coordination twin present")
 	}
 	// Replace policies never check absence (Rust workflow::create uses
 	// create() for replace): the twin is no obstacle there.
