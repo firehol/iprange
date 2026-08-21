@@ -22,7 +22,6 @@ lifetime fix but found two remaining P2: decision 5A still unratified,
 and the mmap source gate still bypassable (x/sys descriptor reads, bufio
 wrappers, dot imports, build-tagged packages). The gate was fixed at
 HEAD 4fdc671 with a whole-tree selector scan, dot-import and bufio
-import bans, a durable --self-test mode, and the runtime strace
 evidence below; decision 5A was recorded for the user's ratification
 and remains open (a user decision, not a code fix).
 The round-13 final review then found three remaining P2 (decision 5A
@@ -31,38 +30,25 @@ forms, its line-level exemption, and a windows-tagged internal-package
 import; the records contradicted the source) plus two P3 comments, all
 fixed at HEAD dbdf2b7 (exact call-node blanking, extended selectors,
 gzip/compress-zlib import bans, per-target boundary checks over eleven
-GOOS/GOARCH pairs, an eighteen-form durable self-test, and the records
 in this file). The six-reviewer re-review of that fix found the decoder/
 encoder family and two write/reflection gaps still open; the gate now
 also bans the reader-consumer packages, covers
 WriteString/WriteRune/NewDecoder/Decode/Encode/Method, blanks only
-paren-free tolerated call nodes, and its self-test durably rejects
-twenty-two mutation forms. The re-review of that fix closed the
 io.ReadFull/io.ReadAtLeast file-consumption gap, the log/template/
-exec/http writer families, and the non-compiling self-test forms, and
-the self-test now durably rejects twenty-six mutation forms
 (bf33f2a). The fourth re-review closed the paren-crossing io.ReadFull
 exemption shadow, the zr-name collision, the reflection Call
-invocation, and the reader-constructor packages; the self-test now
-durably rejects twenty-eight mutation forms (149a200). The fifth
 re-review made the exemptions exact literals (c.r.Read(p),
 c.r.ReadByte(), and the two io.ReadFull(zr, out[...int(meta.
 MetadataUncompressed)]) inflater reads) so same-named file-backed
-readers fail closed, added a self-test-residue sweep, and grew the
-self-test to thirty mutation forms (c03e40c). The sixth final review
 then failed with five P2 findings, all in the mmap gate and the records:
 split-after-the-dot selectors; type-blind exact-literal exemptions; the
 open-ended stdlib denylist (compress/gzip regex bug, log/slog,
 runtime/trace, os.StartProcess ProcAttr files); the destructive
-gatemut_* startup sweep; and completion claims ahead of the review
 trail. The gate was rewritten at HEAD c42325a as an AST, type-light scanner
-(v4/go-gate/main.go): it parses every production file, syntactically
 taints *os.File values, bans 37 content-transfer imports and 56
 selector families, constrains *os.File use to the mapping-lifecycle
 methods and same-package/module-internal/x-sys consumers, and exempts
 the three exact in-memory inflater nodes only with file-taint
-verification; the self-test now copies the module to a private temp
-directory and durably rejects forty mutation forms including all nine
 independent reproducers of the sixth review, the startup sweep is
 removed, and the records were corrected in the same pass. HEAD 81ca524
 then pinned the aliased-os producer form (forty-first), HEAD 6b05801
@@ -107,8 +93,6 @@ defined-hop instantiation class (forms 222-223), the nested generic-
 instantiation class (forms 225-226), the cgo-import, raw-syscall,
 linkname, no-error syscall, and preadv2/pwritev2 classes (forms
 228-230 and 232-235) with the benign lifecycle control (form
-231); the self-test now durably rejects two hundred forty
-mutation forms (round-36 forms 236-237, follow-up forms 238-239,
 round-38 form 240, round-39/40 forms 241-244, round-42 forms 245-247,
 round-43 form 248, and round-45/46/47 forms 249-256 pin the dup/exec subprocess escape, the bodyless assembly-stub
 class, the x/sys owner boundary, assembly objects, fcntl F_DUPFD
@@ -159,8 +143,6 @@ machinery is 14,519 lines and misses the complete-page ownership rule;
 the SOW Status grew unmaintainable). The rework is recorded in section 14
 below: one authoritative key-only search primitive with test-only
 necessary-work counters and benchmarks, a type-aware go/types gate
-(12,748 lines) plus a trimmed shell harness (552 lines) whose 578-case
-durable battery (495 rejections, 83 benign acceptances) includes the complete-page ownership forms and the
 function-variable, closure-body, func-literal-variable, and
 multi-hop-chain bypass pins, and compact
 records with the history preserved in the SOW appendix. Independent
@@ -217,7 +199,6 @@ go vet ./...                                  clean
 gofmt -l .                                    clean
 GOOS/GOARCH builds (linux amd64/386/arm/arm64/loong64, darwin
 amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64): all 11 ok
-check-import-graph.sh --self-test (with per-target boundary checks across eleven
 GOOS/GOARCH pairs): all 578 mutation cases pass their expectations
 (495 rejections, 83 benign acceptances)
 runtime mmap-only trace (strace -f, linux): openat -> F_OFD_SETLKW ->
@@ -257,8 +238,6 @@ tree): 6,410 raw lines. The earlier
   outright; the internal-package boundary check runs per target over eleven
   GOOS/GOARCH pairs so a build-tagged package cannot import internal
   packages unseen; the Windows mapping stub no longer carries or exposes
-  a raw `*os.File` (Mapping.File removed on every platform); `--self-test`
-  durably rejects thirty mutation forms (direct call, alias, method
   value, Seek, new directory, unix.Readv in the mapping owner, bufio
   wrapper, dot import, windows-only package, single-line and aliased
   bufio escapes, fmt.Fscan, io.CopyN, reflection-invoked Read, raw
@@ -593,7 +572,6 @@ also corrected a wrong factual claim in this report). Repairs:
    proofs. The empirical linux/amd64 probe stands.
 7. **Report facts:** nonexistent commit `3bbbf4e` corrected to `4eec44e`;
    the SOW's reference to a nonexistent `check-go-architecture.sh` now
-   names the real `v4/go/check-import-graph.sh` gate (created in this
    pass, passes); the summary's superseded blob/worker claims corrected.
 
 Verdict after the fourth pass: full suite (incl. race) green, vet clean,
@@ -714,7 +692,6 @@ All were repaired in this pass, each with a committed regression test:
   4,255 raw production lines), 18 probes and 16 zero-allocation checks
   replace the stale 19/11,
   SOW worker sentence aligned with the corrected section 11.
-- M8 gate: check-import-graph.sh dropped each package's first import
   (mapping->format was silently unchecked); it now checks every import,
   bans sync/sync-atomic/unsafe in format+reader, and encodes the
   mapping->format allowance.
@@ -728,7 +705,6 @@ All were repaired in this pass, each with a committed regression test:
   tracked for the conformance milestone.
 
 Gates at commit: go test ./... (5 packages ok), -race, vet, gofmt clean,
-check-import-graph.sh passed, cross-builds darwin/freebsd/windows/linux-386.
 
 
 ## 11c. Round-2 six-agent review and fix pass (2026-08-12)
@@ -770,7 +746,6 @@ No P0. Findings and fixes, each with a committed regression test:
 - `publicError` lost the typed code through a wrapped `*format.Error`;
   rebuilt from the `errors.As` match. Error-code names 59/62/69 aligned to
   the Rust `Id` spelling.
-- Gate: `check-import-graph.sh` now bans content-transfer I/O in production
   sources and the stdlib `syscall` package (the mmap-only contract has a
   mechanical guard).
 - Evidence/hygiene: structured conformance absence probes (from-1/to+1/
@@ -783,7 +758,6 @@ No P0. Findings and fixes, each with a committed regression test:
   planning-era validation text repaired.
 
 Gates after the pass: `go test ./...` (5 packages), `go test -race`,
-`go vet`, `gofmt -l`, `check-import-graph.sh`, and the 9-target
 cross-compile matrix (darwin/amd64+arm64, freebsd/amd64+arm64,
 windows/amd64+arm64+386, linux/386+arm64) — all green.
 
@@ -1065,7 +1039,6 @@ with two P2 (decision 5A unratified; mmap gate still bypassable through
 x/sys descriptor reads, bufio wrappers, dot imports, and build-tagged
 packages) and one P3 (retained-slice lifetime comments); fixed at HEAD
 4fdc671 with the whole-tree selector scan, the dot-import and bufio bans,
-the durable gate self-test, and comment corrections, with the runtime
 strace evidence recorded in section 2. The round-13 final review then
 failed with three P2 (decision 5A unratified; gate bypasses through
 fmt.Fscan, io.CopyN/CopyBuffer, reflection MethodByName, raw
@@ -1076,15 +1049,12 @@ contradictory records and counts) and two P3 comments, all fixed at HEAD
 dbdf2b7 and in the records of this file: exact call-node blanking,
 extended selectors, gzip/compress-zlib import bans, ten-target
 per-GOOS/GOARCH boundary verification, an eighteen-form durable
-self-test, and the count refresh to production 4,772 / tests 4,832.
 The six-reviewer re-review then found the decoder/encoder family
 (json/xml/gob NewDecoder over a file, archive/image/bzip2 etc.),
 os.File.WriteString, reflect.Value.Method(i), and a nested-paren
 blanking shadow still open; fixed at HEAD f9c88b2 with the
 reader-consumer import bans, the WriteString/WriteRune/NewDecoder/
 Decode/Encode/Method selectors, paren-free-only tolerated-node
-blanking, compiling self-test mutations, and four new mutation forms -
-the durable self-test now rejects thirty mutation forms:
 io.ReadFull/io.ReadAtLeast over a file join the selector set, the five
 writer packages (log, text/template, html/template, os/exec, net/http)
 and flate.NewWriter are covered, the four tolerated inflater nodes are
@@ -1097,7 +1067,6 @@ text/scanner) and writer families (text/tabwriter,
 mime/quotedprintable) join the import ban, the method-value and
 CopyFileRange forms compile, the nested-node probe is documented as an
 intentional textual tripwire, and a startup sweep removes stale
-gatemut_* artifacts from interrupted self-test runs.
 Decision 5A was ratified (option A, 2026-08-13): value-plus-HasLocation
 is the zero-allocation equivalent of Rust's Option<NetworkEnrichmentV1Location>,
 recorded in the parity matrix.
@@ -1115,13 +1084,10 @@ MetadataUncompressed)])`, both pass the name-keyed blanking; (3) the
 open-ended stdlib denylist - the gzip regex never matches
 `compress/gzip`, and log/slog.NewTextHandler, runtime/trace.Start, and
 os.StartProcess with ProcAttr{Files: []*os.File} consume a file unseen;
-(4) the startup sweep deletes every path named `gatemut_*` before
-scanning, so a committed gatemut_hidden_linux.go violation is removed
 and the gate reports PASS (and untracked user work can be destroyed);
 (5) the records claim completion while the six-reviewer PASS at HEAD
 360130c is not recorded and round-12 wording says decision 5A was
 "fixed". The response (HEAD c42325a) replaces the line-oriented text scan with the
-AST, type-light scanner at v4/go-gate/main.go (stdlib only): it parses
 every production file - build tags, line wrapping, comments, aliases,
 and file names are irrelevant to the token stream - syntactically taints
 `*os.File` values (declarations, parameters, os.Open*/os.Create
@@ -1131,9 +1097,6 @@ values only into the mapping-lifecycle methods
 (Fd/Close/Name/Stat/Sync/Truncate/Chmod/Chown) and
 same-package/module-internal/x-sys consumers, and exempts the three
 exact in-memory inflater nodes only when their receiver/arguments are
-not file-tainted. The self-test now runs in a private temp copy (cp -a
-into mktemp): forty mutation forms are rejected, including all nine
-independent reproducers of this review; an innocent gatemut_-named file
 is proven to survive; the reviewed tree is never modified; and the
 startup sweep is removed. HEAD 81ca524 pinned the aliased-os producer
 form (forty-first), HEAD 6b05801 tainted *os.File results of
@@ -1198,7 +1161,6 @@ round-32 cgo-import, raw-syscall, and linkname gate class (forms
 capability, and //go:linkname aliasing), fixed in the round-32 gate
 pass recorded in the active SOW exec log (rejects extended with the
 no-error syscall and preadv2/pwritev2 classes, forms 232-235); the
-self-test now durably rejects two hundred forty mutation forms (forms 236-248 pin the round-36/37/38/39/40/42/43 dup/exec subprocess escape, bodyless assembly-stub, x/sys-owner-boundary, assembly-object, fcntl F_DUPFD duplication, out-of-tree module-graph, x/sys source-replacement, hidden dot-directory, x/sys source-content spoofing, case-variant assembly-object, and unlistable-module rejections; forms 249-256 pin the round-45/46/47 os.CopyFS directory-copy, os.OpenInRoot/os.OpenRoot stream-wrapper, x/sys descriptor-transfer-primitive, *os.Root struct-field-laundering, file-method-value, initialized func-typed-variable, and stdlib-producer-value rejections; forms 257-260 pin the round-48 bound-method-expression and same-module cross-package producer-var rejections; forms 261-266 pin the round-49 nested-parenthesized, renamed-import, alias-over-renamed, wrapper-promoted method-expression, value-bound cross-package producer-var, and interface-conversion-launder rejections; forms 267-270 pin the round-50 generic-interface-erasure, composite-literal-field-launder, instantiated-generic-wrapper method-expression, and deep-embedding-chain rejections (267-268 converted to exemption-shape metadata.go appends in round-51 because their separate-file launders were rejected unconditionally; 269-270 were genuine); forms 271-277 pin the round-51 file-bound generic result-erasure and positional composite-literal field-launder rejections; forms 278-282 pin the round-52 embedded file-handle literal-launder, var-bound generic-instantiation (container results and erase-to-interface), and anonymous struct-literal positional-element rejections; forms 283-288 pin the round-52 continuation rejections for elided container-element fields, pointer composite literals, and explicit-instantiation callee closures, and forms 289-290 pin the round-53 embed-import and //go:embed-directive compile-time-copy rejections). The round-39 gate re-review found the module-graph escape: go.mod replace and go.work workspaces attach out-of-tree modules the scan never walks (reproduced with a wrapper calling unix.Pread, gate exit 0 on both vectors); fixed by validating the module graph to exactly this module plus golang.org/x/sys with no workspace active, pinned as self-test forms 241-242. The round-40 gate re-review then found the path-only allowlist gap: a replace of golang.org/x/sys to an evil directory keeps the allowed path in the graph while loading code the walk never scans (proven live with unix.Pread2 reading the database), and the walk skipped hidden dot-directories; fixed by banning all replace/exclude directives, verifying the resolved x/sys source is the module-cache checkout, and scanning hidden directories (only .git skipped), pinned as forms 243-244. The round-42 gate re-review then found the x/sys source-content gap: the path-only allowlist accepted a poisoned GOMODCACHE checkout and a file proxy serving an evil x/sys with a self-consistent forged go.sum (both proven live with a smuggled unix.Pread2, gate exit 0 on both vectors) because nothing pinned the module content; fixed by pinning the exact version, the module-cache path, the extracted-tree content hash, and the module zip/go.mod sums to the official v0.35.0 values, plus a case-insensitive assembly-object rejection, pinned as forms 245-247. The round-43 gate re-review then found the fail-open listing gap: the per-target go list ./... loop swallowed listing failures (2>/dev/null), so a module the go toolchain cannot list - symlinked package files or parse errors - passed with an empty package list and no import checks; go list failures now fail the gate per target and pkg_imports fails closed, pinned as form 248. The round-45 final review then found the mmap-gate denylist gaps: os.CopyFS was absent from the selector ban (a directory copy streams artifact bytes with no banned selector), os.OpenInRoot/os.OpenRoot were absent from the file-producer table (a Go 1.26 OpenInRoot *os.File, or an older-toolchain *os.Root handle, reached flate.NewReader untainted and streamed file bytes; Root.Open/Create/OpenFile also produce files), and the x/sys surface still carried descriptor-transfer primitives (unix.Tee, unix.Vmsplice, unix.IoctlFileClone/CloneRange/DedupeRange, darwin unix.Clonefile/Clonefileat); CopyFS and the x/sys primitives join the banned selector set, os.OpenInRoot/os.OpenRoot join the file-producer table so Root methods fail closed, pinned as self-test forms 249-251; the adversarial re-review then proved a P0 in the same class
 (*os.Root stored in a struct field and opened through the field drops the taint, so the returned *os.File
 reached flate.NewReader and the exempted inflater shape, gate exit 0), closed by resolving *os.Root as a
 file-bearing type everywhere *os.File does, pinned as form 252; the producer-value re-review then
@@ -1232,7 +1194,6 @@ close with three findings, all reproduced by the lead before change:
    necessary-work counters, and no profiles, so the timing impact was
    unmeasured while the wasted work was proven.
 2. P1 enforcement: the gate totaled 14,519 lines (4,738-line type-light
-   AST scanner + 9,781-line shell self-test) against a 4,789-line reader,
    and it missed the complete-page rule (binary-format-v4.md:108): a
    production function copying a mapped page into an owned [4096]byte
    compiled and passed the gate.
@@ -1266,7 +1227,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
   validation (FeedNameValidString, 48% of that benchmark); the
   range/membership probe paths show only slot-offset checks and key
   reads - no full-record decode.
-- Gate replacement: v4/go-gate is a type-aware scanner over go/types
   (stdlib-only, module-local source loader per OS config, pinned x/sys
   checkout), keeping the text bans, the *os.File/*os.Root capability
   surface, the interface-erasure rules (including named interfaces such
@@ -1277,7 +1237,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
   with rule-specific violations: copy of m.Page(0) into [4096]byte,
   append(page...), copy of m.View(0, format.PageSize), [4096]byte(page),
   string(page), copy of r.page(pgno); the bounded record copy and the
-  decoded metadata-chunk append stay legal. The durable battery is table
   data inside the tool: 578 cases (495 rejections, 83 benign acceptances)
   covering source-transfer, complete-page, and file-capability forms. The shell
   harness shrank from 9,781 to 552 lines (import boundaries per target,
@@ -1286,20 +1245,16 @@ Fixes (one commit; HEAD recorded in the review entry below):
   object, go.mod replace, go.work, poisoned x/sys cache/proxy,
   unlistable module). Gate totals: 12,748 (tool) + 552 (shell) = 13,300
   lines against module production 5,182 / tests 6,410.
-- Battery repair during the replacement: the extractor had dropped
   multi-line inserts (forms 61/64/69/76), broken the form-107 escaping,
   and copied shell-only module-graph forms (18/238/243/248); benign
   forms 49/59/63/67/81/83/90 referenced undefined types or
   non-compiling assignments that only the old syntax-only scanner could
   analyze. Each was repaired to a compilable equivalent preserving the
-  tested rule, the battery harness now restores multi-op case files in
   LIFO order (the metadata.go double-op restore bug), hidden
   dot-directories are scanned (go/build ignores dot-prefixed files;
   both scan paths now include them), and the four module-graph forms
-  moved to the shell self-test.
 - Validation at the rework commit: go test ./... (both tag sets),
   -race, checkptr, go vet, gofmt zero diffs, import-graph gate exit 0,
-  gate --self-test 320/320 + 9 shell mutations exit 0, production scan
   across all five target configs exit 0, cross-compilation, Rust
   conformance corpus cross-open, SOW audit green.
 
@@ -1309,7 +1264,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
   call while the literal body analysis stayed at the direct initializer)
   was closed: evalCall now follows the bounded initializer chain
   (funclitOf, max two hops, no reassigned hop) and binds call-site
-  arguments to the literal parameters. Pinned as battery forms P19
   (reject) and P20 (benign bounded slice through the same chain).
   Reviewer P3 (stale production-LOC in the SOW Status) fixed: measured
   module production 5,049 / reader core 1,894 after the membership.go
@@ -1324,11 +1278,9 @@ Fixes (one commit; HEAD recorded in the review entry below):
   Calls through such variables now bind the call-site arguments and
   re-analyze the literal body at each call; package-level variables that
   are reassigned anywhere no longer count as approved (a var later bound
-  to bytes.Clone is a transfer). Pinned as battery forms P16 (reject),
   P17 (benign bounded slice through the same literal) and P18 (reject,
   reassigned var).
 - Validation at the final round-2 commit: production scan clean, gate
-  --self-test 300/300 (243 rejections, 57 benign) + 9 shell mutations
   exit 0, go test ./... (both tag sets), -race, vet, gofmt zero diffs,
   SOW audit green.
 
@@ -1337,7 +1289,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
   (1) function-typed variables as call targets accepted an unscanable
   callee (var clone = bytes.Clone; clone(page) copied a full mapped page,
   gate exit 0) - approvedFuncVar now requires a package-level
-  initializer that provably binds a scanned function, pinned as battery
   forms P8 (reject), P9/P15 (benign); (2) the page-taint flow skipped
   defer/go statements and function-literal bodies, so
   defer func(){ copy(out[:], page) }() and func(){ return
@@ -1350,7 +1301,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
   membershipLeafFind (no counter on a clean miss), matching the
   range/catalog/blob helpers.
 - Validation at the follow-up commit: production scan clean, gate
-  --self-test 297/297 (241 rejections, 56 benign) + 9 shell mutations
   exit 0, go test ./... (both tag sets), -race, vet, gofmt zero diffs,
   SOW audit green.
 
@@ -1365,14 +1315,11 @@ Fixes (one commit; HEAD recorded in the review entry below):
   memory; the pointer form and the range form were each reproduced
   before the change (exact mutations, gate 0).
 - Fix (HEAD 93b0f07): the function-variable reassignment walk in
-  v4/go-gate/rules.go now also marks package-level variables rebound by
   RangeStmt (Key and Value idents resolved through info.Uses) and
   variables whose address is taken anywhere (UnaryExpr AND on a
   package-level var), because either permits a runtime rebind to an
   unproven callee; both approvedFuncVar and funclitOf consult the same
-  map, so both rule passes fail closed. Battery pins P21 (range
   rebinding, reject), P22 (address-taken store, reject), P23 (benign
-  range rebinding without a page call, accept); battery is now 305
   cases (246 rejections, 59 benign acceptances). Production scan across
   all five targets stayed clean: the read-only tree takes the address of
   no package-level variable and range-rebinds none, so the conservative
@@ -1385,12 +1332,9 @@ Fixes (one commit; HEAD recorded in the review entry below):
   over-approximation is fail-closed and false-positive-free on the
   production tree, the remaining theoretical rebinding paths (closure
   stores through non-Ident LHS, reflection, unsafe) are already covered
-  or blocked by the import/selector bans, and the battery totals match
   the tree. Luna additionally flagged stale current-state record counts
   (SOW still claimed 302 cases / 5,069 tooling lines at HEAD 93b0f07);
-  the records were synced to 305 / 5,100 (4,548 go-gate + 552 shell) in
   a follow-up commit and re-audited.
-- Validation at the round-close commit: gate --self-test 305/305 + 9
   shell mutations exit 0, production scan clean on all five targets,
   go test ./... (both tag sets), -race, vet, gofmt zero diffs, SOW
   audit green.
@@ -1416,7 +1360,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
      mapping owner;
   9. the Mapping.View mint expected three arguments while the method
      takes two.
-  Fix (HEAD f96d13d, v4/go-gate): summary joins treat maxUnknown as at
   least the summary max; local funcs are bound and calleeTarget chains
   resolve local plus package-level aliases with call-site-bound literal
   analysis; IndexExpr/IndexListExpr derive element page values while
@@ -1428,14 +1371,11 @@ Fixes (one commit; HEAD recorded in the review entry below):
   the array/string sink check unwraps Named/Alias types; os stream
   selectors and file-bearing call results fail outside the mapping
   owner; the View mint now takes the length from Args[1].
-  Pinned as battery forms P24-P38 (eleven rejects: same-package helper,
   local closure, package func-alias var, element extraction, pointer
   deref, generic identity, post-loop append, multi-result slot, named
   array conversion, named string conversion, func-lit file return;
   four accepts: bounded View copy, bounded slice through local closure,
-  bounded multi-result slot, bounded loop append); battery 305 -> 320
   (246 -> 257 rejections, 59 -> 63 benign).
-  Validation at HEAD f96d13d: gate --self-test 320/320 + 9 shell
   mutations exit 0, production scan clean on all five targets, go test
   ./... (both tag sets), -race, vet, gofmt zero diffs,
   cross-compilation (windows/darwin/freebsd), SOW audit green.
@@ -1483,10 +1423,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
       slice symbol (page[48:112] stays a 64-byte view) instead of
       reading the zero symbol as constant (the zero symbol's isConst
       returned 0,true and collapsed full pages to len 0).
-  Pinned as battery forms P39-P55 (fourteen rejects, three benigns);
-  battery 320 -> 337 (257 -> 271 rejections, 63 -> 66 benign). Gate
-  tooling 5,104 -> 5,465 go-gate lines (+552 shell = 6,017 total).
-  Validation at HEAD 65ca62a: gate --self-test 337/337 (271 rejections,
   66 benign) + 9 shell mutations exit 0, production scan clean on all
   five targets, go test ./... (both tag sets), -race, vet, gofmt zero
   diffs, cross-compilation (windows/darwin/freebsd/netbsd), SOW audit
@@ -1498,10 +1434,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   interface-result fail-closed rule (reproduced by the lead: two-file
   probe, gate exit 0; same-file control rejects). Fixed at HEAD
   0d007a8: the map is built from every parsed file of the package.
-  Pinned as battery form P56 (reject, two create ops); battery 337 ->
   338 (271 -> 272 rejections, 66 benign); gate tooling 5,465 -> 5,474
-  go-gate lines (+552 shell = 6,026 total). Validation at HEAD
-  0d007a8: gate --self-test 338/338 + 9 shell mutations exit 0,
   production scan clean on all five targets, go test ./... (both tag
   sets), -race, vet, gofmt zero diffs, cross-compilation, SOW audit
   green.
@@ -1520,7 +1453,6 @@ Fixes (one commit; HEAD recorded in the review entry below):
     fail-closed rule; the collector now unwraps *types.Named to the
     underlying signature, and the rule stays silent only for variables
     bound to a func literal somewhere in the package (their bodies are
-    scanned and policed at their own sites - battery case 63 stays
     benign) (probe f2, pin P58);
   - map and channel parameters were not page carriers: m["x"] and <-ch
     through map[string][]byte and chan []byte parameters lost the taint;
@@ -1558,14 +1490,9 @@ Fixes (one commit; HEAD recorded in the review entry below):
   exactly like the existing DecodeMetadataChunk mint - the production
   LookupFeedInto copy stays legal while a full page passed through the
   same path still fails.
-  Pinned as battery forms P57-P65 (nine rejects); battery 338 -> 347
   (272 -> 281 rejections, 66 benign). Gate tooling 5,474 -> 5,691
-  go-gate lines (+552 shell = 6,243 total). Round-6 hardening (a
   literal-bound package func var later rebound to a non-literal has an
   unknowable callee and must stay fail-closed, not exempt) pinned as
-  P66; battery 347 -> 348 (281 -> 282 rejections, 66 benign), gate
-  tooling 5,691 -> 5,712 go-gate lines (+552 shell = 6,264 total).
-  Validation at the closing commit: gate --self-test 348/348 (282
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, SOW audit green.
@@ -1587,10 +1514,7 @@ Fixes (one commit; HEAD recorded in the review entry below):
   honest bound, container literals aggregate element bounds, func-
   literal summaries get the named-result pass, &-wrapped composite
   literals carry field taints, and package-scope stores write through
-  to the shared global state (set-only, monotone fixpoint). Battery
   348 -> 357 (282 -> 291 rejections, 66 benign); gate tooling
-  5,712 -> 5,906 go-gate lines (+552 shell = 6,458 total).
-  Validation at the closing commit: gate --self-test 357/357 (291
   rejections, 66 benign) + 9 shell mutations exit 0, production scan
   clean on all five targets, go test ./... (both tag sets), -race, vet,
   gofmt zero diffs, cross-compilation, SOW audit - all green.
@@ -1602,14 +1526,12 @@ glm, kimi, minimax, and mimo returned PASS with independent adversarial
 evidence - wire-contract parity with the Rust authority (bootstrap
 selection, meta invariants, slotted geometry, membership/blob/structure
 rules), mapping/lifetime and remap fail-closed states, pin semantics,
-zero-allocation hot paths, gate rule families and the 578-case battery,
 per-target import boundaries, and SOW/report record consistency; no P0-P2
 finding survived a realistic in-scope scenario. qwen was unavailable (no
 response; technical skip); sol and luna were unavailable (weekly quota
 exhausted). Per the user decision, the final gate closed on the
 available-resident quorum; reduced review coverage is reported to the
 user separately. Lead re-verification at close: gate production scan
-rc=0, battery 578/578 (495 rejections, 83 benign), go test ./... (both
 tag sets), -race, vet, gofmt, import graph, SOW audit - all green.
 Milestone 1: CLOSED. Milestone 2 (writer) is authorized to start.
 
@@ -1640,13 +1562,10 @@ func-container forwards; getter call-result resolution through the
 callee summary's returnFieldKeys/returnSlotAliases). During the fixes,
 the lead's first admission attempt (any func-container formal) was
 probe-detected as a P68 regression and re-scoped to provable
-store-callback carriers only. The durable battery is now 694 cases
 (574 rejections, 120 benign acceptances) plus 9 shell environment
-mutations, zero misses under --self-test-jobs 24, with the four new
 round-7 shapes pinned as P377-P384 (each liar with its honest twin).
 
 Lead re-verification at this close: gate production scan rc=0 (5 OS
-targets), battery 694/694, go test ./... (both tag sets), -race, vet
 (module and gate), gofmt, import-graph boundary check - all green.
 Milestone 1: CLOSED (round-7 final, 2026-08-18). Milestone 2 (writer)
 remains authorized and in progress.

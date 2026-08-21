@@ -147,7 +147,6 @@ recorded below; nothing in the repository was modified by the analysis.
   entry is mangled.
 
 ### M8 — Cost-visibility and no-per-call-sync claims are partly unbacked
-- The import-graph gate (`check-import-graph.sh`) enforces import
   boundaries but NOT a sync/atomic ban; the report claims the reader core
   is "sync/atomic-free, enforced by the import-graph gate" — the factory
   part is true today, the enforcement part is not. Add the rule or drop
@@ -252,7 +251,6 @@ recorded below; nothing in the repository was modified by the analysis.
   macOS/FreeBSD/Windows unproven).
 
 Master verification commands: `sed -n` on `structure.go:125-150`,
-`table.rs:625-646`, `page.go:100-145`, `check-import-graph.sh` (read),
 `live_lock.rs:35-61`, `mapping.go:83,129`, `sdk_error.rs:21-23`;
 `awk`/`grep` recounts (18 probes, 16 zeroalloc checks); `wc`/`cat` LOC;
 `go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`,

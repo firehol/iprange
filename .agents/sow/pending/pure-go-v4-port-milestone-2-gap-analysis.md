@@ -56,7 +56,6 @@ cross-open + mixed subprocess gates.
   internal/mapping and are now name-banned everywhere else
   (lifecycleOwnerOnly rule family covering Ftruncate/Msync/Fsync/
   Fdatasync/Syncfs/Sync/Truncate/Fallocate/SyncFileRange, pinned by
-  gate battery cases 299-313); the FcntlInt exemption is per-file and per-call
   (mapping_sync_darwin.go only), with the pre-existing FcntlInt dup pin
   (240) still rejecting every other location.
 - Performance: no per-item allocation in hot COW paths, declared page

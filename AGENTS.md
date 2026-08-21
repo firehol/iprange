@@ -49,6 +49,12 @@ repository. The user does not want to repeat them.
 - **Test-only observability** — necessary-work counters, benchmarks, and
   profiles exist in test builds only; they compile to no-ops in production.
 
+- **Gate = full-codebase review** — the mmap-only and file-I/O policies are
+  enforced by adversarial reviewers who read the ENTIRE Go codebase, file by
+  file: two concurrent reviewers hunt complete-page copies into or out of the
+  mmap, two hunt file I/O on persistent content outside the mmap (fresh
+  context, lead's model, run at milestone gates). No scanner-run mutation corpora: this is a small SDK, and CI-grade checks must finish in
+  well under a minute to at most a couple of minutes.
 - **Resource budget** — no wasted compute: every build/test/scan runs under
   `nice`; any step expected to exceed ~2 wall-minutes or ~10 core-minutes must be
   named with its expected cost in the report and recorded in the active SOW
