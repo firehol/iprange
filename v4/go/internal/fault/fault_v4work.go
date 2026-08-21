@@ -5,6 +5,7 @@ package fault
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 // Crash exits the process with code 86 when the environment names this
@@ -22,10 +23,30 @@ func Crash(point string) {
 // unresolved-outcome behavior can be asserted in the same process. The
 // arming variable is consumed on the first fire, so a retried operation
 // later in the same process runs clean (one physical step, one fault).
+// Multiple points may be armed comma-separated; each fires once, in the
+// order the operations reach them.
 func Fail(point string) error {
-	if os.Getenv("IPRANGE_V4_TEST_FAIL_AT") == point {
-		os.Unsetenv("IPRANGE_V4_TEST_FAIL_AT")
-		return errors.New("injected fault: " + point)
+	value := os.Getenv("IPRANGE_V4_TEST_FAIL_AT")
+	found := false
+	for _, item := range strings.Split(value, ",") {
+		if item == point {
+			found = true
+			break
+		}
 	}
-	return nil
+	if !found {
+		return nil
+	}
+	remaining := make([]string, 0, 1)
+	for _, item := range strings.Split(value, ",") {
+		if item != point && item != "" {
+			remaining = append(remaining, item)
+		}
+	}
+	if len(remaining) == 0 {
+		os.Unsetenv("IPRANGE_V4_TEST_FAIL_AT")
+	} else {
+		os.Setenv("IPRANGE_V4_TEST_FAIL_AT", strings.Join(remaining, ","))
+	}
+	return errors.New("injected fault: " + point)
 }

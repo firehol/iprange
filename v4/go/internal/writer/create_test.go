@@ -8,6 +8,7 @@ package writer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,11 +189,11 @@ func TestCreateRemovesPartialFileOnFailure(t *testing.T) {
 // reports both sides of a failed create).
 func TestJoinErrorSurface(t *testing.T) {
 	primary := &format.Error{Code: format.CodeSourceFailed, Detail: "primary"}
-	joined := joinError{text: primary.Error() + "; close failed: secondary", cause: primary}
+	joined := fmt.Errorf("%w; close failed: %v", primary, errors.New("secondary"))
 	if joined.Error() != primary.Error()+"; close failed: secondary" {
 		t.Fatalf("joined text = %q", joined.Error())
 	}
 	if !errors.Is(joined, primary) {
-		t.Fatal("joinError does not unwrap to the primary cause")
+		t.Fatal("joined error does not unwrap to the primary cause")
 	}
 }

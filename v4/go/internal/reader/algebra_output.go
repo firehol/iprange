@@ -422,9 +422,8 @@ func (a *MembershipAlgebra) BuildAlgebraOutput(prepared *AlgebraOutputPrepared, 
 		OutputFeedCount: uint64(prepared.outputFeedCount),
 	}
 	// The catalog names are decoded feed names (bounded below a
-	// complete page by the v4 name grammar); the State accessor keeps
-	// the bounded provenance visible to the ownership gate the same
-	// way the public Feeds boundary does.
+	// complete page by the v4 name grammar); the State accessor exposes
+	// them the same way the public Feeds boundary does.
 	entries := a.State().Names()
 	if mode.preserve {
 		for index, global := range prepared.catalogGlobals {

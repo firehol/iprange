@@ -18,9 +18,9 @@ import (
 
 // OutputWords is one membership bitmap source (Rust MembershipWords): the
 // caller's own words in canonical order. The concrete type keeps every
-// writer-side read inside the scanned package: the content-transfer gate
-// cannot trace words through an interface receiver, so no mapped page
-// view can reach a membership read.
+// writer-side membership read on caller-owned words: an interface receiver
+// could not statically rule out a mapped page view reaching the read, and
+// the concrete pass keeps the read source bounded.
 type OutputWords []uint64
 
 // WordCount returns the canonical bitmap word count (Rust word_count).

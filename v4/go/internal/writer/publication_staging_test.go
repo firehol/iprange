@@ -6,6 +6,7 @@
 package writer_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -326,7 +327,10 @@ func TestPublishFailIfExistsRefused(t *testing.T) {
 	destination := filepath.Join(dir, "output.iprdb")
 	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
 	// The destination appears between CreateAttempt and Publish, so the
-	// refusal surfaces from the atomic no-replace rename.
+	// refusal surfaces from the atomic no-replace rename. Rust
+	// classifies every pre-proven rename refusal as outcome_unknown
+	// (attempt.rs from_armed): Unclassified content, CleanupState::Clean,
+	// and the private output retained as recovery residue.
 	if err := os.WriteFile(destination, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -334,8 +338,11 @@ func TestPublishFailIfExistsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Publish returned an error for a refused rename: %v", err)
 	}
-	if result.Status != writer.PublicationNotPublished {
-		t.Fatalf("status = %v, want NotPublished", result.Status)
+	if result.Status != writer.PublicationOutcomeUnknown {
+		t.Fatalf("status = %v, want OutcomeUnknown", result.Status)
+	}
+	if result.DestinationContent != writer.DestinationContentUnclassified {
+		t.Fatalf("content = %v, want Unclassified", result.DestinationContent)
 	}
 	if result.Cause == nil {
 		t.Fatal("refused publish carries no cause")
@@ -357,9 +364,151 @@ func TestPublishFailIfExistsRefused(t *testing.T) {
 	if string(got) != "old" {
 		t.Fatalf("destination changed to %q, want untouched %q", got, "old")
 	}
-	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
-		t.Fatalf("attempt file still exists after refusal: %v", err)
+	// The private artifact is retained (Rust recovery residue), so the
+	// published name never overwrites and the attempt stays for the
+	// caller's recovery decision.
+	if _, err := os.Lstat(attempt.AttemptPath()); err != nil {
+		t.Fatalf("attempt file missing after outcome_unknown, want retained: %v", err)
 	}
+}
+
+// TestPublishFailIfExistsCoordinationTwinRefused pins the publish-time
+// coordination twin check: a foreign .readers file appearing between
+// CreateAttempt and Publish refuses the publication with NotPublished +
+// NameExists and discards the attempt, preserving the foreign twin
+// (Rust reservation_file foreign_coordination_is_preserved_...: the
+// reservation rename to the coordination name refuses, NotPublished,
+// Absent, Clean, NameExists).
+func TestPublishFailIfExistsCoordinationTwinRefused(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "output.iprdb")
+	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
+	twin := destination + ".readers"
+	if err := os.WriteFile(twin, []byte("foreign"), 0o600); err != nil {
+		t.Fatal("write twin:", err)
+	}
+	result, err := writer.Publish(attempt, b, writer.PolicyFailIfExists)
+	if err != nil {
+		t.Fatalf("Publish returned an error for a coordination twin refusal: %v", err)
+	}
+	if result.Status != writer.PublicationNotPublished {
+		t.Fatalf("status = %v, want NotPublished", result.Status)
+	}
+	if result.DestinationContent != writer.DestinationContentAbsent {
+		t.Fatalf("content = %v, want Absent", result.DestinationContent)
+	}
+	if code := errorCode(t, result.Cause); code != format.CodeNameExists {
+		t.Fatalf("cause code = %d, want NameExists", code)
+	}
+	if result.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean", result.Cleanup)
+	}
+	closeBuilder(t, b)
+	got, readErr := os.ReadFile(twin)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "foreign" {
+		t.Fatalf("foreign twin changed to %q", got)
+	}
+	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
+		t.Fatalf("attempt file still exists after twin refusal: %v", err)
+	}
+}
+
+// TestPublishReplaceRefusesCoordinationTwin pins the Rust replacement
+// bind: require_absent(coordination) inside replacement::open() refuses
+// with the early preparation failure and discards the attempt, even
+// when the main destination exists.
+func TestPublishReplaceRefusesCoordinationTwin(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "output.iprdb")
+	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	attempt, b := stagedBuilder(t, destination, writer.PolicyReplaceExisting)
+	twin := destination + ".readers"
+	if err := os.WriteFile(twin, []byte("foreign"), 0o600); err != nil {
+		t.Fatal("write twin:", err)
+	}
+	_, err := writer.Publish(attempt, b, writer.PolicyReplaceExisting)
+	if err == nil {
+		t.Fatal("replace publish succeeded with the coordination twin present")
+	}
+	var failure *writer.PublicationPreparationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error type = %T, want *PublicationPreparationFailure", err)
+	}
+	if code := errorCode(t, failure.Cause); code != format.CodeNameExists {
+		t.Fatalf("cause code = %d, want NameExists", code)
+	}
+	if failure.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean", failure.Cleanup)
+	}
+	closeBuilder(t, b)
+	got, readErr := os.ReadFile(twin)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "foreign" {
+		t.Fatalf("foreign twin changed to %q", got)
+	}
+	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
+		t.Fatalf("attempt file still exists after twin refusal: %v", err)
+	}
+}
+
+// TestPublishAttemptLinkCountRefused pins the Rust verify_name link-count
+// custody proof (namespace.rs): a hard-linked attempt file has links == 2
+// and the publish refuses with the conflict class before any rename. The
+// cleanup still removes the exact-name entry (identity stays bound), so
+// the namespace is clean.
+func TestPublishAttemptLinkCountRefused(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "output.iprdb")
+	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
+	linkPath := filepath.Join(dir, "attempt-hardlink.tmp")
+	if err := os.Link(attempt.AttemptPath(), linkPath); err != nil {
+		t.Skipf("filesystem refuses hard links: %v", err)
+	}
+	defer os.Remove(linkPath)
+	_, err := writer.Publish(attempt, b, writer.PolicyFailIfExists)
+	if err == nil {
+		t.Fatal("publish succeeded with a hard-linked attempt file")
+	}
+	var failure *writer.PublicationPreparationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error type = %T, want *PublicationPreparationFailure", err)
+	}
+	if code := errorCode(t, failure.Cause); code != format.CodeConflict {
+		t.Fatalf("cause code = %d, want Conflict", code)
+	}
+	if failure.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean (exact-name entry removed)", failure.Cleanup)
+	}
+	closeBuilder(t, b)
+	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
+		t.Fatalf("attempt entry still exists after refuse-and-discard: %v", err)
+	}
+}
+
+// TestPublishReplaceNilCoordinationTwinKeepsWorking: without the twin the
+// replace policy still publishes (the twin check is the only added gate).
+func TestPublishReplaceNoTwinPublishes(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "output.iprdb")
+	if err := os.WriteFile(destination, []byte("previous content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	attempt, b := stagedBuilder(t, destination, writer.PolicyReplaceExisting)
+	result, err := writer.Publish(attempt, b, writer.PolicyReplaceExisting)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if result.Status != writer.PublicationPublished {
+		t.Fatalf("status = %v, want Published", result.Status)
+	}
+	closeBuilder(t, b)
 }
 
 func TestPublishExchangeReplaces(t *testing.T) {
@@ -393,24 +542,24 @@ func TestPublishExchangeMissingDestination(t *testing.T) {
 	dir := t.TempDir()
 	destination := filepath.Join(dir, "output.iprdb")
 	attempt, b := stagedBuilder(t, destination, writer.PolicyReplaceExisting)
-	result, err := writer.Publish(attempt, b, writer.PolicyReplaceExisting)
-	if err != nil {
-		t.Fatalf("Publish returned an error for a missing destination: %v", err)
+	_, err := writer.Publish(attempt, b, writer.PolicyReplaceExisting)
+	if err == nil {
+		t.Fatal("Publish succeeded with a missing replacement destination")
 	}
-	if result.Status != writer.PublicationNotPublished {
-		t.Fatalf("status = %v, want NotPublished", result.Status)
+	var failure *writer.PublicationPreparationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error type = %T, want *PublicationPreparationFailure", err)
 	}
-	if result.DestinationContent != writer.DestinationContentAbsent {
-		t.Fatalf("content = %v, want Absent", result.DestinationContent)
-	}
-	if code := errorCode(t, result.Cause); code != format.CodeNameNotFound {
+	// Rust replacement::bind refuses a missing destination at the
+	// preparation stage (Early failure) and discards the attempt.
+	if code := errorCode(t, failure.Cause); code != format.CodeNameNotFound {
 		t.Fatalf("cause code = %d, want NameNotFound", code)
 	}
-	if detail := errorDetail(t, result.Cause); detail != "publication name is missing" {
+	if detail := errorDetail(t, failure.Cause); detail != "publication name is missing" {
 		t.Fatalf("cause detail = %q, want the Rust detail", detail)
 	}
-	if result.Cleanup != writer.CleanupStateClean {
-		t.Fatalf("cleanup = %v, want Clean", result.Cleanup)
+	if failure.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean", failure.Cleanup)
 	}
 	closeBuilder(t, b)
 	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
@@ -569,16 +718,17 @@ func TestDiscardStates(t *testing.T) {
 	}
 }
 
-func TestPublishFailureCarriesResidue(t *testing.T) {
+func TestPublishOutcomeUnknownRetainsArtifact(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("permission-based residue test needs an unprivileged POSIX user")
+		t.Skip("permission-based refusal test needs an unprivileged POSIX user")
 	}
 	dir := t.TempDir()
 	destination := filepath.Join(dir, "output.iprdb")
 	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
-	// A blocked rename (existing destination) with an unremovable
-	// attempt dir: the refused publish discards, and the unprovable
-	// removal surfaces as ResiduePossible.
+	// A blocked rename (existing destination, read-only directory): the
+	// refusal is Rust outcome_unknown - Unclassified, CleanupState::Clean
+	// (nothing removed), and the private artifact retained as recovery
+	// residue for the caller.
 	if err := os.WriteFile(destination, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -592,14 +742,14 @@ func TestPublishFailureCarriesResidue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if result.Status != writer.PublicationNotPublished {
-		t.Fatalf("status = %v, want NotPublished", result.Status)
+	if result.Status != writer.PublicationOutcomeUnknown {
+		t.Fatalf("status = %v, want OutcomeUnknown", result.Status)
 	}
-	if result.Cleanup != writer.CleanupStateResiduePossible {
-		t.Fatalf("cleanup = %v, want ResiduePossible", result.Cleanup)
+	if result.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean (nothing removed)", result.Cleanup)
 	}
 	// The residue contract: the attempt file provably remains, so the
-	// caller can retry its removal.
+	// caller can retry its removal or recovery.
 	if _, err := os.Lstat(attempt.AttemptPath()); os.IsNotExist(err) {
 		t.Fatal("residue attempt file is missing")
 	}

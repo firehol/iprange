@@ -9,133 +9,47 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// maxMetadataChainPages caps one metadata chain walk at the Rust
+// authority's fixed bound (metadata.rs MAX_PAGES = 5_182): even a
+// crafted header whose declared compressed length stays inside the
+// section-11 bound cannot force more than this many page visits.
+const maxMetadataChainPages = 5_182
+
 // ReadMetadataJSON returns the exact decompressed opaque metadata bytes.
 // present is false for absent metadata (root zero); an empty non-nil slice
 // with present true is the exact empty-payload state (section 11).
+//
+// The chain is walked exactly once, like Rust metadata::read: each page is
+// validated (header, chunk fields, geometry, reserved-zero tail, link
+// validity, the MAX_PAGES cap) and its payload is fed to the inflater on
+// the same visit. metadataStream implements ReadByte, so flate consumes
+// the source directly without read-ahead and stops exactly at the final
+// DEFLATE block; the read count then proves byte-exact stream end and any
+// trailing junk is rejected. The compressed stream is never accumulated
+// in owned memory.
 func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	meta := r.meta
 	if meta.MetadataRoot == 0 {
 		return nil, false, nil
 	}
-	// Pass 1 walks the whole chain and validates its geometry without
-	// copying the payload into owned memory, capturing only the stream's
-	// first two bytes (zlib header) and last four bytes (Adler-32 trailer).
-	var (
-		first [2]byte
-		n1    int
-		last  [4]byte
-		n4    int
-		total uint64
-		pgno  = meta.MetadataRoot
-	)
-	var offset uint64
-	for {
-		page, err := r.page(pgno)
-		if err != nil {
-			return nil, false, err
-		}
-		h, err := format.DecodePageHeader(page, meta.TxnID)
-		if err != nil {
-			return nil, false, err
-		}
-		if h.PageType != format.PageTypeMetadataChunk || h.Level != 0 || h.Aux != 0 || h.ItemCount != 1 {
-			return nil, false, corrupt("metadata chunk page")
-		}
-		chunk, err := format.DecodeMetadataChunk(page)
-		if err != nil {
-			return nil, false, err
-		}
-		if h.Lower != 48+chunk.ChunkLen || h.Upper != format.PageSize {
-			return nil, false, corrupt("metadata chunk geometry")
-		}
-		// Bytes after the chunk must be zero (binary-format-v4.md:1051);
-		// Rust rejects the page on the read path (metadata.rs:274) and as
-		// PageReservedNonzero on validation.
-		for _, b := range page[48+int(chunk.ChunkLen):] {
-			if b != 0 {
-				return nil, false, corrupt("metadata chunk tail nonzero")
-			}
-		}
-		if chunk.LogicalOffset != offset {
-			return nil, false, corrupt("metadata offset %d expected %d", chunk.LogicalOffset, offset)
-		}
-		if total+uint64(chunk.ChunkLen) > meta.MetadataCompressed {
-			return nil, false, corrupt("metadata chain longer than declared")
-		}
-		// Keep only the first two stream bytes.
-		d := chunk.Data
-		if n1 < 2 {
-			take := 2 - n1
-			if take > len(d) {
-				take = len(d)
-			}
-			copy(first[n1:n1+take], d[:take])
-			n1 += take
-			d = d[take:]
-		} else if len(d) > 0 {
-			// The window stays filled: the first two bytes are fixed the
-			// moment the second stream byte is seen, so later chunks never
-			// change them.
-		}
-		// Keep the last four stream bytes (sliding window).
-		d = chunk.Data
-		if n4 < 4 {
-			take := 4 - n4
-			if take > len(d) {
-				take = len(d)
-			}
-			copy(last[n4:n4+take], d[:take])
-			n4 += take
-			d = d[take:]
-		}
-		if n4 == 4 && len(d) > 0 {
-			if len(d) >= 4 {
-				copy(last[:], d[len(d)-4:])
-			} else {
-				copy(last[:4-len(d)], last[len(d):])
-				copy(last[4-len(d):], d)
-			}
-		}
-		total += uint64(chunk.ChunkLen)
-		offset += uint64(chunk.ChunkLen)
-		if chunk.Next == 0 {
-			break
-		}
-		if chunk.ChunkLen != format.MaxMetadataChunkLen {
-			return nil, false, corrupt("nonfinal metadata chunk shorter than full")
-		}
-		if !format.PageNumberValid(chunk.Next, meta.PageCount) {
-			return nil, false, corrupt("metadata next out of range")
-		}
-		pgno = chunk.Next
-	}
-	if offset != meta.MetadataCompressed {
-		return nil, false, corrupt("metadata chain ends at %d declared %d", offset, meta.MetadataCompressed)
-	}
-	// The stream must be exactly one complete RFC 1950 zlib stream
-	// (section 11): header constraints checked below, the DEFLATE payload
-	// must end exactly at the final block, and the last four bytes must be
-	// the Adler-32 of the uncompressed output. Trailing bytes and
-	// concatenated streams are rejected.
-	if total < 6 {
+	if meta.MetadataCompressed < 6 {
 		return nil, false, corrupt("metadata stream shorter than zlib header+trailer")
 	}
-	if first[0]&0x0f != 8 || first[0]>>4 > 7 || first[1]>>5&1 != 0 {
-		return nil, false, corrupt("metadata zlib header flags")
+	stream := &metadataStream{
+		page:      r.page,
+		pageCount: meta.PageCount,
+		txn:       meta.TxnID,
+		next:      meta.MetadataRoot,
+		skip:      2,
+		left:      meta.MetadataCompressed - 6,
+		count:     meta.MetadataCompressed,
 	}
-	// RFC 1950: the header check bits must satisfy (CMF*256+FLG) % 31 == 0.
-	if (uint16(first[0])<<8|uint16(first[1]))%31 != 0 {
-		return nil, false, corrupt("metadata zlib header check mismatch")
+	// Prime the chain so the first two stream bytes (the RFC 1950 zlib
+	// header) are captured and checked before any inflation starts,
+	// preserving the two-pass reader's check order.
+	if err := stream.primeHeader(); err != nil {
+		return nil, false, err
 	}
-	// One single inflation validates the whole stream, read straight from
-	// the mapped chunk views (Rust metadata.rs streams the chain into the
-	// inflater the same way): the payload is the stream minus the two
-	// header bytes and the four trailer bytes. metadataStream implements
-	// ReadByte, so flate uses it directly (no bufio read-ahead) and stops
-	// exactly at the final DEFLATE block; the output cap keeps work bounded
-	// at declared+1 (metadata.rs step bounds output the same way). Nothing
-	// accumulates the compressed stream in owned memory.
-	stream := &metadataStream{page: r.page, next: meta.MetadataRoot, left: total - 6, skip: 2}
 	// One exact allocation for the declared uncompressed size plus the
 	// one-byte overflow probe: a truncation is ErrUnexpectedEOF, an
 	// over-long stream leaves the probe byte set. No growth reallocations.
@@ -143,6 +57,9 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	zr := flate.NewReader(stream)
 	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
 		zr.Close()
+		if _, ok := err.(*format.Error); ok {
+			return nil, false, err
+		}
 		return nil, false, corrupt("metadata deflate stream: %v", err)
 	}
 	n, err := io.ReadFull(zr, out[int(meta.MetadataUncompressed):])
@@ -150,36 +67,182 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	if n != 0 || err != io.EOF {
 		return nil, false, corrupt("metadata decompressed %d declared %d", int(meta.MetadataUncompressed)+n, meta.MetadataUncompressed)
 	}
-	if stream.read != total-6 {
+	if stream.read != stream.count-6 {
 		return nil, false, corrupt("metadata stream trailing bytes")
 	}
 	out = out[:int(meta.MetadataUncompressed)]
-	if binary.BigEndian.Uint32(last[:]) != adler32.Checksum(out) {
+	if binary.BigEndian.Uint32(stream.trailer()) != adler32.Checksum(out) {
 		return nil, false, corrupt("metadata adler32 trailer")
 	}
 	return out, true, nil
 }
 
-// metadataStream exposes the DEFLATE payload of a validated metadata chain
+// metadataStream serves the DEFLATE payload of a validated metadata chain
 // (the stream minus its 2-byte zlib header and 4-byte Adler-32 trailer) as
-// an io.Reader over the mapped chunk views. The chunk views alias the
-// mapping; the compressed stream is never accumulated in owned memory.
-// Pass 1 of ReadMetadataJSON validated the whole chain, so Read only
-// follows the recorded Next pointers and serves the chunk payloads.
+// an io.Reader over the mapped chunk views, validating and feeding one
+// page per visit (Rust walk_chain + Inflater parity). The chunk views
+// alias the mapping; the compressed stream is never accumulated in owned
+// memory. Geometry and link validation happen on the same visit that
+// feeds the inflater, so a malformed chain can never hand unvalidated
+// bytes to the decoder.
 type metadataStream struct {
-	page func(uint32) ([]byte, error)
-	next uint32 // next chain page; 0 = chain end
-	view []byte // unread payload of the current chunk
-	skip uint64 // header bytes still to skip (2 at start)
-	left uint64 // payload bytes still to expose
-	read uint64 // payload bytes delivered
-	err  error  // page or decode failure (defensive; pass 1 validated the chain)
+	page      func(uint32) ([]byte, error)
+	pageCount uint64
+	txn       uint64
+	next      uint32 // next chain page; 0 = chain end
+	view      []byte // unread payload of the current chunk
+	skip      uint64 // header bytes still to skip (2 at start)
+	left      uint64 // payload bytes still to expose
+	read      uint64 // payload bytes delivered
+	count     uint64 // declared compressed length (header+payload+trailer)
+	off       uint64 // chain bytes visited (stream offset incl. header/trailer)
+	pages     uint64 // chain pages visited (Rust MAX_PAGES cap)
+	first     [2]byte
+	n1        int
+	last      [4]byte
+	n4        int
+	err       error // page or decode failure (defensive; each visit validates first)
 }
 
+// primeHeader visits chunks until the two zlib header bytes are captured
+// and validates the RFC 1950 header constraints (binary-format-v4.md
+// section 11) before any payload byte is served.
+func (s *metadataStream) primeHeader() error {
+	for s.err == nil && s.n1 < 2 {
+		if len(s.view) == 0 {
+			s.visitNext()
+		} else {
+			// The current view's bytes were already captured at the
+			// visit; a sub-two-byte chunk contributes its whole payload
+			// to the header window and the view is retired.
+			dropped := uint64(len(s.view))
+			s.view = nil
+			if s.skip > dropped {
+				s.skip -= dropped
+			} else {
+				s.skip = 0
+			}
+		}
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.first[0]&0x0f != 8 || s.first[0]>>4 > 7 || s.first[1]>>5&1 != 0 {
+		return corrupt("metadata zlib header flags")
+	}
+	// RFC 1950: the header check bits must satisfy (CMF*256+FLG) % 31 == 0.
+	if (uint16(s.first[0])<<8|uint16(s.first[1]))%31 != 0 {
+		return corrupt("metadata zlib header check mismatch")
+	}
+	return nil
+}
+
+// visitNext fetches and validates the next chain page, captures the
+// stream-edge windows, and prepares its payload for serving. Every check
+// mirrors the Rust walk_chain parse_page + chunk_fields + reserved_zero
+// on the same visit that feeds the inflater.
+func (s *metadataStream) visitNext() {
+	if s.pages == maxMetadataChainPages {
+		s.err = corrupt("metadata chain exceeds its fixed bound")
+		return
+	}
+	page, err := s.page(s.next)
+	if err != nil {
+		s.err = err
+		return
+	}
+	h, err := format.DecodePageHeader(page, s.txn)
+	if err != nil {
+		s.err = err
+		return
+	}
+	if h.PageType != format.PageTypeMetadataChunk || h.Level != 0 || h.Aux != 0 || h.ItemCount != 1 {
+		s.err = corrupt("metadata chunk page")
+		return
+	}
+	chunk, err := format.DecodeMetadataChunk(page)
+	if err != nil {
+		s.err = err
+		return
+	}
+	if h.Lower != 48+chunk.ChunkLen || h.Upper != format.PageSize {
+		s.err = corrupt("metadata chunk geometry")
+		return
+	}
+	// Bytes after the chunk must be zero (binary-format-v4.md:1051);
+	// Rust rejects the page on the read path (metadata.rs:274) and as
+	// PageReservedNonzero on validation.
+	for _, b := range page[48+int(chunk.ChunkLen):] {
+		if b != 0 {
+			s.err = corrupt("metadata chunk tail nonzero")
+			return
+		}
+	}
+	if chunk.LogicalOffset != s.off {
+		s.err = corrupt("metadata offset %d expected %d", chunk.LogicalOffset, s.off)
+		return
+	}
+	remaining := s.count - s.off
+	if uint64(chunk.ChunkLen) > remaining {
+		s.err = corrupt("metadata chain longer than declared")
+		return
+	}
+	final := uint64(chunk.ChunkLen) == remaining
+	if !final && chunk.ChunkLen != format.MaxMetadataChunkLen {
+		s.err = corrupt("nonfinal metadata chunk shorter than full")
+		return
+	}
+	if final && chunk.Next != 0 {
+		s.err = corrupt("metadata chain has an extra page")
+		return
+	}
+	if !final && (!format.PageNumberValid(chunk.Next, s.pageCount) || chunk.Next == s.next) {
+		s.err = corrupt("metadata next out of range")
+		return
+	}
+	// Keep the first two stream bytes (zlib header).
+	if s.n1 < 2 {
+		take := 2 - s.n1
+		if take > len(chunk.Data) {
+			take = len(chunk.Data)
+		}
+		copy(s.first[s.n1:s.n1+take], chunk.Data[:take])
+		s.n1 += take
+	}
+	// Keep the last four stream bytes (Adler-32 trailer; sliding window).
+	d := chunk.Data
+	if s.n4 < 4 {
+		take := 4 - s.n4
+		if take > len(d) {
+			take = len(d)
+		}
+		copy(s.last[s.n4:s.n4+take], d[:take])
+		s.n4 += take
+		d = d[take:]
+	}
+	if s.n4 == 4 && len(d) > 0 {
+		if len(d) >= 4 {
+			copy(s.last[:], d[len(d)-4:])
+		} else {
+			copy(s.last[:4-len(d)], s.last[len(d):])
+			copy(s.last[4-len(d):], d)
+		}
+	}
+	s.next = chunk.Next
+	s.view = chunk.Data
+	s.off += uint64(chunk.ChunkLen)
+	s.pages++
+}
+
+// trailer returns the captured Adler-32 trailer bytes; valid only when
+// the whole declared stream was served (the caller checks the read count
+// first).
+func (s *metadataStream) trailer() []byte { return s.last[:] }
+
 // ReadByte serves one payload byte (flate.Reader contract). Counting here
-// and in Read keeps the post-inflate check exact: flate consumes the source
-// directly without buffering, so bytes between the final DEFLATE block and
-// the Adler-32 trailer are never read and the count falls short.
+// and in Read keeps the post-inflate check exact: flate consumes the
+// source directly without buffering, so bytes between the final DEFLATE
+// block and the Adler-32 trailer are never read and the count falls short.
 func (s *metadataStream) ReadByte() (byte, error) {
 	if s.err != nil {
 		return 0, s.err
@@ -193,18 +256,10 @@ func (s *metadataStream) ReadByte() (byte, error) {
 				s.err = io.ErrUnexpectedEOF
 				return 0, s.err
 			}
-			page, err := s.page(s.next)
-			if err != nil {
-				s.err = err
-				return 0, err
+			s.visitNext()
+			if s.err != nil {
+				return 0, s.err
 			}
-			chunk, err := format.DecodeMetadataChunk(page)
-			if err != nil {
-				s.err = err
-				return 0, err
-			}
-			s.view = chunk.Data
-			s.next = chunk.Next
 		}
 		v := s.view
 		if s.skip > 0 {
@@ -233,18 +288,10 @@ func (s *metadataStream) Read(p []byte) (int, error) {
 			if s.next == 0 {
 				break
 			}
-			page, err := s.page(s.next)
-			if err != nil {
-				s.err = err
+			s.visitNext()
+			if s.err != nil {
 				break
 			}
-			chunk, err := format.DecodeMetadataChunk(page)
-			if err != nil {
-				s.err = err
-				break
-			}
-			s.view = chunk.Data
-			s.next = chunk.Next
 		}
 		v := s.view
 		if s.skip > 0 {

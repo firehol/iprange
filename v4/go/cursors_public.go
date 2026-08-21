@@ -6,6 +6,7 @@
 package iprangedb
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
@@ -27,6 +28,9 @@ type DirectCursorV4 struct {
 func (r *ImmutableReader) DirectCursorV4(direction RangeDirection) (*DirectCursorV4, error) {
 	if err := r.checkOpen(); err != nil {
 		return nil, err
+	}
+	if r.inner.Meta().ValueKind != format.ValueKindDirect {
+		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct cursor requires a direct-value database"}
 	}
 	if r.inner.Meta().AddressFamily != 4 {
 		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "range cursor address family does not match the database"}
@@ -73,6 +77,9 @@ type DirectCursorV6 struct {
 func (r *ImmutableReader) DirectCursorV6(direction RangeDirection) (*DirectCursorV6, error) {
 	if err := r.checkOpen(); err != nil {
 		return nil, err
+	}
+	if r.inner.Meta().ValueKind != format.ValueKindDirect {
+		return nil, &Error{Code: ErrorWrongValueKind, Detail: "direct cursor requires a direct-value database"}
 	}
 	if r.inner.Meta().AddressFamily != 6 {
 		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "range cursor address family does not match the database"}
@@ -164,6 +171,9 @@ func (r *ImmutableReader) FeedRangeCursorV4(name string, direction RangeDirectio
 	if err := r.requireMembershipCapable(); err != nil {
 		return nil, err
 	}
+	if r.inner.Meta().AddressFamily != 4 {
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "feed cursor address family does not match the database"}
+	}
 	entry, found, err := r.LookupFeed(name)
 	if err != nil {
 		return nil, err
@@ -209,6 +219,9 @@ func (r *ImmutableReader) FeedRangeCursorV6(name string, direction RangeDirectio
 	}
 	if err := r.requireMembershipCapable(); err != nil {
 		return nil, err
+	}
+	if r.inner.Meta().AddressFamily != 6 {
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "feed cursor address family does not match the database"}
 	}
 	entry, found, err := r.LookupFeed(name)
 	if err != nil {

@@ -561,7 +561,7 @@ func TestPublishSetSelectionErrors(t *testing.T) {
 	token := NewCancellationToken()
 	token.Cancel()
 	_, err = helpers.alg.PublishSet(publishDest(t, "d.iprdb"), tag, operationAllUnion(), mode, nil, PolicyFailIfExists, outputBudget(), token)
-	requireDetail(t, err, "operation cancelled")
+	requireDetail(t, err, "operation was cancelled")
 
 	// Closed algebra source refuses the operation with the reader
 	// wrong-state class (every post-close reader operation reports

@@ -95,9 +95,8 @@ func MaxLeafSize(codec Codec) int {
 // codec's record-length bounds, and only the branch WRITE hooks dispatch
 // through the interface (partial records and keys, exactly like the
 // approved Codec methods). No page view ever dispatches through this
-// interface: the content-transfer gate fails closed on unprovable
-// receivers with complete pages, and the concrete read keeps the record
-// slices provably partial.
+// interface: the concrete read keeps the record slices provably partial
+// and never hands the tree core a complete page.
 type VariableCodec interface {
 	Codec
 	// MaxBranchCell is the largest encoded branch cell (Rust

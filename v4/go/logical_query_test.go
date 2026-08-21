@@ -581,9 +581,37 @@ func TestLogicalCursorsClosedReader(t *testing.T) {
 // created database (all roots zero) opens cursors that iterate zero
 // records instead of refusing with corruption (fixed_tree
 // cursor:unpositioned finished = root == 0; feed_catalog FeedCursor
-// finished = catalog_index_root == 0).
+// finished = catalog_index_root == 0). The kind gates from
+// generation.rs still apply: direct cursors need a direct database,
+// feed cursors need a membership database, so each half uses the kind
+// it drives.
 func TestEmptyDatabaseCursors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty-membership.iprdb")
+	dir := t.TempDir()
+
+	// Direct range cursors in both directions are empty, not corrupt.
+	directPath := filepath.Join(dir, "empty-direct.iprdb")
+	if _, err := Create(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
+		t.Fatal("create direct:", err)
+	}
+	directDB, err := OpenImmutable(directPath)
+	if err != nil {
+		t.Fatal("open direct:", err)
+	}
+	for _, direction := range []RangeDirection{RangeDirectionForward, RangeDirectionBackward} {
+		cur, err := directDB.DirectCursorV4(direction)
+		if err != nil {
+			t.Fatalf("direct cursor %v on an empty database: %v", direction, err)
+		}
+		if _, ok, err := cur.NextRange(); err != nil || ok {
+			t.Fatalf("direct cursor %v on an empty database: ok=%v err=%v", direction, ok, err)
+		}
+	}
+	if err := directDB.Close(); err != nil {
+		t.Fatal("close direct:", err)
+	}
+
+	// The membership catalog feed cursor is empty, not corrupt.
+	path := filepath.Join(dir, "empty-membership.iprdb")
 	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}); err != nil {
 		t.Fatal("create:", err)
 	}
@@ -593,18 +621,6 @@ func TestEmptyDatabaseCursors(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Direct range cursors in both directions are empty, not corrupt.
-	for _, dir := range []RangeDirection{RangeDirectionForward, RangeDirectionBackward} {
-		cur, err := db.DirectCursorV4(dir)
-		if err != nil {
-			t.Fatalf("direct cursor %v on an empty database: %v", dir, err)
-		}
-		if _, ok, err := cur.NextRange(); err != nil || ok {
-			t.Fatalf("direct cursor %v on an empty database: ok=%v err=%v", dir, ok, err)
-		}
-	}
-
-	// The catalog feed cursor is empty, not corrupt.
 	fc, err := db.FeedCursor()
 	if err != nil {
 		t.Fatal("feed cursor:", err)

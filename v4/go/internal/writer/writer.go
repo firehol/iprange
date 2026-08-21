@@ -72,6 +72,15 @@ func (c *Core) requireHealthy() error {
 	return nil
 }
 
+// MarkUnresolved brands the core unusable after a failed abandonment
+// discard (Rust abort_after_source State::Unusable): the draft state is
+// unknown, so every mutating entry point fails closed until Close.
+func (c *Core) MarkUnresolved(err error) {
+	c.draft = nil
+	c.unprovedTailEnd = nil
+	c.unresolved = err
+}
+
 // OpenWriter maps path read-write under the exclusive lifetime lock and
 // selects the committed generation with the writer rule, mirroring Rust
 // WriterCore::map_writer (database_file.rs map_writer): a read-write

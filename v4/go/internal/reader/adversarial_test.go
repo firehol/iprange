@@ -323,6 +323,62 @@ func TestOversizedBasenameRejected(t *testing.T) {
 	}
 }
 
+// auditNameFold: the reserved-basename matches are byte-wise
+// ASCII-case-insensitive, exactly like Rust eq_ignore_ascii_case
+// (path.rs validate_posix_name). A non-ASCII spelling that Unicode case
+// folding would map onto the reserved suffix (U+017F LATIN SMALL LETTER
+// LONG S folds to "s") is accepted, so the Go reader refuses neither
+// more nor fewer names than Rust.
+func TestUnicodeFoldBasenameAccepted(t *testing.T) {
+	dir := t.TempDir()
+	name := "db.reader\u017f" // Unicode long s; strings.ToLower maps it to "s"
+	dst := filepath.Join(dir, name)
+	data, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Skipf("filesystem rejects the test name itself: %v", err)
+	}
+	r, err := OpenImmutable(dst)
+	if err != nil {
+		t.Fatalf("open refused a basename Rust accepts (ASCII-only fold): %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The ASCII spellings of the reserved names still refuse, including
+	// mixed case (ASCII-only fold).
+	for _, reserved := range []string{".IpRange-x", "name.READERS"} {
+		dst := filepath.Join(dir, reserved)
+		data, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0o600); err != nil {
+			t.Skipf("filesystem rejects the test name itself: %v", err)
+		}
+		if _, err := OpenImmutable(dst); err == nil {
+			t.Fatalf("open accepted reserved basename %q", reserved)
+		}
+	}
+}
+
+// auditNulName: a NUL byte in the basename is rejected up front with the
+// typed invalid-argument error, like Rust validate_posix_name, not
+// reported later as an I/O failure.
+func TestNulBasenameRejected(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "db\u0000.iprdb")
+	_, err := OpenImmutable(dst)
+	if err == nil {
+		t.Fatal("open accepted a NUL basename")
+	}
+	if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeInvalidArgument {
+		t.Fatalf("NUL basename class = %T %v, want CodeInvalidArgument", err, err)
+	}
+}
+
 // auditNameBranchBelowFirstKey: a target lexicographically below the first
 // branch key is absent, never corruption.
 func TestNameBranchBelowFirstKeyAbsent(t *testing.T) {

@@ -10,6 +10,7 @@ package iprangedb
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
@@ -228,6 +229,19 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
 	}
+	// Capture the attempt-file identity from the builder's own
+	// descriptor: every later Discard is identity-guarded (Rust
+	// CreatedOutput::create_with binds cleanup to the created inode).
+	if device, inode, idErr := builder.FileIdentity(); idErr != nil {
+		closeErr := builder.Close()
+		cleanup := attempt.Discard()
+		if closeErr != nil {
+			idErr = mergeErrors(idErr, closeErr)
+		}
+		return zero, &AlgebraPreparationFailure{Cause: publicError(idErr), Cleanup: cleanup}
+	} else {
+		attempt.SetFileIdentity(device, inode)
+	}
 	discarded := func(cause error) (AlgebraSetResult, error) {
 		// Rust drops the mapped writer in every path; Go must release the
 		// exclusive lifetime lock before the caller can reopen the
@@ -318,9 +332,10 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 }
 
 // mergeErrors keeps the primary cause of a failed publication and
-// attaches a cleanup-side close error as the secondary. It is hand-rolled
-// instead of errors.Join so the primary stays first for errors.As/Is
-// traversal (errors.Join would wrap the pair as a joined list).
+// attaches a cleanup-side close error as the secondary. A single
+// fmt.Errorf %w reproduces the Rust shape exactly: the primary stays the
+// errors.As/Is/Unwrap target with the secondary present in the message
+// only.
 func mergeErrors(primary, secondary error) error {
 	if primary == nil {
 		return secondary
@@ -328,21 +343,8 @@ func mergeErrors(primary, secondary error) error {
 	if secondary == nil {
 		return primary
 	}
-	return &mergedError{primary: primary, secondary: secondary}
+	return fmt.Errorf("%w; %v", primary, secondary)
 }
-
-// mergedError is the two-error value of mergeErrors; Unwrap reports the
-// primary so errors.As/Is keep the original failure class.
-type mergedError struct {
-	primary   error
-	secondary error
-}
-
-func (e *mergedError) Error() string {
-	return e.primary.Error() + "; " + e.secondary.Error()
-}
-
-func (e *mergedError) Unwrap() error { return e.primary }
 
 // setOperation converts one public operation into the reader operation
 // (Rust FeedName::new parity: invalid selection names fail before the

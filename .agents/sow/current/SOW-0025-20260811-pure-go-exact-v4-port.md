@@ -59,23 +59,61 @@ ENTIRE Go codebase, file by file - two hunt complete-page copies into or
 out of the mmap, two hunt file I/O on persistent content outside the mmap.
 Every .go file, every build-tagged variant, tests included.
 
-### Status (2026-08-21)
+### Status (2026-08-21) - slice 3 close gate: five-aspect review executed, findings fixed, re-review pending
 
-- M3 chunk-3b-2 slice 3 (publish_set surface) is at the close gate;
-  implementation and functional validation are complete at HEAD 6ded376
-  (go test both tag sets, -race, vet, gofmt, 5-OS cross-builds, Rust
-  cargo test, zero-allocation and conformance suites green).
-- Level-1 five-aspect review: all PASS at 6ded376. Level-2: minimax PASS,
-  mimo PASS; glm unavailable (context overflow), kimi unavailable
-  (unresponsive) - reduced coverage reported to the user.
-- The close gate for this slice is the four-reviewer full-codebase review
-  (page-copy x2, file-I/O x2); findings, if any, are fixed before close.
+- M3 chunk-3b-2 slice 3 (publish_set surface) is at the close gate. The
+  single-level five-aspect review above ran at HEAD 2a5e78e with the Rust
+  implementation as the mandatory baseline; all five reviewers returned
+  findings (none P0): Pauli (Rust parity) FAIL - three P1 publish
+  classification gaps plus two P2; Hume (Go idioms) FAIL - fourteen stale
+  gate-era comments plus three hand-rolled error-type chains; Aristotle
+  (performance) FAIL - two P2 hot-path items (per-cell leaf re-validation,
+  metadata two-pass decode); Aquinas (wire/integrity) PASS with one P2
+  (Unicode-vs-ASCII fold in the reader reserved-name check); Ohm
+  (APIs/docs) FAIL - two P1 cursor gate gaps plus one P2 (abortAfter code
+  class, stale Validation records).
+- All findings are fixed with this entry:
+  - publish classification matches Rust: rename-refusal is
+    PublicationOutcomeUnknown with the attempt retained (attempt.rs
+    outcome_unknown); fail-if-exists twin checks and the replace-policy
+    early custody checks (missing destination, foreign twin preserved,
+    proven single-link attempt, identity-guarded discard) mirror
+    publication/replacement.rs and reservation_file.rs; attempt names
+    are hex-encoded;
+  - file identity capture (FileIdentity via fstat) proves attempt
+    custody before publish and discard;
+  - error-type consolidation: join/merge error chains are single
+    fmt.Errorf wraps with the close-failure cause appended;
+  - abortAfter with unresolved state maps to CodeCleanupInProgress (77),
+    nested under the abort error exactly like Rust CleanupIncomplete
+    (sdk_error.rs);
+  - the stale gate-era comment vocabulary is purged from production
+    sources (zero non-test hits);
+  - reserved-name checks use ASCII-only folding with NUL rejection from
+    the shared internal/format/name.go authority (Rust path.rs);
+  - cursor constructors gate kind and family at open with Rust-exact
+    error strings, pinned by cursors_gate_test.go;
+  - metadata decoding is single-pass: the chain is validated on the same
+    visit that feeds the inflater, capped at 5,182 pages (Rust MAX_PAGES);
+  - treeCursor caches the validated leaf (Rust Cursor::leaf); the
+    necessary-work pins moved with the measured reduction (catalog 71 ->
+    2, direct 4 -> 2, projection 7 -> 5 page visits; LeafValidation
+    counts unchanged).
+- Validation after the fixes: go test ./... both tag sets, -race (both),
+  vet, gofmt, 5-OS cross-builds (linux/darwin/freebsd/netbsd/windows)
+  all green; full suite ~9 s, niced. Rust tree unchanged.
+- Delta re-review is in progress with the same five reviewers; the slice
+  closes only when all five report no P0-P2.
 - M3 record (compact): chunk 1 - reader correctness fixes; chunk 2 - joins
   and aggregation with the zero-membership-ID fix; chunk 3a - read-side
   algebra; chunk 3b-1 - tree variable; chunk 3b-2 slices 1-3 - output
-  machinery and the publish_set writer surface, slice 3 at close. The
-  detailed per-round narratives were purged with this entry; they remain
-  in git history.
+  machinery and the publish_set writer surface, slice 3 at close.
+- Superseded pre-rules gates: at 6ded376 the previous level-1 five-aspect
+  arrangement reported all PASS with a reduced level-2 quorum (minimax,
+  mimo), and the four-reviewer full-codebase mmap/file-I/O gate PASSed at
+  2a5e78e (record below); the single-level five-aspect rules at the top
+  of this SOW supersede both, and the five-aspect re-review at 2a5e78e
+  found the failures listed above.
 
 ### 2026-08-21 - close gate: four-reviewer full-codebase review (PASS, one P1 fixed)
 
@@ -2952,188 +2990,106 @@ Use these sections in this order:
 
 Acceptance criteria evidence:
 
-- Milestone 1 evidence: milestone report
-  `.agents/sow/pending/pure-go-v4-port-milestone-1-report.md` (fixture
-  cross-open with exact cases.json semantics, malformed rejection, literal
-  codec vectors, zero-allocation measurements incl. the blob path, review
-  rounds 1-3 with all P0-P2 findings fixed and regression-pinned).
-  Milestone 2 not started.
+- Milestone 1 (immutable reader): CLOSED (final check 2026-08-17, HEAD
+  4f11e3d; re-closed after the 2026-08-14 external-review rework whose
+  three verified findings - duplicated search loops, overgrown gate
+  machinery, stale records - were all fixed and pinned). Milestone 2
+  (writer core) is implemented; Milestone 3 is in progress: chunks
+  1-3b-2 slice 3 are implemented; slice 3 is at its five-aspect close
+  gate (Status entry above).
+- Slice-3 evidence: single-level five-aspect adversarial review at HEAD
+  2a5e78e with the Rust implementation as the mandatory baseline; all
+  findings fixed (Status entry above); delta re-review pending with the
+  same five reviewers.
 
 Tests or equivalent validation:
 
-- `go test ./...` (5 packages: root, format, reader, mapping, work) — green at the last commit.
-- `go test -race ./internal/format ./internal/reader ./internal/mapping .` — green.
-- `go vet ./...` — clean; `gofmt -l .` — empty.
-  gate (v4/go-gate, stdlib only): banned imports/selectors and the
-  `*os.File` capability surface, with the in-memory inflater call sites
-  runs in a private temp copy and never modifies the reviewed tree.
-- Cross-compilation: linux amd64/386/arm/arm64/loong64, darwin
-  amd64/arm64, freebsd amd64, netbsd amd64, windows amd64/arm64 (the
-  gate's per-target listing matrix) — all build.
-- Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3 invalid
-  mutations rejected with code 32; structured absence probes added.
-- `.agents/sow/audit.sh` — clean.
+- `go test ./...` (all packages, default tag set) - green.
+- `go test -tags v4work ./...` (necessary-work counters and fault hooks
+  compiled in) - green.
+- `go test -race ./...` and `go test -race -tags v4work ./...` - green.
+- `go vet ./...` - clean; `gofmt -l .` - empty.
+- Cross-compilation: linux, darwin, freebsd, netbsd, windows (amd64) -
+  all build.
+- Conformance: 6/6 Rust fixtures cross-open with exact semantics; 3/3
+  invalid mutations rejected with the typed error; structured absence
+  probes included.
+- The mmap-only / file-I/O policy gate: the full-codebase four-reviewer
+  review PASSed at 2a5e78e with one P1 fixed (metadata streaming, record
+  in Status above); enforcement now lives in review aspect 2 plus
+  periodic full-codebase sweeps (Review Process, step 3). No scanner or
+  mutation corpus exists.
+- `.agents/sow/audit.sh` - clean.
+- Necessary-work counters: pinned in query_work_test.go against the
+  frozen fixtures; the pins moved with the leaf-cache reduction (Status
+  entry above).
 
 Real-use evidence:
 
 - The Rust peer has accepted representative update-ipsets replay evidence.
-  Equivalent Go evidence is an implementation acceptance requirement, not a
-  planning claim.
+  Equivalent Go evidence is an implementation acceptance requirement, not
+  a planning claim.
 
 Reviewer findings:
 
-- Six-agent adversarial review rounds 1-5 (2026-08-11/12, see execution
-  log): the pre-session gap-analysis pass found one real BLOCKER (structure
-  radix) and ten MAJOR findings, all repaired (58c4d8f); this session's
-  round 1 found no P0 but P1/P2 findings across all six aspects, all
-  repaired with regression tests; round 2 re-review caught a shipped P0
-  (blob coverage underflow, 3b4f3d5) and further P2s, all repaired and
-  pinned; rounds 3-5 closed with all six reviewers at PASS (0 P0-P2).
-  The review-process sweeps through the sixth round are recorded in the
-  gate execution record: the fifth sweep completed with all six narrow
-  reviewers at PASS (360130c); the sixth final review (sol round 14)
-  failed with five P2 findings in the mmap gate and the records, all
-  fixed in this pass with the AST gate rewrite (v4/go-gate), the
-  ratified (option A, 2026-08-13) after the user delegated the choice to
-  the implementing agent.
-  The round-44 re-verification then completed with all six narrow
-  reviewers at PASS (e5fea20); the round-45 final review failed with
-  three P2 mmap-gate findings (os.CopyFS, os.OpenInRoot/os.OpenRoot
-  handles, x/sys descriptor-transfer primitives), all fixed at the next
-  with form 252, and the producer-value P0s closed with forms 253-256;
-  gate re-review then closed bound method expressions and
-  same-module cross-package producer vars (forms 257-260, two
-  hundred ten forms); the round-49 gate re-review closed nested-
-  paren, renamed-import, alias-over-renamed, and wrapper-promoted
-  method expressions, value-bound cross-package producer vars, and
-  interface-conversion laundering of a file into the metadata
-  inflater exemption (forms 261-266, two hundred sixteen forms);
-  the round-50 gate re-review then closed the generic
-  identity-with-interface-result erasure, the composite-literal
-  field launder, the instantiated-generic-wrapper method
-  expression, and the deep embedding-chain method expression
-  (forms 267-270, two hundred twenty forms); re-verification at the
-  round-50 HEAD passed the full replay and gate suites.
-  The round-51 gate re-review then failed with seven live escapes
-  across three root causes: interface-erased generic results were
-  recognized only under the literal io qualifier (renamed imports,
-  io/fs interfaces, and chan sends of the erased value escaped),
-  container-of-type-parameter results ([]T, [2]T) never resolved to
-  file taint, and positional (unkeyed) composite-literal elements
-  registered no field taint (a plain file field and an os.Root
-  opener both laundered); closed at 875b192 by tainting every
-  declared result position of a file-bound generic call and by
-  resolving unkeyed literal elements through the struct's declared
-  field order, pinned as forms 271-277 and by converting the vacuous
-  separate-file forms 267-268 to exemption-shape metadata.go appends
-  (forms 269-270 were already genuine); the pre-fix scanner misses
-  exactly the seven new forms, the fixed scanner rejects all two
-  hundred twenty-seven.
-  The round-52 gate re-review then failed with four live escapes
-  across three root causes: embedded fields were registered by type
-  text while Go names them by type name, so positional io.Reader and
-  positional/keyed *os.Root wrapper literals left promoted handles
-  live; a variable bound to an explicit generic instantiation
-  (var a = wrap[*os.File]) erased container-result taint; anonymous
-  struct literals registered no positional order (x := struct{ r
-  io.Reader }{f}, and an anonymous struct embedding *os.Root with a
-  positional element); the continuation hunt then added twelve live
-  escapes across three more classes (elided inner composite
-  literals in slice, map, nested-container, and channel elements;
-  pointer composite literals; func-valued arguments to explicitly
-  instantiated generics); closed at 5acd2a6 by naming embedded
-  fields by type name, resolving var-bound instantiations through
-  the base generic's fixed arguments, resolving anonymous literal
-  order from the literal's own fields, escalating anonymous
-  embedded-handle wrappers, registering elided container element
-  fields by the element struct's declaration, unwrapping pointer
-  literals, and mounting the explicit-instantiation callee route,
-  integrity review also exposed forms 245-246 as never running the
-  gate (the env prefix expanded to a command name), fixed by
-  prefixing env in run_mut; the pre-fix scanner misses exactly the
-  eleven new forms, the fixed scanner rejects all two hundred
-  thirty-eight.
-  The round-53 final review then failed with two P2 findings: the
-  embed package and the //go:embed directive copy database bytes
-  into the binary at compile time, bypassing the mmap-only contract
-  (the AST gate banned neither the embed import - blank `_ "embed"`
-  imports are skipped as name-less - nor the directive, which was
-  scanned only for //go:linkname); closed at 2e0e3667db3c by banning the
-  embed import and rejecting every //go:embed directive in the
-  production scan, pinned as pre-fix-failing forms 289 (non-blank
-  embed import) and 290 (blank import with an embedded probe.db);
-  the pre-fix scanner misses exactly the two new forms, the fixed
-  scanner rejects all two hundred forty; the
-  NetworkEnrichmentV1Location pointer-vs-value deviation was ratified
-  as decision 5A (option A): value-plus-HasLocation is the documented
-  zero-allocation equivalent of Rust's Option<NetworkEnrichmentV1Location>.
-  The closed-state error class was resolved by decision 3 (WrongState
-  class, error-capable WordCount) and was never an open defect.
-
-  Final check (2026-08-17, HEAD 4f11e3d): full-scope five-resident swarm
-  under the Review Process step-5 boundary - glm, kimi, minimax, and mimo
-  PASS with no P0-P2 (independent adversarial sweeps of codec parity vs
-  the Rust authority, mapping/remap fail-closed states, pin lifetime,
-  per-target import boundaries, records); qwen skipped as unavailable;
-  sol and luna skipped (weekly quota); the final gate closed on the
-  available-resident quorum per user decision; reduced coverage reported
-  to the user. No findings to fix; no round restart.
+- Single-level five-aspect review, 2026-08-21 (HEAD 2a5e78e): five
+  reviewers, disjoint aspects, Rust authority baseline; verdicts FAIL x4
+  plus PASS-with-P2 x1; all findings fixed and validated (Status entry
+  above). Delta re-review is in progress with the same five reviewers;
+  the slice closes only when all five report no P0-P2.
+- The earlier milestone-1 gate rounds and the retired scanner-era form
+  narratives are preserved in git history and are not reproduced here;
+  their dated execution-log entries remain below.
 
 Same-failure scan:
 
-- Round-2 searches re-ran the full classes: content-transfer I/O (now also a
-  mechanical gate), complete page arrays, stale wire constants, missing
-  record-limit validation (catalog feed index), kind-classification error
-  classes, blob/probe validation gaps, metadata stream validation, report and
-  SOW factual drift. Each class is fixed completely, not only the cited
-  examples.
+- The publish-classification fixes cover every publication outcome path
+  (rename refusal, fail-if-exists, replace, discard, cleanup) and every
+  deliverable that reports a publication outcome; the error-type
+  consolidation covered all hand-rolled join chains in the writer; the
+  cursor gates cover both direct and feed-range constructors for both
+  address families; the ASCII fold is one shared authority used by
+  reader and writer; stale gate-era comment vocabulary has zero non-test
+  hits (grep-verified).
 
 Sensitive data gate:
 
 - This SOW contains repository-relative paths, public upstream identity,
   generic platform names, code metrics, and synthetic/public benchmark
-  descriptions only. It contains no raw secret, credential, operational host
-  alias, personal or customer/community data, private endpoint, or proprietary
-  incident detail.
+  descriptions only. It contains no raw secret, credential, operational
+  host alias, personal or customer/community data, private endpoint, or
+  proprietary incident detail.
 
 Artifact maintenance gate:
 
-- AGENTS.md: updated to register the generic final-review runtime skill.
-- Runtime project skills: added `project-final-review` after the first repeated
-  false PASS, then reframed it after the round-10 false PASS around one explicit
-  adversarial objective: prove the work should not merge. It now grants broad
-  investigative authority, requires concrete evidence, and defines PASS as a
-  failed full-scope disproof attempt. The Rust skill remains unchanged. A Go
-  implementation skill is still not invented here.
-- Specs: reviewed completely; no format or behavior change was made.
-- End-user/operator docs: unaffected; the milestone report is corrected as a
-  project record, not published product documentation.
+- AGENTS.md: unchanged; this SOW's review rules stand at the top of this
+  file per the user decision (SWARM.md is intentionally untouched).
+- Runtime project skills: project-final-review and project-v4-rust
+  unchanged; no new skill was needed for this round.
+- Specs: no format or behavior change was made; the v4 contract is
+  unchanged.
+- End-user/operator docs: v4/conformance/README.md corrected (compressed
+  metadata-chain size example); no other public document changed.
 - End-user/operator skills: none exist and no public workflow changed.
-- SOW lifecycle: this file remains `in-progress` under `current/`; Milestone 1
-  is CLOSED after the final check (2026-08-17, HEAD 4f11e3d) and re-closed
-  entry in Status above); Milestone 2 (writer) is authorized and in
+- SOW lifecycle: this file remains `in-progress` under `current/`;
+  Milestone 1 is closed, Milestone 2 is implemented, Milestone 3 is in
   progress; SOW-0017 remains the separate Phase-2 item.
 
 Specs update:
 
-- None for Milestone 1: the Go reader implements the current normative
-  contract unchanged.
+- None: the fixes align the Go implementation with already-normative
+  Rust behavior; nothing in the wire contract changed.
 
 Project skills update:
 
-- Updated `project-final-review` after the round-10 false PASS. The generic
-  workflow now makes fault discovery its explicit mission, requires reviewers
-  to understand the objective and blast radius, grants authority to examine any
-  relevant surface and build `/tmp` reproducers, requires proven findings, and
-  defines PASS as failure to prove a blocking defect after the strongest
-  plausible attacks. Repository modification, process interference, and
-  software installation/removal are forbidden. A Go implementation skill
-  remains deferred until proven commands and hazards exist later in this SOW.
+- None for this round; the review process itself is recorded in this
+  SOW's top rules per the user decision.
 
 End-user/operator docs update:
 
-- The round-2 repairs are recorded in the milestone report and this SOW log;
-  the Go SDK documentation itself is an implementation deliverable.
+- The Go SDK documentation is an implementation deliverable; the only
+  document corrected this round is v4/conformance/README.md (chain-size
+  example).
 
 End-user/operator skills update:
 
@@ -3145,11 +3101,14 @@ Lessons:
   current wire compatibility.
 - A semantic port needs an explicit parity matrix and cross-language
   execution; source similarity is neither required nor sufficient.
-- The most dangerous way to port this engine is to preserve the obsolete Go
-  storage architecture because it already looks substantial.
-- Single-reviewer passes converge; only adversarial multi-agent passes with
-  disjoint briefs found the catalog-limit, kind-class, dangling-reference,
-  FreeBSD, and paperwork defects.
+- The most dangerous way to port this engine is to preserve the obsolete
+  Go storage architecture because it already looks substantial.
+- Single-reviewer passes converge; only adversarial multi-agent passes
+  with disjoint briefs found the catalog-limit, kind-class,
+  dangling-reference, FreeBSD, and paperwork defects.
+- Necessary-work pins are part of the code under review: when a
+  performance fix legitimately reduces page visits, the pins move with
+  the measured reduction, never the other way around.
 
 Follow-up mapping:
 
@@ -3158,7 +3117,10 @@ Follow-up mapping:
 
 ## Outcome
 
-Pending implementation and user acceptance.
+Milestone 1 (immutable reader) is closed. Milestone 2 (writer core) is
+implemented. Milestone 3 is in progress: chunks 1-3b-2 slice 3 are
+implemented and at the five-aspect review close gate. SOW completion
+remains pending final validation and user acceptance.
 
 ## Lessons Extracted
 

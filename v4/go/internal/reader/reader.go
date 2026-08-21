@@ -119,7 +119,7 @@ func sidecarAbsentUnderLock(clean string) error {
 // sidecarPath returns the canonical external sidecar component: the accepted
 // main basename plus lowercase ".readers".
 func sidecarPath(clean string) string {
-	return filepath.Join(filepath.Dir(clean), filepath.Base(clean)+".readers")
+	return filepath.Join(filepath.Dir(clean), filepath.Base(clean)+format.CoordinationSuffix)
 }
 
 // namespaceChecks applies the section-3 basename rules and the sidecar
@@ -131,13 +131,19 @@ func namespaceChecks(path string) error {
 	if base == "." || base == string(filepath.Separator) {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "no basename"}
 	}
-	lower := strings.ToLower(base)
-	if strings.HasPrefix(lower, ".iprange-") || strings.HasSuffix(lower, ".readers") {
+	if strings.IndexByte(base, 0) >= 0 {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "basename contains NUL"}
+	}
+	// The reserved matches are byte-wise ASCII-case-insensitive (Rust
+	// eq_ignore_ascii_case, path.rs validate_posix_name); Unicode folding
+	// is not applied, so spellings Rust accepts are accepted here too.
+	if format.AsciiFoldHasPrefix(base, format.ReservedBasenamePrefix) ||
+		format.AsciiFoldHasSuffix(base, format.CoordinationSuffix) {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "reserved basename"}
 	}
 	// The canonical sidecar (main + ".readers") must fit the target
 	// filesystem component limit (POSIX NAME_MAX).
-	if len(base)+len(".readers") > 255 {
+	if len(base)+len(format.CoordinationSuffix) > 255 {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "canonical sidecar name exceeds component limit"}
 	}
 	return nil

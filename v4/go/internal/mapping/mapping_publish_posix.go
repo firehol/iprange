@@ -12,9 +12,11 @@ import (
 
 // FreeBSD and NetBSD have no atomic name-exchange primitive in the
 // pinned x/sys surface: the exchange policies refuse (Rust
-// require_exchange_available), while the no-replace pre-check, the
-// plain replacement, and the directory sync keep working. Builds are
-// verified by the per-target gate scan.
+// require_exchange_available), and rename-no-replace is unavailable
+// too, so PolicyFailIfExists publications always refuse on these
+// targets (failing closed: there is no overwrite race). The plain
+// replacement and the retained-directory sync keep working. Builds are
+// verified by the cross-compile matrix.
 
 // ExchangeAvailable reports whether the target has an atomic name
 // exchange (Rust require_exchange_available: linux and apple only).

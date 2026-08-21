@@ -18,8 +18,8 @@ operation yet - Go writes the compact main file directly):
 - `rust/first-seen-ipv6.iprdb`: full IPv6 first-seen coverage and empty metadata;
 - `rust/membership-ipv4.iprdb`: 70 named feeds, index reuse, and memberships
   crossing the 64-bit boundary;
-- `rust/membership-ipv6.iprdb`: full IPv6 membership and a 1 MiB compressed
-  metadata payload;
+- `rust/membership-ipv6.iprdb`: full IPv6 membership and a 1 MiB uncompressed
+  metadata payload (a 1039-byte compressed chain on disk);
 - `rust/structured-ipv4.iprdb`: typed network enrichment, named threat feeds,
   arrival-order overwrites, clearing, lazy membership, and exact metadata;
 - `rust/structured-ipv4-nothreat.iprdb`: structured values without threat

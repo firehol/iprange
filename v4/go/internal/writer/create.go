@@ -11,6 +11,7 @@
 package writer
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/fault"
@@ -63,7 +64,7 @@ func Create(path string, family, kind, structure uint8, valueTag [16]byte, check
 			// Keep the primary failure reachable through Unwrap and
 			// surface the cleanup failure too (Rust cleanup absorbs and
 			// reports both sides of a failed create).
-			return Created{}, joinError{text: err.Error() + "; close failed: " + closeErr.Error(), cause: err}
+			return Created{}, fmt.Errorf("%w; close failed: %v", err, closeErr)
 		}
 		return Created{}, err
 	}
@@ -73,18 +74,6 @@ func Create(path string, family, kind, structure uint8, valueTag [16]byte, check
 	}
 	return Created{DatabaseID: databaseID, CommitNonce: nonce}, nil
 }
-
-// joinError preserves the primary cause while recording a failing
-// cleanup, without formatting an interface-typed error through fmt (the
-// gate treats an interface error value as a possible page carrier).
-type joinError struct {
-	text  string
-	cause error
-}
-
-func (e joinError) Error() string { return e.text }
-
-func (e joinError) Unwrap() error { return e.cause }
 
 // writeEmptyMeta encodes the identical meta into both meta pages through
 // the mapping and flushes and syncs the pair (Rust write_empty).

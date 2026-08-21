@@ -25,8 +25,8 @@ type rangeFamily interface {
 	// Previous returns key-1 in the family address space, when it exists.
 	Previous(key tree.Key) (tree.Key, bool)
 	// EncodeRecord writes one range record into output (record size bytes)
-	// (Rust RangeCodec::encode; Encode itself is a banned content-transfer
-	// selector name, and this method takes an owned output buffer).
+	// (Rust RangeCodec::encode; the Go method takes an owned output buffer
+	// so no record write can ever target a mapped view).
 	EncodeRecord(r rangeRecord, output []byte) (int, error)
 }
 

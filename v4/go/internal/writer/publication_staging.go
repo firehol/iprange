@@ -9,6 +9,7 @@ package writer
 
 import (
 	"crypto/sha512"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +28,12 @@ const (
 	PolicyReplaceExistingNoRollback
 )
 
-// CleanupState reports whether an abandoned attempt artifact was
-// provably removed (Rust CleanupState).
+// CleanupState reports the attempt-artifact state after one publication
+// attempt exactly like Rust CleanupState: Clean means either the artifact
+// was provably removed or nothing needed removal (Rust outcome_unknown
+// retains the private output as recovery residue and still reports
+// Clean); ResiduePossible means removal was attempted but could not be
+// proved.
 type CleanupState uint8
 
 const (
@@ -85,7 +90,7 @@ func (f *PublicationPreparationFailure) Unwrap() error {
 // PublicationResult is the factual outcome of one publish call (Rust
 // PublicationResult). A refusal or unprovable outcome still returns a
 // result: Status and Cause classify it, and Cleanup reports the state
-// of the discarded attempt.
+// of the attempt artifact exactly like Rust CleanupState (see above).
 type PublicationResult struct {
 	Status             PublicationStatus
 	DestinationContent DestinationContent
@@ -102,6 +107,13 @@ type OutputAttempt struct {
 	name        string
 	dirDevice   uint64
 	dirInode    uint64
+	// fileDevice/fileInode are the captured identity of the attempt file
+	// (Rust bind/verify_name: cleanup discard is identity-guarded, so an
+	// unlink can never remove a path that no longer names the file the
+	// builder created).
+	fileDevice uint64
+	fileInode  uint64
+	fileProven bool
 }
 
 // Destination returns the publication destination path.
@@ -118,6 +130,16 @@ func (a *OutputAttempt) Name() string { return a.name }
 // device+inode (Rust directory_identity).
 func (a *OutputAttempt) DirectoryIdentity() (device uint64, inode uint64) {
 	return a.dirDevice, a.dirInode
+}
+
+// SetFileIdentity records the attempt file's captured device+inode from
+// the output builder's own descriptor (Rust CreatedOutput::create_with
+// captures the identity at creation; verifyCustody refreshes it from a
+// path probe before publish).
+func (a *OutputAttempt) SetFileIdentity(device, inode uint64) {
+	a.fileDevice = device
+	a.fileInode = inode
+	a.fileProven = true
 }
 
 // AttemptPath returns the attempt file path inside the destination
@@ -139,30 +161,9 @@ const (
 func attemptName(attemptID [16]byte) string {
 	var name [attemptNameLength]byte
 	copy(name[:], attemptPrefix)
-	hex := attemptHex(attemptID)
-	copy(name[len(attemptPrefix):len(attemptPrefix)+attemptHexChars], hex[:])
+	hex.Encode(name[len(attemptPrefix):len(attemptPrefix)+attemptHexChars], attemptID[:])
 	copy(name[len(attemptPrefix)+attemptHexChars:], attemptSuffix)
 	return string(name[:])
-}
-
-// attemptHex encodes the 16 attempt bytes as 32 lowercase hex
-// characters (Rust artifact_name::write_attempt). The destination is a
-// local fixed array, never a caller slice: the source bytes are read
-// by index from the fixed caller array and never leave it.
-func attemptHex(attemptID [16]byte) [32]byte {
-	var hex [32]byte
-	for index := 0; index < len(attemptID); index++ {
-		hex[2*index] = nibble(attemptID[index] >> 4)
-		hex[2*index+1] = nibble(attemptID[index] & 0x0f)
-	}
-	return hex
-}
-
-func nibble(value byte) byte {
-	if value < 10 {
-		return '0' + value
-	}
-	return 'a' + value - 10
 }
 
 // invalidDestinationName mirrors Rust path::validate_main_name: one
@@ -176,10 +177,10 @@ func invalidDestinationName(name string) bool {
 	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
 		return true
 	}
-	if asciiFoldHasPrefix(name, ".iprange-") {
+	if format.AsciiFoldHasPrefix(name, format.ReservedBasenamePrefix) {
 		return true
 	}
-	if asciiFoldHasSuffix(name, coordinationSuffix) {
+	if format.AsciiFoldHasSuffix(name, format.CoordinationSuffix) {
 		return true
 	}
 	return false
@@ -190,46 +191,6 @@ func invalidDestinationName(name string) bool {
 // darwin, freebsd, and netbsd filesystems). The Windows stub refuses
 // opens, so no Windows bound is needed.
 const destinationNameMax = 255
-
-// coordinationSuffix is the reader-coordination twin suffix the
-// publication namespace reserves (Rust platform::destination_names).
-const coordinationSuffix = ".readers"
-
-// asciiFoldLower folds one ASCII byte to lowercase (Rust
-// eq_ignore_ascii_case).
-func asciiFoldLower(value byte) byte {
-	if 'A' <= value && value <= 'Z' {
-		return value + 'a' - 'A'
-	}
-	return value
-}
-
-// asciiFoldHasPrefix reports an ASCII-case-insensitive prefix match.
-func asciiFoldHasPrefix(s, prefix string) bool {
-	if len(s) < len(prefix) {
-		return false
-	}
-	for index := range len(prefix) {
-		if asciiFoldLower(s[index]) != prefix[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// asciiFoldHasSuffix reports an ASCII-case-insensitive suffix match.
-func asciiFoldHasSuffix(s, suffix string) bool {
-	if len(s) < len(suffix) {
-		return false
-	}
-	offset := len(s) - len(suffix)
-	for index := range len(suffix) {
-		if asciiFoldLower(s[offset+index]) != suffix[index] {
-			return false
-		}
-	}
-	return true
-}
 
 // CreateAttempt validates the destination and names one publication
 // attempt (Rust workflow::create + CreatedOutput::create_with):
@@ -256,7 +217,7 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 	// .readers coordination twin must both fit the directory name bound;
 	// an overlong basename refuses here with the name error instead of
 	// failing at the rename with a generic IO class.
-	if len(name) > destinationNameMax || len(name)+len(coordinationSuffix) > destinationNameMax {
+	if len(name) > destinationNameMax || len(name)+len(format.CoordinationSuffix) > destinationNameMax {
 		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := filepath.Dir(clean)
@@ -278,7 +239,7 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 		// contract, and the immutable reader refuses a published
 		// database next to a sidecar. Replace policies never check
 		// absence (Rust workflow::create uses create() for those).
-		for _, candidate := range []string{clean, clean + coordinationSuffix} {
+		for _, candidate := range []string{clean, clean + format.CoordinationSuffix} {
 			if _, err := os.Lstat(candidate); err == nil {
 				return nil, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
 			} else if !os.IsNotExist(err) {
@@ -304,10 +265,15 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 }
 
 // Discard removes an abandoned attempt file (Rust
-// cleanup::discard_attempt/discard_created): exact-name unlink plus
-// the retained-directory sync. Clean is returned only when the attempt
-// name provably no longer exists; any unprovable or failed step is
-// ResiduePossible.
+// cleanup::discard_attempt/discard_created): exact-name unlink plus the
+// retained-directory sync. The unlink is identity-guarded (Rust binds
+// the cleanup to the captured identity): when the attempt identity was
+// captured, a path that no longer names the created file - a replaced
+// entry or a directory entry bound to a different inode - is left
+// untouched. The link count is a custody proof, not a cleanup blocker:
+// with the identity still bound, the exact-name unlink proceeds exactly
+// like Rust. Clean is returned only when the attempt name provably no
+// longer exists; any unprovable or failed step is ResiduePossible.
 func (a *OutputAttempt) Discard() CleanupState {
 	path := a.AttemptPath()
 	fi, err := os.Lstat(path)
@@ -319,6 +285,11 @@ func (a *OutputAttempt) Discard() CleanupState {
 	}
 	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
 		return CleanupStateResiduePossible
+	}
+	if a.fileProven {
+		if device, inode, statErr := mapping.StatIdentity(path); statErr != nil || device != a.fileDevice || inode != a.fileInode {
+			return CleanupStateResiduePossible
+		}
 	}
 	if err := mapping.Unlink(path); err != nil {
 		return CleanupStateResiduePossible
@@ -333,9 +304,12 @@ func (a *OutputAttempt) Discard() CleanupState {
 // custody verify, SHA-512 digest over the finished mapping through
 // mapped views only, finish sync, the policy rename, and the retained
 // directory sync. Failures before the rename discard the attempt and
-// return *PublicationPreparationFailure; rename refusals and unprovable
-// outcomes return a result with Cause and the discarded-attempt cleanup
-// state, mirroring the Rust result classification.
+// return *PublicationPreparationFailure (Rust Early). A rename refusal
+// or unprovable outcome returns a result: outcome_unknown retains the
+// private attempt artifact (Rust recovery residue) and reports Clean;
+// the fail-if-exists coordination twin refusal reports NotPublished and
+// discards the attempt. All classifications mirror the Rust result
+// surface (attempt.rs from_armed/not_published/outcome_unknown).
 func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy) (*PublicationResult, error) {
 	if !b.finished {
 		return nil, &PublicationPreparationFailure{
@@ -360,6 +334,27 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 			Cleanup: attempt.Discard(),
 		}
 	}
+	// Rust requires the fail-if-exists coordination twin absent at the
+	// reservation step (reservation_file.rs: a foreign .readers file is
+	// preserved and the attempt is discarded): a twin appearing between
+	// CreateAttempt and Publish is the NotPublished/NameExists
+	// classification, never a publication next to a live sidecar.
+	if policy == PolicyFailIfExists {
+		if _, statErr := os.Lstat(attempt.destination + format.CoordinationSuffix); statErr == nil {
+			content := DestinationContentAbsent
+			if _, mainErr := os.Lstat(attempt.destination); mainErr == nil {
+				content = DestinationContentUnclassified
+			}
+			return &PublicationResult{
+				Status:             PublicationNotPublished,
+				DestinationContent: content,
+				Cleanup:            attempt.Discard(),
+				Cause:              &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"},
+			}, nil
+		} else if !os.IsNotExist(statErr) {
+			return nil, &PublicationPreparationFailure{Cause: statErr, Cleanup: attempt.Discard()}
+		}
+	}
 	source := attempt.AttemptPath()
 	switch policy {
 	case PolicyFailIfExists:
@@ -370,14 +365,14 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 		err = mapping.RenamePlain(source, attempt.destination)
 	}
 	if err != nil {
-		content := DestinationContentUnclassified
-		if _, statErr := os.Lstat(attempt.destination); statErr != nil && os.IsNotExist(statErr) {
-			content = DestinationContentAbsent
-		}
+		// Any rename refusal before the destination provably held the
+		// output is Rust outcome_unknown (attempt.rs from_armed:
+		// !desired_proven keeps the private artifact as recovery residue
+		// and reports CleanupState::Clean). The attempt file is retained.
 		return &PublicationResult{
-			Status:             PublicationNotPublished,
-			DestinationContent: content,
-			Cleanup:            attempt.Discard(),
+			Status:             PublicationOutcomeUnknown,
+			DestinationContent: DestinationContentUnclassified,
+			Cleanup:            CleanupStateClean,
 			Cause:              err,
 		}, nil
 	}
@@ -445,19 +440,47 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 		return 0, 0, &format.Error{Code: format.CodePublicationUnsupported, Detail: "publication inode is on another filesystem"}
 	}
 	if policy != PolicyFailIfExists {
-		if fi, err := os.Lstat(attempt.destination); err == nil {
-			if fi.Mode()&os.ModeSymlink != 0 {
-				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+		// Rust replacement::bind refuses the coordination twin and the
+		// missing destination BEFORE any rename (publication/replacement.rs
+		// open(): require_absent(coordination), then open_regular(main)
+		// or Missing): both are early preparation failures with the
+		// attempt discarded.
+		if _, twinErr := os.Lstat(attempt.destination + format.CoordinationSuffix); twinErr == nil {
+			return 0, 0, &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"}
+		} else if !os.IsNotExist(twinErr) {
+			return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+		}
+		fi, err := os.Lstat(attempt.destination)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return 0, 0, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
 			}
-			if !fi.Mode().IsRegular() {
-				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
-			}
-			if destDevice, destInode, err := mapping.StatIdentity(attempt.destination); err == nil &&
-				destDevice == device && destInode == inode {
-				return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "replacement source and destination identities match"}
-			}
+			return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
+		}
+		if !fi.Mode().IsRegular() {
+			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+		}
+		if destDevice, destInode, err := mapping.StatIdentity(attempt.destination); err == nil &&
+			destDevice == device && destInode == inode {
+			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "replacement source and destination identities match"}
 		}
 	}
+	// Rust verify_name requires the attempt file to be a regular file
+	// with exactly one hard link (namespace.rs: link count is part of
+	// the custody proof; cleanup discard is identity-guarded the same
+	// way). A changed link count is a conflict class.
+	if nlink, ok := regularLinkCount(fi); !ok || nlink != 1 {
+		if ok && nlink == 0 {
+			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode has no links"}
+		}
+		return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
+	}
+	// Capture the attempt identity so a later Discard is identity-guarded
+	// (Rust binds cleanup to the captured identity).
+	attempt.SetFileIdentity(device, inode)
 	return device, inode, nil
 }
 

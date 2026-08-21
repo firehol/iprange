@@ -213,6 +213,18 @@ func (m *Mapping) Size() uint64 { return m.size }
 // open (the locked extent), extended by Grow.
 func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 
+// FileIdentity returns the device+inode of the mapped file from the
+// owner descriptor (Rust regular_identity over the held File). The
+// writer uses it to capture the attempt-file identity at creation, so
+// cleanup discard stays bound to the exact inode it created.
+func (m *Mapping) FileIdentity() (device uint64, inode uint64, err error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(m.file.Fd()), &st); err != nil {
+		return 0, 0, err
+	}
+	return uint64(st.Dev), uint64(st.Ino), nil
+}
+
 // VerifyIdentity re-checks that the path still names the opened inode.
 // Called after bootstrap+remap and after writer tail-trim to mirror Rust's
 // post-map_reader verify_path_any_link and the writer's open_locked

@@ -51,6 +51,7 @@ func runOutcomeChild(t *testing.T, path, action string) {
 	faultPoint := map[string]string{
 		"outcome_unknown": "commit.after_meta_write",
 		"abort_class":     "commit.prepare",
+		"abort_nested":    "commit.prepare,commit.discard_unpublished",
 	}[action]
 	if faultPoint == "" {
 		t.Fatalf("unknown action %q", action)
@@ -77,6 +78,7 @@ func TestWriterOutcomeUnknownFailClosed(t *testing.T) {
 	dir := t.TempDir()
 	runOutcomeChild(t, filepath.Join(dir, "outcome.iprdb"), "outcome_unknown")
 	runOutcomeChild(t, filepath.Join(dir, "aborted.iprdb"), "abort_class")
+	runOutcomeChild(t, filepath.Join(dir, "abort-nested.iprdb"), "abort_nested")
 }
 
 // TestOutcomeUnknownChild is the subprocess entry point; it only runs
@@ -110,6 +112,41 @@ func TestOutcomeUnknownChild(t *testing.T) {
 	}
 
 	switch action {
+	case "abort_nested":
+		// Both faults fire: the preparation failure aborts the commit and
+		// the abandonment discard fails too, so the chain nests the
+		// CleanupInProgress class (code 77, Rust CleanupIncomplete)
+		// around the original cause, exactly like Rust abort_after_source.
+		if res.Status != CommitNotCommitted {
+			t.Fatalf("commit status = %v, want NotCommitted", res.Status)
+		}
+		if !isPubCode(res.Err, ErrorTransactionAborted) {
+			t.Fatalf("outer class = %v, want TransactionAborted", res.Err)
+		}
+		first := errors.Unwrap(res.Err)
+		if first == nil {
+			t.Fatal("aborted commit carries no nested cause")
+		}
+		if !isPubCode(first, ErrorCleanupInProgress) {
+			t.Fatalf("nested class = %v, want CleanupInProgress", first)
+		}
+		if errors.Unwrap(first) == nil {
+			t.Fatal("nested cleanup error does not expose the original cause")
+		}
+		// A failed abandonment discard brands the writer unusable
+		// (Rust abort_after_source State::Unusable): every mutating
+		// entry point fails closed and only Close remains legal.
+		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+			t.Fatalf("BeginDirect after nested abort err = %v, want WrongState", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close after nested abort: %v", err)
+		}
+		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+			t.Fatalf("BeginDirect after close err = %v, want WrongState", err)
+		}
+		return
+
 	case "outcome_unknown":
 		// The fault fires after the alternate meta write: the commit
 		// reports OutcomeUnknown and the writer turns unhealthy.

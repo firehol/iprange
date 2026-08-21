@@ -224,7 +224,8 @@ func addCheckedU64(a, b uint64) (uint64, bool) {
 // into the global catalog (Rust collect_names; the catalog heap charge
 // is total entries times the Rust FeedName size). Each source is
 // gathered through a direct ScopeData parameter (the aggregation emit
-// shape), so the mapped name views stay bounded for the ownership gate.
+// shape), so the mapped name views stay bounded by the v4 name grammar
+// (never complete pages).
 func collectAlgebraNames(sources []AlgebraSource, totalEntries uint64, heap *operationHeap, check checkpoint) ([]FeedEntry, error) {
 	if err := heap.filled(totalEntries, rustFeedNameSize, "membership algebra catalog heap"); err != nil {
 		return nil, err
@@ -254,10 +255,10 @@ func collectAlgebraNames(sources []AlgebraSource, totalEntries uint64, heap *ope
 }
 
 // dedupAlgebraNames sorts and dedups the gathered names into the global
-// catalog (Rust collect_names tail). The container parameter is a
-// struct-element carrier, so the ownership gate keeps the element
-// reads bounded; the position field is the entry index (Rust names are
-// FeedName values; the position is the binary-search slot).
+// catalog (Rust collect_names tail). The container parameter carries
+// struct elements so the element reads stay bounded; the position field
+// is the entry index (Rust names are FeedName values; the position is
+// the binary-search slot).
 func dedupAlgebraNames(names []FeedEntry) []FeedEntry {
 	sort.Slice(names, func(i, j int) bool { return bytes.Compare(names[i].Name, names[j].Name) < 0 })
 	deduped := make([]FeedEntry, 0, len(names))
@@ -303,7 +304,7 @@ func buildAlgebraInputs(sources []AlgebraSource, names []FeedEntry, heap *operat
 
 // algebraSourcePositions resolves one source's local entries to global
 // catalog positions (Rust build_inputs per source; the direct ScopeData
-// parameter keeps the name views bounded for the ownership gate).
+// parameter keeps the name views bounded).
 func algebraSourcePositions(scope *ScopeData, names []FeedEntry, heap *operationHeap, check checkpoint) ([]uint32, error) {
 	if err := heap.filled(uint64(len(scope.entries)), rustU32Size, "membership algebra source heap"); err != nil {
 		return nil, err
@@ -493,9 +494,8 @@ func (s *algebraSelection) any(present, counts []uint32, check checkpoint) (bool
 
 // algebraSink consumes one maximal segment of the global sweep (Rust
 // SegmentSink, implemented by CountSink and ComparisonSink). Go has no
-// traits and the ownership gate cannot prove an interface receiver,
-// so one concrete sink carries both analyses: nil right selects the
-// union count, a set right selects the four-case comparison.
+// traits, so one concrete sink carries both analyses: nil right selects
+// the union count, a set right selects the four-case comparison.
 type algebraSink struct {
 	left, right *algebraSelection
 

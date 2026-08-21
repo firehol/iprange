@@ -9,6 +9,7 @@
 package iprangedb
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -31,8 +32,16 @@ func TestNoPageSizedHeapAllocationsPublishSet(t *testing.T) {
 	if err != nil {
 		t.Fatal("warm algebra:", err)
 	}
+	// The replacement policy requires the destination to exist before
+	// the first publish (Rust replacement::bind refuses a missing
+	// destination), so seed the target once; every warm-up iteration
+	// then exercises the replace path.
+	again := filepath.Join(dir, "again.iprdb")
+	if err := os.WriteFile(again, []byte("placeholder"), 0o644); err != nil {
+		t.Fatal("seed again:", err)
+	}
 	for range 8 {
-		if _, err := publishV4(t, helpers, filepath.Join(dir, "again.iprdb"), AlgebraSetUnion(AlgebraFeedSelectionAll()), AlgebraOutputModePreserveFeeds(), nil, PolicyReplaceExistingNoRollback, outputBudget()); err != nil {
+		if _, err := publishV4(t, helpers, again, AlgebraSetUnion(AlgebraFeedSelectionAll()), AlgebraOutputModePreserveFeeds(), nil, PolicyReplaceExistingNoRollback, outputBudget()); err != nil {
 			t.Fatal("warm publish again:", err)
 		}
 		if _, err := warmAlgebra.Count(AlgebraFeedSelectionAll(), nil); err != nil {

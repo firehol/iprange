@@ -41,7 +41,7 @@ func TestWorkFeedCursorCatalog(t *testing.T) {
 	if n != 70 {
 		t.Fatalf("catalog emitted %d feeds, want 70", n)
 	}
-	want := work.Snapshot{PagesVisited: 71, PagesParsed: 71, LeafValidations: 70}
+	want := work.Snapshot{PagesVisited: 2, PagesParsed: 2, LeafValidations: 70}
 	if got := work.Read(); got != want {
 		t.Fatalf("feed cursor counters = %+v, want %+v", got, want)
 	}
@@ -67,7 +67,7 @@ func TestWorkDirectCursorScanAndSeek(t *testing.T) {
 			break
 		}
 	}
-	want := work.Snapshot{PagesVisited: 4, PagesParsed: 4, LeafValidations: 3, RangesConsumed: 3}
+	want := work.Snapshot{PagesVisited: 2, PagesParsed: 2, LeafValidations: 3, RangesConsumed: 3}
 	if got := work.Read(); got != want {
 		t.Fatalf("direct cursor counters = %+v, want %+v", got, want)
 	}
@@ -153,7 +153,7 @@ func TestWorkFeedProjection(t *testing.T) {
 		t.Fatalf("projection emitted %d intervals, want 1", n)
 	}
 	want := work.Snapshot{
-		TreeLookups: 3, PagesVisited: 7, PagesParsed: 7, KeyProbes: 6,
+		TreeLookups: 3, PagesVisited: 5, PagesParsed: 5, KeyProbes: 6,
 		LeafValidations: 6, WordReads: 3, RangesConsumed: 3,
 	}
 	if got := work.Read(); got != want {

@@ -59,6 +59,12 @@ func (m *Mapping) VerifyIdentity(path string) error {
 // PhysicalSize satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) PhysicalSize() uint64 { return 0 }
 
+// FileIdentity satisfies the common surface; unreachable on Windows in
+// milestone 1.
+func (m *Mapping) FileIdentity() (uint64, uint64, error) {
+	return 0, 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
 // Grow satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Grow(newSize uint64) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}

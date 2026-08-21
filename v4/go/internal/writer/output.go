@@ -85,6 +85,13 @@ type OutputBuilder struct {
 // MaxOutputPages returns the page budget.
 func (b *OutputBuilder) MaxOutputPages() uint64 { return b.budget.MaxOutputPages }
 
+// FileIdentity returns the device+inode of the attempt file the builder
+// created (Rust CreatedOutput::create_with captures the identity at
+// creation; the publication discard is identity-guarded with it).
+func (b *OutputBuilder) FileIdentity() (device uint64, inode uint64, err error) {
+	return b.mapping.FileIdentity()
+}
+
 // Meta returns the current builder meta.
 func (b *OutputBuilder) Meta() format.Meta { return b.meta }
 
@@ -355,9 +362,8 @@ func (b *OutputBuilder) internMembership(source OutputWords) (uint32, error) {
 	}
 	// Every supplied word must be a subset of the active-feed bitmap
 	// before the dictionary sees the source (Rust CheckedWords). The
-	// check is one concrete chunked pass: an interface wrapper struct
-	// adjacent to the page-bearing store would trip the content-transfer
-	// gate, and a concrete pass keeps the whole body scanned.
+	// check is one concrete chunked pass over the caller's words, with no
+	// interface indirection over the page-bearing store.
 	if err := requireOutputFeeds(b, b.meta.FeedUsedRoot, b.meta.FeedIndexLimit, source); err != nil {
 		return 0, err
 	}

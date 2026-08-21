@@ -36,7 +36,7 @@ func (t *CancellationToken) check() error {
 		return nil
 	}
 	if t.IsCancelled() {
-		return &Error{Code: ErrorCancelled, Detail: "operation cancelled"}
+		return &Error{Code: ErrorCancelled, Detail: "operation was cancelled"}
 	}
 	return nil
 }

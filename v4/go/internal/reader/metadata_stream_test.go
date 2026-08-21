@@ -6,70 +6,56 @@ import (
 	"encoding/binary"
 	"hash/adler32"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// TestMetadataStreamPayload pins the streaming metadata decode edges: the
-// two-byte zlib header and the four-byte Adler-32 trailer may both span
-// chunk boundaries, and the reader must expose exactly the DEFLATE payload
-// without ever materializing the compressed stream in owned memory.
+// TestMetadataStreamPayload pins the streaming metadata decode edges over
+// valid chain geometry: the two-byte zlib header is skipped exactly once,
+// multi-chunk chains stream across page boundaries, an empty payload is
+// exact, and geometry-invalid chains (header split across chunks, a chunk
+// shorter than the declared remainder) are refused on the read path.
 func TestMetadataStreamPayload(t *testing.T) {
 	const text = "hello metadata chain, streamed from mapped chunks"
-	var zbuf bytes.Buffer
-	zbuf.Write([]byte{0x78, 0x01}) // zlib header (CMF/FLG)
-	fw, err := flate.NewWriter(&zbuf, flate.DefaultCompression)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fw.Write([]byte(text)); err != nil {
-		t.Fatal(err)
-	}
-	if err := fw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	var a [4]byte
-	binary.BigEndian.PutUint32(a[:], adler32.Checksum([]byte(text)))
-	zbuf.Write(a[:])
-	stream := zbuf.Bytes()
-	if len(stream) < 6 {
-		t.Fatal("fixture stream too short")
-	}
+	stream := zlibFixture(t, text)
 	minimal := minimalZlibStream(t)
+	big := zlibFixture(t, strings.Repeat("0123456789abcdef", 700))
 	cases := []struct {
-		name   string
-		stream []byte
-		splits [][]byte
+		name    string
+		stream  []byte
+		chunks  [][]byte
+		wantErr bool
 	}{
-		{"header-and-trailer split across chunks", stream, [][]byte{
-			stream[0:1], stream[1:3], stream[3:10],
-			stream[10 : len(stream)-3], stream[len(stream)-3:],
-		}},
-		{"one byte per chunk", stream, splitEvery(stream, 1)},
-		{"single whole chunk", stream, [][]byte{stream}},
-		{"minimal empty stream", minimal, splitEvery(minimal, 2)},
+		{"single whole chunk", stream, [][]byte{stream}, false},
+		{"multi-chunk chain", big, validChunks(big), false},
+		{"minimal empty stream", minimal, [][]byte{minimal}, false},
+		{"header split across chunks", stream, [][]byte{stream[0:1], stream[1:]}, true},
+		{"truncated chain", stream, [][]byte{stream[:20]}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var total int
-			for _, c := range tc.splits {
-				total += len(c)
-			}
-			if total != len(tc.stream) {
-				t.Fatalf("splits cover %d bytes, stream has %d", total, len(tc.stream))
-			}
-			payload := tc.stream[2 : len(tc.stream)-4]
 			s := &metadataStream{
-				page: metadataChunkPageFunc(tc.splits),
-				next: 1,
-				left: uint64(len(tc.stream) - 6),
-				skip: 2,
+				page:      metadataChunkPageFunc(tc.chunks, 1),
+				pageCount: uint64(len(tc.chunks)) + 2,
+				txn:       1,
+				next:      1,
+				left:      uint64(len(tc.stream) - 6),
+				count:     uint64(len(tc.stream)),
+				skip:      2,
 			}
 			got, err := io.ReadAll(s)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ReadAll accepted an invalid chain")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ReadAll: %v", err)
 			}
+			payload := tc.stream[2 : len(tc.stream)-4]
 			if !bytes.Equal(got, payload) {
 				t.Fatalf("payload mismatch: got %d bytes want %d", len(got), len(payload))
 			}
@@ -83,6 +69,17 @@ func TestMetadataStreamPayload(t *testing.T) {
 	}
 }
 
+// validChunks splits one stream into full metadata chunks (4048 bytes)
+// plus the final shorter chunk, the only geometry the format permits.
+func validChunks(b []byte) [][]byte {
+	var out [][]byte
+	for len(b) > 4048 {
+		out = append(out, b[:4048])
+		b = b[4048:]
+	}
+	return append(out, b)
+}
+
 // TestMetadataStreamFlateCounting pins the flate integration Plato demanded:
 // metadataStream implements ReadByte, so flate consumes it directly (no
 // bufio read-ahead) and the post-inflate count is byte-exact. Junk placed
@@ -93,7 +90,7 @@ func TestMetadataStreamFlateCounting(t *testing.T) {
 	stream := zlibFixture(t, text)
 	payload := stream[2 : len(stream)-4]
 
-	valid := &metadataStream{page: metadataChunkPageFunc([][]byte{stream}), next: 1, left: uint64(len(stream) - 6), skip: 2}
+	valid := &metadataStream{page: metadataChunkPageFunc([][]byte{stream}, 1), pageCount: 5, txn: 1, next: 1, left: uint64(len(stream) - 6), count: uint64(len(stream)), skip: 2}
 	got, err := io.ReadAll(flate.NewReader(valid))
 	if err != nil {
 		t.Fatalf("valid stream: %v", err)
@@ -106,7 +103,7 @@ func TestMetadataStreamFlateCounting(t *testing.T) {
 	}
 
 	junked := append(append([]byte{}, stream[:len(stream)-4]...), append([]byte{0xde, 0xad}, stream[len(stream)-4:]...)...)
-	bad := &metadataStream{page: metadataChunkPageFunc([][]byte{junked}), next: 1, left: uint64(len(junked) - 6), skip: 2}
+	bad := &metadataStream{page: metadataChunkPageFunc([][]byte{junked}, 1), pageCount: 5, txn: 1, next: 1, left: uint64(len(junked) - 6), count: uint64(len(junked)), skip: 2}
 	got, err = io.ReadAll(flate.NewReader(bad))
 	if err != nil {
 		t.Fatalf("junked stream deflate: %v", err)
@@ -173,13 +170,25 @@ func minimalZlibStream(t *testing.T) []byte {
 	return zbuf.Bytes()
 }
 
-// metadataChunkPageFunc links chunk payloads into validated-shape metadata
-// chunk pages indexed 1..n and returns a page fetcher for metadataStream.
-func metadataChunkPageFunc(chunks [][]byte) func(uint32) ([]byte, error) {
+// metadataChunkPageFunc links chunk payloads into fully valid metadata
+// chunk pages (page header plus chunk fields) indexed 1..n and returns a
+// page fetcher for metadataStream. Pages carry the shape the reader
+// validates on every visit: type 13, level 0, aux 0, item count 1,
+// lower 48+len, upper 4096, born transaction 1.
+func metadataChunkPageFunc(chunks [][]byte, txn uint64) func(uint32) ([]byte, error) {
 	pages := make([][]byte, len(chunks))
 	var off uint64
 	for i, c := range chunks {
 		p := make([]byte, format.PageSize)
+		copy(p[0:4], format.PageMagic[:])
+		p[4] = byte(format.PageTypeMetadataChunk)
+		binary.LittleEndian.PutUint16(p[6:8], 32)
+		binary.LittleEndian.PutUint64(p[8:16], txn)
+		binary.LittleEndian.PutUint16(p[16:18], 1)
+		binary.LittleEndian.PutUint16(p[18:20], 0)
+		binary.LittleEndian.PutUint16(p[20:22], uint16(48+len(c)))
+		binary.LittleEndian.PutUint16(p[22:24], format.PageSize)
+		binary.LittleEndian.PutUint32(p[24:28], 0)
 		var next uint32
 		if i+1 < len(chunks) {
 			next = uint32(i + 2) // pages are 1-based
@@ -197,4 +206,66 @@ func metadataChunkPageFunc(chunks [][]byte) func(uint32) ([]byte, error) {
 		}
 		return pages[pg-1], nil
 	}
+}
+
+// TestMetadataChainPageCap pins the Rust MAX_PAGES bound (metadata.rs
+// 5_182): a chain longer than the fixed cap is refused on the read path
+// even when its declared length would permit it, exactly like Rust
+// walk_chain ("metadata chain exceeds its fixed bound").
+func TestMetadataChainPageCap(t *testing.T) {
+	// A valid chain of MAX_PAGES full chunks plus one more: the declared
+	// payload needs one extra visit beyond the fixed bound, and the walk
+	// refuses exactly like Rust walk_chain before visiting the extra
+	// page. A full final chunk is valid geometry (final = the chunk that
+	// exactly matches the declared remainder).
+	chunks := make([][]byte, maxMetadataChainPages+1)
+	var off uint64
+	for i := range chunks {
+		b := make([]byte, format.MaxMetadataChunkLen)
+		chunks[i] = b
+		off += uint64(len(b))
+	}
+	count := off
+	stream := &metadataStream{
+		page:      metadataChunkPageFunc(chunks, 1),
+		pageCount: uint64(len(chunks)) + 2,
+		txn:       1,
+		next:      1,
+		left:      uint64(count) - 6,
+		count:     uint64(count),
+		skip:      2,
+	}
+	if _, err := io.ReadAll(stream); err == nil {
+		t.Fatal("chain longer than the fixed bound was accepted")
+	} else if !containsDetail(err, "metadata chain exceeds its fixed bound") {
+		t.Fatalf("cap error = %v, want the fixed-bound refusal", err)
+	}
+	if stream.pages != maxMetadataChainPages {
+		t.Fatalf("visited %d pages before the cap, want %d", stream.pages, maxMetadataChainPages)
+	}
+}
+
+// containsDetail reports whether err carries the detail text somewhere in
+// its message chain.
+func containsDetail(err error, detail string) bool {
+	for err != nil {
+		if fe, ok := err.(*format.Error); ok && fe.Detail == detail {
+			return true
+		}
+		if u := errorsUnwrap(err); u != nil {
+			err = u
+		} else {
+			break
+		}
+	}
+	return false
+}
+
+// errorsUnwrap avoids importing errors twice in this test file.
+func errorsUnwrap(err error) error {
+	type unwrapper interface{ Unwrap() error }
+	if u, ok := err.(unwrapper); ok {
+		return u.Unwrap()
+	}
+	return nil
 }

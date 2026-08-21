@@ -36,15 +36,14 @@ func (b PageBudget) internal() writer.PageBudget {
 }
 
 // writerNamespaceCheck is the module-root namespace hook: the SDK's
-// namespace surface is a milestone-4 gap, so the hook is a scanned
-// package-level no-op that satisfies the internal/writer callback fence
-// (an unscanned nil could launder a mapped page through the writer
-// owner's hook formal).
+// namespace surface is a milestone-4 gap, so the hook is a package-level
+// no-op implementing the writer owner's callback formal (Rust's namespace
+// resolver no-op default).
 func writerNamespaceCheck(clean string) error { return nil }
 
 // noopCheckpoint is the module-root durability checkpoint hook: the
-// coordination surface is a milestone-4 gap, so the hook is a scanned
-// package-level no-op that satisfies the internal/writer callback fence.
+// coordination surface is a milestone-4 gap, so the hook is a
+// package-level no-op implementing the checkpoint formal.
 func noopCheckpoint() error { return nil }
 
 // CreateResult is the factual identity of one created database (Rust
@@ -317,8 +316,9 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 		// Rust commit_with: a preparation failure aborts the draft and
 		// reports the NotCommitted result carrying the cause wrapped in
 		// the TransactionAborted class (code 22); a failed discard
-		// nests the CleanupIncomplete class (code 64) exactly like
-		// Rust abort_after_source.
+		// nests the CleanupInProgress class (code 77, Rust
+		// Error::CleanupIncomplete) exactly like Rust
+		// abort_after_source.
 		return t.abortAfter(attempt, err), nil
 	}
 	// Rust commit_locked runs the prepublication checks immediately
@@ -348,15 +348,21 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 // abortAfter reports an aborted commit the Rust way
 // (abort_after/abort_after_source): the result error class is
 // TransactionAborted (code 22); when the abandonment discard also fails,
-// the chain carries the CleanupIncomplete class (code 64) around the
-// combined cause. The original cause stays reachable through Unwrap.
+// the chain nests the CleanupInProgress class (code 77, Rust
+// CleanupIncomplete) around the original cause. Both classes stay
+// reachable through errors.As on the unwrapped chain.
 func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
 	discardErr := t.w.core.DiscardUnpublished()
 	t.active = false
 	inner := cause
 	if discardErr != nil {
-		inner = &chainError{
-			text:  cause.Error() + "; discard failed: " + discardErr.Error(),
+		// Rust abort_after_source nests Error::CleanupIncomplete (code
+		// CleanupInProgress, 77) around the original cause, brands the
+		// writer unusable, and keeps the outer TransactionAborted class
+		// as the As target.
+		t.w.core.MarkUnresolved(discardErr)
+		inner = &abortError{
+			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "commit discard failed"},
 			cause: cause,
 		}
 	}
@@ -372,22 +378,10 @@ func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error
 	}
 }
 
-// chainError preserves a cause chain: the message is joined eagerly
-// from the concrete Error() strings so the text is fixed at construction
-// time, and Unwrap exposes the original cause for errors.Is/As.
-type chainError struct {
-	text  string
-	cause error
-}
-
-func (e *chainError) Error() string { return e.text }
-
-func (e *chainError) Unwrap() error { return e.cause }
-
-// abortError carries the transaction-aborted error class while keeping
-// the wrapped cause chain inspectable: errors.As sees the class as a
-// *format.Error first, and Unwrap exposes the original preparation or
-// cleanup cause (Rust TransactionAborted(Box<cause>)).
+// abortError carries one declared error class while keeping the wrapped
+// cause chain inspectable: errors.As sees the class as a *format.Error,
+// and Unwrap exposes the nested cause (Rust
+// TransactionAborted(Box<cause>) / CleanupIncomplete{cause}).
 type abortError struct {
 	class *format.Error
 	cause error

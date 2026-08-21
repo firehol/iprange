@@ -7,6 +7,7 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
+	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
@@ -78,6 +79,9 @@ func (c *Core) FinishClose(plan ClosePlan) error {
 // verify the committed generation is intact (Rust
 // WriterCore::discard_unpublished).
 func (c *Core) DiscardUnpublished() error {
+	if err := fault.Fail("commit.discard_unpublished"); err != nil {
+		return err
+	}
 	if err := c.requireHealthy(); err != nil {
 		return err
 	}

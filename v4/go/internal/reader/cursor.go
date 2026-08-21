@@ -2,9 +2,11 @@ package reader
 
 // Ordered fixed-tree traversal without page copies (Rust fixed_tree::Cursor
 // parity). The cursor keeps a bounded branch frame path plus the current
-// leaf location and re-validates page type, level, and slotted shape on
-// every step; leaf cells are decoded by the caller from mapped views, so
-// no record is ever copied into owned memory.
+// leaf location; every branch page is re-validated on each climb and each
+// leaf page is validated once, with the validated leaf cached exactly like
+// Rust caches Leaf { page_number, header } (the immutable mapping cannot
+// change under a reader). Leaf cells are decoded by the caller from mapped
+// views, so no record is ever copied into owned memory.
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -54,6 +56,11 @@ type treeCursor struct {
 	path      [format.MaxTreeLevel + 1]cursorFrame
 	depth     int
 	finished  bool
+	// leafPage/leafSl cache the validated current leaf (Rust Cursor::leaf):
+	// one header decode per leaf, never one per cell.
+	leafPage uint32
+	leafSl   format.SlottedPage
+	leafOK   bool
 }
 
 // newTreeCursor validates the root bounds and positions the cursor at the
@@ -333,10 +340,15 @@ func (c *treeCursor) advance() (uint32, int, error) {
 	return 0, 0, nil
 }
 
-// openLeaf returns the current leaf's slotted view plus its page number,
-// re-validating the leaf page so the caller's cell view always comes from
-// the mapped page at its final state.
+// openLeaf returns the current leaf's slotted view plus its page number.
+// The leaf is validated once and cached (Rust Cursor::leaf); the mapped
+// page cannot change under a reader, so later calls on the same leaf
+// reuse the validated header and slotted shape instead of re-decoding
+// them per cell.
 func (c *treeCursor) openLeaf() (format.SlottedPage, uint32, error) {
+	if c.leafOK && c.leafPage == c.page {
+		return c.leafSl, c.page, nil
+	}
 	frame, leaf, err := c.readPage(c.page, int(c.level))
 	if err != nil {
 		return format.SlottedPage{}, 0, err
@@ -344,5 +356,8 @@ func (c *treeCursor) openLeaf() (format.SlottedPage, uint32, error) {
 	if !leaf || int(frame.itemCount) != int(c.itemCount) {
 		return format.SlottedPage{}, 0, corrupt("tree leaf changed during traversal")
 	}
+	c.leafOK = true
+	c.leafPage = c.page
+	c.leafSl = frame.sl
 	return frame.sl, c.page, nil
 }

@@ -38,7 +38,7 @@ func (k addrKey) Equal(other addrKey) bool {
 // rangeOps carries the family-specific key operations (Rust
 // IpKey::checked_next / checked_previous / inclusive_cardinality). The
 // function fields are initialized from the sealed family tables below,
-// so every call bottoms out in scanned module code.
+// so every call bottoms out in one authoritative table.
 type rangeOps struct {
 	next      func(k addrKey) (addrKey, error)
 	previous  func(k addrKey) (addrKey, error)
