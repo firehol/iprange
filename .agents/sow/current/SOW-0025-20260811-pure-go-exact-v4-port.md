@@ -83,14 +83,21 @@ Every .go file, every build-tagged variant, tests included.
     runs in build-host tests; the FreeBSD entry point
     (mapping_publish_freebsd.go) is its only production caller.
   - NetBSD keeps the no-replace refusal (mapping_publish_netbsd.go) and
-    the writer now classifies the Unsupported refusal like Rust's
-    first-namespace-op Unsupported: preparation failure with the attempt
-    discarded, so no residue accumulates per attempt (Rust attempt.rs
-    state1_selected=false -> preparation).
+    the writer now classifies the Unsupported refusal as the Rust
+    acquire-failure result: NotPublished with both artifacts discarded
+    and the content computed from the main slot (Rust attempt.rs
+    from_private -> Ok(not_published)); no residue accumulates per
+    attempt, and it is a result, never a preparation error.
   - Custody identity compare: verifyCustody compares the path probe to
     the creation-time identity captured from the builder descriptor
     instead of rebinding it (Rust verify_name); Discard stays
-    identity-guarded on the creation capture.
+    identity-guarded on the creation capture. The fail-if-exists
+    publish-time re-checks now cover the twin AND the main name (Rust
+    reservation_file.rs acquire + arm_with require_absent):
+    NotPublished with the foreign file preserved in both cases, and the
+    remaining rename-race window is pinned by a test-only fault point to
+    the outcome_unknown classification with the attempt retained (Rust
+    from_armed).
   - Records: CleanupInProgress is code 64 everywhere; the direct-cursor
     gate detail strings now match what the Rust public path emits
     (require_direct: "direct lookup requires a direct-value database"

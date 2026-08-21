@@ -3,17 +3,15 @@ package reader
 import (
 	"compress/flate"
 	"encoding/binary"
+	"errors"
 	"hash/adler32"
 	"io"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// maxMetadataChainPages caps one metadata chain walk at the Rust
-// authority's fixed bound (metadata.rs MAX_PAGES = 5_182): even a
-// crafted header whose declared compressed length stays inside the
-// section-11 bound cannot force more than this many page visits.
-const maxMetadataChainPages = 5_182
+// The chain walk cap is the shared format authority bound (Rust
+// metadata.rs MAX_PAGES = 5_182; the section-11 compressed window).
 
 // ReadMetadataJSON returns the exact decompressed opaque metadata bytes.
 // present is false for absent metadata (root zero); an empty non-nil slice
@@ -57,7 +55,8 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	zr := flate.NewReader(stream)
 	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
 		zr.Close()
-		if _, ok := err.(*format.Error); ok {
+		var formatErr *format.Error
+		if errors.As(err, &formatErr) {
 			return nil, false, err
 		}
 		return nil, false, corrupt("metadata deflate stream: %v", err)
@@ -142,7 +141,7 @@ func (s *metadataStream) primeHeader() error {
 // mirrors the Rust walk_chain parse_page + chunk_fields + reserved_zero
 // on the same visit that feeds the inflater.
 func (s *metadataStream) visitNext() {
-	if s.pages == maxMetadataChainPages {
+	if s.pages == format.MaxMetadataChainPages {
 		s.err = corrupt("metadata chain exceeds its fixed bound")
 		return
 	}

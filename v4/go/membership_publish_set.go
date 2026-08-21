@@ -232,16 +232,16 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	// Capture the attempt-file identity from the builder's own
 	// descriptor: every later Discard is identity-guarded (Rust
 	// CreatedOutput::create_with binds cleanup to the created inode).
-	if device, inode, idErr := builder.FileIdentity(); idErr != nil {
+	device, inode, idErr := builder.FileIdentity()
+	if idErr != nil {
 		closeErr := builder.Close()
 		cleanup := attempt.Discard()
 		if closeErr != nil {
 			idErr = mergeErrors(idErr, closeErr)
 		}
 		return zero, &AlgebraPreparationFailure{Cause: publicError(idErr), Cleanup: cleanup}
-	} else {
-		attempt.SetFileIdentity(device, inode)
 	}
+	attempt.SetFileIdentity(device, inode)
 	discarded := func(cause error) (AlgebraSetResult, error) {
 		// Rust drops the mapped writer in every path; Go must release the
 		// exclusive lifetime lock before the caller can reopen the

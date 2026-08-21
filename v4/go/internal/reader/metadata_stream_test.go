@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"errors"
 	"hash/adler32"
 	"io"
 	"strings"
@@ -218,7 +219,7 @@ func TestMetadataChainPageCap(t *testing.T) {
 	// refuses exactly like Rust walk_chain before visiting the extra
 	// page. A full final chunk is valid geometry (final = the chunk that
 	// exactly matches the declared remainder).
-	chunks := make([][]byte, maxMetadataChainPages+1)
+	chunks := make([][]byte, format.MaxMetadataChainPages+1)
 	var off uint64
 	for i := range chunks {
 		b := make([]byte, format.MaxMetadataChunkLen)
@@ -240,8 +241,8 @@ func TestMetadataChainPageCap(t *testing.T) {
 	} else if !containsDetail(err, "metadata chain exceeds its fixed bound") {
 		t.Fatalf("cap error = %v, want the fixed-bound refusal", err)
 	}
-	if stream.pages != maxMetadataChainPages {
-		t.Fatalf("visited %d pages before the cap, want %d", stream.pages, maxMetadataChainPages)
+	if stream.pages != format.MaxMetadataChainPages {
+		t.Fatalf("visited %d pages before the cap, want %d", stream.pages, format.MaxMetadataChainPages)
 	}
 }
 
@@ -261,11 +262,10 @@ func containsDetail(err error, detail string) bool {
 	return false
 }
 
-// errorsUnwrap avoids importing errors twice in this test file.
+// errorsUnwrap returns the first wrapped error (errors.Unwrap).
 func errorsUnwrap(err error) error {
-	type unwrapper interface{ Unwrap() error }
-	if u, ok := err.(unwrapper); ok {
-		return u.Unwrap()
+	if err == nil {
+		return nil
 	}
-	return nil
+	return errors.Unwrap(err)
 }

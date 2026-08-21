@@ -27,21 +27,19 @@ func Crash(point string) {
 // order the operations reach them.
 func Fail(point string) error {
 	value := os.Getenv("IPRANGE_V4_TEST_FAIL_AT")
+	items := strings.Split(value, ",")
 	found := false
-	for _, item := range strings.Split(value, ",") {
-		if item == point {
+	remaining := make([]string, 0, len(items))
+	for _, item := range items {
+		switch {
+		case item == point:
 			found = true
-			break
+		case item != "":
+			remaining = append(remaining, item)
 		}
 	}
 	if !found {
 		return nil
-	}
-	remaining := make([]string, 0, 1)
-	for _, item := range strings.Split(value, ",") {
-		if item != point && item != "" {
-			remaining = append(remaining, item)
-		}
 	}
 	if len(remaining) == 0 {
 		os.Unsetenv("IPRANGE_V4_TEST_FAIL_AT")

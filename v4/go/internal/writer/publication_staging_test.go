@@ -322,56 +322,6 @@ func TestPublishFailIfExistsPublishes(t *testing.T) {
 	}
 }
 
-func TestPublishFailIfExistsRefused(t *testing.T) {
-	dir := t.TempDir()
-	destination := filepath.Join(dir, "output.iprdb")
-	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
-	// The destination appears between CreateAttempt and Publish, so the
-	// refusal surfaces from the atomic no-replace rename. Rust
-	// classifies every pre-proven rename refusal as outcome_unknown
-	// (attempt.rs from_armed): Unclassified content, CleanupState::Clean,
-	// and the private output retained as recovery residue.
-	if err := os.WriteFile(destination, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	result, err := writer.Publish(attempt, b, writer.PolicyFailIfExists)
-	if err != nil {
-		t.Fatalf("Publish returned an error for a refused rename: %v", err)
-	}
-	if result.Status != writer.PublicationOutcomeUnknown {
-		t.Fatalf("status = %v, want OutcomeUnknown", result.Status)
-	}
-	if result.DestinationContent != writer.DestinationContentUnclassified {
-		t.Fatalf("content = %v, want Unclassified", result.DestinationContent)
-	}
-	if result.Cause == nil {
-		t.Fatal("refused publish carries no cause")
-	}
-	if code := errorCode(t, result.Cause); code != format.CodeNameExists {
-		t.Fatalf("cause code = %d, want NameExists", code)
-	}
-	if detail := errorDetail(t, result.Cause); detail != "publication name already exists" {
-		t.Fatalf("cause detail = %q, want the Rust detail", detail)
-	}
-	if result.Cleanup != writer.CleanupStateClean {
-		t.Fatalf("cleanup = %v, want Clean", result.Cleanup)
-	}
-	closeBuilder(t, b)
-	got, readErr := os.ReadFile(destination)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if string(got) != "old" {
-		t.Fatalf("destination changed to %q, want untouched %q", got, "old")
-	}
-	// The private artifact is retained (Rust recovery residue), so the
-	// published name never overwrites and the attempt stays for the
-	// caller's recovery decision.
-	if _, err := os.Lstat(attempt.AttemptPath()); err != nil {
-		t.Fatalf("attempt file missing after outcome_unknown, want retained: %v", err)
-	}
-}
-
 // TestPublishFailIfExistsCoordinationTwinRefused pins the publish-time
 // coordination twin check: a foreign .readers file appearing between
 // CreateAttempt and Publish refuses the publication with NotPublished +
@@ -413,6 +363,51 @@ func TestPublishFailIfExistsCoordinationTwinRefused(t *testing.T) {
 	}
 	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
 		t.Fatalf("attempt file still exists after twin refusal: %v", err)
+	}
+}
+
+// TestPublishFailIfExistsMainAppearedRefused pins the publish-time main
+// check (Rust reservation_file.rs arm_with require_absent(destination.
+// main)): a foreign main appearing between CreateAttempt and Publish is
+// the NotPublished classification with Unclassified content (attempt.rs
+// not_published never reads the foreign main) and the attempt is
+// discarded, never a rename-race outcome_unknown.
+func TestPublishFailIfExistsMainAppearedRefused(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "output.iprdb")
+	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
+	if err := os.WriteFile(destination, []byte("foreign"), 0o600); err != nil {
+		t.Fatal("write main:", err)
+	}
+	result, err := writer.Publish(attempt, b, writer.PolicyFailIfExists)
+	if err != nil {
+		t.Fatalf("Publish returned an error for a main-appeared refusal: %v", err)
+	}
+	if result.Status != writer.PublicationNotPublished {
+		t.Fatalf("status = %v, want NotPublished", result.Status)
+	}
+	if result.DestinationContent != writer.DestinationContentUnclassified {
+		t.Fatalf("content = %v, want Unclassified", result.DestinationContent)
+	}
+	if code := errorCode(t, result.Cause); code != format.CodeNameExists {
+		t.Fatalf("cause code = %d, want NameExists", code)
+	}
+	closeBuilder(t, b)
+	got, readErr := os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "foreign" {
+		t.Fatalf("foreign main changed to %q", got)
+	}
+	if _, err := os.Lstat(attempt.AttemptPath()); !os.IsNotExist(err) {
+		t.Fatalf("attempt file still exists after main refusal: %v", err)
+	}
+	if detail := errorDetail(t, result.Cause); detail != "publication name already exists" {
+		t.Fatalf("cause detail = %q, want the Rust detail", detail)
+	}
+	if result.Cleanup != writer.CleanupStateClean {
+		t.Fatalf("cleanup = %v, want Clean", result.Cleanup)
 	}
 }
 
@@ -725,13 +720,11 @@ func TestPublishOutcomeUnknownRetainsArtifact(t *testing.T) {
 	dir := t.TempDir()
 	destination := filepath.Join(dir, "output.iprdb")
 	attempt, b := stagedBuilder(t, destination, writer.PolicyFailIfExists)
-	// A blocked rename (existing destination, read-only directory): the
-	// refusal is Rust outcome_unknown - Unclassified, CleanupState::Clean
-	// (nothing removed), and the private artifact retained as recovery
-	// residue for the caller.
-	if err := os.WriteFile(destination, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// A blocked rename (read-only directory, destination absent: the
+	// fail-if-exists twin/main re-checks pass, so the refusal surfaces
+	// from the no-replace rename): the refusal is Rust outcome_unknown -
+	// Unclassified, CleanupState::Clean (nothing removed), and the
+	// private artifact retained as recovery residue for the caller.
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}

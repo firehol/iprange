@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
@@ -335,11 +336,13 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 			Cleanup: attempt.Discard(),
 		}
 	}
-	// Rust requires the fail-if-exists coordination twin absent at the
-	// reservation step (reservation_file.rs: a foreign .readers file is
-	// preserved and the attempt is discarded): a twin appearing between
-	// CreateAttempt and Publish is the NotPublished/NameExists
-	// classification, never a publication next to a live sidecar.
+	// Rust requires the fail-if-exists coordination twin and the main
+	// name still absent at the reservation steps (reservation_file.rs
+	// acquire + arm_with require_absent): a twin or a main appearing
+	// between CreateAttempt and Publish is the NotPublished/NameExists
+	// classification - the foreign file is preserved and the attempt is
+	// discarded - never a publication next to a live sidecar and never
+	// a rename-race outcome_unknown.
 	if policy == PolicyFailIfExists {
 		if _, statErr := os.Lstat(attempt.destination + format.CoordinationSuffix); statErr == nil {
 			content := DestinationContentAbsent
@@ -355,11 +358,35 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 		} else if !os.IsNotExist(statErr) {
 			return nil, &PublicationPreparationFailure{Cause: statErr, Cleanup: attempt.Discard()}
 		}
+		// Rust arm_with require_absent(destination.main) (reservation_
+		// file.rs): a main present before the arm is the NotPublished
+		// classification with Unclassified content (attempt.rs
+		// not_published: the foreign main is never read) and the
+		// attempt discarded.
+		if _, mainErr := os.Lstat(attempt.destination); mainErr == nil {
+			return &PublicationResult{
+				Status:             PublicationNotPublished,
+				DestinationContent: DestinationContentUnclassified,
+				Cleanup:            attempt.Discard(),
+				Cause:              &format.Error{Code: format.CodeNameExists, Detail: "publication name already exists"},
+			}, nil
+		} else if !os.IsNotExist(mainErr) {
+			return nil, &PublicationPreparationFailure{Cause: mainErr, Cleanup: attempt.Discard()}
+		}
 	}
 	source := attempt.AttemptPath()
 	switch policy {
 	case PolicyFailIfExists:
-		err = mapping.RenameNoReplace(source, attempt.destination, fileDevice, fileInode)
+		// Test-only fault point for the rename race window (Rust
+		// from_armed): once the twin/main re-checks pass, a racing
+		// destination turns the no-replace rename into the
+		// outcome_unknown refusal handled below. Production builds
+		// compile the fault to nothing.
+		if ferr := fault.Fail("publish.fie_before_rename"); ferr != nil {
+			err = ferr
+		} else {
+			err = mapping.RenameNoReplace(source, attempt.destination, fileDevice, fileInode)
+		}
 	case PolicyReplaceExisting:
 		err = mapping.RenameExchange(source, attempt.destination)
 	case PolicyReplaceExistingNoRollback:
@@ -367,16 +394,29 @@ func Publish(attempt *OutputAttempt, b *OutputBuilder, policy PublicationPolicy)
 	}
 	if err != nil {
 		// A target without the no-replace primitive refuses the first
-		// namespace operation with Unsupported: Rust classifies that as
-		// the preparation failure (state1_selected=false) with the
-		// attempt discarded, so no residue accumulates per attempt
-		// (netbsd and windows). Every other rename refusal before the
-		// destination provably held the output is Rust outcome_unknown
-		// (attempt.rs from_armed: !desired_proven keeps the private
-		// artifact as recovery residue and reports CleanupState::Clean).
+		// namespace mutation with Unsupported (netbsd and windows; Rust
+		// rename_noreplace Unsupported on non-linux/apple/freebsd).
+		// That refusal is the acquire-failure classification: Rust
+		// from_private returns Ok(not_published(...)) with both
+		// artifacts discarded and the content computed from the main
+		// slot at cleanup time (attempt.rs not_published) - a result,
+		// never a preparation error and never retained residue. Every
+		// other rename refusal before the destination provably held
+		// the output is Rust outcome_unknown (attempt.rs from_armed:
+		// !desired_proven keeps the private artifact as recovery
+		// residue and reports CleanupState::Clean).
 		var nsErr *format.Error
 		if errors.As(err, &nsErr) && nsErr.Code == format.CodeOSUnsupported {
-			return nil, &PublicationPreparationFailure{Cause: err, Cleanup: attempt.Discard()}
+			content := DestinationContentAbsent
+			if _, mainErr := os.Lstat(attempt.destination); mainErr == nil {
+				content = DestinationContentUnclassified
+			}
+			return &PublicationResult{
+				Status:             PublicationNotPublished,
+				DestinationContent: content,
+				Cleanup:            attempt.Discard(),
+				Cause:              err,
+			}, nil
 		}
 		return &PublicationResult{
 			Status:             PublicationOutcomeUnknown,
@@ -459,17 +499,17 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 		} else if !os.IsNotExist(twinErr) {
 			return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 		}
-		fi, err := os.Lstat(attempt.destination)
+		dfi, err := os.Lstat(attempt.destination)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return 0, 0, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
 			}
 			return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
+		if dfi.Mode()&os.ModeSymlink != 0 {
 			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
 		}
-		if !fi.Mode().IsRegular() {
+		if !dfi.Mode().IsRegular() {
 			return 0, 0, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 		}
 		if destDevice, destInode, err := mapping.StatIdentity(attempt.destination); err == nil &&
