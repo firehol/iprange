@@ -45,7 +45,7 @@ type membershipBlobLevel struct {
 
 // buildMembershipBlob writes the bitmap as one blob tree and returns its
 // root (Rust blob::build). The source word count is nonzero.
-func buildMembershipBlob(store tree.Store, words OutputWords) (uint32, error) {
+func buildMembershipBlob[W membershipWords](store tree.Store, words W) (uint32, error) {
 	if words.WordCount() == 0 {
 		return 0, invalid("empty membership has no blob representation")
 	}
@@ -70,7 +70,7 @@ func buildMembershipBlob(store tree.Store, words OutputWords) (uint32, error) {
 
 // writeMembershipBlobLeaf writes one payload leaf (Rust write_leaf): the
 // fixed geometry header plus the words in 64-word chunks.
-func writeMembershipBlobLeaf(store tree.Store, words OutputWords, offsetWords, count uint32) (membershipBlobNode, error) {
+func writeMembershipBlobLeaf[W membershipWords](store tree.Store, words W, offsetWords, count uint32) (membershipBlobNode, error) {
 	pageNumber, err := store.Allocate()
 	if err != nil {
 		return membershipBlobNode{}, err

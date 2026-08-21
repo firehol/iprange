@@ -52,6 +52,9 @@ type counters struct {
 	membershipLookups         atomic.Uint64
 	membershipInterns         atomic.Uint64
 	membershipRefcountBatches atomic.Uint64
+	sourcePasses              atomic.Uint64
+	historyWindowTests        atomic.Uint64
+	membershipCombinations    atomic.Uint64
 }
 
 var current counters
@@ -130,6 +133,9 @@ type Snapshot struct {
 	MembershipLookups         uint64
 	MembershipInterns         uint64
 	MembershipRefcountBatches uint64
+	SourcePasses              uint64
+	HistoryWindowTests        uint64
+	MembershipCombinations    uint64
 }
 
 // Read returns a consistent snapshot of the counters.
@@ -179,6 +185,9 @@ func Read() Snapshot {
 		MembershipLookups:         current.membershipLookups.Load(),
 		MembershipInterns:         current.membershipInterns.Load(),
 		MembershipRefcountBatches: current.membershipRefcountBatches.Load(),
+		SourcePasses:              current.sourcePasses.Load(),
+		HistoryWindowTests:        current.historyWindowTests.Load(),
+		MembershipCombinations:    current.membershipCombinations.Load(),
 	}
 }
 
@@ -202,6 +211,7 @@ func Reset() {
 		&current.catalogInterns, &current.outputPasses, &current.membershipInternCacheHits,
 		&current.membershipLookups, &current.membershipInterns,
 		&current.membershipRefcountBatches,
+		&current.sourcePasses, &current.historyWindowTests, &current.membershipCombinations,
 	} {
 		atomic.Store(0)
 	}
@@ -237,3 +247,6 @@ func MembershipInternCacheHit(n uint64) { current.membershipInternCacheHits.Add(
 func MembershipLookup(n uint64)         { current.membershipLookups.Add(n) }
 func MembershipIntern(n uint64)         { current.membershipInterns.Add(n) }
 func MembershipRefcountBatch(n uint64)  { current.membershipRefcountBatches.Add(n) }
+func SourcePass(n uint64)               { current.sourcePasses.Add(n) }
+func HistoryWindowTest(n uint64)        { current.historyWindowTests.Add(n) }
+func MembershipCombination(n uint64)    { current.membershipCombinations.Add(n) }

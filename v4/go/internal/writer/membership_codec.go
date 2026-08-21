@@ -333,7 +333,7 @@ type membershipHashRecord struct {
 
 // digestWords computes the SHA-256 digest of one membership bitmap over
 // little-endian u64 words in at most 64-word chunks (Rust hash_words).
-func digestWords(words OutputWords) ([32]byte, error) {
+func digestWords[W membershipWords](words W) ([32]byte, error) {
 	var hasher = sha256.New()
 	var buffer [64]uint64
 	var start uint32

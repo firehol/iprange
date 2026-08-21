@@ -167,3 +167,15 @@ func OutputPass(uint64) {}
 // MembershipInternCacheHit counts one membership intern served from the
 // bounded sequence cache (Rust work::membership_intern_cache_hit).
 func MembershipInternCacheHit(uint64) {}
+
+// SourcePass counts one logical pass over one history source (Rust
+// work::source_pass).
+func SourcePass(uint64) {}
+
+// HistoryWindowTest counts one per-window before/after test during a
+// history projection (Rust work::history_window_test).
+func HistoryWindowTest(uint64) {}
+
+// MembershipCombination counts one membership bitmap combination
+// (Rust work::membership_combination).
+func MembershipCombination(uint64) {}

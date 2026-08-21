@@ -16,11 +16,21 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
+// membershipWords is one bounded membership bitmap source (Rust
+// Words<S>). Implementations write caller-owned output buffers only: a
+// source never returns a mapped page view, so a dictionary read can never
+// retain or alias page bytes. The type parameter is instantiated per
+// concrete source (OutputWords, the combine operand, the history prefix),
+// mirroring the Rust generic trait without interface dispatch on the hot
+// path.
+type membershipWords interface {
+	WordCount() uint32
+	ReadWords(start uint32, output []uint64) error
+}
+
 // OutputWords is one membership bitmap source (Rust MembershipWords): the
 // caller's own words in canonical order. The concrete type keeps every
-// writer-side membership read on caller-owned words: an interface receiver
-// could not statically rule out a mapped page view reaching the read, and
-// the concrete pass keeps the read source bounded.
+// writer-side membership read on caller-owned words.
 type OutputWords []uint64
 
 // WordCount returns the canonical bitmap word count (Rust word_count).
@@ -58,7 +68,7 @@ type membershipInterned struct {
 // internMembership returns the dictionary ID for one membership bitmap,
 // creating the record when the bitmap is new (Rust
 // membership_dictionary::intern).
-func internMembership(store tree.RetiringStore, state *membershipState, words OutputWords) (membershipInterned, error) {
+func internMembership[W membershipWords](store tree.RetiringStore, state *membershipState, words W) (membershipInterned, error) {
 	work.MembershipIntern(1)
 	wordCount := words.WordCount()
 	if wordCount == 0 || wordCount > membershipMaxWordCount {
@@ -78,7 +88,7 @@ func internMembership(store tree.RetiringStore, state *membershipState, words Ou
 
 // insertNewMembership allocates the lowest free ID and inserts both tree
 // records (Rust insert_new).
-func insertNewMembership(store tree.RetiringStore, state *membershipState, words OutputWords, digest [32]byte) (membershipInterned, error) {
+func insertNewMembership[W membershipWords](store tree.RetiringStore, state *membershipState, words W, digest [32]byte) (membershipInterned, error) {
 	id, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
 		bitmap.KindMembership, membershipIDExhausted())
 	if err != nil {
@@ -106,7 +116,7 @@ func membershipIDExhausted() error {
 // findEqualMembership searches the hash tree for an equal bitmap (Rust
 // find_equal): at_or_after over (digest, word_count, id), word-for-word
 // comparison against the candidate record.
-func findEqualMembership(store tree.Store, state *membershipState, words OutputWords, digest [32]byte) (uint32, bool, error) {
+func findEqualMembership[W membershipWords](store tree.Store, state *membershipState, words W, digest [32]byte) (uint32, bool, error) {
 	// Rust find_equal does not count membership_lookup; only record::find
 	// and apply_delta do (membership_dictionary.rs + record.rs).
 	if state.hashRoot == 0 {
@@ -142,7 +152,7 @@ func findEqualMembership(store tree.Store, state *membershipState, words OutputW
 // equalMembershipWords compares one stored record's bitmap with the
 // source words in 64-word chunks (Rust equal_words): one located find,
 // then chunked reads that reuse the located record.
-func equalMembershipWords(store tree.Store, idRoot uint32, id uint32, words OutputWords) (bool, error) {
+func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id uint32, words W) (bool, error) {
 	found, err := findMembership(store, idRoot, id)
 	if err != nil {
 		return false, err
@@ -177,7 +187,7 @@ func equalMembershipWords(store tree.Store, idRoot uint32, id uint32, words Outp
 // encodeMembershipRecord builds the ID-tree record for one bitmap:
 // inline when it fits the record limit, otherwise a blob tree (Rust
 // record::encode).
-func encodeMembershipRecord(store tree.Store, words OutputWords, id uint32, digest [32]byte) (membershipEncoded, error) {
+func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uint32, digest [32]byte) (membershipEncoded, error) {
 	var blobRoot uint32
 	if words.WordCount() > membershipInlineWords {
 		root, err := buildMembershipBlob(store, words)
