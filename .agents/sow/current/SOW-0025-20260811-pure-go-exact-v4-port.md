@@ -185,6 +185,23 @@ Every .go file, every build-tagged variant, tests included.
   overflow probe; the flate workspace test uses runtime.KeepAlive
   instead of the dead `_ = enc`.
 
+- Retirement parity review round (Pauli PASS at 8749f99; Hume FAIL at
+  4e077a6 with two P2s, both fixed at e2858bb; branch pins at the close):
+  the replacement crash test skips where the atomic name exchange is
+  unavailable (Rust cfg(linux, apple) guard parity), the zero-link
+  retirement branch propagates a non-ENOENT probe error as CodeIO
+  instead of collapsing it into NameExists, and a direct-call table
+  pins every retirement refusal branch (TestRetireExchangedPrevious
+  BranchClassification: already-retired Clean/NameExists, changed byte
+  length, multi-link, vanished private name, symlink and directory at
+  the private name, foreign inode, and the last-link unlink). The
+  post-unlink CleanupConflict proof stays a race-window guarantee with
+  no deterministic construction without a blocking checkpoint (Rust
+  pins it via checkpoint observers; the Go fault machinery has no
+  mutation hook and adding test-only production machinery is a defect
+  per project philosophy). The stale verifyCustody doc now describes
+  the previousCustody binding.
+
 ### Status (2026-08-21) - chunk 3b-3 defined: snapshot writer surface (snapshot::snapshot_to)
 
 - Next M3 chunk after the 3b-2 close: the compact-snapshot surface.
