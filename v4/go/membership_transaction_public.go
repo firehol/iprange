@@ -81,11 +81,13 @@ type MembershipTransaction struct {
 // membership database is required and the operation nonce pins every
 // reference produced by the transaction.
 func (w *Writer) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
-	if w.core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
+	// Rust begin_membership_state checks cancellation first, so a fired
+	// token classifies as Cancelled even on a closed writer.
 	if err := cancellation.check(); err != nil {
 		return nil, err
+	}
+	if w.core == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if err := w.core.Healthy(); err != nil {
 		return nil, err
@@ -163,7 +165,9 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 // ApplyV4 applies one membership operation to an inclusive IPv4
 // interval (Rust MembershipTransaction::apply_v4): the range must be
 // ordered, the membership reference current, and the database family
-// must match.
+// must match. The per-cell transform checkpoint is a no-op, exactly like
+// Rust apply_membership_handle; cancellation is checked before and after
+// the mutate, never inside the cell transform.
 func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef, operation MembershipOperation) (bool, error) {
 	if err := t.requireFamily(format.AddressFamilyIPv4, from <= to); err != nil {
 		return false, err
@@ -177,7 +181,7 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 	var changed bool
 	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
 		var err error
-		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), t.cancellation.check)
+		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 		return err
 	})
 	if err != nil {
@@ -204,7 +208,7 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 	var changed bool
 	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
 		var err error
-		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), t.cancellation.check)
+		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 		return err
 	})
 	if err != nil {
@@ -410,6 +414,9 @@ func (t *MembershipTransaction) requireActive() error {
 	if t.spent {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
+	if t.w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
 	if !t.w.core.OperationIs(t.operationNonce) {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
@@ -442,7 +449,7 @@ func (t *MembershipTransaction) requireCurrentFeed(feed FeedRef) error {
 		return err
 	}
 	if !found || current != feed.entry {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "feed reference is stale"}
+		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -455,13 +462,13 @@ func (t *MembershipTransaction) requireCurrentMembership(membership MembershipRe
 		return err
 	}
 	if membership.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "membership reference belongs to another database"}
+		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if membership.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "membership reference is stale"}
+		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	if membership.catalogEpoch != t.membershipEpoch {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "membership reference is stale"}
+		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -474,10 +481,10 @@ func (t *MembershipTransaction) requireReference(feed FeedRef) error {
 		return err
 	}
 	if feed.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "feed reference belongs to another database"}
+		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if feed.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "feed reference is stale"}
+		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }

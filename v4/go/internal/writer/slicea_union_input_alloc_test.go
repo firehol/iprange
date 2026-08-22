@@ -34,15 +34,7 @@ func pushOrderedAllocs(t *testing.T, count int) float64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store.rangeRoot = store.draft.workflowRangeRoot
-		store.rangeCount = store.draft.workflowRangeCount
-		ctx := &store.rangeCtx
-		ctx.family = family
-		ctx.store = store
-		ctx.untracked = false
-		ctx.root = &store.rangeRoot
-		ctx.count = &store.rangeCount
-		ctx.scratch = &store.rangeScratch
+		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
 			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {
@@ -69,15 +61,7 @@ func pushGeneralAllocs(t *testing.T, count int) float64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store.rangeRoot = store.draft.workflowRangeRoot
-		store.rangeCount = store.draft.workflowRangeCount
-		ctx := &store.rangeCtx
-		ctx.family = family
-		ctx.store = store
-		ctx.untracked = false
-		ctx.root = &store.rangeRoot
-		ctx.count = &store.rangeCount
-		ctx.scratch = &store.rangeScratch
+		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
 			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {
@@ -88,10 +72,11 @@ func pushGeneralAllocs(t *testing.T, count int) float64 {
 }
 
 // TestSliceAOrderedUnionAllocCeiling pins the ordered coverage-input
-// path. Baseline after the slice A fixes: ~54 allocations for the fresh
-// draft plus zero per record (512 records). The ceiling of 128 fails on
-// any per-record allocation (54 + 512 = 566) while leaving headroom for
-// setup variance across Go releases.
+// path. Baseline after the zero-alloc completion: ~52 allocations for
+// the fresh draft plus zero per record (52 at both 512 and 1024
+// records). The ceiling of 128 fails on any per-record allocation
+// (52 + 512 = 564) while leaving headroom for setup variance across Go
+// releases.
 func TestSliceAOrderedUnionAllocCeiling(t *testing.T) {
 	total := pushOrderedAllocs(t, 512)
 	t.Logf("ordered coverage input allocations (fresh draft + 512 records): %.0f", total)
@@ -101,19 +86,17 @@ func TestSliceAOrderedUnionAllocCeiling(t *testing.T) {
 	}
 }
 
-// TestSliceAGeneralUnionAllocCeiling pins the general fallback. The
-// generic gap rejection machinery allocates ~2 objects per record at
-// this tree size (rejection, probePredecessor, privatePathSelect; the
-// optionalCell follow-up removes them); the allocation slope grows
-// with tree depth, so the pin uses the absolute total of one fixed
-// measurement. Baseline: ~57 for the fresh draft plus 1.98 per record
-// = ~565 for 256 records. Ceiling 800 permits up to 2.9 per record
-// and fails on any new per-record allocation on top of the baseline
-// (a +1 regression lands at 57 + 2.98 x 256 = 820).
+// TestSliceAGeneralUnionAllocCeiling pins the general fallback. After
+// the zero-alloc completion the gap rejection machinery is value-based
+// and the only remaining cost is the fresh-draft setup plus a small
+// tree-depth slope (measured: 58 objects at 256 records, 61 at 512, 70
+// at 1024; ~3 per tree-level doubling). The ceiling of 300 fails on any
+// new per-record allocation (58 + 256 = 314) while leaving headroom for
+// the depth slope and setup variance across Go releases.
 func TestSliceAGeneralUnionAllocCeiling(t *testing.T) {
 	total := pushGeneralAllocs(t, 256)
 	t.Logf("general coverage input allocations (fresh draft + 256 records): %.0f", total)
-	const ceiling = 800
+	const ceiling = 300
 	if total > ceiling {
 		t.Fatalf("general coverage input allocates %.0f objects for 256 records, ceiling is %d: a new per-record allocation was introduced", total, ceiling)
 	}

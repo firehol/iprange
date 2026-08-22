@@ -28,15 +28,7 @@ func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, v
 	if err != nil {
 		return false, err
 	}
-	store.rangeRoot = store.draft.meta.RangeRoot
-	store.rangeCount = store.draft.meta.RangeRecordCount
-	ctx := &store.rangeCtx
-	ctx.family = family
-	ctx.store = store
-	ctx.untracked = false
-	ctx.root = &store.rangeRoot
-	ctx.count = &store.rangeCount
-	ctx.scratch = &store.rangeScratch
+	ctx := store.beginRangeEdit(family, store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
 	ctx.markUntracked()
 	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
 	if err != nil {
@@ -132,7 +124,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount, scratch: &store.rangeScratch}, &state); err != nil {
+		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, storeView: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount, scratch: &store.rangeScratch}, &state); err != nil {
 			t.Fatal(err)
 		}
 		snapshot := work.Read()
@@ -339,15 +331,7 @@ func TestWorkUnionInputFlushKeepsEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.rangeRoot = store.draft.meta.RangeRoot
-	store.rangeCount = store.draft.meta.RangeRecordCount
-	ctx := &store.rangeCtx
-	ctx.family = family
-	ctx.store = store
-	ctx.untracked = false
-	ctx.root = &store.rangeRoot
-	ctx.count = &store.rangeCount
-	ctx.scratch = &store.rangeScratch
+	ctx := store.beginRangeEdit(family, store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
 	ctx.markUntracked()
 	if err := finishPrivateUntracked(ctx, &state); err != nil {
 		t.Fatal(err)

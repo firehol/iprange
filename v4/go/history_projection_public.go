@@ -348,12 +348,16 @@ func (w *Writer) abortAfterSource(cause error) error {
 	if discardErr != nil {
 		w.core.MarkUnresolved(discardErr)
 		inner = &abortError{
-			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "history projection discard failed"},
+			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "workflow discard failed"},
 			cause: cause,
 		}
 	}
+	// The class detail is neutral because this helper is shared by every
+	// workflow kind (history projection, feed workflow, membership
+	// transaction, prepared feed change); Rust TransactionAborted
+	// carries no detail.
 	return &abortError{
-		class: &format.Error{Code: format.CodeTransactionAborted, Detail: "history projection aborted"},
+		class: &format.Error{Code: format.CodeTransactionAborted, Detail: "workflow aborted"},
 		cause: inner,
 	}
 }
@@ -474,7 +478,7 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 			return CommitResult{}, err
 		}
 		h.spent = true
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	attempt, err := h.w.core.CommitAttempt()
 	if err != nil {
@@ -558,7 +562,7 @@ func (h *FinishedHistoryProjection) Abort() error {
 	}
 	h.spent = true
 	if !h.changed {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if h.w.core == nil || h.w.core.Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}

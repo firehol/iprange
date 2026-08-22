@@ -700,23 +700,32 @@ func TestWorkflowStateMachine(t *testing.T) {
 	}
 
 	// Mutate on a core without a draft starts a plain transaction (Rust
-	// WriterCore::edit), never a workflow.
-	if err := c.Mutate(func(edit *WriterEdit) error {
+	// WriterCore::edit), never a workflow. A membership core rejects raw
+	// value assignments (they become refcount deltas for ids that were
+	// never interned), so the plain-transaction gates run on a direct
+	// value core.
+	directPath := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, lastSeenTag)
+	d, err := Open(directPath, historyBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.Mutate(func(edit *WriterEdit) error {
 		_, err := edit.store.AssignV4(10, 20, 5)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !c.HasDraft() || !c.DraftChanged() || c.WorkflowActive() {
+	if !d.HasDraft() || !d.DraftChanged() || d.WorkflowActive() {
 		t.Fatal("mutate did not open a changed plain transaction")
 	}
-	if err := c.Prepare(nil); err != nil {
+	if err := d.Prepare(nil); err != nil {
 		t.Fatal(err)
 	}
-	if res := c.Publish(nil); res.Status != PublishCommitted {
+	if res := d.Publish(nil); res.Status != PublishCommitted {
 		t.Fatalf("publish status = %v (%v), want committed", res.Status, res.Err)
 	}
-	if c.HasDraft() || c.WorkflowActive() {
+	if d.HasDraft() || d.WorkflowActive() {
 		t.Fatal("commit left workflow state")
 	}
 }

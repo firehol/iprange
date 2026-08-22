@@ -432,11 +432,12 @@ func finishMembershipRemoval(store tree.RetiringStore, state *membershipState, r
 			return err
 		}
 	}
-	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindMembership, record.id, &retired)
+	var clearedRetired tree.RetiredPages
+	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindMembership, record.id, &clearedRetired)
 	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired); err != nil {
+	if err := store.RetirePages(clearedRetired); err != nil {
 		return err
 	}
 	if !cleared {

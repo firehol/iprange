@@ -84,6 +84,36 @@ func NewDraftStore(m *mapping.Mapping, committedPageCount uint64, budget PageBud
 	return &DraftStore{mapping: m, committedPageCount: committedPageCount, budget: budget, draft: draft}
 }
 
+// beginRangeEdit snaps the range root/count locals from one draft
+// source and resets the draft-owned range context for one range edit
+// (Rust range_mutation function parameters). Every range entry point
+// must pair beginRangeEdit with commitRangeEdit, so the untracked flag,
+// the scratch target, and the root/count pointers are always reset
+// before an operation: the missed-reset class that silently skipped
+// membership accounting is impossible by construction.
+func (s *DraftStore) beginRangeEdit(family rangeFamily, root uint32, count uint64) *rangeCtx {
+	s.rangeRoot = root
+	s.rangeCount = count
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.storeView = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
+	return ctx
+}
+
+// commitRangeEdit writes the edited range root/count back to one draft
+// destination and folds the changed flag into the draft (Rust
+// draft_store.rs assign/clear locals written back after the edit).
+func (s *DraftStore) commitRangeEdit(root *uint32, count *uint64, changed bool) {
+	*root = s.rangeRoot
+	*count = s.rangeCount
+	s.draft.changed = s.draft.changed || changed
+}
+
 // Compile-time interface checks: the draft store serves the tree core, the
 // free bitmap, and the retirement sink.
 var (

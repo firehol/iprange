@@ -42,6 +42,50 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - slice B review-fix round: five-aspect FAILs fixed
+
+The five-aspect slice-B review round (Meitner Rust parity, Anscombe Go
+idioms, Harvey performance, Newton wire/integrity, Aristotle APIs/docs)
+returned FAIL on every aspect; all findings were fixed and the full
+battery is green again:
+
+- Retirement double-free (pre-existing, Newton-class integrity bug):
+  finishMembershipRemoval (membership_dictionary.go) and
+  applyStructureDelta (structure_dictionary.go) reused the hash-delete
+  `retired` list for bitmap.ClearUsed, so RetirePages retired the same
+  page twice ("page is already retired"). Rust clear_used_id builds a
+  fresh RetiredPages; Go now uses a fresh `clearedRetired` list in both
+  call sites.
+- PrepareWithCheckpoint Rust parity (Meitner F-3): membership deltas
+  are now drained at prepare (draft_prepare.go), matching Rust; this
+  exposed the TestWorkflowStateMachine plain-transaction section, which
+  assigned a raw value on a membership core (id never interned). The
+  plain-transaction gates now run on a direct value core, preserving
+  the membership workflow gates on the original core.
+- Zero-alloc flake root cause (Harvey performance + reliability): Go
+  1.26's probabilistic type-assert cache (48-byte allocation at
+  ~1/1024 type asserts) fired on the per-record RangeStore -> tree.Store
+  interface conversion in UnionInput.pushOrdered. rangeCtx now carries
+  a concrete storeView set once in beginRangeEdit, removing the
+  per-record conversion (60/60 flake attempts clean; also a real
+  hot-path win matching Rust, which passes the concrete store).
+- Entry-point hygiene (Anscombe P2-1): beginRangeEdit/commitRangeEdit
+  helpers now own the range root/count/scratch/untracked reset at every
+  entry point; missed-reset class bugs are impossible by construction.
+- Test parity (Newton): TestPublicRenameDeleteReuseCommittedIndex must
+  call del.ClearMetadataJSON() before commit; metadata is not
+  auto-cleared by delete, matching the Rust vector.
+- Harness cleanup: debug.PrintStack instrumentation removed from
+  draft_store.go; range_bulk.go confirmed untouched (empty diff).
+- Full battery green under nice: go build, gofmt clean, go vet,
+  go test -count=1 ./..., go test -count=1 -tags v4work ./...,
+  go test -count=1 -race ./..., go test -count=1 -race -tags v4work
+  ./..., GODEBUG=checkptr=2 go test -count=1 ./..., and six
+  cross-compiles (linux/386, linux/arm, linux/arm64, windows/amd64,
+  darwin/arm64, freebsd/amd64).
+- Next: commit this batch, send the delta brief to all five reviewers,
+  close slice B only when all aspects PASS, then slice C.
+
 ### Status (2026-08-22) - slice B zero-alloc completion: feed slice ingestion reaches Rust parity (0 allocations per batch)
 
 The slice-B public feed workflow batch (uncommitted work on top of

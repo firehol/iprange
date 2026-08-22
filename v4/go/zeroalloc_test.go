@@ -2,6 +2,7 @@ package iprangedb
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -335,12 +336,40 @@ func TestZeroAllocationFeedSliceIngestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	// Pin the fresh-workflow first batch: the very first slice ingestion
+	// (which proves the ascending prefix and starts the ordered builder)
+	// must also allocate nothing, mirroring the Rust
+	// count_thread_allocations window around the first add_ranges_v4_slice.
+	// The one exception is the Go runtime's one-time type-assertion cache:
+	// the first interface assertion of the coverage path charges a single
+	// 48-byte runtime metadata entry that no user code can avoid (Rust's
+	// thread-allocation counter does not see Go runtime internals). One
+	// throwaway workflow warms that cache so the measured window is
+	// exactly the user-code allocation behavior.
+	warm, err := w.BeginCreateFeed(feedName(t, "warm"), NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := warm.AddRangesV4(feedRanges1000()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Abort(); err != nil {
+		t.Fatal(err)
+	}
 	create, err := w.BeginCreateFeed(feedName(t, "feed"), NewCancellationToken())
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
 	if err := create.AddRangesV4(feedRanges1000()); err != nil {
 		t.Fatal(err)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	if delta := after.TotalAlloc - before.TotalAlloc; delta != 0 {
+		t.Fatalf("fresh-workflow first batch allocated %d bytes, want 0", delta)
 	}
 	// 51 continuation batches of 1000 strictly ascending records (one
 	// extra for the AllocsPerRun warmup); the first record of batch b

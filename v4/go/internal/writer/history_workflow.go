@@ -38,7 +38,7 @@ func (c *Core) BeginHistoryProjection(windows []HistoryWindow, check func() erro
 		return nil, err
 	}
 	if c.draft == nil {
-		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
 	plan, err := prepareHistoryPlan(store, windows, check)
@@ -60,7 +60,7 @@ func (p *HistoryProjection) Push4(from, to uint32, lastSeen uint32, check func()
 		return err
 	}
 	if p.core.draft == nil {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return p.merge.push(p.store, tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, lastSeen, check)
 }
@@ -73,7 +73,7 @@ func (p *HistoryProjection) Push6(fromHi, fromLo, toHi, toLo uint64, lastSeen ui
 		return err
 	}
 	if p.core.draft == nil {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return p.merge.push(p.store, tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, lastSeen, check)
 }
@@ -87,7 +87,7 @@ func (p *HistoryProjection) Finish(sourceRangeCount uint64, sourceAddresses form
 		return nil, err
 	}
 	if p.core.draft == nil {
-		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return p.merge.finish(p.store, check, sourceRangeCount, sourceAddresses)
 }

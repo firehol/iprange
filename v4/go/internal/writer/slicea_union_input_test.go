@@ -36,15 +36,7 @@ func pushWorkflowCoverage(store *DraftStore, input *UnionInput, from, to tree.Ke
 	if err != nil {
 		return err
 	}
-	store.rangeRoot = store.draft.workflowRangeRoot
-	store.rangeCount = store.draft.workflowRangeCount
-	ctx := &store.rangeCtx
-	ctx.family = family
-	ctx.store = store
-	ctx.untracked = false
-	ctx.root = &store.rangeRoot
-	ctx.count = &store.rangeCount
-	ctx.scratch = &store.rangeScratch
+	ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 	if _, err := pushPrivateUntracked(ctx, from, to, value, input); err != nil {
 		return err
 	}
@@ -60,15 +52,7 @@ func finishWorkflowInput(store *DraftStore, input *UnionInput) error {
 	if err != nil {
 		return err
 	}
-	store.rangeRoot = store.draft.workflowRangeRoot
-	store.rangeCount = store.draft.workflowRangeCount
-	ctx := &store.rangeCtx
-	ctx.family = family
-	ctx.store = store
-	ctx.untracked = false
-	ctx.root = &store.rangeRoot
-	ctx.count = &store.rangeCount
-	ctx.scratch = &store.rangeScratch
+	ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 	if _, err := finishInputUntracked(ctx, input); err != nil {
 		return err
 	}

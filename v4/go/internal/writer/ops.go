@@ -21,7 +21,7 @@ func (c *Core) AssignV4(from, to uint32, value uint32) (bool, error) {
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).AssignV4(from, to, value)
 }
@@ -33,7 +33,7 @@ func (c *Core) AssignV6(fromHi, fromLo, toHi, toLo uint64, value uint32) (bool, 
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).AssignV6(fromHi, fromLo, toHi, toLo, value)
 }
@@ -45,7 +45,7 @@ func (c *Core) ClearV4(from, to uint32) (bool, error) {
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).ClearV4(from, to)
 }
@@ -57,7 +57,7 @@ func (c *Core) ClearV6(fromHi, fromLo, toHi, toLo uint64) (bool, error) {
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).ClearV6(fromHi, fromLo, toHi, toLo)
 }
@@ -69,7 +69,7 @@ func (c *Core) SetMetadata(input []byte) (bool, error) {
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).SetMetadata(input)
 }
@@ -81,7 +81,7 @@ func (c *Core) ClearMetadata() (bool, error) {
 		return false, err
 	}
 	if c.draft == nil {
-		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return false, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft).ClearMetadata()
 }

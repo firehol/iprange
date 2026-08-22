@@ -242,14 +242,17 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 	}
 	work.SourcePass(1)
 	work.InputSourcePass(1)
-	if err := in.cancellation.check(); err != nil {
-		return err
-	}
 	edit := in.edit
+	// Rust drain_source runs every cancellation checkpoint inside
+	// writer.mutate, so each failure aborts the workflow and wraps the
+	// cause in TransactionAborted.
+	if err := in.cancellation.check(); err != nil {
+		return in.w.abortAfter(err)
+	}
 	for chunkStart := 0; chunkStart < len(ranges); chunkStart += 4096 {
 		if chunkStart != 0 {
 			if err := in.cancellation.check(); err != nil {
-				return err
+				return in.w.abortAfter(err)
 			}
 		}
 		chunkEnd := chunkStart + 4096
@@ -258,19 +261,30 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 		}
 		for record := chunkStart; record < chunkEnd; record++ {
 			r := ranges[record]
+			next, err := in.nextInputRecord()
+			if err != nil {
+				return in.w.abortAfter(err)
+			}
 			if r.From > r.To {
-				return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
 			if in.emptyMapCreate {
 				if err := edit.AddEmptyMapFeedRange(tree.Key{Hi: uint64(r.From)}, tree.Key{Hi: uint64(r.To)}, in.member, &in.coverage); err != nil {
-					return err
+					return in.w.abortAfter(err)
 				}
 			} else if err := edit.AddFeedCoverage(tree.Key{Hi: uint64(r.From)}, tree.Key{Hi: uint64(r.To)}, &in.coverage); err != nil {
-				return err
+				return in.w.abortAfter(err)
 			}
-			if err := in.consumeRecord(); err != nil {
-				return err
-			}
+			work.RangeConsumed(1)
+			in.inputRecords = next
+		}
+	}
+	// Rust drain_source runs its loop-top checkpoint once more after the
+	// final batch before the source reports end-of-stream; an empty
+	// source never reaches that iteration.
+	if len(ranges) != 0 {
+		if err := in.cancellation.check(); err != nil {
+			return in.w.abortAfter(err)
 		}
 	}
 	return nil
@@ -284,14 +298,17 @@ func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 	}
 	work.SourcePass(1)
 	work.InputSourcePass(1)
-	if err := in.cancellation.check(); err != nil {
-		return err
-	}
 	edit := in.edit
+	// Rust drain_source runs every cancellation checkpoint inside
+	// writer.mutate, so each failure aborts the workflow and wraps the
+	// cause in TransactionAborted.
+	if err := in.cancellation.check(); err != nil {
+		return in.w.abortAfter(err)
+	}
 	for chunkStart := 0; chunkStart < len(ranges); chunkStart += 4096 {
 		if chunkStart != 0 {
 			if err := in.cancellation.check(); err != nil {
-				return err
+				return in.w.abortAfter(err)
 			}
 		}
 		chunkEnd := chunkStart + 4096
@@ -300,41 +317,55 @@ func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 		}
 		for record := chunkStart; record < chunkEnd; record++ {
 			r := ranges[record]
+			next, err := in.nextInputRecord()
+			if err != nil {
+				return in.w.abortAfter(err)
+			}
 			if r.FromHi > r.ToHi || (r.FromHi == r.ToHi && r.FromLo > r.ToLo) {
-				return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
 			from := tree.Key{Hi: r.FromHi, Lo: r.FromLo}
 			to := tree.Key{Hi: r.ToHi, Lo: r.ToLo}
 			if in.emptyMapCreate {
 				if err := edit.AddEmptyMapFeedRange(from, to, in.member, &in.coverage); err != nil {
-					return err
+					return in.w.abortAfter(err)
 				}
 			} else if err := edit.AddFeedCoverage(from, to, &in.coverage); err != nil {
-				return err
+				return in.w.abortAfter(err)
 			}
-			if err := in.consumeRecord(); err != nil {
-				return err
-			}
+			work.RangeConsumed(1)
+			in.inputRecords = next
+		}
+	}
+	// Rust drain_source runs its loop-top checkpoint once more after the
+	// final batch before the source reports end-of-stream; an empty
+	// source never reaches that iteration.
+	if len(ranges) != 0 {
+		if err := in.cancellation.check(); err != nil {
+			return in.w.abortAfter(err)
 		}
 	}
 	return nil
 }
 
-// consumeRecord charges one consumed input range and its record counter
-// (Rust drain_source per-record accounting).
-func (in *exactFeedWorkflow) consumeRecord() error {
-	work.RangeConsumed(1)
-	if in.inputRecords == ^uint64(0) {
-		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
+// nextInputRecord reserves the next input record counter before the
+// record is applied and the caller charges RangeConsumed and stores the
+// counter after the apply, mirroring Rust drain_source per-record order.
+func (in *exactFeedWorkflow) nextInputRecord() (uint64, error) {
+	next := in.inputRecords + 1
+	if next == 0 {
+		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
 	}
-	in.inputRecords++
-	return nil
+	return next, nil
 }
 
 // requireInputFamily mirrors Rust require_input_family: the input must
 // be active and the database family must match; a mismatch aborts the
 // workflow through the writer.
 func (in *exactFeedWorkflow) requireInputFamily(family uint8) error {
+	if in.w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
 	if err := in.w.core.Healthy(); err != nil {
 		return err
 	}
@@ -455,7 +486,7 @@ func (f *FinishedWorkflow) Abort() error {
 	}
 	f.spent = true
 	if !f.changed {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if f.w.core == nil || f.w.core.Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
@@ -485,6 +516,12 @@ func (w *Writer) RenameFeed(old, new FeedName, cancellation *CancellationToken) 
 	}
 	if !found {
 		return nil, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
+	}
+	// require_existing_feed (Rust feed_lifecycle.rs): the cancellation
+	// checkpoint runs before the new-name lookup, so a fired token
+	// classifies as Cancelled even when the new name exists.
+	if err := cancellation.check(); err != nil {
+		return nil, err
 	}
 	if _, found, err := w.core.LookupBaseFeed(string(new)); err != nil {
 		return nil, err
@@ -646,7 +683,7 @@ func (w *Writer) Abort() error {
 		return err
 	}
 	if !w.core.HasDraft() {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return w.core.DiscardUnpublished()
 }
@@ -689,6 +726,9 @@ func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 // requireActive mirrors Rust ExactFeedState::require_active (the shared
 // require_input_active): healthy writer with an open workflow input.
 func (in *exactFeedWorkflow) requireActive() error {
+	if in.w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
 	if err := in.w.core.Healthy(); err != nil {
 		return err
 	}
@@ -857,7 +897,7 @@ func commitPrepared(w *Writer, cancellation *CancellationToken, markSpent func()
 			return CommitResult{}, err
 		}
 		markSpent()
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	attempt, err := w.core.CommitAttempt()
 	if err != nil {

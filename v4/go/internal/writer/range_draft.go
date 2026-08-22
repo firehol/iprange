@@ -29,15 +29,7 @@ func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	var changed bool
 	if s.draft.rangeTreePrivate {
 		changed, err = rangeAssignPrivate(ctx, from, to, value)
@@ -47,9 +39,7 @@ func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return changed, nil
 }
 
@@ -58,22 +48,12 @@ func (s *DraftStore) clear(from, to tree.Key) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	changed, err := rangeClear(ctx, from, to)
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return changed, nil
 }
 
@@ -135,22 +115,12 @@ func (s *DraftStore) addPrivateConstantRange(from, to tree.Key, value uint32, in
 	if err != nil {
 		return err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	changed, err := pushPrivateUntracked(ctx, from, to, value, input)
 	if err != nil {
 		return err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return nil
 }
 
@@ -161,22 +131,12 @@ func (s *DraftStore) finishPrivateConstantRanges(input *UnionInput) error {
 	if err != nil {
 		return err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	changed, err := finishInputUntracked(ctx, input)
 	if err != nil {
 		return err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return nil
 }
 
@@ -192,21 +152,11 @@ func (s *DraftStore) assignInput(from, to tree.Key, value uint32, input *private
 	if err != nil {
 		return false, err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	changed, err := rangeAssignPrivateInput(ctx, from, to, value, input)
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return changed, nil
 }

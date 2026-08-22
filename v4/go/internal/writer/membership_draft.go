@@ -235,15 +235,7 @@ func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle,
 	if err != nil {
 		return false, err
 	}
-	s.rangeRoot = s.draft.meta.RangeRoot
-	s.rangeCount = s.draft.meta.RangeRecordCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	memberID, memberWords := member.stored()
 	changed, err := rangeTransform(ctx, from, to, func(store RangeStore, value optionalValue) (optionalValue, error) {
 		if err := check(); err != nil {
@@ -262,9 +254,7 @@ func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle,
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = s.rangeRoot
-	s.draft.meta.RangeRecordCount = s.rangeCount
-	s.draft.changed = s.draft.changed || changed
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	return changed, nil
 }
 

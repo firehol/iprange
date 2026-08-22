@@ -15,6 +15,11 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
+// noopCheck is the nil-checkpoint stand-in for prepare stages that
+// always run their internal checkpoint: the commit path passes the
+// cancellation check, while internal callers may pass none.
+func noopCheck() error { return nil }
+
 // PrepareWithCheckpoint stages the draft for publication (Rust
 // DraftStore::prepare_with_checkpoint). The workflow-input-open gate of
 // the Rust sequence is structurally closed: editor workflow states arrive
@@ -36,8 +41,13 @@ func (s *DraftStore) PrepareWithCheckpoint(checkpoint func() error) error {
 			return err
 		}
 	}
-	// finish_membership_deltas: no-op until the membership edit core
-	// (direct drafts carry no membership deltas).
+	// finish_membership_deltas: drain and apply the buffered refcount
+	// deltas of membership and structured drafts (Rust
+	// prepare_with_checkpoint parity); direct drafts carry no deltas and
+	// the empty-delta gate passes trivially.
+	if err := s.finishMembershipDeltasWithCheckpoint(noopCheck); err != nil {
+		return err
+	}
 	if checkpoint != nil {
 		if err := checkpoint(); err != nil {
 			return err

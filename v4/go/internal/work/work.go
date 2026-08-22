@@ -21,9 +21,12 @@ func TreeDescent(uint64) {}
 // PageVisit counts one visited page view on the reader hot paths.
 func PageVisit(uint64) {}
 
-// PageParse counts one page-header decode. The reader decodes exactly one
-// header per visited page on every path, so PageParse moves with PageVisit
-// and the pinned tests treat them as one invariant.
+// PageParse counts one page-header decode. The reader page owner decodes
+// exactly one header per visited page, so on the reader hot paths PageParse
+// moves with PageVisit and the pinned reader tests treat them as one
+// invariant. Writer edit paths decode headers through their own parse owner
+// and can re-inspect a page (COW first-touch, cell apply), so there
+// PageParse is not tied to PageVisit.
 func PageParse(uint64) {}
 
 // KeyProbe counts one key-only comparison during a fixed-tree search.

@@ -114,7 +114,7 @@ func (c *Core) BindEdit() (*WriterEdit, error) {
 		return nil, err
 	}
 	if c.draft == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "no pending transaction"}
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "no changed transaction is pending"}
 	}
 	return newWriterEdit(NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft), c.base.Meta), nil
 }
@@ -271,7 +271,7 @@ func (c *Core) CompareMaps(check func() error) (Comparison, error) {
 		return Comparison{}, err
 	}
 	if c.draft == nil {
-		return Comparison{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return Comparison{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
 	return compareMaps(store, c.base.Meta, check)

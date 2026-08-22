@@ -134,6 +134,7 @@ func newV4Ctx(m *rangeMemoryStore, root *uint32, count *uint64) *rangeCtx {
 	ctx := &m.rangeCtx
 	ctx.family = rangeCodec4{}
 	ctx.store = m
+	ctx.storeView = m
 	ctx.root = root
 	ctx.count = count
 	ctx.untracked = false
@@ -309,6 +310,7 @@ func TestEndpointArithmeticHandlesBothFullAddressSpaces(t *testing.T) {
 	ctx6 := &m6.rangeCtx
 	ctx6.family = rangeCodec6{}
 	ctx6.store = m6
+	ctx6.storeView = m6
 	ctx6.root = &root6
 	ctx6.count = &count6
 	ctx6.untracked = false

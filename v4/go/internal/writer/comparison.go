@@ -99,7 +99,7 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 			case compareAfter:
 				next, ok := rfamily.Next(step.leftEnd)
 				if !ok {
-					return Comparison{}, overflow("range Comparison cursor")
+					return Comparison{}, overflow("range comparison cursor")
 				}
 				old.from = next
 			}
@@ -111,7 +111,7 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 			case compareAfter:
 				next, ok := rfamily.Next(step.rightEnd)
 				if !ok {
-					return Comparison{}, overflow("range Comparison cursor")
+					return Comparison{}, overflow("range comparison cursor")
 				}
 				newValue.from = next
 			}
@@ -189,7 +189,7 @@ func compareRangePair(rfamily rangeFamily, family uint8, left, right rangeRecord
 	if leftValue.from.Less(rightValue.from) {
 		end, ok := rfamily.Previous(rightValue.from)
 		if !ok {
-			return compareStep{}, overflow("range Comparison prefix")
+			return compareStep{}, overflow("range comparison prefix")
 		}
 		count, err := familyInclusiveCardinality(family, leftValue.from, end)
 		if err != nil {
@@ -207,7 +207,7 @@ func compareRangePair(rfamily rangeFamily, family uint8, left, right rangeRecord
 	} else if rightValue.from.Less(leftValue.from) {
 		end, ok := rfamily.Previous(leftValue.from)
 		if !ok {
-			return compareStep{}, overflow("range Comparison prefix")
+			return compareStep{}, overflow("range comparison prefix")
 		}
 		count, err := familyInclusiveCardinality(family, rightValue.from, end)
 		if err != nil {

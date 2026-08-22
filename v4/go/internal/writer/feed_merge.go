@@ -70,20 +70,11 @@ func (s *DraftStore) addFeedCoverage(from, to tree.Key, input *UnionInput) error
 	if err != nil {
 		return err
 	}
-	s.rangeRoot = s.draft.workflowRangeRoot
-	s.rangeCount = s.draft.workflowRangeCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
 	if _, err := pushPrivateUntracked(ctx, from, to, 1, input); err != nil {
 		return err
 	}
-	s.draft.workflowRangeRoot = s.rangeRoot
-	s.draft.workflowRangeCount = s.rangeCount
+	s.commitRangeEdit(&s.draft.workflowRangeRoot, &s.draft.workflowRangeCount, false)
 	return nil
 }
 
@@ -94,20 +85,11 @@ func (s *DraftStore) finishFeedCoverage(input *UnionInput) error {
 	if err != nil {
 		return err
 	}
-	s.rangeRoot = s.draft.workflowRangeRoot
-	s.rangeCount = s.draft.workflowRangeCount
-	ctx := &s.rangeCtx
-	ctx.family = family
-	ctx.store = s
-	ctx.untracked = false
-	ctx.root = &s.rangeRoot
-	ctx.count = &s.rangeCount
-	ctx.scratch = &s.rangeScratch
+	ctx := s.beginRangeEdit(family, s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
 	if _, err := finishInputUntracked(ctx, input); err != nil {
 		return err
 	}
-	s.draft.workflowRangeRoot = s.rangeRoot
-	s.draft.workflowRangeCount = s.rangeCount
+	s.commitRangeEdit(&s.draft.workflowRangeRoot, &s.draft.workflowRangeCount, false)
 	return nil
 }
 

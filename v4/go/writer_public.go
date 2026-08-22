@@ -305,7 +305,7 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 			return CommitResult{}, err
 		}
 		t.active = false
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	attempt, err := t.w.core.CommitAttempt()
 	if err != nil {

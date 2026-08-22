@@ -164,7 +164,7 @@ func applyStructureDelta(codec structurePayloadCodec, store tree.RetiringStore, 
 	if err := store.RetirePages(retired); err != nil {
 		return 0, err
 	}
-	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindStructure, record.id, &retired)
+	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindStructure, record.id, &tree.RetiredPages{})
 	if err != nil {
 		return 0, err
 	}

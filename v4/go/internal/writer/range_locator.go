@@ -25,9 +25,18 @@ const (
 	locatorConflictLimit = 8
 )
 
-// leafHint is one locator entry: the first key of a private leaf and its
-// page number (Rust LeafHint).
-type leafHint struct {
+// leafHint4 is one IPv4 locator entry: the first key (always a 32-bit
+// address carried in Key.Hi with Lo zero) and its page number. It is 8
+// bytes, exactly like Rust LeafHint<Ipv4Key>, so the 256 KiB budget
+// yields the same 32,768-hint coverage as Rust.
+type leafHint4 struct {
+	first      uint32
+	pageNumber uint32
+}
+
+// leafHint6 is one IPv6 locator entry: the 128-bit first key and its
+// page number, 24 bytes exactly like Rust LeafHint<Ipv6Key>.
+type leafHint6 struct {
 	first      tree.Key
 	pageNumber uint32
 }
@@ -39,10 +48,15 @@ type locatorCandidate struct {
 }
 
 // leafLocator is the bounded hint table of one private build (Rust
-// LeafLocator). enabled state follows the slice capacity exactly like the
-// Rust Vec: make gives capacity, release drops to zero.
+// LeafLocator). family picks the family-sized hint entry so the Go
+// element size equals the Rust LeafHint<K> size (8 bytes IPv4, 24 bytes
+// IPv6): the budget charge, the 256 KiB cap, and the hint coverage all
+// match Rust exactly. enabled state follows the slice capacity exactly
+// like the Rust Vec: make gives capacity, release drops to zero.
 type leafLocator struct {
-	hints []leafHint
+	family uint8
+	hints4 []leafHint4
+	hints6 []leafHint6
 }
 
 // newLeafLocator charges the hint table against the caller's byte budget
@@ -62,11 +76,15 @@ func newLeafLocator(family uint8, maxHeapBytes uint64) leafLocator {
 	if err := budget.vector(capacity, size, "private leaf locator"); err != nil {
 		return leafLocator{}
 	}
-	return leafLocator{hints: make([]leafHint, 0, capacity)}
+	if family == format.AddressFamilyIPv4 {
+		return leafLocator{family: family, hints4: make([]leafHint4, 0, capacity)}
+	}
+	return leafLocator{family: family, hints6: make([]leafHint6, 0, capacity)}
 }
 
-// leafHintSize reports the Rust element size of one hint for the budget
-// charge (Rust size_of::<LeafHint<K>>(): 8 for IPv4, 24 for IPv6).
+// leafHintSize reports the element size of one hint for the budget
+// charge, identical to Rust size_of::<LeafHint<K>>() (8 for IPv4, 24
+// for IPv6) and to the real Go element size of the family hint entry.
 func leafHintSize(family uint8) uint64 {
 	if family == format.AddressFamilyIPv4 {
 		return 8
@@ -74,25 +92,45 @@ func leafHintSize(family uint8) uint64 {
 	return 24
 }
 
-func (l *leafLocator) enabled() bool { return cap(l.hints) != 0 }
+func (l *leafLocator) enabled() bool { return cap(l.hints4)+cap(l.hints6) != 0 }
 
 // candidate returns the hint at or below key (Rust LeafLocator::candidate
 // over partition_point of first <= key).
 func (l *leafLocator) candidate(key tree.Key) (locatorCandidate, bool) {
-	index := sort.Search(len(l.hints), func(i int) bool {
-		return key.Less(l.hints[i].first)
+	if l.family == format.AddressFamilyIPv4 {
+		index := sort.Search(len(l.hints4), func(i int) bool {
+			return uint64(l.hints4[i].first) > key.Hi
+		})
+		if index == 0 {
+			return locatorCandidate{}, false
+		}
+		index--
+		return locatorCandidate{index: index, pageNumber: l.hints4[index].pageNumber}, true
+	}
+	index := sort.Search(len(l.hints6), func(i int) bool {
+		return key.Less(l.hints6[i].first)
 	})
 	if index == 0 {
 		return locatorCandidate{}, false
 	}
 	index--
-	return locatorCandidate{index: index, pageNumber: l.hints[index].pageNumber}, true
+	return locatorCandidate{index: index, pageNumber: l.hints6[index].pageNumber}, true
 }
 
 // learn records the first key and page of one freshly inserted private
 // leaf, coalescing with an existing hint for the same page (Rust
 // LeafLocator::learn).
 func (l *leafLocator) learn(first tree.Key, pageNumber uint32, c locatorCandidate, hasCandidate bool) {
+	if l.family == format.AddressFamilyIPv4 {
+		l.learn4(uint32(first.Hi), pageNumber, c, hasCandidate)
+		return
+	}
+	l.learn6(first, pageNumber, c, hasCandidate)
+}
+
+// learn4 is the IPv4 form of learn (Rust LeafLocator::<Ipv4Key>::learn):
+// the first key is the 32-bit address in Key.Hi.
+func (l *leafLocator) learn4(first uint32, pageNumber uint32, c locatorCandidate, hasCandidate bool) {
 	following := 0
 	if hasCandidate {
 		following = c.index + 1
@@ -101,35 +139,74 @@ func (l *leafLocator) learn(first tree.Key, pageNumber uint32, c locatorCandidat
 	switch {
 	case hasCandidate && c.pageNumber == pageNumber:
 		existing = c.index
-	case following < len(l.hints) && l.hints[following].pageNumber == pageNumber:
+	case following < len(l.hints4) && l.hints4[following].pageNumber == pageNumber:
 		existing = following
 	}
 	if existing >= 0 {
-		if l.hints[existing].first.Equal(first) {
+		if l.hints4[existing].first == first {
 			return
 		}
-		l.hints = append(l.hints[:existing], l.hints[existing+1:]...)
+		l.hints4 = append(l.hints4[:existing], l.hints4[existing+1:]...)
 	}
-	index := sort.Search(len(l.hints), func(i int) bool {
-		return !l.hints[i].first.Less(first)
+	index := sort.Search(len(l.hints4), func(i int) bool {
+		return uint64(l.hints4[i].first) >= uint64(first)
 	})
-	if index < len(l.hints) && l.hints[index].first.Equal(first) {
-		l.hints[index].pageNumber = pageNumber
+	if index < len(l.hints4) && l.hints4[index].first == first {
+		l.hints4[index].pageNumber = pageNumber
 		return
 	}
-	if len(l.hints) < cap(l.hints) {
-		l.hints = append(l.hints, leafHint{})
-		copy(l.hints[index+1:], l.hints[index:])
-		l.hints[index] = leafHint{first: first, pageNumber: pageNumber}
+	if len(l.hints4) < cap(l.hints4) {
+		l.hints4 = append(l.hints4, leafHint4{})
+		copy(l.hints4[index+1:], l.hints4[index:])
+		l.hints4[index] = leafHint4{first: first, pageNumber: pageNumber}
+	}
+}
+
+// learn6 is the IPv6 form of learn (Rust LeafLocator::<Ipv6Key>::learn).
+func (l *leafLocator) learn6(first tree.Key, pageNumber uint32, c locatorCandidate, hasCandidate bool) {
+	following := 0
+	if hasCandidate {
+		following = c.index + 1
+	}
+	existing := -1
+	switch {
+	case hasCandidate && c.pageNumber == pageNumber:
+		existing = c.index
+	case following < len(l.hints6) && l.hints6[following].pageNumber == pageNumber:
+		existing = following
+	}
+	if existing >= 0 {
+		if l.hints6[existing].first.Equal(first) {
+			return
+		}
+		l.hints6 = append(l.hints6[:existing], l.hints6[existing+1:]...)
+	}
+	index := sort.Search(len(l.hints6), func(i int) bool {
+		return !l.hints6[i].first.Less(first)
+	})
+	if index < len(l.hints6) && l.hints6[index].first.Equal(first) {
+		l.hints6[index].pageNumber = pageNumber
+		return
+	}
+	if len(l.hints6) < cap(l.hints6) {
+		l.hints6 = append(l.hints6, leafHint6{})
+		copy(l.hints6[index+1:], l.hints6[index:])
+		l.hints6[index] = leafHint6{first: first, pageNumber: pageNumber}
 	}
 }
 
 // clear keeps the capacity and drops the entries (Rust Vec::clear).
-func (l *leafLocator) clear() { l.hints = l.hints[:0] }
+func (l *leafLocator) clear() {
+	l.hints4 = l.hints4[:0]
+	l.hints6 = l.hints6[:0]
+}
 
 // release drops the table and disables the locator (Rust
 // LeafLocator::release).
-func (l *leafLocator) release() { l.hints = nil }
+func (l *leafLocator) release() {
+	l.hints4 = nil
+	l.hints6 = nil
+}
 
 // privateInput is the locator-backed private range input (Rust
 // PrivateInput<K, ADAPTIVE>). adaptive mirrors the Rust const generic: the

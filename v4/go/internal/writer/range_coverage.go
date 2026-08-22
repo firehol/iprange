@@ -111,12 +111,11 @@ const (
 // embedded by value, exactly like the Rust Builder lives inside the
 // OrderedPrefix variant: the ordered path therefore never allocates.
 type orderedPrefix struct {
-	state      orderedPrefixState
-	builder    rangeBulkBuilder
-	hasBuilder bool
-	addresses  format.Cardinality129
-	finished   format.Cardinality129
-	hasBuilt   bool
+	state     orderedPrefixState
+	builder   rangeBulkBuilder
+	addresses format.Cardinality129
+	finished  format.Cardinality129
+	hasBuilt  bool
 }
 
 // UnionInput is the streamed coverage input of one feed workflow (Rust
@@ -196,16 +195,15 @@ func (u *UnionInput) pushOrdered(ctx *rangeCtx, r rangeRecord) (changed bool, ha
 			return false, false, nil
 		}
 		u.ordered = orderedPrefix{
-			state:      orderedBuilding,
-			hasBuilder: true,
-			addresses:  format.CardinalityZero(),
+			state:     orderedBuilding,
+			addresses: format.CardinalityZero(),
 		}
 		u.ordered.builder.init(ctx.store.TargetTxn(), u.valueKind, u.family)
 	}
-	if u.ordered.state != orderedBuilding || !u.ordered.hasBuilder {
+	if u.ordered.state != orderedBuilding {
 		return false, false, nil
 	}
-	pushed, err := u.ordered.builder.tryPush(ctx.store, r)
+	pushed, err := u.ordered.builder.tryPush(ctx.storeView, r)
 	if err != nil {
 		return false, false, err
 	}
@@ -239,7 +237,7 @@ func (u *UnionInput) finishOrdered(ctx *rangeCtx) (bool, error) {
 	}
 	builder := &u.ordered.builder
 	addresses := u.ordered.addresses
-	root, count, err := builder.finishInline(ctx.store)
+	root, count, err := builder.finishInline(ctx.storeView)
 	if err != nil {
 		return false, err
 	}
@@ -297,11 +295,11 @@ func (u *UnionInput) queue(incoming rangeRecord) (pending rangeRecord, knownGap 
 	u.hasPending = true
 	if touching {
 		u.hasGap = false
-	} else if incoming.from.Less(pending.from) {
-		u.pendingGap = tree.EdgeFirst
+	} else if pending.from.Less(incoming.from) {
+		u.pendingGap = tree.EdgeLast
 		u.hasGap = true
 	} else {
-		u.pendingGap = tree.EdgeLast
+		u.pendingGap = tree.EdgeFirst
 		u.hasGap = true
 	}
 	return pending, knownGap, hasGap, true
@@ -533,6 +531,9 @@ func applyGeneral(ctx *rangeCtx, incoming rangeRecord) (bool, error) {
 	}
 	if result.Inserted {
 		return true, nil
+	}
+	if !result.Rejected {
+		return false, corrupt("general union gap rejection is missing")
 	}
 	changed, _, _, err := mergeRejected(ctx, incoming, result.Reject)
 	return changed, err

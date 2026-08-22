@@ -107,7 +107,7 @@ func (c *Core) CommitAttempt() (CommitAttempt, error) {
 		return CommitAttempt{}, err
 	}
 	if c.draft == nil || !c.draft.changed {
-		return CommitAttempt{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return CommitAttempt{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return CommitAttempt{
 		DatabaseID:    c.draft.meta.DatabaseID,
@@ -127,7 +127,7 @@ func (c *Core) Prepare(checkpoint func() error) error {
 		return err
 	}
 	if c.draft == nil {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
 	return store.PrepareWithCheckpoint(checkpoint)
@@ -138,7 +138,7 @@ func (c *Core) Prepare(checkpoint func() error) error {
 // page_count * PAGE_SIZE, checked).
 func (c *Core) RequireDraftLength() error {
 	if c.draft == nil {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	expected, err := checkedMul(c.draft.meta.PageCount, format.PageSize, "committed file length")
 	if err != nil {
@@ -171,7 +171,7 @@ func (c *Core) Publish(checkpoint func() error) PublishResult {
 	}
 	fault.Crash("commit.before_private_sync")
 	if c.draft == nil {
-		return PublishResult{Status: PublishBeforePublication, Err: &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}}
+		return PublishResult{Status: PublishBeforePublication, Err: &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}}
 	}
 	committedBytes := c.draft.meta.PageCount * format.PageSize
 	if err := c.m.Shrink(committedBytes); err != nil {

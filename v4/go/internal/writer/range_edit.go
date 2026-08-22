@@ -32,8 +32,16 @@ type RangeStore interface {
 type rangeCtx struct {
 	family rangeFamily
 	store  RangeStore
-	root   *uint32
-	count  *uint64
+	// storeView is the same store pre-widened to the pure tree-core
+	// surface once per edit (Rust passes the concrete store everywhere;
+	// Go widens a concrete *DraftStore into tree.Store for free at edit
+	// start, so the per-record builder calls pass an identical
+	// interface instead of converting RangeStore to tree.Store on every
+	// record, which would hit the Go runtime's cached type-assertion
+	// path and its probabilistic heap cache update).
+	storeView tree.Store
+	root      *uint32
+	count     *uint64
 	// untracked no-ops the per-record value accounting of this draft
 	// operation (Rust Untracked wrapper): coverage ranges are internal
 	// to one workflow and never account membership refcounts. One flag

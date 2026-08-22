@@ -346,6 +346,11 @@ func (b *SlottedBuilder) Finish(page []byte) error {
 	return nil
 }
 
+// maxInt is the largest int value; the appender slot-array overflow
+// check uses it to mirror Rust checked_add on the page geometry (dead on
+// 64-bit builds).
+const maxInt = int(^uint(0) >> 1)
+
 // SlottedAppender mirrors slotted_page.rs Appender: a fresh page under
 // construction whose records are appended one by one with tryPush,
 // reporting whether the pushed record fits without failing the page
@@ -369,7 +374,13 @@ func (a *SlottedAppender) TryPush(page []byte, cell []byte) (bool, error) {
 	if len(cell) == 0 {
 		return false, headerErr("slotted-page record is empty")
 	}
+	if a.count+1 > (maxInt-SlottedHeaderSize)/2 {
+		return false, headerErr("slotted-page slot array overflows")
+	}
 	lower := SlottedHeaderSize + (a.count+1)*2
+	if len(cell) > a.upper {
+		return false, headerErr("slotted-page record area overflows")
+	}
 	upper := a.upper - len(cell)
 	if lower > upper {
 		return false, nil
