@@ -22,44 +22,36 @@ const (
 	catalogNameLenOff  = 8
 )
 
-// CatalogRecord is one encoded catalog record (Rust
-// feed_catalog::codec::Encoded): the caller-owned bounded buffer holds
-// the exact record bytes for one tree insert.
-type CatalogRecord struct {
-	bytes [catalogMaxRecord]byte
-	len   int
-}
-
-// EncodeCatalogRecord writes one name record into the bounded buffer
-// (Rust encode: len + index + name). The name must already satisfy the
-// v4 feed-name grammar; the encoder re-checks it so a caller bug cannot
-// plant an invalid key. The name is the caller's string (never a mapped
-// view), so no owned copy of page bytes can happen here.
-func EncodeCatalogRecord(name string, index uint32) (CatalogRecord, error) {
-	var record CatalogRecord
+// encodeCatalogRecord writes one name record into scratch and returns
+// the encoded length (Rust feed_catalog::codec::encode: len + index +
+// name). The scratch is the caller's bounded encode target, sized at
+// least catalogMaxRecord; callers keep it for the lifetime of the
+// draft or output so repeated inserts never allocate (the Go generic
+// tree interface makes stack encodes escape). The name must already
+// satisfy the v4 feed-name grammar; the encoder re-checks it so a
+// caller bug cannot plant an invalid key. The name is the caller's
+// string (never a mapped view), so no owned copy of page bytes can
+// happen here.
+func encodeCatalogRecord(name string, index uint32, scratch []byte) (int, error) {
+	if len(scratch) < catalogMaxRecord {
+		return 0, corrupt("feed catalog record scratch is too small")
+	}
 	if !format.FeedNameValidString(name) {
-		return record, corrupt("feed catalog name is invalid")
+		return 0, corrupt("feed catalog name is invalid")
 	}
 	length := catalogRecordBase + len(name)
-	putU16 := func(offset int, v uint16) { format.PutU16(record.bytes[offset:], v) }
-	putU32 := func(offset int, v uint32) { format.PutU32(record.bytes[offset:], v) }
+	putU16 := func(offset int, v uint16) { format.PutU16(scratch[offset:], v) }
+	putU32 := func(offset int, v uint32) { format.PutU32(scratch[offset:], v) }
 	putU16(0, uint16(length))
 	putU16(2, 0)
 	putU32(catalogIndexOffset, index)
-	record.bytes[catalogNameLenOff] = byte(len(name))
-	record.bytes[9] = 0
-	record.bytes[10] = 0
-	record.bytes[11] = 0
-	copy(record.bytes[catalogNameOffset:length], name)
-	record.len = length
-	return record, nil
+	scratch[catalogNameLenOff] = byte(len(name))
+	scratch[9] = 0
+	scratch[10] = 0
+	scratch[11] = 0
+	copy(scratch[catalogNameOffset:length], name)
+	return length, nil
 }
-
-// Len reports the encoded record length.
-func (r *CatalogRecord) Len() int { return r.len }
-
-// Slice returns the encoded record bytes.
-func (r *CatalogRecord) Slice() []byte { return r.bytes[:r.len] }
 
 // catalogDecodeName extracts the name from one catalog record (Rust
 // decode_entry): the returned slice aliases the input record and lives
@@ -141,10 +133,10 @@ func (nameCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.VarKey(name), nil
 }
 
-func (nameCodec) ReadLeaf(cell []byte) (any, error) {
+func (nameCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {
 	name, index, err := catalogDecodeName(cell)
 	if err != nil {
-		return nil, err
+		return format.CatalogNameRecord{}, err
 	}
 	return format.CatalogNameRecord{FeedIndex: index, Name: name}, nil
 }
@@ -203,10 +195,10 @@ func (indexCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(format.U32(cell[0:4]))}, nil
 }
 
-func (indexCodec) ReadLeaf(cell []byte) (any, error) {
+func (indexCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {
 	name, index, err := catalogDecodeName(cell)
 	if err != nil {
-		return nil, err
+		return format.CatalogNameRecord{}, err
 	}
 	return format.CatalogNameRecord{FeedIndex: index, Name: name}, nil
 }
@@ -221,31 +213,32 @@ func (indexCodec) WriteKey(key tree.Key, output []byte) {
 // inserts is retired through the store; on a fresh output store no page is
 // committed yet, so retirement stays empty. The name root and index root
 // always move together on success.
-func insertCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, name string, index uint32) error {
-	record, err := EncodeCatalogRecord(name, index)
+func insertCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, indexRoot *uint32, name string, index uint32) error {
+	length, err := encodeCatalogRecord(name, index, scratch)
 	if err != nil {
 		return err
 	}
-	retired := tree.NewRetiredPages()
-	changed, err := tree.Insert(nameCodec{}, store, nameRoot, record.Slice(), retired)
+	var retired tree.RetiredPages
+	var changed bool
+	retired, changed, err = tree.Insert(nameCodec{}, store, nameRoot, scratch[:length], retired)
 	if err != nil {
 		return err
 	}
 	if !changed {
 		return corrupt("feed name already exists")
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
-	retired.Clear()
-	changed, err = tree.Insert(indexCodec{}, store, indexRoot, record.Slice(), retired)
+	retired = tree.RetiredPages{}
+	retired, changed, err = tree.Insert(indexCodec{}, store, indexRoot, scratch[:length], retired)
 	if err != nil {
 		return err
 	}
 	if !changed {
 		return corrupt("feed index already exists")
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	work.CatalogIntern(1)

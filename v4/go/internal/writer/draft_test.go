@@ -11,6 +11,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/retire"
+	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // makeEmptyDBPages writes a minimal valid empty direct database whose meta
@@ -69,11 +70,13 @@ func openDraftStore(t testing.TB, path string, budget PageBudget, nonce [16]byte
 func initRangeLeaf(t testing.TB, store *DraftStore, pageNumber uint32, txn uint64) {
 	t.Helper()
 	t.Helper()
-	if err := store.Update(pageNumber, func(page []byte) error {
-		format.InitializePageHeader(page, format.PageTypeRangeLeaf, txn, 0, 0,
-			format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	format.InitializePageHeader(page, format.PageTypeRangeLeaf, txn, 0, 0,
+		format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -153,11 +156,11 @@ func TestMappedPageCannotBypassTheCurrentPageLimit(t *testing.T) {
 	if pageNumber != 2 {
 		t.Fatalf("first allocation = %d, want 2", pageNumber)
 	}
-	if err := store.Inspect(pageNumber, func([]byte) error { return nil }); err != nil {
+	if _, err := store.Inspect(pageNumber); err != nil {
 		t.Fatal(err)
 	}
 	draft.meta.PageCount = uint64(pageNumber)
-	if err := store.Inspect(pageNumber, func([]byte) error { return nil }); err == nil {
+	if _, err := store.Inspect(pageNumber); err == nil {
 		t.Fatal("inspect passed beyond the draft page limit")
 	} else if errCode(err) != format.CodeFormatInvalid {
 		t.Fatalf("error code = %d, want FormatInvalid", errCode(err))
@@ -176,22 +179,23 @@ func TestReusingACurrentTransactionPageKeepsOneDirtyChainEntry(t *testing.T) {
 	if err := store.claimAllocated(5); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Update(5, func(page []byte) error {
-		page[100] = 0xa5
-		return nil
-	}); err != nil {
+	view, tag, err := store.Update(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view[100] = 0xa5
+	if err := store.RestoreDirty(5, tag); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DiscardPrivate(5); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Inspect(5, func(page []byte) error {
-		if page[100] != 0xa5 {
-			t.Fatalf("discarded page content at 100 = %#x, want 0xa5", page[100])
-		}
-		return nil
-	}); err != nil {
+	view, err = store.Inspect(5)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if view[100] != 0xa5 {
+		t.Fatalf("discarded page content at 100 = %#x, want 0xa5", view[100])
 	}
 	if page, err := store.popPrivate(); err != nil || page != 5 {
 		t.Fatalf("popPrivate = %d, %v; want 5", page, err)
@@ -314,12 +318,14 @@ func TestDirectPageUpdateRejectsACommittedPageBeforeMutation(t *testing.T) {
 	if err := store.claimAllocated(5); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Update(5, func(page []byte) error {
-		format.InitializePageHeader(page, format.PageTypeRangeLeaf, first.meta.TxnID, 0, 0,
-			format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
-		page[100] = 0xa5
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	format.InitializePageHeader(page, format.PageTypeRangeLeaf, first.meta.TxnID, 0, 0,
+		format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
+	page[100] = 0xa5
+	if err := store.RestoreDirty(5, tag); err != nil {
 		t.Fatal(err)
 	}
 	committed := first.Meta()
@@ -330,30 +336,25 @@ func TestDirectPageUpdateRejectsACommittedPageBeforeMutation(t *testing.T) {
 	}
 	store2 := NewDraftStore(core.m, committed.PageCount, budget, next)
 	before := make([]byte, 1)
-	if err := store2.Inspect(5, func(page []byte) error {
-		before[0] = page[100]
-		return nil
-	}); err != nil {
+	state, err := store2.Inspect(5)
+	if err != nil {
 		t.Fatal(err)
 	}
+	before[0] = state[100]
 	if before[0] != 0xa5 {
 		t.Fatalf("committed byte = %#x, want 0xa5", before[0])
 	}
-	if err := store2.Update(5, func(page []byte) error {
-		page[100] = 0x5a
-		return nil
-	}); err == nil {
+	if _, _, err := store2.Update(5); err == nil {
 		t.Fatal("update of a committed page succeeded")
 	} else if errCode(err) != format.CodeFormatInvalid {
 		t.Fatalf("error code = %d, want FormatInvalid", errCode(err))
 	}
-	if err := store2.Inspect(5, func(page []byte) error {
-		if page[100] != before[0] {
-			t.Fatalf("committed page mutated by the refused update: %#x", page[100])
-		}
-		return nil
-	}); err != nil {
+	state, err = store2.Inspect(5)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if state[100] != before[0] {
+		t.Fatalf("committed page mutated by the refused update: %#x", state[100])
 	}
 }
 
@@ -523,7 +524,7 @@ func TestRetirePagesDrainsTheAllocatorBacklog(t *testing.T) {
 	if err := draft.allocatorRetired.Push(2); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RetirePages(nil); err != nil {
+	if err := store.RetirePages(tree.RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
 	if draft.allocatorRetired.Len() != 0 {

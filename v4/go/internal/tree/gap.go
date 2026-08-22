@@ -44,10 +44,11 @@ const (
 // gap between two adjacent existing records (Rust LocalGap). The cell
 // argument is the raw leaf cell on the probed side, or nil when the tree
 // has no cell on that side (the candidate is the tree's extreme edge). A
-// Reject decision carries the decoded cell value that blocks the gap.
-type LocalGap interface {
-	Previous(exact bool, cell []byte) (LocalPrevious, any, error)
-	Next(cell []byte) (LocalNext, any, error)
+// Reject decision carries the decoded cell value that blocks the gap. The
+// value type is concrete: the probe never boxes.
+type LocalGap[T any] interface {
+	Previous(exact bool, cell []byte) (LocalPrevious, T, error)
+	Next(cell []byte) (LocalNext, T, error)
 }
 
 // LocalInsert is the outcome of a local gap insertion (Rust LocalInsert).
@@ -111,7 +112,7 @@ func RootEdge(pageNumber uint32) PrivateEdge {
 
 // FlushEdge propagates a pending first-key fence update and forgets it
 // (Rust flush_edge).
-func FlushEdge(codec Codec, store Store, root *uint32, edge *PrivateEdge) error {
+func FlushEdge[T any](codec Codec[T], store Store, root *uint32, edge *PrivateEdge) error {
 	if edge.pendingFirst != nil {
 		if err := PropagateFirst(codec, store, root, &edge.position.Path, *edge.pendingFirst); err != nil {
 			return err
@@ -122,7 +123,17 @@ func FlushEdge(codec Codec, store Store, root *uint32, edge *PrivateEdge) error 
 }
 
 // rejectCell is one decoded neighbor cell and its physical index.
-type rejectCell struct {
+type rejectCell[T any] struct {
+	index int
+	value T
+}
+
+// rejectCellIndex is the stored form of a decoded neighbor cell: it keeps
+// the physical index alongside the value so a later replacement can name
+// the exact leaf slot. LocalReject stores either form in its any-typed
+// neighbor fields because it is shared across concrete codecs (Rust
+// LocalReject keeps the index in GapDecision).
+type rejectCellIndex struct {
 	index int
 	value any
 }
@@ -134,10 +145,10 @@ type LocalReject struct {
 	Target LeafTarget
 	// predecessor is the decoded cell immediately before the gap, when the
 	// leaf had one and it bridged the gap.
-	predecessor *rejectCell
+	predecessor any
 	// successor is the decoded cell immediately after the gap, when the
 	// leaf had one and it bridged the gap.
-	successor *rejectCell
+	successor any
 	// predecessorComplete reports the predecessor side of the tree was
 	// fully examined (no external predecessor exists that could bridge
 	// the gap).
@@ -152,7 +163,8 @@ func (r *LocalReject) Predecessor() (any, bool) {
 	if r.predecessor == nil {
 		return nil, false
 	}
-	return r.predecessor.value, true
+	cell, _ := r.predecessor.(rejectCellIndex)
+	return cell.value, true
 }
 
 // Successor returns the decoded successor cell value, when present.
@@ -160,7 +172,8 @@ func (r *LocalReject) Successor() (any, bool) {
 	if r.successor == nil {
 		return nil, false
 	}
-	return r.successor.value, true
+	cell, _ := r.successor.(rejectCellIndex)
+	return cell.value, true
 }
 
 // PredecessorComplete reports the predecessor side was fully examined.
@@ -175,78 +188,64 @@ func (r *LocalReject) IntoPosition() PrivatePosition {
 	return PrivatePosition{Path: r.Target.Path, PageNumber: r.Target.PageNumber}
 }
 
-// ExternalPredecessor reads the tree-predecessor leaf of the rejected gap,
-// walking the sibling subtree (Rust LocalReject::external_predecessor).
-func (r *LocalReject) ExternalPredecessor(codec Codec, store Store) (any, error) {
-	leaf, err := adjacentLeaf(codec, store, &r.Target.Path, AdjacentBefore)
-	if err != nil || leaf == nil {
-		return nil, err
-	}
-	return leaf.leaf, nil
-}
-
-// ExternalSuccessor reads the tree-successor leaf of the rejected gap,
-// walking the sibling subtree (Rust LocalReject::external_successor).
-func (r *LocalReject) ExternalSuccessor(codec Codec, store Store) (any, error) {
-	leaf, err := adjacentLeaf(codec, store, &r.Target.Path, AdjacentAfter)
-	if err != nil || leaf == nil {
-		return nil, err
-	}
-	return leaf.leaf, nil
-}
-
 // InsertIfLocalGap inserts one leaf cell into the physical gap around its
 // key when the gap is fully local to the probed leaf (Rust
 // insert_if_local_gap). The tree must already be private.
-func InsertIfLocalGap(codec Codec, store Store, root *uint32, leafCell []byte, retired *RetiredPages, gap LocalGap) (LocalInsert, error) {
+func InsertIfLocalGap[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, retired RetiredPages, gap LocalGap[T]) (RetiredPages, LocalInsert, error) {
 	if err := RequireLeaf(codec, leafCell); err != nil {
-		return LocalInsert{}, err
+		return RetiredPages{}, LocalInsert{}, err
 	}
 	if *root == 0 {
 		pageNumber, err := NewLeaf(codec, store, leafCell)
 		if err != nil {
-			return LocalInsert{}, err
+			return RetiredPages{}, LocalInsert{}, err
 		}
 		*root = pageNumber
-		return LocalInsert{Inserted: true, PageNumber: pageNumber}, nil
+		return retired, LocalInsert{Inserted: true, PageNumber: pageNumber}, nil
 	}
 	key, err := codec.ReadKey(leafCell, 0)
 	if err != nil {
-		return LocalInsert{}, err
+		return RetiredPages{}, LocalInsert{}, err
 	}
-	var selector gapSelector
+	var selector gapSelector[T]
 	selector.init(codec, key, len(leafCell), gap)
-	leaf, err := privatePathSelect(codec, store, root, key, retired, selector.decide)
+	leaf, retired, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header Header, path Path) (gapDecision[T], error) {
+		index, exists, err := lowerBound(codec, page, &header, key, true)
+		if err != nil {
+			return gapDecision[T]{}, err
+		}
+		return selector.selectAt(page, &header, &path, index, exists)
+	})
 	if err != nil {
-		return LocalInsert{}, err
+		return RetiredPages{}, LocalInsert{}, err
 	}
 	if retired.Len() != 0 {
-		return LocalInsert{}, corrupt("private B+tree contains a committed page")
+		return RetiredPages{}, LocalInsert{}, corrupt("private B+tree contains a committed page")
 	}
-	decision := leaf.Selection.(gapDecision)
+	decision := leaf.Selection
 	if !decision.insert {
 		reject, err := rejection(leaf.Path, leaf.PageNumber, leaf.Header, decision)
 		if err != nil {
-			return LocalInsert{}, err
+			return RetiredPages{}, LocalInsert{}, err
 		}
-		return LocalInsert{Reject: reject}, nil
+		return retired, LocalInsert{Reject: reject}, nil
 	}
 	target := LeafTarget{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: decision.index, Exists: false}
 	pageNumber := target.PageNumber
-	positioned, err := insertGapTarget(codec, store, root, leafCell, target, key, decision.fits)
+	positioned, fits, err := insertGapTarget(codec, store, root, leafCell, target, key, decision.fits)
 	if err != nil {
-		return LocalInsert{}, err
+		return RetiredPages{}, LocalInsert{}, err
 	}
-	if positioned != nil {
+	if fits {
 		pageNumber = positioned.PageNumber
 	}
-	return LocalInsert{Inserted: true, PageNumber: pageNumber}, nil
+	return retired, LocalInsert{Inserted: true, PageNumber: pageNumber}, nil
 }
 
 // InsertIfCachedInteriorGap probes one cached private leaf for a fitting
 // interior gap and inserts the cell there (Rust
 // insert_if_cached_interior_gap). The page must already be private.
-func InsertIfCachedInteriorGap(codec Codec, store Store, pageNumber uint32, leafCell []byte, gap LocalGap) (CachedInsert, error) {
+func InsertIfCachedInteriorGap[T any](codec Codec[T], store Store, pageNumber uint32, leafCell []byte, gap LocalGap[T]) (CachedInsert, error) {
 	if err := RequireLeaf(codec, leafCell); err != nil {
 		return CachedInsertMiss, err
 	}
@@ -254,56 +253,47 @@ func InsertIfCachedInteriorGap(codec Codec, store Store, pageNumber uint32, leaf
 	if err != nil {
 		return CachedInsertMiss, err
 	}
-	var selected *Header
-	index := 0
 	level := uint16(0)
-	err = store.Inspect(pageNumber, func(page []byte) error {
-		header, err := parse(codec, page, store.TargetTxn(), &level)
-		if err != nil {
-			return err
-		}
-		if format.U64(page[format.HeaderBorn:]) != store.TargetTxn() {
-			return corrupt("leaf locator selected a committed page")
-		}
-		probeIndex, exists, err := lowerBound(codec, page, header, key, true)
-		if err != nil {
-			return err
-		}
-		if exists || probeIndex == 0 || probeIndex == int(header.ItemCount) {
-			return nil
-		}
-		var selector gapSelector
-		selector.init(codec, key, len(leafCell), gap)
-		decision, err := selector.selectAt(page, header, &Path{}, probeIndex, false)
-		if err != nil {
-			return err
-		}
-		if !decision.insert || !decision.fits {
-			return nil
-		}
-		index = decision.index
-		selected = header
-		return nil
-	})
+	page, err := store.Inspect(pageNumber)
 	if err != nil {
 		return CachedInsertMiss, err
 	}
-	if selected == nil {
+	header, err := parse(codec, page, store.TargetTxn(), &level)
+	if err != nil {
+		return CachedInsertMiss, err
+	}
+	if format.U64(page[format.HeaderBorn:]) != store.TargetTxn() {
+		return CachedInsertMiss, corrupt("leaf locator selected a committed page")
+	}
+	probeIndex, exists, err := lowerBound(codec, page, &header, key, true)
+	if err != nil {
+		return CachedInsertMiss, err
+	}
+	if exists || probeIndex == 0 || probeIndex == int(header.ItemCount) {
 		return CachedInsertMiss, nil
 	}
-	return CachedInsertInserted, applyLeafEdit(codec, store, pageNumber, selected, Edit{index: index, replace: false, cell: leafCell})
+	var selector gapSelector[T]
+	selector.init(codec, key, len(leafCell), gap)
+	decision, err := selector.selectAt(page, &header, &Path{}, probeIndex, false)
+	if err != nil {
+		return CachedInsertMiss, err
+	}
+	if !decision.insert || !decision.fits {
+		return CachedInsertMiss, nil
+	}
+	return CachedInsertInserted, applyLeafEdit(codec, store, pageNumber, &header, Edit{index: decision.index, replace: false, cell: leafCell})
 }
 
 // InsertRejectedGap completes a previously rejected local gap insertion
 // after the caller proved the external sides (Rust insert_rejected_gap).
 // It returns the final private position when the record fit locally.
-func InsertRejectedGap(codec Codec, store Store, root *uint32, leafCell []byte, rejected *LocalReject) (*PrivatePosition, error) {
+func InsertRejectedGap[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, rejected *LocalReject) (PrivatePosition, bool, error) {
 	if err := RequireLeaf(codec, leafCell); err != nil {
-		return nil, err
+		return PrivatePosition{}, false, err
 	}
 	key, err := codec.ReadKey(leafCell, 0)
 	if err != nil {
-		return nil, err
+		return PrivatePosition{}, false, err
 	}
 	fits := format.SlottedInsertFits(&rejected.Target.Header, len(leafCell))
 	return insertGapTarget(codec, store, root, leafCell, rejected.Target, key, fits)
@@ -312,27 +302,27 @@ func InsertRejectedGap(codec Codec, store Store, root *uint32, leafCell []byte, 
 // insertGapTarget applies one positioned gap insertion, propagating the
 // first-key fence when the record lands at index zero and splitting the
 // leaf when the record does not fit (Rust insert_gap_target).
-func insertGapTarget(codec Codec, store Store, root *uint32, leafCell []byte, target LeafTarget, key Key, fits bool) (*PrivatePosition, error) {
+func insertGapTarget[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, target LeafTarget, key Key, fits bool) (PrivatePosition, bool, error) {
 	if fits {
 		if err := applyLeafEdit(codec, store, target.PageNumber, &target.Header, Edit{index: target.Index, replace: false, cell: leafCell}); err != nil {
-			return nil, err
+			return PrivatePosition{}, false, err
 		}
 		if target.Index == 0 {
 			if err := PropagateFirst(codec, store, root, &target.Path, key); err != nil {
-				return nil, err
+				return PrivatePosition{}, false, err
 			}
 		}
-		return &PrivatePosition{Path: target.Path, PageNumber: target.PageNumber}, nil
+		return PrivatePosition{Path: target.Path, PageNumber: target.PageNumber}, true, nil
 	}
 	if _, err := EditLeaf(codec, store, root, leafCell, &target); err != nil {
-		return nil, err
+		return PrivatePosition{}, false, err
 	}
-	return nil, nil
+	return PrivatePosition{}, false, nil
 }
 
 // InsertIfEdgeGap inserts one leaf cell at a cached private tree edge when
 // the local gap is open (Rust insert_if_edge_gap).
-func InsertIfEdgeGap(codec Codec, store Store, root *uint32, leafCell []byte, cached *PrivateEdge, edge Edge, knownGap bool, gap LocalGap) (EdgeInsert, error) {
+func InsertIfEdgeGap[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, cached *PrivateEdge, edge Edge, knownGap bool, gap LocalGap[T]) (EdgeInsert, error) {
 	if err := RequireLeaf(codec, leafCell); err != nil {
 		return EdgeInsert{}, err
 	}
@@ -347,72 +337,71 @@ func InsertIfEdgeGap(codec Codec, store Store, root *uint32, leafCell []byte, ca
 		return EdgeInsert{}, err
 	}
 	level := uint16(0)
-	var header *Header
-	decision := gapDecision{}
-	err = store.Inspect(cached.position.PageNumber, func(page []byte) error {
-		h, err := parse(codec, page, store.TargetTxn(), &level)
-		if err != nil {
-			return err
-		}
-		if format.U64(page[format.HeaderBorn:]) != store.TargetTxn() {
-			return corrupt("cached B+tree edge is not private")
-		}
-		header = h
-		boundary := 0
-		if edge == EdgeLast {
-			boundary = int(h.ItemCount) - 1
-		}
-		boundaryKey, err := keyAt(codec, page, h, boundary)
-		if err != nil {
-			return err
-		}
-		index := 0
-		exists := false
-		if edge == EdgeFirst {
-			switch {
-			case key.Less(boundaryKey):
-				index, exists = 0, false
-			case key.Equal(boundaryKey):
-				index, exists = 0, true
-			default:
-				return corrupt("cached B+tree edge order changed")
-			}
-		} else {
-			switch {
-			case boundaryKey.Less(key):
-				index, exists = int(h.ItemCount), false
-			case key.Equal(boundaryKey):
-				index, exists = int(h.ItemCount)-1, true
-			default:
-				return corrupt("cached B+tree edge order changed")
-			}
-		}
-		if knownGap {
-			if exists {
-				return corrupt("known B+tree edge gap contains its key")
-			}
-			decision = gapDecision{insert: true, index: index, fits: format.SlottedInsertFits(h, len(leafCell))}
-			return nil
-		}
-		var selector gapSelector
-		selector.init(codec, key, len(leafCell), gap)
-		decision, err = selector.selectAt(page, h, &cached.position.Path, index, exists)
-		return err
-	})
+	page, err := store.Inspect(cached.position.PageNumber)
 	if err != nil {
 		return EdgeInsert{}, err
+	}
+	header, err := parse(codec, page, store.TargetTxn(), &level)
+	if err != nil {
+		return EdgeInsert{}, err
+	}
+	if format.U64(page[format.HeaderBorn:]) != store.TargetTxn() {
+		return EdgeInsert{}, corrupt("cached B+tree edge is not private")
+	}
+	boundary := 0
+	if edge == EdgeLast {
+		boundary = int(header.ItemCount) - 1
+	}
+	boundaryKey, err := keyAt(codec, page, &header, boundary)
+	if err != nil {
+		return EdgeInsert{}, err
+	}
+	index := 0
+	exists := false
+	if edge == EdgeFirst {
+		switch {
+		case key.Less(boundaryKey):
+			index, exists = 0, false
+		case key.Equal(boundaryKey):
+			index, exists = 0, true
+		default:
+			return EdgeInsert{}, corrupt("cached B+tree edge order changed")
+		}
+	} else {
+		switch {
+		case boundaryKey.Less(key):
+			index, exists = int(header.ItemCount), false
+		case key.Equal(boundaryKey):
+			index, exists = int(header.ItemCount)-1, true
+		default:
+			return EdgeInsert{}, corrupt("cached B+tree edge order changed")
+		}
+	}
+	var decision gapDecision[T]
+	if knownGap {
+		if exists {
+			return EdgeInsert{}, corrupt("known B+tree edge gap contains its key")
+		}
+		decision = gapDecision[T]{insert: true, index: index, fits: format.SlottedInsertFits(&header, len(leafCell))}
+	} else {
+		var selector gapSelector[T]
+		selector.init(codec, key, len(leafCell), gap)
+		decision, err = selector.selectAt(page, &header, &cached.position.Path, index, exists)
+		if err != nil {
+			return EdgeInsert{}, err
+		}
 	}
 	if !decision.insert {
 		if err := FlushEdge(codec, store, root, cached); err != nil {
 			return EdgeInsert{}, err
 		}
-		reject, err := rejection(cached.position.Path, cached.position.PageNumber, *header, decision)
+		reject, err := rejection(cached.position.Path, cached.position.PageNumber, header, decision)
 		if err != nil {
 			return EdgeInsert{}, err
 		}
 		return EdgeInsert{Reject: reject}, nil
 	}
-	target := LeafTarget{Path: cached.position.Path, PageNumber: cached.position.PageNumber, Header: *header, Index: decision.index, Exists: false}
+	target := LeafTarget{Path: cached.position.Path, PageNumber: cached.position.PageNumber, Header: header, Index: decision.index, Exists: false}
 	if decision.fits {
 		var pendingFirst *Key
 		if target.Index == 0 && target.Path.Depth() != 0 {
@@ -436,7 +425,7 @@ func InsertIfEdgeGap(codec Codec, store Store, root *uint32, leafCell []byte, ca
 		if err != nil {
 			return EdgeInsert{}, err
 		}
-		cached.position = *position
+		cached.position = position
 	}
 	return EdgeInsert{Inserted: true, Edge: cached}, nil
 }
@@ -458,7 +447,7 @@ func verifyCachedEdge(cached *PrivateEdge, root uint32, edge Edge) error {
 	return nil
 }
 
-func applyFittingEdgeInsert(codec Codec, store Store, target LeafTarget, leafCell []byte) (PrivatePosition, error) {
+func applyFittingEdgeInsert[T any](codec Codec[T], store Store, target LeafTarget, leafCell []byte) (PrivatePosition, error) {
 	if err := applyLeafEdit(codec, store, target.PageNumber, &target.Header, Edit{index: target.Index, replace: false, cell: leafCell}); err != nil {
 		return PrivatePosition{}, err
 	}
@@ -467,69 +456,64 @@ func applyFittingEdgeInsert(codec Codec, store Store, target LeafTarget, leafCel
 
 // rejection converts a general gap decision into its rejection record
 // (Rust rejection).
-func rejection(path Path, pageNumber uint32, header Header, decision gapDecision) (*LocalReject, error) {
+func rejection[T any](path Path, pageNumber uint32, header Header, decision gapDecision[T]) (*LocalReject, error) {
 	if decision.insert {
 		return nil, corrupt("accepted B+tree gap became a rejection")
 	}
-	return &LocalReject{
+	reject := &LocalReject{
 		Target:              LeafTarget{Path: path, PageNumber: pageNumber, Header: header, Index: decision.index, Exists: false},
-		predecessor:         decision.predecessor,
-		successor:           decision.successor,
 		predecessorComplete: decision.predecessorComplete,
 		successorComplete:   decision.successorComplete,
-	}, nil
+	}
+	if decision.predecessor != nil {
+		reject.predecessor = rejectCellIndex{index: decision.predecessor.index, value: decision.predecessor.value}
+	}
+	if decision.successor != nil {
+		reject.successor = rejectCellIndex{index: decision.successor.index, value: decision.successor.value}
+	}
+	return reject, nil
 }
 
 // gapDecision is the internal outcome of one gap probe (Rust
 // GapDecision).
-type gapDecision struct {
+type gapDecision[T any] struct {
 	insert              bool
 	index               int
 	fits                bool
-	predecessor         *rejectCell
-	successor           *rejectCell
+	predecessor         *rejectCell[T]
+	successor           *rejectCell[T]
 	predecessorComplete bool
 	successorComplete   bool
 }
 
 // gapSelector drives the gap probe over one leaf (Rust GapSelector).
-type gapSelector struct {
-	codec   Codec
+type gapSelector[T any] struct {
+	codec   Codec[T]
 	key     Key
 	cellLen int
-	gap     LocalGap
+	gap     LocalGap[T]
 }
 
-func (g *gapSelector) init(codec Codec, key Key, cellLen int, gap LocalGap) {
+func (g *gapSelector[T]) init(codec Codec[T], key Key, cellLen int, gap LocalGap[T]) {
 	g.codec = codec
 	g.key = key
 	g.cellLen = cellLen
 	g.gap = gap
 }
 
-// select implements the leaf selection entry used by the COW descent
-// (Rust LeafSelector::select).
-func (g *gapSelector) decide(page []byte, header *Header, path *Path) (any, error) {
-	index, exists, err := lowerBound(g.codec, page, header, g.key, true)
-	if err != nil {
-		return nil, err
-	}
-	return g.selectAt(page, header, path, index, exists)
-}
-
 // selectAt decides the gap at one already-located position (Rust
 // GapSelector::select_at).
-func (g *gapSelector) selectAt(page []byte, header *Header, path *Path, index int, exists bool) (gapDecision, error) {
+func (g *gapSelector[T]) selectAt(page []byte, header *Header, path *Path, index int, exists bool) (gapDecision[T], error) {
 	predecessor, predecessorComplete, err := g.probePredecessor(page, header, path, index, exists)
 	if err != nil {
-		return gapDecision{}, err
+		return gapDecision[T]{}, err
 	}
 	successor, successorComplete, err := g.probeSuccessor(page, header, path, index, exists)
 	if err != nil {
-		return gapDecision{}, err
+		return gapDecision[T]{}, err
 	}
 	if predecessor != nil || successor != nil || !predecessorComplete || !successorComplete {
-		return gapDecision{
+		return gapDecision[T]{
 			insert:              false,
 			index:               index,
 			predecessor:         predecessor,
@@ -538,10 +522,10 @@ func (g *gapSelector) selectAt(page []byte, header *Header, path *Path, index in
 			successorComplete:   successorComplete,
 		}, nil
 	}
-	return gapDecision{insert: true, index: index, fits: format.SlottedInsertFits(header, g.cellLen)}, nil
+	return gapDecision[T]{insert: true, index: index, fits: format.SlottedInsertFits(header, g.cellLen)}, nil
 }
 
-func (g *gapSelector) probePredecessor(page []byte, header *Header, path *Path, index int, exists bool) (*rejectCell, bool, error) {
+func (g *gapSelector[T]) probePredecessor(page []byte, header *Header, path *Path, index int, exists bool) (*rejectCell[T], bool, error) {
 	if exists {
 		cell, err := g.validLeaf(page, header, index)
 		if err != nil {
@@ -554,7 +538,7 @@ func (g *gapSelector) probePredecessor(page []byte, header *Header, path *Path, 
 		if decision == LocalPreviousAccept {
 			return nil, false, corrupt("exact B+tree key was accepted as a gap")
 		}
-		return &rejectCell{index: index, value: value}, true, nil
+		return &rejectCell[T]{index: index, value: value}, true, nil
 	}
 	if index > 0 {
 		cell, err := g.validLeaf(page, header, index-1)
@@ -568,7 +552,7 @@ func (g *gapSelector) probePredecessor(page []byte, header *Header, path *Path, 
 		if decision == LocalPreviousAccept {
 			return nil, true, nil
 		}
-		return &rejectCell{index: index - 1, value: value}, true, nil
+		return &rejectCell[T]{index: index - 1, value: value}, true, nil
 	}
 	if allFirst(path) {
 		decision, _, err := g.gap.Previous(false, nil)
@@ -583,7 +567,7 @@ func (g *gapSelector) probePredecessor(page []byte, header *Header, path *Path, 
 	return nil, false, nil
 }
 
-func (g *gapSelector) probeSuccessor(page []byte, header *Header, path *Path, index int, exists bool) (*rejectCell, bool, error) {
+func (g *gapSelector[T]) probeSuccessor(page []byte, header *Header, path *Path, index int, exists bool) (*rejectCell[T], bool, error) {
 	successorIndex := index
 	if exists {
 		successorIndex++
@@ -600,7 +584,7 @@ func (g *gapSelector) probeSuccessor(page []byte, header *Header, path *Path, in
 		if decision == LocalNextAccept {
 			return nil, true, nil
 		}
-		return &rejectCell{index: successorIndex, value: value}, true, nil
+		return &rejectCell[T]{index: successorIndex, value: value}, true, nil
 	}
 	if allLast(path) {
 		decision, _, err := g.gap.Next(nil)
@@ -641,7 +625,7 @@ func pathIsEdge(path *Path, edge Edge) bool {
 }
 
 // validLeaf re-verifies one leaf cell and returns it (Rust validated_leaf).
-func (g *gapSelector) validLeaf(page []byte, header *Header, index int) ([]byte, error) {
+func (g *gapSelector[T]) validLeaf(page []byte, header *Header, index int) ([]byte, error) {
 	cell, err := codecCell(g.codec, page, header, index)
 	if err != nil {
 		return nil, err
@@ -669,7 +653,7 @@ const (
 // ReplaceLocalPredecessorWith replaces the rejected gap's local
 // predecessor cell with a 2-3 cell replacement (Rust
 // replace_local_predecessor_with).
-func ReplaceLocalPredecessorWith(codec Codec, store Store, root *uint32, rejected *LocalReject, key Key, cells [][]byte) error {
+func ReplaceLocalPredecessorWith[T any](codec Codec[T], store Store, root *uint32, rejected *LocalReject, key Key, cells [][]byte) error {
 	if err := RequireReplacement(codec, key, cells); err != nil {
 		return err
 	}
@@ -677,7 +661,7 @@ func ReplaceLocalPredecessorWith(codec Codec, store Store, root *uint32, rejecte
 		return corrupt("B+tree local predecessor is unavailable")
 	}
 	target := rejected.Target
-	target.Index = rejected.predecessor.index
+	target.Index = rejected.predecessorIndex()
 	target.Exists = true
 	return replaceTarget(codec, store, root, target, cells)
 }
@@ -685,7 +669,7 @@ func ReplaceLocalPredecessorWith(codec Codec, store Store, root *uint32, rejecte
 // ReplaceLocalRun overwrites one local neighbor cell (or the contiguous
 // pair) of a rejected gap with one replacement cell (Rust
 // replace_local_run). The replacement must keep the same encoded size.
-func ReplaceLocalRun(codec Codec, store Store, root *uint32, rejected *LocalReject, run LocalRun, replacement []byte) error {
+func ReplaceLocalRun[T any](codec Codec[T], store Store, root *uint32, rejected *LocalReject, run LocalRun, replacement []byte) error {
 	if err := RequireLeaf(codec, replacement); err != nil {
 		return err
 	}
@@ -696,12 +680,12 @@ func ReplaceLocalRun(codec Codec, store Store, root *uint32, rejected *LocalReje
 		if rejected.predecessor == nil {
 			return corrupt("local predecessor is unavailable")
 		}
-		start = rejected.predecessor.index
+		start = rejected.predecessorIndex()
 	case LocalRunSuccessor:
 		if rejected.successor == nil {
 			return corrupt("local successor is unavailable")
 		}
-		start = rejected.successor.index
+		start = rejected.successorIndex()
 	case LocalRunBoth:
 		if rejected.predecessor == nil {
 			return corrupt("local predecessor is unavailable")
@@ -709,10 +693,10 @@ func ReplaceLocalRun(codec Codec, store Store, root *uint32, rejected *LocalReje
 		if rejected.successor == nil {
 			return corrupt("local successor is unavailable")
 		}
-		if rejected.successor.index != rejected.predecessor.index+1 {
+		if rejected.successorIndex() != rejected.predecessorIndex()+1 {
 			return corrupt("local B+tree run is not contiguous")
 		}
-		start = rejected.predecessor.index
+		start = rejected.predecessorIndex()
 		removeCount = 2
 	}
 	target := &rejected.Target
@@ -723,56 +707,57 @@ func ReplaceLocalRun(codec Codec, store Store, root *uint32, rejected *LocalReje
 	if err != nil {
 		return err
 	}
-	err = store.Update(target.PageNumber, func(page []byte) error {
-		oldLen, err := codecCell(codec, page, &target.Header, start)
-		if err != nil {
-			return err
-		}
-		oldLenBytes := len(oldLen)
-		if len(replacement) != oldLenBytes {
-			return unsupported("local B+tree run replacement changed cell size")
-		}
-		if start > 0 {
-			previous, err := keyAt(codec, page, &target.Header, start-1)
-			if err != nil {
-				return err
-			}
-			if !previous.Less(replacementKey) {
-				return corrupt("local B+tree replacement is out of order")
-			}
-		}
-		if start+removeCount < int(target.Header.ItemCount) {
-			next, err := keyAt(codec, page, &target.Header, start+removeCount)
-			if err != nil {
-				return err
-			}
-			if !replacementKey.Less(next) {
-				return corrupt("local B+tree replacement is out of order")
-			}
-		}
-		changed, err := format.SlottedReplace(page, &target.Header, start, oldLenBytes, replacement)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			return corrupt("local B+tree replacement no longer fits")
-		}
-		header := target.Header
-		for i := 1; i < removeCount; i++ {
-			cell, err := codecCell(codec, page, &header, start+1)
-			if err != nil {
-				return err
-			}
-			if err := format.SlottedRemove(page, &header, start+1, len(cell)); err != nil {
-				return err
-			}
-			header.ItemCount--
-			header.Lower -= 2
-			header.Upper += uint16(len(cell))
-		}
-		return nil
-	})
+	page, tag, err := store.Update(target.PageNumber)
 	if err != nil {
+		return err
+	}
+	oldLen, err := codecCell(codec, page, &target.Header, start)
+	if err != nil {
+		return err
+	}
+	oldLenBytes := len(oldLen)
+	if len(replacement) != oldLenBytes {
+		return unsupported("local B+tree run replacement changed cell size")
+	}
+	if start > 0 {
+		previous, err := keyAt(codec, page, &target.Header, start-1)
+		if err != nil {
+			return err
+		}
+		if !previous.Less(replacementKey) {
+			return corrupt("local B+tree replacement is out of order")
+		}
+	}
+	if start+removeCount < int(target.Header.ItemCount) {
+		next, err := keyAt(codec, page, &target.Header, start+removeCount)
+		if err != nil {
+			return err
+		}
+		if !replacementKey.Less(next) {
+			return corrupt("local B+tree replacement is out of order")
+		}
+	}
+	changed, err := format.SlottedReplace(page, &target.Header, start, oldLenBytes, replacement)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return corrupt("local B+tree replacement no longer fits")
+	}
+	header := target.Header
+	for i := 1; i < removeCount; i++ {
+		cell, err := codecCell(codec, page, &header, start+1)
+		if err != nil {
+			return err
+		}
+		if err := format.SlottedRemove(page, &header, start+1, len(cell)); err != nil {
+			return err
+		}
+		header.ItemCount--
+		header.Lower -= 2
+		header.Upper += uint16(len(cell))
+	}
+	if err := store.RestoreDirty(target.PageNumber, tag); err != nil {
 		return err
 	}
 	if start == 0 {
@@ -781,4 +766,16 @@ func ReplaceLocalRun(codec Codec, store Store, root *uint32, rejected *LocalReje
 		}
 	}
 	return nil
+}
+
+// predecessorIndex is the physical index of the stored predecessor cell.
+func (r *LocalReject) predecessorIndex() int {
+	cell, _ := r.predecessor.(rejectCellIndex)
+	return cell.index
+}
+
+// successorIndex is the physical index of the stored successor cell.
+func (r *LocalReject) successorIndex() int {
+	cell, _ := r.successor.(rejectCellIndex)
+	return cell.index
 }

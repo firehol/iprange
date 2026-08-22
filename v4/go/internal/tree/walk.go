@@ -12,21 +12,21 @@ type walkFrame struct {
 
 // RetireTree walks one detached tree in postorder and retires every page
 // (Rust retire_tree). The checkpoint runs before every page visit.
-func RetireTree(codec Codec, store RetiringStore, root uint32, checkpoint func() error) error {
+func RetireTree[T any](codec Codec[T], store RetiringStore, root uint32, checkpoint func() error) error {
 	return walk(codec, store, root, checkpoint, func(page uint32) error {
-		return store.RetirePages([]uint32{page})
+		return store.RetirePages(RetireOne(page))
 	})
 }
 
 // DiscardPrivateTree walks one detached tree in postorder and discards
 // every private page (Rust discard_private_tree).
-func DiscardPrivateTree(codec Codec, store Store, root uint32, checkpoint func() error) error {
+func DiscardPrivateTree[T any](codec Codec[T], store Store, root uint32, checkpoint func() error) error {
 	return walk(codec, store, root, checkpoint, func(page uint32) error {
 		return store.DiscardPrivate(page)
 	})
 }
 
-func walk(codec Codec, store Store, root uint32, checkpoint func() error, release func(page uint32) error) error {
+func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() error, release func(page uint32) error) error {
 	if root == 0 {
 		return nil
 	}
@@ -40,25 +40,22 @@ func walk(codec Codec, store Store, root uint32, checkpoint func() error, releas
 		targetTxn := store.TargetTxn()
 		isLeaf := false
 		firstChild := uint32(0)
-		var header *Header
-		if err := store.Inspect(current, func(page []byte) error {
-			h, err := parse(codec, page, targetTxn, expectedLevel)
+		page, err := store.Inspect(current)
+		if err != nil {
+			return false, err
+		}
+		header, err := parse(codec, page, targetTxn, expectedLevel)
+		if err != nil {
+			return false, err
+		}
+		if header.Level == 0 {
+			isLeaf = true
+		} else {
+			child, err := branchChild(codec, page, &header, 0, store.PageLimit())
 			if err != nil {
-				return err
-			}
-			header = h
-			if h.Level == 0 {
-				isLeaf = true
-				return nil
-			}
-			child, err := branchChild(codec, page, h, 0, store.PageLimit())
-			if err != nil {
-				return err
+				return false, err
 			}
 			firstChild = child
-			return nil
-		}); err != nil {
-			return false, err
 		}
 		if !isLeaf {
 			if depth >= maxPath {
@@ -86,22 +83,19 @@ func walk(codec Codec, store Store, root uint32, checkpoint func() error, releas
 			frame := stack[depth-1]
 			if frame.nextChild < frame.childCount {
 				targetTxn := store.TargetTxn()
-				child := uint32(0)
-				if err := store.Inspect(frame.pageNumber, func(page []byte) error {
-					header, err := parse(codec, page, targetTxn, &frame.level)
-					if err != nil {
-						return err
-					}
-					if int(header.ItemCount) != frame.childCount {
-						return corrupt("B+tree changed during postorder release")
-					}
-					c, err := branchChild(codec, page, header, frame.nextChild, store.PageLimit())
-					if err != nil {
-						return err
-					}
-					child = c
-					return nil
-				}); err != nil {
+				page, err := store.Inspect(frame.pageNumber)
+				if err != nil {
+					return false, err
+				}
+				header, err := parse(codec, page, targetTxn, &frame.level)
+				if err != nil {
+					return false, err
+				}
+				if int(header.ItemCount) != frame.childCount {
+					return false, corrupt("B+tree changed during postorder release")
+				}
+				child, err := branchChild(codec, page, &header, frame.nextChild, store.PageLimit())
+				if err != nil {
 					return false, err
 				}
 				stack[depth-1].nextChild = frame.nextChild + 1

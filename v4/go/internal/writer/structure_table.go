@@ -76,32 +76,29 @@ func structureTableFind(codec structurePayloadCodec, store tree.Store, root uint
 	if err != nil || !found {
 		return structureRecord{}, false, err
 	}
-	var record structureRecord
-	recordFound := false
-	err = store.Inspect(leaf, func(page []byte) error {
-		cell, err := structureTableLeafCell(codec, page, id)
-		if err != nil {
-			return err
+	page, err := store.Inspect(leaf)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	cell, err := structureTableLeafCell(codec, page, id)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	storedID := format.U32(cell[structureIDOffset:])
+	if storedID == 0 {
+		if allZero(cell) {
+			return structureRecord{}, false, nil
 		}
-		storedID := format.U32(cell[structureIDOffset:])
-		if storedID == 0 {
-			if allZero(cell) {
-				return nil
-			}
-			return corrupt("empty structure table slot is nonzero")
-		}
-		decoded, err := decodeStructureRecord(codec, cell)
-		if err != nil {
-			return err
-		}
-		if decoded.id != id {
-			return corrupt("structure table record is in the wrong slot")
-		}
-		record = decoded
-		recordFound = true
-		return nil
-	})
-	return record, recordFound, err
+		return structureRecord{}, false, corrupt("empty structure table slot is nonzero")
+	}
+	decoded, err := decodeStructureRecord(codec, cell)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	if decoded.id != id {
+		return structureRecord{}, false, corrupt("structure table record is in the wrong slot")
+	}
+	return decoded, true, nil
 }
 
 // structureTableLocateLeaf descends the radix path of id (Rust
@@ -121,18 +118,20 @@ func structureTableLocateLeaf(codec structurePayloadCodec, store tree.Store, roo
 	pageNumber := root
 	for level > 0 {
 		child := uint32(0)
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			header, err := structureTableParse(codec, page, store.TargetTxn(), &level)
-			if err != nil {
-				return err
-			}
-			index, err := structureChildIndex(id, level)
-			if err != nil {
-				return err
-			}
-			child, err = structureBranchChild(page, header, index, store.PageLimit())
-			return err
-		}); err != nil {
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return 0, false, err
+		}
+		header, err := structureTableParse(codec, page, store.TargetTxn(), &level)
+		if err != nil {
+			return 0, false, err
+		}
+		index, err := structureChildIndex(id, level)
+		if err != nil {
+			return 0, false, err
+		}
+		child, err = structureBranchChild(page, header, index, store.PageLimit())
+		if err != nil {
 			return 0, false, err
 		}
 		if child == 0 {
@@ -159,7 +158,7 @@ func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore,
 	if err != nil {
 		return err
 	}
-	retired := tree.NewRetiredPages()
+	var retired tree.RetiredPages
 	if err := structureGrowRoot(codec, store, root, targetLevel); err != nil {
 		return err
 	}
@@ -171,7 +170,7 @@ func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore,
 		*root = pageNumber
 		return nil
 	}
-	privateRoot, header, err := structureTableTouch(codec, store, *root, targetLevel, retired)
+	privateRoot, header, err := structureTableTouch(codec, store, *root, targetLevel, &retired)
 	if err != nil {
 		return err
 	}
@@ -183,11 +182,12 @@ func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore,
 			return err
 		}
 		child := uint32(0)
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			var err error
-			child, err = structureBranchChild(page, header, index, store.PageLimit())
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
 			return err
-		}); err != nil {
+		}
+		child, err = structureBranchChild(page, header, index, store.PageLimit())
+		if err != nil {
 			return err
 		}
 		if child == 0 {
@@ -195,33 +195,48 @@ func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore,
 			if err != nil {
 				return err
 			}
-			if err := store.Update(pageNumber, func(page []byte) error {
-				return structureSetBranchChild(page, header, index, child)
-			}); err != nil {
+			page, tag, err := store.Update(pageNumber)
+			if err != nil {
 				return err
 			}
-			return store.RetirePages(retired.Slice())
+			if err := structureSetBranchChild(page, header, index, child); err != nil {
+				return err
+			}
+			if err := store.RestoreDirty(pageNumber, tag); err != nil {
+				return err
+			}
+			return store.RetirePages(retired)
 		}
-		privateChild, nextHeader, err := structureTableTouch(codec, store, child, header.level-1, retired)
+		privateChild, nextHeader, err := structureTableTouch(codec, store, child, header.level-1, &retired)
 		if err != nil {
 			return err
 		}
 		if privateChild != child {
-			if err := store.Update(pageNumber, func(page []byte) error {
-				return structureReplaceBranchChild(page, header, index, privateChild)
-			}); err != nil {
+			page, tag, err := store.Update(pageNumber)
+			if err != nil {
+				return err
+			}
+			if err := structureReplaceBranchChild(page, header, index, privateChild); err != nil {
+				return err
+			}
+			if err := store.RestoreDirty(pageNumber, tag); err != nil {
 				return err
 			}
 		}
 		pageNumber = privateChild
 		header = nextHeader
 	}
-	if err := store.Update(pageNumber, func(page []byte) error {
-		return structureInsertLeaf(codec, page, header, record)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
 		return err
 	}
-	return store.RetirePages(retired.Slice())
+	if err := structureInsertLeaf(codec, page, header, record); err != nil {
+		return err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		return err
+	}
+	return store.RetirePages(retired)
 }
 
 // structureTableChangeRefcount applies one refcount change to one record,
@@ -235,8 +250,8 @@ func structureTableChangeRefcount(codec structurePayloadCodec, store tree.Retiri
 	if err != nil {
 		return structureRecord{}, false, err
 	}
-	retired := tree.NewRetiredPages()
-	privateRoot, header, err := structureTableTouch(codec, store, *root, expectedLevel, retired)
+	var retired tree.RetiredPages
+	privateRoot, header, err := structureTableTouch(codec, store, *root, expectedLevel, &retired)
 	if err != nil {
 		return structureRecord{}, false, err
 	}
@@ -249,11 +264,12 @@ func structureTableChangeRefcount(codec structurePayloadCodec, store tree.Retiri
 			return structureRecord{}, false, err
 		}
 		child := uint32(0)
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			var err error
-			child, err = structureBranchChild(page, header, index, store.PageLimit())
-			return err
-		}); err != nil {
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return structureRecord{}, false, err
+		}
+		child, err = structureBranchChild(page, header, index, store.PageLimit())
+		if err != nil {
 			return structureRecord{}, false, err
 		}
 		if child == 0 {
@@ -266,14 +282,19 @@ func structureTableChangeRefcount(codec structurePayloadCodec, store tree.Retiri
 		}); err != nil {
 			return structureRecord{}, false, err
 		}
-		privateChild, nextHeader, err := structureTableTouch(codec, store, child, header.level-1, retired)
+		privateChild, nextHeader, err := structureTableTouch(codec, store, child, header.level-1, &retired)
 		if err != nil {
 			return structureRecord{}, false, err
 		}
 		if privateChild != child {
-			if err := store.Update(pageNumber, func(page []byte) error {
-				return structureReplaceBranchChild(page, header, index, privateChild)
-			}); err != nil {
+			page, tag, err := store.Update(pageNumber)
+			if err != nil {
+				return structureRecord{}, false, err
+			}
+			if err := structureReplaceBranchChild(page, header, index, privateChild); err != nil {
+				return structureRecord{}, false, err
+			}
+			if err := store.RestoreDirty(pageNumber, tag); err != nil {
 				return structureRecord{}, false, err
 			}
 		}
@@ -292,30 +313,37 @@ func structureTableChangeRefcount(codec structurePayloadCodec, store tree.Retiri
 		return structureRecord{}, false, err
 	}
 	if next != 0 {
-		if err := store.Update(pageNumber, func(page []byte) error {
-			at := structureRecordOffset(id) + structureRefcountOffset
-			if at+8 > len(page) {
-				return corrupt("structure table record is outside its page")
-			}
-			format.PutU64(page[at:], next)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
 			return structureRecord{}, false, err
 		}
-		if err := store.RetirePages(retired.Slice()); err != nil {
+		at := structureRecordOffset(id) + structureRefcountOffset
+		if at+8 > len(page) {
+			return structureRecord{}, false, corrupt("structure table record is outside its page")
+		}
+		format.PutU64(page[at:], next)
+		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+			return structureRecord{}, false, err
+		}
+		if err := store.RetirePages(retired); err != nil {
 			return structureRecord{}, false, err
 		}
 		return record, false, nil
 	}
-	if err := store.Update(pageNumber, func(page []byte) error {
-		return structureDeleteLeaf(page, header, id)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	if err := structureDeleteLeaf(page, header, id); err != nil {
+		return structureRecord{}, false, err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return structureRecord{}, false, err
 	}
 	if err := structureRemoveEmptyPath(store, root, pageNumber, header.itemCount-1, &path); err != nil {
 		return structureRecord{}, false, err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return structureRecord{}, false, err
 	}
 	return record, true, nil
@@ -334,42 +362,40 @@ func structureTableShrink(codec structurePayloadCodec, store tree.RetiringStore,
 	if err != nil {
 		return err
 	}
-	retired := tree.NewRetiredPages()
+	var retired tree.RetiredPages
 	for {
 		header, err := structureParsePage(codec, store, *root, nil)
 		if err != nil {
 			return err
 		}
 		if header.level == wanted {
-			return store.RetirePages(retired.Slice())
+			return store.RetirePages(retired)
 		}
 		if header.level < wanted || header.itemCount != 1 {
 			return corrupt("structure table root cannot shrink")
 		}
-		private, privateHeader, err := structureTableTouch(codec, store, *root, header.level, retired)
+		private, privateHeader, err := structureTableTouch(codec, store, *root, header.level, &retired)
 		if err != nil {
 			return err
 		}
 		*root = private
 		child := uint32(0)
-		if err := store.Inspect(private, func(page []byte) error {
-			var err error
-			child, err = structureBranchChild(page, privateHeader, 0, store.PageLimit())
+		page, err := store.Inspect(private)
+		if err != nil {
+			return err
+		}
+		child, err = structureBranchChild(page, privateHeader, 0, store.PageLimit())
+		if err != nil {
+			return err
+		}
+		for index := 1; index < structureBranchChildren; index++ {
+			other, err := structureRawBranchChild(page, index)
 			if err != nil {
 				return err
 			}
-			for index := 1; index < structureBranchChildren; index++ {
-				other, err := structureRawBranchChild(page, index)
-				if err != nil {
-					return err
-				}
-				if other != 0 {
-					return corrupt("structure table root has data above its new limit")
-				}
+			if other != 0 {
+				return corrupt("structure table root has data above its new limit")
 			}
-			return nil
-		}); err != nil {
-			return err
 		}
 		if child == 0 {
 			return corrupt("structure table shrinking root has no first child")
@@ -403,13 +429,11 @@ func structureTableParse(codec structurePayloadCodec, page []byte, selectedTxn u
 // structureParsePage parses one store page (Rust shrink's
 // inspect_page + parse).
 func structureParsePage(codec structurePayloadCodec, store tree.Store, pageNumber uint32, expectedLevel *uint16) (structureTableHeader, error) {
-	var header structureTableHeader
-	err := store.Inspect(pageNumber, func(page []byte) error {
-		var err error
-		header, err = structureTableParse(codec, page, store.TargetTxn(), expectedLevel)
-		return err
-	})
-	return header, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return structureTableHeader{}, err
+	}
+	return structureTableParse(codec, page, store.TargetTxn(), expectedLevel)
 }
 
 // structureInspectHeader mirrors the Rust inspect_header problem
@@ -494,15 +518,17 @@ func structureGrowRoot(codec structurePayloadCodec, store tree.RetiringStore, ro
 			return err
 		}
 		targetTxn := store.TargetTxn()
-		if err := store.Update(next, func(page []byte) error {
-			structureInitialize(codec, page, targetTxn, level+1, 1)
-			at := format.SlottedHeaderSize // child index zero
-			if at+4 > len(page) {
-				return corrupt("structure table child is outside page bounds")
-			}
-			format.PutU32(page[at:], *root)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(next)
+		if err != nil {
+			return err
+		}
+		structureInitialize(codec, page, targetTxn, level+1, 1)
+		at := format.SlottedHeaderSize // child index zero
+		if at+4 > len(page) {
+			return corrupt("structure table child is outside page bounds")
+		}
+		format.PutU32(page[at:], *root)
+		if err := store.RestoreDirty(next, tag); err != nil {
 			return err
 		}
 		*root = next
@@ -532,15 +558,17 @@ func structureNewSubtree(codec structurePayloadCodec, store tree.RetiringStore, 
 	}
 	targetTxn := store.TargetTxn()
 	if level == 0 {
-		if err := store.Update(pageNumber, func(page []byte) error {
-			structureInitialize(codec, page, targetTxn, 0, 1)
-			at := structureRecordOffset(id)
-			if at+len(record) > len(page) {
-				return corrupt("structure table record is outside its page")
-			}
-			copy(page[at:], record)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return 0, err
+		}
+		structureInitialize(codec, page, targetTxn, 0, 1)
+		at := structureRecordOffset(id)
+		if at+len(record) > len(page) {
+			return 0, corrupt("structure table record is outside its page")
+		}
+		copy(page[at:], record)
+		if err := store.RestoreDirty(pageNumber, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -553,15 +581,17 @@ func structureNewSubtree(codec structurePayloadCodec, store tree.RetiringStore, 
 	if err != nil {
 		return 0, err
 	}
-	if err := store.Update(pageNumber, func(page []byte) error {
-		structureInitialize(codec, page, targetTxn, level, 1)
-		at := format.SlottedHeaderSize + index*4
-		if at+4 > len(page) {
-			return corrupt("structure table child is outside page bounds")
-		}
-		format.PutU32(page[at:], child)
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return 0, err
+	}
+	structureInitialize(codec, page, targetTxn, level, 1)
+	at := format.SlottedHeaderSize + index*4
+	if at+4 > len(page) {
+		return 0, corrupt("structure table child is outside page bounds")
+	}
+	format.PutU32(page[at:], child)
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil
@@ -595,18 +625,16 @@ func structureTableTouch(codec structurePayloadCodec, store tree.RetiringStore, 
 // structureTouchHeader inspects one page and reports whether it is
 // already private (born in the target transaction).
 func structureTouchHeader(codec structurePayloadCodec, store tree.Store, pageNumber uint32, level uint16) (structureTableHeader, bool, error) {
-	var header structureTableHeader
-	private := false
-	err := store.Inspect(pageNumber, func(page []byte) error {
-		var err error
-		header, err = structureTableParse(codec, page, store.TargetTxn(), &level)
-		if err != nil {
-			return err
-		}
-		private = format.U64(page[format.HeaderBorn:]) == store.TargetTxn()
-		return nil
-	})
-	return header, private, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return structureTableHeader{}, false, err
+	}
+	header, err := structureTableParse(codec, page, store.TargetTxn(), &level)
+	if err != nil {
+		return structureTableHeader{}, false, err
+	}
+	private := format.U64(page[format.HeaderBorn:]) == store.TargetTxn()
+	return header, private, nil
 }
 
 // structureInitialize writes the radix page header (Rust initialize): the
@@ -666,15 +694,17 @@ func structureRemoveEmptyPath(store tree.Store, root *uint32, child uint32, chil
 	}
 	for depth := path.depth - 1; depth >= 0; depth-- {
 		frame := path.frames[depth]
-		if err := store.Update(frame.pageNumber, func(page []byte) error {
-			at := format.SlottedHeaderSize + frame.childIndex*4
-			if at+4 > len(page) {
-				return corrupt("structure table child is outside page bounds")
-			}
-			format.PutU32(page[at:], 0)
-			format.PutU16(page[format.HeaderCount:], frame.itemCount-1)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(frame.pageNumber)
+		if err != nil {
+			return err
+		}
+		at := format.SlottedHeaderSize + frame.childIndex*4
+		if at+4 > len(page) {
+			return corrupt("structure table child is outside page bounds")
+		}
+		format.PutU32(page[at:], 0)
+		format.PutU16(page[format.HeaderCount:], frame.itemCount-1)
+		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
 			return err
 		}
 		child = frame.pageNumber
@@ -693,31 +723,28 @@ func structureRemoveEmptyPath(store tree.Store, root *uint32, child uint32, chil
 // structureReadRecordAt reads one record at its id slot of one leaf page
 // (Rust change_refcount's read_record).
 func structureReadRecordAt(codec structurePayloadCodec, store tree.Store, pageNumber uint32, id uint32) (structureRecord, bool, error) {
-	var record structureRecord
-	found := false
-	err := store.Inspect(pageNumber, func(page []byte) error {
-		cell, err := structureTableLeafCell(codec, page, id)
-		if err != nil {
-			return err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	cell, err := structureTableLeafCell(codec, page, id)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	if format.U32(cell[structureIDOffset:]) == 0 {
+		if !allZero(cell) {
+			return structureRecord{}, false, corrupt("empty structure table slot is nonzero")
 		}
-		if format.U32(cell[structureIDOffset:]) == 0 {
-			if !allZero(cell) {
-				return corrupt("empty structure table slot is nonzero")
-			}
-			return nil
-		}
-		decoded, err := decodeStructureRecord(codec, cell)
-		if err != nil {
-			return err
-		}
-		if decoded.id != id {
-			return corrupt("structure table record is in the wrong slot")
-		}
-		record = decoded
-		found = true
-		return nil
-	})
-	return record, found, err
+		return structureRecord{}, false, nil
+	}
+	decoded, err := decodeStructureRecord(codec, cell)
+	if err != nil {
+		return structureRecord{}, false, err
+	}
+	if decoded.id != id {
+		return structureRecord{}, false, corrupt("structure table record is in the wrong slot")
+	}
+	return decoded, true, nil
 }
 
 // structureChangedRefcount applies one signed change (Rust

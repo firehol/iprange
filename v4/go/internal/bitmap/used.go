@@ -38,7 +38,7 @@ func (p *editPath) push(frame usedFrame) error {
 
 type usedCursor struct {
 	pageNumber uint32
-	header     *Header
+	header     Header
 	base       uint64
 }
 
@@ -58,7 +58,7 @@ type setSpec struct {
 // AllocateLowestID returns the lowest unused ID of a namespace: a hole
 // from the used bitmap, or (for a dense namespace) the new id at the limit
 // (Rust used_bitmap::allocate_lowest_id).
-func AllocateLowestID(store tree.RetiringStore, root *uint32, limit *uint64, liveCount uint64, kind Kind, exhausted error) (uint32, error) {
+func AllocateLowestID(store tree.RetiringStore, root *uint32, limit *uint64, liveCount uint64, kind Kind, exhausted func() error) (uint32, error) {
 	if *limit == 0 {
 		return 0, corrupt("ID namespace limit is zero")
 	}
@@ -66,78 +66,72 @@ func AllocateLowestID(store tree.RetiringStore, root *uint32, limit *uint64, liv
 		return 0, corrupt("ID namespace count exceeds its limit")
 	}
 	if liveCount < *limit-1 {
-		retired := tree.NewRetiredPages()
-		id, ok, err := TakeLowestUsed(store, root, *limit, kind, retired)
+		var retired tree.RetiredPages
+		id, ok, err := TakeLowestUsed(store, root, *limit, kind, &retired)
 		if err != nil {
 			return 0, err
 		}
 		if !ok {
 			return 0, corrupt("ID used bitmap has no advertised hole")
 		}
-		if err := store.RetirePages(retired.Slice()); err != nil {
+		if err := store.RetirePages(retired); err != nil {
 			return 0, err
 		}
 		return id, nil
 	}
 	if *limit == 1<<32 {
-		return 0, exhausted
+		return 0, exhausted()
 	}
 	id := uint32(*limit)
 	(*limit)++
-	retired := tree.NewRetiredPages()
-	if err := setDenseAppend(store, root, *limit, kind, id, retired); err != nil {
+	var retired tree.RetiredPages
+	if err := setDenseAppend(store, root, *limit, kind, id, &retired); err != nil {
 		return 0, err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return 0, err
 	}
 	return id, nil
 }
 
-func touch(store tree.Store, pageNumber uint32, kind Kind, level uint16, base, limit uint64, retired *tree.RetiredPages) (uint32, *Header, error) {
+func touch(store tree.Store, pageNumber uint32, kind Kind, level uint16, base, limit uint64, retired *tree.RetiredPages) (uint32, Header, error) {
 	targetTxn := store.TargetTxn()
-	var header *Header
-	private := false
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		h, err := InspectHeader(page, targetTxn, kind, &level)
-		if err != nil {
-			return err
-		}
-		header = h
-		private = format.U64(page[format.HeaderBorn:]) == targetTxn
-		return nil
-	}); err != nil {
-		return 0, nil, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return 0, Header{}, err
 	}
+	header, err := InspectHeader(page, targetTxn, kind, &level)
+	if err != nil {
+		return 0, Header{}, err
+	}
+	private := format.U64(page[format.HeaderBorn:]) == targetTxn
 	if private {
 		return pageNumber, header, nil
 	}
 	privatePage, err := store.Allocate()
 	if err != nil {
-		return 0, nil, err
+		return 0, Header{}, err
 	}
 	if err := tree.CopyForCow(store, pageNumber, privatePage); err != nil {
-		return 0, nil, err
+		return 0, Header{}, err
 	}
 	if err := retired.Push(pageNumber); err != nil {
-		return 0, nil, err
+		return 0, Header{}, err
 	}
 	return privatePage, header, nil
 }
 
 func subtreeHasCandidate(store tree.Store, pageNumber uint32, kind Kind, base, limit uint64) (bool, error) {
 	targetTxn := store.TargetTxn()
-	var candidate bool
-	err := store.Inspect(pageNumber, func(page []byte) error {
-		header, err := InspectHeader(page, targetTxn, kind, nil)
-		if err != nil {
-			return err
-		}
-		c, err := pageHasCandidate(page, header.Level, base, limit, kind)
-		candidate = c
-		return err
-	})
-	return candidate, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return false, err
+	}
+	header, err := InspectHeader(page, targetTxn, kind, nil)
+	if err != nil {
+		return false, err
+	}
+	return pageHasCandidate(page, header.Level, base, limit, kind)
 }
 
 // pageHasCandidate reports whether the page has any zero candidate bit in
@@ -353,15 +347,15 @@ func ClearUsed(store tree.Store, root *uint32, limit uint64, kind Kind, bit uint
 	return true, nil
 }
 
-func start(store tree.Store, root uint32, kind Kind, level uint16, limit uint64, retired *tree.RetiredPages) (*usedCursor, error) {
+func start(store tree.Store, root uint32, kind Kind, level uint16, limit uint64, retired *tree.RetiredPages) (usedCursor, error) {
 	pageNumber, header, err := touch(store, root, kind, level, 0, limit, retired)
 	if err != nil {
-		return nil, err
+		return usedCursor{}, err
 	}
-	return &usedCursor{pageNumber: pageNumber, header: header, base: 0}, nil
+	return usedCursor{pageNumber: pageNumber, header: header}, nil
 }
 
-func branchStepOf(store tree.Store, cursor *usedCursor, bit uint32) (branchStep, error) {
+func branchStepOf(store tree.Store, cursor usedCursor, bit uint32) (branchStep, error) {
 	index, err := ChildIndex(bit, cursor.header.Level)
 	if err != nil {
 		return branchStep{}, err
@@ -375,18 +369,18 @@ func branchStepOf(store tree.Store, cursor *usedCursor, bit uint32) (branchStep,
 		return branchStep{}, err
 	}
 	limit := store.PageLimit()
-	var child uint32
-	if err := store.Inspect(cursor.pageNumber, func(page []byte) error {
-		c, err := CheckedBranchChild(page, cursor.header, index, limit)
-		child = c
-		return err
-	}); err != nil {
+	page, err := store.Inspect(cursor.pageNumber)
+	if err != nil {
+		return branchStep{}, err
+	}
+	child, err := CheckedBranchChild(page, cursor.header, index, limit)
+	if err != nil {
 		return branchStep{}, err
 	}
 	return branchStep{index: index, child: child, childBase: childBase}, nil
 }
 
-func frame(cursor *usedCursor, step *branchStep) usedFrame {
+func frame(cursor usedCursor, step *branchStep) usedFrame {
 	return usedFrame{
 		pageNumber: cursor.pageNumber,
 		childIndex: step.index,
@@ -395,22 +389,27 @@ func frame(cursor *usedCursor, step *branchStep) usedFrame {
 	}
 }
 
-func touchChild(store tree.Store, parent *usedCursor, step branchStep, limit uint64, kind Kind, retired *tree.RetiredPages) (*usedCursor, error) {
+func touchChild(store tree.Store, parent usedCursor, step branchStep, limit uint64, kind Kind, retired *tree.RetiredPages) (usedCursor, error) {
 	pageNumber, header, err := touch(store, step.child, kind, parent.header.Level-1, step.childBase, limit, retired)
 	if err != nil {
-		return nil, err
+		return usedCursor{}, err
 	}
 	if pageNumber != step.child {
-		if err := store.Update(parent.pageNumber, func(page []byte) error {
-			return setPointer(page, parent.header, step.index, pageNumber)
-		}); err != nil {
-			return nil, err
+		page, tag, err := store.Update(parent.pageNumber)
+		if err != nil {
+			return usedCursor{}, err
+		}
+		if err := setPointer(page, parent.header, step.index, pageNumber); err != nil {
+			return usedCursor{}, err
+		}
+		if err := store.RestoreDirty(parent.pageNumber, tag); err != nil {
+			return usedCursor{}, err
 		}
 	}
-	return &usedCursor{pageNumber: pageNumber, header: header, base: step.childBase}, nil
+	return usedCursor{pageNumber: pageNumber, header: header, base: step.childBase}, nil
 }
 
-func insertMissing(store tree.Store, cursor *usedCursor, path *editPath, step branchStep, spec setSpec) error {
+func insertMissing(store tree.Store, cursor usedCursor, path *editPath, step branchStep, spec setSpec) error {
 	child, err := newUsedSubtree(store, spec.kind, cursor.header.Level-1, step.childBase, spec.limit, spec.bit)
 	if err != nil {
 		return err
@@ -424,9 +423,14 @@ func insertMissing(store tree.Store, cursor *usedCursor, path *editPath, step br
 			return err
 		}
 	}
-	if err := store.Update(cursor.pageNumber, func(page []byte) error {
-		return setBranchChild(page, cursor.header, step.index, child, candidate)
-	}); err != nil {
+	page, tag, err := store.Update(cursor.pageNumber)
+	if err != nil {
+		return err
+	}
+	if err := setBranchChild(page, cursor.header, step.index, child, candidate); err != nil {
+		return err
+	}
+	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
 		return err
 	}
 	if spec.candidateHint != nil {
@@ -435,30 +439,31 @@ func insertMissing(store tree.Store, cursor *usedCursor, path *editPath, step br
 	return propagate(store, path.frames[:path.depth-1], cursor.pageNumber, cursor.base, spec.limit, spec.kind)
 }
 
-func setLeaf(store tree.Store, cursor *usedCursor, path *editPath, spec setSpec) error {
+func setLeaf(store tree.Store, cursor usedCursor, path *editPath, spec setSpec) error {
 	wordIndex := LeafWordIndex(spec.bit)
-	wordCandidate := false
-	if err := store.Update(cursor.pageNumber, func(page []byte) error {
-		word, err := LeafWord(page, wordIndex)
-		if err != nil {
-			return err
-		}
-		mask := uint64(1) << (uint64(spec.bit) % 64)
-		if word&mask != 0 {
-			return corrupt("used bitmap bit is already set")
-		}
-		next := word | mask
-		if err := SetLeafWord(page, wordIndex, next); err != nil {
-			return err
-		}
-		count := cursor.header.ItemCount
-		if word == 0 {
-			count++
-		}
-		stampLeaf(page, count)
-		wordCandidate = wordHasCandidate(next, wordIndex, cursor.base, spec.limit, spec.kind)
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(cursor.pageNumber)
+	if err != nil {
+		return err
+	}
+	word, err := LeafWord(page, wordIndex)
+	if err != nil {
+		return err
+	}
+	mask := uint64(1) << (uint64(spec.bit) % 64)
+	if word&mask != 0 {
+		return corrupt("used bitmap bit is already set")
+	}
+	next := word | mask
+	if err := SetLeafWord(page, wordIndex, next); err != nil {
+		return err
+	}
+	count := cursor.header.ItemCount
+	if word == 0 {
+		count++
+	}
+	stampLeaf(page, count)
+	wordCandidate := wordHasCandidate(next, wordIndex, cursor.base, spec.limit, spec.kind)
+	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
 		return err
 	}
 	candidate := false
@@ -479,29 +484,29 @@ func setLeaf(store tree.Store, cursor *usedCursor, path *editPath, spec setSpec)
 
 // clearLeaf clears one bit of the private leaf and reports whether the
 // leaf became empty (Rust clear_leaf).
-func clearLeaf(store tree.Store, cursor *usedCursor, path *editPath, limit uint64, kind Kind, bit uint32) (bool, error) {
+func clearLeaf(store tree.Store, cursor usedCursor, path *editPath, limit uint64, kind Kind, bit uint32) (bool, error) {
 	wordIndex := LeafWordIndex(bit)
-	count := 0
-	err := store.Update(cursor.pageNumber, func(page []byte) error {
-		word, err := LeafWord(page, wordIndex)
-		if err != nil {
-			return err
-		}
-		mask := uint64(1) << (uint64(bit) % 64)
-		if word&mask == 0 {
-			return corrupt("used bitmap bit disappeared")
-		}
-		next := word &^ mask
-		if err := SetLeafWord(page, wordIndex, next); err != nil {
-			return err
-		}
-		count = cursor.header.ItemCount
-		if next == 0 {
-			count--
-		}
-		return nil
-	})
+	page, tag, err := store.Update(cursor.pageNumber)
 	if err != nil {
+		return false, err
+	}
+	word, err := LeafWord(page, wordIndex)
+	if err != nil {
+		return false, err
+	}
+	mask := uint64(1) << (uint64(bit) % 64)
+	if word&mask == 0 {
+		return false, corrupt("used bitmap bit disappeared")
+	}
+	next := word &^ mask
+	if err := SetLeafWord(page, wordIndex, next); err != nil {
+		return false, err
+	}
+	count := cursor.header.ItemCount
+	if next == 0 {
+		count--
+	}
+	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
 		return false, err
 	}
 	if count == 0 {
@@ -510,10 +515,12 @@ func clearLeaf(store tree.Store, cursor *usedCursor, path *editPath, limit uint6
 		}
 		return true, nil
 	}
-	if err := store.Update(cursor.pageNumber, func(page []byte) error {
-		stampLeaf(page, count)
-		return nil
-	}); err != nil {
+	page, tag, err = store.Update(cursor.pageNumber)
+	if err != nil {
+		return false, err
+	}
+	stampLeaf(page, count)
+	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
 		return false, err
 	}
 	if err := propagateKnown(store, path.frames[:path.depth], cursor.pageNumber, cursor.base, limit, kind, true); err != nil {

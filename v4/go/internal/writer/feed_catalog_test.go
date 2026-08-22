@@ -111,13 +111,15 @@ func TestDraftFeedCatalogIndexExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Update(page, func(view []byte) error {
-		bitmap.Initialize(view, draft.meta.TxnID, 3, bitmap.KindFeed)
-		// A branch page must declare a nonzero item count; the zeroed
-		// summaries then report no hole at any level.
-		format.PutU16(view[format.HeaderCount:], 1)
-		return nil
-	}); err != nil {
+	view, tag, err := store.Update(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bitmap.Initialize(view, draft.meta.TxnID, 3, bitmap.KindFeed)
+	// A branch page must declare a nonzero item count; the zeroed
+	// summaries then report no hole at any level.
+	format.PutU16(view[format.HeaderCount:], 1)
+	if err := store.RestoreDirty(page, tag); err != nil {
 		t.Fatal(err)
 	}
 	draft.meta.FeedUsedRoot = page

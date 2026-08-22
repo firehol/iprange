@@ -13,13 +13,14 @@ import (
 // aliases the mapping and is valid only for the current operation. The
 // string input is compared without any heap allocation.
 func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
+	if !format.FeedNameValidString(name) {
+		return FeedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
+	}
+	work.CatalogLookup(1)
 	if r.meta.CatalogNameRoot == 0 {
 		return FeedEntry{}, false, nil
 	}
 	work.TreeLookup(1)
-	if !format.FeedNameValidString(name) {
-		return FeedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
-	}
 	cur := r.meta.CatalogNameRoot
 	level := uint16(0)
 	first := true

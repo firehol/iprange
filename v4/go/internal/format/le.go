@@ -42,9 +42,14 @@ func CRC32C(data []byte) uint32 {
 // MetaCRC32C computes the exact meta-page checksum: CRC-32C over the full
 // 4,096-byte page with bytes [252,256) (the stored checksum field) treated as
 // zero (binary-format-v4.md section 4).
+// metaCRCPadding is the four zero bytes covering the stored checksum
+// field of one meta page (package-level to keep MetaCRC32C allocation
+// free).
+var metaCRCPadding = [4]byte{}
+
 func MetaCRC32C(page []byte) uint32 {
 	crc := crc32.Checksum(page[:252], crc32cTable)
-	crc = crc32.Update(crc, crc32cTable, []byte{0, 0, 0, 0})
+	crc = crc32.Update(crc, crc32cTable, metaCRCPadding[:])
 	crc = crc32.Update(crc, crc32cTable, page[256:])
 	return crc
 }

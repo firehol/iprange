@@ -36,11 +36,11 @@ func (s selectedStore) PageLimit() uint64 { return s.meta.PageCount }
 
 // Inspect validates the page against the base bounds, then views it
 // through the draft mapping (Rust SelectedStore::view_page).
-func (s selectedStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+func (s selectedStore) Inspect(pageNumber uint32) ([]byte, error) {
 	if pageNumber < 2 || uint64(pageNumber) >= s.meta.PageCount {
-		return corrupt("stored range page is outside its source")
+		return nil, corrupt("stored range page is outside its source")
 	}
-	return s.store.InspectBase(pageNumber, fn)
+	return s.store.InspectBase(pageNumber)
 }
 
 // DiscardPrivate is unreachable on a selected base source (the cursor is
@@ -52,7 +52,7 @@ func (s selectedStore) DiscardPrivate(pageNumber uint32) error {
 // rangeCursor is one forward cursor over a base generation range tree
 // through the draft mapping (Rust Cursor<K> with SelectedStore).
 type rangeCursor struct {
-	cursor *tree.ForwardCursor
+	cursor *tree.ForwardCursor[rangeRecord]
 	family uint8
 }
 
@@ -64,13 +64,13 @@ func newRangeCursor(store *DraftStore, base format.Meta) (*rangeCursor, error) {
 		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "stored range cursor has the wrong address family"}
 	}
 	source := selectedStore{store: store, meta: base}
-	var codec tree.Codec
+	var codec tree.Codec[rangeRecord]
 	if base.AddressFamily == format.AddressFamilyIPv4 {
 		codec = rangeCodec4{}
 	} else {
 		codec = rangeCodec6{}
 	}
-	cursor, err := tree.NewForwardCursor(codec, source, base.RangeRoot, false)
+	cursor, err := tree.NewForwardCursor[rangeRecord](codec, source, base.RangeRoot, false)
 	if err != nil {
 		return nil, err
 	}
@@ -80,30 +80,11 @@ func newRangeCursor(store *DraftStore, base format.Meta) (*rangeCursor, error) {
 // next returns the next range record in ascending key order, or ok=false
 // at the end (Rust Cursor::next + RangeItem; one record by value).
 func (c *rangeCursor) next() (record rangeRecord, ok bool, err error) {
-	found := false
-	err = c.cursor.Next(func(cell []byte, header *tree.Header, pageNumber uint32, index int) error {
-		var decoded rangeRecord
-		var err error
-		if c.family == format.AddressFamilyIPv4 {
-			var r format.RangeRecordV4
-			r, err = format.DecodeRangeRecordV4(cell)
-			decoded = rangeRecord{from: tree.Key{Hi: uint64(r.From)}, to: tree.Key{Hi: uint64(r.To)}, value: r.Value}
-		} else {
-			var r format.RangeRecordV6
-			r, err = format.DecodeRangeRecordV6(cell)
-			decoded = rangeRecord{from: tree.Key{Hi: r.FromHi, Lo: r.FromLo}, to: tree.Key{Hi: r.ToHi, Lo: r.ToLo}, value: r.Value}
-		}
-		if err != nil {
-			return corrupt("range leaf is invalid")
-		}
-		record = decoded
-		found = true
-		return nil
-	})
+	record, ok, err = c.cursor.Next()
 	if err != nil {
 		return rangeRecord{}, false, err
 	}
-	if !found {
+	if !ok {
 		return rangeRecord{}, false, nil
 	}
 	work.RangeConsumed(1)
@@ -113,13 +94,9 @@ func (c *rangeCursor) next() (record rangeRecord, ok bool, err error) {
 // InspectBase views one mapped page without the base-bound validation
 // (the DraftStore-bound readers use Inspect; the selected base source
 // adds its own bound on top).
-func (s *DraftStore) InspectBase(pageNumber uint32, fn func(page []byte) error) error {
+func (s *DraftStore) InspectBase(pageNumber uint32) ([]byte, error) {
 	if uint64(pageNumber) >= s.draft.meta.PageCount {
-		return corrupt("draft page is out of bounds")
+		return nil, corrupt("draft page is out of bounds")
 	}
-	page, err := s.mapping.Page(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+	return s.mapping.Page(pageNumber)
 }

@@ -77,17 +77,17 @@ func (codec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return Key{Txn: format.U64(cell[txnOffset:]), First: format.U32(cell[firstOffset:])}.ToTree(), nil
 }
 
-func (codec) ReadLeaf(cell []byte) (any, error) {
+func (codec) ReadLeaf(cell []byte) (Extent, error) {
 	if len(cell) != cellSize {
-		return nil, corrupt("retirement leaf has the wrong record size")
+		return Extent{}, corrupt("retirement leaf has the wrong record size")
 	}
 	key := Key{Txn: format.U64(cell[txnOffset:]), First: format.U32(cell[firstOffset:])}
 	count := format.U32(cell[countOffset:])
 	if key.Txn <= 1 || key.First < 2 || count == 0 {
-		return nil, corrupt("retirement extent has invalid fields")
+		return Extent{}, corrupt("retirement extent has invalid fields")
 	}
 	if uint64(key.First)+uint64(count) > 1<<32 {
-		return nil, corrupt("retirement extent endpoint overflow")
+		return Extent{}, corrupt("retirement extent endpoint overflow")
 	}
 	return Extent{Key: key, Count: count}, nil
 }
@@ -108,25 +108,25 @@ func encode(extent Extent) []byte {
 // AddPage records one retired page, coalescing with the previous and next
 // extents of the same transaction (Rust retirement::add_page). Returns the
 // COW pages retired by the operation itself.
-func AddPage(store tree.Store, root *uint32, extentCount *uint64, txn uint64, pageNumber uint32) (*tree.RetiredPages, error) {
+func AddPage(store tree.Store, root *uint32, extentCount *uint64, txn uint64, pageNumber uint32) (tree.RetiredPages, error) {
 	if txn <= 1 {
-		return nil, invalid("retirement transaction must be above creation")
+		return tree.RetiredPages{}, invalid("retirement transaction must be above creation")
 	}
 	if pageNumber < 2 {
-		return nil, corrupt("a meta page cannot be retired")
+		return tree.RetiredPages{}, corrupt("a meta page cannot be retired")
 	}
 	key := Key{Txn: txn, First: pageNumber}
 	previous, err := predecessor(store, *root, key)
 	if err != nil {
-		return nil, err
+		return tree.RetiredPages{}, err
 	}
 	next, err := atOrAfter(store, *root, key)
 	if err != nil {
-		return nil, err
+		return tree.RetiredPages{}, err
 	}
 	kind, err := classifyNeighbors(key, previous, next)
 	if err != nil {
-		return nil, err
+		return tree.RetiredPages{}, err
 	}
 	return applyPage(store, root, extentCount, key, previous, next, kind)
 }
@@ -171,31 +171,34 @@ const (
 	neighborsBoth
 )
 
-func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, previous, next *Extent, kind neighbors) (*tree.RetiredPages, error) {
-	retired := tree.NewRetiredPages()
+func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, previous, next *Extent, kind neighbors) (tree.RetiredPages, error) {
+	var retired tree.RetiredPages
 	switch kind {
 	case neighborsNeither:
-		return retired, insert(store, root, extentCount, Extent{Key: key, Count: 1}, retired)
+		return insert(store, root, extentCount, Extent{Key: key, Count: 1}, retired)
 	case neighborsPrevious:
 		count, err := grow(previous.Count, 1)
 		if err != nil {
 			return retired, err
 		}
-		return retired, insert(store, root, extentCount, Extent{Key: previous.Key, Count: count}, retired)
+		return insert(store, root, extentCount, Extent{Key: previous.Key, Count: count}, retired)
 	case neighborsNext:
-		if err := remove(store, root, extentCount, next.Key, retired); err != nil {
+		retired, err := remove(store, root, extentCount, next.Key, retired)
+		if err != nil {
 			return retired, err
 		}
 		count, err := grow(next.Count, 1)
 		if err != nil {
 			return retired, err
 		}
-		return retired, insert(store, root, extentCount, Extent{Key: key, Count: count}, retired)
+		return insert(store, root, extentCount, Extent{Key: key, Count: count}, retired)
 	case neighborsBoth:
-		if err := remove(store, root, extentCount, previous.Key, retired); err != nil {
+		retired, err := remove(store, root, extentCount, previous.Key, retired)
+		if err != nil {
 			return retired, err
 		}
-		if err := remove(store, root, extentCount, next.Key, retired); err != nil {
+		retired, err = remove(store, root, extentCount, next.Key, retired)
+		if err != nil {
 			return retired, err
 		}
 		merged, err := grow(previous.Count, 1)
@@ -206,7 +209,7 @@ func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, pre
 		if err != nil {
 			return retired, err
 		}
-		return retired, insert(store, root, extentCount, Extent{Key: previous.Key, Count: merged}, retired)
+		return insert(store, root, extentCount, Extent{Key: previous.Key, Count: merged}, retired)
 	}
 	return retired, nil
 }
@@ -218,62 +221,57 @@ func grow(count, by uint32) (uint32, error) {
 	return count + by, nil
 }
 
-func insert(store tree.Store, root *uint32, extentCount *uint64, extent Extent, retired *tree.RetiredPages) error {
-	inserted, err := tree.Insert(codec{}, store, root, encode(extent), retired)
+func insert(store tree.Store, root *uint32, extentCount *uint64, extent Extent, retired tree.RetiredPages) (tree.RetiredPages, error) {
+	retired, inserted, err := tree.Insert(codec{}, store, root, encode(extent), retired)
 	if err != nil {
-		return err
+		return tree.RetiredPages{}, err
 	}
 	if inserted {
 		if *extentCount == ^uint64(0) {
-			return overflow("retirement extent count")
+			return tree.RetiredPages{}, overflow("retirement extent count")
 		}
 		*extentCount = *extentCount + 1
-	}
-	return nil
-}
-
-func remove(store tree.Store, root *uint32, extentCount *uint64, key Key, retired *tree.RetiredPages) error {
-	if err := tree.DeleteExisting(codec{}, store, root, key.ToTree(), retired); err != nil {
-		return err
-	}
-	if *extentCount == 0 {
-		return overflow("retirement extent count underflows")
-	}
-	*extentCount = *extentCount - 1
-	return nil
-}
-
-// RemoveExtent removes one whole extent (Rust remove_extent).
-func RemoveExtent(store tree.Store, root *uint32, extentCount *uint64, extent Extent) (*tree.RetiredPages, error) {
-	retired := tree.NewRetiredPages()
-	if err := remove(store, root, extentCount, extent.Key, retired); err != nil {
-		return nil, err
 	}
 	return retired, nil
 }
 
+func remove(store tree.Store, root *uint32, extentCount *uint64, key Key, retired tree.RetiredPages) (tree.RetiredPages, error) {
+	retired, err := tree.DeleteExisting(codec{}, store, root, key.ToTree(), retired)
+	if err != nil {
+		return tree.RetiredPages{}, err
+	}
+	if *extentCount == 0 {
+		return tree.RetiredPages{}, overflow("retirement extent count underflows")
+	}
+	*extentCount = *extentCount - 1
+	return retired, nil
+}
+
+// RemoveExtent removes one whole extent (Rust remove_extent).
+func RemoveExtent(store tree.Store, root *uint32, extentCount *uint64, extent Extent) (tree.RetiredPages, error) {
+	return remove(store, root, extentCount, extent.Key, tree.RetiredPages{})
+}
+
 func predecessor(store tree.Store, root uint32, key Key) (*Extent, error) {
-	value, err := tree.Predecessor(codec{}, store, root, key.ToTree())
+	value, found, err := tree.Predecessor(codec{}, store, root, key.ToTree())
 	if err != nil {
 		return nil, err
 	}
-	return asExtent(value), nil
+	if !found {
+		return nil, nil
+	}
+	return &value, nil
 }
 
 func atOrAfter(store tree.Store, root uint32, key Key) (*Extent, error) {
-	value, err := tree.AtOrAfter(codec{}, store, root, key.ToTree())
+	value, found, err := tree.AtOrAfter(codec{}, store, root, key.ToTree())
 	if err != nil {
 		return nil, err
 	}
-	return asExtent(value), nil
-}
-
-func asExtent(value any) *Extent {
-	if value == nil {
-		return nil
+	if !found {
+		return nil, nil
 	}
-	extent := value.(Extent)
-	return &extent
+	return &value, nil
 }
 
 // First returns the lowest retirement extent (Rust retirement::first).

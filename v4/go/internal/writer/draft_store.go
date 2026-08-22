@@ -43,6 +43,15 @@ type DraftStore struct {
 	committedPageCount uint64
 	budget             PageBudget
 	draft              *Draft
+	// Encode targets for the dictionary and catalog records of one
+	// draft. A draft is single-threaded and every tree insert copies its
+	// record into the mapped page before the next encode reuses the
+	// buffer, so these are allocated once per draft, never per record
+	// (the Go generic tree interface makes stack encodes escape).
+	recordScratch  [membershipRecordLimit]byte
+	hashScratch    [membershipHashKeySize]byte
+	catalogScratch [catalogMaxRecord]byte
+	deltaScratch   [deltaRecordSize]byte
 }
 
 // NewDraftStore binds one draft to the opened read-write mapping (Rust
@@ -66,16 +75,12 @@ func (s *DraftStore) TargetTxn() uint64 { return s.draft.meta.TxnID }
 // PageLimit returns the draft's current page count (Rust Store::page_limit).
 func (s *DraftStore) PageLimit() uint64 { return s.draft.meta.PageCount }
 
-// Inspect runs fn over one mapped draft page (Rust Store::inspect_page).
-func (s *DraftStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+// Inspect returns one mapped draft page view (Rust Store::inspect_page).
+func (s *DraftStore) Inspect(pageNumber uint32) ([]byte, error) {
 	if err := requirePage(pageNumber, s.draft.meta.PageCount); err != nil {
-		return err
+		return nil, err
 	}
-	page, err := s.mapping.Page(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+	return s.mapping.Page(pageNumber)
 }
 
 // Allocate returns one page for the draft: the private stack first, then
@@ -86,9 +91,9 @@ func (s *DraftStore) Allocate() (uint32, error) {
 		return s.popPrivate()
 	}
 	root := s.draft.meta.FreeBitmapRoot
-	retired := tree.NewRetiredPages()
+	var retired tree.RetiredPages
 	limit := s.committedPageCount
-	page, ok, err := bitmap.TakeLowest(s, &root, limit, retired)
+	page, ok, err := bitmap.TakeLowest(s, &root, limit, &retired)
 	if err != nil {
 		return 0, err
 	}
@@ -106,9 +111,30 @@ func (s *DraftStore) Allocate() (uint32, error) {
 	return s.allocateTail()
 }
 
-// Update runs fn over one private mapped page and re-arms its dirty-chain
-// tag (Rust Store::update_page). Committed pages are refused before fn.
-func (s *DraftStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+// Update returns one private mapped page view ready for mutation with the
+// dirty-chain tag captured before the mutation (Rust Store::update_page).
+// The caller must restore the tag with RestoreDirty after a successful
+// mutation, because page-header writes clear the checksum slot that
+// carries the tag until prepare seals the page. Committed pages are
+// refused (Rust update_page).
+func (s *DraftStore) Update(pageNumber uint32) ([]byte, uint32, error) {
+	if err := requirePage(pageNumber, s.draft.meta.PageCount); err != nil {
+		return nil, 0, err
+	}
+	page, err := s.mapping.Page(pageNumber)
+	if err != nil {
+		return nil, 0, err
+	}
+	tag, err := privateTag(page, s.draft.meta.TxnID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return page, tag, nil
+}
+
+// RestoreDirty re-arms one page's dirty-chain tag after a successful
+// mutation (Rust Store::restore_dirty).
+func (s *DraftStore) RestoreDirty(pageNumber uint32, tag uint32) error {
 	if err := requirePage(pageNumber, s.draft.meta.PageCount); err != nil {
 		return err
 	}
@@ -116,46 +142,36 @@ func (s *DraftStore) Update(pageNumber uint32, fn func(page []byte) error) error
 	if err != nil {
 		return err
 	}
-	tag, err := privateTag(page, s.draft.meta.TxnID)
-	if err != nil {
-		return err
-	}
-	if err := fn(page); err != nil {
-		return err
-	}
 	format.PutU32(page[format.PageChecksumOffset:], tag)
 	work.BytesMoved(4)
 	return nil
 }
 
-// CopyPage copies one mapped page into a destination that is already
-// private for the draft and runs fn over the pair (Rust Store::copy_page).
-func (s *DraftStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+// CopyPage returns the source and destination page views of one COW copy;
+// the destination must already be private for the draft. The destination's
+// dirty-chain tag is captured before the copy; the caller copies the bytes
+// and then restores the tag with RestoreDirty (Rust Store::copy_page).
+func (s *DraftStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	if err := requirePage(source, s.draft.meta.PageCount); err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	if err := requirePage(destination, s.draft.meta.PageCount); err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	src, err := s.mapping.Page(source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := s.mapping.Page(destination)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	tag, err := privateTag(dst, s.draft.meta.TxnID)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
-	if err := fn(src, dst); err != nil {
-		return err
-	}
-	format.PutU32(dst[format.PageChecksumOffset:], tag)
-	work.BytesMoved(4)
 	work.PageCopied(1)
-	return nil
+	return src, dst, tag, nil
 }
 
 // DiscardPrivate pushes one private page onto the reuse stack (Rust
@@ -234,8 +250,8 @@ func (s *DraftStore) AllocationForbidden(pageNumber uint32) bool {
 
 // RetirePages records every retired page in the retirement tree, draining
 // the allocator-retired backlog in between (Rust RetiringStore::retire_pages).
-func (s *DraftStore) RetirePages(pages []uint32) error {
-	for _, page := range pages {
+func (s *DraftStore) RetirePages(retired tree.RetiredPages) error {
+	for _, page := range retired.Slice() {
 		if err := s.retireOne(page); err != nil {
 			return err
 		}
@@ -263,20 +279,18 @@ func (s *DraftStore) sealPrivatePages(checkpoint func() error) error {
 		limit := s.draft.meta.PageCount
 		var next uint32
 		var dataPage bool
-		if err := s.Inspect(pageNumber, func(page []byte) error {
-			n, err := dirtyNext(format.U32(page[format.PageChecksumOffset:]), pageNumber, limit)
-			if err != nil {
-				return err
-			}
-			if hasPageMagic(page) && format.U64(page[format.HeaderBorn:]) != txn {
-				return corrupt("dirty page has the wrong transaction")
-			}
-			next = n
-			dataPage = hasPageMagic(page)
-			return nil
-		}); err != nil {
+		page, err := s.Inspect(pageNumber)
+		if err != nil {
 			return err
 		}
+		next, err = dirtyNext(format.U32(page[format.PageChecksumOffset:]), pageNumber, limit)
+		if err != nil {
+			return err
+		}
+		if hasPageMagic(page) && format.U64(page[format.HeaderBorn:]) != txn {
+			return corrupt("dirty page has the wrong transaction")
+		}
+		dataPage = hasPageMagic(page)
 		if dataPage {
 			page, err := s.mapping.Page(pageNumber)
 			if err != nil {
@@ -417,14 +431,12 @@ func (s *DraftStore) popPrivate() (uint32, error) {
 		return 0, corrupt("private page stack is empty")
 	}
 	txn := s.draft.meta.TxnID
-	var next uint32
-	if err := s.Inspect(pageNumber, func(page []byte) error {
-		n, err := privateStackNext(page, txn)
-		if err == nil {
-			next = n
-		}
-		return err
-	}); err != nil {
+	page, err := s.Inspect(pageNumber)
+	if err != nil {
+		return 0, err
+	}
+	next, err := privateStackNext(page, txn)
+	if err != nil {
 		return 0, err
 	}
 	if next == pageNumber || (next != 0 && (next < 2 || uint64(next) >= s.draft.meta.PageCount)) {
@@ -541,8 +553,8 @@ func (s *DraftStore) drainAllocatorRetired() error {
 // victims to the allocator-retired backlog (Rust free_one).
 func (s *DraftStore) freeOne(pageNumber uint32) error {
 	root := s.draft.meta.FreeBitmapRoot
-	retired := tree.NewRetiredPages()
-	if err := bitmap.SetFree(s, &root, s.draft.meta.PageCount, pageNumber, retired); err != nil {
+	var retired tree.RetiredPages
+	if err := bitmap.SetFree(s, &root, s.draft.meta.PageCount, pageNumber, &retired); err != nil {
 		return err
 	}
 	s.draft.meta.FreeBitmapRoot = root

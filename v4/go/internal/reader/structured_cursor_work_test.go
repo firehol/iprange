@@ -43,6 +43,7 @@ func TestWorkNetworkEnrichmentV1Cursor4(t *testing.T) {
 		LeafValidations:  4,
 		StructureDecodes: 4,
 		RangesConsumed:   4,
+		SourcePasses:     1,
 	}
 	if got := work.Read(); got != want {
 		t.Fatalf("structured cursor counters = %+v, want %+v", got, want)
@@ -65,6 +66,7 @@ func TestWorkNetworkEnrichmentV1Cursor4(t *testing.T) {
 		LeafValidations:  1,
 		StructureDecodes: 1,
 		RangesConsumed:   1,
+		SourcePasses:     1,
 	}
 	if got := work.Read(); got != want {
 		t.Fatalf("single record counters = %+v, want %+v", got, want)
@@ -97,6 +99,7 @@ func TestWorkNetworkEnrichmentV1Cursor6(t *testing.T) {
 		LeafValidations:  2,
 		StructureDecodes: 2,
 		RangesConsumed:   2,
+		SourcePasses:     1,
 	}
 	if got := work.Read(); got != want {
 		t.Fatalf("ipv6 cursor counters = %+v, want %+v", got, want)

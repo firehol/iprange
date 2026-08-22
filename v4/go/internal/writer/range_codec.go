@@ -19,7 +19,7 @@ type rangeRecord struct {
 // rangeFamily is one address-family range contract over the generic tree
 // key (Rust IpKey: width, record size, checked next/previous).
 type rangeFamily interface {
-	tree.Codec
+	tree.Codec[rangeRecord]
 	// Next returns key+1 in the family address space, when it exists.
 	Next(key tree.Key) (tree.Key, bool)
 	// Previous returns key-1 in the family address space, when it exists.
@@ -46,13 +46,13 @@ func (rangeCodec4) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(format.U32(cell))}, nil
 }
 
-func (rangeCodec4) ReadLeaf(cell []byte) (any, error) {
+func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord, error) {
 	if len(cell) != format.RangeRecordV4Size {
-		return nil, corrupt("range leaf has the wrong record size")
+		return rangeRecord{}, corrupt("range leaf has the wrong record size")
 	}
 	r, err := format.DecodeRangeRecordV4(cell)
 	if err != nil {
-		return nil, corrupt("range leaf is invalid")
+		return rangeRecord{}, corrupt("range leaf is invalid")
 	}
 	return rangeRecord{
 		from:  tree.Key{Hi: uint64(r.From)},
@@ -107,13 +107,13 @@ func (rangeCodec6) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.Key{Hi: hi, Lo: lo}, nil
 }
 
-func (rangeCodec6) ReadLeaf(cell []byte) (any, error) {
+func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord, error) {
 	if len(cell) != format.RangeRecordV6Size {
-		return nil, corrupt("range leaf has the wrong record size")
+		return rangeRecord{}, corrupt("range leaf has the wrong record size")
 	}
 	r, err := format.DecodeRangeRecordV6(cell)
 	if err != nil {
-		return nil, corrupt("range leaf is invalid")
+		return rangeRecord{}, corrupt("range leaf is invalid")
 	}
 	return rangeRecord{
 		from:  tree.Key{Hi: r.FromHi, Lo: r.FromLo},

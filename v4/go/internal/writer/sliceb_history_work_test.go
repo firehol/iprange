@@ -144,15 +144,15 @@ func TestWorkMembershipWorkflowSpillsEachDeltaOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unrelatedBit, err := store.internMembership(singleBitWords{feedIndex: unrelated.index})
+	unrelatedBit, err := draftInternMembership(store, singleBitWords{feedIndex: unrelated.index})
 	if err != nil {
 		t.Fatal(err)
 	}
-	recentBit, err := store.internMembership(singleBitWords{feedIndex: recent.index})
+	recentBit, err := draftInternMembership(store, singleBitWords{feedIndex: recent.index})
 	if err != nil {
 		t.Fatal(err)
 	}
-	veryRecentBit, err := store.internMembership(singleBitWords{feedIndex: veryRecent.index})
+	veryRecentBit, err := draftInternMembership(store, singleBitWords{feedIndex: veryRecent.index})
 	if err != nil {
 		t.Fatal(err)
 	}

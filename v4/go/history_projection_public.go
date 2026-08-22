@@ -112,7 +112,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	}
 	internalWindows := make([]writer.HistoryWindow, len(windows))
 	for index, window := range windows {
-		internalWindows[index] = writer.HistoryWindow{FeedName: string(window.FeedName), Cutoff: window.Cutoff}
+		internalWindows[index] = writer.HistoryWindow{FeedName: window.FeedName, Cutoff: window.Cutoff}
 	}
 	projection, err := w.core.BeginHistoryProjection(internalWindows, cancellation.check)
 	if err != nil {
@@ -135,13 +135,13 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo, projection *writer.HistoryProjection, cancellation *CancellationToken) (*writer.HistoryProjectionReport, error) {
 	sourceRangeCount := uint64(0)
 	sourceAddresses := format.CardinalityZero()
+	check := cancellation.check
 	work.InputSourcePass(1)
 	if info.Family == AddressFamilyIPv4 {
 		cursor, err := src.inner.NewDirectCursor4(reader.RangeForward)
 		if err != nil {
 			return nil, w.abortAfterSource(err)
 		}
-		work.SourcePass(1)
 		var previous histPrevious4
 		for {
 			current, ok, err := cursor.Next()
@@ -154,7 +154,7 @@ func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo,
 			if !canonicalSource4(previous, current) {
 				return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
-			if err := projection.Push4(current.From, current.To, current.Value, cancellation.check); err != nil {
+			if err := projection.Push4(current.From, current.To, current.Value, check); err != nil {
 				return nil, w.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
@@ -176,7 +176,6 @@ func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo,
 		if err != nil {
 			return nil, w.abortAfterSource(err)
 		}
-		work.SourcePass(1)
 		var previous histPrevious6
 		for {
 			current, ok, err := cursor.Next()
@@ -189,7 +188,7 @@ func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo,
 			if !canonicalSource6(previous, current) {
 				return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
-			if err := projection.Push6(current.FromHi, current.FromLo, current.ToHi, current.ToLo, current.Value, cancellation.check); err != nil {
+			if err := projection.Push6(current.FromHi, current.FromLo, current.ToHi, current.ToLo, current.Value, check); err != nil {
 				return nil, w.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
@@ -210,7 +209,7 @@ func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo,
 	if sourceRangeCount != info.RangeRecordCount {
 		return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen range count disagrees"})
 	}
-	report, err := projection.Finish(sourceRangeCount, sourceAddresses, cancellation.check)
+	report, err := projection.Finish(sourceRangeCount, sourceAddresses, check)
 	if err != nil {
 		return nil, w.abortAfter(err)
 	}
@@ -320,9 +319,10 @@ func publicHistoryReport(report *writer.HistoryProjectionReport) HistoryProjecti
 		AddedAddresses:      report.AddedAddresses,
 		RemovedAddresses:    report.RemovedAddresses,
 	}
-	for _, window := range report.Windows {
-		out.Windows = append(out.Windows, HistoryWindowReport{
-			FeedName:            []byte(window.FeedName),
+	out.Windows = make([]HistoryWindowReport, len(report.Windows))
+	for index, window := range report.Windows {
+		out.Windows[index] = HistoryWindowReport{
+			FeedName:            window.FeedName,
 			Cutoff:              window.Cutoff,
 			Created:             window.Created,
 			BeforeIntervalCount: window.BeforeIntervalCount,
@@ -332,7 +332,7 @@ func publicHistoryReport(report *writer.HistoryProjectionReport) HistoryProjecti
 			UnchangedAddresses:  window.UnchangedAddresses,
 			AddedAddresses:      window.AddedAddresses,
 			RemovedAddresses:    window.RemovedAddresses,
-		})
+		}
 	}
 	return out
 }
@@ -484,19 +484,23 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 	// Rust commit_with prepare_and_lock: check, prepare, check, then
 	// the sidecar lock (Go noop).
 	if err := h.cancellation.check(); err != nil {
-		return h.abortAfter(attempt, err), nil
+		return h.commitAbortAfter(attempt, err), nil
 	}
 	if err := h.w.core.Prepare(h.cancellation.check); err != nil {
-		return h.abortAfter(attempt, err), nil
+		return h.commitAbortAfter(attempt, err), nil
 	}
 	if err := h.cancellation.check(); err != nil {
-		return h.abortAfter(attempt, err), nil
+		return h.commitAbortAfter(attempt, err), nil
+	}
+	// Rust prepublication_checks: unchanged base, then the sidecar scan
+	// (Go noop), then the locked file covering the draft length. A
+	// failure is a BeforePublication abort, same class as a preparation
+	// failure.
+	if err := h.w.core.RequireUnchangedBase(); err != nil {
+		return h.commitAbortAfter(attempt, err), nil
 	}
 	if err := h.w.core.RequireDraftLength(); err != nil {
-		return h.abortAfter(attempt, err), nil
-	}
-	if err := h.w.core.RequireUnchangedBase(); err != nil {
-		return h.abortAfter(attempt, err), nil
+		return h.commitAbortAfter(attempt, err), nil
 	}
 	res := h.w.core.Publish(h.cancellation.check)
 	h.spent = true
@@ -505,18 +509,23 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 	case writer.PublishCommitted:
 		result.Status = CommitCommitted
 	case writer.PublishBeforePublication:
+		// Rust finish_commit_locked_with wraps a BeforePublication
+		// cause through abort_after (TransactionAborted class, draft
+		// discarded) before building the NotCommitted result.
 		result.Status = CommitNotCommitted
+		result.Err = h.w.abortAfter(res.Err)
 	default:
 		result.Status = CommitOutcomeUnknown
 	}
 	return result, nil
 }
 
-// abortAfter reports an aborted prepared commit exactly like the direct
-// transaction commit abort (Rust commit_with abort_after): the result
-// error class is TransactionAborted, and a failed abandonment discard
-// nests the CleanupInProgress class.
-func (h *FinishedHistoryProjection) abortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
+// commitAbortAfter reports an aborted prepared commit exactly like the
+// direct transaction commit abort (Rust commit_with abort_after): the
+// result error class is TransactionAborted, and a failed abandonment
+// discard nests the CleanupInProgress class. The name is distinct from
+// Writer.abortAfter, which wraps a plain cause with writer branding.
+func (h *FinishedHistoryProjection) commitAbortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
 	discardErr := h.w.core.DiscardUnpublished()
 	h.spent = true
 	inner := cause

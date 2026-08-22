@@ -8,6 +8,8 @@ import (
 )
 
 // LeafLocation identifies one leaf record position (Rust LeafLocation).
+// It is a value: the hot lookup paths return it embedded in their result
+// instead of allocating one location per record.
 type LeafLocation struct {
 	PageNumber uint32
 	Header     Header
@@ -17,44 +19,47 @@ type LeafLocation struct {
 // Predecessor returns the greatest leaf value at or below key when the key
 // exists, otherwise the greatest value strictly below it (Rust
 // fixed_tree::predecessor; used by retirement neighbor classification).
-func Predecessor(codec Codec, store Store, root uint32, key Key) (any, error) {
-	output, _, err := cursorLookup(codec, store, root, key, backward, seekPrevious)
-	return output, err
+// The bool reports whether the tree had any qualifying record.
+func Predecessor[T any](codec Codec[T], store Store, root uint32, key Key) (T, bool, error) {
+	value, _, found, err := cursorLookup(codec, store, root, key, backward, seekPrevious)
+	return value, found, err
 }
 
 // PredecessorLocated is Predecessor plus the selected leaf location
 // (Rust fixed_tree::predecessor_located): callers that need to re-inspect
 // the record's cell later keep the location instead of re-descending.
-func PredecessorLocated(codec Codec, store Store, root uint32, key Key) (any, *LeafLocation, error) {
+func PredecessorLocated[T any](codec Codec[T], store Store, root uint32, key Key) (T, LeafLocation, bool, error) {
 	return cursorLookup(codec, store, root, key, backward, seekPrevious)
 }
 
 // AtOrAfter returns the first leaf value at or after key, mirroring
 // fixed_tree::at_or_after.
-func AtOrAfter(codec Codec, store Store, root uint32, key Key) (any, error) {
-	output, _, err := cursorLookup(codec, store, root, key, forward, seekCurrentOrNext)
-	return output, err
+func AtOrAfter[T any](codec Codec[T], store Store, root uint32, key Key) (T, bool, error) {
+	value, _, found, err := cursorLookup(codec, store, root, key, forward, seekCurrentOrNext)
+	return value, found, err
 }
 
 // InspectLeaf re-verifies one located leaf page and runs inspect on its
 // cell (Rust inspect_leaf).
-func InspectLeaf(codec Codec, store Store, pageNumber uint32, itemCount uint16, index int, inspect func(cell []byte) error) error {
+func InspectLeaf[T any](codec Codec[T], store Store, pageNumber uint32, itemCount uint16, index int, inspect func(cell []byte) error) error {
 	level := uint16(0)
-	return store.Inspect(pageNumber, func(page []byte) error {
-		header, err := parse(codec, page, store.TargetTxn(), &level)
-		if err != nil {
-			return err
-		}
-		if header.ItemCount != itemCount {
-			return corrupt("B+tree leaf changed during inspection")
-		}
-		cell, err := codecCell(codec, page, header, index)
-		if err != nil {
-			return err
-		}
-		work.LeafValidation(1)
-		return inspect(cell)
-	})
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return err
+	}
+	header, err := parse(codec, page, store.TargetTxn(), &level)
+	if err != nil {
+		return err
+	}
+	if header.ItemCount != itemCount {
+		return corrupt("B+tree leaf changed during inspection")
+	}
+	cell, err := codecCell(codec, page, &header, index)
+	if err != nil {
+		return err
+	}
+	work.LeafValidation(1)
+	return inspect(cell)
 }
 
 type cursorDirection uint8
@@ -72,7 +77,7 @@ const (
 	seekFinished
 )
 
-type seekPolicy func(page []byte, header *Header, position int, exact bool, direction cursorDirection) (seekPosition, int, error)
+type seekPolicy func(position int, exact bool, direction cursorDirection, itemCount int) (seekPosition, int, error)
 
 // cursorFrame is the descent record for one branch level (Rust
 // Cursor::Frame). The frame stores the child index chosen at that level so
@@ -87,132 +92,123 @@ type cursorFrame struct {
 // cursorLookup is the allocation-free one-shot seek of the Rust cursor:
 // descend to the positioning leaf, apply the policy, and read the
 // selected record inside the final page view (Rust seek_read_inner reads
-// the item inside the seek closure). Returns the item value and the
-// selected leaf location.
-func cursorLookup(codec Codec, store Store, root uint32, key Key, direction cursorDirection, policy seekPolicy) (any, *LeafLocation, error) {
+// the item inside the seek closure). Every page view is fetched through
+// the closure-free Store.Inspect, so one lookup never allocates.
+func cursorLookup[T any](codec Codec[T], store Store, root uint32, key Key, direction cursorDirection, policy seekPolicy) (T, LeafLocation, bool, error) {
 	work.TreeLookup(1)
-	if root != 0 && (root < 2 || uint64(root) >= store.PageLimit()) {
-		return nil, nil, corrupt("B+tree root is outside page bounds")
-	}
 	if root == 0 {
-		return nil, nil, nil
+		var zero T
+		return zero, LeafLocation{}, false, nil
+	}
+	if root < 2 || uint64(root) >= store.PageLimit() {
+		var zero T
+		return zero, LeafLocation{}, false, corrupt("B+tree root is outside page bounds")
 	}
 	pageNumber := root
 	var expectedLevel *uint16
 	var path [maxPath]cursorFrame
 	depth := 0
 	for {
-		var header *Header
-		position := 0
-		exact := false
-		child := uint32(0)
-		index := 0
-		selected := seekFinished
-		value := any(nil)
-		var location *LeafLocation
-		advance := false
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			h, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			var zero T
+			return zero, LeafLocation{}, false, err
+		}
+		header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		if err != nil {
+			var zero T
+			return zero, LeafLocation{}, false, err
+		}
+		position, exact, err := lowerBound(codec, page, &header, key, true)
+		if err != nil {
+			var zero T
+			return zero, LeafLocation{}, false, err
+		}
+		if header.Level == 0 {
+			selected, index, err := policy(position, exact, direction, int(header.ItemCount))
 			if err != nil {
-				return err
+				var zero T
+				return zero, LeafLocation{}, false, err
 			}
-			header = h
-			pos, ex, err := lowerBound(codec, page, h, key, true)
-			if err != nil {
-				return err
-			}
-			position, exact = pos, ex
-			if h.Level == 0 {
-				selected, index, err = policy(page, h, position, exact, direction)
+			var value T
+			var zero T
+			var location LeafLocation
+			switch selected {
+			case seekFinished:
+				return value, location, false, nil
+			case seekIndex:
+				if index >= int(header.ItemCount) {
+					return zero, LeafLocation{}, false, corrupt("B+tree seek index is invalid")
+				}
+				cell, err := codecCell(codec, page, &header, index)
 				if err != nil {
-					return err
+					return zero, LeafLocation{}, false, err
 				}
-				if selected == seekIndex {
-					if index >= int(h.ItemCount) {
-						return corrupt("B+tree seek index is invalid")
-					}
-					cell, err := codecCell(codec, page, h, index)
-					if err != nil {
-						return err
-					}
-					value, err = codec.ReadLeaf(cell)
-					if err != nil {
-						return err
-					}
-					location = &LeafLocation{PageNumber: pageNumber, Header: *h, Index: index}
+				value, err = codec.ReadLeaf(cell)
+				if err != nil {
+					return zero, LeafLocation{}, false, err
 				}
-				return nil
+				return value, LeafLocation{PageNumber: pageNumber, Header: header, Index: index}, true, nil
 			}
-			index = position
-			if !exact {
-				if position == 0 {
-					if direction == backward {
-						return errSeekFinished
-					}
-					index = 0
-				} else {
-					index = position - 1
-				}
-			}
-			c, err := branchChild(codec, page, h, index, store.PageLimit())
+			// seekNextLeaf: move to the sibling leaf and read the record
+			// there (Rust set_leaf + advance_leaf + read_current).
+			location, found, err := advanceLeaf(codec, store, &path, &depth, direction)
 			if err != nil {
-				return err
+				return zero, LeafLocation{}, false, err
 			}
-			child = c
-			advance = true
-			return nil
-		}); err != nil {
-			if err == errSeekFinished {
-				return nil, nil, nil
+			if !found {
+				return zero, LeafLocation{}, false, nil
 			}
-			return nil, nil, err
+			value, err = readOn(codec, store, location)
+			if err != nil {
+				return zero, LeafLocation{}, false, err
+			}
+			return value, location, true, nil
 		}
-		if advance {
-			if depth >= maxPath {
-				return nil, nil, corrupt("B+tree exceeds its maximum height")
+		index := position
+		if !exact {
+			if position == 0 {
+				if direction == backward {
+					// The seek walked before the first record: no
+					// qualifying record exists (Rust seek returns None,
+					// not an error).
+					var zero T
+					return zero, LeafLocation{}, false, nil
+				}
+				index = 0
+			} else {
+				index = position - 1
 			}
-			path[depth] = cursorFrame{
-				pageNumber: pageNumber,
-				index:      index,
-				itemCount:  int(header.ItemCount),
-				level:      header.Level,
-			}
-			depth++
-			level := header.Level - 1
-			expectedLevel = &level
-			pageNumber = child
-			work.TreeDescent(1)
-			continue
 		}
-		// Leaf reached: the policy already read the Index case.
-		switch selected {
-		case seekFinished:
-			return nil, nil, nil
-		case seekIndex:
-			return value, location, nil
-		}
-		// seekNextLeaf: move to the sibling leaf and read the record
-		// there (Rust set_leaf + advance_leaf + read_current).
-		location, err := advanceLeaf(codec, store, &path, &depth, direction)
+		child, err := branchChild(codec, page, &header, index, store.PageLimit())
 		if err != nil {
-			return nil, nil, err
+			var zero T
+			return zero, LeafLocation{}, false, err
 		}
-		if location == nil {
-			return nil, nil, nil
+		if depth >= maxPath {
+			var zero T
+			return zero, LeafLocation{}, false, corrupt("B+tree exceeds its maximum height")
 		}
-		value, err = readOn(codec, store, *location)
-		if err != nil {
-			return nil, nil, err
+		path[depth] = cursorFrame{
+			pageNumber: pageNumber,
+			index:      index,
+			itemCount:  int(header.ItemCount),
+			level:      header.Level,
 		}
-		return value, location, nil
+		depth++
+		level := header.Level - 1
+		expectedLevel = &level
+		pageNumber = child
+		work.TreeDescent(1)
 	}
 }
 
 // advanceLeaf moves an edge-seek into the sibling subtree on the same side
 // (Rust Cursor::advance_leaf followed by descend_edge): walk up the path
 // to the nearest branch with a sibling on the seek side, then descend to
-// the edge leaf of that sibling. Returns nil when the seek is finished.
-func advanceLeaf(codec Codec, store Store, path *[maxPath]cursorFrame, depth *int, direction cursorDirection) (*LeafLocation, error) {
+// the edge leaf of that sibling. Returns found=false when the seek is
+// finished.
+func advanceLeaf[T any](codec Codec[T], store Store, path *[maxPath]cursorFrame, depth *int, direction cursorDirection) (LeafLocation, bool, error) {
 	for *depth > 0 {
 		slot := *depth - 1
 		frame := path[slot]
@@ -232,98 +228,83 @@ func advanceLeaf(codec Codec, store Store, path *[maxPath]cursorFrame, depth *in
 		}
 		path[slot].index = index
 		*depth = slot + 1
-		child := uint32(0)
-		if err := store.Inspect(frame.pageNumber, func(page []byte) error {
-			expected := frame.level
-			header, err := parse(codec, page, store.TargetTxn(), &expected)
-			if err != nil {
-				return err
-			}
-			if int(header.ItemCount) != frame.itemCount {
-				return corrupt("B+tree branch changed during traversal")
-			}
-			c, err := branchChild(codec, page, header, index, store.PageLimit())
-			if err != nil {
-				return err
-			}
-			child = c
-			return nil
-		}); err != nil {
-			return nil, err
+		page, err := store.Inspect(frame.pageNumber)
+		if err != nil {
+			return LeafLocation{}, false, err
+		}
+		expected := frame.level
+		header, err := parse(codec, page, store.TargetTxn(), &expected)
+		if err != nil {
+			return LeafLocation{}, false, err
+		}
+		if int(header.ItemCount) != frame.itemCount {
+			return LeafLocation{}, false, corrupt("B+tree branch changed during traversal")
+		}
+		child, err := branchChild(codec, page, &header, index, store.PageLimit())
+		if err != nil {
+			return LeafLocation{}, false, err
 		}
 		level := frame.level - 1
 		pageNumber := child
 		expectedLevel := &level
 		for {
-			var location *LeafLocation
-			child := uint32(0)
-			isBranch := false
-			if err := store.Inspect(pageNumber, func(page []byte) error {
-				header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
-				if err != nil {
-					return err
-				}
-				idx := 0
-				if direction == backward {
-					idx = int(header.ItemCount) - 1
-				}
-				if header.Level == 0 {
-					location = &LeafLocation{PageNumber: pageNumber, Header: *header, Index: idx}
-					return nil
-				}
-				c, err := branchChild(codec, page, header, idx, store.PageLimit())
-				if err != nil {
-					return err
-				}
-				if *depth >= maxPath {
-					return corrupt("B+tree exceeds its maximum height")
-				}
-				path[*depth] = cursorFrame{
-					pageNumber: pageNumber,
-					index:      idx,
-					itemCount:  int(header.ItemCount),
-					level:      header.Level,
-				}
-				*depth++
-				child = c
-				isBranch = true
-				return nil
-			}); err != nil {
-				return nil, err
+			page, err := store.Inspect(pageNumber)
+			if err != nil {
+				return LeafLocation{}, false, err
 			}
-			if !isBranch {
-				return location, nil
+			header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+			if err != nil {
+				return LeafLocation{}, false, err
 			}
+			idx := 0
+			if direction == backward {
+				idx = int(header.ItemCount) - 1
+			}
+			if header.Level == 0 {
+				return LeafLocation{PageNumber: pageNumber, Header: header, Index: idx}, true, nil
+			}
+			child, err := branchChild(codec, page, &header, idx, store.PageLimit())
+			if err != nil {
+				return LeafLocation{}, false, err
+			}
+			if *depth >= maxPath {
+				return LeafLocation{}, false, corrupt("B+tree exceeds its maximum height")
+			}
+			path[*depth] = cursorFrame{
+				pageNumber: pageNumber,
+				index:      idx,
+				itemCount:  int(header.ItemCount),
+				level:      header.Level,
+			}
+			*depth++
 			pageNumber = child
 			expected := *expectedLevel - 1
 			expectedLevel = &expected
 			work.TreeDescent(1)
 		}
 	}
-	return nil, nil
+	return LeafLocation{}, false, nil
 }
 
-var errSeekFinished = corrupt("seek finished")
-
-func readOn(codec Codec, store Store, location LeafLocation) (any, error) {
-	var value any
+func readOn[T any](codec Codec[T], store Store, location LeafLocation) (T, error) {
+	var value T
 	level := uint16(0)
-	err := store.Inspect(location.PageNumber, func(page []byte) error {
-		header, err := parse(codec, page, store.TargetTxn(), &level)
-		if err != nil {
-			return err
-		}
-		cell, err := codecCell(codec, page, header, location.Index)
-		if err != nil {
-			return err
-		}
-		value, err = codec.ReadLeaf(cell)
-		return err
-	})
-	return value, err
+	page, err := store.Inspect(location.PageNumber)
+	if err != nil {
+		return value, err
+	}
+	header, err := parse(codec, page, store.TargetTxn(), &level)
+	if err != nil {
+		return value, err
+	}
+	cell, err := codecCell(codec, page, &header, location.Index)
+	if err != nil {
+		return value, err
+	}
+	return codec.ReadLeaf(cell)
 }
 
-func seekPrevious(_ []byte, _ *Header, position int, exact bool, _ cursorDirection) (seekPosition, int, error) {
+func seekPrevious(position int, exact bool, _ cursorDirection, _ int) (seekPosition, int, error) {
 	if exact {
 		return seekIndex, position, nil
 	}
@@ -333,8 +314,8 @@ func seekPrevious(_ []byte, _ *Header, position int, exact bool, _ cursorDirecti
 	return seekIndex, position - 1, nil
 }
 
-func seekCurrentOrNext(_ []byte, header *Header, position int, _ bool, _ cursorDirection) (seekPosition, int, error) {
-	if position < int(header.ItemCount) {
+func seekCurrentOrNext(position int, _ bool, _ cursorDirection, itemCount int) (seekPosition, int, error) {
+	if position < itemCount {
 		return seekIndex, position, nil
 	}
 	return seekNextLeaf, 0, nil
@@ -342,7 +323,7 @@ func seekCurrentOrNext(_ []byte, header *Header, position int, _ bool, _ cursorD
 
 // adjacentLeaf descends the sibling subtree of the deepest branch that has
 // one (Rust adjacent_leaf).
-func adjacentLeaf(codec Codec, store Store, path *Path, direction AdjacentLeafDirection) (*adjacentLeafResult, error) {
+func adjacentLeaf[T any](codec Codec[T], store Store, path *Path, direction AdjacentLeafDirection) (adjacentLeafResult[T], bool, error) {
 	depth := path.Depth()
 	for depth > 0 {
 		depth--
@@ -356,74 +337,61 @@ func adjacentLeaf(codec Codec, store Store, path *Path, direction AdjacentLeafDi
 		if sibling < 0 {
 			continue
 		}
-		pageNumber := uint32(0)
-		var expectedLevel uint16
-		if err := store.Inspect(frame.PageNumber, func(page []byte) error {
-			header, err := parse(codec, page, store.TargetTxn(), nil)
-			if err != nil {
-				return err
-			}
-			if int(header.ItemCount) != frame.ItemCount || header.Level == 0 {
-				return corrupt("B+tree path changed during adjacent-leaf traversal")
-			}
-			child, err := branchChild(codec, page, header, sibling, store.PageLimit())
-			if err != nil {
-				return err
-			}
-			pageNumber = child
-			expectedLevel = header.Level - 1
-			return nil
-		}); err != nil {
-			return nil, err
+		page, err := store.Inspect(frame.PageNumber)
+		if err != nil {
+			return adjacentLeafResult[T]{}, false, err
 		}
+		header, err := parse(codec, page, store.TargetTxn(), nil)
+		if err != nil {
+			return adjacentLeafResult[T]{}, false, err
+		}
+		if int(header.ItemCount) != frame.ItemCount || header.Level == 0 {
+			return adjacentLeafResult[T]{}, false, corrupt("B+tree path changed during adjacent-leaf traversal")
+		}
+		child, err := branchChild(codec, page, &header, sibling, store.PageLimit())
+		if err != nil {
+			return adjacentLeafResult[T]{}, false, err
+		}
+		pageNumber := child
+		expectedLevel := header.Level - 1
 		for {
-			var leafResult *adjacentLeafResult
-			child := uint32(0)
-			branch := true
-			if err := store.Inspect(pageNumber, func(page []byte) error {
-				header, err := parse(codec, page, store.TargetTxn(), &expectedLevel)
-				if err != nil {
-					return err
-				}
-				index := 0
-				if direction == AdjacentBefore {
-					index = int(header.ItemCount) - 1
-				}
-				cell, err := codecCell(codec, page, header, index)
-				if err != nil {
-					return err
-				}
-				if header.Level == 0 {
-					key, err := codec.ReadKey(cell, 0)
-					if err != nil {
-						return err
-					}
-					value, err := codec.ReadLeaf(cell)
-					if err != nil {
-						return err
-					}
-					leafResult = &adjacentLeafResult{key: key, leaf: value}
-					branch = false
-					return nil
-				}
-				c, err := branchChild(codec, page, header, index, store.PageLimit())
-				if err != nil {
-					return err
-				}
-				child = c
-				return nil
-			}); err != nil {
-				return nil, err
+			page, err := store.Inspect(pageNumber)
+			if err != nil {
+				return adjacentLeafResult[T]{}, false, err
 			}
-			if !branch {
-				return leafResult, nil
+			header, err := parse(codec, page, store.TargetTxn(), &expectedLevel)
+			if err != nil {
+				return adjacentLeafResult[T]{}, false, err
+			}
+			index := 0
+			if direction == AdjacentBefore {
+				index = int(header.ItemCount) - 1
+			}
+			cell, err := codecCell(codec, page, &header, index)
+			if err != nil {
+				return adjacentLeafResult[T]{}, false, err
+			}
+			if header.Level == 0 {
+				key, err := codec.ReadKey(cell, 0)
+				if err != nil {
+					return adjacentLeafResult[T]{}, false, err
+				}
+				value, err := codec.ReadLeaf(cell)
+				if err != nil {
+					return adjacentLeafResult[T]{}, false, err
+				}
+				return adjacentLeafResult[T]{key: key, leaf: value}, true, nil
+			}
+			child, err := branchChild(codec, page, &header, index, store.PageLimit())
+			if err != nil {
+				return adjacentLeafResult[T]{}, false, err
 			}
 			pageNumber = child
 			expectedLevel--
 			work.TreeDescent(1)
 		}
 	}
-	return nil, nil
+	return adjacentLeafResult[T]{}, false, nil
 }
 
 // AdjacentLeafDirection selects the neighbor leaf for run-adjacency reads.
@@ -434,7 +402,7 @@ const (
 	AdjacentAfter
 )
 
-type adjacentLeafResult struct {
+type adjacentLeafResult[T any] struct {
 	key  Key
-	leaf any
+	leaf T
 }

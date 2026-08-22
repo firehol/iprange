@@ -36,30 +36,32 @@ func findLowest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32,
 		child := uint32(0)
 		nextBase := uint64(0)
 		step := 0 // 0 = leaf result, 1 = finished, 2 = descend
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &level)
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return 0, false, err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &level)
+		if err != nil {
+			return 0, false, err
+		}
+		if level == 0 {
+			bit, ok, err := lowestLeaf(page, base, start, limit)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
-			if level == 0 {
-				bit, ok, err := lowestLeaf(page, base, start, limit)
-				if err != nil {
-					return err
-				}
-				if !ok && selected {
-					return corrupt("used bitmap summary has no candidate")
-				}
-				if !ok {
-					step = 1
-					return nil
-				}
+			if !ok && selected {
+				return 0, false, corrupt("used bitmap summary has no candidate")
+			}
+			if !ok {
+				step = 1
+			} else {
 				found = uint32(bit)
 				step = 0
-				return nil
 			}
+		} else {
 			span, err := Coverage(level - 1)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
 			first := 0
 			if start > base {
@@ -67,46 +69,38 @@ func findLowest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32,
 			}
 			index, okSummary, err := FirstSummary(page, first)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
 			if !okSummary {
 				if selected {
-					return corrupt("used bitmap summary has no candidate")
+					return 0, false, corrupt("used bitmap summary has no candidate")
 				}
 				step = 1
 				noCandidate = true
-				return nil
-			}
-			childBase, err := childBaseAt(base, span, index)
-			if err != nil {
-				return err
-			}
-			if childBase >= limit {
-				return corrupt("used bitmap candidate is outside its limit")
-			}
-			c, err := CheckedBranchChild(page, header, index, pageLimit)
-			if err != nil {
-				return err
-			}
-			if c == 0 {
-				step = 1
-				missing = uint32(start)
-				if childBase > start {
-					missing = uint32(childBase)
+			} else {
+				childBase, err := childBaseAt(base, span, index)
+				if err != nil {
+					return 0, false, err
 				}
-				return nil
+				if childBase >= limit {
+					return 0, false, corrupt("used bitmap candidate is outside its limit")
+				}
+				c, err := CheckedBranchChild(page, header, index, pageLimit)
+				if err != nil {
+					return 0, false, err
+				}
+				if c == 0 {
+					step = 1
+					missing = uint32(start)
+					if childBase > start {
+						missing = uint32(childBase)
+					}
+				} else {
+					step = 2
+					child = c
+					nextBase = childBase
+				}
 			}
-			step = 2
-			child = c
-			nextBase = childBase
-			nextStart := start
-			if childBase > start {
-				nextStart = childBase
-			}
-			_ = nextStart
-			return nil
-		}); err != nil {
-			return 0, false, err
 		}
 		switch step {
 		case 0:
@@ -150,43 +144,42 @@ func contains(store tree.Store, root uint32, limit uint64, kind Kind, bit uint32
 		missing := false
 		child := uint32(0)
 		nextBase := uint64(0)
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &level)
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return false, err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &level)
+		if err != nil {
+			return false, err
+		}
+		if level == 0 {
+			word, err := LeafWord(page, LeafWordIndex(bit))
 			if err != nil {
-				return err
+				return false, err
 			}
-			if level == 0 {
-				word, err := LeafWord(page, LeafWordIndex(bit))
-				if err != nil {
-					return err
-				}
-				result = word&(uint64(1)<<(uint64(bit)%64)) != 0
-				return nil
-			}
+			result = word&(uint64(1)<<(uint64(bit)%64)) != 0
+		} else {
 			span, err := Coverage(level - 1)
 			if err != nil {
-				return err
+				return false, err
 			}
 			index, err := ChildIndex(bit, level)
 			if err != nil {
-				return err
+				return false, err
 			}
 			nextBase, err = childBaseAt(base, span, index)
 			if err != nil {
-				return err
+				return false, err
 			}
 			c, err := CheckedBranchChild(page, header, index, pageLimit)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if c == 0 {
 				missing = true
-				return nil
+			} else {
+				child = c
 			}
-			child = c
-			return nil
-		}); err != nil {
-			return false, err
 		}
 		if missing {
 			return false, nil
@@ -227,17 +220,16 @@ func ReadWords(store tree.Store, root uint32, limit uint64, kind Kind, start uin
 		if pageNumber, ok, err := findLeaf(store, root, limit, kind, base, leafBase); err != nil {
 			return err
 		} else if ok {
-			if err := store.Inspect(pageNumber, func(page []byte) error {
-				for index := 0; index < count; index++ {
-					word, err := LeafWord(page, within+index)
-					if err != nil {
-						return err
-					}
-					output[offset+index] = word
-				}
-				return nil
-			}); err != nil {
+			page, err := store.Inspect(pageNumber)
+			if err != nil {
 				return err
+			}
+			for index := 0; index < count; index++ {
+				word, err := LeafWord(page, within+index)
+				if err != nil {
+					return err
+				}
+				output[offset+index] = word
 			}
 		}
 		at += uint64(count)
@@ -279,42 +271,40 @@ func findLeaf(store tree.Store, root uint32, limit uint64, kind Kind, base, leaf
 		pageLimit := store.PageLimit()
 		child := uint32(0)
 		isLeaf := false
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &level)
-			if err != nil {
-				return err
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return 0, false, err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &level)
+		if err != nil {
+			return 0, false, err
+		}
+		if level == 0 {
+			if pageBase != leafBase {
+				return 0, false, corrupt("used bitmap leaf coverage is invalid")
 			}
-			if level == 0 {
-				if pageBase != leafBase {
-					return corrupt("used bitmap leaf coverage is invalid")
-				}
-				isLeaf = true
-				return nil
-			}
+			isLeaf = true
+		} else {
 			span, err := Coverage(level - 1)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
 			index, err := ChildIndex(bit, level)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
 			nextBase, err := childBaseAt(pageBase, span, index)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
 			c, err := CheckedBranchChild(page, header, index, pageLimit)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
-			if c == 0 {
-				return nil // absent subtree
+			if c != 0 {
+				child = c
+				pageBase = nextBase
 			}
-			child = c
-			pageBase = nextBase
-			return nil
-		}); err != nil {
-			return 0, false, err
 		}
 		if isLeaf {
 			return pageNumber, true, nil
@@ -355,51 +345,52 @@ func greatest(store tree.Store, root uint32, limit uint64, kind Kind) (uint32, b
 		child := uint32(0)
 		nextBase := uint64(0)
 		isLeaf := false
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &level)
-			if err != nil {
-				return err
-			}
-			if level == 0 {
-				isLeaf = true
-				return nil
-			}
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return 0, false, err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &level)
+		if err != nil {
+			return 0, false, err
+		}
+		if level == 0 {
+			isLeaf = true
+		} else {
 			span, err := Coverage(level - 1)
 			if err != nil {
-				return err
+				return 0, false, err
 			}
+			foundBranch := false
 			for index := BranchChildren - 1; index >= 0; index-- {
 				c, err := CheckedBranchChild(page, header, index, pageLimit)
 				if err != nil {
-					return err
+					return 0, false, err
 				}
 				if c != 0 {
 					child = c
 					nextBase, err = childBaseAt(base, span, index)
 					if err != nil {
-						return err
+						return 0, false, err
 					}
-					return nil
+					foundBranch = true
+					break
 				}
 			}
-			return corrupt("used bitmap branch has no child")
-		}); err != nil {
-			return 0, false, err
+			if !foundBranch {
+				return 0, false, corrupt("used bitmap branch has no child")
+			}
 		}
 		if isLeaf {
-			var bit uint32
-			if err := store.Inspect(pageNumber, func(page []byte) error {
-				b, ok, err := greatestLeaf(page, base, limit)
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return corrupt("used bitmap leaf has no set bit")
-				}
-				bit = b
-				return nil
-			}); err != nil {
+			leafPage, err := store.Inspect(pageNumber)
+			if err != nil {
 				return 0, false, err
+			}
+			bit, ok, err := greatestLeaf(leafPage, base, limit)
+			if err != nil {
+				return 0, false, err
+			}
+			if !ok {
+				return 0, false, corrupt("used bitmap leaf has no set bit")
 			}
 			return bit, true, nil
 		}

@@ -720,6 +720,6 @@ func outputDigest(m *mapping.Mapping) (byteLength uint64, digest [64]byte, err e
 		copy(buffer[:], view)
 		hasher.Write(buffer[:])
 	}
-	copy(digest[:], hasher.Sum(nil))
+	hasher.Sum(digest[:0])
 	return byteLength, digest, nil
 }

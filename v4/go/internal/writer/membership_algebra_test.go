@@ -58,7 +58,15 @@ func storedAlgebraWords(t *testing.T, m *rangeMemoryStore, state *membershipStat
 
 func newAlgebraState() (*rangeMemoryStore, *membershipState) {
 	m := newRangeMemoryStore()
-	return m, &membershipState{idRoot: 0, hashRoot: 0, usedRoot: 0, entryCount: 0, idLimit: 1}
+	return m, &membershipState{
+		idRoot:        0,
+		hashRoot:      0,
+		usedRoot:      0,
+		entryCount:    0,
+		idLimit:       1,
+		recordScratch: make([]byte, membershipRecordLimit),
+		hashScratch:   make([]byte, membershipHashKeySize),
+	}
 }
 
 // TestMembershipCombineIdentityShortcuts pins every Rust identity rule:

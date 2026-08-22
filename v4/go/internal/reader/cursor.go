@@ -70,6 +70,7 @@ func (r *ImmutableReader) newTreeCursor(root uint32, dir cursorDir, branchType, 
 	// construction (Rust fixed_tree::Cursor::unpositioned). Any other
 	// out-of-bounds root is corruption.
 	if root == 0 {
+		work.SourcePass(1)
 		return &treeCursor{r: r, root: root, dir: dir, branchType: branchType, leafType: leafType, aux: aux, finished: true}, nil
 	}
 	if root < 2 || uint64(root) >= r.meta.PageCount {
@@ -79,6 +80,7 @@ func (r *ImmutableReader) newTreeCursor(root uint32, dir cursorDir, branchType, 
 	if err := c.descendEdge(root); err != nil {
 		return nil, err
 	}
+	work.SourcePass(1)
 	return c, nil
 }
 

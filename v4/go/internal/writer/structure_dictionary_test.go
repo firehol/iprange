@@ -41,18 +41,15 @@ func structureTestPayload(value ...byte) structurePayload {
 // inspect_page + table::parse).
 func structureTestRootLevel(t *testing.T, store *rangeMemoryStore, root uint32) uint16 {
 	t.Helper()
-	var level uint16
-	if err := store.Inspect(root, func(page []byte) error {
-		header, err := structureTableParse(structureNetCodec, page, store.TargetTxn(), nil)
-		if err != nil {
-			return err
-		}
-		level = header.level
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(root)
+	if err != nil {
 		t.Fatalf("parse root: %v", err)
 	}
-	return level
+	header, err := structureTableParse(structureNetCodec, page, store.TargetTxn(), nil)
+	if err != nil {
+		t.Fatalf("parse root: %v", err)
+	}
+	return header.level
 }
 
 func TestStructureEqualPayloadsDeduplicateAndLowestReleasedIDIsReused(t *testing.T) {
@@ -149,7 +146,7 @@ func TestStructureEqualDigestWithUnequalPayloadDoesNotMerge(t *testing.T) {
 		t.Fatalf("digest: %v", err)
 	}
 	fakeID, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
-		bitmap.KindStructure, structureIDExhausted())
+		bitmap.KindStructure, structureIDExhausted)
 	if err != nil {
 		t.Fatalf("allocate fake id: %v", err)
 	}

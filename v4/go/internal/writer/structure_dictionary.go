@@ -65,7 +65,7 @@ func internStructure(codec structurePayloadCodec, store tree.RetiringStore, stat
 // records (Rust insert_new).
 func insertNewStructure(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, payload *structurePayload, digest [32]byte, membershipID uint32) (structureInterned, error) {
 	id, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
-		bitmap.KindStructure, structureIDExhausted())
+		bitmap.KindStructure, structureIDExhausted)
 	if err != nil {
 		return structureInterned{}, err
 	}
@@ -91,13 +91,12 @@ func insertNewStructure(codec structurePayloadCodec, store tree.RetiringStore, s
 // insertStructureHashRecord inserts one record into the structure hash
 // tree, retiring the COW pages (Rust manager.rs insert + fixed_tree
 // insert_retiring).
-func insertStructureHashRecord(store tree.RetiringStore, codec tree.Codec, root *uint32, record []byte) error {
-	retired := tree.NewRetiredPages()
-	changed, err := tree.Insert(codec, store, root, record, retired)
+func insertStructureHashRecord(store tree.RetiringStore, codec tree.Codec[structureHashRecord], root *uint32, record []byte) error {
+	retired, changed, err := tree.Insert(codec, store, root, record, tree.RetiredPages{})
 	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	if !changed {
@@ -115,14 +114,14 @@ func findEqualStructure(codec structurePayloadCodec, store tree.Store, state *st
 	}
 	key := structureHashProbe(digest, 1)
 	for {
-		value, err := tree.AtOrAfter(structureHashCodec{kind: codec.kind()}, store, state.hashRoot, tree.VarKey(key[:]))
+		value, found, err := tree.AtOrAfter(structureHashCodec{kind: codec.kind()}, store, state.hashRoot, tree.RawKey(key[:]))
 		if err != nil {
 			return 0, false, err
 		}
-		if value == nil {
+		if !found {
 			return 0, false, nil
 		}
-		candidate := value.(structureHashRecord)
+		candidate := value
 		if candidate.digest != digest {
 			return 0, false, nil
 		}
@@ -158,19 +157,18 @@ func applyStructureDelta(codec structurePayloadCodec, store tree.RetiringStore, 
 		return 0, nil
 	}
 	probe := structureHashProbe(record.digest, record.id)
-	retired := tree.NewRetiredPages()
-	if err := tree.DeleteExisting(structureHashCodec{kind: codec.kind()}, store, &state.hashRoot, tree.VarKey(probe[:]), retired); err != nil {
-		return 0, err
-	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
-		return 0, err
-	}
-	retired = tree.NewRetiredPages()
-	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindStructure, record.id, retired)
+	retired, err := tree.DeleteExisting(structureHashCodec{kind: codec.kind()}, store, &state.hashRoot, tree.RawKey(probe[:]), tree.RetiredPages{})
 	if err != nil {
 		return 0, err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
+		return 0, err
+	}
+	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindStructure, record.id, &retired)
+	if err != nil {
+		return 0, err
+	}
+	if err := store.RetirePages(retired); err != nil {
 		return 0, err
 	}
 	if !cleared {

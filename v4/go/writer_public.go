@@ -319,17 +319,19 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 		// nests the CleanupInProgress class (code 64, Rust
 		// Error::CleanupIncomplete) exactly like Rust
 		// abort_after_source.
-		return t.abortAfter(attempt, err), nil
+		return t.commitAbortAfter(attempt, err), nil
 	}
 	// Rust commit_locked runs the prepublication checks immediately
-	// before publish: the base must be unchanged and the locked file
-	// must cover the draft length. A failure is a BeforePublication
-	// abort, same class as a preparation failure.
-	if err := t.w.core.RequireDraftLength(); err != nil {
-		return t.abortAfter(attempt, err), nil
-	}
+	// before publish: the sidecar pair (noop here), the unchanged base,
+	// and the locked file covering the draft length. A failure is a
+	// BeforePublication abort, same class as a preparation failure, and
+	// the cause is wrapped through abort_after with the draft discarded
+	// (Rust finish_commit_locked_with).
 	if err := t.w.core.RequireUnchangedBase(); err != nil {
-		return t.abortAfter(attempt, err), nil
+		return t.commitAbortAfter(attempt, err), nil
+	}
+	if err := t.w.core.RequireDraftLength(); err != nil {
+		return t.commitAbortAfter(attempt, err), nil
 	}
 	res := t.w.core.Publish(noopCheckpoint)
 	t.active = false
@@ -339,6 +341,7 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 		result.Status = CommitCommitted
 	case writer.PublishBeforePublication:
 		result.Status = CommitNotCommitted
+		result.Err = t.w.abortAfter(res.Err)
 	default:
 		result.Status = CommitOutcomeUnknown
 	}
@@ -351,7 +354,7 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 // the chain nests the CleanupInProgress class (code 64, Rust
 // CleanupIncomplete) around the original cause. Both classes stay
 // reachable through errors.As on the unwrapped chain.
-func (t *DirectTransaction) abortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
+func (t *DirectTransaction) commitAbortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
 	discardErr := t.w.core.DiscardUnpublished()
 	t.active = false
 	inner := cause

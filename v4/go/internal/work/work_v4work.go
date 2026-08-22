@@ -47,6 +47,7 @@ type counters struct {
 	aggregationResults        atomic.Uint64
 	joinAdvances              atomic.Uint64
 	catalogInterns            atomic.Uint64
+	catalogLookups            atomic.Uint64
 	outputPasses              atomic.Uint64
 	membershipInternCacheHits atomic.Uint64
 	membershipLookups         atomic.Uint64
@@ -129,6 +130,7 @@ type Snapshot struct {
 	AggregationResults        uint64
 	JoinAdvances              uint64
 	CatalogInterns            uint64
+	CatalogLookups            uint64
 	OutputPasses              uint64
 	MembershipInternCacheHits uint64
 	MembershipLookups         uint64
@@ -182,6 +184,7 @@ func Read() Snapshot {
 		AggregationResults:        current.aggregationResults.Load(),
 		JoinAdvances:              current.joinAdvances.Load(),
 		CatalogInterns:            current.catalogInterns.Load(),
+		CatalogLookups:            current.catalogLookups.Load(),
 		OutputPasses:              current.outputPasses.Load(),
 		MembershipInternCacheHits: current.membershipInternCacheHits.Load(),
 		MembershipLookups:         current.membershipLookups.Load(),
@@ -211,7 +214,8 @@ func Reset() {
 		&current.inputSourcePasses, &current.membershipDecodeCacheHits,
 		&current.membershipWordReads, &current.aggregationContributions,
 		&current.aggregationResults, &current.joinAdvances,
-		&current.catalogInterns, &current.outputPasses, &current.membershipInternCacheHits,
+		&current.catalogInterns, &current.catalogLookups, &current.outputPasses,
+		&current.membershipInternCacheHits,
 		&current.membershipLookups, &current.membershipInterns,
 		&current.membershipRefcountBatches,
 		&current.sourcePasses, &current.historyWindowTests, &current.membershipCombinations,
@@ -246,6 +250,7 @@ func AggregationContribution(n uint64)  { current.aggregationContributions.Add(n
 func AggregationResult(n uint64)        { current.aggregationResults.Add(n) }
 func JoinAdvance(n uint64)              { current.joinAdvances.Add(n) }
 func CatalogIntern(n uint64)            { current.catalogInterns.Add(n) }
+func CatalogLookup(n uint64)            { current.catalogLookups.Add(n) }
 func OutputPass(n uint64)               { current.outputPasses.Add(n) }
 func MembershipInternCacheHit(n uint64) { current.membershipInternCacheHits.Add(n) }
 func MembershipLookup(n uint64)         { current.membershipLookups.Add(n) }

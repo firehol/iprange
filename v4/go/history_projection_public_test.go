@@ -111,9 +111,9 @@ func histCount(t *testing.T, c Cardinality129) uint64 {
 // windows3 is the Rust one_source_pass window set.
 func windows3() []HistoryWindow {
 	return []HistoryWindow{
-		{FeedName: []byte("one"), Cutoff: 9},
-		{FeedName: []byte("two"), Cutoff: 10},
-		{FeedName: []byte("three"), Cutoff: 11},
+		{FeedName: "one", Cutoff: 9},
+		{FeedName: "two", Cutoff: 10},
+		{FeedName: "three", Cutoff: 11},
 	}
 }
 
@@ -196,7 +196,7 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 	}
 	for index, want := range expected {
 		window := report.Windows[index]
-		if string(window.FeedName) != want.name || window.Cutoff != want.cutoff || !window.Created {
+		if window.FeedName != want.name || window.Cutoff != want.cutoff || !window.Created {
 			t.Fatalf("window %d = %q cutoff %d created %v, want %q/%d/true", index, window.FeedName, window.Cutoff, window.Created, want.name, want.cutoff)
 		}
 		if window.BeforeIntervalCount != 0 || histCount(t, window.BeforeAddresses) != 0 {
@@ -284,7 +284,7 @@ func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
 	source := histSource(t, sourcePath)
 	defer source.Close()
 
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: []byte("all"), Cutoff: 1}}, nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "all", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 
 	source := histSource(t, sourcePath)
 	defer source.Close()
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: []byte("seen"), Cutoff: 1}}, nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 
 	// A fresh projection stages the metadata and commits it (the
 	// public reader sees the committed value after the writer closes).
-	fresh, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: []byte("seen"), Cutoff: 1}}, nil)
+	fresh, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +555,7 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 	defer w.Close()
 
 	firstSource := histSource(t, sourcePath)
-	first, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: firstSource}, []HistoryWindow{{FeedName: []byte("recent"), Cutoff: 15}}, nil)
+	first, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: firstSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +568,7 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 	}
 
 	secondSource := histSource(t, sourcePath)
-	second, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: secondSource}, []HistoryWindow{{FeedName: []byte("recent"), Cutoff: 15}, {FeedName: []byte("very-recent"), Cutoff: 25}}, nil)
+	second, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: secondSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,11 +577,11 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 		t.Fatal("second projection with a new window is not changed")
 	}
 	recent := second.Report().Windows[0]
-	if string(recent.FeedName) != "recent" || histCount(t, recent.AfterAddresses) != 30 || histCount(t, recent.UnchangedAddresses) != 30 {
+	if recent.FeedName != "recent" || histCount(t, recent.AfterAddresses) != 30 || histCount(t, recent.UnchangedAddresses) != 30 {
 		t.Fatalf("rerun recent = %d after, %d unchanged, want 30/30 preserved", histCount(t, recent.AfterAddresses), histCount(t, recent.UnchangedAddresses))
 	}
 	veryRecent := second.Report().Windows[1]
-	if string(veryRecent.FeedName) != "very-recent" || histCount(t, veryRecent.AfterAddresses) != 10 {
+	if veryRecent.FeedName != "very-recent" || histCount(t, veryRecent.AfterAddresses) != 10 {
 		t.Fatalf("very-recent after = %d, want 10 (only the last_seen 30 range)", histCount(t, veryRecent.AfterAddresses))
 	}
 	if res, err := second.Commit(); err != nil || res.Status != CommitCommitted {
@@ -590,7 +590,7 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 
 	thirdSource := histSource(t, sourcePath)
 	defer thirdSource.Close()
-	third, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: thirdSource}, []HistoryWindow{{FeedName: []byte("recent"), Cutoff: 15}, {FeedName: []byte("very-recent"), Cutoff: 25}}, nil)
+	third, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: thirdSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 // is decoded once and validated against the declared namespace limit
 // (mirroring feed_catalog.rs lookup_index + decode_leaf).
 func (r *ImmutableReader) LookupFeedIndex(index uint32) (FeedEntry, bool, error) {
+	work.CatalogLookup(1)
 	root := r.meta.CatalogIndexRoot
 	if root == 0 {
 		return FeedEntry{}, false, nil

@@ -112,6 +112,10 @@ func RangeConsumed(uint64) {}
 // RangeEmitted counts one range record written during a range edit.
 func RangeEmitted(uint64) {}
 
+// CatalogLookup counts one feed-name or feed-index catalog lookup (Rust
+// work::catalog_lookup).
+func CatalogLookup(uint64) {}
+
 // RangeSplit counts one range record split into two during a rewrite.
 func RangeSplit(uint64) {}
 

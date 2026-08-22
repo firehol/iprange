@@ -313,9 +313,9 @@ type SlottedBuilder struct {
 
 // NewSlottedBuilder initializes one fresh slotted page with the common
 // header and empty geometry.
-func NewSlottedBuilder(page []byte, pageType PageType, bornTxn uint64, level uint16, aux uint32) *SlottedBuilder {
+func NewSlottedBuilder(page []byte, pageType PageType, bornTxn uint64, level uint16, aux uint32) SlottedBuilder {
 	InitializePageHeader(page, pageType, bornTxn, 0, level, SlottedHeaderSize, PageSize, aux)
-	return &SlottedBuilder{count: 0, upper: PageSize}
+	return SlottedBuilder{count: 0, upper: PageSize}
 }
 
 // Push appends one record to the page under construction.
@@ -358,9 +358,9 @@ type SlottedAppender struct {
 
 // NewSlottedAppender initializes one fresh slotted page with the common
 // header and empty geometry (Rust Appender::new).
-func NewSlottedAppender(page []byte, pageType PageType, bornTxn uint64, level uint16, aux uint32) *SlottedAppender {
+func NewSlottedAppender(page []byte, pageType PageType, bornTxn uint64, level uint16, aux uint32) SlottedAppender {
 	InitializePageHeader(page, pageType, bornTxn, 0, level, SlottedHeaderSize, PageSize, aux)
-	return &SlottedAppender{count: 0, upper: PageSize}
+	return SlottedAppender{count: 0, upper: PageSize}
 }
 
 // TryPush appends one record when it fits and reports whether it was

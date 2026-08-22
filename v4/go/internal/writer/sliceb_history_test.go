@@ -74,15 +74,16 @@ type singleBitWords struct {
 
 func (w singleBitWords) WordCount() uint32 { return w.feedIndex/64 + 1 }
 
-func (w singleBitWords) ReadWords(start uint32, output []uint64) error {
-	for index := range output {
-		output[index] = 0
+func (w singleBitWords) ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error) {
+	count = membershipChunkWords
+	if remaining := w.WordCount() - start; count > remaining {
+		count = remaining
 	}
 	word := w.feedIndex / 64
-	if word >= start && word-start < uint32(len(output)) {
-		output[word-start] |= uint64(1) << (w.feedIndex % 64)
+	if word >= start && word-start < count {
+		words[word-start] |= uint64(1) << (w.feedIndex % 64)
 	}
-	return nil
+	return words, count, nil
 }
 
 // destinationFeedIDs are the interned membership ids of the white-box
@@ -125,15 +126,15 @@ func setupDestinationFeeds(t *testing.T, path string) destinationFeedIDs {
 		if err != nil {
 			return err
 		}
-		unrelatedBit, err := store.internMembership(singleBitWords{feedIndex: unrelated.index})
+		unrelatedBit, err := draftInternMembership(store, singleBitWords{feedIndex: unrelated.index})
 		if err != nil {
 			return err
 		}
-		recentBit, err := store.internMembership(singleBitWords{feedIndex: recent.index})
+		recentBit, err := draftInternMembership(store, singleBitWords{feedIndex: recent.index})
 		if err != nil {
 			return err
 		}
-		veryRecentBit, err := store.internMembership(singleBitWords{feedIndex: veryRecent.index})
+		veryRecentBit, err := draftInternMembership(store, singleBitWords{feedIndex: veryRecent.index})
 		if err != nil {
 			return err
 		}

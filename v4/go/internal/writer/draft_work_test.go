@@ -35,10 +35,12 @@ func TestDiscardPrivateWorkPin(t *testing.T) {
 	if err := store.claimAllocated(5); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Update(5, func(page []byte) error {
-		page[100] = 0xa5
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page[100] = 0xa5
+	if err := store.RestoreDirty(5, tag); err != nil {
 		t.Fatal(err)
 	}
 	work.Reset()

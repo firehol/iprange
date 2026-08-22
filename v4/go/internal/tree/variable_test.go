@@ -64,9 +64,9 @@ func (varRecordCodec) ReadKey(cell []byte, level uint16) (Key, error) {
 	return Key{Hi: uint64(format.U32(cell))}, nil
 }
 
-func (varRecordCodec) ReadLeaf(cell []byte) (any, error) {
+func (varRecordCodec) ReadLeaf(cell []byte) (string, error) {
 	if len(cell) < 7 || int(format.U16(cell)) != len(cell) {
-		return nil, corrupt("test leaf record is invalid")
+		return "", corrupt("test leaf record is invalid")
 	}
 	return fmt.Sprintf("%x", cell[6:]), nil
 }
@@ -126,9 +126,9 @@ func (varNameCodec) ReadKey(cell []byte, _ uint16) (Key, error) {
 	return VarKey(append([]byte(nil), cell[6:]...)), nil
 }
 
-func (varNameCodec) ReadLeaf(cell []byte) (any, error) {
+func (varNameCodec) ReadLeaf(cell []byte) (string, error) {
 	if len(cell) < 7 || int(format.U16(cell)) != len(cell) {
-		return nil, corrupt("test name leaf record is invalid")
+		return "", corrupt("test name leaf record is invalid")
 	}
 	return "name:" + string(cell[6:]), nil
 }
@@ -157,31 +157,29 @@ func nameRecord(name string, child uint32) []byte {
 
 // walkTree is the test-only whole-tree enumeration: the visit callback
 // receives every leaf record in order, resolved through the store.
-func walkTree(codec Codec, m *memoryStore, root uint32, visit func(cell []byte, header *Header, index int) error) error {
+func walkTree(codec Codec[string], m *memoryStore, root uint32, visit func(cell []byte, header *Header, index int) error) error {
 	if root == 0 {
 		return nil
 	}
 	var descend func(pageNumber uint32, expected *uint16) error
 	descend = func(pageNumber uint32, expected *uint16) error {
-		var header *Header
-		if err := m.Inspect(pageNumber, func(page []byte) error {
-			h, err := parse(codec, page, m.TargetTxn(), expected)
-			if err != nil {
-				return err
-			}
-			header = h
-			return nil
-		}); err != nil {
+		page, err := m.Inspect(pageNumber)
+		if err != nil {
 			return err
 		}
+		h, err := parse(codec, page, m.TargetTxn(), expected)
+		if err != nil {
+			return err
+		}
+		header := &h
 		if header.Level != 0 {
 			for index := 0; index < int(header.ItemCount); index++ {
-				var child uint32
-				if err := m.Inspect(pageNumber, func(page []byte) error {
-					c, err := branchChild(codec, page, header, index, m.PageLimit())
-					child = c
+				page, err := m.Inspect(pageNumber)
+				if err != nil {
 					return err
-				}); err != nil {
+				}
+				child, err := branchChild(codec, page, header, index, m.PageLimit())
+				if err != nil {
 					return err
 				}
 				next := header.Level - 1
@@ -192,12 +190,12 @@ func walkTree(codec Codec, m *memoryStore, root uint32, visit func(cell []byte, 
 			return nil
 		}
 		for index := 0; index < int(header.ItemCount); index++ {
-			var cell []byte
-			if err := m.Inspect(pageNumber, func(page []byte) error {
-				c, err := codecCell(codec, page, header, index)
-				cell = c
+			page, err := m.Inspect(pageNumber)
+			if err != nil {
 				return err
-			}); err != nil {
+			}
+			cell, err := codecCell(codec, page, header, index)
+			if err != nil {
 				return err
 			}
 			if err := visit(cell, header, index); err != nil {
@@ -216,12 +214,14 @@ func TestVariableRecordInsertOrdered(t *testing.T) {
 	m := newMemoryStore()
 	codec := varRecordCodec{}
 	root := uint32(0)
-	retired := NewRetiredPages()
 	const count = 200
 	for i := 0; i < count; i++ {
-		changed, err := Insert(codec, m, &root, varRecord(uint32(i), byte(8+i%40)), retired)
+		retired, changed, err := Insert(codec, m, &root, varRecord(uint32(i), byte(8+i%40)), RetiredPages{})
 		if err != nil {
 			t.Fatalf("insert %d: %v", i, err)
+		}
+		if retired.Len() != 0 {
+			t.Fatalf("insert %d retired pages", i)
 		}
 		if !changed {
 			t.Fatalf("insert %d reported no change", i)
@@ -260,16 +260,19 @@ func TestVariableNameInsertOrdered(t *testing.T) {
 	m := newMemoryStore()
 	codec := varNameCodec{}
 	root := uint32(0)
-	retired := NewRetiredPages()
+	retired := RetiredPages{}
 	names := make([]string, 0, 120)
 	for i := 0; i < 120; i++ {
 		names = append(names, fmt.Sprintf("feed-%03d", i))
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		changed, err := Insert(codec, m, &root, nameRecord(name, 0), retired)
+		next, changed, err := Insert(codec, m, &root, nameRecord(name, 0), RetiredPages{})
 		if err != nil {
 			t.Fatalf("insert %q: %v", name, err)
+		}
+		if next.Len() != 0 {
+			t.Fatalf("insert %q retired pages", name)
 		}
 		if !changed {
 			t.Fatalf("insert %q reported no change", name)
@@ -277,7 +280,7 @@ func TestVariableNameInsertOrdered(t *testing.T) {
 	}
 	for _, name := range names {
 		key := VarKey([]byte(name))
-		leaf, err := PrivatePath(codec, m, &root, key, retired)
+		leaf, _, err := PrivatePath(codec, m, &root, key, RetiredPages{})
 		if err != nil {
 			t.Fatalf("path %q: %v", name, err)
 		}
@@ -310,15 +313,16 @@ func TestVariableNameInsertSplitFence(t *testing.T) {
 	m := newMemoryStore()
 	codec := varNameCodec{}
 	root := uint32(0)
-	retired := NewRetiredPages()
+	retired := RetiredPages{}
 	// Insert a descending series so every insert lands at index 0 and
 	// rewrites the root fence.
 	for i := 199; i >= 0; i-- {
 		name := fmt.Sprintf("feed-%03d", i)
-		changed, err := Insert(codec, m, &root, nameRecord(name, 0), retired)
+		next, changed, err := Insert(codec, m, &root, nameRecord(name, 0), retired)
 		if err != nil {
 			t.Fatalf("insert %q: %v", name, err)
 		}
+		retired = next
 		if !changed {
 			t.Fatalf("insert %q reported no change", name)
 		}
@@ -348,14 +352,14 @@ func TestVariableRecordReplacement(t *testing.T) {
 	m := newMemoryStore()
 	codec := varRecordCodec{}
 	root := uint32(0)
-	retired := NewRetiredPages()
-	if _, err := Insert(codec, m, &root, varRecord(7, 3), retired); err != nil {
+	retired := RetiredPages{}
+	if _, _, err := Insert(codec, m, &root, varRecord(7, 3), retired); err != nil {
 		t.Fatal(err)
 	}
 	// The replacement keeps the target key in its first cell (Rust
 	// require_replacement: the first cell's key must equal the replaced
 	// key) and adds a second, later key.
-	if err := ReplaceLeafWith(codec, m, &root, Key{Hi: 7}, [][]byte{varRecord(7, 3), varRecord(9, 5)}, retired); err != nil {
+	if _, err := ReplaceLeafWith(codec, m, &root, Key{Hi: 7}, [][]byte{varRecord(7, 3), varRecord(9, 5)}, retired); err != nil {
 		t.Fatal(err)
 	}
 	keys := []uint32{}
@@ -378,34 +382,34 @@ func TestVariableNameAtOrAfter(t *testing.T) {
 	m := newMemoryStore()
 	codec := varNameCodec{}
 	root := uint32(0)
-	retired := NewRetiredPages()
+	retired := RetiredPages{}
 	names := []string{"alpha", "bravo", "charlie", "delta"}
 	for _, name := range names {
-		if _, err := Insert(codec, m, &root, nameRecord(name, 0), retired); err != nil {
+		if _, _, err := Insert(codec, m, &root, nameRecord(name, 0), retired); err != nil {
 			t.Fatal(err)
 		}
 	}
-	value, err := AtOrAfter(codec, m, root, VarKey([]byte("charl")))
+	value, found, err := AtOrAfter(codec, m, root, VarKey([]byte("charl")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value == nil || value.(string) != "name:charlie" {
+	if !found || value != "name:charlie" {
 		t.Fatalf("AtOrAfter(charl) = %v, want name:charlie", value)
 	}
 	// Predecessor returns the key itself when it exists (Rust
 	// predecessor: at-or-below, otherwise strictly below).
-	value, err = Predecessor(codec, m, root, VarKey([]byte("bravo")))
+	value, found, err = Predecessor(codec, m, root, VarKey([]byte("bravo")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value == nil || value.(string) != "name:bravo" {
+	if !found || value != "name:bravo" {
 		t.Fatalf("Predecessor(bravo) = %v, want name:bravo", value)
 	}
-	value, err = Predecessor(codec, m, root, VarKey([]byte("brian")))
+	value, found, err = Predecessor(codec, m, root, VarKey([]byte("brian")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value == nil || value.(string) != "name:bravo" {
+	if !found || value != "name:bravo" {
 		t.Fatalf("Predecessor(brian) = %v, want name:bravo", value)
 	}
 }

@@ -120,8 +120,11 @@ func TestDraftStoreRangeAccountingRoutesMembershipRefcounts(t *testing.T) {
 	if store.draft.membershipDeltaPending.isEmpty() {
 		t.Fatal("membership assign left the refcount delta buffer empty")
 	}
+	if !store.draft.membershipDeltaPending.used[0] {
+		t.Fatal("pending delta slot 0 is empty, want {7 +1}")
+	}
 	slot := store.draft.membershipDeltaPending.slots[0]
-	if slot == nil || slot.id != 7 || slot.change != 1 {
+	if slot.id != 7 || slot.change != 1 {
 		t.Fatalf("pending delta = %+v, want {7 +1}", slot)
 	}
 
@@ -133,8 +136,11 @@ func TestDraftStoreRangeAccountingRoutesMembershipRefcounts(t *testing.T) {
 	if store.draft.meta.RangeRecordCount != 0 {
 		t.Fatalf("membership clear record count = %d, want 0", store.draft.meta.RangeRecordCount)
 	}
+	if !store.draft.membershipDeltaPending.used[0] {
+		t.Fatal("pending delta slot 0 is empty after clear, want {7 0}")
+	}
 	slot = store.draft.membershipDeltaPending.slots[0]
-	if slot == nil || slot.id != 7 || slot.change != 0 {
+	if slot.id != 7 || slot.change != 0 {
 		t.Fatalf("pending delta after clear = %+v, want {7 0}", slot)
 	}
 }

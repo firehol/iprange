@@ -17,15 +17,19 @@ import (
 )
 
 // membershipWords is one bounded membership bitmap source (Rust
-// Words<S>). Implementations write caller-owned output buffers only: a
+// Words<S>). Implementations return each up-to-64-word chunk by value: a
 // source never returns a mapped page view, so a dictionary read can never
-// retain or alias page bytes. The type parameter is instantiated per
+// retain or alias page bytes, and the Go generic constraint method can
+// never retain a caller stack buffer (a slice argument through the
+// generic dispatch would escape). The type parameter is instantiated per
 // concrete source (OutputWords, the combine operand, the history prefix),
-// mirroring the Rust generic trait without interface dispatch on the hot
-// path.
+// mirroring the Rust generic trait.
 type membershipWords interface {
 	WordCount() uint32
-	ReadWords(start uint32, output []uint64) error
+	// ReadChunk returns the words starting at start as a copy of at
+	// most membershipChunkWords (Rust read_words bounded by
+	// HASH_WORDS); count is the number of valid words.
+	ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error)
 }
 
 // OutputWords is one membership bitmap source (Rust MembershipWords): the
@@ -49,13 +53,36 @@ func (w OutputWords) ReadWords(start uint32, output []uint64) error {
 	return nil
 }
 
-// membershipState is the writable dictionary state (Rust State).
+// ReadChunk returns the words starting at start by value (the generic
+// chunk read; Rust read_words with a HASH_WORDS chunk).
+func (w OutputWords) ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error) {
+	startIndex := int(start)
+	if startIndex < 0 || startIndex > len(w) {
+		return words, 0, corrupt("membership words are outside the source bounds")
+	}
+	count = membershipChunkWords
+	if remaining := len(w) - startIndex; int(count) > remaining {
+		count = uint32(remaining)
+	}
+	copy(words[:count], w[startIndex:startIndex+int(count)])
+	return words, count, nil
+}
+
+// membershipState is the writable dictionary state (Rust State). The
+// record and hash scratches are bounded encode targets owned by the
+// draft store or output builder (never per record): a draft is
+// single-threaded, every tree insert copies its record into the mapped
+// page before the next encode reuses the scratch, and the slices are
+// views over the owner's encode arrays, so writer allocations never
+// scale with records.
 type membershipState struct {
-	idRoot     uint32
-	hashRoot   uint32
-	usedRoot   uint32
-	entryCount uint64
-	idLimit    uint64
+	idRoot        uint32
+	hashRoot      uint32
+	usedRoot      uint32
+	entryCount    uint64
+	idLimit       uint64
+	recordScratch []byte
+	hashScratch   []byte
 }
 
 // membershipInterned is the outcome of one intern (Rust Interned).
@@ -90,19 +117,19 @@ func internMembership[W membershipWords](store tree.RetiringStore, state *member
 // records (Rust insert_new).
 func insertNewMembership[W membershipWords](store tree.RetiringStore, state *membershipState, words W, digest [32]byte) (membershipInterned, error) {
 	id, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
-		bitmap.KindMembership, membershipIDExhausted())
+		bitmap.KindMembership, membershipIDExhausted)
 	if err != nil {
 		return membershipInterned{}, err
 	}
-	record, err := encodeMembershipRecord(store, words, id, digest)
+	record, err := encodeMembershipRecord(store, words, id, digest, state.recordScratch)
 	if err != nil {
 		return membershipInterned{}, err
 	}
 	if err := insertMembershipRecord(store, idCodec{}, &state.idRoot, record.Slice()); err != nil {
 		return membershipInterned{}, err
 	}
-	key := hashKey(digest, words.WordCount(), id)
-	if err := insertMembershipRecord(store, hashCodec{}, &state.hashRoot, key[:]); err != nil {
+	writeHashKey(state.hashScratch, digest, words.WordCount(), id)
+	if err := insertMembershipRecord(store, hashCodec{}, &state.hashRoot, state.hashScratch); err != nil {
 		return membershipInterned{}, err
 	}
 	state.entryCount++
@@ -124,14 +151,14 @@ func findEqualMembership[W membershipWords](store tree.Store, state *membershipS
 	}
 	key := hashProbe(digest, words.WordCount(), 1)
 	for {
-		value, err := tree.AtOrAfter(hashCodec{}, store, state.hashRoot, tree.VarKey(key[:]))
+		value, ok, err := tree.AtOrAfter(hashCodec{}, store, state.hashRoot, tree.RawKey(key[:]))
 		if err != nil {
 			return 0, false, err
 		}
-		if value == nil {
+		if !ok {
 			return 0, false, nil
 		}
-		candidate := value.(membershipHashRecord)
+		candidate := value
 		if candidate.digest != digest || candidate.wordCount != words.WordCount() {
 			return 0, false, nil
 		}
@@ -161,7 +188,6 @@ func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id
 		return false, nil
 	}
 	var actual [64]uint64
-	var wanted [64]uint64
 	var start uint32
 	for start < found.record.wordCount {
 		count := found.record.wordCount - start
@@ -169,14 +195,17 @@ func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id
 			count = 64
 		}
 		actualSlice := actual[:count]
-		wantedSlice := wanted[:count]
 		if err := readFoundMembershipWords(store, found, start, actualSlice); err != nil {
 			return false, err
 		}
-		if err := words.ReadWords(start, wantedSlice); err != nil {
+		wanted, got, err := words.ReadChunk(start)
+		if err != nil {
 			return false, err
 		}
-		if !slices.Equal(actualSlice, wantedSlice) {
+		if got < count {
+			return false, corrupt("membership words are outside the source bounds")
+		}
+		if !slices.Equal(actualSlice, wanted[:count]) {
 			return false, nil
 		}
 		start += count
@@ -185,9 +214,10 @@ func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id
 }
 
 // encodeMembershipRecord builds the ID-tree record for one bitmap:
-// inline when it fits the record limit, otherwise a blob tree (Rust
-// record::encode).
-func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uint32, digest [32]byte) (membershipEncoded, error) {
+// inline when it fits the record limit, otherwise a blob tree, written
+// into the caller's scratch (Rust record::encode; the scratch is the
+// draft state's bounded record buffer).
+func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uint32, digest [32]byte, scratch []byte) (membershipEncoded, error) {
 	var blobRoot uint32
 	if words.WordCount() > membershipInlineWords {
 		root, err := buildMembershipBlob(store, words)
@@ -196,7 +226,7 @@ func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uin
 		}
 		blobRoot = root
 	}
-	encoded, err := newMembershipEncoded(id, words.WordCount(), digest, blobRoot)
+	encoded, err := newMembershipEncoded(id, words.WordCount(), digest, blobRoot, scratch)
 	if err != nil {
 		return membershipEncoded{}, err
 	}
@@ -204,17 +234,20 @@ func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uin
 		// Read the words in bounded batches directly into the record
 		// (Rust encode_inline WORD_BATCH=32).
 		const batch = 32
-		var values [batch]uint64
 		var start uint32
 		for start < words.WordCount() {
+			chunk, got, err := words.ReadChunk(start)
+			if err != nil {
+				return membershipEncoded{}, err
+			}
 			count := words.WordCount() - start
 			if count > batch {
 				count = batch
 			}
-			if err := words.ReadWords(start, values[:count]); err != nil {
-				return membershipEncoded{}, err
+			if got < count {
+				return membershipEncoded{}, corrupt("membership words are outside the source bounds")
 			}
-			for offset, word := range values[:count] {
+			for offset, word := range chunk[:count] {
 				if err := encoded.putInlineWord(int(start)+offset, word); err != nil {
 					return membershipEncoded{}, err
 				}
@@ -229,13 +262,12 @@ func encodeMembershipRecord[W membershipWords](store tree.Store, words W, id uin
 // with its own codec, retiring the COW pages (Rust mutate_insert, which
 // is generic over the tree codec: the ID tree and the hash tree each use
 // their own).
-func insertMembershipRecord(store tree.RetiringStore, codec tree.Codec, root *uint32, record []byte) error {
-	retired := tree.NewRetiredPages()
-	changed, err := tree.Insert(codec, store, root, record, retired)
+func insertMembershipRecord[T any](store tree.RetiringStore, codec tree.Codec[T], root *uint32, record []byte) error {
+	retired, changed, err := tree.Insert(codec, store, root, record, tree.RetiredPages{})
 	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	if !changed {
@@ -258,18 +290,17 @@ func findMembership(store tree.Store, root uint32, id uint32) (membershipFound, 
 	if id == 0 || root == 0 {
 		return membershipFound{}, corrupt("membership ID is missing")
 	}
-	value, location, err := tree.PredecessorLocated(idCodec{}, store, root, tree.Key{Hi: uint64(id)})
+	value, location, ok, err := tree.PredecessorLocated(idCodec{}, store, root, tree.Key{Hi: uint64(id)})
 	if err != nil {
 		return membershipFound{}, err
 	}
-	if value == nil {
+	if !ok {
 		return membershipFound{}, corrupt("membership ID is missing")
 	}
-	record := value.(membershipRecord)
-	if record.id != id {
+	if value.id != id {
 		return membershipFound{}, corrupt("membership ID is missing")
 	}
-	return membershipFound{record: record, location: location}, nil
+	return membershipFound{record: value, location: &location}, nil
 }
 
 // readMembershipWords reads sequential words of one stored membership
@@ -329,10 +360,8 @@ func readFoundMembershipWords(store tree.Store, found membershipFound, start uin
 func applyMembershipDelta(store tree.RetiringStore, state *membershipState, id uint32, change int64) error {
 	work.MembershipLookup(1)
 	var nextRefcount uint64
-	retired := tree.NewRetiredPages()
-	value, err := tree.MutateLeafU64(idCodec{}, store, &state.idRoot, tree.Key{Hi: uint64(id)},
-		membershipRefcountOffset, retired, func(leaf any) (tree.LeafU64Mutation, error) {
-			record := leaf.(membershipRecord)
+	retired, value, err := tree.MutateLeafU64(idCodec{}, store, &state.idRoot, tree.Key{Hi: uint64(id)},
+		membershipRefcountOffset, tree.RetiredPages{}, func(record membershipRecord) (tree.LeafU64Mutation, error) {
 			next, err := changedRefcount(record.refcount, change)
 			if err != nil {
 				return tree.LeafU64Mutation{}, err
@@ -346,13 +375,13 @@ func applyMembershipDelta(store tree.RetiringStore, state *membershipState, id u
 	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	if nextRefcount != 0 {
 		return nil
 	}
-	return finishMembershipRemoval(store, state, value.(membershipRecord))
+	return finishMembershipRemoval(store, state, value)
 }
 
 func changedRefcount(current uint64, change int64) (uint64, error) {
@@ -375,11 +404,11 @@ func changedRefcount(current uint64, change int64) (uint64, error) {
 // finish_record_removal).
 func finishMembershipRemoval(store tree.RetiringStore, state *membershipState, record membershipRecord) error {
 	probe := hashProbe(record.digest, record.wordCount, record.id)
-	retired := tree.NewRetiredPages()
-	if err := tree.DeleteExisting(hashCodec{}, store, &state.hashRoot, tree.VarKey(probe[:]), retired); err != nil {
+	retired, err := tree.DeleteExisting(hashCodec{}, store, &state.hashRoot, tree.RawKey(probe[:]), tree.RetiredPages{})
+	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	if record.storage == membershipStorageBlob {
@@ -387,12 +416,11 @@ func finishMembershipRemoval(store tree.RetiringStore, state *membershipState, r
 			return err
 		}
 	}
-	retired = tree.NewRetiredPages()
-	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindMembership, record.id, retired)
+	cleared, err := bitmap.ClearUsed(store, &state.usedRoot, state.idLimit, bitmap.KindMembership, record.id, &retired)
 	if err != nil {
 		return err
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
 	if !cleared {

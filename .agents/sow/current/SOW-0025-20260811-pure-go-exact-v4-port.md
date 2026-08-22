@@ -42,6 +42,77 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (uncommitted, reviewed before milestone close)
+
+The warm ProjectHistory projection path (source 1000 last-seen points,
+three destination windows, abort) allocated 5,169 heap objects per call
+before this pass; it now allocates 39 - all per-projection or per-window
+objects with Rust call-pattern parity, none proportional to the input
+record count. The fixes, in order:
+
+1. tree.Key inline hash keys: Key carries an optional 40-byte Raw value
+   (tree.RawKey) so the hash-tree probe keys of the membership
+   dictionary stop escaping through the generic Codec interface
+   (tree/codec.go, writer/membership_dictionary.go). Removed ~700/run.
+2. bitmap.AllocateLowestID exhaustion callback: the error value changed
+   to a func() error built only on exhaustion (Rust parity), removing
+   the per-allocation closure escape (bitmap/used.go, the two
+   dictionaries). Removed ~300/run.
+3. sha256 digests: hasher.Sum(digest[:0]) replaces Sum(nil)+copy at the
+   three codec sites. Removed ~300/run.
+4. membershipWords interface: ReadWords(start, output []uint64) became
+   ReadChunk(start) ([64]uint64, count, error) (Rust HASH_WORDS), so
+   the 64-word batch buffer no longer escapes through the generic
+   interface (membership_dictionary.go, membership_blob.go). Removed
+   ~300/run.
+5. bitmap used-cursor: start/touchChild return a usedCursor value and
+   every consumer takes it by value. Removed ~400/run.
+6. historyPlan.begin moved to a pointer receiver. Removed ~200/run.
+7. historyPolicy gained a scratchWords prefixWords field so the prefix
+   decode reuses the bound instead of escaping a stack value through
+   generic dispatch. Removed ~300/run.
+8. Public FeedName became string ([]byte before): the Rust FeedName is
+   a 256-byte value, and a Go string is the natural immutable value; it
+   removes the per-window conversion and append-grow copies
+   (logical_types.go, history_projection_public.go, public tests).
+   Removed ~700/run.
+9. MetaCRC32C padding: the [4]byte zero literal became a package-level
+   var. Removed ~200/run.
+10. Writer-owned encode scratches (the remaining per-record escapes):
+    encodeMembershipRecord, encodeCatalogRecord, and writeMemberDelta
+    now write into caller-held bounded arrays on DraftStore,
+    OutputBuilder, or deltaPending (writer/membership_dictionary.go,
+    writer/catalog_codec.go, writer/membership_delta.go,
+    writer/draft_store.go, writer/output.go). The Go generic tree
+    interface makes stack encodes escape; the Rust borrow checker keeps
+    them on the stack, so the writer owns the bounded targets - a draft
+    is single-threaded and every tree insert copies the record into the
+    mapped page before the next encode reuses the buffer. Removed the
+    last ~700/run. This also fixed a latent buffer-reuse bug: the
+    membership record head only wrote the blobRoot slot for blob
+    records, so an inline record encoded into a reused buffer kept the
+    previous blob root and failed validation (masked while every encode
+    used a fresh make() buffer).
+
+The permanent gate is TestProjectHistoryAllocCeiling
+(v4/go/history_projection_alloc_test.go): AllocsPerRun on the warm
+path with a documented ceiling of 50 and a breakdown comment; the
+temporary probe files were deleted. Remaining per-run costs are the
+inherent ones: the report vectors (4 makes sized by window count, Rust
+Vec parity), the plan/merge/draft-store/cursor objects, and the two
+fstat sequences of the abort path (require unchanged base + trim +
+verify, exactly the Rust discard_unpublished call pattern).
+
+Validation (all under nice): go test ./... and -tags v4work (both
+-count=1 and -race), go vet, gofmt clean, checkptr, GOOS
+windows/darwin/freebsd and linux-arm64 builds, Rust full suite and
+--all-features, Go conformance and mixed subprocess cross-open - all
+green. The allocation test is deterministic at 39/run.
+
+- Next: the five-aspect adversarial close gate for chunk 3b-4 over
+  delta HEAD 11003d8..working tree (allocation fixes, slice A+B+C,
+  the corpus extension), then the next M3 surface (feed workflows).
+
 ### 2026-08-21 - user decision: the gate scanner and its mutation corpora are deleted; the gate is full-codebase review
 
 The pure-Go SDK is a small, simple file-format SDK. Reasonable tests are
@@ -150,6 +221,40 @@ Every .go file, every build-tagged variant, tests included.
      base tree).
 - Next: slice C (the public Writer.ProjectHistory facade), then the
   five-aspect review at the close gate like every slice.
+
+### Status (2026-08-22) - chunk 3b-4 cross-open evidence committed: Go-produced history destination (HEAD 11003d8)
+
+- The shared conformance corpus now carries a Go-produced membership
+  destination built through the public Writer.ProjectHistory workflow:
+  v4/conformance/go/history-membership-ipv4.iprdb (69 KB), source =
+  1000 singleton last-seen points (last_seen 10+index%3), windows
+  one/two/three with exclusive cutoffs 9/10/11 so the feeds keep
+  1000/666/333 points (manifest breakdown 334 one-only, 333 one+two,
+  333 one+two+three, 3 feeds, address_count 1000). cases.json now
+  lists nine fixtures; the Rust conformance suite opens and verifies
+  every range, feed projection, and cardinality of the new file, the
+  Go conformance inventory includes it, and both mixed subprocess
+  gates check the feed catalog and record count from a fresh process.
+- The two older Go fixtures were regenerated with the current writer
+  during the corpus extension. The regenerated bytes differ from the
+  committed originals in the meta-page database_id (offset 32-47) and
+  commit_nonce (offset 56-71) fields and in the page checksums that
+  cover them; both readers verified the observable data (format, range
+  records, feed catalog) is byte-identical between the regenerated and
+  committed files, and the corpus contract allows non-identical bytes
+  when observable data is equal.
+- Go regeneration path: TestRegenerateGoFixtures gained
+  regenHistoryMembershipIPv4 and republishes all three Go files after
+  staging verification.
+- Validation at HEAD: go test ./... and -tags v4work (both -race),
+  checkptr (-gcflags=all=-d=checkptr=2), go vet, gofmt clean, GOOS
+  windows/darwin/freebsd and linux/arm64 builds on both tag sets,
+  Rust full suite and --all-features, Rust conformance and mixed
+  subprocess, Go conformance and subprocess cross-open - all green.
+  Tests finish in seconds; no scanner runs.
+- Next: the five-aspect adversarial close gate for chunk 3b-4
+  (delta 99166af..11003d8, slices A+B+C and the corpus extension),
+  then the next M3 surface (feed workflows).
 
 ### Status (2026-08-22) - chunk 3b-4 slice C COMMITTED: public Writer.ProjectHistory facade (HEAD b9e942f)
 

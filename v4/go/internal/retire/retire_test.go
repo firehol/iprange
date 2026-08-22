@@ -29,20 +29,20 @@ func (m *memoryStore) pageView(pageNumber uint32) ([]byte, error) {
 	return m.pages[pageNumber][:], nil
 }
 
-func (m *memoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
-	page, err := m.pageView(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+func (m *memoryStore) Inspect(pageNumber uint32) ([]byte, error) {
+	return m.pageView(pageNumber)
 }
 
-func (m *memoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+func (m *memoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	page, err := m.pageView(pageNumber)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	return fn(page)
+	return page, 0, nil
+}
+
+func (m *memoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return nil
 }
 
 func (m *memoryStore) Allocate() (uint32, error) {
@@ -54,16 +54,16 @@ func (m *memoryStore) Allocate() (uint32, error) {
 	return pageNumber, nil
 }
 
-func (m *memoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+func (m *memoryStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	src, err := m.pageView(source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := m.pageView(destination)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
-	return fn(src, dst)
+	return src, dst, 0, nil
 }
 
 func (m *memoryStore) DiscardPrivate(pageNumber uint32) error {
@@ -100,11 +100,10 @@ func TestBigEndianPortableRetirementExtentMatchesLiteralBytes(t *testing.T) {
 	if !bytes.Equal(cell, want) {
 		t.Fatalf("encoded extent % x, want % x", cell, want)
 	}
-	value, err := (codec{}).ReadLeaf(cell)
+	decoded, err := (codec{}).ReadLeaf(cell)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded := value.(Extent)
 	if decoded.Key.Txn != extent.Key.Txn || decoded.Key.First != extent.Key.First || decoded.Count != extent.Count {
 		t.Fatalf("decoded extent %#v, want %#v", decoded, extent)
 	}

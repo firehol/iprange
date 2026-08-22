@@ -117,10 +117,12 @@ func (s *DraftStore) replenishReserve() error {
 			if err != nil {
 				return err
 			}
-			if err := s.Update(pageNumber, func(page []byte) error {
-				clear(page)
-				return nil
-			}); err != nil {
+			page, tag, err := s.Update(pageNumber)
+			if err != nil {
+				return err
+			}
+			clear(page)
+			if err := s.RestoreDirty(pageNumber, tag); err != nil {
 				return err
 			}
 			s.draft.meta.AllocatorReserve[i] = pageNumber

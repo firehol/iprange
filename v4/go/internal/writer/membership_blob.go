@@ -77,30 +77,33 @@ func writeMembershipBlobLeaf[W membershipWords](store tree.Store, words W, offse
 	}
 	txn := store.TargetTxn()
 	dataLen := int(count) * 8
-	if err := store.Update(pageNumber, func(page []byte) error {
-		initializeMembershipBlobLeaf(page, txn, uint64(offsetWords)*8, dataLen)
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
 		return membershipBlobNode{}, err
 	}
-	const chunk = 64
-	var values [chunk]uint64
+	initializeMembershipBlobLeaf(page, txn, uint64(offsetWords)*8, dataLen)
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		return membershipBlobNode{}, err
+	}
 	var written uint32
 	for written < count {
-		n := count - written
-		if n > chunk {
-			n = chunk
-		}
-		if err := words.ReadWords(offsetWords+written, values[:n]); err != nil {
+		values, got, err := words.ReadChunk(offsetWords + written)
+		if err != nil {
 			return membershipBlobNode{}, err
 		}
-		if err := store.Update(pageNumber, func(page []byte) error {
-			for index, value := range values[:n] {
-				at := membershipBlobLeafData + (int(written)+index)*8
-				binary.LittleEndian.PutUint64(page[at:], value)
-			}
-			return nil
-		}); err != nil {
+		n := count - written
+		if n > got {
+			n = got
+		}
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return membershipBlobNode{}, err
+		}
+		for index, value := range values[:n] {
+			at := membershipBlobLeafData + (int(written)+index)*8
+			binary.LittleEndian.PutUint64(page[at:], value)
+		}
+		if err := store.RestoreDirty(pageNumber, tag); err != nil {
 			return membershipBlobNode{}, err
 		}
 		written += n
@@ -190,19 +193,24 @@ func flushMembershipBlobLevel(store tree.Store, level *membershipBlobLevel) (mem
 		return membershipBlobNode{}, err
 	}
 	txn := store.TargetTxn()
-	if err := store.Update(pageNumber, func(page []byte) error {
-		b := format.NewSlottedBuilder(page, format.PageTypeBlobBranch, txn, childLevel+1, membershipBlobAux)
-		for _, node := range level.nodes[:level.len] {
-			var record [membershipBlobBranchSize]byte
-			binary.LittleEndian.PutUint64(record[membershipBlobBranchOffsetOffset:], node.offset)
-			binary.LittleEndian.PutUint32(record[membershipBlobBranchChildOffset:], node.page)
-			binary.LittleEndian.PutUint32(record[membershipBlobBranchReserved:], 0)
-			if err := b.Push(page, record[:]); err != nil {
-				return corrupt("membership blob branch build failed: " + err.Error())
-			}
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return membershipBlobNode{}, err
+	}
+	b := format.NewSlottedBuilder(page, format.PageTypeBlobBranch, txn, childLevel+1, membershipBlobAux)
+	for _, node := range level.nodes[:level.len] {
+		var record [membershipBlobBranchSize]byte
+		binary.LittleEndian.PutUint64(record[membershipBlobBranchOffsetOffset:], node.offset)
+		binary.LittleEndian.PutUint32(record[membershipBlobBranchChildOffset:], node.page)
+		binary.LittleEndian.PutUint32(record[membershipBlobBranchReserved:], 0)
+		if err := b.Push(page, record[:]); err != nil {
+			return membershipBlobNode{}, corrupt("membership blob branch build failed: " + err.Error())
 		}
-		return b.Finish(page)
-	}); err != nil {
+	}
+	if err := b.Finish(page); err != nil {
+		return membershipBlobNode{}, err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return membershipBlobNode{}, err
 	}
 	return membershipBlobNode{offset: level.nodes[0].offset, page: pageNumber, level: childLevel + 1}, nil
@@ -227,16 +235,12 @@ func releaseMembershipBlobPage(store tree.RetiringStore, pageNumber uint32, expe
 	if depth > format.MaxTreeLevel {
 		return corrupt("membership blob exceeds its maximum height")
 	}
-	var level uint16
-	var born uint64
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		level = format.U16(page[format.HeaderLevel:])
-		born = format.U64(page[format.HeaderBorn:])
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
 		return err
 	}
-	var err error
+	level := format.U16(page[format.HeaderLevel:])
+	born := format.U64(page[format.HeaderBorn:])
 	if level == 0 {
 		err = releaseMembershipBlobLeaf(store, pageNumber, expectedLevel, total, next)
 	} else {
@@ -248,47 +252,44 @@ func releaseMembershipBlobPage(store tree.RetiringStore, pageNumber uint32, expe
 	if born == store.TargetTxn() {
 		return store.DiscardPrivate(pageNumber)
 	}
-	return store.RetirePages([]uint32{pageNumber})
+	return store.RetirePages(tree.RetireOne(pageNumber))
 }
 
 func releaseMembershipBlobBranch(store tree.RetiringStore, pageNumber uint32, level uint16, expectedLevel *uint16, total uint64, next *uint64, depth uint16) error {
-	var header *tree.Header
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		h, err := format.DecodePageHeader(page, store.TargetTxn())
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return err
+	}
+	h, err := format.DecodePageHeader(page, store.TargetTxn())
+	if err != nil {
+		return err
+	}
+	if h.PageType != format.PageTypeBlobBranch || h.Aux != membershipBlobAux ||
+		(expectedLevel != nil && *expectedLevel != h.Level) {
+		return corrupt("membership blob branch page is invalid")
+	}
+	header := &h
+	for index := 0; index < int(header.ItemCount); index++ {
+		var child uint32
+		page, err := store.Inspect(pageNumber)
 		if err != nil {
 			return err
 		}
-		if h.PageType != format.PageTypeBlobBranch || h.Aux != membershipBlobAux ||
-			(expectedLevel != nil && *expectedLevel != h.Level) {
-			return corrupt("membership blob branch page is invalid")
-		}
-		header = &h
-		return nil
-	}); err != nil {
-		return err
-	}
-	for index := 0; index < int(header.ItemCount); index++ {
-		var child uint32
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			cell, err := format.SlottedCell(page, header, index, membershipBlobBranchSize)
-			if err != nil {
-				return err
-			}
-			if len(cell) != membershipBlobBranchSize ||
-				binary.LittleEndian.Uint32(cell[membershipBlobBranchReserved:]) != 0 {
-				return corrupt("membership blob branch record is malformed")
-			}
-			offset := binary.LittleEndian.Uint64(cell[membershipBlobBranchOffsetOffset:])
-			if offset != *next {
-				return corrupt("membership blob branch record is malformed")
-			}
-			child = binary.LittleEndian.Uint32(cell[membershipBlobBranchChildOffset:])
-			if child < 2 || uint64(child) >= store.PageLimit() {
-				return corrupt("membership blob branch record is malformed")
-			}
-			return nil
-		}); err != nil {
+		cell, err := format.SlottedCell(page, header, index, membershipBlobBranchSize)
+		if err != nil {
 			return err
+		}
+		if len(cell) != membershipBlobBranchSize ||
+			binary.LittleEndian.Uint32(cell[membershipBlobBranchReserved:]) != 0 {
+			return corrupt("membership blob branch record is malformed")
+		}
+		offset := binary.LittleEndian.Uint64(cell[membershipBlobBranchOffsetOffset:])
+		if offset != *next {
+			return corrupt("membership blob branch record is malformed")
+		}
+		child = binary.LittleEndian.Uint32(cell[membershipBlobBranchChildOffset:])
+		if child < 2 || uint64(child) >= store.PageLimit() {
+			return corrupt("membership blob branch record is malformed")
 		}
 		nextLevel := level - 1
 		if err := releaseMembershipBlobPage(store, child, &nextLevel, total, next, depth+1); err != nil {
@@ -299,35 +300,32 @@ func releaseMembershipBlobBranch(store tree.RetiringStore, pageNumber uint32, le
 }
 
 func releaseMembershipBlobLeaf(store tree.RetiringStore, pageNumber uint32, expectedLevel *uint16, total uint64, next *uint64) error {
-	var dataLen int
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		h, err := format.DecodePageHeader(page, store.TargetTxn())
-		if err != nil {
-			return err
-		}
-		if h.PageType != format.PageTypeBlobLeaf || h.Aux != membershipBlobAux ||
-			(expectedLevel != nil && *expectedLevel != h.Level) {
-			return corrupt("membership blob leaf page is invalid")
-		}
-		start := binary.LittleEndian.Uint64(page[membershipBlobLeafStartOffset:])
-		length := int(binary.LittleEndian.Uint16(page[membershipBlobLeafLengthOffset:]))
-		if start != *next || length <= 0 || length > format.PageSize-membershipBlobLeafData ||
-			length%8 != 0 {
-			return corrupt("membership blob leaf layout is malformed")
-		}
-		end := start + uint64(length)
-		if end > total || (end < total && length != format.PageSize-membershipBlobLeafData) {
-			return corrupt("membership blob leaf layout is malformed")
-		}
-		if int(h.Lower) != membershipBlobLeafData+length || int(h.Upper) != format.PageSize {
-			return corrupt("membership blob leaf layout is malformed")
-		}
-		dataLen = length
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
 		return err
 	}
-	*next += uint64(dataLen)
+	h, err := format.DecodePageHeader(page, store.TargetTxn())
+	if err != nil {
+		return err
+	}
+	if h.PageType != format.PageTypeBlobLeaf || h.Aux != membershipBlobAux ||
+		(expectedLevel != nil && *expectedLevel != h.Level) {
+		return corrupt("membership blob leaf page is invalid")
+	}
+	start := binary.LittleEndian.Uint64(page[membershipBlobLeafStartOffset:])
+	length := int(binary.LittleEndian.Uint16(page[membershipBlobLeafLengthOffset:]))
+	if start != *next || length <= 0 || length > format.PageSize-membershipBlobLeafData ||
+		length%8 != 0 {
+		return corrupt("membership blob leaf layout is malformed")
+	}
+	end := start + uint64(length)
+	if end > total || (end < total && length != format.PageSize-membershipBlobLeafData) {
+		return corrupt("membership blob leaf layout is malformed")
+	}
+	if int(h.Lower) != membershipBlobLeafData+length || int(h.Upper) != format.PageSize {
+		return corrupt("membership blob leaf layout is malformed")
+	}
+	*next += uint64(length)
 	return nil
 }
 
@@ -351,14 +349,13 @@ func readMembershipBlobWords(store tree.Store, root uint32, totalWords, start ui
 		if count == 0 {
 			return corrupt("membership blob cannot advance by a complete word")
 		}
-		if err := store.Inspect(leaf.pageNumber, func(page []byte) error {
-			for index := 0; index < count; index++ {
-				at := membershipBlobLeafData + local + index*8
-				output[written+index] = binary.LittleEndian.Uint64(page[at:])
-			}
-			return nil
-		}); err != nil {
+		page, err := store.Inspect(leaf.pageNumber)
+		if err != nil {
 			return err
+		}
+		for index := 0; index < count; index++ {
+			at := membershipBlobLeafData + local + index*8
+			output[written+index] = binary.LittleEndian.Uint64(page[at:])
 		}
 		written += count
 		offset += uint64(count) * 8
@@ -390,50 +387,52 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 		done := false
 		var leafStart uint64
 		var leafLen int
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			level := format.U16(page[format.HeaderLevel:])
-			if level == 0 {
-				start := binary.LittleEndian.Uint64(page[membershipBlobLeafStartOffset:])
-				length := int(binary.LittleEndian.Uint16(page[membershipBlobLeafLengthOffset:]))
-				if start != expectedOffset || length <= 0 ||
-					length > format.PageSize-membershipBlobLeafData || length%8 != 0 {
-					return corrupt("membership blob leaf layout is malformed")
-				}
-				end := start + uint64(length)
-				if end > totalBytes || target >= end {
-					return corrupt("membership blob leaf layout is malformed")
-				}
-				if expected != nil && *expected != 0 {
-					return corrupt("membership blob leaf level is invalid")
-				}
-				done = true
-				leafStart = start
-				leafLen = length
-				return nil
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return membershipBlobFoundLeaf{}, err
+		}
+		level := format.U16(page[format.HeaderLevel:])
+		if level == 0 {
+			start := binary.LittleEndian.Uint64(page[membershipBlobLeafStartOffset:])
+			length := int(binary.LittleEndian.Uint16(page[membershipBlobLeafLengthOffset:]))
+			if start != expectedOffset || length <= 0 ||
+				length > format.PageSize-membershipBlobLeafData || length%8 != 0 {
+				return membershipBlobFoundLeaf{}, corrupt("membership blob leaf layout is malformed")
 			}
+			end := start + uint64(length)
+			if end > totalBytes || target >= end {
+				return membershipBlobFoundLeaf{}, corrupt("membership blob leaf layout is malformed")
+			}
+			if expected != nil && *expected != 0 {
+				return membershipBlobFoundLeaf{}, corrupt("membership blob leaf level is invalid")
+			}
+			done = true
+			leafStart = start
+			leafLen = length
+		} else {
 			h, err := format.DecodePageHeader(page, store.TargetTxn())
 			if err != nil {
-				return err
+				return membershipBlobFoundLeaf{}, err
 			}
 			if h.PageType != format.PageTypeBlobBranch || h.Aux != membershipBlobAux ||
 				(expected != nil && *expected != h.Level) {
-				return corrupt("membership blob branch page is invalid")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch page is invalid")
 			}
 			first, err := format.SlottedCell(page, &h, 0, membershipBlobBranchSize)
 			if err != nil {
-				return corrupt("membership blob branch record is malformed")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 			}
 			if binary.LittleEndian.Uint64(first[membershipBlobBranchOffsetOffset:]) != expectedOffset {
-				return corrupt("membership blob branch starts at a wrong offset")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch starts at a wrong offset")
 			}
 			best := -1
 			for index := 0; index < int(h.ItemCount); index++ {
 				cell, err := format.SlottedCell(page, &h, index, membershipBlobBranchSize)
 				if err != nil {
-					return corrupt("membership blob branch record is malformed")
+					return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 				}
 				if binary.LittleEndian.Uint32(cell[membershipBlobBranchReserved:]) != 0 {
-					return corrupt("membership blob branch record is malformed")
+					return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 				}
 				offset := binary.LittleEndian.Uint64(cell[membershipBlobBranchOffsetOffset:])
 				if offset <= target {
@@ -443,21 +442,18 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 				}
 			}
 			if best < 0 {
-				return corrupt("membership blob branch record is malformed")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 			}
 			cell, err := format.SlottedCell(page, &h, best, membershipBlobBranchSize)
 			if err != nil {
-				return corrupt("membership blob branch record is malformed")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 			}
 			child = binary.LittleEndian.Uint32(cell[membershipBlobBranchChildOffset:])
 			if child < 2 || uint64(child) >= store.PageLimit() {
-				return corrupt("membership blob branch record is malformed")
+				return membershipBlobFoundLeaf{}, corrupt("membership blob branch record is malformed")
 			}
 			childOffset = binary.LittleEndian.Uint64(cell[membershipBlobBranchOffsetOffset:])
 			branchLevel = h.Level
-			return nil
-		}); err != nil {
-			return membershipBlobFoundLeaf{}, err
 		}
 		if done {
 			return membershipBlobFoundLeaf{pageNumber: pageNumber, offset: leafStart, dataLen: leafLen}, nil

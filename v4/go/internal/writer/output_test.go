@@ -17,6 +17,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/reader"
+	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -615,10 +616,10 @@ func TestOutputStoreGuardrails(t *testing.T) {
 	// The append-only store refuses retires and discards. These store
 	// calls bypass the mutation latch and never poison the builder.
 	guards, _ := newOutput(t, directSpec(format.AddressFamilyIPv4), generousBudget())
-	if err := guards.RetirePages(nil); err != nil {
+	if err := guards.RetirePages(tree.RetiredPages{}); err != nil {
 		t.Fatalf("empty retire: %v", err)
 	}
-	err := guards.RetirePages([]uint32{9})
+	err := guards.RetirePages(tree.RetireOne(9))
 	if !isWriterCode(err, format.CodeFormatInvalid) {
 		t.Fatalf("non-empty retire error %v", err)
 	}
@@ -629,16 +630,16 @@ func TestOutputStoreGuardrails(t *testing.T) {
 	// Page area is [2, pageCount): meta pages and out-of-range pages are
 	// refused before any page bytes are touched.
 	for _, pageNumber := range []uint32{0, 1} {
-		err = guards.Inspect(pageNumber, func(page []byte) error { return nil })
+		_, err = guards.Inspect(pageNumber)
 		if !isWriterCode(err, format.CodeFormatInvalid) {
 			t.Fatalf("Inspect(%d) error %v", pageNumber, err)
 		}
 	}
-	err = guards.Update(1, func(page []byte) error { return nil })
+	_, _, err = guards.Update(1)
 	if !isWriterCode(err, format.CodeFormatInvalid) {
 		t.Fatalf("Update(1) error %v", err)
 	}
-	err = guards.CopyPage(3, 1, func(source, output []byte) error { return nil })
+	_, _, _, err = guards.CopyPage(3, 1)
 	if !isWriterCode(err, format.CodeFormatInvalid) {
 		t.Fatalf("CopyPage dest error %v", err)
 	}

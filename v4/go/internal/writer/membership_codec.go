@@ -21,6 +21,9 @@ const (
 	membershipMaxWordCount = format.MaxMembershipWordCount
 	membershipRecordLimit  = 512
 	membershipInlineWords  = (membershipRecordLimit - membershipIDBase) / 8
+	// membershipChunkWords is the maximum word batch of one membership
+	// source read (Rust HASH_WORDS).
+	membershipChunkWords = 64
 )
 
 const (
@@ -61,18 +64,21 @@ type membershipRecord struct {
 }
 
 // membershipEncoded is one encoded ID-tree leaf record (Rust Encoded):
-// the caller-owned bounded buffer holds the fixed 64-byte head; inline
-// bitmap words are appended by the caller up to the inline limit.
+// a view over the draft state's bounded scratch holding the fixed
+// 64-byte head; inline bitmap words are appended by the caller up to the
+// inline limit. The scratch is writer-owned heap, so encoding one record
+// never allocates (writer allocations are bounded, never per record).
 type membershipEncoded struct {
-	bytes [membershipRecordLimit]byte
+	bytes []byte
 	len   int
 }
 
 // newMembershipEncoded builds the record head for one membership entry
-// (Rust Encoded::new). blobRoot == 0 selects inline storage; a nonzero
-// root selects blob storage with the fixed 64-byte head.
-func newMembershipEncoded(id, wordCount uint32, digest [32]byte, blobRoot uint32) (membershipEncoded, error) {
-	var encoded membershipEncoded
+// into scratch (Rust Encoded::new; the caller owns the scratch and must
+// size it to membershipRecordLimit). blobRoot == 0 selects inline
+// storage; a nonzero root selects blob storage with the fixed 64-byte
+// head.
+func newMembershipEncoded(id, wordCount uint32, digest [32]byte, blobRoot uint32, scratch []byte) (membershipEncoded, error) {
 	bitmapLen := uint64(wordCount) * 8
 	length := int(membershipIDBase) + int(bitmapLen)
 	storage := membershipStorageInline
@@ -84,6 +90,10 @@ func newMembershipEncoded(id, wordCount uint32, digest [32]byte, blobRoot uint32
 		length > membershipRecordLimit || (blobRoot != 0 && blobRoot < 2) {
 		return membershipEncoded{}, invalid("membership record fields are outside the v4 limit")
 	}
+	if len(scratch) < membershipRecordLimit {
+		return membershipEncoded{}, corrupt("membership record scratch is too small")
+	}
+	encoded := membershipEncoded{bytes: scratch, len: length}
 	putU16 := func(offset int, v uint16) { binary.LittleEndian.PutUint16(encoded.bytes[offset:], v) }
 	putU32 := func(offset int, v uint32) { binary.LittleEndian.PutUint32(encoded.bytes[offset:], v) }
 	putU64 := func(offset int, v uint64) { binary.LittleEndian.PutUint64(encoded.bytes[offset:], v) }
@@ -94,12 +104,9 @@ func newMembershipEncoded(id, wordCount uint32, digest [32]byte, blobRoot uint32
 	putU64(membershipRefcountOffset, 0)
 	putU32(membershipWordCountOffset, wordCount)
 	putU32(membershipBitmapLenOffset, uint32(bitmapLen))
-	if blobRoot != 0 {
-		putU32(membershipBlobRootOffset, blobRoot)
-	}
+	putU32(membershipBlobRootOffset, blobRoot)
 	putU32(membershipReservedOffset, 0)
 	copy(encoded.bytes[membershipDigestOffset:], digest[:])
-	encoded.len = length
 	return encoded, nil
 }
 
@@ -225,29 +232,31 @@ func (idCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(binary.LittleEndian.Uint32(cell[0:4]))}, nil
 }
 
-func (idCodec) ReadLeaf(cell []byte) (any, error) {
-	record, err := decodeMembershipRecord(cell)
-	if err != nil {
-		return nil, err
-	}
-	return record, nil
+func (idCodec) ReadLeaf(cell []byte) (membershipRecord, error) {
+	return decodeMembershipRecord(cell)
 }
 
 func (idCodec) WriteKey(key tree.Key, output []byte) {
 	binary.LittleEndian.PutUint32(output, uint32(key.Hi))
 }
 
-// hashKey encodes one hash-tree LEAF record (Rust encode_hash): the
-// wire bytes are the digest, the little-endian word count, and the
-// little-endian id. The tree orders keys by the typed Rust HashKey Ord
-// (digest bytes, then the numeric word count and id), so the tree Key
-// keeps word count and id big-endian (hashProbe) while the cells on
-// disk stay exactly the Rust wire layout.
+// writeHashKey encodes one hash-tree LEAF record into dst (Rust
+// encode_hash): the wire bytes are the digest, the little-endian word
+// count, and the little-endian id. The tree orders keys by the typed
+// Rust HashKey Ord (digest bytes, then the numeric word count and id),
+// so the tree Key keeps word count and id big-endian (hashProbe) while
+// the cells on disk stay exactly the Rust wire layout.
+func writeHashKey(dst []byte, digest [32]byte, wordCount, id uint32) {
+	copy(dst[hashDigestOffset:], digest[:])
+	binary.LittleEndian.PutUint32(dst[hashWordCountOffset:], wordCount)
+	binary.LittleEndian.PutUint32(dst[hashIDOffset:], id)
+}
+
+// hashKey encodes one hash-tree LEAF record as a value (Rust
+// encode_hash; test and wire-build convenience over writeHashKey).
 func hashKey(digest [32]byte, wordCount, id uint32) [membershipHashKeySize]byte {
 	var key [membershipHashKeySize]byte
-	copy(key[hashDigestOffset:], digest[:])
-	binary.LittleEndian.PutUint32(key[hashWordCountOffset:], wordCount)
-	binary.LittleEndian.PutUint32(key[hashIDOffset:], id)
+	writeHashKey(key[:], digest, wordCount, id)
 	return key
 }
 
@@ -297,13 +306,13 @@ func (hashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 		return tree.Key{}, err
 	}
 	probe := hashProbe(digest, wordCount, id)
-	return tree.VarKey(probe[:]), nil
+	return tree.RawKey(probe[:]), nil
 }
 
-func (hashCodec) ReadLeaf(cell []byte) (any, error) {
+func (hashCodec) ReadLeaf(cell []byte) (membershipHashRecord, error) {
 	digest, wordCount, id, err := decodeHashKey(cell)
 	if err != nil {
-		return nil, err
+		return membershipHashRecord{}, err
 	}
 	return membershipHashRecord{digest: digest, wordCount: wordCount, id: id}, nil
 }
@@ -311,17 +320,18 @@ func (hashCodec) ReadLeaf(cell []byte) (any, error) {
 func (hashCodec) WriteKey(key tree.Key, output []byte) {
 	// Branch cells carry the wire layout (digest, little-endian word
 	// count and id); the tree Key is the numeric orientation, so the
-	// trailing eight bytes reverse.
-	bytes := key.Bytes()
-	copy(output[hashDigestOffset:hashWordCountOffset], bytes[:hashWordCountOffset])
-	output[hashWordCountOffset] = bytes[hashWordCountOffset+3]
-	output[hashWordCountOffset+1] = bytes[hashWordCountOffset+2]
-	output[hashWordCountOffset+2] = bytes[hashWordCountOffset+1]
-	output[hashWordCountOffset+3] = bytes[hashWordCountOffset]
-	output[hashIDOffset] = bytes[hashIDOffset+3]
-	output[hashIDOffset+1] = bytes[hashIDOffset+2]
-	output[hashIDOffset+2] = bytes[hashIDOffset+1]
-	output[hashIDOffset+3] = bytes[hashIDOffset]
+	// trailing eight bytes reverse. The probe bytes are the key's raw
+	// inline field, never a slice of a local.
+	raw := key.Raw
+	copy(output[hashDigestOffset:hashWordCountOffset], raw[:hashWordCountOffset])
+	output[hashWordCountOffset] = raw[hashWordCountOffset+3]
+	output[hashWordCountOffset+1] = raw[hashWordCountOffset+2]
+	output[hashWordCountOffset+2] = raw[hashWordCountOffset+1]
+	output[hashWordCountOffset+3] = raw[hashWordCountOffset]
+	output[hashIDOffset] = raw[hashIDOffset+3]
+	output[hashIDOffset+1] = raw[hashIDOffset+2]
+	output[hashIDOffset+2] = raw[hashIDOffset+1]
+	output[hashIDOffset+3] = raw[hashIDOffset]
 }
 
 // membershipHashRecord is one decoded hash-tree leaf (Rust HashKey).
@@ -334,19 +344,15 @@ type membershipHashRecord struct {
 // digestWords computes the SHA-256 digest of one membership bitmap over
 // little-endian u64 words in at most 64-word chunks (Rust hash_words).
 func digestWords[W membershipWords](words W) ([32]byte, error) {
-	var hasher = sha256.New()
-	var buffer [64]uint64
+	hasher := sha256.New()
 	var start uint32
 	total := words.WordCount()
 	for start < total {
-		count := total - start
-		if count > 64 {
-			count = 64
-		}
-		if err := words.ReadWords(start, buffer[:count]); err != nil {
+		chunk, count, err := words.ReadChunk(start)
+		if err != nil {
 			return [32]byte{}, err
 		}
-		for _, word := range buffer[:count] {
+		for _, word := range chunk[:count] {
 			var encoded [8]byte
 			binary.LittleEndian.PutUint64(encoded[:], word)
 			hasher.Write(encoded[:])
@@ -354,6 +360,6 @@ func digestWords[W membershipWords](words W) ([32]byte, error) {
 		start += count
 	}
 	var digest [32]byte
-	copy(digest[:], hasher.Sum(nil))
+	hasher.Sum(digest[:0])
 	return digest, nil
 }

@@ -12,39 +12,41 @@ import (
 type Header = format.PageHeader
 
 // parse validates one complete tree page view at the expected level and
-// returns its header (Rust slotted_page::parse_tree).
-func parse(codec Codec, page []byte, selectedTxn uint64, expectedLevel *uint16) (*Header, error) {
+// returns its header by value (Rust slotted_page::parse_tree). The value
+// return keeps the descent loops allocation-free: a heap-allocated header
+// would be one object per visited page per operation.
+func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel *uint16) (Header, error) {
 	work.PageParse(1)
 	h, err := format.DecodePageHeader(page, selectedTxn)
 	if err != nil {
-		return nil, corrupt("slotted-page header is invalid: " + err.Error())
+		return Header{}, corrupt("slotted-page header is invalid: " + err.Error())
 	}
 	expectedType := codec.LeafType()
 	if h.Level != 0 {
 		expectedType = codec.BranchType()
 	}
 	if h.PageType != expectedType || h.Aux != codec.Aux() {
-		return nil, corrupt("slotted-page type or discriminator is invalid")
+		return Header{}, corrupt("slotted-page type or discriminator is invalid")
 	}
 	if expectedLevel != nil && *expectedLevel != h.Level {
-		return nil, corrupt("slotted-page child level is invalid")
+		return Header{}, corrupt("slotted-page child level is invalid")
 	}
 	if !format.SlottedShapeValid(&h) {
-		return nil, corrupt("slotted-page bounds are invalid")
+		return Header{}, corrupt("slotted-page bounds are invalid")
 	}
-	return &h, nil
+	return h, nil
 }
 
 // FixedSearch is one fixed-cell page whose shape was checked once; every
 // probe re-checks the persistent slot value (Rust FixedSearch).
 type FixedSearch struct {
 	page    []byte
-	header  *Header
+	header  Header
 	cellLen int
 }
 
-func newFixedSearch(page []byte, header *Header, cellLen int) (FixedSearch, error) {
-	if len(page) != format.PageSize || !format.SlottedShapeValid(header) ||
+func newFixedSearch(page []byte, header Header, cellLen int) (FixedSearch, error) {
+	if len(page) != format.PageSize || !format.SlottedShapeValid(&header) ||
 		cellLen == 0 || cellLen > format.PageSize {
 		return FixedSearch{}, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -54,7 +56,7 @@ func newFixedSearch(page []byte, header *Header, cellLen int) (FixedSearch, erro
 // cellAt reads the fixed cell at an index already bounded by the search
 // algorithm (Rust FixedSearch::cell_at).
 func (f FixedSearch) cellAt(index int) ([]byte, error) {
-	cell, err := format.SlottedCell(f.page, f.header, index, f.cellLen)
+	cell, err := format.SlottedCell(f.page, &f.header, index, f.cellLen)
 	if err != nil {
 		return nil, corrupt("slotted-page cell is outside the record area")
 	}
@@ -65,17 +67,14 @@ func (f FixedSearch) cellAt(index int) ([]byte, error) {
 // fixed_tree/page.rs lower_bound). With insertion true the result is the
 // insertion point; otherwise a nonexact result steps back one record (the
 // greatest key < key).
-func lowerBound(codec Codec, page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
-	if cellLen, ok := FixedCellSize(codec, header.Level); ok {
-		return lowerBoundFixed(codec, page, header, key, insertion, cellLen)
+func lowerBound[T any](codec Codec[T], page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
+	cellLen, ok := FixedCellSize(codec, header.Level)
+	if !ok {
+		return lowerBoundBy(header, key, insertion, func(index int) (Key, error) {
+			return keyAt(codec, page, header, index)
+		})
 	}
-	return lowerBoundBy(header, key, insertion, func(index int) (Key, error) {
-		return keyAt(codec, page, header, index)
-	})
-}
-
-func lowerBoundFixed(codec Codec, page []byte, header *Header, key Key, insertion bool, cellLen int) (int, bool, error) {
-	search, err := newFixedSearch(page, header, cellLen)
+	search, err := newFixedSearch(page, *header, cellLen)
 	if err != nil {
 		return 0, false, err
 	}
@@ -130,7 +129,7 @@ func lowerBoundBy(header *Header, key Key, insertion bool, keyAt func(int) (Key,
 }
 
 // keyAt decodes the key of one cell (Rust key_at).
-func keyAt(codec Codec, page []byte, header *Header, index int) (Key, error) {
+func keyAt[T any](codec Codec[T], page []byte, header *Header, index int) (Key, error) {
 	cell, err := codecCell(codec, page, header, index)
 	if err != nil {
 		return Key{}, err
@@ -141,13 +140,13 @@ func keyAt(codec Codec, page []byte, header *Header, index int) (Key, error) {
 // branchChild reads and validates one branch child page number (Rust
 // branch_child). Variable branch records name the child through the
 // codec's ReadBranchChild override.
-func branchChild(codec Codec, page []byte, header *Header, index int, pageLimit uint64) (uint32, error) {
+func branchChild[T any](codec Codec[T], page []byte, header *Header, index int, pageLimit uint64) (uint32, error) {
 	cell, err := codecCell(codec, page, header, index)
 	if err != nil {
 		return 0, err
 	}
 	var child uint32
-	if variable, ok := codec.(VariableCodec); ok && codec.KeySize() == 0 {
+	if variable, ok := codec.(VariableCodec[T]); ok && codec.KeySize() == 0 {
 		child, err = variable.ReadBranchChild(cell)
 	} else {
 		child = readChild(cell, codec.KeySize())
@@ -170,8 +169,8 @@ func readChild(cell []byte, keySize int) uint32 {
 // the concrete slotted record helper with the codec's length bounds;
 // fixed-size levels keep the fast slotted path. Cell bytes are always
 // slices of the caller's page (never copied).
-func codecCell(codec Codec, page []byte, header *Header, index int) ([]byte, error) {
-	variable, hasVariable := codec.(VariableCodec)
+func codecCell[T any](codec Codec[T], page []byte, header *Header, index int) ([]byte, error) {
+	variable, hasVariable := codec.(VariableCodec[T])
 	if header.Level == 0 {
 		if hasVariable && codec.LeafSize() == 0 {
 			minimum, maximum := variable.LeafRecordBounds()
@@ -211,12 +210,12 @@ type CellBuf struct {
 // newBranchCell encodes one branch cell (key + child). Variable branch
 // records (catalog name branches) route through the codec's WriteBranch
 // override, which returns the encoded length.
-func newBranchCell(codec Codec, key Key, child uint32) (*CellBuf, error) {
+func newBranchCell[T any](codec Codec[T], key Key, child uint32) (CellBuf, error) {
 	var cell CellBuf
-	if variable, ok := codec.(VariableCodec); ok && codec.KeySize() == 0 {
+	if variable, ok := codec.(VariableCodec[T]); ok && codec.KeySize() == 0 {
 		length, err := variable.WriteBranch(key, child, cell.bytes[:])
 		if err != nil {
-			return nil, err
+			return cell, err
 		}
 		cell.len = length
 	} else {
@@ -225,13 +224,13 @@ func newBranchCell(codec Codec, key Key, child uint32) (*CellBuf, error) {
 		format.PutU32(cell.bytes[codec.KeySize():cell.len], child)
 	}
 	if cell.len == 0 || cell.len > MaxBranchSize(codec) || cell.len > maxTreeCell {
-		return nil, unsupported("B+tree branch encoding is invalid")
+		return cell, unsupported("B+tree branch encoding is invalid")
 	}
-	return &cell, nil
+	return cell, nil
 }
 
 // Bytes returns the encoded branch cell.
-func (c *CellBuf) Bytes() []byte { return c.bytes[:c.len] }
+func (c CellBuf) Bytes() []byte { return c.bytes[:c.len] }
 
 // Edit is one in-place or inserted cell edit (Rust Edit).
 type Edit struct {
@@ -257,7 +256,7 @@ type Replacement struct {
 func (r Replacement) total(sourceCount int) int { return sourceCount + len(r.cells) - 1 }
 
 // editFits reports whether one edit fits the free area (Rust edit_fits).
-func editFits(codec Codec, page []byte, header *Header, edit Edit) (bool, error) {
+func editFits[T any](codec Codec[T], page []byte, header *Header, edit Edit) (bool, error) {
 	work.EditFitProbe(1)
 	if edit.replace {
 		if edit.index >= int(header.ItemCount) {
@@ -277,7 +276,7 @@ func editFits(codec Codec, page []byte, header *Header, edit Edit) (bool, error)
 
 // replacementFits reports whether one multi-cell replacement fits (Rust
 // replacement_fits).
-func replacementFits(codec Codec, page []byte, header *Header, edit Replacement) (bool, error) {
+func replacementFits[T any](codec Codec[T], page []byte, header *Header, edit Replacement) (bool, error) {
 	work.EditFitProbe(1)
 	if edit.index >= int(header.ItemCount) || len(edit.cells) == 0 {
 		return false, corrupt("B+tree replacement is invalid")
@@ -296,7 +295,7 @@ func replacementFits(codec Codec, page []byte, header *Header, edit Replacement)
 }
 
 // splitIndex picks the split point (Rust split_index).
-func splitIndex(codec Codec, page []byte, header *Header, edit Edit) (int, error) {
+func splitIndex[T any](codec Codec[T], page []byte, header *Header, edit Edit) (int, error) {
 	total := edit.total(int(header.ItemCount))
 	if cellLen, ok := FixedCellSize(codec, header.Level); ok {
 		return fixedSplitIndex(total, cellLen)
@@ -312,7 +311,7 @@ func splitIndex(codec Codec, page []byte, header *Header, edit Edit) (int, error
 
 // replacementSplitIndex picks the split point for one replacement (Rust
 // replacement_split_index).
-func replacementSplitIndex(codec Codec, page []byte, header *Header, edit Replacement) (int, error) {
+func replacementSplitIndex[T any](codec Codec[T], page []byte, header *Header, edit Replacement) (int, error) {
 	total := edit.total(int(header.ItemCount))
 	if cellLen, ok := FixedCellSize(codec, header.Level); ok {
 		return fixedSplitIndex(total, cellLen)
@@ -328,7 +327,7 @@ func replacementSplitIndex(codec Codec, page []byte, header *Header, edit Replac
 
 // buildEdit builds one fresh page from a source page and one edit over
 // [start, end) virtual records (Rust build_edit).
-func buildEdit(codec Codec, source []byte, header *Header, edit Edit, start, end int, output []byte) error {
+func buildEdit[T any](codec Codec[T], source []byte, header *Header, edit Edit, start, end int, output []byte) error {
 	pageType := codec.LeafType()
 	if header.Level != 0 {
 		pageType = codec.BranchType()
@@ -348,7 +347,7 @@ func buildEdit(codec Codec, source []byte, header *Header, edit Edit, start, end
 
 // buildReplacement builds one fresh page from a source page and one
 // replacement over [start, end) (Rust build_replacement).
-func buildReplacement(codec Codec, source []byte, header *Header, edit Replacement, start, end int, output []byte) error {
+func buildReplacement[T any](codec Codec[T], source []byte, header *Header, edit Replacement, start, end int, output []byte) error {
 	pageType := codec.LeafType()
 	if header.Level != 0 {
 		pageType = codec.BranchType()
@@ -368,7 +367,7 @@ func buildReplacement(codec Codec, source []byte, header *Header, edit Replaceme
 
 // virtualCell maps one virtual index to the edited or existing cell (Rust
 // virtual_cell).
-func virtualCell(codec Codec, source []byte, header *Header, edit Edit, virtualIndex int) ([]byte, error) {
+func virtualCell[T any](codec Codec[T], source []byte, header *Header, edit Edit, virtualIndex int) ([]byte, error) {
 	if virtualIndex == edit.index {
 		return edit.cell, nil
 	}
@@ -381,7 +380,7 @@ func virtualCell(codec Codec, source []byte, header *Header, edit Edit, virtualI
 
 // replacementCell maps one virtual index to a replacement cell or an
 // existing cell (Rust replacement_cell).
-func replacementCell(codec Codec, source []byte, header *Header, edit Replacement, index int) ([]byte, error) {
+func replacementCell[T any](codec Codec[T], source []byte, header *Header, edit Replacement, index int) ([]byte, error) {
 	if offset := index - edit.index; offset >= 0 && offset < len(edit.cells) {
 		return edit.cells[offset], nil
 	}
@@ -393,27 +392,27 @@ func replacementCell(codec Codec, source []byte, header *Header, edit Replacemen
 }
 
 // truncate keeps the first keep logical records (Rust page::truncate).
-func truncate(codec Codec, page []byte, header *Header, keep int) (*Header, error) {
+func truncate[T any](codec Codec[T], page []byte, header *Header, keep int) (Header, error) {
 	if cellLen, ok := FixedCellSize(codec, header.Level); ok {
 		shape, err := format.SlottedTruncateFixed(page, header, keep, cellLen)
 		if err != nil {
-			return nil, corrupt(err.Error())
+			return Header{}, corrupt(err.Error())
 		}
 		return shapeHeader(header, shape), nil
 	}
 	shape, err := format.SlottedTruncate(page, header, keep)
 	if err != nil {
-		return nil, corrupt(err.Error())
+		return Header{}, corrupt(err.Error())
 	}
 	return shapeHeader(header, shape), nil
 }
 
-func shapeHeader(header *Header, shape format.SlottedShape) *Header {
+func shapeHeader(header *Header, shape format.SlottedShape) Header {
 	out := *header
 	out.ItemCount = uint16(shape.ItemCount)
 	out.Lower = shape.Lower
 	out.Upper = shape.Upper
-	return &out
+	return out
 }
 
 func fixedSplitIndex(total, cellLen int) (int, error) {

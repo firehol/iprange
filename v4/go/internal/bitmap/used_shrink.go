@@ -30,8 +30,8 @@ func shrink(store tree.RetiringStore, root *uint32, oldLimit uint64, kind Kind) 
 	if newLimit == oldLimit || *root == 0 {
 		return newLimit, nil
 	}
-	retired := tree.NewRetiredPages()
-	if err := trimRoot(store, root, oldLimit, newLimit, kind, retired); err != nil {
+	var retired tree.RetiredPages
+	if err := trimRoot(store, root, oldLimit, newLimit, kind, &retired); err != nil {
 		return 0, err
 	}
 	if *root != 0 {
@@ -39,13 +39,13 @@ func shrink(store tree.RetiringStore, root *uint32, oldLimit uint64, kind Kind) 
 		if err != nil {
 			return 0, err
 		}
-		refreshed, err := refreshPage(store, *root, required, 0, newLimit, kind, retired)
+		refreshed, err := refreshPage(store, *root, required, 0, newLimit, kind, &retired)
 		if err != nil {
 			return 0, err
 		}
 		*root = refreshed
 	}
-	if err := store.RetirePages(retired.Slice()); err != nil {
+	if err := store.RetirePages(retired); err != nil {
 		return 0, err
 	}
 	return newLimit, nil
@@ -69,26 +69,25 @@ func trimRoot(store tree.Store, root *uint32, oldLimit, newLimit uint64, kind Ki
 		}
 		*root = private
 		pageLimit := store.PageLimit()
-		child := uint32(0)
-		if err := store.Inspect(private, func(page []byte) error {
-			c, err := CheckedBranchChild(page, header, 0, pageLimit)
+		page, err := store.Inspect(private)
+		if err != nil {
+			return err
+		}
+		child, err := CheckedBranchChild(page, header, 0, pageLimit)
+		if err != nil {
+			return err
+		}
+		if child == 0 {
+			return corrupt("used bitmap root has no retained child")
+		}
+		for index := 1; index < BranchChildren; index++ {
+			extra, err := CheckedBranchChild(page, header, index, pageLimit)
 			if err != nil {
 				return err
 			}
-			if c == 0 {
-				return corrupt("used bitmap root has no retained child")
+			if extra != 0 {
+				return corrupt("used bitmap root has data above its new limit")
 			}
-			for index := 1; index < BranchChildren; index++ {
-				if extra, err := CheckedBranchChild(page, header, index, pageLimit); err != nil {
-					return err
-				} else if extra != 0 {
-					return corrupt("used bitmap root has data above its new limit")
-				}
-			}
-			child = c
-			return nil
-		}); err != nil {
-			return err
 		}
 		if err := store.DiscardPrivate(private); err != nil {
 			return err
@@ -121,35 +120,45 @@ func refreshPage(store tree.Store, pageNumber uint32, level uint16, base uint64,
 	return private, nil
 }
 
-func refreshChild(store tree.Store, pageNumber uint32, header *Header, index int, level uint16, base uint64, span uint64, limit uint64, kind Kind, retired *tree.RetiredPages) error {
+func refreshChild(store tree.Store, pageNumber uint32, header Header, index int, level uint16, base uint64, span uint64, limit uint64, kind Kind, retired *tree.RetiredPages) error {
 	childBase, err := childBaseAt(base, span, index)
 	if err != nil {
 		return err
 	}
 	pageLimit := store.PageLimit()
-	child := uint32(0)
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		c, err := CheckedBranchChild(page, header, index, pageLimit)
-		child = c
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
 		return err
-	}); err != nil {
+	}
+	child, err := CheckedBranchChild(page, header, index, pageLimit)
+	if err != nil {
 		return err
 	}
 	if childBase >= limit {
 		if child != 0 {
 			return corrupt("used bitmap has data above its new limit")
 		}
-		return store.Update(pageNumber, func(page []byte) error {
-			return setBranchChild(page, header, index, 0, false)
-		})
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return err
+		}
+		if err := setBranchChild(page, header, index, 0, false); err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
 	}
 	if childBase+span <= limit {
 		return nil
 	}
 	if child == 0 {
-		return store.Update(pageNumber, func(page []byte) error {
-			return setBranchChild(page, header, index, 0, true)
-		})
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return err
+		}
+		if err := setBranchChild(page, header, index, 0, true); err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
 	}
 	refreshed, err := refreshPage(store, child, level-1, childBase, limit, kind, retired)
 	if err != nil {
@@ -159,7 +168,12 @@ func refreshChild(store tree.Store, pageNumber uint32, header *Header, index int
 	if err != nil {
 		return err
 	}
-	return store.Update(pageNumber, func(page []byte) error {
-		return setBranchChild(page, header, index, refreshed, candidate)
-	})
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	if err := setBranchChild(page, header, index, refreshed, candidate); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }

@@ -17,9 +17,13 @@ import (
 // workflow draft (Rust HistoryPlan + HistoryMerge bound for a
 // projection). It is not safe to use after Finish, and the surrounding
 // writer owns the draft until the public workflow discards it or
-// finishes the membership workflow.
+// finishes the membership workflow. The draft store is bound once at
+// begin and reused by every push and the finish: it reads the draft meta
+// live, so one instance serves the whole projection without per-record
+// allocation (Rust DraftStore is one handle per projection).
 type HistoryProjection struct {
 	core  *Core
+	store *DraftStore
 	merge *historyMerge
 }
 
@@ -45,7 +49,7 @@ func (c *Core) BeginHistoryProjection(windows []HistoryWindow, check func() erro
 	if err != nil {
 		return nil, err
 	}
-	return &HistoryProjection{core: c, merge: merge}, nil
+	return &HistoryProjection{core: c, store: store, merge: merge}, nil
 }
 
 // Push4 feeds one inclusive IPv4 source range into the projection merge
@@ -58,8 +62,7 @@ func (p *HistoryProjection) Push4(from, to uint32, lastSeen uint32, check func()
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
-	store := NewDraftStore(p.core.m, p.core.base.Meta.PageCount, p.core.budget, p.core.draft)
-	return p.merge.push(store, tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, lastSeen, check)
+	return p.merge.push(p.store, tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, lastSeen, check)
 }
 
 // Push6 feeds one inclusive IPv6 source range into the projection merge
@@ -72,8 +75,7 @@ func (p *HistoryProjection) Push6(fromHi, fromLo, toHi, toLo uint64, lastSeen ui
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
-	store := NewDraftStore(p.core.m, p.core.base.Meta.PageCount, p.core.budget, p.core.draft)
-	return p.merge.push(store, tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, lastSeen, check)
+	return p.merge.push(p.store, tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, lastSeen, check)
 }
 
 // Finish ends the projection merge and assembles the projection report
@@ -87,6 +89,5 @@ func (p *HistoryProjection) Finish(sourceRangeCount uint64, sourceAddresses form
 	if p.core.draft == nil {
 		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
-	store := NewDraftStore(p.core.m, p.core.base.Meta.PageCount, p.core.budget, p.core.draft)
-	return p.merge.finish(store, check, sourceRangeCount, sourceAddresses)
+	return p.merge.finish(p.store, check, sourceRangeCount, sourceAddresses)
 }

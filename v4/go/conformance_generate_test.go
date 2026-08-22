@@ -194,9 +194,9 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{
-		{FeedName: []byte("one"), Cutoff: 9},
-		{FeedName: []byte("two"), Cutoff: 10},
-		{FeedName: []byte("three"), Cutoff: 11},
+		{FeedName: "one", Cutoff: 9},
+		{FeedName: "two", Cutoff: 10},
+		{FeedName: "three", Cutoff: 11},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

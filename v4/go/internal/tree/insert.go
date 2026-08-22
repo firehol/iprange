@@ -18,7 +18,7 @@ type LeafTarget struct {
 
 // RequireLeaf validates one leaf cell against the codec (Rust
 // require_leaf).
-func RequireLeaf(codec Codec, leafCell []byte) error {
+func RequireLeaf[T any](codec Codec[T], leafCell []byte) error {
 	if err := requireCodec(codec); err != nil {
 		return err
 	}
@@ -32,7 +32,7 @@ func RequireLeaf(codec Codec, leafCell []byte) error {
 
 // RequireReplacement validates a 2-3 cell replacement (Rust
 // require_replacement).
-func RequireReplacement(codec Codec, key Key, cells [][]byte) error {
+func RequireReplacement[T any](codec Codec[T], key Key, cells [][]byte) error {
 	if len(cells) < 2 || len(cells) > 3 {
 		return invalid("B+tree leaf replacement requires two or three cells")
 	}
@@ -65,54 +65,55 @@ func RequireReplacement(codec Codec, key Key, cells [][]byte) error {
 // Insert inserts one leaf cell into the tree rooted at root and reports
 // whether the tree changed (Rust fixed_tree::insert). The caller retires
 // the returned pages after the operation.
-func Insert(codec Codec, store Store, root *uint32, leafCell []byte, retired *RetiredPages) (bool, error) {
+func Insert[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, retired RetiredPages) (RetiredPages, bool, error) {
 	if err := RequireLeaf(codec, leafCell); err != nil {
-		return false, err
+		return RetiredPages{}, false, err
 	}
 	if *root == 0 {
 		pageNumber, err := NewLeaf(codec, store, leafCell)
 		if err != nil {
-			return false, err
+			return RetiredPages{}, false, err
 		}
 		*root = pageNumber
-		return true, nil
+		return retired, true, nil
 	}
 	key, err := codec.ReadKey(leafCell, 0)
 	if err != nil {
-		return false, err
+		return RetiredPages{}, false, err
 	}
-	leaf, err := PrivatePath(codec, store, root, key, retired)
+	leaf, retired, err := PrivatePath(codec, store, root, key, retired)
 	if err != nil {
-		return false, err
+		return RetiredPages{}, false, err
 	}
 	target := LeafTarget{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: leaf.Index, Exists: leaf.Exists}
-	return EditLeaf(codec, store, root, leafCell, &target)
+	changed, err := EditLeaf(codec, store, root, leafCell, &target)
+	return retired, changed, err
 }
 
 // ReplaceLeafWith replaces one existing leaf cell with 2-3 cells and
 // propagates the resulting split (Rust replace_leaf_with).
-func ReplaceLeafWith(codec Codec, store Store, root *uint32, key Key, cells [][]byte, retired *RetiredPages) error {
+func ReplaceLeafWith[T any](codec Codec[T], store Store, root *uint32, key Key, cells [][]byte, retired RetiredPages) (RetiredPages, error) {
 	if err := RequireReplacement(codec, key, cells); err != nil {
-		return err
+		return RetiredPages{}, err
 	}
-	leaf, err := PrivatePath(codec, store, root, key, retired)
+	leaf, retired, err := PrivatePath(codec, store, root, key, retired)
 	if err != nil {
-		return err
+		return RetiredPages{}, err
 	}
 	target := LeafTarget{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: leaf.Index, Exists: leaf.Exists}
 	if !target.Exists {
-		return corrupt("B+tree replacement key is missing")
+		return RetiredPages{}, corrupt("B+tree replacement key is missing")
 	}
-	return replaceTarget(codec, store, root, target, cells)
+	return retired, replaceTarget(codec, store, root, target, cells)
 }
 
-func replaceTarget(codec Codec, store Store, root *uint32, target LeafTarget, cells [][]byte) error {
+func replaceTarget[T any](codec Codec[T], store Store, root *uint32, target LeafTarget, cells [][]byte) error {
 	edit := Replacement{index: target.Index, cells: cells}
-	split, err := applyReplacement(codec, store, target.PageNumber, &target.Header, edit)
+	split, ok, err := applyReplacement(codec, store, target.PageNumber, &target.Header, edit)
 	if err != nil {
 		return err
 	}
-	if split == nil {
+	if !ok {
 		return nil
 	}
 	if split.level != 0 {
@@ -122,34 +123,36 @@ func replaceTarget(codec Codec, store Store, root *uint32, target LeafTarget, ce
 }
 
 // NewLeaf builds a fresh single-record leaf page (Rust new_leaf).
-func NewLeaf(codec Codec, store Store, cell []byte) (uint32, error) {
+func NewLeaf[T any](codec Codec[T], store Store, cell []byte) (uint32, error) {
 	pageNumber, err := store.Allocate()
 	if err != nil {
 		return 0, err
 	}
 	txn := store.TargetTxn()
-	if err := store.Update(pageNumber, func(page []byte) error {
-		b := format.NewSlottedBuilder(page, codec.LeafType(), txn, 0, codec.Aux())
-		if err := b.Push(page, cell); err != nil {
-			return corrupt("B+tree leaf build failed: " + err.Error())
-		}
-		return b.Finish(page)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
 		return 0, err
 	}
-	return pageNumber, nil
+	b := format.NewSlottedBuilder(page, codec.LeafType(), txn, 0, codec.Aux())
+	if err := b.Push(page, cell); err != nil {
+		return 0, corrupt("B+tree leaf build failed: " + err.Error())
+	}
+	if err := b.Finish(page); err != nil {
+		return 0, err
+	}
+	return pageNumber, store.RestoreDirty(pageNumber, tag)
 }
 
 // EditLeaf applies one leaf edit, splitting the page when the record does
 // not fit (Rust edit_leaf). Reports whether the key was newly inserted.
-func EditLeaf(codec Codec, store Store, root *uint32, leafCell []byte, target *LeafTarget) (bool, error) {
+func EditLeaf[T any](codec Codec[T], store Store, root *uint32, leafCell []byte, target *LeafTarget) (bool, error) {
 	edit := Edit{index: target.Index, replace: target.Exists, cell: leafCell}
-	fits := false
-	if err := store.Inspect(target.PageNumber, func(page []byte) error {
-		var err error
-		fits, err = editFits(codec, page, &target.Header, edit)
-		return err
-	}); err != nil {
+	page, err := store.Inspect(target.PageNumber)
+	if err != nil {
+		return false, err
+	}
+	fits, err := editFits(codec, page, &target.Header, edit)
+	if err != nil {
 		return false, err
 	}
 	if !fits {
@@ -173,13 +176,18 @@ func EditLeaf(codec Codec, store Store, root *uint32, leafCell []byte, target *L
 	return !target.Exists, nil
 }
 
-func applyLeafEdit(codec Codec, store Store, pageNumber uint32, header *Header, edit Edit) error {
-	return store.Update(pageNumber, func(page []byte) error {
-		return applyEdit(codec, page, header, edit)
-	})
+func applyLeafEdit[T any](codec Codec[T], store Store, pageNumber uint32, header *Header, edit Edit) error {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	if err := applyEdit(codec, page, header, edit); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }
 
-func applyEdit(codec Codec, page []byte, header *Header, edit Edit) error {
+func applyEdit[T any](codec Codec[T], page []byte, header *Header, edit Edit) error {
 	var changed bool
 	var err error
 	if edit.replace {
@@ -200,27 +208,32 @@ func applyEdit(codec Codec, page []byte, header *Header, edit Edit) error {
 	return nil
 }
 
-func splitLeaf(codec Codec, store Store, root *uint32, target *LeafTarget, edit Edit) error {
+func splitLeaf[T any](codec Codec[T], store Store, root *uint32, target *LeafTarget, edit Edit) error {
 	total := edit.total(int(target.Header.ItemCount))
-	var middle int
-	if err := store.Inspect(target.PageNumber, func(page []byte) error {
-		var err error
-		middle, err = splitIndex(codec, page, &target.Header, edit)
+	page, err := store.Inspect(target.PageNumber)
+	if err != nil {
 		return err
-	}); err != nil {
+	}
+	middle, err := splitIndex(codec, page, &target.Header, edit)
+	if err != nil {
 		return err
 	}
 	return splitLeafAt(codec, store, root, target, edit, middle, total)
 }
 
-func splitLeafAt(codec Codec, store Store, root *uint32, target *LeafTarget, edit Edit, middle, total int) error {
+func splitLeafAt[T any](codec Codec[T], store Store, root *uint32, target *LeafTarget, edit Edit, middle, total int) error {
 	rightPage, err := store.Allocate()
 	if err != nil {
 		return err
 	}
-	if err := store.CopyPage(target.PageNumber, rightPage, func(source, output []byte) error {
-		return buildEdit(codec, source, &target.Header, edit, middle, total, output)
-	}); err != nil {
+	src, dst, tag, err := store.CopyPage(target.PageNumber, rightPage)
+	if err != nil {
+		return err
+	}
+	if err := buildEdit(codec, src, &target.Header, edit, middle, total, dst); err != nil {
+		return err
+	}
+	if err := store.RestoreDirty(rightPage, tag); err != nil {
 		return err
 	}
 	if err := keepLeftEdit(codec, store, target.PageNumber, &target.Header, edit, middle); err != nil {
@@ -242,49 +255,54 @@ func splitLeafAt(codec Codec, store Store, root *uint32, target *LeafTarget, edi
 }
 
 // FirstKey reads the first key of one page (Rust first_key).
-func FirstKey(codec Codec, store Store, pageNumber uint32, level uint16) (Key, error) {
+func FirstKey[T any](codec Codec[T], store Store, pageNumber uint32, level uint16) (Key, error) {
 	targetTxn := store.TargetTxn()
-	var key Key
-	err := store.Inspect(pageNumber, func(page []byte) error {
-		header, err := parse(codec, page, targetTxn, &level)
-		if err != nil {
-			return err
-		}
-		k, err := keyAt(codec, page, header, 0)
-		key = k
-		return err
-	})
-	return key, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return Key{}, err
+	}
+	header, err := parse(codec, page, targetTxn, &level)
+	if err != nil {
+		return Key{}, err
+	}
+	return keyAt(codec, page, &header, 0)
 }
 
-func keepLeftEdit(codec Codec, store Store, pageNumber uint32, header *Header, edit Edit, middle int) error {
+func keepLeftEdit[T any](codec Codec[T], store Store, pageNumber uint32, header *Header, edit Edit, middle int) error {
 	txn := store.TargetTxn()
-	return store.Update(pageNumber, func(page []byte) error {
-		editInLeft := edit.index < middle
-		keep := middle
-		if editInLeft && !edit.replace {
-			keep--
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	editInLeft := edit.index < middle
+	keep := middle
+	if editInLeft && !edit.replace {
+		keep--
+	}
+	if keep == 0 {
+		pageType := codec.LeafType()
+		if header.Level != 0 {
+			pageType = codec.BranchType()
 		}
-		if keep == 0 {
-			pageType := codec.LeafType()
-			if header.Level != 0 {
-				pageType = codec.BranchType()
-			}
-			b := format.NewSlottedBuilder(page, pageType, txn, header.Level, codec.Aux())
-			if err := b.Push(page, edit.cell); err != nil {
-				return corrupt("B+tree leaf build failed: " + err.Error())
-			}
-			return b.Finish(page)
+		b := format.NewSlottedBuilder(page, pageType, txn, header.Level, codec.Aux())
+		if err := b.Push(page, edit.cell); err != nil {
+			return corrupt("B+tree leaf build failed: " + err.Error())
 		}
-		left, err := truncate(codec, page, header, keep)
-		if err != nil {
+		if err := b.Finish(page); err != nil {
 			return err
 		}
-		if editInLeft {
-			return applyEdit(codec, page, left, edit)
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	left, err := truncate(codec, page, header, keep)
+	if err != nil {
+		return err
+	}
+	if editInLeft {
+		if err := applyEdit(codec, page, &left, edit); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }
 
 type branchSplit struct {
@@ -294,11 +312,11 @@ type branchSplit struct {
 	level      uint16
 }
 
-func propagateSplit(codec Codec, store Store, root *uint32, path *Path, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, childLevel uint16) error {
+func propagateSplit[T any](codec Codec[T], store Store, root *uint32, path *Path, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, childLevel uint16) error {
 	return propagateSplitFrom(codec, store, root, path, path.Depth(), leftPage, leftFirst, rightPage, rightFirst, childLevel)
 }
 
-func propagateSplitFrom(codec Codec, store Store, root *uint32, path *Path, depth int, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, childLevel uint16) error {
+func propagateSplitFrom[T any](codec Codec[T], store Store, root *uint32, path *Path, depth int, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, childLevel uint16) error {
 	for {
 		if depth == 0 {
 			pageNumber, err := newRoot(codec, store, leftPage, leftFirst, rightPage, rightFirst, childLevel+1)
@@ -310,11 +328,11 @@ func propagateSplitFrom(codec Codec, store Store, root *uint32, path *Path, dept
 		}
 		depth--
 		frame := path.Frame(depth)
-		split, err := insertBranch(codec, store, frame, leftFirst, rightPage, rightFirst)
+		split, ok, err := insertBranch(codec, store, frame, leftFirst, rightPage, rightFirst)
 		if err != nil {
 			return err
 		}
-		if split == nil {
+		if !ok {
 			if frame.Index == 0 {
 				if err := propagateFirstFrom(codec, store, root, path, depth, leftFirst); err != nil {
 					return err
@@ -330,63 +348,60 @@ func propagateSplitFrom(codec Codec, store Store, root *uint32, path *Path, dept
 	}
 }
 
-func insertBranch(codec Codec, store Store, frame Frame, leftFirst Key, rightPage uint32, rightFirst Key) (*branchSplit, error) {
+func insertBranch[T any](codec Codec[T], store Store, frame Frame, leftFirst Key, rightPage uint32, rightFirst Key) (branchSplit, bool, error) {
 	targetTxn := store.TargetTxn()
-	var header *Header
-	var leftChild uint32
-	if err := store.Inspect(frame.PageNumber, func(page []byte) error {
-		h, err := parse(codec, page, targetTxn, nil)
-		if err != nil {
-			return err
-		}
-		header = h
-		child, err := branchChild(codec, page, h, frame.Index, store.PageLimit())
-		if err != nil {
-			return err
-		}
-		leftChild = child
-		return nil
-	}); err != nil {
-		return nil, err
+	page, err := store.Inspect(frame.PageNumber)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	header, err := parse(codec, page, targetTxn, nil)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	leftChild, err := branchChild(codec, page, &header, frame.Index, store.PageLimit())
+	if err != nil {
+		return branchSplit{}, false, err
 	}
 	left, err := newBranchCell(codec, leftFirst, leftChild)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	right, err := newBranchCell(codec, rightFirst, rightPage)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	edit := Replacement{index: frame.Index, cells: [][]byte{left.Bytes(), right.Bytes()}}
-	split, err := applyReplacement(codec, store, frame.PageNumber, header, edit)
+	split, ok, err := applyReplacement(codec, store, frame.PageNumber, &header, edit)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	work.FirstFenceUpdate(1)
-	return split, nil
+	return split, ok, nil
 }
 
-func applyReplacement(codec Codec, store Store, pageNumber uint32, header *Header, edit Replacement) (*branchSplit, error) {
-	fits := false
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		var err error
-		fits, err = replacementFits(codec, page, header, edit)
-		return err
-	}); err != nil {
-		return nil, err
+func applyReplacement[T any](codec Codec[T], store Store, pageNumber uint32, header *Header, edit Replacement) (branchSplit, bool, error) {
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	fits, err := replacementFits(codec, page, header, edit)
+	if err != nil {
+		return branchSplit{}, false, err
 	}
 	if fits {
-		if err := store.Update(pageNumber, func(page []byte) error {
-			return applyCells(codec, page, header, edit.index, edit.cells)
-		}); err != nil {
-			return nil, err
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return branchSplit{}, false, err
 		}
-		return nil, nil
+		if err := applyCells(codec, page, header, edit.index, edit.cells); err != nil {
+			return branchSplit{}, false, err
+		}
+		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
 	}
 	return splitReplacement(codec, store, pageNumber, header, edit)
 }
 
-func applyCells(codec Codec, page []byte, header *Header, index int, cells [][]byte) error {
+func applyCells[T any](codec Codec[T], page []byte, header *Header, index int, cells [][]byte) error {
 	oldCell, err := codecCell(codec, page, header, index)
 	if err != nil {
 		return err
@@ -403,7 +418,7 @@ func applyCells(codec Codec, page []byte, header *Header, index int, cells [][]b
 		if err != nil {
 			return err
 		}
-		ok, err := format.SlottedInsert(page, current, index+offset+1, cell)
+		ok, err := format.SlottedInsert(page, &current, index+offset+1, cell)
 		if err != nil {
 			return err
 		}
@@ -414,63 +429,79 @@ func applyCells(codec Codec, page []byte, header *Header, index int, cells [][]b
 	return nil
 }
 
-func splitReplacement(codec Codec, store Store, pageNumber uint32, header *Header, edit Replacement) (*branchSplit, error) {
+func splitReplacement[T any](codec Codec[T], store Store, pageNumber uint32, header *Header, edit Replacement) (branchSplit, bool, error) {
 	total := edit.total(int(header.ItemCount))
-	var middle int
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		var err error
-		middle, err = replacementSplitIndex(codec, page, header, edit)
-		return err
-	}); err != nil {
-		return nil, err
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	middle, err := replacementSplitIndex(codec, page, header, edit)
+	if err != nil {
+		return branchSplit{}, false, err
 	}
 	rightPage, err := store.Allocate()
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
-	if err := store.CopyPage(pageNumber, rightPage, func(source, output []byte) error {
-		return buildReplacement(codec, source, header, edit, middle, total, output)
-	}); err != nil {
-		return nil, err
+	src, dst, tag, err := store.CopyPage(pageNumber, rightPage)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := buildReplacement(codec, src, header, edit, middle, total, dst); err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := store.RestoreDirty(rightPage, tag); err != nil {
+		return branchSplit{}, false, err
 	}
 	if err := keepLeftReplacement(codec, store, pageNumber, header, edit, middle); err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	work.PageSplit(1)
 	rightFirst, err := FirstKey(codec, store, rightPage, header.Level)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	leftFirst, err := FirstKey(codec, store, pageNumber, header.Level)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
-	return &branchSplit{rightPage: rightPage, rightFirst: rightFirst, leftFirst: leftFirst, level: header.Level}, nil
+	return branchSplit{rightPage: rightPage, rightFirst: rightFirst, leftFirst: leftFirst, level: header.Level}, true, nil
 }
 
-func keepLeftReplacement(codec Codec, store Store, pageNumber uint32, header *Header, edit Replacement, middle int) error {
-	return store.Update(pageNumber, func(page []byte) error {
-		if middle <= edit.index {
-			_, err := truncate(codec, page, header, middle)
-			return err
-		}
-		if middle < edit.index+len(edit.cells) {
-			left, err := truncate(codec, page, header, edit.index+1)
-			if err != nil {
-				return err
-			}
-			return applyCells(codec, page, left, edit.index, edit.cells[:middle-edit.index])
-		}
-		keep := middle - (len(edit.cells) - 1)
-		left, err := truncate(codec, page, header, keep)
+func keepLeftReplacement[T any](codec Codec[T], store Store, pageNumber uint32, header *Header, edit Replacement, middle int) error {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	if middle <= edit.index {
+		_, err := truncate(codec, page, header, middle)
 		if err != nil {
 			return err
 		}
-		return applyCells(codec, page, left, edit.index, edit.cells)
-	})
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	if middle < edit.index+len(edit.cells) {
+		left, err := truncate(codec, page, header, edit.index+1)
+		if err != nil {
+			return err
+		}
+		if err := applyCells(codec, page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	keep := middle - (len(edit.cells) - 1)
+	left, err := truncate(codec, page, header, keep)
+	if err != nil {
+		return err
+	}
+	if err := applyCells(codec, page, &left, edit.index, edit.cells); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }
 
-func newRoot(codec Codec, store Store, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, level uint16) (uint32, error) {
+func newRoot[T any](codec Codec[T], store Store, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, level uint16) (uint32, error) {
 	if level > format.MaxTreeLevel {
 		return 0, invalid("B+tree height limit reached")
 	}
@@ -487,36 +518,38 @@ func newRoot(codec Codec, store Store, leftPage uint32, leftFirst Key, rightPage
 		return 0, err
 	}
 	txn := store.TargetTxn()
-	if err := store.Update(pageNumber, func(page []byte) error {
-		b := format.NewSlottedBuilder(page, codec.BranchType(), txn, level, codec.Aux())
-		if err := b.Push(page, left.Bytes()); err != nil {
-			return corrupt("B+tree branch build failed: " + err.Error())
-		}
-		if err := b.Push(page, right.Bytes()); err != nil {
-			return corrupt("B+tree branch build failed: " + err.Error())
-		}
-		return b.Finish(page)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
 		return 0, err
 	}
-	return pageNumber, nil
+	b := format.NewSlottedBuilder(page, codec.BranchType(), txn, level, codec.Aux())
+	if err := b.Push(page, left.Bytes()); err != nil {
+		return 0, corrupt("B+tree branch build failed: " + err.Error())
+	}
+	if err := b.Push(page, right.Bytes()); err != nil {
+		return 0, corrupt("B+tree branch build failed: " + err.Error())
+	}
+	if err := b.Finish(page); err != nil {
+		return 0, err
+	}
+	return pageNumber, store.RestoreDirty(pageNumber, tag)
 }
 
 // PropagateFirst updates the ancestor first-key fences after an index-0
 // leaf change (Rust propagate_first).
-func PropagateFirst(codec Codec, store Store, root *uint32, path *Path, key Key) error {
+func PropagateFirst[T any](codec Codec[T], store Store, root *uint32, path *Path, key Key) error {
 	return propagateFirstFrom(codec, store, root, path, path.Depth(), key)
 }
 
-func propagateFirstFrom(codec Codec, store Store, root *uint32, path *Path, depth int, key Key) error {
+func propagateFirstFrom[T any](codec Codec[T], store Store, root *uint32, path *Path, depth int, key Key) error {
 	for depth > 0 {
 		depth--
 		frame := path.Frame(depth)
-		split, err := replaceFirstBranch(codec, store, frame, key)
+		split, ok, err := replaceFirstBranch(codec, store, frame, key)
 		if err != nil {
 			return err
 		}
-		if split != nil {
+		if ok {
 			return propagateSplitFrom(codec, store, root, path, depth, frame.PageNumber, split.leftFirst, split.rightPage, split.rightFirst, split.level)
 		}
 		if frame.Index != 0 {
@@ -526,42 +559,37 @@ func propagateFirstFrom(codec Codec, store Store, root *uint32, path *Path, dept
 	return nil
 }
 
-func replaceFirstBranch(codec Codec, store Store, frame Frame, key Key) (*branchSplit, error) {
+func replaceFirstBranch[T any](codec Codec[T], store Store, frame Frame, key Key) (branchSplit, bool, error) {
 	targetTxn := store.TargetTxn()
-	var header *Header
-	var child uint32
-	if err := store.Inspect(frame.PageNumber, func(page []byte) error {
-		h, err := parse(codec, page, targetTxn, nil)
-		if err != nil {
-			return err
-		}
-		header = h
-		c, err := branchChild(codec, page, h, frame.Index, store.PageLimit())
-		if err != nil {
-			return err
-		}
-		child = c
-		return nil
-	}); err != nil {
-		return nil, err
+	page, err := store.Inspect(frame.PageNumber)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	header, err := parse(codec, page, targetTxn, nil)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	child, err := branchChild(codec, page, &header, frame.Index, store.PageLimit())
+	if err != nil {
+		return branchSplit{}, false, err
 	}
 	replacement, err := newBranchCell(codec, key, child)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	edit := Replacement{index: frame.Index, cells: [][]byte{replacement.Bytes()}}
-	split, err := applyReplacement(codec, store, frame.PageNumber, header, edit)
+	split, ok, err := applyReplacement(codec, store, frame.PageNumber, &header, edit)
 	if err != nil {
-		return nil, err
+		return branchSplit{}, false, err
 	}
 	work.FirstFenceUpdate(1)
-	return split, nil
+	return split, ok, nil
 }
 
 // SplitLeafAtEdge splits the target private leaf, keeping the side that
 // holds the new edge cell (Rust split_leaf_at_edge). The edit is an
 // insertion at the first or last position of the leaf.
-func SplitLeafAtEdge(codec Codec, store Store, root *uint32, target *LeafTarget, leafCell []byte, edge Edge) error {
+func SplitLeafAtEdge[T any](codec Codec[T], store Store, root *uint32, target *LeafTarget, leafCell []byte, edge Edge) error {
 	edit := Edit{index: 0, replace: false, cell: leafCell}
 	total := int(target.Header.ItemCount) + 1
 	middle := 1
@@ -574,16 +602,15 @@ func SplitLeafAtEdge(codec Codec, store Store, root *uint32, target *LeafTarget,
 
 // locatePrivatePosition re-descends the private tree and returns the leaf
 // position of key without retiring any page (Rust locate_private_position).
-func locatePrivatePosition(codec Codec, store Store, root *uint32, key Key) (*PrivatePosition, error) {
-	retired := NewRetiredPages()
-	leaf, err := PrivatePath(codec, store, root, key, retired)
+func locatePrivatePosition[T any](codec Codec[T], store Store, root *uint32, key Key) (PrivatePosition, error) {
+	leaf, retired, err := PrivatePath(codec, store, root, key, RetiredPages{})
 	if err != nil {
-		return nil, err
+		return PrivatePosition{}, err
 	}
 	if retired.Len() != 0 {
-		return nil, corrupt("private B+tree position retired a page")
+		return PrivatePosition{}, corrupt("private B+tree position retired a page")
 	}
-	return &PrivatePosition{Path: leaf.Path, PageNumber: leaf.PageNumber}, nil
+	return PrivatePosition{Path: leaf.Path, PageNumber: leaf.PageNumber}, nil
 }
 
 // LeafU64Mutation is the outcome of one leaf u64 field decision (Rust
@@ -597,9 +624,9 @@ type LeafU64Mutation struct {
 
 // existingLeaf is the selector output of MutateLeafU64: the record
 // position inside its private leaf plus the decoded value.
-type existingLeaf struct {
+type existingLeaf[T any] struct {
 	position existingLeafPosition
-	value    any
+	value    T
 }
 
 // existingLeafPosition locates one leaf cell inside its page: the logical
@@ -615,52 +642,35 @@ type existingLeafPosition struct {
 // (Rust fixed_tree::mutate_leaf_u64). The key must exist; the returned
 // value is the decoded leaf (Rust C::Leaf). The field write happens on
 // the private leaf page at the exact cell offset, so variable-length
-// records are handled by construction.
-func MutateLeafU64(codec Codec, store Store, root *uint32, key Key, fieldOffset int, retired *RetiredPages, decide func(leaf any) (LeafU64Mutation, error)) (any, error) {
-	leaf, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header *Header, path *Path) (any, error) {
-		index, exists, err := lowerBound(codec, page, header, key, true)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, corrupt("B+tree update key is missing")
-		}
-		cell, err := codecCell(codec, page, header, index)
-		if err != nil {
-			return nil, err
-		}
-		value, err := codec.ReadLeaf(cell)
-		if err != nil {
-			return nil, err
-		}
-		offset, ok := format.SlottedCellOffset(page, header, index)
-		if !ok {
-			return nil, corrupt("B+tree update cell offset is invalid")
-		}
-		return existingLeaf{
-			position: existingLeafPosition{index: index, offset: offset, cellLen: len(cell)},
-			value:    value,
-		}, nil
+// records are handled by construction. The descent is closure-free: the
+// leaf selection runs after privateDescent on the descent's page view, so
+// no address-taken stack value crosses an indirect call.
+func MutateLeafU64[T any](codec Codec[T], store Store, root *uint32, key Key, fieldOffset int, retired RetiredPages, decide func(T) (LeafU64Mutation, error)) (RetiredPages, T, error) {
+	var zero T
+	leaf, retired, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header Header, _ Path) (existingLeaf[T], error) {
+		return existingLeafAt(codec, page, &header, key)
 	})
 	if err != nil {
-		return nil, err
+		return RetiredPages{}, zero, err
 	}
-	found := leaf.Selection.(existingLeaf)
+	found := leaf.Selection
 	mutation, err := decide(found.value)
 	if err != nil {
-		return nil, err
+		return RetiredPages{}, zero, err
 	}
 	if mutation.DoReplace {
 		if fieldOffset < 0 || fieldOffset+8 > found.position.cellLen {
-			return nil, corrupt("B+tree update field is outside its leaf")
+			return RetiredPages{}, zero, corrupt("B+tree update field is outside its leaf")
 		}
-		if err := store.Update(leaf.PageNumber, func(page []byte) error {
-			format.PutU64(page[found.position.offset+fieldOffset:], mutation.Replace)
-			return nil
-		}); err != nil {
-			return nil, err
+		page, tag, err := store.Update(leaf.PageNumber)
+		if err != nil {
+			return RetiredPages{}, zero, err
 		}
-		return found.value, nil
+		format.PutU64(page[found.position.offset+fieldOffset:], mutation.Replace)
+		if err := store.RestoreDirty(leaf.PageNumber, tag); err != nil {
+			return RetiredPages{}, zero, err
+		}
+		return retired, found.value, nil
 	}
 	if err := DeleteTarget(codec, store, root, &Target{
 		Path:       leaf.Path,
@@ -668,7 +678,36 @@ func MutateLeafU64(codec Codec, store Store, root *uint32, key Key, fieldOffset 
 		Header:     leaf.Header,
 		Index:      found.position.index,
 	}); err != nil {
-		return nil, err
+		return RetiredPages{}, zero, err
 	}
-	return found.value, nil
+	return retired, found.value, nil
+}
+
+// existingLeafAt locates one existing leaf record inside a leaf page view
+// and decodes it: the logical index, the physical cell offset, the cell
+// length, and the decoded value (Rust mutate_leaf_u64's leaf selection).
+func existingLeafAt[T any](codec Codec[T], page []byte, header *Header, key Key) (existingLeaf[T], error) {
+	index, exists, err := lowerBound(codec, page, header, key, true)
+	if err != nil {
+		return existingLeaf[T]{}, err
+	}
+	if !exists {
+		return existingLeaf[T]{}, corrupt("B+tree update key is missing")
+	}
+	cell, err := codecCell(codec, page, header, index)
+	if err != nil {
+		return existingLeaf[T]{}, err
+	}
+	value, err := codec.ReadLeaf(cell)
+	if err != nil {
+		return existingLeaf[T]{}, err
+	}
+	offset, ok := format.SlottedCellOffset(page, header, index)
+	if !ok {
+		return existingLeaf[T]{}, corrupt("B+tree update cell offset is invalid")
+	}
+	return existingLeaf[T]{
+		position: existingLeafPosition{index: index, offset: offset, cellLen: len(cell)},
+		value:    value,
+	}, nil
 }

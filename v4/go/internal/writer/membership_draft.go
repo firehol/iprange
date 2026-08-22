@@ -34,11 +34,13 @@ func handleFromInterned(interned membershipInterned) membershipHandle {
 // (Rust DraftStore::membership_state).
 func (s *DraftStore) membershipState() membershipState {
 	return membershipState{
-		idRoot:     s.draft.meta.MembershipIDRoot,
-		hashRoot:   s.draft.meta.MembershipHashRoot,
-		usedRoot:   s.draft.meta.MembershipUsedRoot,
-		entryCount: s.draft.meta.MembershipEntryCount,
-		idLimit:    s.draft.meta.MembershipIDLimit,
+		idRoot:        s.draft.meta.MembershipIDRoot,
+		hashRoot:      s.draft.meta.MembershipHashRoot,
+		usedRoot:      s.draft.meta.MembershipUsedRoot,
+		entryCount:    s.draft.meta.MembershipEntryCount,
+		idLimit:       s.draft.meta.MembershipIDLimit,
+		recordScratch: s.recordScratch[:],
+		hashScratch:   s.hashScratch[:],
 	}
 }
 
@@ -52,11 +54,14 @@ func (s *DraftStore) storeMembershipState(state membershipState) {
 	s.draft.meta.MembershipIDLimit = state.idLimit
 }
 
-// internMembership interns one caller-owned bitmap into the draft
+// draftInternMembership interns one caller-owned bitmap into the draft
 // dictionary, accounting a zero refcount delta for the new record (Rust
 // DraftStore::intern_membership + track_new_membership). New records of
-// every value kind get the owner-refcount delta exactly like Rust.
-func (s *DraftStore) internMembership(words membershipWords) (membershipInterned, error) {
+// every value kind get the owner-refcount delta exactly like Rust. The
+// bitmap source stays concrete: the generic parameter instantiates the
+// whole intern path per source type, so the word reads never cross an
+// interface call (Rust generic Words on the hot path).
+func draftInternMembership[W membershipWords](s *DraftStore, words W) (membershipInterned, error) {
 	state := s.membershipState()
 	interned, err := internMembership(s, &state, words)
 	if err != nil {
@@ -155,11 +160,11 @@ func (s *DraftStore) finishMembershipDeltasWithCheckpoint(checkpoint func() erro
 		if err := checkpoint(); err != nil {
 			return err
 		}
-		delta, err := drain.next(s)
+		delta, ok, err := drain.next(s)
 		if err != nil {
 			return err
 		}
-		if delta == nil {
+		if !ok {
 			break
 		}
 		if err := applyMembershipDelta(s, &state, delta.id, delta.change); err != nil {

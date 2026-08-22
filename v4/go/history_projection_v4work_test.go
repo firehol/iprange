@@ -82,7 +82,7 @@ func TestHistoryProjectionUnusedPrefixesNotInterned(t *testing.T) {
 
 	windows := make([]HistoryWindow, 64)
 	for index := range windows {
-		windows[index] = HistoryWindow{FeedName: []byte("history-" + string(rune('0'+index/10)) + string(rune('0'+index%10))), Cutoff: uint32(index)}
+		windows[index] = HistoryWindow{FeedName: "history-" + string(rune('0'+index/10)) + string(rune('0'+index%10)), Cutoff: uint32(index)}
 	}
 	work.Reset()
 	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows, nil)

@@ -224,14 +224,16 @@ func metadataWriteChain(s tree.Store, compressed []byte) (uint32, error) {
 			next = pages[i+1]
 		}
 		chunk := compressed[start:end]
-		if err := s.Update(pages[i], func(page []byte) error {
-			format.InitializePageHeader(page, format.PageTypeMetadataChunk, targetTxn, 1, 0, uint16(48+len(chunk)), format.PageSize, 0)
-			format.PutU32(page[32:36], next)
-			format.PutU16(page[36:38], uint16(len(chunk)))
-			format.PutU64(page[40:48], uint64(start))
-			copy(page[48:], chunk)
-			return nil
-		}); err != nil {
+		page, tag, err := s.Update(pages[i])
+		if err != nil {
+			return 0, err
+		}
+		format.InitializePageHeader(page, format.PageTypeMetadataChunk, targetTxn, 1, 0, uint16(48+len(chunk)), format.PageSize, 0)
+		format.PutU32(page[32:36], next)
+		format.PutU16(page[36:38], uint16(len(chunk)))
+		format.PutU64(page[40:48], uint64(start))
+		copy(page[48:], chunk)
+		if err := s.RestoreDirty(pages[i], tag); err != nil {
 			return 0, err
 		}
 	}
@@ -256,43 +258,39 @@ func metadataCollectPages(s tree.Store, meta format.Meta) ([]uint32, error) {
 			return nil, corrupt("metadata chain exceeds its fixed bound")
 		}
 		pages = append(pages, pgno)
-		var next uint32
-		var length uint16
-		err := s.Inspect(pgno, func(page []byte) error {
-			h, err := format.DecodePageHeader(page, meta.TxnID)
-			if err != nil {
-				return corrupt("metadata chunk page")
-			}
-			if h.PageType != format.PageTypeMetadataChunk || h.Level != 0 || h.Aux != 0 || h.ItemCount != 1 {
-				return corrupt("metadata chunk page")
-			}
-			chunk, err := format.DecodeMetadataChunk(page)
-			if err != nil {
-				return corrupt("metadata chunk page")
-			}
-			if h.Lower != 48+chunk.ChunkLen || h.Upper != format.PageSize {
-				return corrupt("metadata chunk geometry")
-			}
-			if chunk.LogicalOffset != offset {
-				return corrupt(fmt.Sprintf("metadata offset %d expected %d", chunk.LogicalOffset, offset))
-			}
-			if uint64(chunk.ChunkLen) > remaining {
-				return corrupt("metadata chain longer than declared")
-			}
-			if chunk.ChunkLen != format.MaxMetadataChunkLen && uint64(chunk.ChunkLen) != remaining {
-				return corrupt("nonfinal metadata chunk shorter than full")
-			}
-			next = chunk.Next
-			length = chunk.ChunkLen
-			for _, b := range page[48+int(chunk.ChunkLen):] {
-				if b != 0 {
-					return corrupt("metadata chunk tail nonzero")
-				}
-			}
-			return nil
-		})
+		page, err := s.Inspect(pgno)
 		if err != nil {
 			return nil, err
+		}
+		h, err := format.DecodePageHeader(page, meta.TxnID)
+		if err != nil {
+			return nil, corrupt("metadata chunk page")
+		}
+		if h.PageType != format.PageTypeMetadataChunk || h.Level != 0 || h.Aux != 0 || h.ItemCount != 1 {
+			return nil, corrupt("metadata chunk page")
+		}
+		chunk, err := format.DecodeMetadataChunk(page)
+		if err != nil {
+			return nil, corrupt("metadata chunk page")
+		}
+		if h.Lower != 48+chunk.ChunkLen || h.Upper != format.PageSize {
+			return nil, corrupt("metadata chunk geometry")
+		}
+		if chunk.LogicalOffset != offset {
+			return nil, corrupt(fmt.Sprintf("metadata offset %d expected %d", chunk.LogicalOffset, offset))
+		}
+		if uint64(chunk.ChunkLen) > remaining {
+			return nil, corrupt("metadata chain longer than declared")
+		}
+		if chunk.ChunkLen != format.MaxMetadataChunkLen && uint64(chunk.ChunkLen) != remaining {
+			return nil, corrupt("nonfinal metadata chunk shorter than full")
+		}
+		next := chunk.Next
+		length := chunk.ChunkLen
+		for _, b := range page[48+int(chunk.ChunkLen):] {
+			if b != 0 {
+				return nil, corrupt("metadata chunk tail nonzero")
+			}
 		}
 		offset += uint64(length)
 		remaining -= uint64(length)

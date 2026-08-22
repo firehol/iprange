@@ -27,7 +27,7 @@ type freeFrame struct {
 
 type freeCursor struct {
 	pageNumber uint32
-	header     *Header
+	header     Header
 }
 
 // SetFree marks one page free in the bitmap, growing the tree as needed
@@ -79,12 +79,12 @@ func descendForInsert(store BitmapStore, cursor *freeCursor, bit uint32, retired
 		return nil, false, err
 	}
 	limit := store.PageLimit()
-	var child uint32
-	if err := store.Inspect(cursor.pageNumber, func(page []byte) error {
-		c, err := CheckedBranchChild(page, cursor.header, index, limit)
-		child = c
-		return err
-	}); err != nil {
+	page, err := store.Inspect(cursor.pageNumber)
+	if err != nil {
+		return nil, false, err
+	}
+	child, err := CheckedBranchChild(page, cursor.header, index, limit)
+	if err != nil {
 		return nil, false, err
 	}
 	if child == 0 {
@@ -109,34 +109,40 @@ func descendForInsert(store BitmapStore, cursor *freeCursor, bit uint32, retired
 	return next, true, nil
 }
 
-func replaceChild(store BitmapStore, pageNumber uint32, header *Header, index int, child uint32) error {
-	return store.Update(pageNumber, func(page []byte) error {
-		_, err := ReplaceBranchChild(page, header, index, child, child != 0)
+func replaceChild(store BitmapStore, pageNumber uint32, header Header, index int, child uint32) error {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
 		return err
-	})
+	}
+	if _, err := ReplaceBranchChild(page, header, index, child, child != 0); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }
 
 func markLeafFree(store BitmapStore, cursor *freeCursor, bit uint32) error {
 	wordIndex := LeafWordIndex(bit)
 	mask := uint64(1) << (uint64(bit) % 64)
-	return store.Update(cursor.pageNumber, func(page []byte) error {
-		word, err := LeafWord(page, wordIndex)
-		if err != nil {
-			return err
-		}
-		if word&mask != 0 {
-			return corrupt("page is already free")
-		}
-		if err := SetLeafWord(page, wordIndex, word|mask); err != nil {
-			return err
-		}
-		count := cursor.header.ItemCount
-		if word == 0 {
-			count++
-		}
-		format.PutU16(page[format.HeaderCount:], uint16(count))
-		return nil
-	})
+	page, tag, err := store.Update(cursor.pageNumber)
+	if err != nil {
+		return err
+	}
+	word, err := LeafWord(page, wordIndex)
+	if err != nil {
+		return err
+	}
+	if word&mask != 0 {
+		return corrupt("page is already free")
+	}
+	if err := SetLeafWord(page, wordIndex, word|mask); err != nil {
+		return err
+	}
+	count := cursor.header.ItemCount
+	if word == 0 {
+		count++
+	}
+	format.PutU16(page[format.HeaderCount:], uint16(count))
+	return store.RestoreDirty(cursor.pageNumber, tag)
 }
 
 // TakeLowest takes the lowest allocatable free page, mirroring Rust
@@ -187,19 +193,16 @@ func descendLowest(store BitmapStore, cursor *freeCursor, retired *tree.RetiredP
 	depth := 0
 	base := uint64(0)
 	for cursor.header.Level > 0 {
-		var index int
-		if err := store.Inspect(cursor.pageNumber, func(page []byte) error {
-			i, found, err := FirstSummary(page, 0)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return corrupt("free summary is empty")
-			}
-			index = i
-			return nil
-		}); err != nil {
+		page, err := store.Inspect(cursor.pageNumber)
+		if err != nil {
 			return nil, 0, 0, err
+		}
+		index, found, err := FirstSummary(page, 0)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if !found {
+			return nil, 0, 0, corrupt("free summary is empty")
 		}
 		path[depth] = freeFrame{pageNumber: cursor.pageNumber, childIndex: index, level: cursor.header.Level}
 		offset, err := addChildBase(base, cursor.header.Level, index)
@@ -208,12 +211,12 @@ func descendLowest(store BitmapStore, cursor *freeCursor, retired *tree.RetiredP
 		}
 		base = offset
 		limit := store.PageLimit()
-		var child uint32
-		if err := store.Inspect(cursor.pageNumber, func(page []byte) error {
-			c, err := CheckedBranchChild(page, cursor.header, index, limit)
-			child = c
-			return err
-		}); err != nil {
+		branchPage, err := store.Inspect(cursor.pageNumber)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		child, err := CheckedBranchChild(branchPage, cursor.header, index, limit)
+		if err != nil {
 			return nil, 0, 0, err
 		}
 		if child == 0 {
@@ -243,21 +246,16 @@ func addChildBase(base uint64, level uint16, index int) (uint64, error) {
 }
 
 func selectFreeLeaf(store BitmapStore, leaf *freeCursor, path []freeFrame, base uint64, limit uint64) (uint32, int, uint64, uint64, error) {
-	var wordIndex int
-	var word uint64
-	if err := store.Inspect(leaf.pageNumber, func(page []byte) error {
-		index, value, err := FirstLeafWord(page)
-		if err != nil {
-			return err
-		}
-		if value == 0 {
-			return corrupt("free leaf is empty")
-		}
-		wordIndex = index
-		word = value
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(leaf.pageNumber)
+	if err != nil {
 		return 0, 0, 0, 0, err
+	}
+	wordIndex, word, err := FirstLeafWord(page)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if word == 0 {
+		return 0, 0, 0, 0, corrupt("free leaf is empty")
 	}
 	bitInWord := uint64(trailingZeros(word))
 	selected := base + uint64(wordIndex)*64 + bitInWord
@@ -293,23 +291,23 @@ func validateSelected(store BitmapStore, leafPage uint32, path []freeFrame, sele
 // take_from_nonempty + clear_leaf_bit).
 func clearLeafBit(store BitmapStore, leaf *freeCursor, wordIndex int, word uint64, bitInWord uint64) (bool, error) {
 	next := word &^ (uint64(1) << bitInWord)
-	nonempty := false
-	err := store.Update(leaf.pageNumber, func(page []byte) error {
-		if err := SetLeafWord(page, wordIndex, next); err != nil {
-			return err
-		}
-		count := leaf.header.ItemCount
-		if next == 0 {
-			count--
-		}
-		if count < 0 {
-			return corrupt("free bitmap leaf count underflows")
-		}
-		format.PutU16(page[format.HeaderCount:], uint16(count))
-		nonempty = count != 0
-		return nil
-	})
+	page, tag, err := store.Update(leaf.pageNumber)
 	if err != nil {
+		return false, err
+	}
+	if err := SetLeafWord(page, wordIndex, next); err != nil {
+		return false, err
+	}
+	count := leaf.header.ItemCount
+	if next == 0 {
+		count--
+	}
+	if count < 0 {
+		return false, corrupt("free bitmap leaf count underflows")
+	}
+	format.PutU16(page[format.HeaderCount:], uint16(count))
+	nonempty := count != 0
+	if err := store.RestoreDirty(leaf.pageNumber, tag); err != nil {
 		return false, err
 	}
 	if !nonempty {
@@ -337,20 +335,20 @@ func pruneEmptyPath(store BitmapStore, root *uint32, path []freeFrame, depth int
 
 func pruneParent(store BitmapStore, frame freeFrame) (bool, error) {
 	targetTxn := store.TargetTxn()
-	nonempty := false
-	err := store.Update(frame.pageNumber, func(page []byte) error {
-		header, err := InspectHeader(page, targetTxn, KindFree, &frame.level)
-		if err != nil {
-			return err
-		}
-		count, err := ReplaceBranchChild(page, header, frame.childIndex, 0, false)
-		if err != nil {
-			return err
-		}
-		nonempty = count != 0
-		return nil
-	})
+	page, tag, err := store.Update(frame.pageNumber)
 	if err != nil {
+		return false, err
+	}
+	header, err := InspectHeader(page, targetTxn, KindFree, &frame.level)
+	if err != nil {
+		return false, err
+	}
+	count, err := ReplaceBranchChild(page, header, frame.childIndex, 0, false)
+	if err != nil {
+		return false, err
+	}
+	nonempty := count != 0
+	if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
 		return false, err
 	}
 	if nonempty {
@@ -390,7 +388,7 @@ func EnsureLevel(store BitmapStore, root *uint32, limit uint64) error {
 // validateBody verifies the reserved tail, the first set entry, and the
 // header count against the body of one committed free bitmap page (Rust
 // free_bitmap.rs validate_body).
-func validateBody(page []byte, header *Header) error {
+func validateBody(page []byte, header Header) error {
 	if header.Level == 0 {
 		if !ReservedZero(page, header.Level) {
 			return corrupt("free bitmap leaf is invalid")
@@ -429,28 +427,24 @@ func validateBody(page []byte, header *Header) error {
 
 func touchCursor(store BitmapStore, pageNumber uint32, expectedLevel uint16, retired *tree.RetiredPages) (*freeCursor, error) {
 	targetTxn := store.TargetTxn()
-	var header *Header
-	private := false
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		born := format.U64(page[format.HeaderBorn:])
-		h, err := InspectHeader(page, targetTxn, KindFree, &expectedLevel)
-		if err != nil {
-			return err
-		}
-		if born != targetTxn {
-			if !format.PageChecksumValid(page) {
-				return corrupt("free bitmap checksum is invalid")
-			}
-			if err := validateBody(page, h); err != nil {
-				return err
-			}
-		}
-		header = h
-		private = born == targetTxn
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
 		return nil, err
 	}
+	born := format.U64(page[format.HeaderBorn:])
+	header, err := InspectHeader(page, targetTxn, KindFree, &expectedLevel)
+	if err != nil {
+		return nil, err
+	}
+	if born != targetTxn {
+		if !format.PageChecksumValid(page) {
+			return nil, corrupt("free bitmap checksum is invalid")
+		}
+		if err := validateBody(page, header); err != nil {
+			return nil, err
+		}
+	}
+	private := born == targetTxn
 	if private {
 		return &freeCursor{pageNumber: pageNumber, header: header}, nil
 	}
@@ -469,18 +463,15 @@ func touchCursor(store BitmapStore, pageNumber uint32, expectedLevel uint16, ret
 
 func growRoot(store BitmapStore, root *uint32, required uint16) error {
 	targetTxn := store.TargetTxn()
-	var level uint16
-	if err := store.Inspect(*root, func(page []byte) error {
-		var err error
-		h, err := InspectHeader(page, targetTxn, KindFree, nil)
-		if err != nil {
-			return err
-		}
-		level = h.Level
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(*root)
+	if err != nil {
 		return err
 	}
+	header, err := InspectHeader(page, targetTxn, KindFree, nil)
+	if err != nil {
+		return err
+	}
+	level := header.Level
 	if level > required {
 		return corrupt("free bitmap root level is too high")
 	}
@@ -491,11 +482,15 @@ func growRoot(store BitmapStore, root *uint32, required uint16) error {
 		}
 		child := *root
 		nextLevel := level + 1
-		if err := store.Update(parent, func(page []byte) error {
-			Initialize(page, targetTxn, nextLevel, KindFree)
-			_, err := ReplaceBranchChild(page, &Header{Level: nextLevel}, 0, child, true)
+		page, tag, err := store.Update(parent)
+		if err != nil {
 			return err
-		}); err != nil {
+		}
+		Initialize(page, targetTxn, nextLevel, KindFree)
+		if _, err := ReplaceBranchChild(page, Header{Level: nextLevel}, 0, child, true); err != nil {
+			return err
+		}
+		if err := store.RestoreDirty(parent, tag); err != nil {
 			return err
 		}
 		*root = parent
@@ -512,14 +507,16 @@ func newSubtree(store BitmapStore, level uint16, bit uint32) (uint32, error) {
 		}
 		txn := store.TargetTxn()
 		wordIndex := LeafWordIndex(bit)
-		if err := store.Update(pageNumber, func(page []byte) error {
-			Initialize(page, txn, 0, KindFree)
-			if err := SetLeafWord(page, wordIndex, uint64(1)<<(uint64(bit)%64)); err != nil {
-				return err
-			}
-			format.PutU16(page[format.HeaderCount:], 1)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return 0, err
+		}
+		Initialize(page, txn, 0, KindFree)
+		if err := SetLeafWord(page, wordIndex, uint64(1)<<(uint64(bit)%64)); err != nil {
+			return 0, err
+		}
+		format.PutU16(page[format.HeaderCount:], 1)
+		if err := store.RestoreDirty(pageNumber, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -537,11 +534,15 @@ func newSubtree(store BitmapStore, level uint16, bit uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := store.Update(pageNumber, func(page []byte) error {
-		Initialize(page, txn, level, KindFree)
-		_, err := ReplaceBranchChild(page, &Header{Level: level}, index, child, true)
-		return err
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return 0, err
+	}
+	Initialize(page, txn, level, KindFree)
+	if _, err := ReplaceBranchChild(page, Header{Level: level}, index, child, true); err != nil {
+		return 0, err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil

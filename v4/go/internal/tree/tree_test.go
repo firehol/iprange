@@ -26,9 +26,9 @@ func (u32Codec) ReadKey(cell []byte, _ uint16) (Key, error) {
 	}
 	return Key{Hi: uint64(format.U32(cell))}, nil
 }
-func (u32Codec) ReadLeaf(cell []byte) (any, error) {
+func (u32Codec) ReadLeaf(cell []byte) (u32Leaf, error) {
 	if len(cell) != 8 {
-		return nil, corrupt("test leaf size is invalid")
+		return u32Leaf{}, corrupt("test leaf size is invalid")
 	}
 	return u32Leaf{key: format.U32(cell), value: format.U32(cell[4:])}, nil
 }
@@ -60,9 +60,9 @@ func (wideCodec) ReadKey(cell []byte, _ uint16) (Key, error) {
 		Lo: binary.BigEndian.Uint64(cell[8:]),
 	}, nil
 }
-func (wideCodec) ReadLeaf(cell []byte) (any, error) {
+func (wideCodec) ReadLeaf(cell []byte) (wideLeaf, error) {
 	if len(cell) != 64 {
-		return nil, corrupt("test leaf size is invalid")
+		return wideLeaf{}, corrupt("test leaf size is invalid")
 	}
 	return wideLeaf{key: binary.BigEndian.Uint32(cell), value: binary.LittleEndian.Uint64(cell[56:])}, nil
 }
@@ -120,22 +120,24 @@ func pageView(pages [][format.PageSize]byte, pageNumber uint32) ([]byte, error) 
 	return pages[pageNumber][:], nil
 }
 
-func (m *memoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+func (m *memoryStore) Inspect(pageNumber uint32) ([]byte, error) {
 	m.inspections++
-	page, err := pageView(m.pages, pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+	return pageView(m.pages, pageNumber)
 }
 
-func (m *memoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+func (m *memoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	m.updates++
 	page, err := pageView(m.pages, pageNumber)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	return fn(page)
+	return page, 0, nil
+}
+
+// RestoreDirty re-arms the dirty tag after a mutation; the memory store
+// has no checksum slot, so the tag is a no-op.
+func (m *memoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return nil
 }
 
 func (m *memoryStore) Allocate() (uint32, error) {
@@ -147,18 +149,18 @@ func (m *memoryStore) Allocate() (uint32, error) {
 	return pageNumber, nil
 }
 
-func (m *memoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+func (m *memoryStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	m.reads++
 	m.writes++
 	src, err := pageView(m.pages, source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := pageView(m.pages, destination)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
-	return fn(src, dst)
+	return src, dst, 0, nil
 }
 
 func (m *memoryStore) DiscardPrivate(pageNumber uint32) error {
@@ -178,39 +180,36 @@ func lookupU32(m *memoryStore, root uint32, key uint32) (uint32, bool, error) {
 		var value uint32
 		found := false
 		child := uint32(0)
-		isLeaf := false
-		if err := m.Inspect(pageNumber, func(page []byte) error {
-			header, err := parse(u32Codec{}, page, m.TargetTxn(), expectedLevel)
-			if err != nil {
-				return err
-			}
-			if header.Level == 0 {
-				index, exists, err := lowerBound(u32Codec{}, page, header, u32Key(key), true)
-				if err != nil {
-					return err
-				}
-				if exists {
-					cell, err := codecCell(u32Codec{}, page, header, index)
-					if err != nil {
-						return err
-					}
-					value = format.U32(cell[4:])
-					found = true
-				}
-				isLeaf = true
-				return nil
-			}
-			index, _, err := lowerBound(u32Codec{}, page, header, u32Key(key), false)
-			if err != nil {
-				return err
-			}
-			child, err = branchChild(u32Codec{}, page, header, index, m.PageLimit())
-			return err
-		}); err != nil {
+		page, err := m.Inspect(pageNumber)
+		if err != nil {
 			return 0, false, err
 		}
-		if isLeaf {
+		header, err := parse(u32Codec{}, page, m.TargetTxn(), expectedLevel)
+		if err != nil {
+			return 0, false, err
+		}
+		if header.Level == 0 {
+			index, exists, err := lowerBound(u32Codec{}, page, &header, u32Key(key), true)
+			if err != nil {
+				return 0, false, err
+			}
+			if exists {
+				cell, err := codecCell(u32Codec{}, page, &header, index)
+				if err != nil {
+					return 0, false, err
+				}
+				value = format.U32(cell[4:])
+				found = true
+			}
 			return value, found, nil
+		}
+		index, _, err := lowerBound(u32Codec{}, page, &header, u32Key(key), false)
+		if err != nil {
+			return 0, false, err
+		}
+		child, err = branchChild(u32Codec{}, page, &header, index, m.PageLimit())
+		if err != nil {
+			return 0, false, err
 		}
 		level := uint16(0)
 		if expectedLevel != nil {
@@ -225,8 +224,8 @@ func TestInsertReplaceSplitOrder(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 999; key >= 0; key-- {
-		retired := NewRetiredPages()
-		changed, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), retired)
+		retired := RetiredPages{}
+		retired, changed, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), retired)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -255,33 +254,33 @@ func TestInsertReplaceSplitOrder(t *testing.T) {
 		t.Fatal("key 1001 was found in a 0..999 tree")
 	}
 
-	pred, err := Predecessor(u32Codec{}, m, root, u32Key(501))
+	pred, found, err := Predecessor(u32Codec{}, m, root, u32Key(501))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := pred.(u32Leaf); !ok || leaf.key != 501 {
+	if !found || pred.key != 501 {
 		t.Fatalf("predecessor(501) = %#v, want key 501", pred)
 	}
-	next, err := AtOrAfter(u32Codec{}, m, root, u32Key(501))
+	next, found, err := AtOrAfter(u32Codec{}, m, root, u32Key(501))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := next.(u32Leaf); !ok || leaf.key != 501 {
+	if !found || next.key != 501 {
 		t.Fatalf("at_or_after(501) = %#v, want key 501", next)
 	}
-	if pred, err := Predecessor(u32Codec{}, m, root, u32Key(0)); err != nil {
+	if _, found, err := Predecessor(u32Codec{}, m, root, u32Key(0)); err != nil {
 		t.Fatal(err)
-	} else if pred == nil {
+	} else if !found {
 		t.Fatal("predecessor(0) is unexpectedly empty")
 	}
-	if next, err := AtOrAfter(u32Codec{}, m, root, u32Key(1001)); err != nil {
+	if next, found, err := AtOrAfter(u32Codec{}, m, root, u32Key(1001)); err != nil {
 		t.Fatal(err)
-	} else if next != nil {
+	} else if found {
 		t.Fatalf("at_or_after(1001) = %#v, want none", next)
 	}
 
-	retired := NewRetiredPages()
-	changed, err := Insert(u32Codec{}, m, &root, u32Record(500, 7), retired)
+	retired := RetiredPages{}
+	retired, changed, err := Insert(u32Codec{}, m, &root, u32Record(500, 7), retired)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +298,7 @@ func TestOneShotReadsVisitEachPathPageOnce(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -310,11 +309,11 @@ func TestOneShotReadsVisitEachPathPageOnce(t *testing.T) {
 	pathPages := uint64(header.Level) + 1
 
 	m.inspections = 0
-	value, err := Predecessor(u32Codec{}, m, root, u32Key(501))
+	value, found, err := Predecessor(u32Codec{}, m, root, u32Key(501))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := value.(u32Leaf); !ok || leaf.key != 501 {
+	if !found || value.key != 501 {
 		t.Fatalf("predecessor(501) = %#v", value)
 	}
 	if m.inspections != pathPages {
@@ -322,11 +321,11 @@ func TestOneShotReadsVisitEachPathPageOnce(t *testing.T) {
 	}
 
 	m.inspections = 0
-	value, err = AtOrAfter(u32Codec{}, m, root, u32Key(501))
+	value, found, err = AtOrAfter(u32Codec{}, m, root, u32Key(501))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := value.(u32Leaf); !ok || leaf.key != 501 {
+	if !found || value.key != 501 {
 		t.Fatalf("at_or_after(501) = %#v", value)
 	}
 	if m.inspections != pathPages {
@@ -341,36 +340,36 @@ func TestAtOrAfterAdvancesAcrossLeafBoundaries(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key += 2 {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for odd := uint32(1); odd < 998; odd += 2 {
-		next, err := AtOrAfter(u32Codec{}, m, root, u32Key(odd))
+		next, found, err := AtOrAfter(u32Codec{}, m, root, u32Key(odd))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if leaf, ok := next.(u32Leaf); !ok || leaf.key != odd+1 {
+		if !found || next.key != odd+1 {
 			t.Fatalf("at_or_after(%d) = %#v, want key %d", odd, next, odd+1)
 		}
-		pred, err := Predecessor(u32Codec{}, m, root, u32Key(odd))
+		pred, found, err := Predecessor(u32Codec{}, m, root, u32Key(odd))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if leaf, ok := pred.(u32Leaf); !ok || leaf.key != odd-1 {
+		if !found || pred.key != odd-1 {
 			t.Fatalf("predecessor(%d) = %#v, want key %d", odd, pred, odd-1)
 		}
 	}
-	if next, err := AtOrAfter(u32Codec{}, m, root, u32Key(999)); err != nil {
+	if next, found, err := AtOrAfter(u32Codec{}, m, root, u32Key(999)); err != nil {
 		t.Fatal(err)
-	} else if next != nil {
+	} else if found {
 		t.Fatalf("at_or_after(999) = %#v, want none", next)
 	}
 	// Rust parity: predecessor returns the exact match when the key
 	// exists, so predecessor(0) is the record for key 0 itself.
-	if pred, err := Predecessor(u32Codec{}, m, root, u32Key(0)); err != nil {
+	if pred, found, err := Predecessor(u32Codec{}, m, root, u32Key(0)); err != nil {
 		t.Fatal(err)
-	} else if leaf, ok := pred.(u32Leaf); !ok || leaf.key != 0 {
+	} else if !found || pred.key != 0 {
 		t.Fatalf("predecessor(0) = %#v, want key 0", pred)
 	}
 }
@@ -378,7 +377,7 @@ func TestAtOrAfterAdvancesAcrossLeafBoundaries(t *testing.T) {
 func TestFixedSearchRejectsForgedPageShape(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
-	if _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), NewRetiredPages()); err != nil {
+	if _, _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
 	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil)
@@ -386,7 +385,7 @@ func TestFixedSearchRejectsForgedPageShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	header.ItemCount++
-	if _, _, err := lowerBound(u32Codec{}, m.pages[root][:], header, u32Key(1), true); err == nil {
+	if _, _, err := lowerBound(u32Codec{}, m.pages[root][:], &header, u32Key(1), true); err == nil {
 		t.Fatal("forged item count was accepted")
 	}
 }
@@ -394,7 +393,7 @@ func TestFixedSearchRejectsForgedPageShape(t *testing.T) {
 func TestFixedSearchChecksEachPersistentSlotExtent(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
-	if _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), NewRetiredPages()); err != nil {
+	if _, _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil); err != nil {
@@ -410,7 +409,7 @@ func TestNextTransactionCopiesOnlyItsSelectedPath(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -419,8 +418,8 @@ func TestNextTransactionCopiesOnlyItsSelectedPath(t *testing.T) {
 	copy(committed, m.pages)
 	m.targetTxn = 2
 
-	retired := NewRetiredPages()
-	changed, err := Insert(u32Codec{}, m, &root, u32Record(1000, 99), retired)
+	retired := RetiredPages{}
+	retired, changed, err := Insert(u32Codec{}, m, &root, u32Record(1000, 99), retired)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,8 +448,8 @@ func TestNextTransactionCopiesOnlyItsSelectedPath(t *testing.T) {
 		t.Fatalf("key 1000 after draft: (%d, %v)", got, ok)
 	}
 
-	samePath := NewRetiredPages()
-	if _, err := Insert(u32Codec{}, m, &root, u32Record(1001, 100), samePath); err != nil {
+	samePath := RetiredPages{}
+	if _, _, err := Insert(u32Codec{}, m, &root, u32Record(1001, 100), samePath); err != nil {
 		t.Fatal(err)
 	}
 	if samePath.Len() != 0 {
@@ -462,7 +461,7 @@ func TestPrivateTreeReleaseVisitsEveryPageOnce(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -489,12 +488,12 @@ func TestDeletionRemovesEmptyChildrenAndCollapsesRoot(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 900; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for key := 0; key < 900; key++ {
-		if err := DeleteExisting(u32Codec{}, m, &root, u32Key(uint32(key)), NewRetiredPages()); err != nil {
+		if _, err := DeleteExisting(u32Codec{}, m, &root, u32Key(uint32(key)), RetiredPages{}); err != nil {
 			t.Fatalf("delete %d: %v", key, err)
 		}
 		if _, ok, err := lookupU32(m, root, uint32(key)); err != nil {
@@ -515,7 +514,7 @@ func TestBranchSplitsCreateAndSearchThreeLevelTree(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 4999; key >= 0; key-- {
-		if _, err := Insert(wideCodec{}, m, &root, wideRecord(uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(wideCodec{}, m, &root, wideRecord(uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -526,11 +525,11 @@ func TestBranchSplitsCreateAndSearchThreeLevelTree(t *testing.T) {
 	if header.Level != 2 {
 		t.Fatalf("wide tree root level is %d, want 2", header.Level)
 	}
-	pred, err := Predecessor(wideCodec{}, m, root, wideKey(4999))
+	pred, found, err := Predecessor(wideCodec{}, m, root, wideKey(4999))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := pred.(wideLeaf); !ok || leaf.key != 4999 {
+	if !found || pred.key != 4999 {
 		t.Fatalf("predecessor(4999) = %#v", pred)
 	}
 }

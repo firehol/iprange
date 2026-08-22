@@ -10,6 +10,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // feedEntry is one draft catalog entry (Rust FeedEntry): the validated
@@ -27,21 +28,21 @@ func (s *DraftStore) lookupFeed(name string) (feedEntry, bool, error) {
 	if !format.FeedNameValidString(name) {
 		return feedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 	}
+	work.CatalogLookup(1)
 	if s.draft.meta.CatalogNameRoot == 0 {
 		return feedEntry{}, false, nil
 	}
-	value, err := tree.AtOrAfter(nameCodec{}, s, s.draft.meta.CatalogNameRoot, tree.VarKey([]byte(name)))
+	value, ok, err := tree.AtOrAfter(nameCodec{}, s, s.draft.meta.CatalogNameRoot, tree.VarKey([]byte(name)))
 	if err != nil {
 		return feedEntry{}, false, err
 	}
-	if value == nil {
+	if !ok {
 		return feedEntry{}, false, nil
 	}
-	record := value.(format.CatalogNameRecord)
-	if !nameBytesEqual(name, record.Name) {
+	if !nameBytesEqual(name, value.Name) {
 		return feedEntry{}, false, nil
 	}
-	return feedEntry{name: name, index: record.FeedIndex}, true, nil
+	return feedEntry{name: name, index: value.FeedIndex}, true, nil
 }
 
 // ensureFeed returns the existing entry or creates the feed (Rust
@@ -69,7 +70,7 @@ func (s *DraftStore) insertFeed(name string) (feedEntry, error) {
 	}
 	nameRoot := s.draft.meta.CatalogNameRoot
 	indexRoot := s.draft.meta.CatalogIndexRoot
-	if err := insertCatalogEntry(s, &nameRoot, &indexRoot, name, index); err != nil {
+	if err := insertCatalogEntry(s, s.catalogScratch[:], &nameRoot, &indexRoot, name, index); err != nil {
 		return feedEntry{}, err
 	}
 	s.draft.meta.CatalogNameRoot = nameRoot
@@ -89,8 +90,8 @@ func (s *DraftStore) insertFeed(name string) (feedEntry, error) {
 func (s *DraftStore) allocateFeedIndex() (uint32, error) {
 	root := s.draft.meta.FeedUsedRoot
 	limit := s.draft.meta.FeedIndexLimit
-	retired := tree.NewRetiredPages()
-	reused, ok, err := bitmap.TakeLowestUsed(s, &root, limit, bitmap.KindFeed, retired)
+	var retired tree.RetiredPages
+	reused, ok, err := bitmap.TakeLowestUsed(s, &root, limit, bitmap.KindFeed, &retired)
 	if err != nil {
 		return 0, err
 	}
@@ -103,13 +104,13 @@ func (s *DraftStore) allocateFeedIndex() (uint32, error) {
 		}
 		index = uint32(limit)
 		nextLimit := limit + 1
-		if err := bitmap.SetUsed(s, &root, nextLimit, bitmap.KindFeed, index, retired); err != nil {
+		if err := bitmap.SetUsed(s, &root, nextLimit, bitmap.KindFeed, index, &retired); err != nil {
 			return 0, err
 		}
 		s.draft.meta.FeedIndexLimit = nextLimit
 	}
 	s.draft.meta.FeedUsedRoot = root
-	if err := s.RetirePages(retired.Slice()); err != nil {
+	if err := s.RetirePages(retired); err != nil {
 		return 0, err
 	}
 	return index, nil

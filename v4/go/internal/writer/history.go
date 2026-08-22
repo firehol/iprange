@@ -9,7 +9,9 @@ package writer
 
 import (
 	"math"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
@@ -135,6 +137,11 @@ type historyPolicy struct {
 	cache         historyCached
 	hasCache      bool
 	check         func() error
+	// scratchWords is a reusable heap-owned prefix bitmap view (Rust
+	// PrefixWords is borrowed for the intern call; Go generic dispatch
+	// cannot borrow a stack value, so the view lives on the heap policy
+	// and never allocates per prefix).
+	scratchWords prefixWords
 }
 
 // prepareHistoryPlan validates the windows, ensures every destination
@@ -208,7 +215,7 @@ func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func()
 
 // begin starts the projection merge over the committed destination (Rust
 // HistoryPlan::begin).
-func (p historyPlan) begin(store *DraftStore, base format.Meta, check func() error) (*historyMerge, error) {
+func (p *historyPlan) begin(store *DraftStore, base format.Meta, check func() error) (*historyMerge, error) {
 	var codec rangeFamily
 	if base.AddressFamily == format.AddressFamilyIPv4 {
 		codec = rangeCodec4{}
@@ -269,8 +276,8 @@ func requireUniqueHistoryNames(reports []HistoryWindowReport, feedOrder []uint32
 	if err := check(); err != nil {
 		return err
 	}
-	sort.Slice(feedOrder, func(left, right int) bool {
-		return reports[feedOrder[left]].FeedName < reports[feedOrder[right]].FeedName
+	slices.SortFunc(feedOrder, func(left, right uint32) int {
+		return strings.Compare(reports[left].FeedName, reports[right].FeedName)
 	})
 	if err := check(); err != nil {
 		return err
@@ -327,13 +334,16 @@ func orderHistoryCutoffs(reports []HistoryWindowReport, cutoffOrder []uint32, ra
 	if err := check(); err != nil {
 		return err
 	}
-	sort.Slice(cutoffOrder, func(left, right int) bool {
-		leftReport := reports[cutoffOrder[left]]
-		rightReport := reports[cutoffOrder[right]]
+	slices.SortFunc(cutoffOrder, func(left, right uint32) int {
+		leftReport := reports[left]
+		rightReport := reports[right]
 		if leftReport.Cutoff != rightReport.Cutoff {
-			return leftReport.Cutoff < rightReport.Cutoff
+			if leftReport.Cutoff < rightReport.Cutoff {
+				return -1
+			}
+			return 1
 		}
-		return leftReport.FeedName < rightReport.FeedName
+		return strings.Compare(leftReport.FeedName, rightReport.FeedName)
 	})
 	if err := check(); err != nil {
 		return err
@@ -356,8 +366,14 @@ func orderHistoryFeedIndexes(original []uint32, feedToWindow []uint32, heap *hea
 	if err := check(); err != nil {
 		return nil, nil, err
 	}
-	sort.Slice(feedToWindow, func(left, right int) bool {
-		return original[feedToWindow[left]] < original[feedToWindow[right]]
+	slices.SortFunc(feedToWindow, func(left, right uint32) int {
+		if original[left] < original[right] {
+			return -1
+		}
+		if original[left] > original[right] {
+			return 1
+		}
+		return 0
 	})
 	if err := check(); err != nil {
 		return nil, nil, err
@@ -518,14 +534,15 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle,
 	if length == 0 || !cached.isEmpty() {
 		return cached, nil
 	}
-	words := prefixWords{
+	view := &p.scratchWords
+	*view = prefixWords{
 		feedIndexes:  p.feedIndexes,
 		feedToWindow: p.feedToWindow,
 		rank:         p.rank,
 		prefix:       uint32(length),
 		check:        p.check,
 	}
-	interned, err := store.internMembership(&words)
+	interned, err := draftInternMembership(store, view)
 	if err != nil {
 		return membershipHandle{}, err
 	}
@@ -619,26 +636,24 @@ func (w *prefixWords) WordCount() uint32 {
 	return wordCount
 }
 
-// ReadWords writes the selected prefix bits into caller-owned output
-// (Rust PrefixWords::read_words).
-func (w *prefixWords) ReadWords(start uint32, output []uint64) error {
-	for index := range output {
-		output[index] = 0
+// ReadChunk returns the selected prefix bits starting at start by value
+// (Rust PrefixWords::read_words with a HASH_WORDS chunk).
+func (w *prefixWords) ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error) {
+	count = membershipChunkWords
+	if remaining := w.WordCount() - start; count > remaining {
+		count = remaining
 	}
-	end := start
-	if len(output) > 0 {
-		next, err := checkedAdd(uint64(start), uint64(len(output)), "history prefix word range")
-		if err != nil {
-			return err
-		}
-		if next > math.MaxUint32 {
-			return overflow("history prefix word range")
-		}
-		end = uint32(next)
+	next, err := checkedAdd(uint64(start), uint64(count), "history prefix word range")
+	if err != nil {
+		return words, 0, err
 	}
+	if next > math.MaxUint32 {
+		return words, 0, overflow("history prefix word range")
+	}
+	end := uint32(next)
 	firstIndex := start
 	if firstIndex > math.MaxUint32/64 {
-		return overflow("history prefix bit range")
+		return words, 0, overflow("history prefix bit range")
 	}
 	firstIndex *= 64
 	position := sort.Search(len(w.feedIndexes), func(index int) bool {
@@ -653,17 +668,17 @@ func (w *prefixWords) ReadWords(start uint32, output []uint64) error {
 		}
 		if work&4095 == 4095 {
 			if err := w.check(); err != nil {
-				return err
+				return words, 0, err
 			}
 		}
 		window := w.feedToWindow[position]
 		if w.rank[window] < w.prefix {
-			output[(word - start)] |= uint64(1) << (index % 64)
+			words[(word - start)] |= uint64(1) << (index % 64)
 		}
 		position++
 		work++
 	}
-	return nil
+	return words, count, nil
 }
 
 // observeHistoryWindow folds one segment into one window report (Rust

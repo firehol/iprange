@@ -245,20 +245,20 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 		}
 		middle = &encoded
 	}
-	retired := tree.NewRetiredPages()
+	var retired tree.RetiredPages
 	switch {
 	case middle != nil:
 		cells := [][]byte{left.slice(), middle.slice(), right.slice()}
-		if err := replaceStrictCells(ctx, old.from, cells, hint, retired); err != nil {
+		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
 			return false, err
 		}
 	default:
 		cells := [][]byte{left.slice(), right.slice()}
-		if err := replaceStrictCells(ctx, old.from, cells, hint, retired); err != nil {
+		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
 			return false, err
 		}
 	}
-	if err := ctx.store.RetirePages(retired.Slice()); err != nil {
+	if err := ctx.store.RetirePages(retired); err != nil {
 		return false, err
 	}
 	if middle != nil {
@@ -295,7 +295,9 @@ func replaceStrictCells(ctx *rangeCtx, oldKey tree.Key, cells [][]byte, hint *tr
 	if hint != nil {
 		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.store, ctx.root, hint, oldKey, cells)
 	}
-	return tree.ReplaceLeafWith(ctx.family, ctx.store, ctx.root, oldKey, cells, retired)
+	r, err := tree.ReplaceLeafWith(ctx.family, ctx.store, ctx.root, oldKey, cells, *retired)
+	*retired = r
+	return err
 }
 
 // rewrite accumulates the trimmed sides of one interval rewrite (Rust
@@ -442,12 +444,12 @@ func insert(ctx *rangeCtx, r rangeRecord) error {
 	if err != nil {
 		return err
 	}
-	retired := tree.NewRetiredPages()
-	inserted, err := tree.Insert(ctx.family, ctx.store, ctx.root, encoded.slice(), retired)
+	var retired tree.RetiredPages
+	retired, inserted, err := tree.Insert(ctx.family, ctx.store, ctx.root, encoded.slice(), retired)
 	if err != nil {
 		return err
 	}
-	if err := ctx.store.RetirePages(retired.Slice()); err != nil {
+	if err := ctx.store.RetirePages(retired); err != nil {
 		return err
 	}
 	if inserted {
@@ -464,11 +466,12 @@ func insert(ctx *rangeCtx, r rangeRecord) error {
 
 // rangeRemove deletes one existing range record (Rust remove).
 func rangeRemove(ctx *rangeCtx, r rangeRecord) error {
-	retired := tree.NewRetiredPages()
-	if err := tree.DeleteExisting(ctx.family, ctx.store, ctx.root, r.from, retired); err != nil {
+	var retired tree.RetiredPages
+	retired, err := tree.DeleteExisting(ctx.family, ctx.store, ctx.root, r.from, retired)
+	if err != nil {
 		return err
 	}
-	if err := ctx.store.RetirePages(retired.Slice()); err != nil {
+	if err := ctx.store.RetirePages(retired); err != nil {
 		return err
 	}
 	if err := subCount(ctx.count); err != nil {
@@ -486,8 +489,7 @@ func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert, error) {
 	}
 	var gap privateGap
 	gap.init(ctx.family, r)
-	retired := tree.NewRetiredPages()
-	result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, encoded.slice(), retired, &gap)
+	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, encoded.slice(), tree.RetiredPages{}, &gap)
 	if err != nil {
 		return tree.LocalInsert{}, err
 	}
@@ -504,19 +506,19 @@ func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert, error) {
 
 // insertPrivateRejected completes a rejected private gap insertion after
 // the caller proved the external sides (Rust insert_private_rejected).
-func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected *tree.LocalReject) (*tree.PrivatePosition, error) {
+func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected *tree.LocalReject) (tree.PrivatePosition, bool, error) {
 	encoded, err := newEncodedRange(ctx.family, r)
 	if err != nil {
-		return nil, err
+		return tree.PrivatePosition{}, false, err
 	}
-	position, err := tree.InsertRejectedGap(ctx.family, ctx.store, ctx.root, encoded.slice(), rejected)
+	position, fits, err := tree.InsertRejectedGap(ctx.family, ctx.store, ctx.root, encoded.slice(), rejected)
 	if err != nil {
-		return nil, err
+		return tree.PrivatePosition{}, false, err
 	}
 	if err := rangeRecordAdded(ctx, r.value); err != nil {
-		return nil, err
+		return tree.PrivatePosition{}, false, err
 	}
-	return position, nil
+	return position, fits, nil
 }
 
 func rangeRecordAdded(ctx *rangeCtx, value uint32) error {
@@ -531,21 +533,19 @@ func rangeRecordAdded(ctx *rangeCtx, value uint32) error {
 }
 
 func readPredecessor(ctx *rangeCtx, root uint32, key tree.Key) (*rangeRecord, error) {
-	value, err := tree.Predecessor(ctx.family, ctx.store, root, key)
-	if err != nil || value == nil {
+	value, found, err := tree.Predecessor(ctx.family, ctx.store, root, key)
+	if err != nil || !found {
 		return nil, err
 	}
-	record := value.(rangeRecord)
-	return &record, nil
+	return &value, nil
 }
 
 func readAtOrAfter(ctx *rangeCtx, root uint32, key tree.Key) (*rangeRecord, error) {
-	value, err := tree.AtOrAfter(ctx.family, ctx.store, root, key)
-	if err != nil || value == nil {
+	value, found, err := tree.AtOrAfter(ctx.family, ctx.store, root, key)
+	if err != nil || !found {
 		return nil, err
 	}
-	record := value.(rangeRecord)
-	return &record, nil
+	return &value, nil
 }
 
 // privateGap evaluates the local gap around one candidate range (Rust
@@ -561,20 +561,16 @@ func (g *privateGap) init(family rangeFamily, r rangeRecord) {
 }
 
 func (g *privateGap) decode(cell []byte) (rangeRecord, error) {
-	value, err := g.family.ReadLeaf(cell)
-	if err != nil {
-		return rangeRecord{}, err
-	}
-	return value.(rangeRecord), nil
+	return g.family.ReadLeaf(cell)
 }
 
-func (g *privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, any, error) {
+func (g *privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, rangeRecord, error) {
 	if cell == nil {
-		return tree.LocalPreviousAccept, nil, nil
+		return tree.LocalPreviousAccept, rangeRecord{}, nil
 	}
 	previous, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, rangeRecord{}, err
 	}
 	bridges := false
 	if next, ok := g.family.Next(previous.to); ok {
@@ -584,23 +580,23 @@ func (g *privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, any,
 		(previous.value == g.r.value && bridges) {
 		return tree.LocalPreviousReject, previous, nil
 	}
-	return tree.LocalPreviousAccept, nil, nil
+	return tree.LocalPreviousAccept, rangeRecord{}, nil
 }
 
-func (g *privateGap) Next(cell []byte) (tree.LocalNext, any, error) {
+func (g *privateGap) Next(cell []byte) (tree.LocalNext, rangeRecord, error) {
 	if cell == nil {
-		return tree.LocalNextAccept, nil, nil
+		return tree.LocalNextAccept, rangeRecord{}, nil
 	}
 	next, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, rangeRecord{}, err
 	}
 	bridges := false
 	if boundary, ok := g.family.Next(g.r.to); ok {
 		bridges = boundary.Equal(next.from)
 	}
 	if g.r.to.Less(next.from) && (next.value != g.r.value || !bridges) {
-		return tree.LocalNextAccept, nil, nil
+		return tree.LocalNextAccept, rangeRecord{}, nil
 	}
 	return tree.LocalNextReject, next, nil
 }

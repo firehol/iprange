@@ -28,12 +28,12 @@ func newRangeMemoryStore() *rangeMemoryStore {
 func (m *rangeMemoryStore) TargetTxn() uint64 { return m.targetTxn }
 func (m *rangeMemoryStore) PageLimit() uint64 { return uint64(len(m.pages)) }
 
-func (m *rangeMemoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+func (m *rangeMemoryStore) Inspect(pageNumber uint32) ([]byte, error) {
 	m.reads++
 	if int(pageNumber) >= len(m.pages) {
-		return corrupt("test page is out of bounds")
+		return nil, corrupt("test page is out of bounds")
 	}
-	return fn(m.pages[pageNumber][:])
+	return m.pages[pageNumber][:], nil
 }
 
 func (m *rangeMemoryStore) Allocate() (uint32, error) {
@@ -45,21 +45,28 @@ func (m *rangeMemoryStore) Allocate() (uint32, error) {
 	return pageNumber, nil
 }
 
-func (m *rangeMemoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+func (m *rangeMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	m.writes++
 	if int(pageNumber) >= len(m.pages) {
-		return corrupt("test page is out of bounds")
+		return nil, 0, corrupt("test page is out of bounds")
 	}
-	return fn(m.pages[pageNumber][:])
+	return m.pages[pageNumber][:], 0, nil
 }
 
-func (m *rangeMemoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+// RestoreDirty re-arms one page's dirty marker after a successful
+// mutation; the test store keeps no dirty chain, so the re-arm is a
+// no-op.
+func (m *rangeMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return nil
+}
+
+func (m *rangeMemoryStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	m.reads++
 	m.writes++
 	if int(source) >= len(m.pages) || int(destination) >= len(m.pages) {
-		return corrupt("test page is out of bounds")
+		return nil, nil, 0, corrupt("test page is out of bounds")
 	}
-	return fn(m.pages[source][:], m.pages[destination][:])
+	return m.pages[source][:], m.pages[destination][:], 0, nil
 }
 
 func (m *rangeMemoryStore) DiscardPrivate(pageNumber uint32) error {
@@ -67,8 +74,8 @@ func (m *rangeMemoryStore) DiscardPrivate(pageNumber uint32) error {
 	return nil
 }
 
-func (m *rangeMemoryStore) RetirePages(pages []uint32) error {
-	m.retired = append(m.retired, pages...)
+func (m *rangeMemoryStore) RetirePages(retired tree.RetiredPages) error {
+	m.retired = append(m.retired, retired.Slice()...)
 	return nil
 }
 
@@ -79,16 +86,15 @@ func rangesV4(m *rangeMemoryStore, root uint32) []format.RangeRecordV4 {
 	var result []format.RangeRecordV4
 	key := tree.Key{}
 	for {
-		value, err := tree.AtOrAfter(rangeCodec4{}, m, root, key)
+		value, ok, err := tree.AtOrAfter(rangeCodec4{}, m, root, key)
 		if err != nil {
 			panic(err)
 		}
-		if value == nil {
+		if !ok {
 			return result
 		}
-		r := value.(rangeRecord)
-		result = append(result, format.RangeRecordV4{From: uint32(r.from.Hi), To: uint32(r.to.Hi), Value: r.value})
-		next, ok := rangeCodec4{}.Next(r.from)
+		result = append(result, format.RangeRecordV4{From: uint32(value.from.Hi), To: uint32(value.to.Hi), Value: value.value})
+		next, ok := rangeCodec4{}.Next(value.from)
 		if !ok {
 			break
 		}
@@ -101,20 +107,19 @@ func rangesV6(m *rangeMemoryStore, root uint32) []format.RangeRecordV6 {
 	var result []format.RangeRecordV6
 	key := tree.Key{}
 	for {
-		value, err := tree.AtOrAfter(rangeCodec6{}, m, root, key)
+		value, ok, err := tree.AtOrAfter(rangeCodec6{}, m, root, key)
 		if err != nil {
 			panic(err)
 		}
-		if value == nil {
+		if !ok {
 			return result
 		}
-		r := value.(rangeRecord)
 		result = append(result, format.RangeRecordV6{
-			FromHi: r.from.Hi, FromLo: r.from.Lo,
-			ToHi: r.to.Hi, ToLo: r.to.Lo,
-			Value: r.value,
+			FromHi: value.from.Hi, FromLo: value.from.Lo,
+			ToHi: value.to.Hi, ToLo: value.to.Lo,
+			Value: value.value,
 		})
-		next, ok := rangeCodec6{}.Next(r.from)
+		next, ok := rangeCodec6{}.Next(value.from)
 		if !ok {
 			break
 		}
@@ -152,8 +157,8 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decoded.(rangeRecord); !got.from.Equal(r.from) || !got.to.Equal(r.to) || got.value != r.value {
-		t.Fatalf("round-trip = %#v, want %#v", got, r)
+	if !decoded.from.Equal(r.from) || !decoded.to.Equal(r.to) || decoded.value != r.value {
+		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
 	}
 }
 
@@ -190,8 +195,8 @@ func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decoded.(rangeRecord); !got.from.Equal(r.from) || !got.to.Equal(r.to) || got.value != r.value {
-		t.Fatalf("round-trip = %#v, want %#v", got, r)
+	if !decoded.from.Equal(r.from) || !decoded.to.Equal(r.to) || decoded.value != r.value {
+		t.Fatalf("round-trip = %#v, want %#v", decoded, r)
 	}
 }
 
@@ -331,15 +336,14 @@ func TestTransformsMatchScalarStateAfterEachNonIdempotentOperation(t *testing.T)
 			expected[i] = mapped(expected[i], mode)
 		}
 		for address, wanted := range expected {
-			pred, err := tree.Predecessor(rangeCodec4{}, m, root, v4key(uint32(address)))
+			pred, ok, err := tree.Predecessor(rangeCodec4{}, m, root, v4key(uint32(address)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			var actual *uint32
-			if pred != nil {
-				r := pred.(rangeRecord)
-				if !r.to.Less(v4key(uint32(address))) {
-					v := r.value
+			if ok {
+				if !pred.to.Less(v4key(uint32(address))) {
+					v := pred.value
 					actual = &v
 				}
 			}

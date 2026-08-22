@@ -67,6 +67,15 @@ type OutputBuilder struct {
 	meta    format.Meta
 	budget  OutputBudget
 	ranges  *rangeBulkBuilder
+	// Encode targets for the catalog and dictionary records of one
+	// output. The build loop is single-threaded and every tree insert
+	// copies its record into the mapped page before the next encode
+	// reuses the buffer, so these are allocated once per output, never
+	// per record (the Go generic tree interface makes stack encodes
+	// escape).
+	recordScratch  [membershipRecordLimit]byte
+	hashScratch    [membershipHashKeySize]byte
+	catalogScratch [catalogMaxRecord]byte
 	// membershipRefs aggregates recurring membership references so each
 	// id is applied as one refcount delta (Rust ReferenceBatch).
 	membershipRefs membershipReferenceBatch
@@ -278,14 +287,14 @@ func (b *OutputBuilder) PushFeed(name string, index uint32) error {
 		if active > b.meta.FeedIndexLimit {
 			return corrupt("feed catalog exceeds its index limit")
 		}
-		if err := insertCatalogEntry(b, &b.meta.CatalogNameRoot, &b.meta.CatalogIndexRoot, name, index); err != nil {
+		if err := insertCatalogEntry(b, b.catalogScratch[:], &b.meta.CatalogNameRoot, &b.meta.CatalogIndexRoot, name, index); err != nil {
 			return err
 		}
-		retired := tree.NewRetiredPages()
-		if err := bitmap.SetUsed(b, &b.meta.FeedUsedRoot, b.meta.FeedIndexLimit, bitmap.KindFeed, index, retired); err != nil {
+		var retired tree.RetiredPages
+		if err := bitmap.SetUsed(b, &b.meta.FeedUsedRoot, b.meta.FeedIndexLimit, bitmap.KindFeed, index, &retired); err != nil {
 			return err
 		}
-		if err := b.RetirePages(retired.Slice()); err != nil {
+		if err := b.RetirePages(retired); err != nil {
 			return err
 		}
 		b.meta.ActiveFeedCount = active
@@ -445,11 +454,13 @@ func requireOutputFeeds(store tree.Store, feedRoot uint32, feedLimit uint64, wor
 // membership_state).
 func (b *OutputBuilder) membershipState() membershipState {
 	return membershipState{
-		idRoot:     b.meta.MembershipIDRoot,
-		hashRoot:   b.meta.MembershipHashRoot,
-		usedRoot:   b.meta.MembershipUsedRoot,
-		entryCount: b.meta.MembershipEntryCount,
-		idLimit:    b.meta.MembershipIDLimit,
+		idRoot:        b.meta.MembershipIDRoot,
+		hashRoot:      b.meta.MembershipHashRoot,
+		usedRoot:      b.meta.MembershipUsedRoot,
+		entryCount:    b.meta.MembershipEntryCount,
+		idLimit:       b.meta.MembershipIDLimit,
+		recordScratch: b.recordScratch[:],
+		hashScratch:   b.hashScratch[:],
 	}
 }
 
@@ -654,16 +665,12 @@ func (b *OutputBuilder) TargetTxn() uint64 { return b.meta.TxnID }
 // PageLimit returns the current page count.
 func (b *OutputBuilder) PageLimit() uint64 { return b.meta.PageCount }
 
-// Inspect runs fn over one data page view (Rust inspect_page).
-func (b *OutputBuilder) Inspect(pageNumber uint32, fn func(page []byte) error) error {
+// Inspect returns one data page view (Rust inspect_page).
+func (b *OutputBuilder) Inspect(pageNumber uint32) ([]byte, error) {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
-		return err
+		return nil, err
 	}
-	page, err := b.mapping.Page(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+	return b.mapping.Page(pageNumber)
 }
 
 // Allocate reserves the next output page (Rust allocate = reserve_page).
@@ -687,17 +694,31 @@ func (b *OutputBuilder) reservePage() (uint32, error) {
 	return page, nil
 }
 
-// Update runs fn over one data page and verifies the output ownership
-// afterwards (Rust update_page + require_output_owner).
-func (b *OutputBuilder) Update(pageNumber uint32, fn func(page []byte) error) error {
+// Update returns one data page view for mutation (Rust update_page +
+// require_output_owner). The output has no dirty chain, so the captured
+// tag is always zero; the caller mutates the page and then calls
+// RestoreDirty, which re-verifies the output ownership.
+func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
+	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
+		return nil, 0, err
+	}
+	page, err := b.mapping.Page(pageNumber)
+	if err != nil {
+		return nil, 0, err
+	}
+	return page, 0, nil
+}
+
+// RestoreDirty re-verifies the output ownership after a successful
+// mutation or copy (Rust require_output_owner). The output has no dirty
+// chain, so the tag is never re-armed; the ownership check mirrors the
+// current Update epilogue.
+func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return err
 	}
 	page, err := b.mapping.Page(pageNumber)
 	if err != nil {
-		return err
-	}
-	if err := fn(page); err != nil {
 		return err
 	}
 	if !outputPageOwned(page, b.meta.TxnID) {
@@ -706,32 +727,28 @@ func (b *OutputBuilder) Update(pageNumber uint32, fn func(page []byte) error) er
 	return nil
 }
 
-// CopyPage mirrors copy_page: both views stay inside the mapping and the
-// destination ownership is re-checked (Rust copy_page); work.PageCopied
-// counts the copy.
-func (b *OutputBuilder) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+// CopyPage returns the source and destination page views of one copy;
+// both views stay inside the mapping and the destination ownership is
+// re-checked through RestoreDirty after the caller copies (Rust
+// copy_page). The output has no dirty chain, so the destination tag is
+// always zero; work.PageCopied counts the copy.
+func (b *OutputBuilder) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	if err := requireOutputPage(source, b.meta.PageCount); err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	if err := requireOutputPage(destination, b.meta.PageCount); err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	src, err := b.mapping.Page(source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := b.mapping.Page(destination)
 	if err != nil {
-		return err
-	}
-	if err := fn(src, dst); err != nil {
-		return err
-	}
-	if !outputPageOwned(dst, b.meta.TxnID) {
-		return corrupt("immutable output page ownership is invalid")
+		return nil, nil, 0, err
 	}
 	work.PageCopied(1)
-	return nil
+	return src, dst, 0, nil
 }
 
 // DiscardPrivate refuses every discard: the output is append-only (Rust
@@ -742,8 +759,8 @@ func (b *OutputBuilder) DiscardPrivate(pageNumber uint32) error {
 
 // RetirePages refuses every non-empty retirement (Rust RetiringStore for
 // Builder).
-func (b *OutputBuilder) RetirePages(pages []uint32) error {
-	if len(pages) == 0 {
+func (b *OutputBuilder) RetirePages(retired tree.RetiredPages) error {
+	if retired.Len() == 0 {
 		return nil
 	}
 	return corrupt("immutable output attempted to retire an existing page")

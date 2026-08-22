@@ -15,7 +15,8 @@ type Frame struct {
 	ItemCount  int
 }
 
-// Path is the fixed-depth descent stack (Rust Path).
+// Path is the fixed-depth descent stack (Rust Path). It is a value: the
+// COW descent returns it embedded in the selection result, never boxed.
 type Path struct {
 	frames [maxPath]Frame
 	depth  int
@@ -41,7 +42,8 @@ func (p *Path) Frame(index int) Frame { return p.frames[index] }
 func (p *Path) Slice() []Frame { return p.frames[:p.depth] }
 
 // PrivateLeaf is the outcome of a COW descent: the private leaf page, its
-// header, the descent path, and the leaf selection.
+// header, the descent path, and the leaf selection. It is a value; the
+// caller moves it (Rust returns the same struct by value).
 type PrivateLeaf struct {
 	Path       Path
 	PageNumber uint32
@@ -50,53 +52,31 @@ type PrivateLeaf struct {
 	Exists     bool
 }
 
-// visitedBranch describes one inspected page during the descent loop.
-type visitedBranch struct {
-	header  Header
-	private bool
-	index   int
-	child   uint32
-}
-
-// PrivatePath descends from the root, privatizing every committed page
-// along the path for the draft transaction, and returns the private leaf
-// plus the lower-bound selection of key (Rust private_path + KeySelector).
-// The descent itself is the single authoritative privatePathSelect loop.
-func PrivatePath(codec Codec, store Store, root *uint32, key Key, retired *RetiredPages) (*PrivateLeaf, error) {
-	leaf, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header *Header, path *Path) (any, error) {
-		index, exists, err := lowerBound(codec, page, header, key, true)
-		if err != nil {
-			return nil, err
-		}
-		return keySelection{index: index, exists: exists}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sel := leaf.Selection.(keySelection)
-	return &PrivateLeaf{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: sel.index, Exists: sel.exists}, nil
-}
-
 // PrivateLeafSelect is the outcome of a selector-based COW descent: the
 // private leaf page, its header, the descent path, and the leaf selection
-// (Rust private_path_select PrivateLeaf<L::Selection>).
-type PrivateLeafSelect struct {
+// (Rust private_path_select PrivateLeaf<L::Selection>). Both type
+// parameters are concrete, so the descent never boxes the selection.
+type PrivateLeafSelect[T any, S any] struct {
 	Path       Path
 	PageNumber uint32
 	Header     Header
-	Selection  any
+	Selection  S
 }
 
 // leafSelector decides the leaf position during one COW descent (Rust
-// LeafSelector::select). It receives the page view, the parsed header, and
-// the descent path; only the leaf page is presented.
-type leafSelector func(page []byte, header *Header, path *Path) (any, error)
+// LeafSelector::select). The selector receives the page view, the parsed
+// header, and the descent path by value: only the leaf page is presented
+// and no address-taken stack value crosses the indirect call, so the
+// descent stays allocation-free. The selection runs before the leaf is
+// privatized, when the page view is still the view the store handed out
+// (a COW copy or a mapping growth never invalidates it).
+type leafSelector[S any] func(page []byte, header Header, path Path) (S, error)
 
 // privatePathSelect is the single authoritative COW root-to-leaf descent
-// (Rust private_path_select). It descends from the root, privatizing every
-// committed page along the path for the draft transaction, and returns the
-// private leaf plus the custom leaf selection.
-func privatePathSelect(codec Codec, store Store, root *uint32, key Key, retired *RetiredPages, selectLeaf leafSelector) (*PrivateLeafSelect, error) {
+// (Rust private_path_select). It descends from the root, privatizing
+// every committed page along the path for the draft transaction, and
+// returns the private leaf plus the custom leaf selection.
+func privatePathSelect[T any, S any](codec Codec[T], store Store, root *uint32, key Key, retired RetiredPages, selectLeaf leafSelector[S]) (PrivateLeafSelect[T, S], RetiredPages, error) {
 	work.TreeLookup(1)
 	var path Path
 	pageNumber := *root
@@ -106,54 +86,55 @@ func privatePathSelect(codec Codec, store Store, root *uint32, key Key, retired 
 	parentIndex := 0
 
 	for {
-		var header *Header
-		var born uint64
-		isLeaf := false
-		var selection any
-		index := 0
-		child := uint32(0)
-		if err := store.Inspect(pageNumber, func(page []byte) error {
-			h, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		page, err := store.Inspect(pageNumber)
+		if err != nil {
+			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+		}
+		header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		if err != nil {
+			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+		}
+		born := format.U64(page[format.HeaderBorn:])
+		var selection S
+		var index int
+		var child uint32
+		isLeaf := header.Level == 0
+		if isLeaf {
+			selection, err = selectLeaf(page, header, path)
 			if err != nil {
-				return err
+				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
 			}
-			header = h
-			born = format.U64(page[format.HeaderBorn:])
-			if h.Level == 0 {
-				isLeaf = true
-				selection, err = selectLeaf(page, h, &path)
-				return err
-			}
-			index, _, err = lowerBound(codec, page, h, key, false)
+		} else {
+			index, _, err = lowerBound(codec, page, &header, key, false)
 			if err != nil {
-				return err
+				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
 			}
-			child, err = branchChild(codec, page, h, index, store.PageLimit())
-			return err
-		}); err != nil {
-			return nil, err
+			child, err = branchChild(codec, page, &header, index, store.PageLimit())
+			if err != nil {
+				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+			}
 		}
 
 		activePage := pageNumber
 		if born != store.TargetTxn() {
-			copied, err := touch(store, pageNumber, retired)
+			copied, err := touch(store, pageNumber, &retired)
 			if err != nil {
-				return nil, err
+				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
 			}
 			activePage = copied
 			if hasParent {
 				if err := replaceBranchChild(codec, store, parentPage, parentIndex, copied); err != nil {
-					return nil, err
+					return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
 				}
 			} else {
 				*root = copied
 			}
 		}
 		if isLeaf {
-			return &PrivateLeafSelect{Path: path, PageNumber: activePage, Header: *header, Selection: selection}, nil
+			return PrivateLeafSelect[T, S]{Path: path, PageNumber: activePage, Header: header, Selection: selection}, retired, nil
 		}
 		if err := path.Push(Frame{PageNumber: activePage, Index: index, ItemCount: int(header.ItemCount)}); err != nil {
-			return nil, err
+			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
 		}
 		hasParent = true
 		parentPage = activePage
@@ -169,6 +150,24 @@ func privatePathSelect(codec Codec, store Store, root *uint32, key Key, retired 
 type keySelection struct {
 	index  int
 	exists bool
+}
+
+// PrivatePath descends from the root, privatizing every committed page
+// along the path for the draft transaction, and returns the private leaf
+// plus the lower-bound selection of key (Rust private_path + KeySelector).
+func PrivatePath[T any](codec Codec[T], store Store, root *uint32, key Key, retired RetiredPages) (PrivateLeaf, RetiredPages, error) {
+	leaf, retired, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header Header, _ Path) (keySelection, error) {
+		index, exists, err := lowerBound(codec, page, &header, key, true)
+		if err != nil {
+			return keySelection{}, err
+		}
+		return keySelection{index: index, exists: exists}, nil
+	})
+	if err != nil {
+		return PrivateLeaf{}, RetiredPages{}, err
+	}
+	sel := leaf.Selection
+	return PrivateLeaf{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: sel.index, Exists: sel.exists}, retired, nil
 }
 
 // touch allocates a private copy of a committed page and records the
@@ -189,32 +188,26 @@ func touch(store Store, pageNumber uint32, retired *RetiredPages) (uint32, error
 
 // replaceBranchChild updates one branch slot to name a new child page
 // (Rust replace_branch_child). The branch page must already be private.
-func replaceBranchChild(codec Codec, store Store, pageNumber uint32, index int, child uint32) error {
+func replaceBranchChild[T any](codec Codec[T], store Store, pageNumber uint32, index int, child uint32) error {
 	targetTxn := store.TargetTxn()
-	var header *Header
-	var key Key
-	var oldLen int
-	if err := store.Inspect(pageNumber, func(page []byte) error {
-		h, err := parse(codec, page, targetTxn, nil)
-		if err != nil {
-			return err
-		}
-		header = h
-		k, err := keyAt(codec, page, h, index)
-		if err != nil {
-			return err
-		}
-		key = k
-		cell, err := codecCell(codec, page, h, index)
-		if err != nil {
-			return err
-		}
-		oldLen = len(cell)
-		if _, err := branchChild(codec, page, h, index, store.PageLimit()); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return err
+	}
+	header, err := parse(codec, page, targetTxn, nil)
+	if err != nil {
+		return err
+	}
+	key, err := keyAt(codec, page, &header, index)
+	if err != nil {
+		return err
+	}
+	cell, err := codecCell(codec, page, &header, index)
+	if err != nil {
+		return err
+	}
+	oldLen := len(cell)
+	if _, err := branchChild(codec, page, &header, index, store.PageLimit()); err != nil {
 		return err
 	}
 	replacement, err := newBranchCell(codec, key, child)
@@ -224,14 +217,16 @@ func replaceBranchChild(codec Codec, store Store, pageNumber uint32, index int, 
 	if len(replacement.Bytes()) != oldLen {
 		return corrupt("B+tree child replacement changed key size")
 	}
-	return store.Update(pageNumber, func(page []byte) error {
-		ok, err := format.SlottedReplace(page, header, index, oldLen, replacement.Bytes())
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return corrupt("B+tree child replacement no longer fits")
-		}
-		return nil
-	})
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	ok, err := format.SlottedReplace(page, &header, index, oldLen, replacement.Bytes())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return corrupt("B+tree child replacement no longer fits")
+	}
+	return store.RestoreDirty(pageNumber, tag)
 }

@@ -105,11 +105,11 @@ func headerProblem(page []byte, selectedTxn uint64, kind Kind, expectedLevel *ui
 
 // InspectHeader validates one bitmap page and returns its geometry (Rust
 // bitmap_page::inspect_header).
-func InspectHeader(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) (*Header, error) {
+func InspectHeader(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) (Header, error) {
 	if err := headerProblem(page, selectedTxn, kind, expectedLevel); err != nil {
-		return nil, err
+		return Header{}, err
 	}
-	return &Header{Level: format.U16(page[format.HeaderLevel:]), ItemCount: int(format.U16(page[format.HeaderCount:]))}, nil
+	return Header{Level: format.U16(page[format.HeaderLevel:]), ItemCount: int(format.U16(page[format.HeaderCount:]))}, nil
 }
 
 // ReservedZero reports whether the reserved tail is all zeroes (Rust
@@ -174,7 +174,7 @@ func SetBranchChild(page []byte, index int, child uint32) error {
 
 // CheckedBranchChild reads and bounds-checks one child (Rust
 // checked_branch_child).
-func CheckedBranchChild(page []byte, header *Header, index int, pageLimit uint64) (uint32, error) {
+func CheckedBranchChild(page []byte, header Header, index int, pageLimit uint64) (uint32, error) {
 	if header.Level == 0 || index >= BranchChildren {
 		return 0, corrupt("bitmap child lookup is invalid")
 	}
@@ -190,7 +190,7 @@ func CheckedBranchChild(page []byte, header *Header, index int, pageLimit uint64
 
 // ReplaceBranchChild writes one child plus its summary bit and returns the
 // new child count (Rust replace_branch_child).
-func ReplaceBranchChild(page []byte, header *Header, index int, child uint32, summary bool) (int, error) {
+func ReplaceBranchChild(page []byte, header Header, index int, child uint32, summary bool) (int, error) {
 	if header.Level == 0 || index >= BranchChildren {
 		return 0, corrupt("bitmap child index is invalid")
 	}

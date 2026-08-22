@@ -32,20 +32,20 @@ func (m *usedMemoryStore) pageView(pageNumber uint32) ([]byte, error) {
 	return m.pages[pageNumber][:], nil
 }
 
-func (m *usedMemoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
-	page, err := m.pageView(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+func (m *usedMemoryStore) Inspect(pageNumber uint32) ([]byte, error) {
+	return m.pageView(pageNumber)
 }
 
-func (m *usedMemoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+func (m *usedMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	page, err := m.pageView(pageNumber)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	return fn(page)
+	return page, 0, nil
+}
+
+func (m *usedMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return nil
 }
 
 func (m *usedMemoryStore) Allocate() (uint32, error) {
@@ -57,16 +57,16 @@ func (m *usedMemoryStore) Allocate() (uint32, error) {
 	return pageNumber, nil
 }
 
-func (m *usedMemoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+func (m *usedMemoryStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	src, err := m.pageView(source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := m.pageView(destination)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
-	return fn(src, dst)
+	return src, dst, 0, nil
 }
 
 func (m *usedMemoryStore) DiscardPrivate(pageNumber uint32) error {
@@ -74,8 +74,8 @@ func (m *usedMemoryStore) DiscardPrivate(pageNumber uint32) error {
 	return nil
 }
 
-func (m *usedMemoryStore) RetirePages(pages []uint32) error {
-	m.retired = append(m.retired, pages...)
+func (m *usedMemoryStore) RetirePages(retired tree.RetiredPages) error {
+	m.retired = append(m.retired, retired.Slice()...)
 	return nil
 }
 
@@ -268,7 +268,7 @@ func TestMembershipLimitAndRootLevelShrinkWithTheHighestID(t *testing.T) {
 	if !cleared {
 		t.Fatal("clear(32001) reported no change")
 	}
-	if err := m.RetirePages(retired.Slice()); err != nil {
+	if err := m.RetirePages(*retired); err != nil {
 		t.Fatal(err)
 	}
 	limit, err := ShrinkMembership(m, &root, 32_002)
@@ -298,7 +298,7 @@ func TestMembershipLimitAndRootLevelShrinkWithTheHighestID(t *testing.T) {
 	if !cleared {
 		t.Fatal("final clear reported no change")
 	}
-	if err := m.RetirePages(retired.Slice()); err != nil {
+	if err := m.RetirePages(*retired); err != nil {
 		t.Fatal(err)
 	}
 	limit, err = ShrinkMembership(m, &root, limit)

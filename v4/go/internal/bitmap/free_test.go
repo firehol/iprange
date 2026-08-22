@@ -32,34 +32,34 @@ func (m *bitmapMemoryStore) pageView(pageNumber uint32) ([]byte, error) {
 	return m.pages[pageNumber][:], nil
 }
 
-func (m *bitmapMemoryStore) Inspect(pageNumber uint32, fn func(page []byte) error) error {
-	page, err := m.pageView(pageNumber)
-	if err != nil {
-		return err
-	}
-	return fn(page)
+func (m *bitmapMemoryStore) Inspect(pageNumber uint32) ([]byte, error) {
+	return m.pageView(pageNumber)
 }
 
-func (m *bitmapMemoryStore) Update(pageNumber uint32, fn func(page []byte) error) error {
+func (m *bitmapMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	page, err := m.pageView(pageNumber)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	return fn(page)
+	return page, 0, nil
+}
+
+func (m *bitmapMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return nil
 }
 
 func (m *bitmapMemoryStore) Allocate() (uint32, error) { return m.AllocateBitmapPage() }
 
-func (m *bitmapMemoryStore) CopyPage(source, destination uint32, fn func(source, output []byte) error) error {
+func (m *bitmapMemoryStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	src, err := m.pageView(source)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 	dst, err := m.pageView(destination)
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
-	return fn(src, dst)
+	return src, dst, 0, nil
 }
 
 func (m *bitmapMemoryStore) DiscardPrivate(pageNumber uint32) error {

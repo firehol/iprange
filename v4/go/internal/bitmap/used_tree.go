@@ -41,17 +41,22 @@ func propagateInner(store tree.Store, frames []usedFrame, childPage uint32, chil
 			}
 		}
 		targetTxn := store.TargetTxn()
-		if err := store.Update(frame.pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &frame.level)
-			if err != nil {
-				return err
-			}
-			child, err := BranchChild(page, frame.childIndex)
-			if err != nil {
-				return err
-			}
-			return setBranchChild(page, header, frame.childIndex, child, candidate)
-		}); err != nil {
+		page, tag, err := store.Update(frame.pageNumber)
+		if err != nil {
+			return err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &frame.level)
+		if err != nil {
+			return err
+		}
+		child, err := BranchChild(page, frame.childIndex)
+		if err != nil {
+			return err
+		}
+		if err := setBranchChild(page, header, frame.childIndex, child, candidate); err != nil {
+			return err
+		}
+		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
 			return err
 		}
 		childPage = frame.pageNumber
@@ -77,19 +82,19 @@ func removeEmptyPath(store tree.Store, root *uint32, path *editPath, limit uint6
 		}
 		candidate := coverageIntersects(frame.childBase, span, kind.FirstCandidate(), limit)
 		targetTxn := store.TargetTxn()
-		remaining := 0
-		if err := store.Update(frame.pageNumber, func(page []byte) error {
-			header, err := InspectHeader(page, targetTxn, kind, &frame.level)
-			if err != nil {
-				return err
-			}
-			count, err := ReplaceBranchChild(page, header, frame.childIndex, 0, candidate)
-			if err != nil {
-				return err
-			}
-			remaining = count
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(frame.pageNumber)
+		if err != nil {
+			return err
+		}
+		header, err := InspectHeader(page, targetTxn, kind, &frame.level)
+		if err != nil {
+			return err
+		}
+		remaining, err := ReplaceBranchChild(page, header, frame.childIndex, 0, candidate)
+		if err != nil {
+			return err
+		}
+		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
 			return err
 		}
 		if remaining != 0 {
@@ -121,17 +126,15 @@ func parentBase(frame usedFrame) (uint64, error) {
 // (Rust grow_root).
 func growUsedRoot(store tree.Store, root *uint32, kind Kind, required uint16, limit uint64) error {
 	targetTxn := store.TargetTxn()
-	var level uint16
-	if err := store.Inspect(*root, func(page []byte) error {
-		h, err := InspectHeader(page, targetTxn, kind, nil)
-		if err != nil {
-			return err
-		}
-		level = h.Level
-		return nil
-	}); err != nil {
+	page, err := store.Inspect(*root)
+	if err != nil {
 		return err
 	}
+	header, err := InspectHeader(page, targetTxn, kind, nil)
+	if err != nil {
+		return err
+	}
+	level := header.Level
 	if level > required {
 		return corrupt("used bitmap root level is too high")
 	}
@@ -150,13 +153,18 @@ func growUsedRoot(store tree.Store, root *uint32, kind Kind, required uint16, li
 		if err != nil {
 			return err
 		}
-		if err := store.Update(parent, func(page []byte) error {
-			Initialize(page, targetTxn, nextLevel, kind)
-			if err := initializeSummary(page, 0, span, kind.FirstCandidate(), limit); err != nil {
-				return err
-			}
-			return setBranchChild(page, &Header{Level: nextLevel}, 0, child, candidate)
-		}); err != nil {
+		page, tag, err := store.Update(parent)
+		if err != nil {
+			return err
+		}
+		Initialize(page, targetTxn, nextLevel, kind)
+		if err := initializeSummary(page, 0, span, kind.FirstCandidate(), limit); err != nil {
+			return err
+		}
+		if err := setBranchChild(page, Header{Level: nextLevel}, 0, child, candidate); err != nil {
+			return err
+		}
+		if err := store.RestoreDirty(parent, tag); err != nil {
 			return err
 		}
 		*root = parent
@@ -175,14 +183,16 @@ func newUsedSubtree(store tree.Store, kind Kind, level uint16, base uint64, limi
 			return 0, err
 		}
 		txn := store.TargetTxn()
-		if err := store.Update(pageNumber, func(page []byte) error {
-			Initialize(page, txn, 0, kind)
-			if err := SetLeafWord(page, LeafWordIndex(bit), uint64(1)<<(uint64(bit)%64)); err != nil {
-				return err
-			}
-			stampLeaf(page, 1)
-			return nil
-		}); err != nil {
+		page, tag, err := store.Update(pageNumber)
+		if err != nil {
+			return 0, err
+		}
+		Initialize(page, txn, 0, kind)
+		if err := SetLeafWord(page, LeafWordIndex(bit), uint64(1)<<(uint64(bit)%64)); err != nil {
+			return 0, err
+		}
+		stampLeaf(page, 1)
+		if err := store.RestoreDirty(pageNumber, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -212,13 +222,18 @@ func newUsedSubtree(store tree.Store, kind Kind, level uint16, base uint64, limi
 		return 0, err
 	}
 	txn := store.TargetTxn()
-	if err := store.Update(pageNumber, func(page []byte) error {
-		Initialize(page, txn, level, kind)
-		if err := initializeSummary(page, base, span, kind.FirstCandidate(), limit); err != nil {
-			return err
-		}
-		return setBranchChild(page, &Header{Level: level}, index, child, candidate)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return 0, err
+	}
+	Initialize(page, txn, level, kind)
+	if err := initializeSummary(page, base, span, kind.FirstCandidate(), limit); err != nil {
+		return 0, err
+	}
+	if err := setBranchChild(page, Header{Level: level}, index, child, candidate); err != nil {
+		return 0, err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil
@@ -255,7 +270,7 @@ func coverageIntersects(base, span uint64, first uint64, limit uint64) bool {
 
 // setPointer rewrites one child keeping its current summary bit (Rust
 // set_pointer).
-func setPointer(page []byte, header *Header, index int, child uint32) error {
+func setPointer(page []byte, header Header, index int, child uint32) error {
 	candidate, err := SummaryBit(page, index)
 	if err != nil {
 		return err
@@ -265,7 +280,7 @@ func setPointer(page []byte, header *Header, index int, child uint32) error {
 
 // setBranchChild writes one child and its summary bit (Rust
 // used_bitmap/page.rs set_branch_child).
-func setBranchChild(page []byte, header *Header, index int, child uint32, candidate bool) error {
+func setBranchChild(page []byte, header Header, index int, child uint32, candidate bool) error {
 	_, err := ReplaceBranchChild(page, header, index, child, candidate)
 	return err
 }

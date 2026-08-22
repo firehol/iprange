@@ -7,8 +7,6 @@ package tree
 
 import (
 	"testing"
-
-	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // buildU32Tree inserts keys 0..count-1 into one fresh tree (ascending
@@ -17,8 +15,8 @@ func buildU32Tree(t *testing.T, m *memoryStore, count int) uint32 {
 	t.Helper()
 	root := uint32(0)
 	for key := count - 1; key >= 0; key-- {
-		retired := NewRetiredPages()
-		changed, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), retired)
+		retired := RetiredPages{}
+		retired, changed, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), retired)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,32 +49,17 @@ func TestForwardCursorReadsAscendingAcrossLeafBoundaries(t *testing.T) {
 	}
 	seen := 0
 	for {
-		visited := false
-		err = cursor.Next(func(cell []byte, header *Header, pageNumber uint32, index int) error {
-			visited = true
-			leaf, err := u32Codec{}.ReadLeaf(cell)
-			if err != nil {
-				return err
-			}
-			got := leaf.(u32Leaf)
-			if got.key != uint32(seen) || got.value != uint32(seen+10) {
-				t.Fatalf("record %d = (%d, %d), want (%d, %d)", seen, got.key, got.value, seen, seen+10)
-			}
-			if header == nil || header.Level != 0 {
-				t.Fatalf("record %d header is not a leaf header", seen)
-			}
-			if pageNumber < 2 || index < 0 {
-				t.Fatalf("record %d has an invalid page/index (%d, %d)", seen, pageNumber, index)
-			}
-			seen++
-			return nil
-		})
+		leaf, ok, err := cursor.Next()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !visited {
+		if !ok {
 			break
 		}
+		if leaf.key != uint32(seen) || leaf.value != uint32(seen+10) {
+			t.Fatalf("record %d = (%d, %d), want (%d, %d)", seen, leaf.key, leaf.value, seen, seen+10)
+		}
+		seen++
 	}
 	if seen != 1000 {
 		t.Fatalf("cursor visited %d records, want 1000", seen)
@@ -85,12 +68,10 @@ func TestForwardCursorReadsAscendingAcrossLeafBoundaries(t *testing.T) {
 		t.Fatal("cursor is not finished after the last record")
 	}
 	// A finished cursor yields nothing more.
-	err = cursor.Next(func(cell []byte, header *Header, pageNumber uint32, index int) error {
-		t.Fatal("finished cursor yielded a record")
-		return nil
-	})
-	if err != nil {
+	if _, ok, err := cursor.Next(); err != nil {
 		t.Fatal(err)
+	} else if ok {
+		t.Fatal("finished cursor yielded a record")
 	}
 	// The non-consuming cursor released nothing.
 	if len(m.discarded) != 0 {
@@ -115,18 +96,14 @@ func TestForwardCursorConsumeReleasesEveryPassedPage(t *testing.T) {
 	}
 	seen := 0
 	for {
-		visited := false
-		err = cursor.Next(func(cell []byte, header *Header, pageNumber uint32, index int) error {
-			visited = true
-			seen++
-			return nil
-		})
+		_, ok, err := cursor.Next()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !visited {
+		if !ok {
 			break
 		}
+		seen++
 	}
 	if seen != 1000 {
 		t.Fatalf("cursor visited %d records, want 1000", seen)
@@ -207,17 +184,16 @@ func TestForwardCursorEmptyTreeIsFinished(t *testing.T) {
 	if !cursor.Finished() {
 		t.Fatal("empty tree cursor is not finished")
 	}
-	if err := cursor.Next(func(cell []byte, header *Header, pageNumber uint32, index int) error {
-		t.Fatal("empty cursor yielded a record")
-		return nil
-	}); err != nil {
+	if _, ok, err := cursor.Next(); err != nil {
 		t.Fatal(err)
+	} else if ok {
+		t.Fatal("empty cursor yielded a record")
 	}
 }
 
-// TestForwardCursorCellHeaderRoundTrip pins the borrowed cell contract:
-// the read callback sees the live page header and cell, and the cell
-// decodes through the codec (no owned page anywhere).
+// TestForwardCursorCellHeaderRoundTrip pins the decoded record contract:
+// the first record decodes through the codec, and the same value
+// round-trips from its encoded cell (no owned page anywhere).
 func TestForwardCursorCellHeaderRoundTrip(t *testing.T) {
 	m := newMemoryStore()
 	root := buildU32Tree(t, m, 3)
@@ -225,25 +201,22 @@ func TestForwardCursorCellHeaderRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := true
-	err = cursor.Next(func(cell []byte, header *Header, pageNumber uint32, index int) error {
-		if !first {
-			return nil
-		}
-		first = false
-		leaf, err := u32Codec{}.ReadLeaf(cell)
-		if err != nil {
-			return err
-		}
-		if got := leaf.(u32Leaf); got.key != 0 || got.value != 10 {
-			t.Fatalf("first record = %#v, want {0 10}", got)
-		}
-		if format.U32(cell) != 0 {
-			t.Fatalf("cell first word = %d, want 0", format.U32(cell))
-		}
-		return nil
-	})
+	leaf, ok, err := cursor.Next()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("cursor over a 3-record tree yielded nothing")
+	}
+	if leaf.key != 0 || leaf.value != 10 {
+		t.Fatalf("first record = %#v, want {0 10}", leaf)
+	}
+	// The same record decodes through the codec from its encoded cell.
+	decoded, err := u32Codec{}.ReadLeaf(u32Record(0, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded != leaf {
+		t.Fatalf("codec round-trip = %#v, want %#v", decoded, leaf)
 	}
 }

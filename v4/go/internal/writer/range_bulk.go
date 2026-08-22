@@ -21,27 +21,30 @@ type rangeBulkNode struct {
 
 // rangeBulkPackedPage is one page under construction (Rust PackedPage).
 type rangeBulkPackedPage struct {
-	appender   *format.SlottedAppender
+	appender   format.SlottedAppender
+	started    bool
 	first      tree.Key
 	hasFirst   bool
 	pageNumber uint32
 }
 
-func (p *rangeBulkPackedPage) active() bool { return p.appender != nil }
+func (p *rangeBulkPackedPage) active() bool { return p.started }
 
 func (p *rangeBulkPackedPage) start(store tree.Store, pageType format.PageType, bornTxn uint64, level uint16, aux uint32) error {
 	pageNumber, err := store.Allocate()
 	if err != nil {
 		return err
 	}
-	var appender *format.SlottedAppender
-	if err := store.Update(pageNumber, func(page []byte) error {
-		appender = format.NewSlottedAppender(page, pageType, bornTxn, level, aux)
-		return nil
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	appender := format.NewSlottedAppender(page, pageType, bornTxn, level, aux)
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return err
 	}
 	p.appender = appender
+	p.started = true
 	p.first = tree.Key{}
 	p.hasFirst = false
 	p.pageNumber = pageNumber
@@ -52,15 +55,18 @@ func (p *rangeBulkPackedPage) push(store tree.Store, first tree.Key, cell []byte
 	if p.pageNumber == 0 {
 		return false, corrupt("ordered range page has no output page")
 	}
-	if p.appender == nil {
+	if !p.started {
 		return false, corrupt("ordered range page is not active")
 	}
-	var appended bool
-	if err := store.Update(p.pageNumber, func(page []byte) error {
-		var err error
-		appended, err = p.appender.TryPush(page, cell)
-		return err
-	}); err != nil {
+	page, tag, err := store.Update(p.pageNumber)
+	if err != nil {
+		return false, err
+	}
+	appended, err := p.appender.TryPush(page, cell)
+	if err != nil {
+		return false, err
+	}
+	if err := store.RestoreDirty(p.pageNumber, tag); err != nil {
 		return false, err
 	}
 	if appended && !p.hasFirst {
@@ -71,24 +77,29 @@ func (p *rangeBulkPackedPage) push(store tree.Store, first tree.Key, cell []byte
 }
 
 func (p *rangeBulkPackedPage) finish(store tree.Store) (rangeBulkNode, error) {
-	appender := p.appender
-	if appender == nil {
+	appender := &p.appender
+	if !p.started {
 		return rangeBulkNode{}, corrupt("ordered range page is not active")
 	}
 	pageNumber := p.pageNumber
 	if pageNumber == 0 {
 		return rangeBulkNode{}, corrupt("ordered range page has no output page")
 	}
-	if err := store.Update(pageNumber, func(page []byte) error {
-		return appender.Finish(page)
-	}); err != nil {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return rangeBulkNode{}, err
+	}
+	if err := appender.Finish(page); err != nil {
+		return rangeBulkNode{}, err
+	}
+	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return rangeBulkNode{}, err
 	}
 	if !p.hasFirst {
 		return rangeBulkNode{}, corrupt("ordered range page has no first key")
 	}
 	first := p.first
-	p.appender = nil
+	p.started = false
 	p.first = tree.Key{}
 	p.hasFirst = false
 	p.pageNumber = 0

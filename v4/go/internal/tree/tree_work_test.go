@@ -15,7 +15,7 @@ func TestOneShotReadsHaveNoHiddenScans(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key+10)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -26,7 +26,7 @@ func TestOneShotReadsHaveNoHiddenScans(t *testing.T) {
 	pathPages := uint64(header.Level) + 1
 
 	work.Reset()
-	if _, err := Predecessor(u32Codec{}, m, root, u32Key(501)); err != nil {
+	if _, _, err := Predecessor(u32Codec{}, m, root, u32Key(501)); err != nil {
 		t.Fatal(err)
 	}
 	snap := work.Read()
@@ -38,7 +38,7 @@ func TestOneShotReadsHaveNoHiddenScans(t *testing.T) {
 	}
 
 	work.Reset()
-	if _, err := AtOrAfter(u32Codec{}, m, root, u32Key(501)); err != nil {
+	if _, _, err := AtOrAfter(u32Codec{}, m, root, u32Key(501)); err != nil {
 		t.Fatal(err)
 	}
 	snap = work.Read()
@@ -55,16 +55,16 @@ func TestOneShotReadsHaveNoHiddenScans(t *testing.T) {
 	evenStore := newMemoryStore()
 	evenRoot := uint32(0)
 	for key := 0; key < 1000; key += 2 {
-		if _, err := Insert(u32Codec{}, evenStore, &evenRoot, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, evenStore, &evenRoot, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	work.Reset()
-	value, err := AtOrAfter(u32Codec{}, evenStore, evenRoot, u32Key(811))
+	value, found, err := AtOrAfter(u32Codec{}, evenStore, evenRoot, u32Key(811))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaf, ok := value.(u32Leaf); !ok || leaf.key != 812 {
+	if !found || value.key != 812 {
 		t.Fatalf("at_or_after(811) = %#v, want key 812", value)
 	}
 	snap = work.Read()
@@ -100,12 +100,12 @@ func TestFixedReplacementUsesOneCapacityProbeAndNoSlotScan(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 1000; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	work.Reset()
-	changed, err := Insert(u32Codec{}, m, &root, u32Record(500, 7), NewRetiredPages())
+	_, changed, err := Insert(u32Codec{}, m, &root, u32Record(500, 7), RetiredPages{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,12 +130,12 @@ func TestKnownDeletionUsesOneTreeLookup(t *testing.T) {
 	m := newMemoryStore()
 	root := uint32(0)
 	for key := 0; key < 900; key++ {
-		if _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), NewRetiredPages()); err != nil {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	work.Reset()
-	if err := DeleteExisting(u32Codec{}, m, &root, u32Key(451), NewRetiredPages()); err != nil {
+	if _, err := DeleteExisting(u32Codec{}, m, &root, u32Key(451), RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
 	snap := work.Read()

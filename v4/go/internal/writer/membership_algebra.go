@@ -42,25 +42,20 @@ type combinedWords struct {
 
 func (c *combinedWords) WordCount() uint32 { return c.wordCount }
 
-func (c *combinedWords) ReadWords(start uint32, output []uint64) error {
-	if err := readMembershipOperand(c.store, c.idRoot, c.leftID, c.leftWords, start, output); err != nil {
-		return err
+func (c *combinedWords) ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error) {
+	count = membershipChunkWords
+	if remaining := c.wordCount - start; count > remaining {
+		count = remaining
 	}
-	var right [64]uint64
-	done := 0
-	for done < len(output) {
-		count := len(output) - done
-		if count > len(right) {
-			count = len(right)
-		}
-		at := start + uint32(done)
-		if err := readMembershipOperand(c.store, c.idRoot, c.rightID, c.rightWords, at, right[:count]); err != nil {
-			return err
-		}
-		applyMembershipWords(output[done:done+count], right[:count], c.operation)
-		done += count
+	if err := readMembershipOperand(c.store, c.idRoot, c.leftID, c.leftWords, start, words[:]); err != nil {
+		return words, 0, err
 	}
-	return nil
+	var right [membershipChunkWords]uint64
+	if err := readMembershipOperand(c.store, c.idRoot, c.rightID, c.rightWords, start, right[:]); err != nil {
+		return words, 0, err
+	}
+	applyMembershipWords(words[:], right[:], c.operation)
+	return words, count, nil
 }
 
 // combineMembership returns the dictionary ID for the combination of two
@@ -228,15 +223,18 @@ func rawMembershipWordCount(left, right uint32, operation membershipOperation) u
 // finds the last nonzero word).
 func canonicalMembershipCount[W membershipWords](store tree.Store, source W) (uint32, error) {
 	end := source.WordCount()
-	var words [64]uint64
 	for end != 0 {
-		start := end - minU32(end, uint32(len(words)))
+		start := end - minU32(end, membershipChunkWords)
 		count := end - start
-		if err := source.ReadWords(start, words[:count]); err != nil {
+		chunk, got, err := source.ReadChunk(start)
+		if err != nil {
 			return 0, err
 		}
+		if got < count {
+			return 0, corrupt("membership words are outside the source bounds")
+		}
 		for index := int(count) - 1; index >= 0; index-- {
-			if words[index] != 0 {
+			if chunk[index] != 0 {
 				return start + uint32(index) + 1, nil
 			}
 		}

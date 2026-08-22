@@ -172,7 +172,7 @@ func structurePayloadDigest(codec structurePayloadCodec, payload *structurePaylo
 	binary.LittleEndian.PutUint16(lengthBytes[:], payload.length)
 	hasher.Write(lengthBytes[:])
 	hasher.Write(payload.Slice())
-	copy(digest[:], hasher.Sum(nil))
+	hasher.Sum(digest[:0])
 	return digest, nil
 }
 
@@ -330,13 +330,13 @@ func (c structureHashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error)
 		return tree.Key{}, err
 	}
 	probe := structureHashProbe(record.digest, record.id)
-	return tree.VarKey(probe[:]), nil
+	return tree.RawKey(probe[:]), nil
 }
 
-func (c structureHashCodec) ReadLeaf(cell []byte) (any, error) {
+func (c structureHashCodec) ReadLeaf(cell []byte) (structureHashRecord, error) {
 	record, err := decodeStructureHash(cell)
 	if err != nil {
-		return nil, err
+		return structureHashRecord{}, err
 	}
 	return record, nil
 }
@@ -344,10 +344,12 @@ func (c structureHashCodec) ReadLeaf(cell []byte) (any, error) {
 func (structureHashCodec) WriteKey(key tree.Key, output []byte) {
 	// Branch cells carry the wire layout (digest + little-endian id);
 	// the tree Key is the numeric orientation, so the id bytes reverse.
-	bytes := key.Bytes()
-	copy(output[structureHashDigestOffset:structureHashIDOffset], bytes[:structureHashIDOffset])
-	output[32] = bytes[35]
-	output[33] = bytes[34]
-	output[34] = bytes[33]
-	output[35] = bytes[32]
+	// The probe bytes are the key's raw inline field, never a slice of
+	// a local.
+	raw := key.Raw
+	copy(output[structureHashDigestOffset:structureHashIDOffset], raw[:structureHashIDOffset])
+	output[32] = raw[35]
+	output[33] = raw[34]
+	output[34] = raw[33]
+	output[35] = raw[32]
 }
