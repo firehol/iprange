@@ -206,6 +206,53 @@ func TestFeedCatalogRenameAndRemoveLifecycle(t *testing.T) {
 // carries one constant member record per range, the ordered-prefix
 // address count is exact, and the member refcount is charged for every
 // record.
+// TestFeedMergeEmptyMapSpliceStaysUntracked mirrors the Rust
+// private_constant_union_splices_a_large_run_without_per_record_searches
+// vector through the empty-map feed: 2,000 ascending single-key
+// coverage records, then one large covering range that splices the run
+// into a single record through the general path (union run insert). The
+// splice insert must not charge membership refcounts (coverage stays
+// untracked); the only accounting is the sealed tree record count
+// charged by finishEmptyMapFeedRanges.
+func TestFeedMergeEmptyMapSpliceStaysUntracked(t *testing.T) {
+	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
+	draft, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
+	if err := draft.beginMembershipWorkflow(); err != nil {
+		t.Fatal(err)
+	}
+	alpha, _, err := store.ensureFeed("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.beginEmptyMapFeed(); err != nil {
+		t.Fatal(err)
+	}
+	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
+	for ordinal := 0; ordinal < 2000; ordinal++ {
+		key := uint32(ordinal) * 4
+		if err := store.addEmptyMapFeedRange(key4(key), key4(key+1), member, &input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.addEmptyMapFeedRange(key4(0), key4(8000), member, &input); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.finishEmptyMapFeedRanges(member, &input); err != nil {
+		t.Fatal(err)
+	}
+	if draft.meta.RangeRecordCount != 1 {
+		t.Fatalf("spliced tree count = %d, want 1", draft.meta.RangeRecordCount)
+	}
+	delta := store.draft.membershipDeltaPending.slot(member.id)
+	if delta == nil || delta.change != 1 {
+		t.Fatalf("membership delta after the splice = %+v, want exactly +1 (the coverage splice must stay untracked)", delta)
+	}
+}
+
 func TestFeedMergeEmptyMapCreate(t *testing.T) {
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	draft, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})

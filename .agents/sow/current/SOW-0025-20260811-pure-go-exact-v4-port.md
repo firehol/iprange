@@ -46,6 +46,41 @@ Status: in-progress
 
 Status: in-progress
 
+### Status (2026-08-22) - slice A second reviewer round: one P1 and two P2 verified and fixed
+
+The aspect-reviewer round on the encode-scratch fix (HEAD 4bd7f82)
+returned three more findings, all verified against the tree:
+
+- **P1 (Performance aspect): insert() bypassed the new untracked
+  flag.** The wrapper removal converted every per-record accounting
+  site except insert(), which still called ctx.store.RangeRecordAdded
+  directly; on the marked-untracked coverage path the union-run splice
+  (unionRun -> insert, coverage.go:725) charged a spurious membership
+  refcount delta into the draft (the old untrackedRangeStore wrapper
+  made it a no-op). Verified end-to-end with the Rust
+  private_constant_union_splices_a_large_run... vector through the
+  empty-map feed: before the fix the member delta was +2 (splice +1,
+  sealed count +1), after the fix exactly +1. Fix: insert() routes
+  through rangeRecordAdded; replaceStrictlyInside charges through the
+  new storeRecordAdded helper; regression test
+  TestFeedMergeEmptyMapSpliceStaysUntracked binds the invariant.
+- **P2: encodeRecord had no slot bounds check** (range_edit.go) - a
+  derived slot would panic instead of returning the library error
+  class. Fix: range-encode slot index validated against the scratch
+  array, corrupt error on violation.
+- **P2: the general-path alloc ceiling was loose enough to admit one
+  new per-record allocation** (826 for 256 records allowed 3.0/record
+  vs the 1.98 baseline). Fix: ceiling tightened to 800 (baseline ~568;
+  a +1/record regression lands at ~820). The slope-based alternative
+  was measured and rejected: the generic gap machinery allocates
+  non-linearly (2.89/record at 512 records vs 1.98 at 256), so the pin
+  uses one fixed measurement with a documented arithmetic margin.
+
+Validation (all under nice): gofmt clean, go vet, go test ./... and
+-tags v4work (both -count=1 and -race), checkptr=2, and the
+linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64 and
+freebsd/amd64 cross-builds - all green. Rust suite untouched.
+
 ### Status (2026-08-22) - slice A five-aspect reviewer round: one P2 verified and fixed (per-record encode escape)
 
 The first five-aspect review of the slice A delta (HEAD c2ccd50)

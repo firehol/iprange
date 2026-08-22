@@ -57,6 +57,9 @@ type change struct {
 // and returns the valid byte view (Rust EncodedRange::new). The view
 // stays valid until the next encode reuses the same slot.
 func (ctx *rangeCtx) encodeRecord(slot int, r rangeRecord) ([]byte, error) {
+	if slot < 0 || slot >= len(ctx.encodeScratch) {
+		return nil, corrupt("range encode slot out of range")
+	}
 	output := ctx.encodeScratch[slot][:]
 	n, err := ctx.family.EncodeRecord(r, output)
 	if err != nil {
@@ -273,11 +276,11 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	if change.value.present {
 		recorded = change.value.value
 	}
-	if err := ctx.store.RangeRecordAdded(recorded); err != nil {
+	if err := storeRecordAdded(ctx, recorded); err != nil {
 		return false, err
 	}
 	if change.value.present {
-		if err := ctx.store.RangeRecordAdded(old.value); err != nil {
+		if err := storeRecordAdded(ctx, old.value); err != nil {
 			return false, err
 		}
 	}
@@ -452,13 +455,9 @@ func insert(ctx *rangeCtx, r rangeRecord) error {
 		return err
 	}
 	if inserted {
-		if err := addCount(ctx.count, 1); err != nil {
+		if err := rangeRecordAdded(ctx, r.value); err != nil {
 			return err
 		}
-		if err := ctx.store.RangeRecordAdded(r.value); err != nil {
-			return err
-		}
-		work.RangeEmitted(1)
 	}
 	return nil
 }
@@ -524,13 +523,21 @@ func rangeRecordAdded(ctx *rangeCtx, value uint32) error {
 	if err := addCount(ctx.count, 1); err != nil {
 		return err
 	}
-	if !ctx.untracked {
-		if err := ctx.store.RangeRecordAdded(value); err != nil {
-			return err
-		}
+	if err := storeRecordAdded(ctx, value); err != nil {
+		return err
 	}
 	work.RangeEmitted(1)
 	return nil
+}
+
+// storeRecordAdded charges one recorded value unless the operation is
+// untracked (Rust range_record_added / Untracked). Callers that manage
+// their own count and work counters use it directly.
+func storeRecordAdded(ctx *rangeCtx, value uint32) error {
+	if ctx.untracked {
+		return nil
+	}
+	return ctx.store.RangeRecordAdded(value)
 }
 
 // rangeRecordRemoved accounts one removed record unless the operation is

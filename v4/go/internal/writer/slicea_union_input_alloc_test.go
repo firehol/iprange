@@ -90,15 +90,18 @@ func TestSliceAOrderedUnionAllocCeiling(t *testing.T) {
 }
 
 // TestSliceAGeneralUnionAllocCeiling pins the general fallback. The
-// generic gap rejection machinery allocates ~2 objects per record
-// (rejection, probePredecessor, privatePathSelect; the optionalCell
-// follow-up removes them); the ceiling of 826 permits at most 3 per
-// record and fails on a new per-record allocation on top of the
-// baseline (~1,080).
+// generic gap rejection machinery allocates ~2 objects per record at
+// this tree size (rejection, probePredecessor, privatePathSelect; the
+// optionalCell follow-up removes them); the allocation slope grows
+// with tree depth, so the pin uses the absolute total of one fixed
+// measurement. Baseline: ~57 for the fresh draft plus 1.98 per record
+// = ~565 for 256 records. Ceiling 800 permits up to 2.9 per record
+// and fails on any new per-record allocation on top of the baseline
+// (a +1 regression lands at 57 + 2.98 x 256 = 820).
 func TestSliceAGeneralUnionAllocCeiling(t *testing.T) {
 	total := pushGeneralAllocs(t, 256)
 	t.Logf("general coverage input allocations (fresh draft + 256 records): %.0f", total)
-	const ceiling = 826
+	const ceiling = 800
 	if total > ceiling {
 		t.Fatalf("general coverage input allocates %.0f objects for 256 records, ceiling is %d: a new per-record allocation was introduced", total, ceiling)
 	}
