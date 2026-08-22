@@ -42,7 +42,7 @@ Recorded as Review Process below.
 
 Status: in-progress
 
-### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (uncommitted, reviewed before milestone close)
+### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (committed at 925e114)
 
 The warm ProjectHistory projection path (source 1000 last-seen points,
 three destination windows, abort) allocated 5,169 heap objects per call
@@ -110,8 +110,8 @@ windows/darwin/freebsd and linux-arm64 builds, Rust full suite and
 green. The allocation test is deterministic at 39/run.
 
 - Next: the five-aspect adversarial close gate for chunk 3b-4 over
-  delta HEAD 11003d8..working tree (allocation fixes, slice A+B+C,
-  the corpus extension), then the next M3 surface (feed workflows).
+  delta HEAD 11003d8..925e114 (allocation fixes, slice A+B+C, the
+  corpus extension), then the next M3 surface (feed workflows).
 
 ### 2026-08-21 - user decision: the gate scanner and its mutation corpora are deleted; the gate is full-codebase review
 

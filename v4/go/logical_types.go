@@ -79,7 +79,7 @@ type WorkflowReport struct {
 	TranslatedMembershipCount     uint64
 }
 
-// HistoryWindow is one first-seen history window projection request
+// HistoryWindow is one last-seen history window projection request
 // (Rust history::HistoryWindow; the name is a Go string, the immutable
 // value mirror of the Rust FeedName copy value).
 type HistoryWindow struct {

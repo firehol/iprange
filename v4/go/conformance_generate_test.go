@@ -220,8 +220,8 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	}
 }
 
-// TestRegenerateGoFixtures regenerates both Go-produced fixtures with the
-// Rust two-phase contract: generate both files into a staging corpus,
+// TestRegenerateGoFixtures regenerates the three Go-produced fixtures with
+// the Rust two-phase contract: generate all files into a staging corpus,
 // verify the staging corpus with the exact same conformance suite in a
 // subprocess, and only then publish each file next to its committed
 // target and rename over it. A failed verification leaves the committed
