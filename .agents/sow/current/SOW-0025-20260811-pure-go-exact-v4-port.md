@@ -195,6 +195,59 @@ batch (Go-only edits; no conformance corpus change).
   when all five report no P0-P2, close milestone 1 (push), then start
   the next M3 surface (feed workflows).
 
+### Status (2026-08-22) - milestone 1 close gate: all five aspects PASS on 11003d8..499a0e3
+
+Round-2 re-reviews of the residue batch `fd171b6..499a0e3` (pinned
+milestone delta `11003d8..499a0e3`, HEAD `499a0e3`, signed, worktree
+clean):
+
+- Aspect 1 (Rust parity, Meitner): PASS. All five F-A..F-D2 fixes
+  verified line-by-line against `membership_dictionary.rs`,
+  `blob_tree.rs`, `fixed_tree/query.rs`, `membership_dictionary/blob.rs`;
+  the optionalValue and rejectCell conversions were verified against
+  `range_mutation/assign.rs` and `fixed_tree/gap.rs`; fresh
+  -gcflags=-m=2 shows no remaining value escapes; full validation
+  matrix green at the pinned HEAD. mmap-only/durability statement
+  re-confirmed for the whole delta.
+- Aspect 2 (Go idioms, Anscombe): PASS. P1-1 (uint64 boundary compare)
+  verified against the previously failing linux/386 and linux/arm
+  builds, now green; P3-1 (optionalValue in range_edit.go) and P3-4
+  (single rejectCell) verified in source and in the escape report; the
+  P3-2 and P3-3 dispositions are recorded here and accepted; full
+  validation matrix green at the pinned HEAD.
+- Aspects 3, 4 and 5 (Harvey, Newton, Aristotle) passed the milestone
+  scope on `11003d8..fd171b6`; the residue batch touches no public
+  API surface, no wire bytes and no conformance fixture (both
+  re-reviewers re-ran the full cross-open/alloc/race battery at
+  `499a0e3`), so their PASS stands for the pinned delta.
+
+Carried P3s (all on the range-edit draft path, which has no production
+caller until the next milestone ports draft_store membership/structured
+applies; all tracked as requirements of that slice, see the next-milestone
+entry):
+
+- P3-A: newEncodedRange heap-escapes per range-record edit
+  (range_edit.go:49-56, interface EncodeRecord call). Pre-existing at
+  11003d8, not on the ProjectHistory path, not covered by the 39/84
+  ceilings. Fix plan (validated by Aspect 1): rangeCtx carries a
+  writer-owned [RangeRecordV6Size]byte encode scratch and
+  EncodeRecord writes into it, mirroring Rust EncodedRange::new
+  writing a local [u8; 36] by value.
+- P3-B: the closed-gap rejection path allocates two rejectCell structs
+  (tree/gap.go:458-467). Pre-existing, cold assign-with-hint retry
+  path, returned-by-design pointers. Fix plan: an optionalCell
+  value+present pair when the draft-edit path gets an alloc ceiling.
+- P3-C: segmentAt returns *segment (one escape per transform segment)
+  (range_edit.go:151-169). No production caller today. Fix plan:
+  return segment by value when the transform walk becomes live.
+
+No P0-P2 findings remain on the milestone delta. Milestone 1 (pure-Go
+exact v4 reader core) CLOSED: pushed as master HEAD 499a0e3, and the
+next milestone (M3 surface: feed workflows) starts from the pushed state.
+Follow-up mapping: the three carried P3s above are the first recorded
+requirements of the next milestone's range-edit slice; no other deferred
+items exist in this SOW.
+
 ### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (committed at 925e114)
 
 The warm ProjectHistory projection path (source 1000 last-seen points,
