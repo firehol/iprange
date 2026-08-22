@@ -248,6 +248,68 @@ Follow-up mapping: the three carried P3s above are the first recorded
 requirements of the next milestone's range-edit slice; no other deferred
 items exist in this SOW.
 
+### Status (2026-08-22) - chunk 3b-5 defined: complete feed workflows (M3 surface)
+
+Milestone 1 (reader core + history projection) is closed and pushed at
+HEAD 19bf997. Next M3 surface: the complete named-feed workflows of the
+Rust live writer. Go has the value-free report types, the ordered merge
+base, the draft feed catalog (lookup/ensure/insert/allocate), the draft
+membership dictionary (combine/contains-indexes/intern), the range edit
+core, and the history workflow; it lacks the feed input machinery, the
+feed merge policy, the feed lifecycle ops, the membership/structured
+transaction surfaces, and the structured draft apply paths.
+
+Rust authority: live_writer/{feed_workflow,membership,structured,
+feed_lifecycle}.rs, live_writer/workflow.rs, draft_store/{feed_merge,
+membership,structured,storage,timestamp_refresh,import_merge,
+import_cache}.rs, range_mutation/{coverage.rs,coverage/input.rs,
+assign.rs}, writer_core edit bindings, feed.rs (FeedName), and the
+workflow report/comparison helpers; tests in feed_workflow_tests.rs,
+live_writer workflows and draft_store tests.
+
+Slices (disjoint write scopes, exact Rust baseline):
+
+- A (internal/writer draft machinery): the range-mutation coverage and
+  assignment inputs (UnionInput/UnionState/OrderedPrefix/
+  UnionAssignmentInput, push/finish input untracked, private constant
+  ranges, assign_private_input), the empty-map feed trio, the feed
+  merge policy + projection + merge_coverage over the existing
+  orderedMerge, the draft feed lifecycle (addFeedToMembership with
+  intern_added_bit, rename/remove current feed), and the workflow-range
+  draft fields. Go tree PrivateEdge/LocalInsert already exists.
+- B (public v4/go): FeedName binding, CreateFeed/ReplaceFeed workflows
+  (begin_create_feed/begin_replace_feed, add_ranges_v4/v6(+slice),
+  finish_input -> FinishedWorkflow/PreparedFeedChange), the
+  MembershipTransaction surface (FeedRef/MembershipRef/
+  TransactionFeedCursor, apply_v4/v6, empty_membership, add_feed,
+  lookup/ensure/rename/delete feed, metadata, commit/abort), the
+  workflow completion/classification/report machinery shared with the
+  history projection, and tests mirroring feed_workflow_tests.rs and
+  the membership/structured transaction tests, plus work-counter and
+  zeroalloc pins and Rust cross-open evidence at the close gate.
+- C (internal/writer structured apply + public StructuredTransaction):
+  draft intern_network_enrichment_v1 (payload encode + structure
+  refcounts + membership owner refcounts), assign_structure_input_v4/v6
+  with the assignment input, clear_v4/v6, delete_current_structured_feed
+  (remove_feed_from_structure payload re-intern), finish_structure_deltas
+  (structure_dictionary apply_delta + released-membership accounting),
+  the public StructuredTransaction (StructureRef, assign/clear,
+  metadata, commit/abort), and tests mirroring the Rust structured
+  workflow tests.
+- The carried P3s from the milestone-1 gate (newEncodedRange encode
+  scratch, segmentAt by value, optionalCell for reject cells) land in
+  slice A/C where their callers become live, as recorded.
+
+Recorded decisions (no open user decision): live sidecar remains M4
+(no import/lock/refresh workflows); the feed workflows are the exact
+ranges-over-membership create/replace and the transaction surfaces,
+mirroring the Rust public API one-to-one including reference epochs
+(StaleReference/ForeignReference), empty-map fast path, and the
+logical change classification.
+
+- Next: slice A implementation on the pushed state, then B, then C,
+  then the five-aspect close gate like every chunk.
+
 ### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (committed at 925e114)
 
 The warm ProjectHistory projection path (source 1000 last-seen points,
