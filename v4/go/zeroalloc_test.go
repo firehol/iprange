@@ -376,21 +376,22 @@ func TestZeroAllocationFeedSliceIngestion(t *testing.T) {
 	if delta := after.TotalAlloc - before.TotalAlloc; delta != 0 {
 		// Bounded one-time Go runtime metadata window (see above). The
 		// size-class breakdown stays in the failure report so any new
-		// runtime entry is immediately identifiable.
-		if delta <= 64 {
+		// runtime entry is immediately identifiable. The continuation
+		// pin below still runs: AllocsPerRun warms its own run, so
+		// one-time charges cannot leak into its measurement.
+		if delta > 64 {
 			for i := range after.BySize {
 				if n := int(after.BySize[i].Mallocs) - int(before.BySize[i].Mallocs); n > 0 {
-					t.Logf("runtime metadata size %d: +%d mallocs", after.BySize[i].Size, n)
+					t.Logf("size %d: +%d mallocs", after.BySize[i].Size, n)
 				}
 			}
-			return
+			t.Fatalf("fresh-workflow first batch allocated %d bytes, want <= 64", delta)
 		}
 		for i := range after.BySize {
 			if n := int(after.BySize[i].Mallocs) - int(before.BySize[i].Mallocs); n > 0 {
-				t.Logf("size %d: +%d mallocs", after.BySize[i].Size, n)
+				t.Logf("runtime metadata size %d: +%d mallocs", after.BySize[i].Size, n)
 			}
 		}
-		t.Fatalf("fresh-workflow first batch allocated %d bytes, want <= 64", delta)
 	}
 	// 51 continuation batches of 1000 strictly ascending records (one
 	// extra for the AllocsPerRun warmup); the first record of batch b

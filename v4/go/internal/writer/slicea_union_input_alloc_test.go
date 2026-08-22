@@ -91,7 +91,7 @@ func TestSliceAOrderedUnionAllocCeiling(t *testing.T) {
 // and the only remaining cost is the fresh-draft setup plus a small
 // tree-depth slope (measured: 54 objects at 256 records, 61 at 512, 70
 // at 1024; ~3 per tree-level doubling). The ceiling of 300 fails on any
-// new per-record allocation (58 + 256 = 314) while leaving headroom for
+// new per-record allocation (54 + 256 = 310) while leaving headroom for
 // the depth slope and setup variance across Go releases.
 func TestSliceAGeneralUnionAllocCeiling(t *testing.T) {
 	total := pushGeneralAllocs(t, 256)
