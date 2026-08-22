@@ -52,7 +52,8 @@ func DecodePageHeader(page []byte, selectedTxn uint64) (PageHeader, error) {
 		Aux:        U32(page[24:28]),
 		PageCRC32C: U32(page[28:32]),
 	}
-	if p.PageType < PageTypeRangeBranch || p.PageType > PageTypeStructureHashLeaf {
+	if (p.PageType < PageTypeRangeBranch || p.PageType > PageTypeStructureHashLeaf) &&
+		p.PageType != PageTypeDeltaBranch && p.PageType != PageTypeDeltaLeaf {
 		return PageHeader{}, headerErr("invalid page type %d", p.PageType)
 	}
 	if p.PageFlags != 0 {
@@ -89,7 +90,7 @@ func (p PageHeader) IsBranch() bool {
 	case PageTypeRangeBranch, PageTypeCatalogNameBranch, PageTypeCatalogIndexBranch,
 		PageTypeMembershipIDBranch, PageTypeMembershipHashBranch, PageTypeBlobBranch,
 		PageTypeBitmapBranch, PageTypeRetirementBranch, PageTypeStructureIDDirectory,
-		PageTypeStructureHashBranch:
+		PageTypeStructureHashBranch, PageTypeDeltaBranch:
 		return true
 	default:
 		return false

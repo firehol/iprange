@@ -84,11 +84,14 @@ func TestDraftStoreAssignV6RunsTheV6Family(t *testing.T) {
 	}
 }
 
-// TestDraftStoreRangeAccountingFailsClosedOnMembershipKinds pins the
-// fail-closed fence: until the membership/structure accounting cores
-// arrive, range edits on those kinds are refused instead of silently
-// corrupting refcounts.
-func TestDraftStoreRangeAccountingFailsClosedOnMembershipKinds(t *testing.T) {
+// TestDraftStoreRangeAccountingRoutesMembershipRefcounts pins the
+// membership accounting fence since Slice A/B: range edits on
+// membership-kind drafts succeed and route every record into the
+// operation-private refcount delta state (Rust
+// RangeStore::range_record_added/removed + track_membership_refcount),
+// while structured-kind range edits still fail closed until the
+// structure edit core arrives.
+func TestDraftStoreRangeAccountingRoutesMembershipRefcounts(t *testing.T) {
 	path := makeEmptyDBPagesKind(t, 64, format.AddressFamilyIPv4)
 	raw := make([]byte, 64*format.PageSize)
 	for i := uint64(0); i < 2; i++ {
@@ -104,21 +107,72 @@ func TestDraftStoreRangeAccountingFailsClosedOnMembershipKinds(t *testing.T) {
 	}
 	budget := PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}
 	_, store, _ := openDraftStore(t, path, budget, [16]byte{6})
+
+	changed, err := store.AssignV4(0, 10, 7)
+	if err != nil || !changed {
+		t.Fatalf("membership-kind AssignV4 = %v, %v", changed, err)
+	}
+	if store.draft.meta.RangeRecordCount != 1 {
+		t.Fatalf("membership assign record count = %d, want 1", store.draft.meta.RangeRecordCount)
+	}
+	// The record charged one refcount for membership id 7 into the
+	// pending delta buffer.
+	if store.draft.membershipDeltaPending.isEmpty() {
+		t.Fatal("membership assign left the refcount delta buffer empty")
+	}
+	slot := store.draft.membershipDeltaPending.slots[0]
+	if slot == nil || slot.id != 7 || slot.change != 1 {
+		t.Fatalf("pending delta = %+v, want {7 +1}", slot)
+	}
+
+	// Clearing the range accounts the removal; the same pending slot
+	// merges to a zero change (Rust track_buffered coalescing).
+	if changed, err := store.ClearV4(0, 10); err != nil || !changed {
+		t.Fatalf("membership-kind ClearV4 = %v, %v", changed, err)
+	}
+	if store.draft.meta.RangeRecordCount != 0 {
+		t.Fatalf("membership clear record count = %d, want 0", store.draft.meta.RangeRecordCount)
+	}
+	slot = store.draft.membershipDeltaPending.slots[0]
+	if slot == nil || slot.id != 7 || slot.change != 0 {
+		t.Fatalf("pending delta after clear = %+v, want {7 0}", slot)
+	}
+}
+
+// TestDraftStoreRangeAccountingFailsClosedOnStructuredKinds pins the
+// remaining fail-closed fence: structured-kind range edits are refused
+// until the structure edit core arrives, and a refused edit must leave
+// the draft meta at its pre-call state (Rust draft_store.rs snapshots
+// root/count into locals and commits them only after the edit succeeds).
+func TestDraftStoreRangeAccountingFailsClosedOnStructuredKinds(t *testing.T) {
+	path := makeEmptyDBPagesKind(t, 64, format.AddressFamilyIPv4)
+	raw := make([]byte, 64*format.PageSize)
+	for i := uint64(0); i < 2; i++ {
+		page := raw[i*format.PageSize : (i+1)*format.PageSize]
+		copy(page, format.MainMagic[:])
+		putMetaFieldsForTest(page, 64)
+		page[12] = format.ValueKindStructured
+		page[13] = format.StructureKindNetworkEnrichmentV1
+		format.PutU64(page[112:120], 1) // MembershipIDLimit
+		format.PutU64(page[208:216], 1) // StructureIDLimit
+		format.PutU32(page[252:256], format.MetaCRC32C(page))
+	}
+	if err := osWriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	budget := PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}
+	_, store, _ := openDraftStore(t, path, budget, [16]byte{7})
 	rootBefore := store.draft.meta.RangeRoot
 	countBefore := store.draft.meta.RangeRecordCount
 	if _, err := store.AssignV4(0, 10, 1); err == nil {
-		t.Fatal("membership-kind range assign did not fail closed")
+		t.Fatal("structured-kind range assign did not fail closed")
 	}
-	// Rust draft_store.rs snapshots root/count into locals and commits
-	// them only after the edit succeeds: a failed assign must leave the
-	// draft meta at its pre-call state, and retrying the same edit must
-	// be clean (chunk 3b level-1 F-1 regression pin).
 	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
 		t.Fatalf("failed assign mutated draft meta: root %d->%d count %d->%d",
 			rootBefore, store.draft.meta.RangeRoot, countBefore, store.draft.meta.RangeRecordCount)
 	}
 	if _, err := store.AssignV4(0, 10, 1); err == nil {
-		t.Fatal("membership-kind range assign retry did not fail closed")
+		t.Fatal("structured-kind range assign retry did not fail closed")
 	}
 	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
 		t.Fatalf("failed assign retry mutated draft meta: root %d->%d count %d->%d",

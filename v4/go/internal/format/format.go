@@ -45,6 +45,12 @@ const (
 	PageTypeStructureIDRecord    PageType = 19
 	PageTypeStructureHashBranch  PageType = 20
 	PageTypeStructureHashLeaf    PageType = 21
+	// Operation-private tree types (Rust membership_delta.rs BRANCH_TYPE /
+	// LEAF_TYPE): the draft refcount-delta aggregation tree. These pages
+	// are private to one draft transaction and never appear in a
+	// committed generation.
+	PageTypeDeltaBranch PageType = 250
+	PageTypeDeltaLeaf   PageType = 251
 )
 
 // Address families (binary-format-v4.md section 2).

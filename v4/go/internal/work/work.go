@@ -179,3 +179,7 @@ func HistoryWindowTest(uint64) {}
 // MembershipCombination counts one membership bitmap combination
 // (Rust work::membership_combination).
 func MembershipCombination(uint64) {}
+
+// MembershipDeltaSpill counts one refcount delta spilled from the
+// pending slots into the delta tree (Rust work::membership_delta_spill).
+func MembershipDeltaSpill(uint64) {}

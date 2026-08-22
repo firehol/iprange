@@ -55,6 +55,7 @@ type counters struct {
 	sourcePasses              atomic.Uint64
 	historyWindowTests        atomic.Uint64
 	membershipCombinations    atomic.Uint64
+	membershipDeltaSpills     atomic.Uint64
 }
 
 var current counters
@@ -136,6 +137,7 @@ type Snapshot struct {
 	SourcePasses              uint64
 	HistoryWindowTests        uint64
 	MembershipCombinations    uint64
+	MembershipDeltaSpills     uint64
 }
 
 // Read returns a consistent snapshot of the counters.
@@ -188,6 +190,7 @@ func Read() Snapshot {
 		SourcePasses:              current.sourcePasses.Load(),
 		HistoryWindowTests:        current.historyWindowTests.Load(),
 		MembershipCombinations:    current.membershipCombinations.Load(),
+		MembershipDeltaSpills:     current.membershipDeltaSpills.Load(),
 	}
 }
 
@@ -212,6 +215,7 @@ func Reset() {
 		&current.membershipLookups, &current.membershipInterns,
 		&current.membershipRefcountBatches,
 		&current.sourcePasses, &current.historyWindowTests, &current.membershipCombinations,
+		&current.membershipDeltaSpills,
 	} {
 		atomic.Store(0)
 	}
@@ -250,3 +254,4 @@ func MembershipRefcountBatch(n uint64)  { current.membershipRefcountBatches.Add(
 func SourcePass(n uint64)               { current.sourcePasses.Add(n) }
 func HistoryWindowTest(n uint64)        { current.historyWindowTests.Add(n) }
 func MembershipCombination(n uint64)    { current.membershipCombinations.Add(n) }
+func MembershipDeltaSpill(n uint64)     { current.membershipDeltaSpills.Add(n) }

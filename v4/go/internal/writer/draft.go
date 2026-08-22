@@ -46,6 +46,89 @@ type Draft struct {
 	// range tree). Public range edits on a private tree take the gap
 	// path; edits over a committed tree COW it.
 	rangeTreePrivate bool
+	// baseRangeTreeRetired reports the committed base range tree was
+	// already retired by a merge (Rust base_range_tree_retired): the
+	// workflow finish must not retire it a second time.
+	baseRangeTreeRetired bool
+	// membershipDeltaRoot is the private refcount delta tree of the
+	// open workflow (Rust membership_delta_root; flushed and drained by
+	// finishMembershipDeltasWithCheckpoint).
+	membershipDeltaRoot uint32
+	// membershipDeltaPending is the two-slot delta buffer in front of
+	// the delta tree (Rust membership_delta_pending).
+	membershipDeltaPending deltaPending
+	// workflowRangeRoot and workflowRangeCount are the ordered-merge
+	// output roots staged for the workflow finish (Rust
+	// workflow_range_root / workflow_range_count; the merge publishes
+	// them into meta at finish).
+	workflowRangeRoot  uint32
+	workflowRangeCount uint64
+	// workflow is the exact-workflow state of the draft (Rust
+	// WorkflowState: None, Input, Prepared).
+	workflow workflowState
+	// operationAbandonedFlag reports the prepared operation was
+	// abandoned by its Drop-style cleanup (Rust operation_abandoned;
+	// Go has no Drop hook, so the public workflows set it when the
+	// prepared handle is closed without commit or abort).
+	operationAbandonedFlag bool
+}
+
+// workflowState is one exact workflow state (Rust WorkflowState).
+type workflowState uint8
+
+const (
+	workflowNone     workflowState = iota
+	workflowInput                  // the workflow accepts input records
+	workflowPrepared               // the draft is prepared for publication
+)
+
+// beginRangeWorkflow starts one exact range workflow: the range tree is
+// detached to a private empty tree (Rust Draft::begin_range_workflow).
+func (d *Draft) beginRangeWorkflow() error {
+	if err := d.beginWorkflow(); err != nil {
+		return err
+	}
+	d.meta.RangeRoot = 0
+	d.meta.RangeRecordCount = 0
+	d.rangeTreePrivate = true
+	return nil
+}
+
+// beginMembershipWorkflow starts one exact membership workflow (Rust
+// Draft::begin_membership_workflow).
+func (d *Draft) beginMembershipWorkflow() error {
+	return d.beginWorkflow()
+}
+
+func (d *Draft) beginWorkflow() error {
+	if d.workflow != workflowNone {
+		return &format.Error{Code: format.CodeWrongState, Detail: "another exact workflow is active"}
+	}
+	d.workflow = workflowInput
+	return nil
+}
+
+// workflowInputOpen reports the draft accepts workflow input records
+// (Rust Draft::workflow_input_open).
+func (d *Draft) workflowInputOpen() bool { return d.workflow == workflowInput }
+
+// workflowActive reports any exact workflow state (Rust
+// Draft::workflow_active).
+func (d *Draft) workflowActive() bool { return d.workflow != workflowNone }
+
+// operationAbandoned reports the prepared operation was abandoned (Rust
+// Draft::operation_abandoned).
+func (d *Draft) operationAbandoned() bool { return d.operationAbandonedFlag }
+
+// abandonOperation brands the draft abandoned (Rust
+// Draft::abandon_operation).
+func (d *Draft) abandonOperation() { d.operationAbandonedFlag = true }
+
+// finishWorkflow seals the input state and marks the draft changed (Rust
+// Draft::finish_workflow).
+func (d *Draft) finishWorkflow() {
+	d.workflow = workflowPrepared
+	d.changed = true
 }
 
 // NewDraft starts one draft over base with the next transaction ID and the
@@ -58,7 +141,11 @@ func NewDraft(base format.Meta, nonce [16]byte) (*Draft, error) {
 	}
 	meta.TxnID++
 	meta.CommitNonce = nonce
-	return &Draft{base: base, meta: meta, rangeTreePrivate: base.RangeRoot == 0}, nil
+	return &Draft{
+		base: base, meta: meta,
+		rangeTreePrivate:       base.RangeRoot == 0,
+		membershipDeltaPending: newDeltaPending(),
+	}, nil
 }
 
 // Base returns the committed base generation the draft edits.
