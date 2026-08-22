@@ -46,6 +46,59 @@ Status: in-progress
 
 Status: in-progress
 
+### Status (2026-08-22) - slice A union-input tests: correctness and work pins, plus one merge-cardinality bug
+
+The slice A feed-merge and coverage-union machinery is now pinned by
+focused internal tests mirroring the Rust vectors, all running over the
+real opened mapping (no owned page exists anywhere):
+
+- `slicea_feed_merge_test.go` (fixed and extended): add-feed-to-membership
+  interning and its corrupt classes (draft_store/membership.rs +
+  membership_dictionary.rs), rename/remove current-feed lifecycle
+  (feed_catalog.rs, hole reuse, NameExists class), the empty-map feed
+  trio (begin/add/finish) including its non-empty-tree guard, the exact
+  no-change result of a created feed with empty coverage, and the
+  created-feed merge vector over the committed destination with bit
+  probes on the interned union records.
+- `slicea_union_input_test.go` (new): the Rust range_mutation_tests.rs
+  correctness vectors - random-order buffered union matching a
+  512-address scalar reference (2,000 LCG operations), the pending-gap
+  rebridging vector [(35,45),(15,32),(30,38)] -> [(15,45)], the
+  2,000-key queue-normalized single interval, the late-overlap general
+  fallback in both address families, and the unordered empty-map feed
+  over overlapping ranges.
+- `slicea_union_input_work_test.go` (new, v4work build tag): the Rust
+  work::measure vectors - queue normalize (emitted 1 / coalesced 1999 /
+  lookups 0), ascending packed construction (lookups, splits and output
+  passes all zero; ordered count 4000), monotonic edges (lookups equal
+  splits, exactly one edge-path check, structural fence bound), random
+  order lookup bound, the 20,000-input leaf-locator hint hit rate, and
+  the 100,000-input IPv4/IPv6 assignment locator split (hits > N/3,
+  no hint work for IPv6). Total v4work runtime of the new pins: ~0.6 s.
+
+One real bug was found and fixed by these tests: `newFeedPolicy` built
+the feed policy with its own family set but never initialized the
+embedded `feedProjection.family`, so every created-feed merge over an
+IPv4 base counted segments as IPv6 (the projection fell into the IPv6
+cardinality branch). `newFeedPolicy` now fixes the projection family at
+construction exactly like the history plan (history.go), mirroring the
+Rust generic FeedPolicy<K> whose family is fixed at compile time. The
+merge vector test's original expected values (added 11 / removed 23 /
+four member-only records) were wrong for the real FeedPolicy semantics;
+the corrected vector asserts added = covered cardinality (12), removed
+0, the seven canonical segments, and the union bitmaps by feed-bit
+probes.
+
+Validation (all under nice): gofmt clean, go vet, go test ./... and
+-tags v4work (both -count=1 and -race), checkptr=2, and the
+linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64 and
+freebsd/amd64 cross-builds - all green. Rust suite untouched (Go-only
+edits, no conformance corpus change; re-run at the close gate).
+
+- Next: slice A open items before the feed workflow surface (slice B):
+  confirm with the five-aspect reviewers on this delta, then continue
+  the feed lifecycle and workflow-range draft fields.
+
 ### Status (2026-08-22) - five-aspect close gate: 2 FAIL verdicts, both fix batches applied
 
 The five-aspect adversarial close gate (lead-model reviewers, final-review

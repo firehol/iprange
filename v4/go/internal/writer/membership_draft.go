@@ -202,3 +202,21 @@ func boolToUint64(value bool) uint64 {
 	}
 	return 0
 }
+
+// addFeedToMembership interns the member bitmap of one feed, optionally
+// over a base bitmap (Rust DraftStore::add_feed_to_membership): the
+// single-bit source is interned with the base words and the new record
+// is tracked before the dictionary state is stored back.
+func (s *DraftStore) addFeedToMembership(base membershipHandle, feed feedEntry) (membershipHandle, error) {
+	baseID, baseWords := base.stored()
+	state := s.membershipState()
+	interned, err := internAddedBit(s, &state, baseID, baseWords, feed.index)
+	if err != nil {
+		return membershipHandle{}, err
+	}
+	if err := s.trackNewMembership(interned); err != nil {
+		return membershipHandle{}, err
+	}
+	s.storeMembershipState(state)
+	return handleFromInterned(interned), nil
+}

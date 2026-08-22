@@ -56,21 +56,32 @@ type rangeCursor struct {
 	family uint8
 }
 
-// newRangeCursor opens the forward cursor over the base range tree
-// (Rust Cursor::new; release_private is always false for the history
-// projection, which never consumes the base tree).
-func newRangeCursor(store *DraftStore, base format.Meta) (*rangeCursor, error) {
+// newRangeCursor opens the forward cursor over the source range tree
+// (Rust Cursor::new). A non-consuming cursor reads the base generation
+// through the selected store (history projection, ordered merges); a
+// consuming cursor reads a draft-private tree directly and proves every
+// page was born in the draft transaction (Rust release_private), which
+// the coverage merge of the feed workflows uses.
+func newRangeCursor(store *DraftStore, base format.Meta, consume bool) (*rangeCursor, error) {
 	if base.AddressFamily != format.AddressFamilyIPv4 && base.AddressFamily != format.AddressFamilyIPv6 {
 		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "stored range cursor has the wrong address family"}
 	}
-	source := selectedStore{store: store, meta: base}
+	var source tree.ForwardStore
+	if consume {
+		if base.TxnID != store.draft.meta.TxnID || base.PageCount != store.draft.meta.PageCount {
+			return nil, corrupt("consumed range tree is outside the draft generation")
+		}
+		source = store
+	} else {
+		source = selectedStore{store: store, meta: base}
+	}
 	var codec tree.Codec[rangeRecord]
 	if base.AddressFamily == format.AddressFamilyIPv4 {
 		codec = rangeCodec4{}
 	} else {
 		codec = rangeCodec6{}
 	}
-	cursor, err := tree.NewForwardCursor[rangeRecord](codec, source, base.RangeRoot, false)
+	cursor, err := tree.NewForwardCursor[rangeRecord](codec, source, base.RangeRoot, consume)
 	if err != nil {
 		return nil, err
 	}

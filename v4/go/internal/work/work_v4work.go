@@ -36,6 +36,9 @@ type counters struct {
 	bytesZeroed               atomic.Uint64
 	firstFenceUpdates         atomic.Uint64
 	edgePathChecks            atomic.Uint64
+	leafLocatorHits           atomic.Uint64
+	leafLocatorMisses         atomic.Uint64
+	leafLocatorFallbacks      atomic.Uint64
 	rangesConsumed            atomic.Uint64
 	rangesEmitted             atomic.Uint64
 	rangesSplit               atomic.Uint64
@@ -119,6 +122,9 @@ type Snapshot struct {
 	BytesZeroed               uint64
 	FirstFenceUpdates         uint64
 	EdgePathChecks            uint64
+	LeafLocatorHits           uint64
+	LeafLocatorMisses         uint64
+	LeafLocatorFallbacks      uint64
 	RangesConsumed            uint64
 	RangesEmitted             uint64
 	RangesSplit               uint64
@@ -173,6 +179,9 @@ func Read() Snapshot {
 		BytesZeroed:               current.bytesZeroed.Load(),
 		FirstFenceUpdates:         current.firstFenceUpdates.Load(),
 		EdgePathChecks:            current.edgePathChecks.Load(),
+		LeafLocatorHits:           current.leafLocatorHits.Load(),
+		LeafLocatorMisses:         current.leafLocatorMisses.Load(),
+		LeafLocatorFallbacks:      current.leafLocatorFallbacks.Load(),
 		RangesConsumed:            current.rangesConsumed.Load(),
 		RangesEmitted:             current.rangesEmitted.Load(),
 		RangesSplit:               current.rangesSplit.Load(),
@@ -209,7 +218,8 @@ func Reset() {
 		&current.pagesCopied, &current.pagesSplit, &current.pagesRetired,
 		&current.pagesReclaimed, &current.pagesSealed, &current.bytesMoved,
 		&current.bytesZeroed, &current.firstFenceUpdates,
-		&current.edgePathChecks, &current.rangesConsumed, &current.rangesEmitted, &current.rangesSplit,
+		&current.edgePathChecks, &current.leafLocatorHits, &current.leafLocatorMisses,
+		&current.leafLocatorFallbacks, &current.rangesConsumed, &current.rangesEmitted, &current.rangesSplit,
 		&current.rangesCoalesced,
 		&current.inputSourcePasses, &current.membershipDecodeCacheHits,
 		&current.membershipWordReads, &current.aggregationContributions,
@@ -242,6 +252,10 @@ func RangeSplit(n uint64) { current.rangesSplit.Add(n) }
 
 // RangeCoalesced counts one adjacency merge of two same-value ranges.
 func RangeCoalesced(n uint64) { current.rangesCoalesced.Add(n) }
+
+func LeafLocatorHit(n uint64)      { current.leafLocatorHits.Add(n) }
+func LeafLocatorMiss(n uint64)     { current.leafLocatorMisses.Add(n) }
+func LeafLocatorFallback(n uint64) { current.leafLocatorFallbacks.Add(n) }
 
 func InputSourcePass(n uint64)          { current.inputSourcePasses.Add(n) }
 func MembershipDecodeCacheHit(n uint64) { current.membershipDecodeCacheHits.Add(n) }

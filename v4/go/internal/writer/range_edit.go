@@ -605,3 +605,22 @@ func subCount(count *uint64) error {
 	*count--
 	return nil
 }
+
+// assignPrivateInput assigns one private range through the locator input
+// (Rust assign_private_input): the disabled input takes the ordinary
+// private path, otherwise the locator probe runs first and the rejected
+// gap completes through the hint.
+func rangeAssignPrivateInput(ctx *rangeCtx, from, to tree.Key, value uint32, input *privateInput) (bool, error) {
+	if input.disabled() {
+		return rangeAssignPrivate(ctx, from, to, value)
+	}
+	r := rangeRecord{from: from, to: to, value: value}
+	switch result, err := insertPrivateInputGap(ctx, r, input); {
+	case err != nil:
+		return false, err
+	case result.inserted:
+		return true, nil
+	default:
+		return assignWithHint(ctx, r, result.reject)
+	}
+}

@@ -187,3 +187,16 @@ func MembershipCombination(uint64) {}
 // MembershipDeltaSpill counts one refcount delta spilled from the
 // pending slots into the delta tree (Rust work::membership_delta_spill).
 func MembershipDeltaSpill(uint64) {}
+
+// LeafLocatorHit counts one private input served directly by the leaf
+// locator cache (Rust work::leaf_locator_hit).
+func LeafLocatorHit(uint64) {}
+
+// LeafLocatorMiss counts one private input with no cached leaf (Rust
+// work::leaf_locator_miss).
+func LeafLocatorMiss(uint64) {}
+
+// LeafLocatorFallback counts one private input whose cached leaf did not
+// fit the gap and fell back to a full descent (Rust
+// work::leaf_locator_fallback).
+func LeafLocatorFallback(uint64) {}

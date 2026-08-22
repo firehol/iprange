@@ -275,9 +275,18 @@ func (b *rangeBulkBuilder) pushBranchCell(store tree.Store, levelIndex int, node
 }
 
 // finish seals the tree and returns the root and the record count (Rust
-// Builder::finish).
+// Builder::finish; the output-pass charge separates whole-tree builds
+// from the coverage ordered-prefix builds).
 func (b *rangeBulkBuilder) finish(store tree.Store) (uint32, uint64, error) {
 	work.OutputPass(1)
+	return b.finishInline(store)
+}
+
+// finishInline seals the tree without charging a whole output pass (Rust
+// Builder::finish_inline; the coverage ordered prefix seals inline inside
+// one input workflow, so the pass is charged by the merge that consumes
+// it, never here).
+func (b *rangeBulkBuilder) finishInline(store tree.Store) (uint32, uint64, error) {
 	if b.recordCount == 0 {
 		return 0, 0, nil
 	}

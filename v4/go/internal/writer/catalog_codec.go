@@ -244,3 +244,67 @@ func insertCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, inde
 	work.CatalogIntern(1)
 	return nil
 }
+
+// deleteCatalogEntry removes one feed from both catalog indexes, name
+// first, then index; either deletion is structural because the entry was
+// proven current (Rust feed_catalog::mutation::delete). Every committed
+// page COW-ed by the deletions is retired through the store.
+func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, entry feedEntry) error {
+	var retired tree.RetiredPages
+	var err error
+	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(entry.name)), retired)
+	if err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired); err != nil {
+		return err
+	}
+	retired = tree.RetiredPages{}
+	retired, err = tree.DeleteExisting(indexCodec{}, store, indexRoot, tree.Key{Hi: uint64(entry.index)}, retired)
+	if err != nil {
+		return err
+	}
+	return store.RetirePages(retired)
+}
+
+// renameCatalogEntry renames the name record of one current feed,
+// keeping the index record at the same index key (Rust
+// feed_catalog::mutation::rename): the old name is deleted, the renamed
+// record is inserted under the new name, and the index tree must already
+// hold the record (the rename never moves the index).
+func renameCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, indexRoot *uint32, old feedEntry, newName string) error {
+	var retired tree.RetiredPages
+	var err error
+	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(old.name)), retired)
+	if err != nil {
+		return err
+	}
+	if err := store.RetirePages(retired); err != nil {
+		return err
+	}
+	renamed := feedEntry{name: newName, index: old.index}
+	length, err := encodeCatalogRecord(renamed.name, renamed.index, scratch)
+	if err != nil {
+		return err
+	}
+	retired = tree.RetiredPages{}
+	retired, changed, err := tree.Insert(nameCodec{}, store, nameRoot, scratch[:length], retired)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return corrupt("renamed feed name already exists")
+	}
+	if err := store.RetirePages(retired); err != nil {
+		return err
+	}
+	retired = tree.RetiredPages{}
+	retired, changed, err = tree.Insert(indexCodec{}, store, indexRoot, scratch[:length], retired)
+	if err != nil {
+		return err
+	}
+	if changed {
+		return corrupt("renamed feed index was missing")
+	}
+	return store.RetirePages(retired)
+}

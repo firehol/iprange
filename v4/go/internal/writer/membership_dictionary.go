@@ -535,3 +535,81 @@ func (b *membershipReferenceBatch) isEmpty() bool { return b.entries == 0 }
 // capacity reports the slot table length (Rust len).
 func (b *membershipReferenceBatch) capacity() int { return len(b.slots) }
 func u64LE(b []byte) uint64                       { return binary.LittleEndian.Uint64(b) }
+
+// addedBit is one membership bitmap source with a single extra feed bit
+// set (Rust membership_dictionary::AddedBit): the base bitmap words
+// followed by one bit at the feed index. The source is read directly
+// from the dictionary, so no owned copy of the base words is ever
+// materialized.
+type addedBit struct {
+	store     tree.Store
+	idRoot    uint32
+	baseID    uint32
+	baseWords uint32
+	bit       uint32
+}
+
+// WordCount returns the canonical bitmap length with the added bit (Rust
+// AddedBit::word_count).
+func (a *addedBit) WordCount() uint32 {
+	if a.baseWords > a.bit/64+1 {
+		return a.baseWords
+	}
+	return a.bit/64 + 1
+}
+
+// ReadChunk returns the words starting at start by value (Rust
+// AddedBit::read_words): the base words are copied first, then the bit
+// is folded in; words outside the base are zero.
+func (a *addedBit) ReadChunk(start uint32) (words [membershipChunkWords]uint64, count uint32, err error) {
+	count = membershipChunkWords
+	if remaining := a.WordCount() - start; count > remaining {
+		count = remaining
+	}
+	if err := readMembershipOperand(a.store, a.idRoot, a.baseID, a.baseWords, start, words[:count]); err != nil {
+		return words, 0, err
+	}
+	word := a.bit / 64
+	if word >= start && word-start < count {
+		words[word-start] |= 1 << (a.bit % 64)
+	}
+	return words, count, nil
+}
+
+// internAddedBit returns the dictionary ID for one base bitmap plus one
+// feed bit, creating the record when the bitmap is new (Rust
+// membership_dictionary::intern_added_bit). A base bitmap that already
+// contains the bit returns the base record unchanged.
+func internAddedBit(store tree.RetiringStore, state *membershipState, baseID, baseWords, bit uint32) (membershipInterned, error) {
+	work.MembershipIntern(1)
+	if baseID != 0 {
+		found, err := findMembership(store, state.idRoot, baseID)
+		if err != nil {
+			return membershipInterned{}, err
+		}
+		if !found.located {
+			return membershipInterned{}, corrupt("membership reference ID is missing")
+		}
+		if found.record.wordCount != baseWords {
+			return membershipInterned{}, corrupt("membership reference length changed")
+		}
+		wordIndex := bit / 64
+		if wordIndex < baseWords {
+			var word [1]uint64
+			if err := readFoundMembershipWords(store, found, wordIndex, word[:]); err != nil {
+				return membershipInterned{}, err
+			}
+			if word[0]&(1<<(bit%64)) != 0 {
+				return membershipInterned{id: baseID, wordCount: baseWords}, nil
+			}
+		}
+	}
+	source := &addedBit{
+		store:     store,
+		idRoot:    state.idRoot,
+		baseID:    baseID,
+		baseWords: baseWords,
+		bit:       bit,
+	}
+	return internMembership(store, state, source)
+}

@@ -112,3 +112,71 @@ func (s *DraftStore) RangeRecordRemoved(value uint32) error {
 		return nil
 	}
 }
+
+// addPrivateConstantRange pushes one untracked constant range into the
+// draft range tree (Rust DraftStore::add_private_constant_range). The
+// range is internal to one exact workflow (empty-map feeds, timestamp
+// refreshes); the value accounting is untracked and the changed flag
+// still marks the draft.
+func (s *DraftStore) addPrivateConstantRange(from, to tree.Key, value uint32, input *unionInput) error {
+	family, err := s.rangeFamily()
+	if err != nil {
+		return err
+	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	changed, err := pushPrivateUntracked(ctx, from, to, value, input)
+	if err != nil {
+		return err
+	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
+	s.draft.changed = s.draft.changed || changed
+	return nil
+}
+
+// finishPrivateConstantRanges seals one untracked constant-range input
+// (Rust DraftStore::finish_private_constant_ranges).
+func (s *DraftStore) finishPrivateConstantRanges(input *unionInput) error {
+	family, err := s.rangeFamily()
+	if err != nil {
+		return err
+	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	changed, err := finishInputUntracked(ctx, input)
+	if err != nil {
+		return err
+	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
+	s.draft.changed = s.draft.changed || changed
+	return nil
+}
+
+// assignInput assigns one private range through the leaf-locator input
+// (Rust DraftStore::assign_input): the range tree must be draft-private,
+// because a shared committed tree cannot be assigned through the locator
+// cache.
+func (s *DraftStore) assignInput(from, to tree.Key, value uint32, input *privateInput) (bool, error) {
+	if !s.draft.rangeTreePrivate {
+		return false, corrupt("private assignment input has a shared range tree")
+	}
+	family, err := s.rangeFamily()
+	if err != nil {
+		return false, err
+	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	changed, err := rangeAssignPrivateInput(ctx, from, to, value, input)
+	if err != nil {
+		return false, err
+	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
+	s.draft.changed = s.draft.changed || changed
+	return changed, nil
+}

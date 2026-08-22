@@ -99,15 +99,15 @@ type PrivateEdge struct {
 	pendingFirst *Key
 }
 
-// consistentEdge builds a direction-less edge over one private position
+// ConsistentEdge builds a direction-less edge over one private position
 // (Rust PrivateEdge::consistent).
-func consistentEdge(position PrivatePosition) PrivateEdge {
+func ConsistentEdge(position PrivatePosition) PrivateEdge {
 	return PrivateEdge{position: position}
 }
 
 // RootEdge builds the edge over a single-page tree root (Rust root_edge).
 func RootEdge(pageNumber uint32) PrivateEdge {
-	return consistentEdge(PrivatePosition{Path: Path{}, PageNumber: pageNumber})
+	return ConsistentEdge(PrivatePosition{Path: Path{}, PageNumber: pageNumber})
 }
 
 // FlushEdge propagates a pending first-key fence update and forgets it

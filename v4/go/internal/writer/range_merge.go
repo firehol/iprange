@@ -225,7 +225,7 @@ func newOrderedMerge[P any](store *DraftStore, base format.Meta, codec rangeFami
 	if err := check(); err != nil {
 		return nil, err
 	}
-	oldCursor, err := newRangeCursor(store, base)
+	oldCursor, err := newRangeCursor(store, base, false)
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +481,45 @@ func (m *orderedMerge[P]) requireInput(incoming incomingRange) error {
 		return corrupt("ordered merge input ranges overlap or are out of order")
 	}
 	return nil
+}
+
+// mergeCoverage merges one draft-private coverage tree over the
+// committed base generation (Rust merge_coverage): the coverage tree is
+// consumed record by record through the draft-generation cursor and fed
+// as the ordered merge input; the caller receives the input interval
+// count plus the finished policy output.
+func mergeCoverage[P any](store *DraftStore, source format.Meta, base format.Meta, codec rangeFamily, policy mergePolicy[P], check func() error, countContext string) (uint64, P, error) {
+	var zero P
+	coverage, err := newRangeCursor(store, source, true)
+	if err != nil {
+		return 0, zero, err
+	}
+	merge, err := newOrderedMerge[P](store, base, codec, policy, check)
+	if err != nil {
+		return 0, zero, err
+	}
+	var inputIntervals uint64
+	for {
+		record, ok, err := coverage.next()
+		if err != nil {
+			return 0, zero, err
+		}
+		if !ok {
+			break
+		}
+		inputIntervals, err = checkedAdd(inputIntervals, 1, countContext)
+		if err != nil {
+			return 0, zero, err
+		}
+		if err := merge.push(store, incomingRange{from: record.from, to: record.to, value: record.value}, check); err != nil {
+			return 0, zero, err
+		}
+	}
+	finished, err := merge.finish(store, check)
+	if err != nil {
+		return 0, zero, err
+	}
+	return inputIntervals, finished, nil
 }
 
 func orderedPrevious(codec rangeFamily, key tree.Key, context string) (tree.Key, error) {

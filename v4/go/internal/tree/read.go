@@ -4,6 +4,7 @@
 package tree
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -405,4 +406,50 @@ const (
 type adjacentLeafResult[T any] struct {
 	key  Key
 	leaf T
+}
+
+// PrivateLeafFirst returns the first key of one private leaf page, refusing
+// committed pages (Rust fixed_tree::private_leaf_first): the leaf locator
+// only caches draft-private leaves, so a committed page here is a bug that
+// must fail the operation instead of poisoning the hint.
+func PrivateLeafFirst[T any](codec Codec[T], store Store, pageNumber uint32) (Key, error) {
+	targetTxn := store.TargetTxn()
+	level := uint16(0)
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return Key{}, err
+	}
+	header, err := parse(codec, page, targetTxn, &level)
+	if err != nil {
+		return Key{}, err
+	}
+	if format.U64(page[format.HeaderBorn:]) != targetTxn {
+		return Key{}, corrupt("leaf locator learned a committed page")
+	}
+	return keyAt(codec, page, &header, 0)
+}
+
+// ExternalPredecessor returns the last record of the leaf immediately
+// before the leaf named by path, when such a sibling exists (Rust
+// LocalReject::external_predecessor; used by the coverage union run and
+// the assignment rewrite when the gap was not locally complete).
+func ExternalPredecessor[T any](codec Codec[T], store Store, path *Path) (T, bool, error) {
+	value, found, err := adjacentLeaf(codec, store, path, AdjacentBefore)
+	if err != nil {
+		var zero T
+		return zero, false, err
+	}
+	return value.leaf, found, nil
+}
+
+// ExternalSuccessor returns the first record of the leaf immediately
+// after the leaf named by path, when such a sibling exists (Rust
+// LocalReject::external_successor).
+func ExternalSuccessor[T any](codec Codec[T], store Store, path *Path) (T, bool, error) {
+	value, found, err := adjacentLeaf(codec, store, path, AdjacentAfter)
+	if err != nil {
+		var zero T
+		return zero, false, err
+	}
+	return value.leaf, found, nil
 }

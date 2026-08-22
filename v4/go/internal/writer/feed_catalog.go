@@ -129,3 +129,65 @@ func nameBytesEqual(name string, stored []byte) bool {
 	}
 	return true
 }
+
+// renameCurrentFeed renames one current feed entry, refusing a name that
+// already exists (Rust DraftStore::rename_current_feed). The caller
+// proves the entry is current; the existence probe only guards the new
+// name.
+func (s *DraftStore) renameCurrentFeed(entry feedEntry, newName string) (feedEntry, error) {
+	if _, found, err := s.lookupFeed(newName); err != nil {
+		return feedEntry{}, err
+	} else if found {
+		return feedEntry{}, &format.Error{Code: format.CodeNameExists, Detail: "feed name already exists"}
+	}
+	return s.renameCurrentFeedKnownAvailable(entry, newName)
+}
+
+// renameCurrentFeedKnownAvailable renames one current feed when the new
+// name is already proven available (Rust
+// DraftStore::rename_current_feed_known_available): the dual roots move
+// only after the rename succeeds, and the draft is marked changed.
+func (s *DraftStore) renameCurrentFeedKnownAvailable(entry feedEntry, newName string) (feedEntry, error) {
+	nameRoot := s.draft.meta.CatalogNameRoot
+	indexRoot := s.draft.meta.CatalogIndexRoot
+	if err := renameCatalogEntry(s, s.catalogScratch[:], &nameRoot, &indexRoot, entry, newName); err != nil {
+		return feedEntry{}, err
+	}
+	s.draft.meta.CatalogNameRoot = nameRoot
+	s.draft.meta.CatalogIndexRoot = indexRoot
+	s.draft.changed = true
+	return feedEntry{name: newName, index: entry.index}, nil
+}
+
+// removeCurrentFeed deletes one current feed entry and clears its used
+// bit (Rust DraftStore::remove_current_feed): the catalog roots move
+// first, then the feed-index namespace bit, then the active count.
+func (s *DraftStore) removeCurrentFeed(expected feedEntry) error {
+	nameRoot := s.draft.meta.CatalogNameRoot
+	indexRoot := s.draft.meta.CatalogIndexRoot
+	if err := deleteCatalogEntry(s, &nameRoot, &indexRoot, expected); err != nil {
+		return err
+	}
+	s.draft.meta.CatalogNameRoot = nameRoot
+	s.draft.meta.CatalogIndexRoot = indexRoot
+
+	usedRoot := s.draft.meta.FeedUsedRoot
+	var retired tree.RetiredPages
+	cleared, err := bitmap.ClearUsed(s, &usedRoot, s.draft.meta.FeedIndexLimit, bitmap.KindFeed, expected.index, &retired)
+	if err != nil {
+		return err
+	}
+	if !cleared {
+		return corrupt("deleted feed used bit is missing")
+	}
+	s.draft.meta.FeedUsedRoot = usedRoot
+	if err := s.RetirePages(retired); err != nil {
+		return err
+	}
+	if s.draft.meta.ActiveFeedCount == 0 {
+		return overflow("active feed count")
+	}
+	s.draft.meta.ActiveFeedCount--
+	s.draft.changed = true
+	return nil
+}
