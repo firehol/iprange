@@ -148,8 +148,66 @@ Every .go file, every build-tagged variant, tests included.
      the source scan against the committed destination exactly like
      Rust; release_private is false (history never consumes the
      base tree).
-- Next: slices A, then B (A's surfaces are B's prerequisites), then
-  C, then the five-aspect review at the close gate like every slice.
+- Next: slice C (the public Writer.ProjectHistory facade), then the
+  five-aspect review at the close gate like every slice.
+
+### Status (2026-08-22) - chunk 3b-4 slice B COMMITTED: ordered merge, history projection, workflow state (HEAD e1fae2c)
+
+- Slice B (internal/writer merge + workflow state) committed at
+  e1fae2c:
+  - committed-range forward cursor over a base generation through the
+    draft mapping (range_store_cursor.go SelectedStore; base txn and
+    page count pinned, never consumes, recorded decision 5) on the
+    shared tree.ForwardCursor (internal/tree/cursor.go);
+  - ordered old/input merge (range_merge.go: incomingRange,
+    orderedMerge, mergePolicy, coalescing mergeOutput over
+    rangeBulkBuilder, refcountRun with the checked sign arithmetic of
+    Rust range_merge.rs);
+  - one-pass history plan/merge/policy (history.go: window collection,
+    unique names, ensure feeds with the created count, cutoff ranking,
+    feed-index ordering, cached prefix interning, per-window and
+    aggregate observe with adjacency runs, balanced finish report, the
+    "history projection heap" charges, cancellation checkpoints);
+  - operation-private membership refcount delta state
+    (membership_delta.go track_buffered/flush/track and the delta
+    fixed tree; membership_draft.go
+    finishMembershipDeltasWithCheckpoint; range edits route every
+    membership record through trackMembershipRefcount and fail closed
+    on structured kinds);
+  - Draft/Core prepared-workflow state machine (workflow.go: HasDraft,
+    DraftChanged, WorkflowInputOpen/Active, MetadataStaged,
+    OperationAbandoned/OperationIs, AbandonOperation,
+    BeginRangeWorkflow/BeginMembershipWorkflow, Mutate, WriterEdit
+    PrepareHistoryFrom/BeginHistory/PushHistory/FinishHistory, the
+    membership and direct workflow finishes with the no-change
+    discard).
+- Tests: sliceb_history_test.go mirrors the Rust
+  tests/history_projection.rs vectors (exact multi-window counts and
+  the no-change rerun, empty-source preservation, plan validation and
+  heap budget, the canonical-input merge contract, the workflow gates,
+  the direct-replacement publish), the tree cursor tests, the
+  range-accounting fence updates, and v4work necessary-work pins (one
+  source pass, four ranges consumed, 8 segments x 3 windows = 24
+  window tests, six membership delta spills).
+- Fixed during the slice: work.Reset() did not clear
+  membershipDeltaSpills (the counter leaked across v4work pin tests),
+  and the structured-kind fails-closed fixture wrote a
+  bootstrap-invalid meta (missing structure kind and dictionary
+  limits) instead of the valid empty structured meta.
+- Validation: go test, -tags v4work, both -race, checkptr, vet,
+  gofmt, and the GOOS windows/darwin/freebsd plus linux/arm64 builds
+  and vet on both tag sets, all green.
+
+### Status (2026-08-22) - chunk 3b-4 slice A COMMITTED: membership algebra, draft feed catalog, heap budget (HEAD 3495436)
+
+- Slice A (internal/writer foundations) committed at 3495436: the
+  membership algebra (contains_indexes over caller-owned selected-bit
+  output, combine with identity shortcuts and canonical word counts),
+  the draft feed catalog (ensure/insert over the dual name and index
+  trees plus the feed used bitmap), the bounded heap charge helper
+  under the Rust heap labels, the inclusive-cardinality helpers for
+  both families, and the source_passes/history_window_tests/
+  membership_combinations necessary-work counters (production no-ops).
 
 ### Status (2026-08-21) - chunk 3b-3 slice C+D CLOSED: five-aspect PASS at HEAD 861aef8
 
