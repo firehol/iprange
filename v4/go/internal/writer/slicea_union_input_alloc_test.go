@@ -89,7 +89,7 @@ func TestSliceAOrderedUnionAllocCeiling(t *testing.T) {
 // TestSliceAGeneralUnionAllocCeiling pins the general fallback. After
 // the zero-alloc completion the gap rejection machinery is value-based
 // and the only remaining cost is the fresh-draft setup plus a small
-// tree-depth slope (measured: 58 objects at 256 records, 61 at 512, 70
+// tree-depth slope (measured: 54 objects at 256 records, 61 at 512, 70
 // at 1024; ~3 per tree-level doubling). The ceiling of 300 fails on any
 // new per-record allocation (58 + 256 = 314) while leaving headroom for
 // the depth slope and setup variance across Go releases.

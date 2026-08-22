@@ -42,6 +42,50 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - slice B review-fix round 2: re-review verdicts and residue fixes
+
+First fix round committed at c1fd96b; all five aspects re-reviewed. Harvey
+(performance) PASSED; Meitner (Rust parity), Anscombe (Go idioms), Newton
+(wire/integrity), Aristotle (APIs/docs) found residue, all fixed and
+re-verified:
+
+- P1 (Anscombe + Newton + Meitner, same finding): applyStructureDelta
+  still double-retired the hash-delete list and discarded the
+  ClearUsed accumulator. Now mirrors finishMembershipRemoval exactly:
+  fresh `clearedRetired` accumulator, retired once; the second
+  RetirePages(retired) is gone. The in-memory test store silently
+  absorbed duplicates, masking the fault; the real DraftStore path
+  deterministically failed with "page is already retired".
+- P2 (Meitner + Anscombe): PrepareWithCheckpoint passed noopCheck into
+  finishMembershipDeltasWithCheckpoint, dropping the caller's
+  cancellation for the whole drain. Now threads the caller checkpoint
+  (nil-safe), matching Rust draft_store.rs:318.
+- P2 (Aristotle): CreateFeed/ReplaceFeed AddRangesV4/V6 doc contracts
+  updated: reversed ranges and family mismatches both abort the
+  workflow, observed as ErrorTransactionAborted wrapping the cause.
+- P3 (Meitner): requireActive reports the stale transaction before the
+  closed writer (nonce probe guarded by the core nil check), matching
+  Rust require_transaction order; BindEdit now uses
+  CodeNoPendingTransaction like every other no-draft site; SlottedInsert
+  and TryPush empty-cell and Finish empty-page errors now use
+  CodeInvalidArgument like Rust slotted_page.rs, not HeaderError.
+- P3 (Aristotle): addRanges4/6 comments now include the trailing
+  post-final-batch checkpoint.
+- P3 (Harvey): alloc-ceiling test comment corrected to the measured 54
+  objects.
+- Test determinism: the fresh-workflow first-batch pin (TotalAlloc == 0)
+  flaked once on a 16-byte Go runtime one-time metadata entry that
+  Rust's thread-local counter structurally cannot see. The pin now
+  accepts a bounded 64-byte runtime-metadata window with a size-class
+  breakdown in the failure report; the 50 continuation batches remain
+  pinned at exactly 0 objects and 0 bytes, so per-batch user-code leaks
+  cannot hide.
+- Full battery green under nice: build, gofmt clean, vet, plain/v4work
+  tests, race, race+v4work, checkptr=2, six cross-compiles.
+- Next: commit this round, send the residue delta to the four FAIL
+  reviewers, close slice B only when all five aspects PASS, then
+  slice C.
+
 ### Status (2026-08-23) - slice B review-fix round: five-aspect FAILs fixed
 
 The five-aspect slice-B review round (Meitner Rust parity, Anscombe Go

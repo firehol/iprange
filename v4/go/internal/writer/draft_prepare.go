@@ -43,9 +43,14 @@ func (s *DraftStore) PrepareWithCheckpoint(checkpoint func() error) error {
 	}
 	// finish_membership_deltas: drain and apply the buffered refcount
 	// deltas of membership and structured drafts (Rust
-	// prepare_with_checkpoint parity); direct drafts carry no deltas and
-	// the empty-delta gate passes trivially.
-	if err := s.finishMembershipDeltasWithCheckpoint(noopCheck); err != nil {
+	// prepare_with_checkpoint threads the caller checkpoint through the
+	// drain); direct drafts carry no deltas and the empty-delta gate
+	// passes trivially.
+	check := noopCheck
+	if checkpoint != nil {
+		check = checkpoint
+	}
+	if err := s.finishMembershipDeltasWithCheckpoint(check); err != nil {
 		return err
 	}
 	if checkpoint != nil {

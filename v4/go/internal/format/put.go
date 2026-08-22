@@ -97,7 +97,7 @@ func SlottedInsert(page []byte, header *PageHeader, index int, cell []byte) (boo
 		return false, headerErr("slotted-page insertion index is invalid")
 	}
 	if len(cell) == 0 {
-		return false, headerErr("slotted-page record is empty")
+		return false, &Error{Code: CodeInvalidArgument, Detail: "slotted-page record is empty"}
 	}
 	if !SlottedInsertFits(header, len(cell)) {
 		return false, nil
@@ -372,7 +372,7 @@ func NewSlottedAppender(page []byte, pageType PageType, bornTxn uint64, level ui
 // appended (Rust Appender::try_push).
 func (a *SlottedAppender) TryPush(page []byte, cell []byte) (bool, error) {
 	if len(cell) == 0 {
-		return false, headerErr("slotted-page record is empty")
+		return false, &Error{Code: CodeInvalidArgument, Detail: "slotted-page record is empty"}
 	}
 	if a.count+1 > (maxInt-SlottedHeaderSize)/2 {
 		return false, headerErr("slotted-page slot array overflows")
@@ -396,7 +396,7 @@ func (a *SlottedAppender) TryPush(page []byte, cell []byte) (bool, error) {
 // (Rust Appender::finish).
 func (a *SlottedAppender) Finish(page []byte) error {
 	if a.count == 0 {
-		return headerErr("reachable slotted page cannot be empty")
+		return &Error{Code: CodeInvalidArgument, Detail: "reachable slotted page cannot be empty"}
 	}
 	PutU16(page[HeaderCount:], uint16(a.count))
 	PutU16(page[HeaderLower:], uint16(SlottedHeaderSize+a.count*2))

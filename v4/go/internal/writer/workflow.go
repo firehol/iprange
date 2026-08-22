@@ -114,7 +114,7 @@ func (c *Core) BindEdit() (*WriterEdit, error) {
 		return nil, err
 	}
 	if c.draft == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "no changed transaction is pending"}
+		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	return newWriterEdit(NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft), c.base.Meta), nil
 }

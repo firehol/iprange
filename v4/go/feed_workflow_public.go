@@ -193,14 +193,18 @@ func requireFeedPrecondition(found, create bool) error {
 
 // AddRangesV4 streams one batch of inclusive IPv4 input ranges into this
 // creation (Rust CreateFeed::add_ranges_v4_slice): every range must be
-// ordered (ErrorInvalidArgument) and match the database family
-// (ErrorWrongAddressFamily, which aborts the workflow).
+// ordered and match the database family. Both error classes abort the
+// workflow: the caller observes ErrorTransactionAborted wrapping
+// ErrorInvalidArgument (reversed range) or ErrorWrongAddressFamily
+// (family mismatch), and the creation must not be reused.
 func (f *CreateFeed) AddRangesV4(ranges []AddressRange4) error {
 	return f.state.addRanges4(ranges)
 }
 
 // AddRangesV6 streams one batch of inclusive IPv6 input ranges into this
-// creation (Rust CreateFeed::add_ranges_v6_slice).
+// creation (Rust CreateFeed::add_ranges_v6_slice). Error semantics are
+// identical to AddRangesV4: reversed ranges and family mismatches abort
+// the workflow, reported as ErrorTransactionAborted wrapping the cause.
 func (f *CreateFeed) AddRangesV6(ranges []AddressRange6) error {
 	return f.state.addRanges6(ranges)
 }
@@ -212,13 +216,19 @@ func (f *CreateFeed) FinishInput() (*FinishedWorkflow, error) {
 }
 
 // AddRangesV4 streams one batch of inclusive IPv4 input ranges into this
-// replacement (Rust ReplaceFeed::add_ranges_v4_slice).
+// replacement (Rust ReplaceFeed::add_ranges_v4_slice). Error semantics
+// are identical to CreateFeed.AddRangesV4: reversed ranges and family
+// mismatches abort the workflow, reported as ErrorTransactionAborted
+// wrapping the cause.
 func (f *ReplaceFeed) AddRangesV4(ranges []AddressRange4) error {
 	return f.state.addRanges4(ranges)
 }
 
 // AddRangesV6 streams one batch of inclusive IPv6 input ranges into this
-// replacement (Rust ReplaceFeed::add_ranges_v6_slice).
+// replacement (Rust ReplaceFeed::add_ranges_v6_slice). Error semantics
+// are identical to CreateFeed.AddRangesV4: reversed ranges and family
+// mismatches abort the workflow, reported as ErrorTransactionAborted
+// wrapping the cause.
 func (f *ReplaceFeed) AddRangesV6(ranges []AddressRange6) error {
 	return f.state.addRanges6(ranges)
 }
@@ -232,10 +242,12 @@ func (f *ReplaceFeed) FinishInput() (*FinishedWorkflow, error) {
 // addRanges4 streams one IPv4 batch through the draft-lifetime edit
 // binding (Rust CreateFeed::add_ranges_v4_slice over the writer_core
 // edit core): one source pass, one input-source pass, one cancellation
-// checkpoint before the batch and between 4096-record chunks, and one
-// consumed-range charge plus record count per record. The body is a
-// plain loop, not a closure, so the measured slice path allocates
-// nothing (Rust allocate_nothing_per_record parity).
+// checkpoint before the batch, between 4096-record chunks, and after
+// the final batch (Rust drain_source loop-top check before
+// end-of-stream), and one consumed-range charge plus record count per
+// record. The body is a plain loop, not a closure, so the measured
+// slice path allocates nothing (Rust allocate_nothing_per_record
+// parity).
 func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 	if err := in.requireInputFamily(format.AddressFamilyIPv4); err != nil {
 		return err
@@ -291,7 +303,8 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 }
 
 // addRanges6 streams one IPv6 batch through the draft-lifetime edit
-// binding with the same per-batch accounting as addRanges4.
+// binding with the same per-batch accounting and trailing checkpoint
+// as addRanges4.
 func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 	if err := in.requireInputFamily(format.AddressFamilyIPv6); err != nil {
 		return err

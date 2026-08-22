@@ -414,11 +414,13 @@ func (t *MembershipTransaction) requireActive() error {
 	if t.spent {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
+	// Rust require_transaction reports the stale transaction before the
+	// closed writer; the core nil check only guards the nonce probe.
+	if t.w.core != nil && !t.w.core.OperationIs(t.operationNonce) {
+		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+	}
 	if t.w.core == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	if !t.w.core.OperationIs(t.operationNonce) {
-		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	return t.w.core.Healthy()
 }
