@@ -151,6 +151,50 @@ Every .go file, every build-tagged variant, tests included.
 - Next: slice C (the public Writer.ProjectHistory facade), then the
   five-aspect review at the close gate like every slice.
 
+### Status (2026-08-22) - chunk 3b-4 slice C COMMITTED: public Writer.ProjectHistory facade (HEAD b9e942f)
+
+- Slice C (the public feed-workflow facade) committed at b9e942f:
+  - history_projection_public.go: Writer.ProjectHistory with the Rust
+    request classification order (feed-workflow-ready, window count,
+    source kind/reader, direct value kind, last_seen tag, family,
+    same-file identity through device+inode, cancellation), the
+    allocation-free drive through the reader direct cursors with the
+    canonical-source checks and overflow classes, the finished handle
+    with the no-change discard and the changed workflow finish;
+  - FinishedHistoryProjection: report, abort (no-change
+    ErrorNoPendingTransaction), SetMetadataJSON/ClearMetadataJSON with
+    the cancellation checks and abort-on-error, Commit with the
+    DirectTransaction sequence and the result status mapping;
+  - internal/writer/history_workflow.go: BeginHistoryProjection /
+    Push4/Push6/Finish binding the plan and merge inline per call (no
+    closures on the per-record drive).
+- Core fix found by slice-C validation: the two-commits-on-one-writer
+  path failed at the second RequireUnchangedBase because the in-memory
+  format.Meta struct carried the stored page checksum, which encode
+  recomputes and never reconciles (Rust MetaV4 has no checksum field
+  at all). The field is removed; ParseIdentity verifies the checksum
+  locally. Pinned by writer_double_commit_test.go. This is a pre-fix
+  P1-class parity bug that would have broken every second writer
+  transaction.
+- Work-counter parity fix: the public drive double-charged
+  RangeConsumed (the reader direct cursor already charges it, Rust
+  range_cursor::next parity). The drive now charges only the logical
+  input-source and source passes.
+- Tests: history_projection_public_test.go (multi-window vector with
+  the exclusive-cutoff counts 1000/666/333, full IPv6 space, aborted
+  draft recovery, metadata stage with the TransactionAborted class of
+  the refused second stage, invalid requests, unrelated-feeds rerun,
+  no-change abort), history_projection_v4work_test.go (Rust
+  one_source_pass pins: 1 input pass, 3 source passes, 1000 consumed,
+  1000 emitted, 1 output pass, 3000 window tests; 64 unused prefixes
+  intern nothing), history_projection_zeroalloc_test.go (BySize >=
+  4096 heap objects stay flat across 64 project/abort runs).
+- Validation: go test and -tags v4work (both -race), checkptr, vet,
+  gofmt, GOOS windows/darwin/freebsd and linux/arm64 builds on both
+  tag sets, all green. No scanner runs; tests finish in seconds.
+- Next: the five-aspect adversarial review at the close gate for the
+  slice, then the milestone-1 close gate.
+
 ### Status (2026-08-22) - chunk 3b-4 slice B COMMITTED: ordered merge, history projection, workflow state (HEAD e1fae2c)
 
 - Slice B (internal/writer merge + workflow state) committed at
