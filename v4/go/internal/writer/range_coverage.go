@@ -436,8 +436,6 @@ func finishPrivateUntracked(ctx *rangeCtx, state *unionState) error {
 	if err := tree.FlushEdge(ctx.family, ctx.store, ctx.root, &state.edge); err != nil {
 		return err
 	}
-	state.edge = tree.PrivateEdge{}
-	state.hasEdge = false
 	return nil
 }
 
@@ -676,11 +674,17 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[ra
 		}
 	}
 	if !hasFirst {
-		position, _, err := insertPrivateRejected(ctx, incoming, rejected)
+		// The position is reported only when the record fit the rejected
+		// leaf; a split path caches nothing, exactly like Rust
+		// insert_private_rejected's Option<PrivatePosition>.
+		// The position is reported only when the record fit the rejected
+		// leaf; a split path caches nothing, exactly like Rust
+		// insert_private_rejected's Option<PrivatePosition>.
+		position, fits, err := insertPrivateRejected(ctx, incoming, rejected)
 		if err != nil {
 			return false, tree.PrivatePosition{}, false, err
 		}
-		return true, position, true, nil
+		return true, position, fits, nil
 	}
 	nextStart := runStart
 	removed := uint64(0)

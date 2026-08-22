@@ -353,7 +353,7 @@ func (b *rangeBulkBuilder) finishLevel(store tree.Store, levelIndex int) (any, e
 }
 
 func pageSpaceExhausted() error {
-	return &format.Error{Code: format.CodePageSpaceExhausted, Detail: "range tree page space exhausted"}
+	return &format.Error{Code: format.CodePageSpaceExhausted, Detail: "v4 page-number space is exhausted"}
 }
 
 func rangeLeafType(family uint8) format.PageType   { return format.PageTypeRangeLeaf }

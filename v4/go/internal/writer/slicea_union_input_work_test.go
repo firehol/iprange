@@ -313,3 +313,42 @@ func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
 		t.Fatalf("cell probes = %d >= %d, records were rescanned", snapshot.CellProbes, inputs+200)
 	}
 }
+
+// TestWorkUnionInputFlushKeepsEdge pins the Rust finish_private
+// contract: flushing the pending edge writes the leaf metadata but
+// keeps the cached edge in the union state, so a later edge-proven
+// insert reuses it instead of descending again.
+func TestWorkUnionInputFlushKeepsEdge(t *testing.T) {
+	const inputs = 100
+	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
+	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
+	var state unionState
+	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
+		key := ordinal * 4
+		if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 42); err != nil {
+			t.Fatal(err)
+		}
+	}
+	family, err := store.rangeFamily()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := store.draft.meta.RangeRoot
+	count := store.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	ctx.markUntracked()
+	if err := finishPrivateUntracked(ctx, &state); err != nil {
+		t.Fatal(err)
+	}
+	store.draft.meta.RangeRoot = root
+	store.draft.meta.RangeRecordCount = count
+	if !state.hasEdge {
+		t.Fatal("finish_private dropped the cached edge (Rust keeps it after the flush)")
+	}
+	if _, err := directUnionRange(store, &state, key4(inputs*4), key4(inputs*4+1), 42); err != nil {
+		t.Fatal(err)
+	}
+	if store.draft.meta.RangeRecordCount != inputs+1 {
+		t.Fatalf("count = %d, want %d", store.draft.meta.RangeRecordCount, inputs+1)
+	}
+}

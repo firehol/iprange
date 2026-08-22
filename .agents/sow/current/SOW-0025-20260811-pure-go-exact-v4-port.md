@@ -46,6 +46,43 @@ Status: in-progress
 
 Status: in-progress
 
+### Status (2026-08-22) - slice A parity-residue round: three unrecorded Rust-parity findings fixed (APIs/docs FAIL)
+
+The APIs/docs re-review (HEAD b9ea00b) failed on records accuracy:
+three Rust-parity findings from the first slice-A review were never
+recorded in the SOW and remained open in code. All three were verified
+against the code and the Rust baseline, and fixed:
+
+- **F1 (unionRun position propagation).** unionRun ignored the fit
+  result of insertPrivateRejected and returned hasPosition=true
+  unconditionally; Rust union_run returns the insert_rejected_gap
+  Option<PrivatePosition>, None when the rejected leaf must split
+  (range_mutation.rs:131-143, coverage.rs:451-452). The Go split path
+  returns a zero PrivatePosition, so the next edge-proven insert would
+  raise a spurious "cached B+tree position is not its claimed edge".
+  Fix: the fit flag now propagates (range_coverage.go). Reachability
+  evidence: the branch is currently unreachable, because growth always
+  splits leaves at capacity and a rejected-gap probe therefore always
+  finds leaf slack (30/30 probe rejects in a 4,000-record general tree
+  measured fits=true); the fix removes the latent landmine at zero
+  cost.
+- **F2 (flushed edge lifetime).** finishPrivateUntracked cleared the
+  cached edge after FlushEdge; Rust finish_private flushes via
+  as_mut and keeps the edge (coverage.rs:233-242), so a later
+  edge-proven insert reuses it instead of descending again. Fix: the
+  flush keeps the edge (range_coverage.go). New v4work pin
+  TestWorkUnionInputFlushKeepsEdge binds the invariant; proven
+  binding by temporary bug reintroduction (pre-fix code fails it).
+- **F3 (error-string parity).** pageSpaceExhausted detail was "range
+  tree page space exhausted"; Rust displays "v4 page-number space is
+  exhausted" (sdk_error.rs:356; wire code 25 identical). Fix:
+  range_bulk.go matches the Rust Display string.
+
+Validation (all under nice): gofmt clean, go vet, go test ./... and
+-tags v4work (both -count=1 and -race), checkptr=2, and the
+linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64 and
+freebsd/amd64 cross-builds - all green. Rust suite untouched.
+
 ### Status (2026-08-22) - slice A records-accuracy round: full battery on the committed HEAD, P3 hardening landed
 
 The five-aspect re-review of HEAD c656b71 (the untracked-accounting
@@ -58,8 +95,8 @@ fix) returned four PASS and one FAIL:
 - FAIL (APIs/docs, records accuracy only): the round entry claimed the
   full validation battery (go test ./... and -tags v4work with
   -count=1 and -race, checkptr=2, six cross-builds) without a recorded
-  run on that HEAD. The full battery was re-run on the fixed tree
-  below and the entry now matches what was executed; the P1 label now
+  run on that HEAD. The full battery was re-run on this HEAD
+  (b9ea00b) and the entry now matches what was executed; the P1 label now
   names the defect class (untracked accounting / Rust parity) with the
   reviewing aspect in parentheses, the coverage file is referenced by
   its full path, and the measured allocation baseline is stated as
