@@ -92,8 +92,11 @@ func writeMembershipBlobLeaf[W membershipWords](store tree.Store, words W, offse
 			return membershipBlobNode{}, err
 		}
 		n := count - written
-		if n > got {
-			n = got
+		if n > membershipChunkWords {
+			n = membershipChunkWords
+		}
+		if got < n {
+			return membershipBlobNode{}, corrupt("membership words are outside the source bounds")
 		}
 		page, tag, err := store.Update(pageNumber)
 		if err != nil {
