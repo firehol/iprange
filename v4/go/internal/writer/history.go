@@ -254,10 +254,8 @@ func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *hea
 	cutoffOrder := make([]uint32, windowCount)
 	feedOrder := make([]uint32, windowCount)
 	for index, request := range windows {
-		if index&4095 == 4095 {
-			if err := check(); err != nil {
-				return nil, nil, nil, nil, err
-			}
+		if err := checkEvery(uint32(index), check); err != nil {
+			return nil, nil, nil, nil, err
 		}
 		if !format.FeedNameValidString(request.FeedName) {
 			return nil, nil, nil, nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
@@ -283,10 +281,8 @@ func requireUniqueHistoryNames(reports []HistoryWindowReport, feedOrder []uint32
 		return err
 	}
 	for work := 0; work+1 < len(feedOrder); work++ {
-		if work&4095 == 4095 {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return err
 		}
 		if reports[feedOrder[work]].FeedName == reports[feedOrder[work+1]].FeedName {
 			return invalid("history window feed names are not unique")
@@ -304,10 +300,8 @@ func ensureHistoryFeeds(store *DraftStore, reports []HistoryWindowReport, heap *
 	}
 	indexes := make([]uint32, len(reports))
 	for work := range reports {
-		if work&4095 == 4095 {
-			if err := check(); err != nil {
-				return 0, nil, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return 0, nil, err
 		}
 		entry, created, err := store.ensureFeed(reports[work].FeedName)
 		if err != nil {
@@ -349,10 +343,8 @@ func orderHistoryCutoffs(reports []HistoryWindowReport, cutoffOrder []uint32, ra
 		return err
 	}
 	for position, window := range cutoffOrder {
-		if position&4095 == 4095 {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(uint32(position), check); err != nil {
+			return err
 		}
 		rank[window] = uint32(position)
 	}
@@ -383,10 +375,8 @@ func orderHistoryFeedIndexes(original []uint32, feedToWindow []uint32, heap *hea
 	}
 	indexes := make([]uint32, len(original))
 	for work, window := range feedToWindow {
-		if work&4095 == 4095 {
-			if err := check(); err != nil {
-				return nil, nil, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return nil, nil, err
 		}
 		indexes[work] = original[window]
 	}
@@ -431,10 +421,8 @@ func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue
 			return noneValue(), err
 		}
 		for position, window := range p.feedToWindow {
-			if position&4095 == 4095 {
-				if err := p.check(); err != nil {
-					return noneValue(), err
-				}
+			if err := checkEvery(position, p.check); err != nil {
+				return noneValue(), err
 			}
 			p.before[window] = p.beforeSorted[position]
 		}
@@ -504,10 +492,8 @@ func (p *historyPolicy) observe(from, to tree.Key, _old, _incoming, _new optiona
 	}
 	var beforeAny bool
 	for index := range p.reports {
-		if index&4095 == 4095 {
-			if err := p.check(); err != nil {
-				return err
-			}
+		if err := checkEvery(uint32(index), p.check); err != nil {
+			return err
 		}
 		before := p.before[index] != 0
 		after := p.rank[index] < uint32(p.currentPrefix)
@@ -535,11 +521,16 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle,
 		return cached, nil
 	}
 	view := &p.scratchWords
+	wordCount, err := historyPrefixWordCount(p.feedIndexes, p.feedToWindow, p.rank, uint32(length), p.check)
+	if err != nil {
+		return membershipHandle{}, err
+	}
 	*view = prefixWords{
 		feedIndexes:  p.feedIndexes,
 		feedToWindow: p.feedToWindow,
 		rank:         p.rank,
 		prefix:       uint32(length),
+		wordCount:    wordCount,
 		check:        p.check,
 	}
 	interned, err := draftInternMembership(store, view)
@@ -555,10 +546,8 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle,
 // the current prefix bitmap (Rust HistoryPolicy::matches_prefix).
 func (p *historyPolicy) matchesPrefix() (bool, error) {
 	for window, before := range p.before {
-		if window&4095 == 4095 {
-			if err := p.check(); err != nil {
-				return false, err
-			}
+		if err := checkEvery(uint32(window), p.check); err != nil {
+			return false, err
 		}
 		if (before != 0) != (p.rank[window] < uint32(p.currentPrefix)) {
 			return false, nil
@@ -572,10 +561,8 @@ func (p *historyPolicy) matchesPrefix() (bool, error) {
 func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses format.Cardinality129, createdFeedCount uint64) (*HistoryProjectionReport, error) {
 	changed := createdFeedCount != 0
 	for work := range p.reports {
-		if work&4095 == 4095 {
-			if err := p.check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(work), p.check); err != nil {
+			return nil, err
 		}
 		if err := requireBalancedHistoryReport(&p.reports[work]); err != nil {
 			return nil, err
@@ -610,31 +597,40 @@ func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses fo
 
 // prefixWords is one caller-owned prefix bitmap source over the ranked
 // feed indexes (Rust PrefixWords: reads only caller-owned output words).
+// historyPrefixWordCount computes the canonical bitmap word count of a
+// prefix (Rust PrefixWords::new: the last selected feed index's word,
+// with the cancellation cadence and a corrupt error when no feed is
+// selected instead of a panic).
+func historyPrefixWordCount(feedIndexes, feedToWindow, rank []uint32, prefix uint32, check func() error) (uint32, error) {
+	var wordCount uint32
+	for position := len(feedIndexes) - 1; position >= 0; position-- {
+		if err := checkEvery(uint32(position), check); err != nil {
+			return 0, err
+		}
+		window := feedToWindow[position]
+		if rank[window] < prefix {
+			wordCount = feedIndexes[position]/64 + 1
+			break
+		}
+	}
+	if wordCount == 0 {
+		return 0, corrupt("nonempty history prefix has no feeds")
+	}
+	return wordCount, nil
+}
+
 type prefixWords struct {
 	feedIndexes  []uint32
 	feedToWindow []uint32
 	rank         []uint32
 	prefix       uint32
+	wordCount    uint32
 	check        func() error
 }
 
-// WordCount returns the canonical bitmap word count (Rust
-// PrefixWords::word_count: the last feed index's word, computed at
-// construction in the Rust type; the Go type fills it at plan time).
-func (w *prefixWords) WordCount() uint32 {
-	wordCount := uint32(0)
-	for position := len(w.feedIndexes) - 1; position >= 0; position-- {
-		window := w.feedToWindow[position]
-		if w.rank[window] < w.prefix {
-			wordCount = w.feedIndexes[position]/64 + 1
-			break
-		}
-	}
-	if wordCount == 0 {
-		panic("nonempty history prefix has no feeds")
-	}
-	return wordCount
-}
+// WordCount returns the canonical bitmap word count computed once when
+// the prefix is built (Rust PrefixWords::new stores word_count).
+func (w *prefixWords) WordCount() uint32 { return w.wordCount }
 
 // ReadChunk returns the selected prefix bits starting at start by value
 // (Rust PrefixWords::read_words with a HASH_WORDS chunk).
@@ -666,10 +662,8 @@ func (w *prefixWords) ReadChunk(start uint32) (words [membershipChunkWords]uint6
 		if word >= end {
 			break
 		}
-		if work&4095 == 4095 {
-			if err := w.check(); err != nil {
-				return words, 0, err
-			}
+		if err := checkEvery(uint32(work), w.check); err != nil {
+			return words, 0, err
 		}
 		window := w.feedToWindow[position]
 		if w.rank[window] < w.prefix {

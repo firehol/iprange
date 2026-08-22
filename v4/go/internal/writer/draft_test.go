@@ -498,11 +498,11 @@ func TestRetireOneFeedsTheRetirementRoot(t *testing.T) {
 		t.Fatalf("extent count = %d, want 2", draft.meta.RetiredExtentCount)
 	}
 
-	first, err := retire.First(store, draft.meta.RetirementRoot)
+	first, hasFirst, err := retire.First(store, draft.meta.RetirementRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first == nil {
+	if !hasFirst {
 		t.Fatal("no retirement extent")
 	}
 	if first.Key.Txn != draft.meta.TxnID || first.Key.First != 2 || first.Count != 2 {

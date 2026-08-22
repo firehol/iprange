@@ -210,10 +210,8 @@ func (s *algebraSelection) allPresent(present, counts []uint32, check checkpoint
 		return false, nil
 	}
 	for work, position := range s.positions {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return false, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return false, err
 		}
 		if counts[position] == 0 {
 			return false, nil
@@ -227,10 +225,8 @@ func (s *algebraSelection) allPresent(present, counts []uint32, check checkpoint
 func (s *algebraSelection) forEachPosition(check checkpoint, apply func(position uint32) error) error {
 	if s.all {
 		for position := 0; position < s.count; position++ {
-			if position&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(position, check); err != nil {
+				return err
 			}
 			if err := apply(uint32(position)); err != nil {
 				return err
@@ -239,10 +235,8 @@ func (s *algebraSelection) forEachPosition(check checkpoint, apply func(position
 		return nil
 	}
 	for work, position := range s.positions {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return err
 		}
 		if err := apply(position); err != nil {
 			return err
@@ -258,10 +252,8 @@ func (s *algebraSelection) forEachPosition(check checkpoint, apply func(position
 func (s *algebraSelection) forEachPresent(present, counts []uint32, check checkpoint, apply func(position uint32) error) (bool, error) {
 	if s.all {
 		for work, position := range present {
-			if work&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return false, err
-				}
+			if err := checkEvery(work, check); err != nil {
+				return false, err
 			}
 			if err := apply(position); err != nil {
 				return false, err
@@ -271,10 +263,8 @@ func (s *algebraSelection) forEachPresent(present, counts []uint32, check checkp
 	}
 	if len(s.positions) <= len(present) {
 		for work, position := range s.positions {
-			if work&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return false, err
-				}
+			if err := checkEvery(work, check); err != nil {
+				return false, err
 			}
 			if counts[position] != 0 {
 				if err := apply(position); err != nil {
@@ -285,10 +275,8 @@ func (s *algebraSelection) forEachPresent(present, counts []uint32, check checkp
 		return true, nil
 	}
 	for work, position := range present {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return false, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return false, err
 		}
 		if s.flags[position] != 0 {
 			if err := apply(position); err != nil {
@@ -427,10 +415,8 @@ func (a *MembershipAlgebra) BuildAlgebraOutput(prepared *AlgebraOutputPrepared, 
 	entries := a.State().Names()
 	if mode.preserve {
 		for index, global := range prepared.catalogGlobals {
-			if index&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return report, err
-				}
+			if err := checkEvery(index, check); err != nil {
+				return report, err
 			}
 			entry := entries[global]
 			if err := feed(string(entry.Name), uint32(index)); err != nil {
@@ -451,10 +437,8 @@ func (a *MembershipAlgebra) BuildAlgebraOutput(prepared *AlgebraOutputPrepared, 
 	}
 	if mode.preserve {
 		for output, global := range prepared.catalogGlobals {
-			if output&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return report, err
-				}
+			if err := checkEvery(output, check); err != nil {
+				return report, err
 			}
 			globalToOutput[global] = uint32(output)
 		}

@@ -190,11 +190,11 @@ func (s *DraftStore) ApplyReclamation(selection *retire.Reclamation, checkpoint 
 				return err
 			}
 		}
-		extent, err := retire.First(s, s.draft.meta.RetirementRoot)
+		extent, hasExtent, err := retire.First(s, s.draft.meta.RetirementRoot)
 		if err != nil {
 			return err
 		}
-		if extent == nil {
+		if !hasExtent {
 			break
 		}
 		if extent.Transaction() > selection.ThroughTxn {
@@ -208,7 +208,7 @@ func (s *DraftStore) ApplyReclamation(selection *retire.Reclamation, checkpoint 
 		if err != nil {
 			return err
 		}
-		if err := s.reclaimExtent(*extent, checkpoint); err != nil {
+		if err := s.reclaimExtent(extent, checkpoint); err != nil {
 			return err
 		}
 	}

@@ -19,11 +19,11 @@ func TestAfterWrapsFirstIntoNextTransaction(t *testing.T) {
 	// no such extent exists, so After must report none. The wrapped key
 	// (2, 0) would instead re-find the stored (2, 5) extent and make the
 	// reclamation scan loop or fail on overlap.
-	got, err := After(st, root, Extent{Key: Key{Txn: 2, First: ^uint32(0)}})
+	got, hasGot, err := After(st, root, Extent{Key: Key{Txn: 2, First: ^uint32(0)}})
 	if err != nil {
 		t.Fatalf("After: %v", err)
 	}
-	if got != nil {
-		t.Fatalf("After((2, MaxUint32)) = %+v, want nil", got)
+	if hasGot {
+		t.Fatalf("After((2, MaxUint32)) = %+v, want none", got)
 	}
 }

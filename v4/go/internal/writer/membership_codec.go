@@ -85,9 +85,14 @@ func newMembershipEncoded(id, wordCount uint32, digest [32]byte, blobRoot uint32
 	if blobRoot != 0 {
 		storage = membershipStorageBlob
 		length = membershipIDBase
+		// Rust codec::Encoded::new matches Blob(root >= 2) and returns
+		// Corrupt for a blob root below the page namespace.
+		if blobRoot < 2 {
+			return membershipEncoded{}, corrupt("membership blob root is invalid")
+		}
 	}
 	if id == 0 || wordCount == 0 || wordCount > membershipMaxWordCount ||
-		length > membershipRecordLimit || (blobRoot != 0 && blobRoot < 2) {
+		length > membershipRecordLimit {
 		return membershipEncoded{}, invalid("membership record fields are outside the v4 limit")
 	}
 	if len(scratch) < membershipRecordLimit {

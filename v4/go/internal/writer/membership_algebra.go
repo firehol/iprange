@@ -104,6 +104,9 @@ func storedMembershipWordCount(store tree.Store, root uint32, id uint32) (uint32
 	if err != nil {
 		return 0, err
 	}
+	if !found.located {
+		return 0, corrupt("range membership ID is missing")
+	}
 	return found.record.wordCount, nil
 }
 
@@ -261,6 +264,9 @@ func readMembershipOperand(store tree.Store, idRoot, id, wordCount, start uint32
 	if err != nil {
 		return err
 	}
+	if !found.located {
+		return corrupt("membership ID is missing")
+	}
 	return readFoundMembershipWords(store, found, start, output[:count])
 }
 
@@ -292,10 +298,8 @@ func containsMembershipIndexes(store tree.Store, idRoot uint32, id uint32, index
 		return invalid("membership index selection is not canonical")
 	}
 	for work := 0; work+1 < len(indexes); work++ {
-		if work&4095 == 4095 {
-			if err := checkpoint(check); err != nil {
-				return err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return err
 		}
 		if indexes[work] >= indexes[work+1] {
 			return invalid("membership index selection is not canonical")
@@ -311,13 +315,14 @@ func containsMembershipIndexes(store tree.Store, idRoot uint32, id uint32, index
 	if err != nil {
 		return err
 	}
+	if !found.located {
+		return corrupt("membership ID is missing")
+	}
 	var cachedWord uint64
 	cachedIndex := ^uint32(0)
 	for work, index := range indexes {
-		if work&4095 == 4095 {
-			if err := checkpoint(check); err != nil {
-				return err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return err
 		}
 		wordIndex := index / 64
 		if wordIndex >= found.record.wordCount {
@@ -345,6 +350,20 @@ func containsMembershipIndexes(store tree.Store, idRoot uint32, id uint32, index
 // cancellation function, internal callers pass nil).
 func checkpoint(check func() error) error {
 	if check == nil {
+		return nil
+	}
+	return check()
+}
+
+// integer is the set of integer counters used by checkpoint cadences.
+type integer interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
+}
+
+// checkEvery runs one cancellation checkpoint every 4096 work items (Rust
+// CancellationToken::check cadence); a nil check never cancels.
+func checkEvery[T integer](work T, check func() error) error {
+	if uint64(work)&4095 != 4095 || check == nil {
 		return nil
 	}
 	return check()

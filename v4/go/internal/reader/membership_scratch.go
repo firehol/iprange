@@ -244,10 +244,8 @@ func (s *scratch) clear(check checkpoint) error {
 	s.membershipID = 0
 	s.loaded = false
 	for i, position := range s.present {
-		if i&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(i, check); err != nil {
+			return err
 		}
 		s.flags[position] = 0
 	}
@@ -270,10 +268,8 @@ func (s *scratch) load(r *ImmutableReader, membershipID uint32, scope *ScopeData
 	}
 	if cached := s.cache.keyed(membershipID); cached != nil {
 		for i, position := range cached {
-			if i&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(i, check); err != nil {
+				return err
 			}
 			s.flags[position] = 1
 			s.present = append(s.present, position)
@@ -326,10 +322,8 @@ func (s *scratch) decodeSelected(view *MembershipView, scope *ScopeData, wordCou
 		}
 		work.MembershipWordRead(1)
 		for position < len(scope.entries) && scope.entries[position].FeedIndex/64 == wordIndex {
-			if position&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(position, check); err != nil {
+				return err
 			}
 			entry := scope.entries[position]
 			if word&(uint64(1)<<(entry.FeedIndex%64)) != 0 {
@@ -497,10 +491,8 @@ func (c *sequenceCache) insertSequence(positions []uint32, value uint32, check c
 func hashSequence(positions []uint32, check checkpoint) (uint64, error) {
 	hash := mix(uint64(len(positions)))
 	for work, position := range positions {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return 0, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return 0, err
 		}
 		hash = mix(hash ^ uint64(position))
 	}
@@ -514,10 +506,8 @@ func sequencesEqual(left, right []uint32, check checkpoint) (bool, error) {
 		return false, nil
 	}
 	for work := range left {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return false, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return false, err
 		}
 		if left[work] != right[work] {
 			return false, nil

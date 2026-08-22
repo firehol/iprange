@@ -22,12 +22,11 @@ type feedEntry struct {
 }
 
 // lookupFeed resolves one exact feed name in the draft catalog (Rust
-// DraftStore::lookup_feed): the typed name is validated at the boundary
-// before the absent-root shortcut, then the exact name-tree probe.
+// DraftStore::lookup_feed, which takes the already-validated FeedName
+// type). Callers must validate the name at their boundary first: the
+// encoder's corrupt-class re-check below guards the stored format, it
+// never converts user input errors.
 func (s *DraftStore) lookupFeed(name string) (feedEntry, bool, error) {
-	if !format.FeedNameValidString(name) {
-		return feedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
-	}
 	work.CatalogLookup(1)
 	if s.draft.meta.CatalogNameRoot == 0 {
 		return feedEntry{}, false, nil

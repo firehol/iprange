@@ -116,46 +116,51 @@ func AddPage(store tree.Store, root *uint32, extentCount *uint64, txn uint64, pa
 		return tree.RetiredPages{}, corrupt("a meta page cannot be retired")
 	}
 	key := Key{Txn: txn, First: pageNumber}
-	previous, err := predecessor(store, *root, key)
+	previous, hasPrevious, err := predecessor(store, *root, key)
 	if err != nil {
 		return tree.RetiredPages{}, err
 	}
-	next, err := atOrAfter(store, *root, key)
+	next, hasNext, err := atOrAfter(store, *root, key)
 	if err != nil {
 		return tree.RetiredPages{}, err
 	}
-	kind, err := classifyNeighbors(key, previous, next)
+	around := retiredNeighbors{previous: previous, hasPrevious: hasPrevious, next: next, hasNext: hasNext}
+	kind, err := classifyNeighbors(key, around)
 	if err != nil {
 		return tree.RetiredPages{}, err
 	}
-	return applyPage(store, root, extentCount, key, previous, next, kind)
+	return applyPage(store, root, extentCount, key, around, kind)
 }
 
-func classifyNeighbors(key Key, previous, next *Extent) (neighbors, error) {
-	if next != nil && next.Key == key {
+// retiredNeighbors carries the extents adjacent to a retired-page key
+// (Rust Option semantics without heap indirection).
+type retiredNeighbors struct {
+	previous    Extent
+	hasPrevious bool
+	next        Extent
+	hasNext     bool
+}
+
+func classifyNeighbors(key Key, n retiredNeighbors) (neighbors, error) {
+	if n.hasNext && n.next.Key == key {
 		return 0, corrupt("page is already retired")
 	}
-	if previous != nil && previous.Key.Txn == key.Txn &&
-		uint64(key.First) < uint64(previous.Key.First)+uint64(previous.Count) {
+	if n.hasPrevious && n.previous.Key.Txn == key.Txn &&
+		uint64(key.First) < uint64(n.previous.Key.First)+uint64(n.previous.Count) {
 		return 0, corrupt("page is already retired")
 	}
-	joinsPrevious := false
-	if previous != nil {
-		joinsPrevious = previous.Key.Txn == key.Txn &&
-			uint64(previous.Key.First)+uint64(previous.Count) == uint64(key.First)
-	}
-	joinsNext := false
-	if next != nil {
-		joinsNext = next.Key.Txn == key.Txn && uint64(key.First)+1 == uint64(next.Key.First)
-	}
+	joinsPrevious := n.hasPrevious && n.previous.Key.Txn == key.Txn &&
+		uint64(n.previous.Key.First)+uint64(n.previous.Count) == uint64(key.First)
+	joinsNext := n.hasNext && n.next.Key.Txn == key.Txn &&
+		uint64(key.First)+1 == uint64(n.next.Key.First)
 	switch {
 	case !joinsPrevious && !joinsNext:
 		return neighborsNeither, nil
-	case previous != nil && joinsPrevious && !joinsNext:
+	case joinsPrevious && !joinsNext:
 		return neighborsPrevious, nil
-	case next != nil && !joinsPrevious && joinsNext:
+	case !joinsPrevious && joinsNext:
 		return neighborsNext, nil
-	case previous != nil && next != nil && joinsPrevious && joinsNext:
+	case joinsPrevious && joinsNext:
 		return neighborsBoth, nil
 	default:
 		return 0, corrupt("retirement neighbor classification failed")
@@ -171,45 +176,45 @@ const (
 	neighborsBoth
 )
 
-func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, previous, next *Extent, kind neighbors) (tree.RetiredPages, error) {
+func applyPage(store tree.Store, root *uint32, extentCount *uint64, key Key, n retiredNeighbors, kind neighbors) (tree.RetiredPages, error) {
 	var retired tree.RetiredPages
 	switch kind {
 	case neighborsNeither:
 		return insert(store, root, extentCount, Extent{Key: key, Count: 1}, retired)
 	case neighborsPrevious:
-		count, err := grow(previous.Count, 1)
+		count, err := grow(n.previous.Count, 1)
 		if err != nil {
 			return retired, err
 		}
-		return insert(store, root, extentCount, Extent{Key: previous.Key, Count: count}, retired)
+		return insert(store, root, extentCount, Extent{Key: n.previous.Key, Count: count}, retired)
 	case neighborsNext:
-		retired, err := remove(store, root, extentCount, next.Key, retired)
+		retired, err := remove(store, root, extentCount, n.next.Key, retired)
 		if err != nil {
 			return retired, err
 		}
-		count, err := grow(next.Count, 1)
+		count, err := grow(n.next.Count, 1)
 		if err != nil {
 			return retired, err
 		}
 		return insert(store, root, extentCount, Extent{Key: key, Count: count}, retired)
 	case neighborsBoth:
-		retired, err := remove(store, root, extentCount, previous.Key, retired)
+		retired, err := remove(store, root, extentCount, n.previous.Key, retired)
 		if err != nil {
 			return retired, err
 		}
-		retired, err = remove(store, root, extentCount, next.Key, retired)
+		retired, err = remove(store, root, extentCount, n.next.Key, retired)
 		if err != nil {
 			return retired, err
 		}
-		merged, err := grow(previous.Count, 1)
+		merged, err := grow(n.previous.Count, 1)
 		if err != nil {
 			return retired, err
 		}
-		merged, err = grow(merged, next.Count)
+		merged, err = grow(merged, n.next.Count)
 		if err != nil {
 			return retired, err
 		}
-		return insert(store, root, extentCount, Extent{Key: previous.Key, Count: merged}, retired)
+		return insert(store, root, extentCount, Extent{Key: n.previous.Key, Count: merged}, retired)
 	}
 	return retired, nil
 }
@@ -252,35 +257,21 @@ func RemoveExtent(store tree.Store, root *uint32, extentCount *uint64, extent Ex
 	return remove(store, root, extentCount, extent.Key, tree.RetiredPages{})
 }
 
-func predecessor(store tree.Store, root uint32, key Key) (*Extent, error) {
-	value, found, err := tree.Predecessor(codec{}, store, root, key.ToTree())
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	return &value, nil
+func predecessor(store tree.Store, root uint32, key Key) (Extent, bool, error) {
+	return tree.Predecessor(codec{}, store, root, key.ToTree())
 }
 
-func atOrAfter(store tree.Store, root uint32, key Key) (*Extent, error) {
-	value, found, err := tree.AtOrAfter(codec{}, store, root, key.ToTree())
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	return &value, nil
+func atOrAfter(store tree.Store, root uint32, key Key) (Extent, bool, error) {
+	return tree.AtOrAfter(codec{}, store, root, key.ToTree())
 }
 
 // First returns the lowest retirement extent (Rust retirement::first).
-func First(store tree.Store, root uint32) (*Extent, error) {
+func First(store tree.Store, root uint32) (Extent, bool, error) {
 	return atOrAfter(store, root, Key{Txn: 0, First: 0})
 }
 
 // After returns the first extent strictly after extent (Rust after).
-func After(store tree.Store, root uint32, extent Extent) (*Extent, error) {
+func After(store tree.Store, root uint32, extent Extent) (Extent, bool, error) {
 	first := extent.Key.First + 1
 	txn := extent.Key.Txn
 	if first == 0 {
@@ -289,7 +280,7 @@ func After(store tree.Store, root uint32, extent Extent) (*Extent, error) {
 		// has no successor at all (Rust checked_add chain: first, then
 		// txn, else None).
 		if txn == ^uint64(0) {
-			return nil, nil
+			return Extent{}, false, nil
 		}
 		txn++
 	}
@@ -312,7 +303,7 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 	if maxTransactions == 0 || maxPages == 0 {
 		return nil, invalid("reclamation work limits must be nonzero")
 	}
-	next, err := First(store, root)
+	next, hasNext, err := First(store, root)
 	if err != nil {
 		return nil, err
 	}
@@ -321,10 +312,10 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 		if err := runCheckpoint(checkpoint); err != nil {
 			return nil, err
 		}
-		if next == nil {
+		if !hasNext {
 			break
 		}
-		group, ok, err := safeGroup(store, root, *next, selectedTxn, oldestReader, checkpoint)
+		group, ok, err := safeGroup(store, root, next, selectedTxn, oldestReader, checkpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -342,6 +333,7 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 			break
 		}
 		next = group.next
+		hasNext = group.hasNext
 	}
 	if selected.Transactions == 0 {
 		return nil, nil
@@ -350,9 +342,10 @@ func SelectReclamation(store tree.Store, root uint32, selectedTxn uint64, oldest
 }
 
 type group struct {
-	txn   uint64
-	pages uint64
-	next  *Extent
+	txn     uint64
+	pages   uint64
+	next    Extent
+	hasNext bool
 }
 
 func safeGroup(store tree.Store, root uint32, extent Extent, selectedTxn uint64, oldestReader *uint64, checkpoint func() error) (*group, bool, error) {
@@ -362,11 +355,11 @@ func safeGroup(store tree.Store, root uint32, extent Extent, selectedTxn uint64,
 	if !readerSafe(oldestReader, extent.Key.Txn) {
 		return nil, false, nil
 	}
-	pages, next, err := scanGroup(store, root, extent, selectedTxn, checkpoint)
+	pages, next, hasNext, err := scanGroup(store, root, extent, selectedTxn, checkpoint)
 	if err != nil {
 		return nil, false, err
 	}
-	return &group{txn: extent.Key.Txn, pages: pages, next: next}, true, nil
+	return &group{txn: extent.Key.Txn, pages: pages, next: next, hasNext: hasNext}, true, nil
 }
 
 func readerSafe(oldestReader *uint64, retiredByTxn uint64) bool {
@@ -393,37 +386,36 @@ func appendGroup(selected *Reclamation, txn uint64, groupPages uint64, maxPages 
 	return true, nil
 }
 
-func scanGroup(store tree.Store, root uint32, firstExtent Extent, selectedTxn uint64, checkpoint func() error) (uint64, *Extent, error) {
+func scanGroup(store tree.Store, root uint32, firstExtent Extent, selectedTxn uint64, checkpoint func() error) (pages uint64, next Extent, hasNext bool, err error) {
 	txn := firstExtent.Key.Txn
 	extent := firstExtent
-	var pages uint64
 	for {
 		if err := runCheckpoint(checkpoint); err != nil {
-			return 0, nil, err
+			return 0, Extent{}, false, err
 		}
 		if err := validateSelected(store, extent, selectedTxn); err != nil {
-			return 0, nil, err
+			return 0, Extent{}, false, err
 		}
 		nextCount, ok := checkedAddPages(pages, uint64(extent.Count))
 		if !ok {
-			return 0, nil, overflow("reclaimed page count")
+			return 0, Extent{}, false, overflow("reclaimed page count")
 		}
 		pages = nextCount
-		next, err := After(store, root, extent)
+		next, hasNext, err = After(store, root, extent)
 		if err != nil {
-			return 0, nil, err
+			return 0, Extent{}, false, err
 		}
-		if next == nil {
-			return pages, nil, nil
+		if !hasNext {
+			return pages, Extent{}, false, nil
 		}
 		if next.Key.Txn != txn {
-			return pages, next, nil
+			return pages, next, true, nil
 		}
 		end := uint64(extent.Key.First) + uint64(extent.Count)
 		if uint64(next.Key.First) <= end {
-			return 0, nil, corrupt("retirement extents overlap or are not coalesced")
+			return 0, Extent{}, false, corrupt("retirement extents overlap or are not coalesced")
 		}
-		extent = *next
+		extent = next
 	}
 }
 

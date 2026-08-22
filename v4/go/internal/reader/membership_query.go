@@ -17,6 +17,20 @@ import (
 // CancellationToken.check; nil means no cancellation source).
 type checkpoint func() error
 
+// integer is the set of integer counters used by checkpoint cadences.
+type integer interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
+}
+
+// checkEvery runs one cancellation checkpoint every 4096 work items (Rust
+// CancellationToken::check cadence); a nil check never cancels.
+func checkEvery[T integer](work T, check checkpoint) error {
+	if uint64(work)&4095 != 4095 || check == nil {
+		return nil
+	}
+	return check()
+}
+
 // MembershipPointMatch emits one matching feed name; errors stop the scan
 // and pass through unchanged.
 type MembershipPointMatch func(name []byte) error
@@ -101,10 +115,8 @@ func (r *ImmutableReader) ResolveAllFeeds(maxHeapBytes uint64, check checkpoint)
 		return nil, err
 	}
 	for {
-		if len(data.entries)&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(len(data.entries)), check); err != nil {
+			return nil, err
 		}
 		entry, ok, err := cursor.Next()
 		if err != nil {
@@ -148,10 +160,8 @@ func (r *ImmutableReader) ResolveNamedFeeds(names []string, maxHeapBytes uint64,
 		return nil, err
 	}
 	for i, name := range names {
-		if i&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(i, check); err != nil {
+			return nil, err
 		}
 		entry, found, err := r.LookupFeed(name)
 		if err != nil {
@@ -169,10 +179,8 @@ func (r *ImmutableReader) ResolveNamedFeeds(names []string, maxHeapBytes uint64,
 	}
 	data.sortEntries()
 	for i := 1; i < len(data.entries); i++ {
-		if i&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(i, check); err != nil {
+			return nil, err
 		}
 		if data.entries[i-1].FeedIndex == data.entries[i].FeedIndex {
 			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "membership scope feed names are not unique"}
@@ -216,10 +224,8 @@ func (d *ScopeData) finish(allCatalog bool, check checkpoint) error {
 	var previousWord uint32
 	havePrevious := false
 	for i := range d.entries {
-		if i&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(i, check); err != nil {
+			return err
 		}
 		word := d.entries[i].FeedIndex / 64
 		if !havePrevious || previousWord != word {
@@ -264,10 +270,8 @@ func (d *ScopeData) buildIndexMap(check checkpoint) error {
 		}
 		d.index.dense = make([]uint32, last+1)
 		for position, entry := range d.entries {
-			if position&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(position, check); err != nil {
+				return err
 			}
 			d.index.dense[entry.FeedIndex] = positionValue(position)
 		}
@@ -280,18 +284,14 @@ func (d *ScopeData) buildIndexMap(check checkpoint) error {
 	d.index.slots = make([]scopeSlot, sparseLen)
 	d.index.mask = sparseLen - 1
 	for position, entry := range d.entries {
-		if position&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(position, check); err != nil {
+			return err
 		}
 		slot := uint64(uint32(entry.FeedIndex*0x9e37_79b1)) & d.index.mask
 		var probes uint64
 		for {
-			if probes&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(probes, check); err != nil {
+				return err
 			}
 			if d.index.slots[slot].value == 0 {
 				d.index.slots[slot] = scopeSlot{key: entry.FeedIndex, value: positionValue(position)}

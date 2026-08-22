@@ -81,21 +81,24 @@ func TestDraftFeedCatalogEnsureInsertLookup(t *testing.T) {
 	}
 }
 
-// TestDraftFeedCatalogInvalidNameRefused pins the boundary validation:
-// an invalid feed name is refused with the name-invalid class before any
-// tree operation.
+// TestDraftFeedCatalogInvalidNameRefused pins the writer catalog
+// layering: internal catalog operations assume validated names (Rust
+// DraftStore methods take the typed FeedName), so an invalid name cannot
+// be planted (the encoder's corrupt guard) and a raw probe simply cannot
+// match a stored record. The public plan boundary refuses invalid names
+// with NameInvalid (pinned in sliceb_history_test.go).
 func TestDraftFeedCatalogInvalidNameRefused(t *testing.T) {
 	path := makeEmptyDB(t)
 	_, store, _ := openDraftStore(t, path, PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}, [16]byte{3})
 	if _, _, err := store.ensureFeed("-bad"); err == nil {
 		t.Fatal("invalid feed name accepted")
-	} else if code := errCode(err); code != format.CodeNameInvalid {
-		t.Fatalf("code = %d, want NameInvalid", code)
+	} else if code := errCode(err); code != format.CodeFormatInvalid {
+		t.Fatalf("code = %d, want FormatInvalid (encoder guard)", code)
 	}
-	if _, _, err := store.lookupFeed(""); err == nil {
-		t.Fatal("empty feed name accepted")
-	} else if code := errCode(err); code != format.CodeNameInvalid {
-		t.Fatalf("code = %d, want NameInvalid", code)
+	if entry, ok, err := store.lookupFeed(""); err != nil {
+		t.Fatal(err)
+	} else if ok || entry.name != "" {
+		t.Fatal("invalid name reported found")
 	}
 }
 

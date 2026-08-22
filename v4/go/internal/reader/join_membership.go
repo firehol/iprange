@@ -409,10 +409,8 @@ func (s *membershipJoinSweep) addCross(left, right []uint32, count format.Cardin
 	}
 	for step, l := range left {
 		for _, r := range right {
-			if step&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return err
-				}
+			if err := checkEvery(step, check); err != nil {
+				return err
 			}
 			index := int(l)*s.rightWidth + int(r)
 			var err error
@@ -446,10 +444,8 @@ func (s *membershipJoinSweep) addRightUncovered(present []uint32, count format.C
 
 func addUncovered(output []format.Cardinality129, present []uint32, count format.Cardinality129, check checkpoint) error {
 	for step, feed := range present {
-		if step&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(step, check); err != nil {
+			return err
 		}
 		var err error
 		output[feed], err = addCard(output[feed], count)

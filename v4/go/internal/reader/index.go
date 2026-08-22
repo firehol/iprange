@@ -15,11 +15,11 @@ import (
 // (mirroring feed_catalog.rs lookup_index + decode_leaf).
 func (r *ImmutableReader) LookupFeedIndex(index uint32) (FeedEntry, bool, error) {
 	work.CatalogLookup(1)
+	work.TreeLookup(1) // charged before the root shortcut (Rust fixed_tree::query)
 	root := r.meta.CatalogIndexRoot
 	if root == 0 {
 		return FeedEntry{}, false, nil
 	}
-	work.TreeLookup(1)
 	cur := root
 	level := uint16(0)
 	first := true

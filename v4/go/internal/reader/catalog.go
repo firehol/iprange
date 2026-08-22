@@ -17,10 +17,10 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 		return FeedEntry{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 	}
 	work.CatalogLookup(1)
+	work.TreeLookup(1) // charged before the root shortcut (Rust fixed_tree::query)
 	if r.meta.CatalogNameRoot == 0 {
 		return FeedEntry{}, false, nil
 	}
-	work.TreeLookup(1)
 	cur := r.meta.CatalogNameRoot
 	level := uint16(0)
 	first := true

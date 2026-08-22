@@ -76,11 +76,11 @@ func extents(m *memoryStore, root uint32) ([][3]uint64, error) {
 	var output [][3]uint64
 	key := Key{Txn: 0, First: 0}
 	for {
-		extent, err := atOrAfter(m, root, key)
+		extent, hasExtent, err := atOrAfter(m, root, key)
 		if err != nil {
 			return nil, err
 		}
-		if extent == nil {
+		if !hasExtent {
 			break
 		}
 		output = append(output, [3]uint64{extent.Key.Txn, uint64(extent.Key.First), uint64(extent.Count)})

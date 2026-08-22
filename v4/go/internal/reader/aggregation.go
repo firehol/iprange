@@ -180,10 +180,8 @@ func planAll(feeds int, heap *operationHeap, check checkpoint) (*pairPlan, error
 	}
 	next := 0
 	for left := 0; left < feeds; left++ {
-		if left&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(left), check); err != nil {
+			return nil, err
 		}
 		offsets[left] = next
 		next += feeds - left - 1
@@ -201,10 +199,8 @@ func planTarget(scope *ScopeData, target int, heap *operationHeap, check checkpo
 	}
 	cells := make([]pairCell, 0, capacity)
 	for other := 0; other < len(scope.entries); other++ {
-		if other&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(other), check); err != nil {
+			return nil, err
 		}
 		if other == target {
 			continue
@@ -230,10 +226,8 @@ func planSelected(r *ImmutableReader, scope *ScopeData, pairs []FeedPair, heap *
 	}
 	cells := make([]pairCell, 0, capacity)
 	for work, pair := range pairs {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return nil, err
 		}
 		left, err := scope.positionName(r, pair.Left)
 		if err != nil {
@@ -287,10 +281,8 @@ func planListed(cells []pairCell, feeds int, heap *operationHeap, check checkpoi
 		}
 	}
 	for work := 0; work+1 < len(cells); work++ {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return nil, err
 		}
 		if cells[work].left == cells[work+1].left && cells[work].right == cells[work+1].right {
 			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "selected feed pairs are not unique"}
@@ -301,19 +293,15 @@ func planListed(cells []pairCell, feeds int, heap *operationHeap, check checkpoi
 		return nil, err
 	}
 	for work, cell := range cells {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(work), check); err != nil {
+			return nil, err
 		}
 		next := cell.owner + 1
 		offsets[next] = offsets[next] + 1
 	}
 	for index := 1; index < len(offsets); index++ {
-		if index&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(uint32(index), check); err != nil {
+			return nil, err
 		}
 		offsets[index] = offsets[index] + offsets[index-1]
 	}
@@ -392,10 +380,8 @@ func aggregationScan(r *ImmutableReader, scope *ScopeData, stream *membershipIte
 		if !ok {
 			break
 		}
-		if scannedRangeCount&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return 0, format.CardinalityZero(), err
-			}
+		if err := checkEvery(uint32(scannedRangeCount), check); err != nil {
+			return 0, format.CardinalityZero(), err
 		}
 		count, err := ops.inclusive(rangeRecord.from, rangeRecord.to)
 		if err != nil {
@@ -447,10 +433,8 @@ func contribute(totals []format.Cardinality129, plan *pairPlan, scr *scratch, co
 		return nil
 	}
 	for step, position := range scr.presentList() {
-		if step&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(uint32(step), check); err != nil {
+			return err
 		}
 		var err error
 		totals[position], err = addCard(totals[position], count)
@@ -475,10 +459,8 @@ func (p *pairPlan) add(present []uint32, flags []byte, count format.Cardinality1
 	case AggregationAllPairs:
 		for leftOffset, left := range present {
 			for _, right := range present[leftOffset+1:] {
-				if steps&4095 == 4095 && check != nil {
-					if err := check(); err != nil {
-						return err
-					}
+				if err := checkEvery(steps, check); err != nil {
+					return err
 				}
 				index := int64(p.offsets[left]) + int64(right) - int64(left) - 1
 				if index < 0 || index >= int64(len(p.totals)) {
@@ -499,10 +481,8 @@ func (p *pairPlan) add(present []uint32, flags []byte, count format.Cardinality1
 			start := p.offsets[owner]
 			end := p.offsets[owner+1]
 			for i := start; i < end; i++ {
-				if steps&4095 == 4095 && check != nil {
-					if err := check(); err != nil {
-						return err
-					}
+				if err := checkEvery(steps, check); err != nil {
+					return err
 				}
 				if flags[p.cells[i].other] != 0 {
 					var err error

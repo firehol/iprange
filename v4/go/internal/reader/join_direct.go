@@ -90,10 +90,8 @@ func (t *joinDirectTable) add(feed uint32, direct uint64, count format.Cardinali
 	slot := joinCellHash(feed, direct) & t.mask
 	var probes uint64
 	for {
-		if probes&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(probes, check); err != nil {
+			return err
 		}
 		current := t.slots[slot]
 		if current.cellPlusOne == 0 {
@@ -348,10 +346,8 @@ func (s *joinDirectSweep) advanceLeft(check checkpoint) error {
 }
 
 func (s *joinDirectSweep) advanceRight(check checkpoint) error {
-	if s.stats.directRanges&4095 == 4095 && check != nil {
-		if err := check(); err != nil {
-			return err
-		}
+	if err := checkEvery(s.stats.directRanges, check); err != nil {
+		return err
 	}
 	next, ok, err := s.direct.next()
 	if err != nil {
@@ -407,10 +403,8 @@ func (s *joinDirectSweep) consume(from, to addrKey, direct *uint64, check checkp
 		encoded = *direct
 	}
 	for step, feed := range present {
-		if step&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(step, check); err != nil {
+			return err
 		}
 		if err := s.table.add(feed, encoded, count, check); err != nil {
 			return err

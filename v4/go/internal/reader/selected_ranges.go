@@ -138,10 +138,8 @@ func (s *selectedRanges) count() uint64 {
 }
 
 func (s *selectedRanges) nextPhysical(check checkpoint) (membershipRange, bool, error) {
-	if s.physicalCount&4095 == 4095 && check != nil {
-		if err := check(); err != nil {
-			return membershipRange{}, false, err
-		}
+	if err := checkEvery(s.physicalCount, check); err != nil {
+		return membershipRange{}, false, err
 	}
 	rangeRecord, ok, err := s.stream.next()
 	if err != nil {

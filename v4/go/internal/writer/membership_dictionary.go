@@ -184,6 +184,9 @@ func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id
 	if err != nil {
 		return false, err
 	}
+	if !found.located {
+		return false, corrupt("membership ID is missing")
+	}
 	if found.record.wordCount != words.WordCount() {
 		return false, nil
 	}
@@ -278,29 +281,35 @@ func insertMembershipRecord[T any](store tree.RetiringStore, codec tree.Codec[T]
 
 // membershipFound is one located ID-tree record (Rust record::Found):
 // the decoded record plus the leaf location, so repeated word reads reuse
-// the located cell instead of re-descending the tree.
+// the located cell instead of re-descending the tree. The location is a
+// value: a pointer to the returned local would escape to the heap on
+// every dictionary lookup.
 type membershipFound struct {
 	record   membershipRecord
-	location *tree.LeafLocation
+	location tree.LeafLocation
+	located  bool
 }
 
-// findMembership locates one ID-tree record (Rust record::find).
+// findMembership locates one ID-tree record (Rust record::find). A
+// missing record reports located=false without an error; each caller
+// attaches its own missing-record corrupt detail, mirroring the Rust
+// callers that map find's Option to their Corrupt strings.
 func findMembership(store tree.Store, root uint32, id uint32) (membershipFound, error) {
 	work.MembershipLookup(1)
 	if id == 0 || root == 0 {
-		return membershipFound{}, corrupt("membership ID is missing")
+		return membershipFound{}, nil
 	}
 	value, location, ok, err := tree.PredecessorLocated(idCodec{}, store, root, tree.Key{Hi: uint64(id)})
 	if err != nil {
 		return membershipFound{}, err
 	}
 	if !ok {
-		return membershipFound{}, corrupt("membership ID is missing")
+		return membershipFound{}, nil
 	}
 	if value.id != id {
-		return membershipFound{}, corrupt("membership ID is missing")
+		return membershipFound{}, nil
 	}
-	return membershipFound{record: value, location: &location}, nil
+	return membershipFound{record: value, location: location, located: true}, nil
 }
 
 // readMembershipWords reads sequential words of one stored membership
@@ -309,6 +318,9 @@ func readMembershipWords(store tree.Store, idRoot uint32, id uint32, start uint3
 	found, err := findMembership(store, idRoot, id)
 	if err != nil {
 		return err
+	}
+	if !found.located {
+		return corrupt("membership ID is missing")
 	}
 	return readFoundMembershipWords(store, found, start, output)
 }
@@ -327,10 +339,10 @@ func readFoundMembershipWords(store tree.Store, found membershipFound, start uin
 	}
 	switch found.record.storage {
 	case membershipStorageInline:
-		location := found.location
-		if location == nil {
+		if !found.located {
 			return corrupt("membership inline record lost its leaf location")
 		}
+		location := found.location
 		return tree.InspectLeaf(idCodec{}, store, location.PageNumber, location.Header.ItemCount, location.Index, func(cell []byte) error {
 			current, err := decodeMembershipRecord(cell)
 			if err != nil {

@@ -42,6 +42,99 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+## Status
+
+Status: in-progress
+
+### Status (2026-08-22) - five-aspect close gate: 2 FAIL verdicts, both fix batches applied
+
+The five-aspect adversarial close gate (lead-model reviewers, final-review
+skill, Rust baseline) ran over the chunk 3b-4 delta
+`11003d8..925e114` (allocation pass 5,169 -> 39 allocs/run, slices A+B+C,
+corpus extension). Verdicts and fixes:
+
+- Aspect 5 (APIs/docs, Aristotle): PASS. 4 P3s, actionable ones fixed in
+  `db1307a` (FeedName doc, fixture comment, SOW commit-state wording,
+  commit-path alloc pin).
+- Aspect 3 (performance, Harvey): PASS. 3 P3s; the commit-path allocation
+  pin and AllocsPerRun(4) ceiling landed in `db1307a`; carrying a
+  wall-time benchmark was recorded as a post-close bench item, not a
+  blocker (test-only necessary-work counters already pin work).
+- Aspect 4 (wire/integrity, Newton): PASS. P2.1 the gate commit moved
+  while reviewing (re-affirmed below); P3.1 short membership blob reads
+  now fail closed instead of trimming (`d9c00cc`).
+- Aspect 2 (Go idioms, Anscombe): FAIL -> fixed in this batch.
+  - P2-1 per-lookup heap escape in findMembership: membershipFound
+    now stores tree.LeafLocation by value plus a located bool
+    (membership_dictionary.go); `-gcflags=-m=2` no longer reports the
+    location escape. (Same defect as Aspect-1 F1.)
+  - P2-2 history prefix panic: historyPrefixWordCount now returns
+    corrupt("nonempty history prefix has no feeds") like Rust
+    Error::Corrupt, and prefixWords carries its word count so
+    WordCount() does not re-scan (history.go).
+  - P3-3 retire.go predecessor/atOrAfter returned pointers to locals;
+    the retire package now returns (Extent, bool, error) through
+    First/After/scanGroup/classify/applyPage (retire.go, draft_prepare).
+  - P3-4 writer range_edit.go readPredecessor/readAtOrAfter returned
+    pointers; now (rangeRecord, bool, error) through segmentAt,
+    rangeReplaceWithHint, trimPredecessor, trimFollowing,
+    mergePrevious/Next.
+  - P3-5 RetiredPages API shape kept as-is: the tree returns the fixed
+    array by value and the bitmap dictionaries accumulate in place
+    because Rust passes RetiredPages by &mut and Go mirrors both
+    shapes; both are allocation-free (verified with -gcflags=-m=2).
+  - P3-6 all 23 `&4095` cancellation cadences in writer and reader are
+    now one generic checkEvery[T integer] helper per package
+    (membership_algebra.go, history.go, membership_query.go and every
+    reader loop); the cadence and the nil-check are defined once,
+    identical to Rust CancellationToken::check cadence.
+  - P3-7 tree.LocalReject/LocalInsert/EdgeInsert became generic
+    (rangeRecord, u32 codecs); the any-boxed neighbor cells are now
+    typed values, removing the per-rejection interface boxing and the
+    caller-side type assertion (gap.go, range_edit.go).
+  - P3-8 feed-name validation moved to the plan boundary only, like
+    Rust FeedName::new: collectHistoryWindows refuses invalid window
+    names with CodeNameInvalid (pinned by sliceb_history_test.go) and
+    the internal catalog operations document the pre-validated input
+    contract with the encoder's corrupt guard as the caller-bug backstop
+    (feed_catalog.go, catalog_codec.go); feed_catalog_test.go was
+    updated to pin the new layering.
+- Aspect 1 (Rust parity, Meitner): FAIL -> fixed in this batch.
+  - F1 per-lookup allocation in findMembership: same fix as Anscombe
+    P2-1.
+  - F2 corrupt-path detail mismatch: findMembership now returns
+    located=false and each caller attaches its Rust detail; the
+    membership-algebra path emits corrupt("range membership ID is
+    missing") exactly like Rust algebra.rs stored_word_count, the
+    other paths keep "membership ID is missing"
+    (membership_dictionary.go, membership_algebra.go).
+  - F3 history prefix panic: same fix as Anscombe P2-2.
+  - F4 empty-catalog TreeLookup counter: reader LookupFeed and
+    LookupFeedIndex now charge work.TreeLookup before the absent-root
+    shortcut, mirroring Rust fixed_tree::query (catalog.go, index.go).
+  - F5 membership blob-root encode branch: newMembershipEncoded now
+    returns corrupt("membership blob root is invalid") for blob roots
+    below 2 before the invalid-argument limit check, exactly like Rust
+    codec::Encoded::new (membership_codec.go).
+- Recorded parity decision (counter granularity): Go charges
+  work.BytesMoved at store-layer logical operations (tag, marker, seal
+  stamps; draft_work_test pins 16/8/32) while Rust charges per mapped
+  write; Rust asserts no bytes_moved totals anywhere, so no
+  cross-language counter total is pinned or diverged. The counters are
+  test-only no-ops; both sides pin the same per-operation invariants.
+  Accepted as documented, no code change.
+
+Validation of the fix batch (all under nice): go test ./... and -tags
+v4work (both -count=1 and -race), go vet, gofmt clean, checkptr=2,
+GOOS windows/amd64 + darwin/arm64 + freebsd/amd64 + linux/arm64 builds,
+the two allocation ceilings (39 and 84/run, unchanged), the Rust suite
+and --all-features - all green. Delta for the re-review pin:
+`11003d8..<final commit of this batch>`.
+
+- Next: re-review of the fix batch by Aspect 2 (Anscombe) and Aspect 1
+  (Meitner) on the pinned commit; when all five report no P0-P2, close
+  milestone 1 (push), then start the next M3 surface (feed workflows).
+
 ### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (committed at 925e114)
 
 The warm ProjectHistory projection path (source 1000 last-seen points,
@@ -109,9 +202,9 @@ windows/darwin/freebsd and linux-arm64 builds, Rust full suite and
 --all-features, Go conformance and mixed subprocess cross-open - all
 green. The allocation test is deterministic at 39/run.
 
-- Next: the five-aspect adversarial close gate for chunk 3b-4 over
-  delta HEAD 11003d8..925e114 (allocation fixes, slice A+B+C, the
-  corpus extension), then the next M3 surface (feed workflows).
+- Reviewed by the five-aspect close gate (see the entry below); the
+  gate's fix batches are committed and the re-review proceeds on
+  delta 11003d8..HEAD.
 
 ### 2026-08-21 - user decision: the gate scanner and its mutation corpora are deleted; the gate is full-codebase review
 

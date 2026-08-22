@@ -198,10 +198,8 @@ func inspectAlgebraSources(sources []AlgebraSource, check checkpoint) (uint8, ui
 	family := sources[0].Reader.Meta().AddressFamily
 	var total uint64
 	for index := range sources {
-		if index&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return 0, 0, err
-			}
+		if err := checkEvery(index, check); err != nil {
+			return 0, 0, err
 		}
 		if sources[index].Reader.Meta().AddressFamily != family {
 			return 0, 0, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "membership algebra source families differ"}
@@ -233,10 +231,8 @@ func collectAlgebraNames(sources []AlgebraSource, totalEntries uint64, heap *ope
 	names := make([]FeedEntry, 0, totalEntries)
 	var entryWork int
 	for index := range sources {
-		if index&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(index, check); err != nil {
+			return nil, err
 		}
 		for _, entry := range sources[index].Scope.entries {
 			names = append(names, FeedEntry{Name: entry.Name})
@@ -282,10 +278,8 @@ func buildAlgebraInputs(sources []AlgebraSource, names []FeedEntry, heap *operat
 	}
 	inputs := make([]algebraInput, 0, len(sources))
 	for index := range sources {
-		if index&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(index, check); err != nil {
+			return nil, err
 		}
 		source := sources[index]
 		local, err := algebraSourcePositions(source.Scope, names, heap, check)
@@ -311,10 +305,8 @@ func algebraSourcePositions(scope *ScopeData, names []FeedEntry, heap *operation
 	}
 	local := make([]uint32, 0, len(scope.entries))
 	for work, entry := range scope.entries {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return nil, err
 		}
 		position := algebraNamePosition(names, entry.Name)
 		if position < 0 {
@@ -410,10 +402,8 @@ func resolveAlgebraSelection(a *MembershipAlgebra, requested FeedSelection, heap
 	}
 	positions := make([]uint32, 0, len(requested.names))
 	for work, name := range requested.names {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return nil, err
 		}
 		position := algebraNamePosition(a.state.names, []byte(name))
 		if position < 0 {
@@ -436,10 +426,8 @@ func resolveAlgebraSelection(a *MembershipAlgebra, requested FeedSelection, heap
 		}
 	}
 	for work := 1; work < len(positions); work++ {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return nil, err
 		}
 		if positions[work-1] == positions[work] {
 			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "membership algebra feed selection is not unique"}
@@ -450,10 +438,8 @@ func resolveAlgebraSelection(a *MembershipAlgebra, requested FeedSelection, heap
 	}
 	flags := make([]byte, len(a.state.names))
 	for work, position := range positions {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return nil, err
 		}
 		flags[position] = 1
 	}
@@ -468,10 +454,8 @@ func (s *algebraSelection) any(present, counts []uint32, check checkpoint) (bool
 	}
 	if len(s.positions) < len(present) {
 		for work, position := range s.positions {
-			if work&4095 == 4095 && check != nil {
-				if err := check(); err != nil {
-					return false, err
-				}
+			if err := checkEvery(work, check); err != nil {
+				return false, err
 			}
 			if counts[position] != 0 {
 				return true, nil
@@ -480,10 +464,8 @@ func (s *algebraSelection) any(present, counts []uint32, check checkpoint) (bool
 		return false, nil
 	}
 	for work, slot := range present {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return false, err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return false, err
 		}
 		if s.flags[slot] != 0 {
 			return true, nil
@@ -853,10 +835,8 @@ func newAlgebraGlobalState(feeds int, heap *operationHeap) (*algebraGlobalState,
 // (Rust GlobalState::add).
 func (g *algebraGlobalState) add(present, localToGlobal []uint32, check checkpoint) error {
 	for work, local := range present {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return err
 		}
 		global := localToGlobal[local]
 		count := g.counts[global]
@@ -881,10 +861,8 @@ func (g *algebraGlobalState) add(present, localToGlobal []uint32, check checkpoi
 // presence (Rust GlobalState::remove, swap-remove with slot repair).
 func (g *algebraGlobalState) remove(present, localToGlobal []uint32, check checkpoint) error {
 	for work, local := range present {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return err
 		}
 		global := localToGlobal[local]
 		count := g.counts[global]
@@ -1213,10 +1191,8 @@ func emitAlgebraTerminal(from *addrKey, states []*algebraSourceState, ops rangeO
 // expected range count (Rust finish_sources).
 func finishAlgebraSources(states []*algebraSourceState, ops rangeOps, report *scanReport, check checkpoint) error {
 	for work, state := range states {
-		if work&4095 == 4095 && check != nil {
-			if err := check(); err != nil {
-				return err
-			}
+		if err := checkEvery(work, check); err != nil {
+			return err
 		}
 		if state.active {
 			if !state.hasRange {
