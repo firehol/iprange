@@ -68,4 +68,22 @@ fn go_produced_fixtures_cross_open_child() {
         Some(3),
         "go fixture 10.0.0.16"
     );
+
+    // The Go-produced history projection destination opens and carries
+    // the three last-seen feeds with their full 1000-point range tree
+    // (the Rust conformance suite verifies every range and projection
+    // of this fixture; the smoke verdict here is catalog + record
+    // count).
+    let history =
+        ImmutableReader::open(root.join("go/history-membership-ipv4.iprdb")).unwrap();
+    for (name, index) in [("one", 0u32), ("two", 1), ("three", 2)] {
+        assert_eq!(
+            history.lookup_feed(name).unwrap().unwrap().index,
+            index,
+            "go history fixture feed {name}"
+        );
+    }
+    let history_info = history.info();
+    assert_eq!(history_info.range_record_count, 1000);
+    assert_eq!(history_info.active_feed_count, 3);
 }

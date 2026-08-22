@@ -103,6 +103,33 @@ func TestGoSubprocessChild(t *testing.T) {
 	}
 	r.Close()
 
+	// 2b. The Go-produced history projection destination opens with the
+	// three last-seen feeds and the full 1000-point range tree (the
+	// conformance suite verifies every range; this smoke verdict is
+	// catalog + record count).
+	historyPath, err := filepath.Abs(filepath.Join("..", "conformance", "go", "history-membership-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := OpenImmutable(historyPath)
+	if err != nil {
+		t.Fatalf("go child: go history fixture open: %v", err)
+	}
+	for name, wantIndex := range map[string]uint32{"one": 0, "two": 1, "three": 2} {
+		entry, found, err := h.LookupFeed(name)
+		if err != nil || !found || entry.Index != wantIndex {
+			t.Fatalf("go child: history feed %q = %+v found %v err %v, want index %d", name, entry, found, err, wantIndex)
+		}
+	}
+	historyInfo, err := h.Info()
+	if err != nil {
+		t.Fatalf("go child: history info: %v", err)
+	}
+	if historyInfo.RangeRecordCount != 1000 || historyInfo.ActiveFeedCount != 3 {
+		t.Fatalf("go child: history info = %+v, want 1000 ranges and 3 feeds", historyInfo)
+	}
+	h.Close()
+
 	// 3. One full create -> write -> commit -> read-back roundtrip.
 	path := filepath.Join(t.TempDir(), "child-roundtrip.iprdb")
 	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {

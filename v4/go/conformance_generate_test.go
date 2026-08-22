@@ -139,6 +139,87 @@ func regenFirstSeenIPv6(t *testing.T, dir string) {
 	}
 }
 
+// regenHistoryMembershipIPv4 writes history-membership-ipv4.iprdb into
+// dir: the Rust one_source_pass vector projected through the public
+// Writer.ProjectHistory workflow into three last-seen feeds (cutoffs
+// 9/10/11 over last_seen 10+index%3), so cutoffs keep 1000/666/333
+// points. The destination is the committed projection itself - feed
+// catalog, membership dictionary, and ranges all produced by the Go
+// writer - and both readers cross-open it.
+func regenHistoryMembershipIPv4(t *testing.T, dir string) {
+	t.Helper()
+
+	// The source: one fresh last_seen direct database with the exact
+	// Rust ranges1000 vector (a temporary input, never a corpus file).
+	sourcePath := filepath.Join(t.TempDir(), "history-source.iprdb")
+	if _, err := Create(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+		t.Fatal(err)
+	}
+	sourceWriter, err := OpenWriter(sourcePath, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := sourceWriter.BeginDirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 1000; index++ {
+		address := uint32(index * 2)
+		if changed, err := tx.AssignV4(IPv4(address), IPv4(address), 10+uint32(index%3)); err != nil || !changed {
+			t.Fatalf("source assign %d = changed %v err %v", address, changed, err)
+		}
+	}
+	res, err := tx.Commit()
+	if err != nil || res.Status != CommitCommitted {
+		t.Fatalf("source commit = %+v err %v", res, err)
+	}
+	if err := sourceWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tag, err := NewValueTag([]byte("feeds"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "history-membership-ipv4.iprdb")
+	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := OpenImmutable(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{
+		{FeedName: []byte("one"), Cutoff: 9},
+		{FeedName: []byte("two"), Cutoff: 10},
+		{FeedName: []byte("three"), Cutoff: 11},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handle.IsChanged() {
+		t.Fatal("history projection of 1000 new points is not changed")
+	}
+	report := handle.Report()
+	if report.SourceRangeCount != 1000 || report.CreatedFeedCount != 3 {
+		t.Fatalf("history report source=%d feeds=%d, want 1000/3", report.SourceRangeCount, report.CreatedFeedCount)
+	}
+	res, err = handle.Commit()
+	if err != nil || res.Status != CommitCommitted {
+		t.Fatalf("history commit = %+v err %v", res, err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRegenerateGoFixtures regenerates both Go-produced fixtures with the
 // Rust two-phase contract: generate both files into a staging corpus,
 // verify the staging corpus with the exact same conformance suite in a
@@ -182,6 +263,7 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	}
 	regenDirectIPv4(t, goDir)
 	regenFirstSeenIPv6(t, goDir)
+	regenHistoryMembershipIPv4(t, goDir)
 
 	// Verify: the staged corpus must pass the full conformance suite
 	// (same binary, same test, corpus root redirected by env).
@@ -229,4 +311,5 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	}
 	publish("direct-ipv4.iprdb")
 	publish("first-seen-ipv6.iprdb")
+	publish("history-membership-ipv4.iprdb")
 }
