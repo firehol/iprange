@@ -57,12 +57,6 @@ type Draft struct {
 	// membershipDeltaPending is the two-slot delta buffer in front of
 	// the delta tree (Rust membership_delta_pending).
 	membershipDeltaPending deltaPending
-	// workflowRangeRoot and workflowRangeCount are the ordered-merge
-	// output roots staged for the workflow finish (Rust
-	// workflow_range_root / workflow_range_count; the merge publishes
-	// them into meta at finish).
-	workflowRangeRoot  uint32
-	workflowRangeCount uint64
 	// workflow is the exact-workflow state of the draft (Rust
 	// WorkflowState: None, Input, Prepared).
 	workflow workflowState

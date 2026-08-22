@@ -159,6 +159,21 @@ func (r *ImmutableReader) Info() (DatabaseInfo, error) {
 	}, nil
 }
 
+// FileIdentity returns the device and inode of the mapped file (Rust
+// OpenedMain::identity). The writer workflows compare it with the writer
+// identity so a database can never be its own source (Rust
+// require_compatible_source same-file check).
+func (r *ImmutableReader) FileIdentity() (device uint64, inode uint64, err error) {
+	if err := r.checkOpen(); err != nil {
+		return 0, 0, &Error{Code: ErrorWrongState, Detail: "reader closed"}
+	}
+	device, inode, err = r.inner.FileIdentity()
+	if err != nil {
+		return 0, 0, publicError(err)
+	}
+	return device, inode, nil
+}
+
 // The four require* helpers mirror the Rust reader pre-checks exactly:
 // wrong kind and wrong family are reported before any page is touched
 // (reader_core/generation.rs require_direct/require_membership_family,

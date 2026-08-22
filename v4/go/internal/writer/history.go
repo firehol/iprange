@@ -28,68 +28,75 @@ const (
 	historyHandleBytes = 8   // size_of::<MembershipHandle>()
 )
 
-// historyWindow is one requested history projection window (Rust
-// HistoryWindow): one named feed and the last-seen cutoff.
-type historyWindow struct {
-	feedName string
-	cutoff   uint32
+// HistoryWindow is one requested history projection window at the
+// internal boundary (Rust HistoryWindow): one named feed and the
+// last-seen cutoff. The public facade converts its value-free window
+// onto this type.
+type HistoryWindow struct {
+	FeedName string
+	Cutoff   uint32
 }
 
-// historyWindowReport is the exact before/after statistics of one
-// projected feed (Rust HistoryWindowReport).
-type historyWindowReport struct {
-	feedName            string
-	cutoff              uint32
-	created             bool
-	beforeIntervalCount uint64
-	afterIntervalCount  uint64
-	beforeAddresses     format.Cardinality129
-	afterAddresses      format.Cardinality129
-	unchangedAddresses  format.Cardinality129
-	addedAddresses      format.Cardinality129
-	removedAddresses    format.Cardinality129
+// HistoryWindowReport is the exact before/after statistics of one
+// projected feed (Rust HistoryWindowReport). The public facade copies
+// the values onto its value-free report type.
+type HistoryWindowReport struct {
+	FeedName            string
+	Cutoff              uint32
+	Created             bool
+	BeforeIntervalCount uint64
+	AfterIntervalCount  uint64
+	BeforeAddresses     format.Cardinality129
+	AfterAddresses      format.Cardinality129
+	UnchangedAddresses  format.Cardinality129
+	AddedAddresses      format.Cardinality129
+	RemovedAddresses    format.Cardinality129
 }
 
-// historyProjectionReport is the exact aggregate plus per-window outcome
-// of one history projection (Rust HistoryProjectionReport).
-type historyProjectionReport struct {
-	logicalChange       logicalChange
-	sourceRangeCount    uint64
-	sourceAddresses     format.Cardinality129
-	createdFeedCount    uint64
-	beforeIntervalCount uint64
-	afterIntervalCount  uint64
-	beforeAddresses     format.Cardinality129
-	afterAddresses      format.Cardinality129
-	unchangedAddresses  format.Cardinality129
-	addedAddresses      format.Cardinality129
-	removedAddresses    format.Cardinality129
-	windows             []historyWindowReport
+// HistoryProjectionReport is the exact aggregate plus per-window outcome
+// of one history projection (Rust HistoryProjectionReport). The public
+// facade copies the values onto its value-free report type.
+type HistoryProjectionReport struct {
+	LogicalChange       LogicalChange
+	SourceRangeCount    uint64
+	SourceAddresses     format.Cardinality129
+	CreatedFeedCount    uint64
+	BeforeIntervalCount uint64
+	AfterIntervalCount  uint64
+	BeforeAddresses     format.Cardinality129
+	AfterAddresses      format.Cardinality129
+	UnchangedAddresses  format.Cardinality129
+	AddedAddresses      format.Cardinality129
+	RemovedAddresses    format.Cardinality129
+	Windows             []HistoryWindowReport
 }
 
-// logicalChange is the internal change classification (Rust
-// workflow::LogicalChange; the public values are mirrored by the public
-// facade).
-type logicalChange uint8
+// LogicalChange is the internal change classification of one projection
+// (Rust workflow::LogicalChange; the same numeric values as the public
+// facade constants).
+type LogicalChange uint8
 
 const (
-	logicalChanged  logicalChange = 0
-	logicalNoChange logicalChange = 1
+	LogicalChanged  LogicalChange = 0
+	LogicalNoChange LogicalChange = 1
 )
 
 // historyRun is the adjacency state of one window's observation sweep
-// (Rust Run<K>).
+// (Rust Run<K>). lastTo is embedded by value: the observation hot path
+// must not allocate per segment.
 type historyRun struct {
-	lastTo *tree.Key
-	before bool
-	after  bool
+	lastTo    tree.Key
+	hasLastTo bool
+	before    bool
+	after     bool
 }
 
-// historyCached is one cached transform outcome (Rust Cached).
+// historyCached is one cached transform outcome (Rust Cached; embedded
+// by value in the policy so the transform hot path never allocates).
 type historyCached struct {
-	old    *uint32
+	old    optionalValue
 	prefix int
-	new    *uint32
+	new    optionalValue
 }
 
 // historyPlan is the prepared projection state before the merge starts
@@ -110,7 +117,7 @@ type historyMerge struct {
 // selectedMembershipBits and interns prefix bitmaps through the
 // dictionary).
 type historyPolicy struct {
-	reports       []historyWindowReport
+	reports       []HistoryWindowReport
 	runs          []historyRun
 	cutoffOrder   []uint32
 	rank          []uint32
@@ -121,17 +128,19 @@ type historyPolicy struct {
 	prefixes      []membershipHandle
 	currentPrefix int
 	family        uint8 // address family of the projection (Rust HistoryPolicy<K> fixes K at plan time)
-	aggregate     historyWindowReport
+	aggregate     HistoryWindowReport
 	aggregateRun  historyRun
-	decodedOld    *uint32
-	cache         *historyCached
+	decodedOld    optionalValue
+	decodedOldSet bool
+	cache         historyCached
+	hasCache      bool
 	check         func() error
 }
 
 // prepareHistoryPlan validates the windows, ensures every destination
 // feed, and charges the whole retained plan against the draft heap
 // budget (Rust HistoryPlan::prepare_from).
-func prepareHistoryPlan(store *DraftStore, windows []historyWindow, check func() error) (*historyPlan, error) {
+func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func() error) (*historyPlan, error) {
 	windowCount := len(windows)
 	if windowCount == 0 {
 		return nil, invalid("history windows are empty")
@@ -186,10 +195,12 @@ func prepareHistoryPlan(store *DraftStore, windows []historyWindow, check func()
 		prefixes:      prefixes,
 		currentPrefix: 0,
 		family:        store.draft.meta.AddressFamily,
-		aggregate:     emptyHistoryReport(historyWindow{feedName: "aggregate", cutoff: 0}, false),
+		aggregate:     emptyHistoryReport(HistoryWindow{FeedName: "aggregate"}, false),
 		aggregateRun:  historyRun{},
-		decodedOld:    nil,
-		cache:         nil,
+		decodedOld:    optionalValue{},
+		decodedOldSet: false,
+		cache:         historyCached{},
+		hasCache:      false,
 		check:         check,
 	}
 	return &historyPlan{policy: policy, createdFeedCount: createdFeedCount}, nil
@@ -213,7 +224,7 @@ func (p historyPlan) begin(store *DraftStore, base format.Meta, check func() err
 
 // collectHistoryWindows copies the window requests into the charged plan
 // vectors (Rust collect_windows).
-func collectHistoryWindows(store *DraftStore, windows []historyWindow, heap *heapBudget, check func() error) ([]historyWindowReport, []historyRun, []uint32, []uint32, error) {
+func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *heapBudget, check func() error) ([]HistoryWindowReport, []historyRun, []uint32, []uint32, error) {
 	windowCount := uint64(len(windows))
 	if err := heap.vector(windowCount, historyReportBytes, "history projection heap"); err != nil {
 		return nil, nil, nil, nil, err
@@ -231,7 +242,7 @@ func collectHistoryWindows(store *DraftStore, windows []historyWindow, heap *hea
 	if err := heap.vector(windowCount, historyWordBytes, "history projection heap"); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	reports := make([]historyWindowReport, windowCount)
+	reports := make([]HistoryWindowReport, windowCount)
 	runs := make([]historyRun, windowCount)
 	cutoffOrder := make([]uint32, windowCount)
 	feedOrder := make([]uint32, windowCount)
@@ -241,7 +252,7 @@ func collectHistoryWindows(store *DraftStore, windows []historyWindow, heap *hea
 				return nil, nil, nil, nil, err
 			}
 		}
-		if !format.FeedNameValidString(request.feedName) {
+		if !format.FeedNameValidString(request.FeedName) {
 			return nil, nil, nil, nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 		}
 		reports[index] = emptyHistoryReport(request, false)
@@ -254,12 +265,12 @@ func collectHistoryWindows(store *DraftStore, windows []historyWindow, heap *hea
 
 // requireUniqueHistoryNames rejects duplicate destination feed names
 // (Rust require_unique_names).
-func requireUniqueHistoryNames(reports []historyWindowReport, feedOrder []uint32, check func() error) error {
+func requireUniqueHistoryNames(reports []HistoryWindowReport, feedOrder []uint32, check func() error) error {
 	if err := check(); err != nil {
 		return err
 	}
 	sort.Slice(feedOrder, func(left, right int) bool {
-		return reports[feedOrder[left]].feedName < reports[feedOrder[right]].feedName
+		return reports[feedOrder[left]].FeedName < reports[feedOrder[right]].FeedName
 	})
 	if err := check(); err != nil {
 		return err
@@ -270,7 +281,7 @@ func requireUniqueHistoryNames(reports []historyWindowReport, feedOrder []uint32
 				return err
 			}
 		}
-		if reports[feedOrder[work]].feedName == reports[feedOrder[work+1]].feedName {
+		if reports[feedOrder[work]].FeedName == reports[feedOrder[work+1]].FeedName {
 			return invalid("history window feed names are not unique")
 		}
 	}
@@ -279,7 +290,7 @@ func requireUniqueHistoryNames(reports []historyWindowReport, feedOrder []uint32
 
 // ensureHistoryFeeds creates the missing destination feeds and records
 // their indexes (Rust ensure_feeds).
-func ensureHistoryFeeds(store *DraftStore, reports []historyWindowReport, heap *heapBudget, check func() error) (uint64, []uint32, error) {
+func ensureHistoryFeeds(store *DraftStore, reports []HistoryWindowReport, heap *heapBudget, check func() error) (uint64, []uint32, error) {
 	var createdFeedCount uint64
 	if err := heap.vector(uint64(len(reports)), historyWordBytes, "history projection heap"); err != nil {
 		return 0, nil, err
@@ -291,11 +302,11 @@ func ensureHistoryFeeds(store *DraftStore, reports []historyWindowReport, heap *
 				return 0, nil, err
 			}
 		}
-		entry, created, err := store.ensureFeed(reports[work].feedName)
+		entry, created, err := store.ensureFeed(reports[work].FeedName)
 		if err != nil {
 			return 0, nil, err
 		}
-		reports[work].created = created
+		reports[work].Created = created
 		var added uint64
 		if created {
 			added = 1
@@ -312,17 +323,17 @@ func ensureHistoryFeeds(store *DraftStore, reports []historyWindowReport, heap *
 
 // orderHistoryCutoffs ranks the windows by (cutoff, feed name) (Rust
 // order_cutoffs).
-func orderHistoryCutoffs(reports []historyWindowReport, cutoffOrder []uint32, rank []uint32, check func() error) error {
+func orderHistoryCutoffs(reports []HistoryWindowReport, cutoffOrder []uint32, rank []uint32, check func() error) error {
 	if err := check(); err != nil {
 		return err
 	}
 	sort.Slice(cutoffOrder, func(left, right int) bool {
 		leftReport := reports[cutoffOrder[left]]
 		rightReport := reports[cutoffOrder[right]]
-		if leftReport.cutoff != rightReport.cutoff {
-			return leftReport.cutoff < rightReport.cutoff
+		if leftReport.Cutoff != rightReport.Cutoff {
+			return leftReport.Cutoff < rightReport.Cutoff
 		}
-		return leftReport.feedName < rightReport.feedName
+		return leftReport.FeedName < rightReport.FeedName
 	})
 	if err := check(); err != nil {
 		return err
@@ -374,7 +385,7 @@ func (m *historyMerge) push(store *DraftStore, from, to tree.Key, lastSeen uint3
 
 // finish ends the merge and produces the projection report (Rust
 // HistoryMerge::finish).
-func (m *historyMerge) finish(store *DraftStore, check func() error, sourceRangeCount uint64, sourceAddresses format.Cardinality129) (*historyProjectionReport, error) {
+func (m *historyMerge) finish(store *DraftStore, check func() error, sourceRangeCount uint64, sourceAddresses format.Cardinality129) (*HistoryProjectionReport, error) {
 	policy, err := m.inner.finish(store, check)
 	if err != nil {
 		return nil, err
@@ -388,86 +399,89 @@ func (p *historyPolicy) preserveWithoutInput() bool { return false }
 // HistoryPolicy::transform): the destination bitmap loses every feed
 // whose cutoff is below the incoming last-seen, then gains exactly the
 // feeds ranked below the current prefix.
-func (p *historyPolicy) transform(store *DraftStore, old *uint32, incoming *uint32) (*uint32, error) {
+func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error) {
 	p.currentPrefix = 0
-	if incoming != nil {
+	if incoming.present {
 		p.currentPrefix = sort.Search(len(p.cutoffOrder), func(index int) bool {
-			return p.reports[p.cutoffOrder[index]].cutoff >= *incoming
+			return p.reports[p.cutoffOrder[index]].Cutoff >= incoming.value
 		})
 	}
 	oldID := uint32(0)
-	if old != nil {
-		oldID = *old
+	if old.present {
+		oldID = old.value
 	}
-	if p.decodedOld == nil || *p.decodedOld != oldID {
+	if !p.decodedOldSet || p.decodedOld.value != oldID {
 		if err := store.selectedMembershipBits(oldID, p.feedIndexes, p.beforeSorted, p.check); err != nil {
-			return nil, err
+			return noneValue(), err
 		}
 		for position, window := range p.feedToWindow {
 			if position&4095 == 4095 {
 				if err := p.check(); err != nil {
-					return nil, err
+					return noneValue(), err
 				}
 			}
 			p.before[window] = p.beforeSorted[position]
 		}
-		p.decodedOld = &oldID
+		p.decodedOld = optionalValue{value: oldID, present: true}
+		p.decodedOldSet = true
 	}
-	if p.cache != nil && sameOptionalUint32(p.cache.old, old) && p.cache.prefix == p.currentPrefix {
+	if p.hasCache && sameOptional(p.cache.old, old) && p.cache.prefix == p.currentPrefix {
 		return p.cache.new, nil
 	}
 	if matches, err := p.matchesPrefix(); err != nil {
-		return nil, err
+		return noneValue(), err
 	} else if matches {
-		p.cache = &historyCached{old: old, prefix: p.currentPrefix, new: old}
+		p.cache = historyCached{old: old, prefix: p.currentPrefix, new: old}
+		p.hasCache = true
 		return old, nil
 	}
 	var withoutTargets uint32
 	var withoutPresent bool
-	if old != nil {
+	if old.present {
 		all, err := p.prefix(store, len(p.reports))
 		if err != nil {
-			return nil, err
+			return noneValue(), err
 		}
 		allID, allWords := all.stored()
-		combined, present, err := store.combineMemberships(*old, allID, allWords, membershipDifference)
+		combined, present, err := store.combineMemberships(old.value, allID, allWords, membershipDifference)
 		if err != nil {
-			return nil, err
+			return noneValue(), err
 		}
 		withoutTargets = combined
 		withoutPresent = present
 	}
 	prefix, err := p.prefix(store, p.currentPrefix)
 	if err != nil {
-		return nil, err
+		return noneValue(), err
 	}
 	prefixID, prefixWords := prefix.stored()
-	var new *uint32
+	var new optionalValue
 	switch {
 	case !withoutPresent && prefixID == 0:
-		new = nil
+		new = noneValue()
 	case !withoutPresent:
-		new = &prefixID
+		new = someValue(prefixID)
 	case prefixID == 0:
-		new = &withoutTargets
+		new = someValue(withoutTargets)
 	default:
 		combined, present, err := store.combineMemberships(withoutTargets, prefixID, prefixWords, membershipUnion)
 		if err != nil {
-			return nil, err
+			return noneValue(), err
 		}
 		if present {
-			new = &combined
+			new = someValue(combined)
 		} else {
-			new = nil
+			new = noneValue()
 		}
 	}
-	p.cache = &historyCached{old: old, prefix: p.currentPrefix, new: new}
+	p.cache = historyCached{old: old, prefix: p.currentPrefix, new: new}
+	p.hasCache = true
 	return new, nil
 }
 
 // observe folds one segment into every window and the aggregate (Rust
 // HistoryPolicy::observe).
-func (p *historyPolicy) observe(from, to tree.Key, _old, _incoming, _new *uint32) error {
+func (p *historyPolicy) observe(from, to tree.Key, _old, _incoming, _new optionalValue) error {
 	count, err := familyInclusiveCardinality(p.family, from, to)
 	if err != nil {
 		return err
@@ -538,7 +552,7 @@ func (p *historyPolicy) matchesPrefix() (bool, error) {
 
 // finishReport balances and assembles the projection report (Rust
 // HistoryPolicy::finish_report).
-func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses format.Cardinality129, createdFeedCount uint64) (*historyProjectionReport, error) {
+func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses format.Cardinality129, createdFeedCount uint64) (*HistoryProjectionReport, error) {
 	changed := createdFeedCount != 0
 	for work := range p.reports {
 		if work&4095 == 4095 {
@@ -550,30 +564,30 @@ func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses fo
 			return nil, err
 		}
 		changed = changed ||
-			p.reports[work].addedAddresses != format.CardinalityZero() ||
-			p.reports[work].removedAddresses != format.CardinalityZero()
+			p.reports[work].AddedAddresses != format.CardinalityZero() ||
+			p.reports[work].RemovedAddresses != format.CardinalityZero()
 	}
 	if err := requireBalancedHistoryReport(&p.aggregate); err != nil {
 		return nil, err
 	}
 	aggregate := p.aggregate
-	change := logicalNoChange
+	change := LogicalNoChange
 	if changed {
-		change = logicalChanged
+		change = LogicalChanged
 	}
-	return &historyProjectionReport{
-		logicalChange:       change,
-		sourceRangeCount:    sourceRangeCount,
-		sourceAddresses:     sourceAddresses,
-		createdFeedCount:    createdFeedCount,
-		beforeIntervalCount: aggregate.beforeIntervalCount,
-		afterIntervalCount:  aggregate.afterIntervalCount,
-		beforeAddresses:     aggregate.beforeAddresses,
-		afterAddresses:      aggregate.afterAddresses,
-		unchangedAddresses:  aggregate.unchangedAddresses,
-		addedAddresses:      aggregate.addedAddresses,
-		removedAddresses:    aggregate.removedAddresses,
-		windows:             p.reports,
+	return &HistoryProjectionReport{
+		LogicalChange:       change,
+		SourceRangeCount:    sourceRangeCount,
+		SourceAddresses:     sourceAddresses,
+		CreatedFeedCount:    createdFeedCount,
+		BeforeIntervalCount: aggregate.BeforeIntervalCount,
+		AfterIntervalCount:  aggregate.AfterIntervalCount,
+		BeforeAddresses:     aggregate.BeforeAddresses,
+		AfterAddresses:      aggregate.AfterAddresses,
+		UnchangedAddresses:  aggregate.UnchangedAddresses,
+		AddedAddresses:      aggregate.AddedAddresses,
+		RemovedAddresses:    aggregate.RemovedAddresses,
+		Windows:             p.reports,
 	}, nil
 }
 
@@ -654,62 +668,62 @@ func (w *prefixWords) ReadWords(start uint32, output []uint64) error {
 
 // observeHistoryWindow folds one segment into one window report (Rust
 // observe).
-func observeHistoryWindow(report *historyWindowReport, run *historyRun, family uint8, from, to tree.Key, count format.Cardinality129, before, after bool) error {
+func observeHistoryWindow(report *HistoryWindowReport, run *historyRun, family uint8, from, to tree.Key, count format.Cardinality129, before, after bool) error {
 	adjacent := false
-	if run.lastTo != nil {
-		next, ok := nextKey(family, *run.lastTo)
+	if run.hasLastTo {
+		next, ok := nextKey(family, run.lastTo)
 		adjacent = ok && next.Equal(from)
 	}
 	if before {
-		next, err := addHistoryCount(report.beforeAddresses, count)
+		next, err := addHistoryCount(report.BeforeAddresses, count)
 		if err != nil {
 			return err
 		}
-		report.beforeAddresses = next
+		report.BeforeAddresses = next
 		if !adjacent || !run.before {
-			next, err := incrementHistoryCount(report.beforeIntervalCount)
+			next, err := incrementHistoryCount(report.BeforeIntervalCount)
 			if err != nil {
 				return err
 			}
-			report.beforeIntervalCount = next
+			report.BeforeIntervalCount = next
 		}
 	}
 	if after {
-		next, err := addHistoryCount(report.afterAddresses, count)
+		next, err := addHistoryCount(report.AfterAddresses, count)
 		if err != nil {
 			return err
 		}
-		report.afterAddresses = next
+		report.AfterAddresses = next
 		if !adjacent || !run.after {
-			next, err := incrementHistoryCount(report.afterIntervalCount)
+			next, err := incrementHistoryCount(report.AfterIntervalCount)
 			if err != nil {
 				return err
 			}
-			report.afterIntervalCount = next
+			report.AfterIntervalCount = next
 		}
 	}
 	switch {
 	case before && after:
-		next, err := addHistoryCount(report.unchangedAddresses, count)
+		next, err := addHistoryCount(report.UnchangedAddresses, count)
 		if err != nil {
 			return err
 		}
-		report.unchangedAddresses = next
+		report.UnchangedAddresses = next
 	case before && !after:
-		next, err := addHistoryCount(report.removedAddresses, count)
+		next, err := addHistoryCount(report.RemovedAddresses, count)
 		if err != nil {
 			return err
 		}
-		report.removedAddresses = next
+		report.RemovedAddresses = next
 	case !before && after:
-		next, err := addHistoryCount(report.addedAddresses, count)
+		next, err := addHistoryCount(report.AddedAddresses, count)
 		if err != nil {
 			return err
 		}
-		report.addedAddresses = next
+		report.AddedAddresses = next
 	}
-	toCopy := to
-	run.lastTo = &toCopy
+	run.lastTo = to
+	run.hasLastTo = true
 	run.before = before
 	run.after = after
 	return nil
@@ -717,19 +731,19 @@ func observeHistoryWindow(report *historyWindowReport, run *historyRun, family u
 
 // requireBalancedHistoryReport verifies the before/after accounting of
 // one window (Rust require_balanced).
-func requireBalancedHistoryReport(report *historyWindowReport) error {
-	before, err := addHistoryCount(report.unchangedAddresses, report.removedAddresses)
+func requireBalancedHistoryReport(report *HistoryWindowReport) error {
+	before, err := addHistoryCount(report.UnchangedAddresses, report.RemovedAddresses)
 	if err != nil {
 		return err
 	}
-	after, err := addHistoryCount(report.unchangedAddresses, report.addedAddresses)
+	after, err := addHistoryCount(report.UnchangedAddresses, report.AddedAddresses)
 	if err != nil {
 		return err
 	}
 	zero := format.CardinalityZero()
-	if before != report.beforeAddresses || after != report.afterAddresses ||
-		(report.beforeIntervalCount == 0) != (report.beforeAddresses == zero) ||
-		(report.afterIntervalCount == 0) != (report.afterAddresses == zero) {
+	if before != report.BeforeAddresses || after != report.AfterAddresses ||
+		(report.BeforeIntervalCount == 0) != (report.BeforeAddresses == zero) ||
+		(report.AfterIntervalCount == 0) != (report.AfterAddresses == zero) {
 		return corrupt("history projection counters do not balance")
 	}
 	return nil
@@ -737,11 +751,11 @@ func requireBalancedHistoryReport(report *historyWindowReport) error {
 
 // emptyHistoryReport builds the zero report of one window (Rust
 // empty_report).
-func emptyHistoryReport(window historyWindow, created bool) historyWindowReport {
-	return historyWindowReport{
-		feedName: window.feedName,
-		cutoff:   window.cutoff,
-		created:  created,
+func emptyHistoryReport(window HistoryWindow, created bool) HistoryWindowReport {
+	return HistoryWindowReport{
+		FeedName: window.FeedName,
+		Cutoff:   window.Cutoff,
+		Created:  created,
 	}
 }
 
@@ -775,13 +789,4 @@ func familyInclusiveCardinality(family uint8, from, to tree.Key) (format.Cardina
 		return format.CardinalityZero(), overflow("IPv6 interval cardinality")
 	}
 	return size, nil
-}
-
-// sameOptionalUint32 compares two Rust-style Option<u32> values (both
-// present with equal values, or both absent).
-func sameOptionalUint32(left, right *uint32) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }

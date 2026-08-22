@@ -39,7 +39,6 @@ type Meta struct {
 	StructureIDRoot      uint32
 	StructureHashRoot    uint32
 	StructureUsedRoot    uint32
-	MetaCRC32C           uint32
 }
 
 // ParseIdentity performs the static identity checks of section 4.1 on one
@@ -100,8 +99,8 @@ func ParseIdentity(page []byte) (Meta, bool) {
 			return m, false
 		}
 	}
-	m.MetaCRC32C = U32(page[252:256])
-	if MetaCRC32C(page) != m.MetaCRC32C {
+	storedCRC := U32(page[252:256])
+	if MetaCRC32C(page) != storedCRC {
 		return m, false
 	}
 	fillMetaScalars(&m, page)

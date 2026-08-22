@@ -115,7 +115,7 @@ func newWriterEdit(store *DraftStore, base format.Meta) *WriterEdit {
 // PrepareHistoryFrom validates the history windows, interns every
 // destination feed, and prepares the projection plan (Rust
 // WriterEdit::prepare_history_from).
-func (e *WriterEdit) PrepareHistoryFrom(windows []historyWindow, check func() error) (*historyPlan, error) {
+func (e *WriterEdit) PrepareHistoryFrom(windows []HistoryWindow, check func() error) (*historyPlan, error) {
 	return prepareHistoryPlan(e.store, windows, check)
 }
 
@@ -133,7 +133,7 @@ func (e *WriterEdit) PushHistory(merge *historyMerge, from, to tree.Key, lastSee
 
 // FinishHistory ends the projection merge and assembles the projection
 // report (Rust WriterEdit::finish_history).
-func (e *WriterEdit) FinishHistory(merge *historyMerge, sourceRangeCount uint64, sourceAddresses format.Cardinality129, check func() error) (*historyProjectionReport, error) {
+func (e *WriterEdit) FinishHistory(merge *historyMerge, sourceRangeCount uint64, sourceAddresses format.Cardinality129, check func() error) (*HistoryProjectionReport, error) {
 	return merge.finish(e.store, check, sourceRangeCount, sourceAddresses)
 }
 

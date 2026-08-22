@@ -41,10 +41,10 @@ func TestWorkHistoryProjectionMergePins(t *testing.T) {
 	if err := c.BeginMembershipWorkflow(); err != nil {
 		t.Fatal(err)
 	}
-	windows := []historyWindow{
-		{feedName: "recent", cutoff: 15},
-		{feedName: "very-recent", cutoff: 25},
-		{feedName: "future", cutoff: 30},
+	windows := []HistoryWindow{
+		{FeedName: "recent", Cutoff: 15},
+		{FeedName: "very-recent", Cutoff: 25},
+		{FeedName: "future", Cutoff: 30},
 	}
 	var plan *historyPlan
 	if err := c.Mutate(func(edit *WriterEdit) error {

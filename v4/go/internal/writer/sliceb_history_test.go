@@ -201,7 +201,7 @@ func count129(t *testing.T, c format.Cardinality129) uint64 {
 
 // runProjection drives one internal history projection over the open
 // destination workflow and returns the finished report.
-func runProjection(t *testing.T, c *Core, windows []historyWindow, ranges [][3]uint32) *historyProjectionReport {
+func runProjection(t *testing.T, c *Core, windows []HistoryWindow, ranges [][3]uint32) *HistoryProjectionReport {
 	t.Helper()
 	var plan *historyPlan
 	if err := c.Mutate(func(edit *WriterEdit) error {
@@ -239,7 +239,7 @@ func runProjection(t *testing.T, c *Core, windows []historyWindow, ranges [][3]u
 			t.Fatal(err)
 		}
 	}
-	var report *historyProjectionReport
+	var report *HistoryProjectionReport
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error
 		report, err = edit.FinishHistory(merge, rangeCount, addresses, nilCheck)
@@ -272,100 +272,100 @@ func TestHistoryProjectionMultipleWindowsOncePreservesUnrelatedFeeds(t *testing.
 	if err := c.BeginMembershipWorkflow(); err != nil {
 		t.Fatal(err)
 	}
-	windows := []historyWindow{
-		{feedName: "recent", cutoff: 15},
-		{feedName: "very-recent", cutoff: 25},
-		{feedName: "future", cutoff: 30},
+	windows := []HistoryWindow{
+		{FeedName: "recent", Cutoff: 15},
+		{FeedName: "very-recent", Cutoff: 25},
+		{FeedName: "future", Cutoff: 30},
 	}
 	report := runProjection(t, c, windows, [][3]uint32{
 		{0, 9, 10}, {10, 19, 20}, {20, 29, 30}, {40, 49, 20},
 	})
 
-	if report.logicalChange != logicalChanged {
-		t.Fatalf("logical change = %d, want changed", report.logicalChange)
+	if report.LogicalChange != LogicalChanged {
+		t.Fatalf("logical change = %d, want changed", report.LogicalChange)
 	}
-	if report.sourceRangeCount != 4 {
-		t.Fatalf("source range count = %d, want 4", report.sourceRangeCount)
+	if report.SourceRangeCount != 4 {
+		t.Fatalf("source range count = %d, want 4", report.SourceRangeCount)
 	}
-	if got := count129(t, report.sourceAddresses); got != 40 {
+	if got := count129(t, report.SourceAddresses); got != 40 {
 		t.Fatalf("source addresses = %d, want 40", got)
 	}
-	if report.createdFeedCount != 1 {
-		t.Fatalf("created feed count = %d, want 1", report.createdFeedCount)
+	if report.CreatedFeedCount != 1 {
+		t.Fatalf("created feed count = %d, want 1", report.CreatedFeedCount)
 	}
-	if report.beforeIntervalCount != 2 {
-		t.Fatalf("before interval count = %d, want 2", report.beforeIntervalCount)
+	if report.BeforeIntervalCount != 2 {
+		t.Fatalf("before interval count = %d, want 2", report.BeforeIntervalCount)
 	}
-	if report.afterIntervalCount != 2 {
-		t.Fatalf("after interval count = %d, want 2", report.afterIntervalCount)
+	if report.AfterIntervalCount != 2 {
+		t.Fatalf("after interval count = %d, want 2", report.AfterIntervalCount)
 	}
-	if got := count129(t, report.beforeAddresses); got != 31 {
+	if got := count129(t, report.BeforeAddresses); got != 31 {
 		t.Fatalf("before addresses = %d, want 31", got)
 	}
-	if got := count129(t, report.afterAddresses); got != 30 {
+	if got := count129(t, report.AfterAddresses); got != 30 {
 		t.Fatalf("after addresses = %d, want 30", got)
 	}
-	if got := count129(t, report.unchangedAddresses); got != 15 {
+	if got := count129(t, report.UnchangedAddresses); got != 15 {
 		t.Fatalf("unchanged addresses = %d, want 15", got)
 	}
-	if got := count129(t, report.addedAddresses); got != 15 {
+	if got := count129(t, report.AddedAddresses); got != 15 {
 		t.Fatalf("added addresses = %d, want 15", got)
 	}
-	if got := count129(t, report.removedAddresses); got != 16 {
+	if got := count129(t, report.RemovedAddresses); got != 16 {
 		t.Fatalf("removed addresses = %d, want 16", got)
 	}
-	if len(report.windows) != 3 {
-		t.Fatalf("window report count = %d, want 3", len(report.windows))
+	if len(report.Windows) != 3 {
+		t.Fatalf("window report count = %d, want 3", len(report.Windows))
 	}
 
-	recent := report.windows[0]
-	if recent.created || recent.feedName != "recent" || recent.cutoff != 15 {
+	recent := report.Windows[0]
+	if recent.Created || recent.FeedName != "recent" || recent.Cutoff != 15 {
 		t.Fatalf("recent window head = %+v", recent)
 	}
-	if recent.beforeIntervalCount != 1 || recent.afterIntervalCount != 2 {
-		t.Fatalf("recent intervals = before %d after %d, want 1 and 2", recent.beforeIntervalCount, recent.afterIntervalCount)
+	if recent.BeforeIntervalCount != 1 || recent.AfterIntervalCount != 2 {
+		t.Fatalf("recent intervals = before %d after %d, want 1 and 2", recent.BeforeIntervalCount, recent.AfterIntervalCount)
 	}
-	if got := count129(t, recent.beforeAddresses); got != 20 {
+	if got := count129(t, recent.BeforeAddresses); got != 20 {
 		t.Fatalf("recent before = %d, want 20", got)
 	}
-	if got := count129(t, recent.afterAddresses); got != 30 {
+	if got := count129(t, recent.AfterAddresses); got != 30 {
 		t.Fatalf("recent after = %d, want 30", got)
 	}
-	if got := count129(t, recent.unchangedAddresses); got != 10 {
+	if got := count129(t, recent.UnchangedAddresses); got != 10 {
 		t.Fatalf("recent unchanged = %d, want 10", got)
 	}
-	if got := count129(t, recent.addedAddresses); got != 20 {
+	if got := count129(t, recent.AddedAddresses); got != 20 {
 		t.Fatalf("recent added = %d, want 20", got)
 	}
-	if got := count129(t, recent.removedAddresses); got != 10 {
+	if got := count129(t, recent.RemovedAddresses); got != 10 {
 		t.Fatalf("recent removed = %d, want 10", got)
 	}
 
-	veryRecent := report.windows[1]
-	if veryRecent.created || veryRecent.feedName != "very-recent" {
+	veryRecent := report.Windows[1]
+	if veryRecent.Created || veryRecent.FeedName != "very-recent" {
 		t.Fatalf("very-recent window head = %+v", veryRecent)
 	}
-	if got := count129(t, veryRecent.beforeAddresses); got != 11 {
+	if got := count129(t, veryRecent.BeforeAddresses); got != 11 {
 		t.Fatalf("very-recent before = %d, want 11", got)
 	}
-	if got := count129(t, veryRecent.afterAddresses); got != 10 {
+	if got := count129(t, veryRecent.AfterAddresses); got != 10 {
 		t.Fatalf("very-recent after = %d, want 10", got)
 	}
-	if got := count129(t, veryRecent.unchangedAddresses); got != 5 {
+	if got := count129(t, veryRecent.UnchangedAddresses); got != 5 {
 		t.Fatalf("very-recent unchanged = %d, want 5", got)
 	}
-	if got := count129(t, veryRecent.addedAddresses); got != 5 {
+	if got := count129(t, veryRecent.AddedAddresses); got != 5 {
 		t.Fatalf("very-recent added = %d, want 5", got)
 	}
-	if got := count129(t, veryRecent.removedAddresses); got != 6 {
+	if got := count129(t, veryRecent.RemovedAddresses); got != 6 {
 		t.Fatalf("very-recent removed = %d, want 6", got)
 	}
 
-	future := report.windows[2]
-	if !future.created || future.feedName != "future" {
+	future := report.Windows[2]
+	if !future.Created || future.FeedName != "future" {
 		t.Fatalf("future window head = %+v", future)
 	}
-	if got := count129(t, future.afterAddresses); got != 0 {
+	if got := count129(t, future.AfterAddresses); got != 0 {
 		t.Fatalf("future after = %d, want 0", got)
 	}
 
@@ -420,13 +420,13 @@ func TestHistoryProjectionMultipleWindowsOncePreservesUnrelatedFeeds(t *testing.
 	rerun := runProjection(t, c, windows, [][3]uint32{
 		{0, 9, 10}, {10, 19, 20}, {20, 29, 30}, {40, 49, 20},
 	})
-	if rerun.logicalChange != logicalNoChange {
-		t.Fatalf("rerun logical change = %d, want no change", rerun.logicalChange)
+	if rerun.LogicalChange != LogicalNoChange {
+		t.Fatalf("rerun logical change = %d, want no change", rerun.LogicalChange)
 	}
-	if rerun.createdFeedCount != 0 {
-		t.Fatalf("rerun created feed count = %d, want 0", rerun.createdFeedCount)
+	if rerun.CreatedFeedCount != 0 {
+		t.Fatalf("rerun created feed count = %d, want 0", rerun.CreatedFeedCount)
 	}
-	if got := count129(t, rerun.windows[0].unchangedAddresses); got != 30 {
+	if got := count129(t, rerun.Windows[0].UnchangedAddresses); got != 30 {
 		t.Fatalf("rerun recent unchanged = %d, want 30", got)
 	}
 	if err := c.DiscardUnpublished(); err != nil {
@@ -490,18 +490,18 @@ func TestHistoryProjectionEmptySourcePreservesUnprojectedFeeds(t *testing.T) {
 	if err := c.BeginMembershipWorkflow(); err != nil {
 		t.Fatal(err)
 	}
-	report := runProjection(t, c, []historyWindow{
-		{feedName: "recent", cutoff: 15},
+	report := runProjection(t, c, []HistoryWindow{
+		{FeedName: "recent", Cutoff: 15},
 	}, nil)
-	if report.logicalChange != logicalChanged {
-		t.Fatalf("logical change = %d, want changed", report.logicalChange)
+	if report.LogicalChange != LogicalChanged {
+		t.Fatalf("logical change = %d, want changed", report.LogicalChange)
 	}
 	// The aggregate covers only the projected windows: with one
 	// "recent" window the aggregate before is exactly its coverage.
-	if got := count129(t, report.removedAddresses); got != 20 {
+	if got := count129(t, report.RemovedAddresses); got != 20 {
 		t.Fatalf("removed = %d, want 20 (the recent window coverage)", got)
 	}
-	if got := count129(t, report.afterAddresses); got != 0 {
+	if got := count129(t, report.AfterAddresses); got != 0 {
 		t.Fatalf("after = %d, want 0", got)
 	}
 	if err := c.Mutate(func(edit *WriterEdit) error {
@@ -548,20 +548,20 @@ func TestHistoryPlanValidation(t *testing.T) {
 		t.Fatalf("empty windows code = %d, want InvalidArgument", code)
 	}
 
-	if _, err := preparePlanOn(t, c, []historyWindow{{feedName: "same", cutoff: 1}, {feedName: "same", cutoff: 2}}); err == nil {
+	if _, err := preparePlanOn(t, c, []HistoryWindow{{FeedName: "same", Cutoff: 1}, {FeedName: "same", Cutoff: 2}}); err == nil {
 		t.Fatal("duplicate feed names accepted")
 	} else if code := errCode(err); code != format.CodeInvalidArgument {
 		t.Fatalf("duplicate names code = %d, want InvalidArgument", code)
 	}
 
-	if _, err := preparePlanOn(t, c, []historyWindow{{feedName: "Bad Name", cutoff: 1}}); err == nil {
+	if _, err := preparePlanOn(t, c, []HistoryWindow{{FeedName: "Bad Name", Cutoff: 1}}); err == nil {
 		t.Fatal("invalid feed name accepted")
 	} else if code := errCode(err); code != format.CodeNameInvalid {
 		t.Fatalf("invalid name code = %d, want NameInvalid", code)
 	}
 }
 
-func preparePlanOn(t *testing.T, c *Core, windows []historyWindow) (*historyPlan, error) {
+func preparePlanOn(t *testing.T, c *Core, windows []HistoryWindow) (*historyPlan, error) {
 	t.Helper()
 	var plan *historyPlan
 	err := c.Mutate(func(edit *WriterEdit) error {
@@ -586,7 +586,7 @@ func TestHistoryPlanHeapBudget(t *testing.T) {
 	if err := c.BeginMembershipWorkflow(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := preparePlanOn(t, c, []historyWindow{{feedName: "recent", cutoff: 15}}); err == nil {
+	if _, err := preparePlanOn(t, c, []HistoryWindow{{FeedName: "recent", Cutoff: 15}}); err == nil {
 		t.Fatal("plan prepared under a one-byte heap budget")
 	} else if code := errCode(err); code != format.CodeInsufficientResourceBudget {
 		t.Fatalf("budget code = %d, want InsufficientResourceBudget", code)
@@ -608,7 +608,7 @@ func TestOrderedMergeRequiresCanonicalInput(t *testing.T) {
 	if err := c.BeginMembershipWorkflow(); err != nil {
 		t.Fatal(err)
 	}
-	windows := []historyWindow{{feedName: "recent", cutoff: 15}}
+	windows := []HistoryWindow{{FeedName: "recent", Cutoff: 15}}
 	var plan *historyPlan
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error

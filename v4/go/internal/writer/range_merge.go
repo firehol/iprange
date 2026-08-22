@@ -4,7 +4,9 @@
 // in lockstep, calling the policy for every segment and emitting the
 // new canonical tree through the range bulk builder. Membership values
 // account refcount changes in coalesced runs; the base tree is retired
-// once the merge publishes its output.
+// once the merge publishes its output. Every per-record state below is
+// embedded by value: the drive loop must not allocate per segment (Rust
+// stores the same state as value Option fields).
 
 package writer
 
@@ -13,6 +15,29 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
+
+// optionalValue is one Rust-style Option<u32> carried by value: the
+// ordered-merge and policy hot paths pass segment values without
+// allocating per record.
+type optionalValue struct {
+	value   uint32
+	present bool
+}
+
+// someValue returns the present option of value (Rust Some(value)).
+func someValue(value uint32) optionalValue { return optionalValue{value: value, present: true} }
+
+// noneValue returns the absent option (Rust None).
+func noneValue() optionalValue { return optionalValue{} }
+
+// sameOptional compares two options (Rust Option<u32> equality: both
+// absent, or both present with equal values).
+func sameOptional(left, right optionalValue) bool {
+	if !left.present || !right.present {
+		return left.present == right.present
+	}
+	return left.value == right.value
+}
 
 // incomingRange is one input interval with its value (Rust
 // draft_store/range_merge.rs Incoming; the value is the last-seen
@@ -28,8 +53,8 @@ type incomingRange struct {
 // history projection never preserves an untouched base, the feed merges
 // (which do) reuse this merge later.
 type mergePolicy[P any] interface {
-	transform(store *DraftStore, old *uint32, incoming *uint32) (*uint32, error)
-	observe(from, to tree.Key, old, incoming, new *uint32) error
+	transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error)
+	observe(from, to tree.Key, old, incoming, new optionalValue) error
 	finish() (P, error)
 	preserveWithoutInput() bool
 }
@@ -37,17 +62,20 @@ type mergePolicy[P any] interface {
 // mergeOutput is the coalescing range output of one merge (Rust
 // Output): adjacent same-value records merge into one, each distinct
 // record is charged through the membership refcount run, and the bulk
-// builder seals the new tree at finish.
+// builder seals the new tree at finish. pending is embedded by value so
+// emitting one record never allocates.
 type mergeOutput struct {
-	builder   *rangeBulkBuilder
-	pending   *rangeRecord
-	refcounts *refcountRun
+	builder     *rangeBulkBuilder
+	pending     rangeRecord
+	hasPending  bool
+	refcounts   refcountRun
+	hasRefcount bool
 }
 
 func newMergeOutput(transaction uint64, valueKind, family uint8) mergeOutput {
 	output := mergeOutput{builder: newRangeBulkBuilder(transaction, valueKind, family)}
 	if valueKind == format.ValueKindMembership {
-		output.refcounts = &refcountRun{}
+		output.hasRefcount = true
 	}
 	return output
 }
@@ -55,33 +83,35 @@ func newMergeOutput(transaction uint64, valueKind, family uint8) mergeOutput {
 // emit appends one output record, coalescing it into the pending record
 // when the values match and the ranges are adjacent (Rust Output::emit).
 func (o *mergeOutput) emit(store *DraftStore, record rangeRecord) error {
-	if o.pending != nil && o.pending.value == record.value {
+	if o.hasPending && o.pending.value == record.value {
 		if next, ok := nextKey(store.draft.meta.AddressFamily, o.pending.to); ok && next.Equal(record.from) {
 			o.pending.to = record.to
 			work.RangeCoalesced(1)
 			return nil
 		}
 	}
-	if o.pending != nil {
-		if err := o.push(store, *o.pending); err != nil {
+	if o.hasPending {
+		if err := o.push(store, o.pending); err != nil {
 			return err
 		}
+		o.hasPending = false
 	}
-	o.pending = &rangeRecord{from: record.from, to: record.to, value: record.value}
+	o.pending = record
+	o.hasPending = true
 	return nil
 }
 
 // finish seals the output tree and returns its root and record count
 // (Rust Output::finish).
 func (o *mergeOutput) finish(store *DraftStore) (uint32, uint64, error) {
-	if o.pending != nil {
-		if err := o.push(store, *o.pending); err != nil {
+	if o.hasPending {
+		if err := o.push(store, o.pending); err != nil {
 			return 0, 0, err
 		}
-		o.pending = nil
+		o.hasPending = false
 	}
-	if o.refcounts != nil {
-		if err := o.refcounts.flush(store, 1); err != nil {
+	if o.hasRefcount {
+		if err := o.refcounts.flush(store); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -91,7 +121,7 @@ func (o *mergeOutput) finish(store *DraftStore) (uint32, uint64, error) {
 // push charges one distinct output record and appends it (Rust
 // Output::push).
 func (o *mergeOutput) push(store *DraftStore, record rangeRecord) error {
-	if o.refcounts != nil {
+	if o.hasRefcount {
 		if err := o.refcounts.add(store, record.value, 1); err != nil {
 			return err
 		}
@@ -100,9 +130,10 @@ func (o *mergeOutput) push(store *DraftStore, record rangeRecord) error {
 }
 
 // refcountRun coalesces consecutive refcount changes of one membership
-// id into one delta (Rust RefcountRun).
+// id into one delta (Rust RefcountRun). current is embedded by value.
 type refcountRun struct {
-	current *refcountEntry
+	current    refcountEntry
+	hasCurrent bool
 }
 
 type refcountEntry struct {
@@ -110,10 +141,12 @@ type refcountEntry struct {
 	count uint64
 }
 
-// add records one signed change of id, flushing the previous run when
-// the id changes (Rust RefcountRun::add).
+// add records one signed change of id; when the id changes, the
+// previous run flushes with the caller's sign exactly like Rust
+// RefcountRun::add (the output sweep passes +1, the base-retirement
+// drain -1).
 func (r *refcountRun) add(store *DraftStore, id uint32, sign int64) error {
-	if r.current != nil {
+	if r.hasCurrent {
 		if r.current.id == id {
 			next, err := checkedAdd(r.current.count, 1, "membership refcount run")
 			if err != nil {
@@ -122,18 +155,25 @@ func (r *refcountRun) add(store *DraftStore, id uint32, sign int64) error {
 			r.current.count = next
 			return nil
 		}
-		if err := r.flush(store, sign); err != nil {
+		if err := r.flushSigned(store, sign); err != nil {
 			return err
 		}
 	}
-	r.current = &refcountEntry{id: id, count: 1}
+	r.current = refcountEntry{id: id, count: 1}
+	r.hasCurrent = true
 	return nil
 }
 
-// flush applies the current run with the caller's sign (Rust
-// RefcountRun::flush).
-func (r *refcountRun) flush(store *DraftStore, sign int64) error {
-	if r.current == nil {
+// flush applies and clears the current run with the +1 sign (Rust
+// Output::finish RefcountRun::flush parity).
+func (r *refcountRun) flush(store *DraftStore) error {
+	return r.flushSigned(store, 1)
+}
+
+// flushSigned applies and clears the current run with a caller sign
+// (Rust RefcountRun::flush; -1 drains the accounted base run).
+func (r *refcountRun) flushSigned(store *DraftStore, sign int64) error {
+	if !r.hasCurrent {
 		return nil
 	}
 	var signed int64
@@ -151,26 +191,31 @@ func (r *refcountRun) flush(store *DraftStore, sign int64) error {
 	if err := store.trackMembershipRefcount(r.current.id, signed); err != nil {
 		return err
 	}
-	r.current = nil
+	r.hasCurrent = false
 	return nil
 }
 
 // orderedMerge walks the base generation and the incoming records in
 // lockstep, emitting the policy result per segment (Rust OrderedMerge).
+// old and previousInputEnd are embedded by value; the cursor hands back
+// one record at a time without allocating.
 type orderedMerge[P any] struct {
-	codec            rangeFamily
-	family           uint8
-	oldCursor        *rangeCursor
-	old              *rangeRecord
-	oldAccounted     bool
-	previousInputEnd *tree.Key
-	output           mergeOutput
-	policy           mergePolicy[P]
-	baseRoot         uint32
-	baseCount        uint64
-	inputSeen        bool
-	oldRefcounts     *refcountRun
-	cancellationWork uint16
+	codec               rangeFamily
+	family              uint8
+	oldCursor           *rangeCursor
+	old                 rangeRecord
+	hasOld              bool
+	oldAccounted        bool
+	previousInputEnd    tree.Key
+	hasPreviousInputEnd bool
+	output              mergeOutput
+	policy              mergePolicy[P]
+	baseRoot            uint32
+	baseCount           uint64
+	inputSeen           bool
+	oldRefcounts        refcountRun
+	hasOldRefcounts     bool
+	cancellationWork    uint16
 }
 
 // newOrderedMerge opens the base cursor and the output builder (Rust
@@ -184,23 +229,24 @@ func newOrderedMerge[P any](store *DraftStore, base format.Meta, codec rangeFami
 	if err != nil {
 		return nil, err
 	}
-	old, err := oldCursor.next()
-	if err != nil {
-		return nil, err
-	}
 	merge := &orderedMerge[P]{
 		codec:     codec,
 		family:    base.AddressFamily,
 		oldCursor: oldCursor,
-		old:       old,
 		output:    newMergeOutput(store.draft.meta.TxnID, base.ValueKind, base.AddressFamily),
 		policy:    policy,
 		baseRoot:  base.RangeRoot,
 		baseCount: base.RangeRecordCount,
 	}
 	if base.ValueKind == format.ValueKindMembership {
-		merge.oldRefcounts = &refcountRun{}
+		merge.hasOldRefcounts = true
 	}
+	old, has, err := oldCursor.next()
+	if err != nil {
+		return nil, err
+	}
+	merge.old = old
+	merge.hasOld = has
 	return merge, nil
 }
 
@@ -212,20 +258,21 @@ func (m *orderedMerge[P]) push(store *DraftStore, incoming incomingRange, check 
 	}
 	m.inputSeen = true
 	copy := incoming
-	m.previousInputEnd = &copy.to
+	m.previousInputEnd = copy.to
+	m.hasPreviousInputEnd = true
 	for {
 		if err := m.checkpoint(check); err != nil {
 			return err
 		}
-		if m.old == nil {
-			return m.emit(store, copy.from, copy.to, nil, &copy.value)
+		if !m.hasOld {
+			return m.emit(store, copy.from, copy.to, noneValue(), someValue(copy.value))
 		}
 		if m.old.to.Less(copy.from) {
 			if err := m.accountOld(store); err != nil {
 				return err
 			}
-			old := *m.old
-			if err := m.emit(store, old.from, old.to, &old.value, nil); err != nil {
+			old := m.old
+			if err := m.emit(store, old.from, old.to, someValue(old.value), noneValue()); err != nil {
 				return err
 			}
 			if err := m.advanceOld(store); err != nil {
@@ -234,7 +281,7 @@ func (m *orderedMerge[P]) push(store *DraftStore, incoming incomingRange, check 
 			continue
 		}
 		if copy.to.Less(m.old.from) {
-			return m.emit(store, copy.from, copy.to, nil, &copy.value)
+			return m.emit(store, copy.from, copy.to, noneValue(), someValue(copy.value))
 		}
 		if err := m.accountOld(store); err != nil {
 			return err
@@ -244,8 +291,8 @@ func (m *orderedMerge[P]) push(store *DraftStore, incoming incomingRange, check 
 			if err != nil {
 				return err
 			}
-			old := *m.old
-			if err := m.emit(store, old.from, end, &old.value, nil); err != nil {
+			old := m.old
+			if err := m.emit(store, old.from, end, someValue(old.value), noneValue()); err != nil {
 				return err
 			}
 			m.old.from = copy.from
@@ -256,7 +303,7 @@ func (m *orderedMerge[P]) push(store *DraftStore, incoming incomingRange, check 
 			if err != nil {
 				return err
 			}
-			if err := m.emit(store, copy.from, end, nil, &copy.value); err != nil {
+			if err := m.emit(store, copy.from, end, noneValue(), someValue(copy.value)); err != nil {
 				return err
 			}
 			copy.from = m.old.from
@@ -266,8 +313,8 @@ func (m *orderedMerge[P]) push(store *DraftStore, incoming incomingRange, check 
 		if copy.to.Less(end) {
 			end = copy.to
 		}
-		old := *m.old
-		if err := m.emit(store, old.from, end, &old.value, &copy.value); err != nil {
+		old := m.old
+		if err := m.emit(store, old.from, end, someValue(old.value), someValue(copy.value)); err != nil {
 			return err
 		}
 		if m.old.to.Equal(end) {
@@ -300,23 +347,23 @@ func (m *orderedMerge[P]) finish(store *DraftStore, check func() error) (P, erro
 	if !m.inputSeen && m.policy.preserveWithoutInput() {
 		return m.finishPreserved(store, check)
 	}
-	for m.old != nil {
+	for m.hasOld {
 		if err := m.checkpoint(check); err != nil {
 			return zero, err
 		}
 		if err := m.accountOld(store); err != nil {
 			return zero, err
 		}
-		old := *m.old
-		if err := m.emit(store, old.from, old.to, &old.value, nil); err != nil {
+		old := m.old
+		if err := m.emit(store, old.from, old.to, someValue(old.value), noneValue()); err != nil {
 			return zero, err
 		}
 		if err := m.advanceOld(store); err != nil {
 			return zero, err
 		}
 	}
-	if m.oldRefcounts != nil {
-		if err := m.oldRefcounts.flush(store, -1); err != nil {
+	if m.hasOldRefcounts {
+		if err := m.oldRefcounts.flushSigned(store, -1); err != nil {
 			return zero, err
 		}
 	}
@@ -349,13 +396,13 @@ func (m *orderedMerge[P]) finish(store *DraftStore, check func() error) (P, erro
 // OrderedMerge::finish_preserved).
 func (m *orderedMerge[P]) finishPreserved(store *DraftStore, check func() error) (P, error) {
 	var zero P
-	for m.old != nil {
+	for m.hasOld {
 		if err := m.checkpoint(check); err != nil {
 			return zero, err
 		}
-		old := *m.old
+		old := m.old
 		value := old.value
-		if err := m.policy.observe(old.from, old.to, &value, nil, &value); err != nil {
+		if err := m.policy.observe(old.from, old.to, someValue(value), noneValue(), someValue(value)); err != nil {
 			return zero, err
 		}
 		if err := m.advanceOld(store); err != nil {
@@ -380,7 +427,7 @@ func (m *orderedMerge[P]) checkpoint(check func() error) error {
 
 // emit transforms one segment through the policy and appends the new
 // value (Rust OrderedMerge::emit).
-func (m *orderedMerge[P]) emit(store *DraftStore, from, to tree.Key, old, incoming *uint32) error {
+func (m *orderedMerge[P]) emit(store *DraftStore, from, to tree.Key, old, incoming optionalValue) error {
 	new, err := m.policy.transform(store, old, incoming)
 	if err != nil {
 		return err
@@ -388,8 +435,8 @@ func (m *orderedMerge[P]) emit(store *DraftStore, from, to tree.Key, old, incomi
 	if err := m.policy.observe(from, to, old, incoming, new); err != nil {
 		return err
 	}
-	if new != nil {
-		return m.output.emit(store, rangeRecord{from: from, to: to, value: *new})
+	if new.present {
+		return m.output.emit(store, rangeRecord{from: from, to: to, value: new.value})
 	}
 	return nil
 }
@@ -398,10 +445,10 @@ func (m *orderedMerge[P]) emit(store *DraftStore, from, to tree.Key, old, incomi
 // exactly once (Rust OrderedMerge::account_old).
 func (m *orderedMerge[P]) accountOld(store *DraftStore) error {
 	if !m.oldAccounted {
-		if m.old == nil {
+		if !m.hasOld {
 			return corrupt("ordered merge lost its old range")
 		}
-		if m.oldRefcounts != nil {
+		if m.hasOldRefcounts {
 			if err := m.oldRefcounts.add(store, m.old.value, -1); err != nil {
 				return err
 			}
@@ -414,11 +461,12 @@ func (m *orderedMerge[P]) accountOld(store *DraftStore) error {
 // advanceOld moves the base cursor to the next record (Rust
 // OrderedMerge::advance_old).
 func (m *orderedMerge[P]) advanceOld(store *DraftStore) error {
-	next, err := m.oldCursor.next()
+	next, has, err := m.oldCursor.next()
 	if err != nil {
 		return err
 	}
 	m.old = next
+	m.hasOld = has
 	m.oldAccounted = false
 	return nil
 }
@@ -429,7 +477,7 @@ func (m *orderedMerge[P]) requireInput(incoming incomingRange) error {
 	if incoming.to.Less(incoming.from) {
 		return corrupt("ordered merge input range is reversed")
 	}
-	if m.previousInputEnd != nil && !m.previousInputEnd.Less(incoming.from) {
+	if m.hasPreviousInputEnd && !m.previousInputEnd.Less(incoming.from) {
 		return corrupt("ordered merge input ranges overlap or are out of order")
 	}
 	return nil

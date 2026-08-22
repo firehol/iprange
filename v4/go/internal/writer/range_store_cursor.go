@@ -4,7 +4,9 @@
 // transaction and page count (Rust SelectedStore), so an ordered merge
 // compares the incoming scan against the committed destination exactly,
 // never against the draft's own pages. History never consumes the base
-// tree (recorded chunk-3b-4 decision), so this cursor only reads.
+// tree (recorded chunk-3b-4 decision), so this cursor only reads, and
+// next hands back one record by value so the merge loop allocates
+// nothing per record (Rust Cursor::next returns DirectRange by value).
 
 package writer
 
@@ -75,11 +77,11 @@ func newRangeCursor(store *DraftStore, base format.Meta) (*rangeCursor, error) {
 	return &rangeCursor{cursor: cursor, family: base.AddressFamily}, nil
 }
 
-// next returns the next range record in ascending key order, or nil at
-// the end (Rust Cursor::next + RangeItem).
-func (c *rangeCursor) next() (*rangeRecord, error) {
-	var record *rangeRecord
-	err := c.cursor.Next(func(cell []byte, header *tree.Header, pageNumber uint32, index int) error {
+// next returns the next range record in ascending key order, or ok=false
+// at the end (Rust Cursor::next + RangeItem; one record by value).
+func (c *rangeCursor) next() (record rangeRecord, ok bool, err error) {
+	found := false
+	err = c.cursor.Next(func(cell []byte, header *tree.Header, pageNumber uint32, index int) error {
 		var decoded rangeRecord
 		var err error
 		if c.family == format.AddressFamilyIPv4 {
@@ -94,13 +96,18 @@ func (c *rangeCursor) next() (*rangeRecord, error) {
 		if err != nil {
 			return corrupt("range leaf is invalid")
 		}
-		record = &decoded
+		record = decoded
+		found = true
 		return nil
 	})
-	if record != nil {
-		work.RangeConsumed(1)
+	if err != nil {
+		return rangeRecord{}, false, err
 	}
-	return record, err
+	if !found {
+		return rangeRecord{}, false, nil
+	}
+	work.RangeConsumed(1)
+	return record, true, nil
 }
 
 // InspectBase views one mapped page without the base-bound validation

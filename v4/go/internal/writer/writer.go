@@ -81,6 +81,22 @@ func (c *Core) MarkUnresolved(err error) {
 	c.unresolved = err
 }
 
+// Healthy reports the fail-closed state of the core (Rust
+// require_healthy): nil means the committed generation is selectable
+// and mutating entry points may proceed. The public workflows check it
+// before classifying a request so the unresolved-commit outcome keeps
+// its WrongState class ahead of any request-specific error (Rust
+// require_feed_workflow_ready ordering).
+func (c *Core) Healthy() error { return c.requireHealthy() }
+
+// FileIdentity returns the device and inode of the mapped file (Rust
+// OpenedMain::identity over the held descriptor). The history
+// projection compares it with the source reader identity so a database
+// can never project onto itself (Rust require_compatible_source).
+func (c *Core) FileIdentity() (device uint64, inode uint64, err error) {
+	return c.m.FileIdentity()
+}
+
 // OpenWriter maps path read-write under the exclusive lifetime lock and
 // selects the committed generation with the writer rule, mirroring Rust
 // WriterCore::map_writer (database_file.rs map_writer): a read-write
