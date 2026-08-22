@@ -42,9 +42,36 @@ Recorded as Review Process below.
 
 Status: in-progress
 
-## Status
+### Status (2026-08-22) - slice A round-6 cleanup: all five aspects PASS on b80295a
 
-Status: in-progress
+Round-5 residue landed on top of f1cedb6 and re-validated end-to-end
+(HEAD b80295a):
+
+- unionRun's duplicated 5-line insert_private_rejected comment was
+  removed (range_coverage.go:677-679 retains the single copy).
+- The F1 record now states the fits=false split path is not observed
+  in the current test vectors (30/30 measured fits=true) instead of
+  "currently unreachable", since growth splitting and rejected-gap
+  slack are independent (see the F1 note for why no regression test
+  pins the branch).
+- Error-detail parity sweep completed: every Go Code*Exhausted
+  production site now matches the Rust Display strings -
+  PageSpaceExhausted "v4 page-number space is exhausted"
+  (draft_store.go:468, output.go:686, range_bulk.go:356),
+  MembershipIdExhausted "membership-ID space is exhausted"
+  (membership_dictionary.go:140), StructureIdExhausted
+  "structure-ID space is exhausted" (structure_dictionary.go:37),
+  FeedIndexExhausted already exact (feed_catalog.go:103). Wire codes
+  unchanged.
+
+Full battery re-run on b80295a (all under nice): gofmt clean, go
+vet, go test ./... and -tags v4work (both -count=1 and -race),
+GODEBUG=checkptr=2, and the six GOOS/GOARCH cross-builds - all green.
+Rust suite untouched.
+
+All five aspects re-reviewed b80295a: PASS (Rust parity, Go idioms,
+performance, wire format/integrity, APIs/docs). No open findings;
+slice A remains gated PASS at this HEAD.
 
 ### Status (2026-08-22) - slice A parity-residue round: three unrecorded Rust-parity findings fixed (APIs/docs FAIL)
 
@@ -66,7 +93,10 @@ against the code and the Rust baseline, and fixed:
   measured fits=true), but it is not structurally unreachable: growth
   splitting and rejected-gap slack are independent. The fix guarantees
   the split path caches nothing, exactly like Rust, removing the
-  latent landmine at zero cost.
+  latent landmine at zero cost. No unit test pins the fits=false
+  branch: a fabricated full-header LocalReject would corrupt a real
+  tree (EditLeaf writes the page), and Go and Rust share the same
+  stale-edge corrupt guard, so the pin would only re-test shared code.
 - **F2 (flushed edge lifetime).** finishPrivateUntracked cleared the
   cached edge after FlushEdge; Rust finish_private flushes via
   as_mut and keeps the edge (coverage.rs:233-242), so a later
