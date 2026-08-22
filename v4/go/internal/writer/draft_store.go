@@ -465,7 +465,7 @@ func (s *DraftStore) allocateTail() (uint32, error) {
 		return 0, budgetExceeded("file growth pages")
 	}
 	if s.draft.meta.PageCount >= format.MaxPageCount {
-		return 0, &format.Error{Code: format.CodePageSpaceExhausted, Detail: "page space exhausted"}
+		return 0, &format.Error{Code: format.CodePageSpaceExhausted, Detail: "v4 page-number space is exhausted"}
 	}
 	if err := s.ensureTailCapacity(); err != nil {
 		return 0, err

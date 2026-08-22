@@ -137,7 +137,7 @@ func insertNewMembership[W membershipWords](store tree.RetiringStore, state *mem
 }
 
 func membershipIDExhausted() error {
-	return &format.Error{Code: format.CodeMembershipIdExhausted, Detail: "membership ID namespace exhausted"}
+	return &format.Error{Code: format.CodeMembershipIdExhausted, Detail: "membership-ID space is exhausted"}
 }
 
 // findEqualMembership searches the hash tree for an equal bitmap (Rust

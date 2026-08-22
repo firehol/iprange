@@ -34,7 +34,7 @@ type structureInterned struct {
 }
 
 func structureIDExhausted() error {
-	return &format.Error{Code: format.CodeStructureIdExhausted, Detail: "structure ID namespace exhausted"}
+	return &format.Error{Code: format.CodeStructureIdExhausted, Detail: "structure-ID space is exhausted"}
 }
 
 // internStructure returns the dictionary ID for one payload, creating the

@@ -677,9 +677,6 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[ra
 		// The position is reported only when the record fit the rejected
 		// leaf; a split path caches nothing, exactly like Rust
 		// insert_private_rejected's Option<PrivatePosition>.
-		// The position is reported only when the record fit the rejected
-		// leaf; a split path caches nothing, exactly like Rust
-		// insert_private_rejected's Option<PrivatePosition>.
 		position, fits, err := insertPrivateRejected(ctx, incoming, rejected)
 		if err != nil {
 			return false, tree.PrivatePosition{}, false, err

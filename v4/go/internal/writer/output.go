@@ -683,7 +683,7 @@ func (b *OutputBuilder) Allocate() (uint32, error) {
 // BudgetExceeded.
 func (b *OutputBuilder) reservePage() (uint32, error) {
 	if b.meta.PageCount == 1<<32 {
-		return 0, &format.Error{Code: format.CodePageSpaceExhausted, Detail: "output page space exhausted"}
+		return 0, &format.Error{Code: format.CodePageSpaceExhausted, Detail: "v4 page-number space is exhausted"}
 	}
 	if b.meta.PageCount >= b.budget.MaxOutputPages {
 		return 0, budgetExceeded("immutable output pages")

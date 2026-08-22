@@ -61,11 +61,12 @@ against the code and the Rust baseline, and fixed:
   returns a zero PrivatePosition, so the next edge-proven insert would
   raise a spurious "cached B+tree position is not its claimed edge".
   Fix: the fit flag now propagates (range_coverage.go). Reachability
-  evidence: the branch is currently unreachable, because growth always
-  splits leaves at capacity and a rejected-gap probe therefore always
-  finds leaf slack (30/30 probe rejects in a 4,000-record general tree
-  measured fits=true); the fix removes the latent landmine at zero
-  cost.
+  evidence: the fits=false split path is not observed in the current
+  test vectors (30/30 probe rejects in a 4,000-record general tree
+  measured fits=true), but it is not structurally unreachable: growth
+  splitting and rejected-gap slack are independent. The fix guarantees
+  the split path caches nothing, exactly like Rust, removing the
+  latent landmine at zero cost.
 - **F2 (flushed edge lifetime).** finishPrivateUntracked cleared the
   cached edge after FlushEdge; Rust finish_private flushes via
   as_mut and keeps the edge (coverage.rs:233-242), so a later
