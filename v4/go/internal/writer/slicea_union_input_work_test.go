@@ -30,7 +30,8 @@ func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, v
 	}
 	root := store.draft.meta.RangeRoot
 	count := store.draft.meta.RangeRecordCount
-	ctx := untrackedCtx(&rangeCtx{family: family, store: store, root: &root, count: &count})
+	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	ctx.markUntracked()
 	if _, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state); err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := finishPrivateUntracked(untrackedCtx(&rangeCtx{family: rangeCodec4{}, store: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount}), &state); err != nil {
+		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount}, &state); err != nil {
 			t.Fatal(err)
 		}
 		snapshot := work.Read()

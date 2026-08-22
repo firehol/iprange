@@ -296,13 +296,13 @@ func probeCached(ctx *rangeCtx, r rangeRecord, input *privateInput) (cachedProbe
 		work.LeafLocatorFallback(1)
 		return cachedProbe{}, nil
 	}
-	encoded, err := newEncodedRange(ctx.family, r)
+	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		return cachedProbe{}, err
 	}
 	var gap privateGap
 	gap.init(ctx.family, r)
-	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, encoded.slice(), &gap)
+	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, cell, &gap)
 	if err != nil {
 		return cachedProbe{}, err
 	}

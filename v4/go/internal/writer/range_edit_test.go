@@ -140,20 +140,21 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 		to:    tree.Key{Hi: 0x05060708},
 		value: 0x090a0b0c,
 	}
-	encoded, err := newEncodedRange(rangeCodec4{}, r)
+	ctx := &rangeCtx{family: rangeCodec4{}}
+	encoded, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []byte{4, 3, 2, 1, 8, 7, 6, 5, 0x0c, 0x0b, 0x0a, 9}
-	if len(encoded.slice()) != len(want) {
-		t.Fatalf("encoded length = %d, want %d", len(encoded.slice()), len(want))
+	if len(encoded) != len(want) {
+		t.Fatalf("encoded length = %d, want %d", len(encoded), len(want))
 	}
 	for i := range want {
-		if encoded.slice()[i] != want[i] {
-			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded.slice()[i], want[i])
+		if encoded[i] != want[i] {
+			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded[i], want[i])
 		}
 	}
-	decoded, err := rangeCodec4{}.ReadLeaf(encoded.slice())
+	decoded, err := rangeCodec4{}.ReadLeaf(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,8 @@ func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 		to:    tree.Key{Hi: 0x1112131415161718, Lo: 0x191a1b1c1d1e1f20},
 		value: 0x2a2b2c2d,
 	}
-	encoded, err := newEncodedRange(rangeCodec6{}, r)
+	ctx := &rangeCtx{family: rangeCodec6{}}
+	encoded, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,15 +185,15 @@ func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 		0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
 		0x2d, 0x2c, 0x2b, 0x2a,
 	}
-	if len(encoded.slice()) != len(want) {
-		t.Fatalf("encoded length = %d, want %d", len(encoded.slice()), len(want))
+	if len(encoded) != len(want) {
+		t.Fatalf("encoded length = %d, want %d", len(encoded), len(want))
 	}
 	for i := range want {
-		if encoded.slice()[i] != want[i] {
-			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded.slice()[i], want[i])
+		if encoded[i] != want[i] {
+			t.Fatalf("encoded[%d] = %#x, want %#x", i, encoded[i], want[i])
 		}
 	}
-	decoded, err := rangeCodec6{}.ReadLeaf(encoded.slice())
+	decoded, err := rangeCodec6{}.ReadLeaf(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}

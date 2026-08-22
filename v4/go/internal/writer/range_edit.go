@@ -30,6 +30,20 @@ type rangeCtx struct {
 	store  RangeStore
 	root   *uint32
 	count  *uint64
+	// untracked no-ops the per-record value accounting of this draft
+	// operation (Rust Untracked wrapper): coverage ranges are internal
+	// to one workflow and never account membership refcounts. One flag
+	// replaces the per-record wrapper context of the coverage input
+	// path.
+	untracked bool
+	// encodeScratch owns the fixed-size encode targets of this draft
+	// operation (Rust EncodedRange locals). The generic rangeFamily
+	// interface makes stack targets escape; a draft is single-threaded
+	// and every tree call copies a record into the mapped page before
+	// the next encode reuses a slot. Slot 0 serves the one-record
+	// paths; the up to three cells of one leaf replacement use slots
+	// 0..2 (Rust replace_strictly_inside).
+	encodeScratch [3][format.RangeRecordV6Size]byte
 }
 
 // change is one requested range rewrite (Rust Change).
@@ -39,24 +53,17 @@ type change struct {
 	value optionalValue
 }
 
-// encodedRange is a fixed-size encoded range record (Rust EncodedRange;
-// MAX_RECORD_SIZE 36).
-type encodedRange struct {
-	bytes [format.RangeRecordV6Size]byte
-	len   int
-}
-
-func newEncodedRange(family rangeFamily, r rangeRecord) (encodedRange, error) {
-	var e encodedRange
-	n, err := family.EncodeRecord(r, e.bytes[:])
+// encodeRecord renders one range record into the ctx-owned scratch slot
+// and returns the valid byte view (Rust EncodedRange::new). The view
+// stays valid until the next encode reuses the same slot.
+func (ctx *rangeCtx) encodeRecord(slot int, r rangeRecord) ([]byte, error) {
+	output := ctx.encodeScratch[slot][:]
+	n, err := ctx.family.EncodeRecord(r, output)
 	if err != nil {
-		return encodedRange{}, err
+		return nil, err
 	}
-	e.len = n
-	return e, nil
+	return output[:n], nil
 }
-
-func (e *encodedRange) slice() []byte { return e.bytes[:e.len] }
 
 // assign replaces the [from, to] interval with one value (Rust assign).
 func rangeAssign(ctx *rangeCtx, from, to tree.Key, value uint32) (bool, error) {
@@ -222,31 +229,30 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	if !ok {
 		return false, corrupt("range rewrite does not advance")
 	}
-	left, err := newEncodedRange(ctx.family, rangeRecord{from: old.from, to: leftPrevious, value: old.value})
+	left, err := ctx.encodeRecord(0, rangeRecord{from: old.from, to: leftPrevious, value: old.value})
 	if err != nil {
 		return false, err
 	}
-	right, err := newEncodedRange(ctx.family, rangeRecord{from: rightNext, to: old.to, value: old.value})
+	right, err := ctx.encodeRecord(1, rangeRecord{from: rightNext, to: old.to, value: old.value})
 	if err != nil {
 		return false, err
 	}
-	var middle *encodedRange
+	var middle []byte
 	if change.value.present {
-		encoded, err := newEncodedRange(ctx.family, rangeRecord{from: change.from, to: change.to, value: change.value.value})
+		middle, err = ctx.encodeRecord(2, rangeRecord{from: change.from, to: change.to, value: change.value.value})
 		if err != nil {
 			return false, err
 		}
-		middle = &encoded
 	}
 	var retired tree.RetiredPages
 	switch {
-	case middle != nil:
-		cells := [][]byte{left.slice(), middle.slice(), right.slice()}
+	case change.value.present:
+		cells := [][]byte{left, middle, right}
 		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
 			return false, err
 		}
 	default:
-		cells := [][]byte{left.slice(), right.slice()}
+		cells := [][]byte{left, right}
 		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
 			return false, err
 		}
@@ -254,7 +260,7 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	if err := ctx.store.RetirePages(retired); err != nil {
 		return false, err
 	}
-	if middle != nil {
+	if change.value.present {
 		if err := addCount(ctx.count, 2); err != nil {
 			return false, err
 		}
@@ -270,13 +276,13 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	if err := ctx.store.RangeRecordAdded(recorded); err != nil {
 		return false, err
 	}
-	if middle != nil {
+	if change.value.present {
 		if err := ctx.store.RangeRecordAdded(old.value); err != nil {
 			return false, err
 		}
 	}
 	emitted := uint64(2)
-	if middle != nil {
+	if change.value.present {
 		emitted = 3
 	}
 	work.RangeEmitted(emitted)
@@ -433,12 +439,12 @@ func mergeNext(ctx *rangeCtx, r rangeRecord) (rangeRecord, error) {
 // insert writes one range record into the tree, retiring COW victims and
 // accounting the record (Rust range_mutation::insert).
 func insert(ctx *rangeCtx, r rangeRecord) error {
-	encoded, err := newEncodedRange(ctx.family, r)
+	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		return err
 	}
 	var retired tree.RetiredPages
-	retired, inserted, err := tree.Insert(ctx.family, ctx.store, ctx.root, encoded.slice(), retired)
+	retired, inserted, err := tree.Insert(ctx.family, ctx.store, ctx.root, cell, retired)
 	if err != nil {
 		return err
 	}
@@ -470,19 +476,19 @@ func rangeRemove(ctx *rangeCtx, r rangeRecord) error {
 	if err := subCount(ctx.count); err != nil {
 		return err
 	}
-	return ctx.store.RangeRecordRemoved(r.value)
+	return rangeRecordRemoved(ctx, r.value)
 }
 
 // insertPrivateGap inserts one range into the private tree through the gap
 // machinery (Rust insert_private_gap).
 func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert[rangeRecord], error) {
-	encoded, err := newEncodedRange(ctx.family, r)
+	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		return tree.LocalInsert[rangeRecord]{}, err
 	}
 	var gap privateGap
 	gap.init(ctx.family, r)
-	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, encoded.slice(), tree.RetiredPages{}, &gap)
+	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, cell, tree.RetiredPages{}, &gap)
 	if err != nil {
 		return tree.LocalInsert[rangeRecord]{}, err
 	}
@@ -500,11 +506,11 @@ func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert[rangeRecor
 // insertPrivateRejected completes a rejected private gap insertion after
 // the caller proved the external sides (Rust insert_private_rejected).
 func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected *tree.LocalReject[rangeRecord]) (tree.PrivatePosition, bool, error) {
-	encoded, err := newEncodedRange(ctx.family, r)
+	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		return tree.PrivatePosition{}, false, err
 	}
-	position, fits, err := tree.InsertRejectedGap(ctx.family, ctx.store, ctx.root, encoded.slice(), rejected)
+	position, fits, err := tree.InsertRejectedGap(ctx.family, ctx.store, ctx.root, cell, rejected)
 	if err != nil {
 		return tree.PrivatePosition{}, false, err
 	}
@@ -518,11 +524,22 @@ func rangeRecordAdded(ctx *rangeCtx, value uint32) error {
 	if err := addCount(ctx.count, 1); err != nil {
 		return err
 	}
-	if err := ctx.store.RangeRecordAdded(value); err != nil {
-		return err
+	if !ctx.untracked {
+		if err := ctx.store.RangeRecordAdded(value); err != nil {
+			return err
+		}
 	}
 	work.RangeEmitted(1)
 	return nil
+}
+
+// rangeRecordRemoved accounts one removed record unless the operation is
+// untracked (Rust range_record_removed / Untracked).
+func rangeRecordRemoved(ctx *rangeCtx, value uint32) error {
+	if ctx.untracked {
+		return nil
+	}
+	return ctx.store.RangeRecordRemoved(value)
 }
 
 func readPredecessor(ctx *rangeCtx, root uint32, key tree.Key) (rangeRecord, bool, error) {

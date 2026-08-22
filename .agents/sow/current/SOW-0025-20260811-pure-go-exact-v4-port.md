@@ -46,6 +46,57 @@ Status: in-progress
 
 Status: in-progress
 
+### Status (2026-08-22) - slice A five-aspect reviewer round: one P2 verified and fixed (per-record encode escape)
+
+The first five-aspect review of the slice A delta (HEAD c2ccd50)
+returned one verified blocker:
+
+- **Aspect 2 (Go idioms) FAIL - P2: the carried P3-A (newEncodedRange
+  heap-escape per range-record edit) became live in slice A.** The
+  coverage-union and feed-merge machinery added live callers of
+  `newEncodedRange` on the per-record path (range_coverage.go
+  insertPrivateEdge/mergeRejected, range_locator.go probeCached,
+  range_edit.go insert/insertPrivateGap/insertPrivateRejected/
+  replaceStrictlyInside), while the milestone-1 close record required
+  the writer-owned encode scratch to land exactly where callers become
+  live. Measured before the fix (fresh-state AllocsPerRun, warmup
+  cancelled): ordered-prefix path 1.00 alloc/record, general fallback
+  6.97 allocs/record.
+
+Fix applied on top of c2ccd50:
+
+- `rangeCtx` owns a fixed-size encode scratch
+  (`encodeScratch [3][format.RangeRecordV6Size]byte`) and the new
+  `rangeCtx.encodeRecord(slot, r)` method renders one record into a
+  slot, mirroring the Rust `EncodedRange::new` local `[u8; 36]`; the
+  generic `rangeFamily` interface otherwise makes stack targets escape
+  (range_edit.go). Slot 0 serves the one-record paths; slots 0..2
+  serve the up-to-three-cell leaf replacement (Rust
+  replace_strictly_inside). `newEncodedRange`/`encodedRange` removed.
+- `rangeCtx` gained the `untracked` accounting flag replacing the
+  per-record `untrackedCtx` wrapper context of the coverage input
+  (`rangeCtx.markUntracked`, range_coverage.go): the same-slice hot
+  path allocated one wrapper context per record (the largest remaining
+  allocation in the post-fix profile).
+- New permanent pins `TestSliceAOrderedUnionAllocCeiling` and
+  `TestSliceAGeneralUnionAllocCeiling` (slicea_union_input_alloc_test.go)
+  fail if a per-record allocation returns.
+
+Measured after the fix (same harness): ordered-prefix path 0.00
+alloc/record, general fallback 1.98 allocs/record. The remaining
+general-path cost is the generic tree gap protocol (rejection,
+probePredecessor, privatePathSelect escapes), which is the recorded
+P3-B optionalCell follow-up of the milestone-1 close gate; it stays
+tracked for its slice C slot rather than being redesigned inside this
+fix.
+
+Validation (all under nice): gofmt clean, go vet, go test ./...
+and -tags v4work (both -count=1 and -race), checkptr=2, and the
+linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64 and
+freebsd/amd64 cross-builds - all green. Rust suite untouched
+(Go-only edits, no conformance corpus change; re-run at the close
+gate).
+
 ### Status (2026-08-22) - slice A union-input tests: correctness and work pins, plus one merge-cardinality bug
 
 The slice A feed-merge and coverage-union machinery is now pinned by

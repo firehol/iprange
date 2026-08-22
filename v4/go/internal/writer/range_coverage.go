@@ -323,9 +323,9 @@ func (u *unionInput) takePending() (rangeRecord, tree.Edge, bool, bool) {
 // assignment input, otherwise it is queued, proven ascending, or applied
 // through the union state.
 func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input *unionInput) (bool, error) {
-	uctx := untrackedCtx(ctx)
+	ctx.markUntracked()
 	if input.union.isGeneral() {
-		return unionPrivateUntrackedGeneral(uctx, from, to, value, &input.assignment)
+		return unionPrivateUntrackedGeneral(ctx, from, to, value, &input.assignment)
 	}
 	if to.Less(from) {
 		return false, invalid("range start is after its end")
@@ -335,19 +335,19 @@ func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input 
 		return false, nil
 	}
 	wasGeneral := input.union.isGeneral()
-	if changed, handled, err := input.pushOrdered(uctx, pending); err != nil {
+	if changed, handled, err := input.pushOrdered(ctx, pending); err != nil {
 		return false, err
 	} else if handled {
 		return changed, nil
 	}
-	changed, err := applyPending(uctx, pending, knownGap, hasGap, input)
+	changed, err := applyPending(ctx, pending, knownGap, hasGap, input)
 	if err != nil {
 		return false, err
 	}
 	if !wasGeneral && input.union.isGeneral() {
 		input.enableGeneral()
 		if p, _, _, has := input.takePending(); has {
-			c, err := unionPrivateUntrackedGeneral(uctx, p.from, p.to, p.value, &input.assignment)
+			c, err := unionPrivateUntrackedGeneral(ctx, p.from, p.to, p.value, &input.assignment)
 			if err != nil {
 				return false, err
 			}
@@ -361,27 +361,27 @@ func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input 
 // prefix, flushes the union edge, and releases the assignment input
 // (Rust finish_input_untracked).
 func finishInputUntracked(ctx *rangeCtx, input *unionInput) (bool, error) {
-	uctx := untrackedCtx(ctx)
+	ctx.markUntracked()
 	changed := false
 	if p, knownGap, hasGap, has := input.takePending(); has {
-		if orderedChanged, handled, err := input.pushOrdered(uctx, p); err != nil {
+		if orderedChanged, handled, err := input.pushOrdered(ctx, p); err != nil {
 			return false, err
 		} else if handled {
 			changed = changed || orderedChanged
 		} else {
-			c, err := applyPending(uctx, p, knownGap, hasGap, input)
+			c, err := applyPending(ctx, p, knownGap, hasGap, input)
 			if err != nil {
 				return false, err
 			}
 			changed = changed || c
 		}
 	}
-	built, err := input.finishOrdered(uctx)
+	built, err := input.finishOrdered(ctx)
 	if err != nil {
 		return false, err
 	}
 	changed = changed || built
-	if err := finishPrivateUntracked(uctx, &input.union); err != nil {
+	if err := finishPrivateUntracked(ctx, &input.union); err != nil {
 		return false, err
 	}
 	input.assignment.release()
@@ -444,13 +444,13 @@ func finishPrivateUntracked(ctx *rangeCtx, state *unionState) error {
 // insertPrivateEdge inserts one range at a cached tree edge (Rust
 // insert_private_edge).
 func insertPrivateEdge(ctx *rangeCtx, incoming rangeRecord, position *tree.PrivateEdge, edge tree.Edge, knownGap tree.Edge, hasGap bool) (tree.EdgeInsert[rangeRecord], error) {
-	encoded, err := newEncodedRange(ctx.family, incoming)
+	cell, err := ctx.encodeRecord(0, incoming)
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord]{}, err
 	}
 	var gap privateGap
 	gap.init(ctx.family, incoming)
-	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, encoded.slice(), position, edge, hasGap && knownGap == edge, &gap)
+	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, cell, position, edge, hasGap && knownGap == edge, &gap)
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord]{}, err
 	}
@@ -545,11 +545,11 @@ func mergeRejected(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReje
 	if decision.noChange {
 		return false, rejected.IntoPosition(), true, nil
 	}
-	encoded, err := newEncodedRange(ctx.family, decision.merged)
+	cell, err := ctx.encodeRecord(0, decision.merged)
 	if err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
-	if err := tree.ReplaceLocalRun(ctx.family, ctx.store, ctx.root, rejected, decision.run, encoded.slice()); err != nil {
+	if err := tree.ReplaceLocalRun(ctx.family, ctx.store, ctx.root, rejected, decision.run, cell); err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
 	if decision.removed < 1 || *ctx.count < decision.removed-1 {
@@ -729,18 +729,9 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[ra
 	return true, tree.PrivatePosition{}, false, nil
 }
 
-// untrackedRangeStore delegates every retiring-store operation and
-// no-ops the per-record value accounting (Rust coverage Untracked).
-type untrackedRangeStore struct {
-	tree.RetiringStore
-}
-
-func (u untrackedRangeStore) RangeRecordAdded(uint32) error   { return nil }
-func (u untrackedRangeStore) RangeRecordRemoved(uint32) error { return nil }
-
-// untrackedCtx returns the coverage context over the same roots with the
-// untracked store wrapper (Rust Untracked): coverage ranges are internal
-// to the workflow and never account per-record value refcounts.
-func untrackedCtx(ctx *rangeCtx) *rangeCtx {
-	return &rangeCtx{family: ctx.family, store: untrackedRangeStore{ctx.store}, root: ctx.root, count: ctx.count}
-}
+// markUntracked no-ops the per-record value accounting of the context
+// for the rest of the operation (Rust coverage Untracked wrapper):
+// coverage ranges are internal to the workflow and never account
+// per-record value refcounts. One flag replaces the per-record wrapper
+// context allocation of the coverage input path.
+func (ctx *rangeCtx) markUntracked() { ctx.untracked = true }
