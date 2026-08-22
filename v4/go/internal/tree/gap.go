@@ -122,16 +122,10 @@ func FlushEdge[T any](codec Codec[T], store Store, root *uint32, edge *PrivateEd
 	return nil
 }
 
-// rejectCell is one decoded neighbor cell and its physical index.
+// rejectCell is one decoded neighbor cell and its physical index; the
+// stored reject keeps the same shape so a later replacement can name the
+// exact leaf slot (Rust LocalReject keeps the index in GapDecision).
 type rejectCell[T any] struct {
-	index int
-	value T
-}
-
-// rejectCellIndex is the stored form of a decoded neighbor cell: it keeps
-// the physical index alongside the value so a later replacement can name
-// the exact leaf slot (Rust LocalReject keeps the index in GapDecision).
-type rejectCellIndex[T any] struct {
 	index int
 	value T
 }
@@ -143,10 +137,10 @@ type LocalReject[T any] struct {
 	Target LeafTarget
 	// predecessor is the decoded cell immediately before the gap, when the
 	// leaf had one and it bridged the gap.
-	predecessor *rejectCellIndex[T]
+	predecessor *rejectCell[T]
 	// successor is the decoded cell immediately after the gap, when the
 	// leaf had one and it bridged the gap.
-	successor *rejectCellIndex[T]
+	successor *rejectCell[T]
 	// predecessorComplete reports the predecessor side of the tree was
 	// fully examined (no external predecessor exists that could bridge
 	// the gap).
@@ -464,10 +458,10 @@ func rejection[T any](path Path, pageNumber uint32, header Header, decision gapD
 		successorComplete:   decision.successorComplete,
 	}
 	if decision.predecessor != nil {
-		reject.predecessor = &rejectCellIndex[T]{index: decision.predecessor.index, value: decision.predecessor.value}
+		reject.predecessor = &rejectCell[T]{index: decision.predecessor.index, value: decision.predecessor.value}
 	}
 	if decision.successor != nil {
-		reject.successor = &rejectCellIndex[T]{index: decision.successor.index, value: decision.successor.value}
+		reject.successor = &rejectCell[T]{index: decision.successor.index, value: decision.successor.value}
 	}
 	return reject, nil
 }

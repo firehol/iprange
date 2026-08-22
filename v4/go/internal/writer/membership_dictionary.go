@@ -185,7 +185,7 @@ func equalMembershipWords[W membershipWords](store tree.Store, idRoot uint32, id
 		return false, err
 	}
 	if !found.located {
-		return false, corrupt("membership ID is missing")
+		return false, corrupt("membership hash points to a missing ID")
 	}
 	if found.record.wordCount != words.WordCount() {
 		return false, nil
@@ -339,9 +339,6 @@ func readFoundMembershipWords(store tree.Store, found membershipFound, start uin
 	}
 	switch found.record.storage {
 	case membershipStorageInline:
-		if !found.located {
-			return corrupt("membership inline record lost its leaf location")
-		}
 		location := found.location
 		return tree.InspectLeaf(idCodec{}, store, location.PageNumber, location.Header.ItemCount, location.Index, func(cell []byte) error {
 			current, err := decodeMembershipRecord(cell)

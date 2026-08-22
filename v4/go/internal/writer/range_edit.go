@@ -36,7 +36,7 @@ type rangeCtx struct {
 type change struct {
 	from  tree.Key
 	to    tree.Key
-	value *uint32
+	value optionalValue
 }
 
 // encodedRange is a fixed-size encoded range record (Rust EncodedRange;
@@ -60,7 +60,7 @@ func (e *encodedRange) slice() []byte { return e.bytes[:e.len] }
 
 // assign replaces the [from, to] interval with one value (Rust assign).
 func rangeAssign(ctx *rangeCtx, from, to tree.Key, value uint32) (bool, error) {
-	return rangeReplaceWithHint(ctx, change{from: from, to: to, value: &value}, nil)
+	return rangeReplaceWithHint(ctx, change{from: from, to: to, value: someValue(value)}, nil)
 }
 
 // assignPrivate inserts one range into the private tree when the physical
@@ -83,7 +83,7 @@ func rangeAssignPrivate(ctx *rangeCtx, from, to tree.Key, value uint32) (bool, e
 // assignWithHint completes a private assignment through a previous gap
 // rejection (Rust assign_with_hint).
 func assignWithHint(ctx *rangeCtx, r rangeRecord, hint *tree.LocalReject[rangeRecord]) (bool, error) {
-	return rangeReplaceWithHint(ctx, change{from: r.from, to: r.to, value: &r.value}, hint)
+	return rangeReplaceWithHint(ctx, change{from: r.from, to: r.to, value: someValue(r.value)}, hint)
 }
 
 // clear removes the [from, to] interval (Rust clear).
@@ -100,7 +100,7 @@ func rangeRetireTree(ctx *rangeCtx, root uint32, checkpoint func() error) error 
 // transform walks [from, to] in range order, applying operation to each
 // present-value segment and replacing the segments whose value changed
 // (Rust transform).
-func rangeTransform(ctx *rangeCtx, from, to tree.Key, operation func(store RangeStore, value *uint32) (*uint32, error)) (bool, error) {
+func rangeTransform(ctx *rangeCtx, from, to tree.Key, operation func(store RangeStore, value optionalValue) (optionalValue, error)) (bool, error) {
 	if to.Less(from) {
 		return false, invalid("range start is after its end")
 	}
@@ -115,7 +115,7 @@ func rangeTransform(ctx *rangeCtx, from, to tree.Key, operation func(store Range
 		if err != nil {
 			return false, err
 		}
-		if !sameValue(value, segment.value) {
+		if !sameOptional(value, segment.value) {
 			if _, err := rangeReplaceWithHint(ctx, change{from: cursor, to: segment.to, value: value}, nil); err != nil {
 				return false, err
 			}
@@ -132,18 +132,11 @@ func rangeTransform(ctx *rangeCtx, from, to tree.Key, operation func(store Range
 	}
 }
 
-func sameValue(a, b *uint32) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
-}
-
 // segment is one present or absent interval of a transform walk (Rust
 // Segment).
 type segment struct {
 	to    tree.Key
-	value *uint32
+	value optionalValue
 }
 
 func segmentAt(ctx *rangeCtx, from, to tree.Key) (*segment, error) {
@@ -154,8 +147,7 @@ func segmentAt(ctx *rangeCtx, from, to tree.Key) (*segment, error) {
 		if to.Less(end) {
 			end = to
 		}
-		value := predecessor.value
-		return &segment{to: end, value: &value}, nil
+		return &segment{to: end, value: someValue(predecessor.value)}, nil
 	}
 	if next, hasNext, err := readAtOrAfter(ctx, *ctx.root, from); err != nil {
 		return nil, err
@@ -203,7 +195,7 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint *tree.LocalReject[r
 			return false, err
 		}
 	}
-	if change.value != nil && hasPredecessor && !predecessor.to.Less(change.to) && predecessor.value == *change.value {
+	if change.value.present && hasPredecessor && !predecessor.to.Less(change.to) && predecessor.value == change.value.value {
 		return false, nil
 	}
 	if hasPredecessor && predecessor.from.Less(change.from) && change.to.Less(predecessor.to) {
@@ -239,8 +231,8 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 		return false, err
 	}
 	var middle *encodedRange
-	if change.value != nil {
-		encoded, err := newEncodedRange(ctx.family, rangeRecord{from: change.from, to: change.to, value: *change.value})
+	if change.value.present {
+		encoded, err := newEncodedRange(ctx.family, rangeRecord{from: change.from, to: change.to, value: change.value.value})
 		if err != nil {
 			return false, err
 		}
@@ -272,8 +264,8 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 		}
 	}
 	recorded := old.value
-	if change.value != nil {
-		recorded = *change.value
+	if change.value.present {
+		recorded = change.value.value
 	}
 	if err := ctx.store.RangeRecordAdded(recorded); err != nil {
 		return false, err
@@ -371,14 +363,14 @@ func trimFollowing(ctx *rangeCtx, from, to tree.Key, rewrite *rewrite) error {
 
 // writeReplacement writes the rewritten sides and the new value (Rust
 // write_replacement).
-func writeReplacement(ctx *rangeCtx, from, to tree.Key, value *uint32, rewrite *rewrite) (bool, error) {
+func writeReplacement(ctx *rangeCtx, from, to tree.Key, value optionalValue, rewrite *rewrite) (bool, error) {
 	if rewrite.left != nil {
 		if err := insertCoalesced(ctx, *rewrite.left); err != nil {
 			return false, err
 		}
 	}
-	if value != nil {
-		if err := insertCoalesced(ctx, rangeRecord{from: from, to: to, value: *value}); err != nil {
+	if value.present {
+		if err := insertCoalesced(ctx, rangeRecord{from: from, to: to, value: value.value}); err != nil {
 			return false, err
 		}
 	}
@@ -387,7 +379,7 @@ func writeReplacement(ctx *rangeCtx, from, to tree.Key, value *uint32, rewrite *
 			return false, err
 		}
 	}
-	return rewrite.changed || value != nil, nil
+	return rewrite.changed || value.present, nil
 }
 
 // insertCoalesced inserts one range after merging it with its same-value

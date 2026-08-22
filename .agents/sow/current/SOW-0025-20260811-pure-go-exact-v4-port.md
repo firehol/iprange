@@ -135,6 +135,66 @@ and --all-features - all green. Delta for the re-review pin:
   (Meitner) on the pinned commit; when all five report no P0-P2, close
   milestone 1 (push), then start the next M3 surface (feed workflows).
 
+### Status (2026-08-22) - fd171b6 re-review residue fixed: parity and 32-bit cross-build batch
+
+The Aspect-1 (Meitner) and Aspect-2 (Anscombe) re-reviews of
+`11003d8..fd171b6` came back with verifiable residue; the Aspect-1 items
+were each verified against the Rust source before editing. This batch
+fixes all of them, applies the two remaining P3 dispositions, and pins
+the new HEAD for the final re-review round:
+
+- F-A: equalMembershipWords corrupt detail now reads
+  "membership hash points to a missing ID", exactly like Rust
+  membership_dictionary.rs stored_word_count
+  (membership_dictionary.go).
+- F-B: findMembershipBlobLeaf no longer allocates per tree level; the
+  expected level is a value plus a set flag, mirroring Rust Option<u16>
+  by value (membership_blob.go; verified no `new(uint16)` escape at
+  -gcflags=-m=2).
+- F-C: DraftStore.lookupFeed charges work.TreeLookup(1) before the
+  absent-root shortcut, matching Rust fixed_tree::query cadence
+  (feed_catalog.go).
+- F-D1: the unreachable "membership inline record lost its leaf
+  location" branch was deleted; the located flag is guaranteed by the
+  found-record invariant, and Rust has no such branch
+  (membership_dictionary.go).
+- F-D2: pushMembershipBlobBranch propagates the raw b.Push error
+  instead of wrapping it, matching Rust blob write branch propagation
+  (membership_blob.go).
+- P1-1 (Anscombe): prepareHistoryPlan compares uint64(windowCount)
+  against math.MaxUint32 instead of the raw int, which did not compile
+  on 32-bit targets (GOOS=linux GOARCH=386/arm now build)
+  (history.go).
+- P3-1: the writer's last pointer-Option residue, range_edit.go
+  change/segment/writeReplacement and the transform operation, now
+  carry optionalValue{value, present} by value like the ordered-merge
+  hot path already did (range_edit.go, range_edit_test.go). This also
+  removes the per-call &value escape when the compiler does not inline
+  the assignment entry points.
+- P3-4: tree/gap.go carried two byte-identical neighbor-cell structs;
+  merged to one rejectCell type (Rust LocalReject stores a single
+  Option<(usize, R)> shape), removing the needless duplicate.
+- P3-2 kept by decision: rangeTransform has no production caller yet
+  (Rust callers draft_store/membership.rs and structured.rs are the
+  next milestone slice); it is the Rust-parity foundation for that
+  slice, so it stays under test instead of churning the gate delta.
+- P3-3 kept by decision: RetiredPages returns by value from the tree
+  while the bitmap dictionaries accumulate in place, mirroring Rust
+  &mut vs owned shapes; both forms are allocation-free (verified at
+  -gcflags=-m=2).
+
+Validation (all under nice): go test ./... and -tags v4work (both
+-count=1 and -race), go vet, gofmt clean, checkptr=2, GOOS/GOARCH
+linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64 and
+freebsd/amd64 builds, and the two allocation ceilings (39 and 84 per
+run, unchanged) - all green. The Rust suite is untouched by this
+batch (Go-only edits; no conformance corpus change).
+
+- Next: re-review of this batch by Aspect 1 (Meitner) and Aspect 2
+  (Anscombe) on the pinned commit (the commit this entry ships in);
+  when all five report no P0-P2, close milestone 1 (push), then start
+  the next M3 surface (feed workflows).
+
 ### Status (2026-08-22) - allocation P1 on the warm ProjectHistory path: 5,169 to 39 allocations per run (committed at 925e114)
 
 The warm ProjectHistory projection path (source 1000 last-seen points,

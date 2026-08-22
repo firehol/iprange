@@ -314,7 +314,7 @@ func TestTransformsMatchScalarStateAfterEachNonIdempotentOperation(t *testing.T)
 	root := uint32(0)
 	count := uint64(0)
 	ctx := newV4Ctx(m, &root, &count)
-	var expected [256]*uint32
+	var expected [256]optionalValue
 	random := uint32(0x9e3779b9)
 
 	for step := 0; step < 200; step++ {
@@ -327,7 +327,7 @@ func TestTransformsMatchScalarStateAfterEachNonIdempotentOperation(t *testing.T)
 			from, to = to, from
 		}
 		mode := step % 4
-		if _, err := rangeTransform(ctx, v4key(uint32(from)), v4key(uint32(to)), func(store RangeStore, old *uint32) (*uint32, error) {
+		if _, err := rangeTransform(ctx, v4key(uint32(from)), v4key(uint32(to)), func(store RangeStore, old optionalValue) (optionalValue, error) {
 			return mapped(old, mode), nil
 		}); err != nil {
 			t.Fatal(err)
@@ -340,57 +340,51 @@ func TestTransformsMatchScalarStateAfterEachNonIdempotentOperation(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var actual *uint32
-			if ok {
-				if !pred.to.Less(v4key(uint32(address))) {
-					v := pred.value
-					actual = &v
-				}
+			actual := noneValue()
+			if ok && !pred.to.Less(v4key(uint32(address))) {
+				actual = someValue(pred.value)
 			}
-			if !sameValue(actual, wanted) {
+			if !sameOptional(actual, wanted) {
 				t.Fatalf("step %d, address %d: value %v, want %v", step, address, actual, wanted)
 			}
 		}
 	}
 }
 
-func mapped(value *uint32, mode int) *uint32 {
+func mapped(value optionalValue, mode int) optionalValue {
 	switch mode {
 	case 0:
-		if value == nil {
-			return nil
+		if !value.present {
+			return noneValue()
 		}
-		v := *value ^ 3
+		v := value.value ^ 3
 		if v == 0 {
-			return nil
+			return noneValue()
 		}
-		return &v
+		return someValue(v)
 	case 1:
 		v := uint32(0)
-		if value != nil {
-			v = *value
+		if value.present {
+			v = value.value
 		}
-		v |= 4
-		return &v
+		return someValue(v | 4)
 	case 2:
-		if value != nil && *value == 7 {
-			return nil
+		if value.present && value.value == 7 {
+			return noneValue()
 		}
 		return value
 	default:
-		if value == nil {
-			return uint32ptr(9)
+		if !value.present {
+			return someValue(9)
 		}
-		return nil
+		return noneValue()
 	}
 }
-
-func uint32ptr(v uint32) *uint32 { return &v }
 
 // TestRandomizedSequenceMatchesAScalarReferenceMap mirrors the Rust test.
 func TestRandomizedSequenceMatchesAScalarReferenceMap(t *testing.T) {
 	const space = 256
-	var expected [space]*uint32
+	var expected [space]optionalValue
 	m := newRangeMemoryStore()
 	root := uint32(0)
 	count := uint64(0)
@@ -413,7 +407,7 @@ func TestRandomizedSequenceMatchesAScalarReferenceMap(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := from; i <= to; i++ {
-				expected[i] = nil
+				expected[i] = noneValue()
 			}
 		} else {
 			value := random % 7
@@ -421,8 +415,7 @@ func TestRandomizedSequenceMatchesAScalarReferenceMap(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := from; i <= to; i++ {
-				v := value
-				expected[i] = &v
+				expected[i] = someValue(value)
 			}
 		}
 
@@ -431,15 +424,14 @@ func TestRandomizedSequenceMatchesAScalarReferenceMap(t *testing.T) {
 			t.Fatalf("operation %d: record count = %d, tree has %d", operation, count, len(actual))
 		}
 		for address, wanted := range expected {
-			found := (*uint32)(nil)
+			found := noneValue()
 			for _, r := range actual {
 				if r.From <= uint32(address) && uint32(address) <= r.To {
-					v := r.Value
-					found = &v
+					found = someValue(r.Value)
 					break
 				}
 			}
-			if !sameValue(found, wanted) {
+			if !sameOptional(found, wanted) {
 				t.Fatalf("operation %d, address %d: value %v, want %v", operation, address, found, wanted)
 			}
 		}

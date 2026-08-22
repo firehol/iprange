@@ -28,6 +28,7 @@ type feedEntry struct {
 // never converts user input errors.
 func (s *DraftStore) lookupFeed(name string) (feedEntry, bool, error) {
 	work.CatalogLookup(1)
+	work.TreeLookup(1) // charged before the root shortcut (Rust fixed_tree::query)
 	if s.draft.meta.CatalogNameRoot == 0 {
 		return feedEntry{}, false, nil
 	}

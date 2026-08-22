@@ -152,7 +152,7 @@ func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func()
 	if windowCount == 0 {
 		return nil, invalid("history windows are empty")
 	}
-	if windowCount > math.MaxUint32 {
+	if uint64(windowCount) > math.MaxUint32 {
 		return nil, invalid("history window count exceeds u32")
 	}
 	heap := newHeapBudget(store.budget.MaxHeapBytes)

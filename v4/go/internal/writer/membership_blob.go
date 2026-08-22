@@ -207,7 +207,7 @@ func flushMembershipBlobLevel(store tree.Store, level *membershipBlobLevel) (mem
 		binary.LittleEndian.PutUint32(record[membershipBlobBranchChildOffset:], node.page)
 		binary.LittleEndian.PutUint32(record[membershipBlobBranchReserved:], 0)
 		if err := b.Push(page, record[:]); err != nil {
-			return membershipBlobNode{}, corrupt("membership blob branch build failed: " + err.Error())
+			return membershipBlobNode{}, err
 		}
 	}
 	if err := b.Finish(page); err != nil {
@@ -381,7 +381,8 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 		return membershipBlobFoundLeaf{}, corrupt("membership blob request exceeds its length")
 	}
 	pageNumber := root
-	var expected *uint16
+	var expected uint16
+	expectedSet := false
 	expectedOffset := uint64(0)
 	for depth := 0; depth <= int(format.MaxTreeLevel); depth++ {
 		var child uint32
@@ -406,7 +407,7 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 			if end > totalBytes || target >= end {
 				return membershipBlobFoundLeaf{}, corrupt("membership blob leaf layout is malformed")
 			}
-			if expected != nil && *expected != 0 {
+			if expectedSet && expected != 0 {
 				return membershipBlobFoundLeaf{}, corrupt("membership blob leaf level is invalid")
 			}
 			done = true
@@ -418,7 +419,7 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 				return membershipBlobFoundLeaf{}, err
 			}
 			if h.PageType != format.PageTypeBlobBranch || h.Aux != membershipBlobAux ||
-				(expected != nil && *expected != h.Level) {
+				(expectedSet && expected != h.Level) {
 				return membershipBlobFoundLeaf{}, corrupt("membership blob branch page is invalid")
 			}
 			first, err := format.SlottedCell(page, &h, 0, membershipBlobBranchSize)
@@ -463,8 +464,8 @@ func findMembershipBlobLeaf(store tree.Store, root uint32, totalBytes, target ui
 		}
 		pageNumber = child
 		expectedOffset = childOffset
-		expected = new(uint16)
-		*expected = branchLevel - 1
+		expected = branchLevel - 1
+		expectedSet = true
 		work.TreeDescent(1)
 	}
 	return membershipBlobFoundLeaf{}, corrupt("membership blob tree exceeds its maximum height")
