@@ -42,6 +42,57 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-22) - slice B zero-alloc completion: feed slice ingestion reaches Rust parity (0 allocations per batch)
+
+The slice-B public feed workflow batch (uncommitted work on top of
+7a71f79) was completed and validated end to end:
+
+- Zero-alloc refactor of the feed slice path (Rust
+  slice_ingestion_and_feed_comparison_allocate_nothing_per_record parity):
+  per-record allocations dropped from 3011 to 0 mallocs per 1000-record
+  ordered batch, and the first batch on a fresh workflow now measures
+  0 mallocs / 0 bytes (MemStats delta), matching the Rust thread-allocation
+  pin exactly.
+- Root causes eliminated:
+  1. Per-record rangeCtx encode-scratch escape: the range context now
+     lives on the DraftStore (rangeCtx + rangeScratch fields), reset at
+     every entry point (range_draft.go x5, feed_merge.go x2,
+     membership_draft.go x1).
+  2. parse() pointer-to-local escape: expectedLevel is now passed by
+     value with a checkLevel bool across internal/tree (page.go,
+     delete.go, gap.go, insert.go, path.go, read.go, walk.go, cursor.go
+     and the tree tests), removing the per-tree-descent allocation in
+     privatePathSelect.
+  3. Ordered builder heap allocation: the coverage ordered prefix now
+     embeds rangeBulkBuilder by value (range_coverage.go orderedPrefix),
+     exactly like the Rust OrderedPrefix variant holds Builder.
+  4. Per-batch core-binding allocations (DraftStore, WriterEdit, and
+     two operation closures per Mutate call): Core.BindEdit binds one
+     draft-lifetime WriterEdit, exactFeedWorkflow holds it, and
+     addRanges4/addRanges6 stream with plain loops (no closures),
+     preserving the Rust drain_source accounting (one source pass, one
+     input-source pass, cancellation checkpoints per 4096-record chunk,
+     one consumed charge per record).
+- Test corrected: TestZeroAllocationFeedSliceIngestion previously
+  re-added the same ranges, wrapping the ascending stream, proving the
+  input unordered and charging the general input's one-time locator
+  (a legitimate design cost, not a leak). It now warms once and
+  measures 50 strictly ascending continuation batches (the Rust test
+  shape: the ordered prefix never wraps), asserting exactly 0 objects
+  per batch.
+- Also fixed: internal/tree/gap_work_test.go (v4work build) still used
+  the pre-refactor generic acceptGap[wideLeaf]; updated to the
+  non-generic acceptGap after the value-semantics refactor.
+- Full battery green on the working tree (all under nice): go build,
+  gofmt clean, go vet, go test -count=1 ./..., go test -count=1 -tags
+  v4work ./..., go test -count=1 -race ./..., go test -count=1 -race
+  -tags v4work ./..., GODEBUG=checkptr=2 go test -count=1 ./..., and
+  six cross-compiles (linux/386, linux/arm, linux/arm64,
+  windows/amd64, darwin/arm64, freebsd/amd64).
+- Next: commit this batch, then run the five-aspect slice-B review
+  round on the committed HEAD (reviewers: Meitner, Anscombe, Harvey,
+  Newton, Aristotle), fix any P0-P2, then slice C.
+
 ### Status (2026-08-22) - chalk: slice B (public feed workflows) starts
 
 Slice A (internal draft machinery) is gated PASS at HEAD b80295a /

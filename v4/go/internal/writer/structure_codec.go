@@ -305,7 +305,7 @@ func decodeStructureHash(cell []byte) (structureHashRecord, error) {
 // structureHashCodec is the structure hash tree (Rust HashCodec): fully
 // fixed 36-byte keys and leaves, 40-byte branch cells, page types 20/21
 // with the structure kind as aux. The key is the raw record bytes, so byte
-// comparison is the Rust derived Ord.
+// Comparison is the Rust derived Ord.
 type structureHashCodec struct {
 	kind uint8
 }

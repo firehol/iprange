@@ -296,7 +296,7 @@ func decodeHashKey(cell []byte) (digest [32]byte, wordCount uint32, id uint32, e
 
 // hashCodec is the membership hash tree (Rust HashCodec): fully fixed
 // 40-byte keys and leaves, 44-byte branch cells. The key is the raw
-// record bytes, so byte comparison is the Rust derived Ord.
+// record bytes, so byte Comparison is the Rust derived Ord.
 type hashCodec struct{}
 
 func (hashCodec) BranchType() format.PageType { return format.PageTypeMembershipHashBranch }

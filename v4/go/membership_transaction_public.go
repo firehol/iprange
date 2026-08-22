@@ -1,0 +1,498 @@
+// Public transaction-bound membership catalog surface (Rust
+// live_writer/membership.rs parity): one advanced membership transaction
+// over a clean writer. Every mutation applies in exact call order on the
+// transaction draft; FeedRef and MembershipRef values pin the creating
+// database id, operation nonce, and membership epoch so a reference from
+// another transaction or a later epoch is refused (ErrorForeignReference,
+// ErrorStaleReference). Commit and Abort spend the transaction and its
+// references.
+
+package iprangedb
+
+import (
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/writer"
+)
+
+// FeedRef is one SDK-owned feed reference valid only in its creating
+// transaction (Rust FeedRef): the database id and operation nonce pin
+// the transaction, and the entry carries the feed name and index.
+type FeedRef struct {
+	databaseID     [16]byte
+	operationNonce [16]byte
+	entry          writer.FeedEntry
+}
+
+// Name returns the feed's current structural name (Rust FeedRef::name).
+func (r FeedRef) Name() FeedName { return FeedName(r.entry.Name) }
+
+// Index returns the feed's current structural index (Rust
+// FeedRef::index).
+func (r FeedRef) Index() uint32 { return r.entry.Index }
+
+// MembershipRef is one SDK-owned membership valid only in its creating
+// transaction at the epoch it was produced (Rust MembershipRef): a
+// membership reference produced before a feed deletion is stale on
+// every later mutation.
+type MembershipRef struct {
+	databaseID     [16]byte
+	operationNonce [16]byte
+	handle         writer.MembershipHandle
+	catalogEpoch   uint64
+}
+
+// TransactionFeedCursor is one ordered transaction-bound feed
+// enumeration (Rust TransactionFeedCursor): entries arrive in ascending
+// feed-index order and are pinned to the creating transaction.
+type TransactionFeedCursor struct {
+	cursor         *writer.FeedCursor
+	databaseID     [16]byte
+	operationNonce [16]byte
+}
+
+// Next returns the next transaction-bound feed in ascending feed-index
+// order, or ok=false at the end (Rust TransactionFeedCursor::next_feed).
+func (c *TransactionFeedCursor) Next() (FeedRef, bool, error) {
+	entry, ok, err := c.cursor.Next()
+	if err != nil {
+		return FeedRef{}, false, err
+	}
+	if !ok {
+		return FeedRef{}, false, nil
+	}
+	return FeedRef{databaseID: c.databaseID, operationNonce: c.operationNonce, entry: entry}, true, nil
+}
+
+// MembershipTransaction is one advanced logical membership operation
+// over a clean live writer (Rust MembershipTransaction): the transaction
+// owns the draft until Commit, Abort, or Writer.Close, and every
+// reference produced by it is refused by any other transaction.
+type MembershipTransaction struct {
+	w               *Writer
+	databaseID      [16]byte
+	operationNonce  [16]byte
+	membershipEpoch uint64
+	cancellation    *CancellationToken
+	spent           bool
+}
+
+// BeginMembershipTransaction begins one advanced membership transaction
+// on a clean writer (Rust LiveWriter::begin_membership_transaction): a
+// membership database is required and the operation nonce pins every
+// reference produced by the transaction.
+func (w *Writer) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
+	if w.core == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	if err := cancellation.check(); err != nil {
+		return nil, err
+	}
+	if err := w.core.Healthy(); err != nil {
+		return nil, err
+	}
+	if w.core.BaseInfo().ValueKind != format.ValueKindMembership {
+		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "membership transaction requires a membership database"}
+	}
+	nonce, err := w.core.BeginTransaction()
+	if err != nil {
+		return nil, err
+	}
+	return &MembershipTransaction{
+		w:              w,
+		databaseID:     w.core.BaseInfo().DatabaseID,
+		operationNonce: nonce,
+		cancellation:   cancellation,
+	}, nil
+}
+
+// FeedCursor enumerates the current private catalog by ascending feed
+// index (Rust MembershipTransaction::feed_cursor).
+func (t *MembershipTransaction) FeedCursor() (*TransactionFeedCursor, error) {
+	if err := t.requireActive(); err != nil {
+		return nil, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return nil, err
+	}
+	cursor, err := t.w.core.CurrentFeedCursor()
+	if err != nil {
+		return nil, err
+	}
+	return &TransactionFeedCursor{cursor: cursor, databaseID: t.databaseID, operationNonce: t.operationNonce}, nil
+}
+
+// EmptyMembership constructs the empty membership without allocating an
+// internal id (Rust MembershipTransaction::empty_membership).
+func (t *MembershipTransaction) EmptyMembership() (MembershipRef, error) {
+	if err := t.requireActive(); err != nil {
+		return MembershipRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return MembershipRef{}, err
+	}
+	return t.membershipReference(writer.EmptyMembershipHandle()), nil
+}
+
+// AddFeed adds one feed to a transaction-owned membership (Rust
+// MembershipTransaction::add_feed).
+func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) (MembershipRef, error) {
+	if err := t.requireCurrentMembership(membership); err != nil {
+		return MembershipRef{}, err
+	}
+	if err := t.requireCurrentFeed(feed); err != nil {
+		return MembershipRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return MembershipRef{}, err
+	}
+	var handle writer.MembershipHandle
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		handle, err = edit.AddFeedToMembership(membership.handle, feed.entry)
+		return err
+	})
+	if err != nil {
+		return MembershipRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return MembershipRef{}, err
+	}
+	return t.membershipReference(handle), nil
+}
+
+// ApplyV4 applies one membership operation to an inclusive IPv4
+// interval (Rust MembershipTransaction::apply_v4): the range must be
+// ordered, the membership reference current, and the database family
+// must match.
+func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef, operation MembershipOperation) (bool, error) {
+	if err := t.requireFamily(format.AddressFamilyIPv4, from <= to); err != nil {
+		return false, err
+	}
+	if err := t.requireCurrentMembership(membership); err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	var changed bool
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), t.cancellation.check)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// ApplyV6 applies one membership operation to an inclusive IPv6
+// interval (Rust MembershipTransaction::apply_v6).
+func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef, operation MembershipOperation) (bool, error) {
+	if err := t.requireFamily(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
+		return false, err
+	}
+	if err := t.requireCurrentMembership(membership); err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	var changed bool
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), t.cancellation.check)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// LookupFeed returns an exact existing feed without creating it (Rust
+// MembershipTransaction::lookup_feed).
+func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error) {
+	if !format.FeedNameValidString(string(name)) {
+		return FeedRef{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+	}
+	if err := t.requireActive(); err != nil {
+		return FeedRef{}, false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, false, err
+	}
+	var entry writer.FeedEntry
+	var found bool
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		entry, found, err = edit.LookupFeed(string(name))
+		return err
+	})
+	if err != nil {
+		return FeedRef{}, false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, false, err
+	}
+	if !found {
+		return FeedRef{}, false, nil
+	}
+	return t.reference(entry), true, nil
+}
+
+// EnsureFeed returns the exact feed, creating it at the lowest free
+// index if absent (Rust MembershipTransaction::ensure_feed).
+func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
+	if !format.FeedNameValidString(string(name)) {
+		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+	}
+	if err := t.requireActive(); err != nil {
+		return FeedRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, err
+	}
+	var entry writer.FeedEntry
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		entry, _, err = edit.EnsureFeed(string(name))
+		return err
+	})
+	if err != nil {
+		return FeedRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, err
+	}
+	return t.reference(entry), nil
+}
+
+// RenameFeed renames one referenced feed while preserving its
+// membership (Rust MembershipTransaction::rename_feed): the new name
+// must not exist (ErrorNameExists) and the feed reference must be
+// current.
+func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (FeedRef, error) {
+	if !format.FeedNameValidString(string(newName)) {
+		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+	}
+	if err := t.requireCurrentFeed(feed); err != nil {
+		return FeedRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, err
+	}
+	var entry writer.FeedEntry
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		var err error
+		entry, err = edit.RenameCurrentFeed(feed.entry, string(newName))
+		return err
+	})
+	if err != nil {
+		return FeedRef{}, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return FeedRef{}, err
+	}
+	return t.reference(entry), nil
+}
+
+// DeleteFeed deletes one feed and clears its bit from every stored
+// membership (Rust MembershipTransaction::delete_feed): every membership
+// reference produced before this call becomes stale.
+func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
+	if err := t.requireCurrentFeed(feed); err != nil {
+		return err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return err
+	}
+	nextEpoch := t.membershipEpoch + 1
+	if nextEpoch == 0 {
+		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
+	}
+	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+		return edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check)
+	})
+	if err != nil {
+		return err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return err
+	}
+	t.membershipEpoch = nextEpoch
+	return nil
+}
+
+// SetMetadataJSON stages one exact opaque metadata replacement in this
+// transaction (Rust MembershipTransaction::set_metadata_json).
+func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
+	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	changed, err := t.w.core.SetMetadata(input)
+	if err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// ClearMetadataJSON stages metadata absence in this transaction (Rust
+// MembershipTransaction::clear_metadata_json); an already-absent
+// database reports false.
+func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
+	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	changed, err := t.w.core.ClearMetadata()
+	if err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// Commit publishes this transaction through the alternate metadata page
+// (Rust MembershipTransaction::commit).
+func (t *MembershipTransaction) Commit() (CommitResult, error) {
+	if err := t.requireActive(); err != nil {
+		return CommitResult{}, err
+	}
+	return commitPrepared(t.w, t.cancellation, func() { t.spent = true }, "membership transaction")
+}
+
+// Abort discards this transaction and invalidates all of its references
+// (Rust MembershipTransaction::abort); the writer stays open and
+// healthy. A committed transaction reports ErrorNoPendingTransaction.
+func (t *MembershipTransaction) Abort() error {
+	t.spent = true
+	return t.w.Abort()
+}
+
+// reference builds one transaction-pinned feed reference (Rust
+// MembershipState::reference).
+func (t *MembershipTransaction) reference(entry writer.FeedEntry) FeedRef {
+	return FeedRef{databaseID: t.databaseID, operationNonce: t.operationNonce, entry: entry}
+}
+
+// membershipReference builds one transaction-pinned membership reference
+// at the current epoch (Rust MembershipState::membership_reference).
+func (t *MembershipTransaction) membershipReference(handle writer.MembershipHandle) MembershipRef {
+	return MembershipRef{
+		databaseID:     t.databaseID,
+		operationNonce: t.operationNonce,
+		handle:         handle,
+		catalogEpoch:   t.membershipEpoch,
+	}
+}
+
+// requireActive mirrors Rust MembershipState::require_active: the
+// transaction must still own the open operation and the writer must be
+// healthy.
+func (t *MembershipTransaction) requireActive() error {
+	if t.spent {
+		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+	}
+	if !t.w.core.OperationIs(t.operationNonce) {
+		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+	}
+	return t.w.core.Healthy()
+}
+
+// checkOrAbort mirrors Rust MembershipState::check_or_abort: the
+// transaction must be active and the captured cancellation must not have
+// fired; a fired cancellation aborts the workflow through the writer.
+func (t *MembershipTransaction) checkOrAbort() error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if err := t.cancellation.check(); err != nil {
+		t.spent = true
+		return t.w.abortAfter(err)
+	}
+	return nil
+}
+
+// requireCurrentFeed mirrors Rust MembershipState::require_current_feed:
+// the reference must belong to this transaction and name the exact feed
+// currently in the draft catalog.
+func (t *MembershipTransaction) requireCurrentFeed(feed FeedRef) error {
+	if err := t.requireReference(feed); err != nil {
+		return err
+	}
+	current, found, err := t.w.core.LookupCurrentFeed(feed.entry.Name)
+	if err != nil {
+		return err
+	}
+	if !found || current != feed.entry {
+		return &format.Error{Code: format.CodeStaleReference, Detail: "feed reference is stale"}
+	}
+	return nil
+}
+
+// requireCurrentMembership mirrors Rust
+// MembershipState::require_current_membership: the membership reference
+// must belong to this transaction and the current membership epoch.
+func (t *MembershipTransaction) requireCurrentMembership(membership MembershipRef) error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if membership.databaseID != t.databaseID {
+		return &format.Error{Code: format.CodeForeignReference, Detail: "membership reference belongs to another database"}
+	}
+	if membership.operationNonce != t.operationNonce {
+		return &format.Error{Code: format.CodeStaleReference, Detail: "membership reference is stale"}
+	}
+	if membership.catalogEpoch != t.membershipEpoch {
+		return &format.Error{Code: format.CodeStaleReference, Detail: "membership reference is stale"}
+	}
+	return nil
+}
+
+// requireReference mirrors Rust MembershipState::require_reference: the
+// feed reference must belong to this transaction's database and
+// operation.
+func (t *MembershipTransaction) requireReference(feed FeedRef) error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if feed.databaseID != t.databaseID {
+		return &format.Error{Code: format.CodeForeignReference, Detail: "feed reference belongs to another database"}
+	}
+	if feed.operationNonce != t.operationNonce {
+		return &format.Error{Code: format.CodeStaleReference, Detail: "feed reference is stale"}
+	}
+	return nil
+}
+
+// requireFamily mirrors Rust MembershipState::require_family: the active
+// transaction, the ordered range, and the database address family.
+func (t *MembershipTransaction) requireFamily(family uint8, ordered bool) error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if !ordered {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+	}
+	if t.w.core.BaseInfo().AddressFamily != family {
+		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "membership mutation does not match the database family"}
+	}
+	return nil
+}

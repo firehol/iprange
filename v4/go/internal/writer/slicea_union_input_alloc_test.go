@@ -29,14 +29,20 @@ func pushOrderedAllocs(t *testing.T, count int) float64 {
 			t.Fatal(err)
 		}
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-		input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+		input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 		family, err := store.rangeFamily()
 		if err != nil {
 			t.Fatal(err)
 		}
-		root := store.draft.workflowRangeRoot
-		countv := store.draft.workflowRangeCount
-		ctx := &rangeCtx{family: family, store: store, root: &root, count: &countv}
+		store.rangeRoot = store.draft.workflowRangeRoot
+		store.rangeCount = store.draft.workflowRangeCount
+		ctx := &store.rangeCtx
+		ctx.family = family
+		ctx.store = store
+		ctx.untracked = false
+		ctx.root = &store.rangeRoot
+		ctx.count = &store.rangeCount
+		ctx.scratch = &store.rangeScratch
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
 			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {
@@ -57,15 +63,21 @@ func pushGeneralAllocs(t *testing.T, count int) float64 {
 			t.Fatal(err)
 		}
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-		input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+		input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 		input.startGeneral()
 		family, err := store.rangeFamily()
 		if err != nil {
 			t.Fatal(err)
 		}
-		root := store.draft.workflowRangeRoot
-		countv := store.draft.workflowRangeCount
-		ctx := &rangeCtx{family: family, store: store, root: &root, count: &countv}
+		store.rangeRoot = store.draft.workflowRangeRoot
+		store.rangeCount = store.draft.workflowRangeCount
+		ctx := &store.rangeCtx
+		ctx.family = family
+		ctx.store = store
+		ctx.untracked = false
+		ctx.root = &store.rangeRoot
+		ctx.count = &store.rangeCount
+		ctx.scratch = &store.rangeScratch
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
 			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {

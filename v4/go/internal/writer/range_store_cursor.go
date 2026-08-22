@@ -126,7 +126,11 @@ func (c *rangeCursor) next() (record rangeRecord, ok bool, err error) {
 // (the DraftStore-bound readers use Inspect; the selected base source
 // adds its own bound on top).
 func (s *DraftStore) InspectBase(pageNumber uint32) ([]byte, error) {
-	if uint64(pageNumber) >= s.draft.meta.PageCount {
+	limit := s.committedPageCount
+	if s.draft != nil {
+		limit = s.draft.meta.PageCount
+	}
+	if uint64(pageNumber) >= limit {
 		return nil, corrupt("draft page is out of bounds")
 	}
 	return s.mapping.Page(pageNumber)

@@ -15,7 +15,7 @@ type Header = format.PageHeader
 // returns its header by value (Rust slotted_page::parse_tree). The value
 // return keeps the descent loops allocation-free: a heap-allocated header
 // would be one object per visited page per operation.
-func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel *uint16) (Header, error) {
+func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel uint16, checkLevel bool) (Header, error) {
 	work.PageParse(1)
 	h, err := format.DecodePageHeader(page, selectedTxn)
 	if err != nil {
@@ -28,7 +28,7 @@ func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel
 	if h.PageType != expectedType || h.Aux != codec.Aux() {
 		return Header{}, corrupt("slotted-page type or discriminator is invalid")
 	}
-	if expectedLevel != nil && *expectedLevel != h.Level {
+	if checkLevel && expectedLevel != h.Level {
 		return Header{}, corrupt("slotted-page child level is invalid")
 	}
 	if !format.SlottedShapeValid(&h) {

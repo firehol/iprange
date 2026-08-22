@@ -127,7 +127,7 @@ type historyPolicy struct {
 	feedToWindow  []uint32
 	beforeSorted  []uint8
 	before        []uint8
-	prefixes      []membershipHandle
+	prefixes      []MembershipHandle
 	currentPrefix int
 	family        uint8 // address family of the projection (Rust HistoryPolicy<K> fixes K at plan time)
 	aggregate     HistoryWindowReport
@@ -189,7 +189,7 @@ func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func()
 	if err := heap.filled(uint64(windowCount)+1, historyHandleBytes, "history projection heap"); err != nil {
 		return nil, err
 	}
-	prefixes := make([]membershipHandle, windowCount+1)
+	prefixes := make([]MembershipHandle, windowCount+1)
 	policy := historyPolicy{
 		reports:       reports,
 		runs:          runs,
@@ -317,7 +317,7 @@ func ensureHistoryFeeds(store *DraftStore, reports []HistoryWindowReport, heap *
 			return 0, nil, err
 		}
 		createdFeedCount = next
-		indexes[work] = entry.index
+		indexes[work] = entry.Index
 	}
 	return createdFeedCount, indexes, nil
 }
@@ -447,7 +447,7 @@ func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue
 			return noneValue(), err
 		}
 		allID, allWords := all.stored()
-		combined, present, err := store.combineMemberships(old.value, allID, allWords, membershipDifference)
+		combined, present, err := store.combineMemberships(old.value, allID, allWords, MembershipDifference)
 		if err != nil {
 			return noneValue(), err
 		}
@@ -468,7 +468,7 @@ func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue
 	case prefixID == 0:
 		new = someValue(withoutTargets)
 	default:
-		combined, present, err := store.combineMemberships(withoutTargets, prefixID, prefixWords, membershipUnion)
+		combined, present, err := store.combineMemberships(withoutTargets, prefixID, prefixWords, MembershipUnion)
 		if err != nil {
 			return noneValue(), err
 		}
@@ -512,9 +512,9 @@ func (p *historyPolicy) finish() (historyPolicy, error) { return *p, nil }
 
 // prefix returns the interned prefix bitmap of the first length feeds in
 // cutoff rank, caching it in the plan (Rust HistoryPolicy::prefix).
-func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle, error) {
+func (p *historyPolicy) prefix(store *DraftStore, length int) (MembershipHandle, error) {
 	if length < 0 || length >= len(p.prefixes) {
-		return membershipHandle{}, corrupt("history prefix is outside the window set")
+		return MembershipHandle{}, corrupt("history prefix is outside the window set")
 	}
 	cached := p.prefixes[length]
 	if length == 0 || !cached.isEmpty() {
@@ -523,7 +523,7 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle,
 	view := &p.scratchWords
 	wordCount, err := historyPrefixWordCount(p.feedIndexes, p.feedToWindow, p.rank, uint32(length), p.check)
 	if err != nil {
-		return membershipHandle{}, err
+		return MembershipHandle{}, err
 	}
 	*view = prefixWords{
 		feedIndexes:  p.feedIndexes,
@@ -535,7 +535,7 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (membershipHandle,
 	}
 	interned, err := draftInternMembership(store, view)
 	if err != nil {
-		return membershipHandle{}, err
+		return MembershipHandle{}, err
 	}
 	prefix := handleFromInterned(interned)
 	p.prefixes[length] = prefix

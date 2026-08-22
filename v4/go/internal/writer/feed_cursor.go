@@ -12,9 +12,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// feedCursor is one forward cursor over the catalog index tree of a
+// FeedCursor is one forward cursor over the catalog index tree of a
 // pinned generation.
-type feedCursor struct {
+type FeedCursor struct {
 	cursor      *tree.ForwardCursor[format.CatalogNameRecord]
 	meta        format.Meta
 	emitted     uint64
@@ -23,58 +23,58 @@ type feedCursor struct {
 	finished    bool
 }
 
-// newFeedCursor opens the forward cursor over the generation's catalog
+// NewFeedCursor opens the forward cursor over the generation's catalog
 // index tree (Rust FeedCursor::new; an absent index root is the empty
 // catalog).
-func newFeedCursor(store *DraftStore, meta format.Meta) (*feedCursor, error) {
+func NewFeedCursor(store *DraftStore, meta format.Meta) (*FeedCursor, error) {
 	if meta.CatalogIndexRoot == 0 {
-		return &feedCursor{meta: meta, finished: true}, nil
+		return &FeedCursor{meta: meta, finished: true}, nil
 	}
 	cursor, err := tree.NewForwardCursor[format.CatalogNameRecord](indexCodec{}, selectedStore{store: store, meta: meta}, meta.CatalogIndexRoot, false)
 	if err != nil {
 		return nil, err
 	}
-	return &feedCursor{cursor: cursor, meta: meta}, nil
+	return &FeedCursor{cursor: cursor, meta: meta}, nil
 }
 
 // next returns the next catalog entry in ascending feed-index order, or
 // ok=false at the end (Rust FeedCursor::next_feed; the exact corrupt
 // classes of next_inner, with the finished flag set exactly where Rust
 // sets it).
-func (c *feedCursor) next() (feedEntry, bool, error) {
+func (c *FeedCursor) Next() (FeedEntry, bool, error) {
 	if c.finished {
-		return feedEntry{}, false, nil
+		return FeedEntry{}, false, nil
 	}
 	record, ok, err := c.cursor.Next()
 	if err != nil {
 		c.finished = true
-		return feedEntry{}, false, err
+		return FeedEntry{}, false, err
 	}
 	if !ok {
 		c.finished = true
 		if c.emitted != c.meta.ActiveFeedCount {
-			return feedEntry{}, false, corrupt("feed catalog count is incomplete")
+			return FeedEntry{}, false, corrupt("feed catalog count is incomplete")
 		}
-		return feedEntry{}, false, nil
+		return FeedEntry{}, false, nil
 	}
 	if uint64(record.FeedIndex) >= c.meta.FeedIndexLimit {
 		c.finished = true
-		return feedEntry{}, false, corrupt("feed index is outside the declared limit")
+		return FeedEntry{}, false, corrupt("feed index is outside the declared limit")
 	}
 	if c.hasPrevious && c.previous >= record.FeedIndex {
 		c.finished = true
-		return feedEntry{}, false, corrupt("feed indexes are not strictly increasing")
+		return FeedEntry{}, false, corrupt("feed indexes are not strictly increasing")
 	}
 	c.previous = record.FeedIndex
 	c.hasPrevious = true
 	next := c.emitted + 1
 	if next < c.emitted {
-		return feedEntry{}, false, overflow("feed cursor count")
+		return FeedEntry{}, false, overflow("feed cursor count")
 	}
 	c.emitted = next
 	if c.emitted > c.meta.ActiveFeedCount {
 		c.finished = true
-		return feedEntry{}, false, corrupt("feed catalog exceeds its declared count")
+		return FeedEntry{}, false, corrupt("feed catalog exceeds its declared count")
 	}
-	return feedEntry{name: string(record.Name), index: record.FeedIndex}, true, nil
+	return FeedEntry{Name: string(record.Name), Index: record.FeedIndex}, true, nil
 }

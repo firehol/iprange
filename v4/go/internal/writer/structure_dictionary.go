@@ -107,7 +107,7 @@ func insertStructureHashRecord(store tree.RetiringStore, codec tree.Codec[struct
 
 // findEqualStructure searches the hash tree for an equal payload (Rust
 // find_equal): at_or_after over (digest, id), then the record's exact
-// payload comparison.
+// payload Comparison.
 func findEqualStructure(codec structurePayloadCodec, store tree.Store, state *structureState, payload *structurePayload, digest [32]byte) (uint32, bool, error) {
 	if state.hashRoot == 0 {
 		return 0, false, nil

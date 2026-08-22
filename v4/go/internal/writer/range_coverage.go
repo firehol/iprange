@@ -107,21 +107,24 @@ const (
 // OrderedPrefix). builder and the address counts are disjoint across the
 // states: Available retains nothing, Building retains the builder and its
 // running count, Finished retains the sealed count only when a prefix was
-// actually built (Rust Finished(Option<Cardinality129>)).
+// actually built (Rust Finished(Option<Cardinality129>)). The builder is
+// embedded by value, exactly like the Rust Builder lives inside the
+// OrderedPrefix variant: the ordered path therefore never allocates.
 type orderedPrefix struct {
-	state     orderedPrefixState
-	builder   *rangeBulkBuilder
-	addresses format.Cardinality129
-	finished  format.Cardinality129
-	hasBuilt  bool
+	state      orderedPrefixState
+	builder    rangeBulkBuilder
+	hasBuilder bool
+	addresses  format.Cardinality129
+	finished   format.Cardinality129
+	hasBuilt   bool
 }
 
-// unionInput is the streamed coverage input of one feed workflow (Rust
+// UnionInput is the streamed coverage input of one feed workflow (Rust
 // UnionInput): the queued pending range, the union state, the ordered
 // prefix, and the lazy assignment input for the general fallback. The
 // input is created once per workflow and lives for all of its ranges, so
 // none of its fields allocate per record.
-type unionInput struct {
+type UnionInput struct {
 	pending    rangeRecord
 	hasPending bool
 	pendingGap tree.Edge
@@ -133,11 +136,11 @@ type unionInput struct {
 	assignment privateInput
 }
 
-// newUnionInput starts one coverage input for a workflow of the given
+// NewUnionInput starts one coverage input for a workflow of the given
 // value kind and address family (Rust UnionInput::new; the assignment
 // input stays lazy until the input proves general).
-func newUnionInput(family uint8, valueKind uint8, maxHeapBytes uint64) unionInput {
-	return unionInput{
+func NewUnionInput(family uint8, valueKind uint8, maxHeapBytes uint64) UnionInput {
+	return UnionInput{
 		valueKind: valueKind,
 		family:    family,
 		assignment: privateInput{
@@ -151,24 +154,24 @@ func newUnionInput(family uint8, valueKind uint8, maxHeapBytes uint64) unionInpu
 
 // isGeneral reports the input fell back to the general assignment path
 // (Rust UnionInput::is_general).
-func (u *unionInput) isGeneral() bool { return u.union.isGeneral() }
+func (u *UnionInput) isGeneral() bool { return u.union.isGeneral() }
 
 // orderedAddresses returns the sealed ordered-prefix address count, when
 // one was built (Rust UnionInput::ordered_addresses).
-func (u *unionInput) orderedAddresses() (format.Cardinality129, bool) {
+func (u *UnionInput) orderedAddresses() (format.Cardinality129, bool) {
 	if u.ordered.state == orderedFinished && u.ordered.hasBuilt {
 		return u.ordered.finished, true
 	}
 	return format.CardinalityZero(), false
 }
 
-func (u *unionInput) enableGeneral() {
+func (u *UnionInput) enableGeneral() {
 	u.assignment.enable()
 }
 
 // startGeneral flips the union state to general and enables the
 // assignment input (Rust UnionInput::start_general).
-func (u *unionInput) startGeneral() {
+func (u *UnionInput) startGeneral() {
 	u.union.startGeneral()
 	u.assignment.enable()
 }
@@ -176,7 +179,7 @@ func (u *unionInput) startGeneral() {
 // pushOrdered appends one pending range to the ordered prefix when the
 // input is still strictly ascending, reporting handled=true when the
 // range was consumed by the prefix (Rust UnionInput::push_ordered).
-func (u *unionInput) pushOrdered(ctx *rangeCtx, r rangeRecord) (changed bool, handled bool, err error) {
+func (u *UnionInput) pushOrdered(ctx *rangeCtx, r rangeRecord) (changed bool, handled bool, err error) {
 	if u.ordered.state == orderedAvailable {
 		if *ctx.root != 0 || *ctx.count != 0 {
 			u.ordered = orderedPrefix{state: orderedFinished}
@@ -193,12 +196,13 @@ func (u *unionInput) pushOrdered(ctx *rangeCtx, r rangeRecord) (changed bool, ha
 			return false, false, nil
 		}
 		u.ordered = orderedPrefix{
-			state:     orderedBuilding,
-			builder:   newRangeBulkBuilder(ctx.store.TargetTxn(), u.valueKind, u.family),
-			addresses: format.CardinalityZero(),
+			state:      orderedBuilding,
+			hasBuilder: true,
+			addresses:  format.CardinalityZero(),
 		}
+		u.ordered.builder.init(ctx.store.TargetTxn(), u.valueKind, u.family)
 	}
-	if u.ordered.state != orderedBuilding {
+	if u.ordered.state != orderedBuilding || !u.ordered.hasBuilder {
 		return false, false, nil
 	}
 	pushed, err := u.ordered.builder.tryPush(ctx.store, r)
@@ -226,14 +230,14 @@ func (u *unionInput) pushOrdered(ctx *rangeCtx, r rangeRecord) (changed bool, ha
 
 // finishOrdered seals the built prefix into the coverage tree and keeps
 // its address count (Rust UnionInput::finish_ordered).
-func (u *unionInput) finishOrdered(ctx *rangeCtx) (bool, error) {
+func (u *UnionInput) finishOrdered(ctx *rangeCtx) (bool, error) {
 	if u.ordered.state != orderedBuilding {
 		return false, nil
 	}
 	if *ctx.root != 0 || *ctx.count != 0 {
 		return false, corrupt("ordered range prefix has an existing destination tree")
 	}
-	builder := u.ordered.builder
+	builder := &u.ordered.builder
 	addresses := u.ordered.addresses
 	root, count, err := builder.finishInline(ctx.store)
 	if err != nil {
@@ -250,7 +254,7 @@ func (u *unionInput) finishOrdered(ctx *rangeCtx) (bool, error) {
 // returned for application and the incoming range becomes pending with
 // the gap evidence between them (Rust UnionInput::queue). apply=false
 // reports the incoming range was absorbed by the pending range.
-func (u *unionInput) queue(incoming rangeRecord) (pending rangeRecord, knownGap tree.Edge, hasGap bool, apply bool) {
+func (u *UnionInput) queue(incoming rangeRecord) (pending rangeRecord, knownGap tree.Edge, hasGap bool, apply bool) {
 	if !u.hasPending {
 		u.pending = incoming
 		u.hasPending = true
@@ -305,7 +309,7 @@ func (u *unionInput) queue(incoming rangeRecord) (pending rangeRecord, knownGap 
 
 // takePending removes and returns the pending range (Rust
 // UnionInput::take_pending).
-func (u *unionInput) takePending() (rangeRecord, tree.Edge, bool, bool) {
+func (u *UnionInput) takePending() (rangeRecord, tree.Edge, bool, bool) {
 	if !u.hasPending {
 		return rangeRecord{}, tree.EdgeFirst, false, false
 	}
@@ -322,7 +326,7 @@ func (u *unionInput) takePending() (rangeRecord, tree.Edge, bool, bool) {
 // (Rust push_private_untracked): the general path applies it through the
 // assignment input, otherwise it is queued, proven ascending, or applied
 // through the union state.
-func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input *unionInput) (bool, error) {
+func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input *UnionInput) (bool, error) {
 	ctx.markUntracked()
 	if input.union.isGeneral() {
 		return unionPrivateUntrackedGeneral(ctx, from, to, value, &input.assignment)
@@ -360,7 +364,7 @@ func pushPrivateUntracked(ctx *rangeCtx, from, to tree.Key, value uint32, input 
 // finishInputUntracked drains the pending range, seals the ordered
 // prefix, flushes the union edge, and releases the assignment input
 // (Rust finish_input_untracked).
-func finishInputUntracked(ctx *rangeCtx, input *unionInput) (bool, error) {
+func finishInputUntracked(ctx *rangeCtx, input *UnionInput) (bool, error) {
 	ctx.markUntracked()
 	changed := false
 	if p, knownGap, hasGap, has := input.takePending(); has {
@@ -390,7 +394,7 @@ func finishInputUntracked(ctx *rangeCtx, input *unionInput) (bool, error) {
 
 // applyPending routes one pending range through the union state or the
 // general assignment input (Rust apply_pending).
-func applyPending(ctx *rangeCtx, pending rangeRecord, knownGap tree.Edge, hasGap bool, input *unionInput) (bool, error) {
+func applyPending(ctx *rangeCtx, pending rangeRecord, knownGap tree.Edge, hasGap bool, input *UnionInput) (bool, error) {
 	if input.union.isGeneral() {
 		return unionPrivateUntrackedGeneral(ctx, pending.from, pending.to, pending.value, &input.assignment)
 	}
@@ -446,9 +450,8 @@ func insertPrivateEdge(ctx *rangeCtx, incoming rangeRecord, position *tree.Priva
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord]{}, err
 	}
-	var gap privateGap
-	gap.init(ctx.family, incoming)
-	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, cell, position, edge, hasGap && knownGap == edge, &gap)
+	gap := privateGap{family: ctx.family, r: incoming}
+	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, cell, position, edge, hasGap && knownGap == edge, gap)
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord]{}, err
 	}
@@ -477,7 +480,8 @@ func applyPrivate(ctx *rangeCtx, incoming rangeRecord, state *unionState, knownG
 		state.hasEdge = false
 	}
 	wasEmpty := *ctx.root == 0
-	var rejected *tree.LocalReject[rangeRecord]
+	var rejected tree.LocalReject[rangeRecord]
+	var hasRejected bool
 	if hasCached {
 		result, err := insertPrivateEdge(ctx, incoming, &state.edge, direction, knownGap, hasGap)
 		if err != nil {
@@ -487,7 +491,7 @@ func applyPrivate(ctx *rangeCtx, incoming rangeRecord, state *unionState, knownG
 			state.finish(incoming.from, order, result.Edge)
 			return true, nil
 		}
-		rejected = result.Reject
+		rejected, hasRejected = result.Reject, result.Rejected
 	} else {
 		result, err := insertPrivateGap(ctx, incoming)
 		if err != nil {
@@ -502,7 +506,10 @@ func applyPrivate(ctx *rangeCtx, incoming rangeRecord, state *unionState, knownG
 			state.finish(incoming.from, order, edge)
 			return true, nil
 		}
-		rejected = result.Reject
+		rejected, hasRejected = result.Reject, result.Rejected
+	}
+	if !hasRejected {
+		return false, corrupt("private union gap rejection is missing")
 	}
 	changed, position, hasPosition, err := mergeRejected(ctx, incoming, rejected)
 	if err != nil {
@@ -535,7 +542,7 @@ func applyGeneral(ctx *rangeCtx, incoming rangeRecord) (bool, error) {
 // the local union plan replaces a touching neighbor run in place when
 // possible; otherwise the general run covers the external sides (Rust
 // union_run).
-func mergeRejected(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[rangeRecord]) (bool, tree.PrivatePosition, bool, error) {
+func mergeRejected(ctx *rangeCtx, incoming rangeRecord, rejected tree.LocalReject[rangeRecord]) (bool, tree.PrivatePosition, bool, error) {
 	decision, ok := localUnionPlan(ctx.family, rejected, incoming)
 	if !ok {
 		return unionRun(ctx, incoming, rejected)
@@ -571,7 +578,7 @@ type localUnionDecision struct {
 
 // localUnionPlan proves the rejected gap can be replaced locally (Rust
 // local_union_plan): ok=false sends the range to the general run.
-func localUnionPlan(family rangeFamily, rejected *tree.LocalReject[rangeRecord], incoming rangeRecord) (localUnionDecision, bool) {
+func localUnionPlan(family rangeFamily, rejected tree.LocalReject[rangeRecord], incoming rangeRecord) (localUnionDecision, bool) {
 	predecessor, hasPredecessor := rejected.Predecessor()
 	if hasPredecessor && !predecessor.to.Less(incoming.to) {
 		return localUnionDecision{noChange: true}, true
@@ -633,11 +640,11 @@ func touchesFamily(family uint8, leftTo, rightFrom tree.Key) bool {
 // unionRun covers the rejected range against the external sides and
 // inserts the merged run (Rust union_run). hasPosition reports the
 // rejected position is reusable as the next edge.
-func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[rangeRecord]) (bool, tree.PrivatePosition, bool, error) {
+func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected tree.LocalReject[rangeRecord]) (bool, tree.PrivatePosition, bool, error) {
 	predecessor, hasPredecessor := rejected.Predecessor()
 	if !hasPredecessor && !rejected.PredecessorComplete() {
 		var err error
-		predecessor, hasPredecessor, err = tree.ExternalPredecessor(ctx.family, ctx.store, &rejected.Target.Path)
+		predecessor, hasPredecessor, err = tree.ExternalPredecessor(ctx.family, ctx.store, rejected.Target.Path)
 		if err != nil {
 			return false, tree.PrivatePosition{}, false, err
 		}
@@ -663,7 +670,7 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected *tree.LocalReject[ra
 		successor, hasSuccessor := rejected.Successor()
 		if !hasSuccessor && !rejected.SuccessorComplete() {
 			var err error
-			successor, hasSuccessor, err = tree.ExternalSuccessor(ctx.family, ctx.store, &rejected.Target.Path)
+			successor, hasSuccessor, err = tree.ExternalSuccessor(ctx.family, ctx.store, rejected.Target.Path)
 			if err != nil {
 				return false, tree.PrivatePosition{}, false, err
 			}

@@ -11,24 +11,24 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
-// membershipHandle is one interned membership bitmap plus its stored
+// MembershipHandle is one interned membership bitmap plus its stored
 // word count (Rust MembershipHandle). The zero handle is the empty
 // bitmap.
-type membershipHandle struct {
+type MembershipHandle struct {
 	id        uint32
 	wordCount uint32
 }
 
-func emptyMembershipHandle() membershipHandle { return membershipHandle{} }
+func EmptyMembershipHandle() MembershipHandle { return MembershipHandle{} }
 
 // isEmpty reports the empty bitmap handle (Rust is_empty).
-func (h membershipHandle) isEmpty() bool { return h.id == 0 }
+func (h MembershipHandle) isEmpty() bool { return h.id == 0 }
 
 // stored returns the wire id and word count (Rust stored).
-func (h membershipHandle) stored() (uint32, uint32) { return h.id, h.wordCount }
+func (h MembershipHandle) stored() (uint32, uint32) { return h.id, h.wordCount }
 
-func handleFromInterned(interned membershipInterned) membershipHandle {
-	return membershipHandle{id: interned.id, wordCount: interned.wordCount}
+func handleFromInterned(interned membershipInterned) MembershipHandle {
+	return MembershipHandle{id: interned.id, wordCount: interned.wordCount}
 }
 
 // membershipState returns the writable dictionary state of the draft
@@ -79,7 +79,7 @@ func draftInternMembership[W membershipWords](s *DraftStore, words W) (membershi
 // and interns the result (Rust DraftStore::combine_memberships). The
 // boolean is Rust's Option: an empty combination reports present=false,
 // never a Some(0) id.
-func (s *DraftStore) combineMemberships(current, supplied, suppliedWords uint32, operation membershipOperation) (uint32, bool, error) {
+func (s *DraftStore) combineMemberships(current, supplied, suppliedWords uint32, operation MembershipOperation) (uint32, bool, error) {
 	state := s.membershipState()
 	interned, err := combineMembership(s, &state, current, supplied, suppliedWords, operation)
 	if err != nil {
@@ -208,15 +208,15 @@ func boolToUint64(value bool) uint64 {
 // over a base bitmap (Rust DraftStore::add_feed_to_membership): the
 // single-bit source is interned with the base words and the new record
 // is tracked before the dictionary state is stored back.
-func (s *DraftStore) addFeedToMembership(base membershipHandle, feed feedEntry) (membershipHandle, error) {
+func (s *DraftStore) addFeedToMembership(base MembershipHandle, feed FeedEntry) (MembershipHandle, error) {
 	baseID, baseWords := base.stored()
 	state := s.membershipState()
-	interned, err := internAddedBit(s, &state, baseID, baseWords, feed.index)
+	interned, err := internAddedBit(s, &state, baseID, baseWords, feed.Index)
 	if err != nil {
-		return membershipHandle{}, err
+		return MembershipHandle{}, err
 	}
 	if err := s.trackNewMembership(interned); err != nil {
-		return membershipHandle{}, err
+		return MembershipHandle{}, err
 	}
 	s.storeMembershipState(state)
 	return handleFromInterned(interned), nil
@@ -230,14 +230,20 @@ func (s *DraftStore) addFeedToMembership(base membershipHandle, feed feedEntry) 
 // range root/count commit only after the walk succeeds. The checkpoint
 // runs before every cell combination (Rust apply_membership calls the
 // checkpoint inside the transform closure).
-func (s *DraftStore) applyMembership(from, to tree.Key, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
 	family, err := s.rangeFamily()
 	if err != nil {
 		return false, err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	memberID, memberWords := member.stored()
 	changed, err := rangeTransform(ctx, from, to, func(store RangeStore, value optionalValue) (optionalValue, error) {
 		if err := check(); err != nil {
@@ -256,21 +262,21 @@ func (s *DraftStore) applyMembership(from, to tree.Key, member membershipHandle,
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }
 
 // applyMembershipV4 applies one membership operation over an inclusive
 // IPv4 interval (Rust DraftStore::apply_membership_v4).
-func (s *DraftStore) applyMembershipV4(from, to uint32, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+func (s *DraftStore) applyMembershipV4(from, to uint32, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
 	return s.applyMembership(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, member, operation, check)
 }
 
 // applyMembershipV6 applies one membership operation over an inclusive
 // IPv6 interval (Rust DraftStore::apply_membership_v6).
-func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
 	return s.applyMembership(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, member, operation, check)
 }
 
@@ -279,11 +285,11 @@ func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member
 // DraftStore::delete_current_feed_membership_cancellable): the member
 // bitmap is interned, subtracted from the whole family range through the
 // authoritative transform, and only then is the catalog entry removed.
-func (s *DraftStore) deleteCurrentFeedMembership(feed feedEntry, check func() error) error {
+func (s *DraftStore) deleteCurrentFeedMembership(feed FeedEntry, check func() error) error {
 	if err := check(); err != nil {
 		return err
 	}
-	member, err := s.addFeedToMembership(emptyMembershipHandle(), feed)
+	member, err := s.addFeedToMembership(EmptyMembershipHandle(), feed)
 	if err != nil {
 		return err
 	}
@@ -295,7 +301,7 @@ func (s *DraftStore) deleteCurrentFeedMembership(feed feedEntry, check func() er
 		maximum.Hi = ^uint64(0)
 		maximum.Lo = ^uint64(0)
 	}
-	if _, err := s.applyMembership(minimum, maximum, member, membershipDifference, check); err != nil {
+	if _, err := s.applyMembership(minimum, maximum, member, MembershipDifference, check); err != nil {
 		return err
 	}
 	if err := check(); err != nil {

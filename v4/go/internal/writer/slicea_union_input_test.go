@@ -31,37 +31,49 @@ func readWorkflowTree(t *testing.T, store *DraftStore) []rangeRecord {
 // workflow coverage tree, untracked (Rust push_private_untracked with
 // an explicit value; DraftStore::add_feed_coverage hardcodes value 1,
 // the coverage tests need the Rust vectors' values).
-func pushWorkflowCoverage(store *DraftStore, input *unionInput, from, to tree.Key, value uint32) error {
+func pushWorkflowCoverage(store *DraftStore, input *UnionInput, from, to tree.Key, value uint32) error {
 	family, err := store.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := store.draft.workflowRangeRoot
-	count := store.draft.workflowRangeCount
-	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	store.rangeRoot = store.draft.workflowRangeRoot
+	store.rangeCount = store.draft.workflowRangeCount
+	ctx := &store.rangeCtx
+	ctx.family = family
+	ctx.store = store
+	ctx.untracked = false
+	ctx.root = &store.rangeRoot
+	ctx.count = &store.rangeCount
+	ctx.scratch = &store.rangeScratch
 	if _, err := pushPrivateUntracked(ctx, from, to, value, input); err != nil {
 		return err
 	}
-	store.draft.workflowRangeRoot = root
-	store.draft.workflowRangeCount = count
+	store.draft.workflowRangeRoot = store.rangeRoot
+	store.draft.workflowRangeCount = store.rangeCount
 	return nil
 }
 
 // finishWorkflowInput seals the pending coverage input (Rust
 // finish_input_untracked / DraftStore::finish_feed_coverage).
-func finishWorkflowInput(store *DraftStore, input *unionInput) error {
+func finishWorkflowInput(store *DraftStore, input *UnionInput) error {
 	family, err := store.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := store.draft.workflowRangeRoot
-	count := store.draft.workflowRangeCount
-	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	store.rangeRoot = store.draft.workflowRangeRoot
+	store.rangeCount = store.draft.workflowRangeCount
+	ctx := &store.rangeCtx
+	ctx.family = family
+	ctx.store = store
+	ctx.untracked = false
+	ctx.root = &store.rangeRoot
+	ctx.count = &store.rangeCount
+	ctx.scratch = &store.rangeScratch
 	if _, err := finishInputUntracked(ctx, input); err != nil {
 		return err
 	}
-	store.draft.workflowRangeRoot = root
-	store.draft.workflowRangeCount = count
+	store.draft.workflowRangeRoot = store.rangeRoot
+	store.draft.workflowRangeCount = store.rangeCount
 	return nil
 }
 
@@ -76,7 +88,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 	const space = 512
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	random := uint32(0x243f6a88)
 	var expected [space]bool
 	for operation := 0; operation < 2000; operation++ {
@@ -133,7 +145,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 func TestUnionInputRebridgesGap(t *testing.T) {
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	for _, interval := range [][2]uint32{{35, 45}, {15, 32}, {30, 38}} {
 		if err := pushWorkflowCoverage(store, &input, key4(interval[0]), key4(interval[1]), 1); err != nil {
 			t.Fatal(err)
@@ -162,7 +174,7 @@ func TestUnionInputOrderedNormalizesToSingleInterval(t *testing.T) {
 	const inputs = 2000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	for key := uint32(0); key < inputs; key++ {
 		if err := pushWorkflowCoverage(store, &input, key4(key), key4(key), 42); err != nil {
 			t.Fatal(err)
@@ -200,7 +212,7 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 	for _, family := range []uint8{format.AddressFamilyIPv4, format.AddressFamilyIPv6} {
 		path := createValueDB(t, family, format.ValueKindMembership, 0, feedsTag)
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-		input := newUnionInput(family, format.ValueKindMembership, 256*1024)
+		input := NewUnionInput(family, format.ValueKindMembership, 256*1024)
 		intervals := [][2]uint64{{0, 1}, {4, 5}, {8, 9}, {2, 10}, {20, 21}}
 		for _, interval := range intervals {
 			var from, to tree.Key
@@ -254,14 +266,14 @@ func TestUnionInputEmptyMapUnorderedRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.beginEmptyMapFeed(); err != nil {
 		t.Fatal(err)
 	}
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	for _, interval := range [][2]uint32{{35, 45}, {15, 32}, {30, 38}} {
 		if err := store.addEmptyMapFeedRange(key4(interval[0]), key4(interval[1]), member, &input); err != nil {
 			t.Fatal(err)

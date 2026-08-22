@@ -23,8 +23,12 @@ type RangeStore interface {
 	RangeRecordRemoved(value uint32) error
 }
 
-// rangeCtx carries the mutable range-tree state of one draft (the Rust
-// range_mutation function parameters: store, root, record_count).
+// rangeCtx carries the mutable range-tree state of one draft operation
+// (the Rust range_mutation function parameters: store, root,
+// record_count). The draft store owns one context and every entry point
+// resets it before the operation: the context holds interface fields
+// whose method calls escape a stack context, so a per-record context
+// would allocate once per record.
 type rangeCtx struct {
 	family rangeFamily
 	store  RangeStore
@@ -34,19 +38,17 @@ type rangeCtx struct {
 	// operation (Rust Untracked wrapper): coverage ranges are internal
 	// to one workflow and never account membership refcounts. One flag
 	// replaces the per-record wrapper context of the coverage input
-	// path. Every untracked entry point builds a fresh context and
-	// marks it before the first operation; a marked context must never
-	// be reused for a tracked operation (the flag would silently skip
-	// membership accounting).
+	// path. Every entry point resets the flag before the operation and
+	// the untracked entry points mark it before the first operation; a
+	// marked context must never be reused for a tracked operation
+	// without resetting the flag (it would silently skip membership
+	// accounting).
 	untracked bool
-	// encodeScratch owns the fixed-size encode targets of this draft
-	// operation (Rust EncodedRange locals). The generic rangeFamily
-	// interface makes stack targets escape; a draft is single-threaded
-	// and every tree call copies a record into the mapped page before
-	// the next encode reuses a slot. Slot 0 serves the one-record
-	// paths; the up to three cells of one leaf replacement use slots
-	// 0..2 (Rust replace_strictly_inside).
-	encodeScratch [3][format.RangeRecordV6Size]byte
+	// scratch borrows the draft-owned range encode targets (Rust
+	// EncodedRange locals): the generic rangeFamily interface makes
+	// stack targets escape, so the context points at the DraftStore
+	// array allocated once per draft, never per record.
+	scratch *[3][format.RangeRecordV6Size]byte
 }
 
 // change is one requested range rewrite (Rust Change).
@@ -60,10 +62,10 @@ type change struct {
 // and returns the valid byte view (Rust EncodedRange::new). The view
 // stays valid until the next encode reuses the same slot.
 func (ctx *rangeCtx) encodeRecord(slot int, r rangeRecord) ([]byte, error) {
-	if slot < 0 || slot >= len(ctx.encodeScratch) {
+	if slot < 0 || slot >= len(ctx.scratch) {
 		return nil, corrupt("range encode slot out of range")
 	}
-	output := ctx.encodeScratch[slot][:]
+	output := ctx.scratch[slot][:]
 	n, err := ctx.family.EncodeRecord(r, output)
 	if err != nil {
 		return nil, err
@@ -73,7 +75,7 @@ func (ctx *rangeCtx) encodeRecord(slot int, r rangeRecord) ([]byte, error) {
 
 // assign replaces the [from, to] interval with one value (Rust assign).
 func rangeAssign(ctx *rangeCtx, from, to tree.Key, value uint32) (bool, error) {
-	return rangeReplaceWithHint(ctx, change{from: from, to: to, value: someValue(value)}, nil)
+	return rangeReplaceWithHint(ctx, change{from: from, to: to, value: someValue(value)}, tree.LocalReject[rangeRecord]{}, false)
 }
 
 // assignPrivate inserts one range into the private tree when the physical
@@ -89,19 +91,19 @@ func rangeAssignPrivate(ctx *rangeCtx, from, to tree.Key, value uint32) (bool, e
 	case result.Inserted:
 		return true, nil
 	default:
-		return assignWithHint(ctx, r, result.Reject)
+		return assignWithHint(ctx, r, result.Reject, result.Rejected)
 	}
 }
 
 // assignWithHint completes a private assignment through a previous gap
 // rejection (Rust assign_with_hint).
-func assignWithHint(ctx *rangeCtx, r rangeRecord, hint *tree.LocalReject[rangeRecord]) (bool, error) {
-	return rangeReplaceWithHint(ctx, change{from: r.from, to: r.to, value: someValue(r.value)}, hint)
+func assignWithHint(ctx *rangeCtx, r rangeRecord, hint tree.LocalReject[rangeRecord], hasHint bool) (bool, error) {
+	return rangeReplaceWithHint(ctx, change{from: r.from, to: r.to, value: someValue(r.value)}, hint, hasHint)
 }
 
 // clear removes the [from, to] interval (Rust clear).
 func rangeClear(ctx *rangeCtx, from, to tree.Key) (bool, error) {
-	return rangeReplaceWithHint(ctx, change{from: from, to: to}, nil)
+	return rangeReplaceWithHint(ctx, change{from: from, to: to}, tree.LocalReject[rangeRecord]{}, false)
 }
 
 // retireTree retires every page of one private range tree (Rust
@@ -129,7 +131,7 @@ func rangeTransform(ctx *rangeCtx, from, to tree.Key, operation func(store Range
 			return false, err
 		}
 		if !sameOptional(value, segment.value) {
-			if _, err := rangeReplaceWithHint(ctx, change{from: cursor, to: segment.to, value: value}, nil); err != nil {
+			if _, err := rangeReplaceWithHint(ctx, change{from: cursor, to: segment.to, value: value}, tree.LocalReject[rangeRecord]{}, false); err != nil {
 				return false, err
 			}
 			changed = true
@@ -174,22 +176,13 @@ func segmentAt(ctx *rangeCtx, from, to tree.Key) (*segment, error) {
 	return &segment{to: to}, nil
 }
 
-// rangeReplace rewrites the [from, to] interval with value (Rust replace).
-func rangeReplace(ctx *rangeCtx, from, to tree.Key, hints ...*tree.LocalReject[rangeRecord]) (bool, error) {
-	var hint *tree.LocalReject[rangeRecord]
-	if len(hints) > 0 {
-		hint = hints[0]
-	}
-	return rangeReplaceWithHint(ctx, change{from: from, to: to}, hint)
-}
-
-func rangeReplaceWithHint(ctx *rangeCtx, change change, hint *tree.LocalReject[rangeRecord]) (bool, error) {
+func rangeReplaceWithHint(ctx *rangeCtx, change change, hint tree.LocalReject[rangeRecord], hasHint bool) (bool, error) {
 	if change.to.Less(change.from) {
 		return false, invalid("range start is after its end")
 	}
 	var predecessor rangeRecord
 	var hasPredecessor bool
-	if hint != nil {
+	if hasHint {
 		if pred, ok := hint.Predecessor(); ok {
 			predecessor = pred
 			hasPredecessor = true
@@ -199,7 +192,7 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint *tree.LocalReject[r
 			if err != nil {
 				return false, err
 			}
-			hint = nil
+			hasHint = false
 		}
 	} else {
 		var err error
@@ -212,7 +205,7 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint *tree.LocalReject[r
 		return false, nil
 	}
 	if hasPredecessor && predecessor.from.Less(change.from) && change.to.Less(predecessor.to) {
-		return replaceStrictlyInside(ctx, predecessor, change, hint)
+		return replaceStrictlyInside(ctx, predecessor, change, hint, hasHint)
 	}
 	rewrite, err := trimPredecessor(ctx, predecessor, hasPredecessor, change.from, change.to)
 	if err != nil {
@@ -226,7 +219,7 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint *tree.LocalReject[r
 
 // replaceStrictlyInside replaces one range strictly inside an existing
 // range with up to three records (Rust replace_strictly_inside).
-func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *tree.LocalReject[rangeRecord]) (bool, error) {
+func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint tree.LocalReject[rangeRecord], hasHint bool) (bool, error) {
 	leftPrevious, ok := ctx.family.Previous(change.from)
 	if !ok {
 		return false, corrupt("range rewrite does not advance")
@@ -254,12 +247,12 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	switch {
 	case change.value.present:
 		cells := [][]byte{left, middle, right}
-		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
+		if err := replaceStrictCells(ctx, old.from, cells, hint, hasHint, &retired); err != nil {
 			return false, err
 		}
 	default:
 		cells := [][]byte{left, right}
-		if err := replaceStrictCells(ctx, old.from, cells, hint, &retired); err != nil {
+		if err := replaceStrictCells(ctx, old.from, cells, hint, hasHint, &retired); err != nil {
 			return false, err
 		}
 	}
@@ -296,8 +289,8 @@ func replaceStrictlyInside(ctx *rangeCtx, old rangeRecord, change change, hint *
 	return true, nil
 }
 
-func replaceStrictCells(ctx *rangeCtx, oldKey tree.Key, cells [][]byte, hint *tree.LocalReject[rangeRecord], retired *tree.RetiredPages) error {
-	if hint != nil {
+func replaceStrictCells(ctx *rangeCtx, oldKey tree.Key, cells [][]byte, hint tree.LocalReject[rangeRecord], hasHint bool, retired *tree.RetiredPages) error {
+	if hasHint {
 		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.store, ctx.root, hint, oldKey, cells)
 	}
 	r, err := tree.ReplaceLeafWith(ctx.family, ctx.store, ctx.root, oldKey, cells, *retired)
@@ -488,9 +481,8 @@ func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert[rangeRecor
 	if err != nil {
 		return tree.LocalInsert[rangeRecord]{}, err
 	}
-	var gap privateGap
-	gap.init(ctx.family, r)
-	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, cell, tree.RetiredPages{}, &gap)
+	gap := privateGap{family: ctx.family, r: r}
+	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, cell, tree.RetiredPages{}, gap)
 	if err != nil {
 		return tree.LocalInsert[rangeRecord]{}, err
 	}
@@ -507,7 +499,7 @@ func insertPrivateGap(ctx *rangeCtx, r rangeRecord) (tree.LocalInsert[rangeRecor
 
 // insertPrivateRejected completes a rejected private gap insertion after
 // the caller proved the external sides (Rust insert_private_rejected).
-func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected *tree.LocalReject[rangeRecord]) (tree.PrivatePosition, bool, error) {
+func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected tree.LocalReject[rangeRecord]) (tree.PrivatePosition, bool, error) {
 	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		return tree.PrivatePosition{}, false, err
@@ -570,22 +562,22 @@ type privateGap struct {
 	r      rangeRecord
 }
 
-func (g *privateGap) init(family rangeFamily, r rangeRecord) {
-	g.family = family
-	g.r = r
-}
-
-func (g *privateGap) decode(cell []byte) (rangeRecord, error) {
+func (g privateGap) decode(cell []byte) (rangeRecord, error) {
 	return g.family.ReadLeaf(cell)
 }
 
-func (g *privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, rangeRecord, error) {
+// Previous implements the non-generic LocalGap probe by value: the
+// decision needs the decoded record, but the interface returns the raw
+// probing cell so the generic tree selector can decode it once into the
+// reject value. The interface stays non-generic so the box lives on the
+// stack and a gap probe never allocates.
+func (g privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, []byte, error) {
 	if cell == nil {
-		return tree.LocalPreviousAccept, rangeRecord{}, nil
+		return tree.LocalPreviousAccept, nil, nil
 	}
 	previous, err := g.decode(cell)
 	if err != nil {
-		return 0, rangeRecord{}, err
+		return 0, nil, err
 	}
 	bridges := false
 	if next, ok := g.family.Next(previous.to); ok {
@@ -593,27 +585,27 @@ func (g *privateGap) Previous(exact bool, cell []byte) (tree.LocalPrevious, rang
 	}
 	if exact || !previous.to.Less(g.r.from) ||
 		(previous.value == g.r.value && bridges) {
-		return tree.LocalPreviousReject, previous, nil
+		return tree.LocalPreviousReject, cell, nil
 	}
-	return tree.LocalPreviousAccept, rangeRecord{}, nil
+	return tree.LocalPreviousAccept, nil, nil
 }
 
-func (g *privateGap) Next(cell []byte) (tree.LocalNext, rangeRecord, error) {
+func (g privateGap) Next(cell []byte) (tree.LocalNext, []byte, error) {
 	if cell == nil {
-		return tree.LocalNextAccept, rangeRecord{}, nil
+		return tree.LocalNextAccept, nil, nil
 	}
 	next, err := g.decode(cell)
 	if err != nil {
-		return 0, rangeRecord{}, err
+		return 0, nil, err
 	}
 	bridges := false
 	if boundary, ok := g.family.Next(g.r.to); ok {
 		bridges = boundary.Equal(next.from)
 	}
 	if g.r.to.Less(next.from) && (next.value != g.r.value || !bridges) {
-		return tree.LocalNextAccept, rangeRecord{}, nil
+		return tree.LocalNextAccept, nil, nil
 	}
-	return tree.LocalNextReject, next, nil
+	return tree.LocalNextReject, cell, nil
 }
 
 // addCount adds n to the record count with overflow failure (Rust
@@ -651,6 +643,6 @@ func rangeAssignPrivateInput(ctx *rangeCtx, from, to tree.Key, value uint32, inp
 	case result.inserted:
 		return true, nil
 	default:
-		return assignWithHint(ctx, r, result.reject)
+		return assignWithHint(ctx, r, result.reject, result.rejected)
 	}
 }

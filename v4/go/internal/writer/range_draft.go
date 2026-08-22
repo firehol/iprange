@@ -29,9 +29,15 @@ func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	var changed bool
 	if s.draft.rangeTreePrivate {
 		changed, err = rangeAssignPrivate(ctx, from, to, value)
@@ -41,8 +47,8 @@ func (s *DraftStore) assign(from, to tree.Key, value uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }
@@ -52,15 +58,21 @@ func (s *DraftStore) clear(from, to tree.Key) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	changed, err := rangeClear(ctx, from, to)
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }
@@ -118,40 +130,52 @@ func (s *DraftStore) RangeRecordRemoved(value uint32) error {
 // range is internal to one exact workflow (empty-map feeds, timestamp
 // refreshes); the value accounting is untracked and the changed flag
 // still marks the draft.
-func (s *DraftStore) addPrivateConstantRange(from, to tree.Key, value uint32, input *unionInput) error {
+func (s *DraftStore) addPrivateConstantRange(from, to tree.Key, value uint32, input *UnionInput) error {
 	family, err := s.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	changed, err := pushPrivateUntracked(ctx, from, to, value, input)
 	if err != nil {
 		return err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return nil
 }
 
 // finishPrivateConstantRanges seals one untracked constant-range input
 // (Rust DraftStore::finish_private_constant_ranges).
-func (s *DraftStore) finishPrivateConstantRanges(input *unionInput) error {
+func (s *DraftStore) finishPrivateConstantRanges(input *UnionInput) error {
 	family, err := s.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	changed, err := finishInputUntracked(ctx, input)
 	if err != nil {
 		return err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return nil
 }
@@ -168,15 +192,21 @@ func (s *DraftStore) assignInput(from, to tree.Key, value uint32, input *private
 	if err != nil {
 		return false, err
 	}
-	root := s.draft.meta.RangeRoot
-	count := s.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.meta.RangeRoot
+	s.rangeCount = s.draft.meta.RangeRecordCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	changed, err := rangeAssignPrivateInput(ctx, from, to, value, input)
 	if err != nil {
 		return false, err
 	}
-	s.draft.meta.RangeRoot = root
-	s.draft.meta.RangeRecordCount = count
+	s.draft.meta.RangeRoot = s.rangeRoot
+	s.draft.meta.RangeRecordCount = s.rangeCount
 	s.draft.changed = s.draft.changed || changed
 	return changed, nil
 }

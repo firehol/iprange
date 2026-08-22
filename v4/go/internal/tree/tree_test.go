@@ -175,7 +175,8 @@ func lookupU32(m *memoryStore, root uint32, key uint32) (uint32, bool, error) {
 		return 0, false, nil
 	}
 	pageNumber := root
-	var expectedLevel *uint16
+	var expectedLevel uint16
+	checkLevel := false
 	for {
 		var value uint32
 		found := false
@@ -184,7 +185,7 @@ func lookupU32(m *memoryStore, root uint32, key uint32) (uint32, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		header, err := parse(u32Codec{}, page, m.TargetTxn(), expectedLevel)
+		header, err := parse(u32Codec{}, page, m.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
 			return 0, false, err
 		}
@@ -211,11 +212,8 @@ func lookupU32(m *memoryStore, root uint32, key uint32) (uint32, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		level := uint16(0)
-		if expectedLevel != nil {
-			level = *expectedLevel
-		}
-		expectedLevel = &level
+		expectedLevel = header.Level - 1
+		checkLevel = true
 		pageNumber = child
 	}
 }
@@ -302,7 +300,7 @@ func TestOneShotReadsVisitEachPathPageOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil)
+	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +378,7 @@ func TestFixedSearchRejectsForgedPageShape(t *testing.T) {
 	if _, _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
-	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil)
+	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +394,7 @@ func TestFixedSearchChecksEachPersistentSlotExtent(t *testing.T) {
 	if _, _, err := Insert(u32Codec{}, m, &root, u32Record(1, 1), RetiredPages{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil); err != nil {
+	if _, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), 0, false); err != nil {
 		t.Fatal(err)
 	}
 	format.PutU16(m.pages[root][format.SlottedHeaderSize:], 0)
@@ -518,7 +516,7 @@ func TestBranchSplitsCreateAndSearchThreeLevelTree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	header, err := parse(wideCodec{}, m.pages[root][:], m.TargetTxn(), nil)
+	header, err := parse(wideCodec{}, m.pages[root][:], m.TargetTxn(), 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

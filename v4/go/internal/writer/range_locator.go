@@ -193,7 +193,7 @@ func (p *privateInput) release() {
 
 // noteRejection adapts the probe policy after one rejected local probe
 // (Rust PrivateInput::note_rejection).
-func (p *privateInput) noteRejection(rejected *tree.LocalReject[rangeRecord]) {
+func (p *privateInput) noteRejection(rejected tree.LocalReject[rangeRecord]) {
 	p.locator.clear()
 	if !p.adaptive {
 		return
@@ -224,7 +224,8 @@ func (p *privateInput) noteRejection(rejected *tree.LocalReject[rangeRecord]) {
 // rejected with the positioned proof for the caller's merge.
 type privateInputInsert struct {
 	inserted bool
-	reject   *tree.LocalReject[rangeRecord]
+	reject   tree.LocalReject[rangeRecord]
+	rejected bool
 }
 
 // insertPrivateInputGap inserts one range through the locator input when
@@ -243,7 +244,7 @@ func insertPrivateInputGap(ctx *rangeCtx, r rangeRecord, input *privateInput) (p
 		if result.Inserted {
 			return privateInputInsert{inserted: true}, nil
 		}
-		return privateInputInsert{reject: result.Reject}, nil
+		return privateInputInsert{reject: result.Reject, rejected: true}, nil
 	}
 	locatorEnabled := input.locator.enabled()
 	probe, err := probeCached(ctx, r, input)
@@ -272,7 +273,7 @@ func insertPrivateInputGap(ctx *rangeCtx, r rangeRecord, input *privateInput) (p
 		return privateInputInsert{inserted: true}, nil
 	}
 	input.noteRejection(result.Reject)
-	return privateInputInsert{reject: result.Reject}, nil
+	return privateInputInsert{reject: result.Reject, rejected: true}, nil
 }
 
 // cachedProbe is the outcome of one cached-leaf probe (Rust CachedProbe:
@@ -300,9 +301,8 @@ func probeCached(ctx *rangeCtx, r rangeRecord, input *privateInput) (cachedProbe
 	if err != nil {
 		return cachedProbe{}, err
 	}
-	var gap privateGap
-	gap.init(ctx.family, r)
-	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, cell, &gap)
+	gap := privateGap{family: ctx.family, r: r}
+	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, cell, gap)
 	if err != nil {
 		return cachedProbe{}, err
 	}

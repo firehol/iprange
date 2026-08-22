@@ -26,7 +26,7 @@ func TestDraftFeedCatalogEnsureInsertLookup(t *testing.T) {
 	if !created {
 		t.Fatal("first ensure did not create")
 	}
-	if entry.name != "alpha" || entry.index != 0 {
+	if entry.Name != "alpha" || entry.Index != 0 {
 		t.Fatalf("first entry = %+v, want alpha@0", entry)
 	}
 	if draft.meta.ActiveFeedCount != 1 || draft.meta.FeedIndexLimit != 1 {
@@ -43,7 +43,7 @@ func TestDraftFeedCatalogEnsureInsertLookup(t *testing.T) {
 	if created {
 		t.Fatal("second ensure created again")
 	}
-	if entry.name != "alpha" || entry.index != 0 {
+	if entry.Name != "alpha" || entry.Index != 0 {
 		t.Fatalf("reused entry = %+v, want alpha@0", entry)
 	}
 
@@ -51,7 +51,7 @@ func TestDraftFeedCatalogEnsureInsertLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created || entry.index != 1 {
+	if !created || entry.Index != 1 {
 		t.Fatalf("beta = %+v created %v, want beta@1 created", entry, created)
 	}
 	if draft.meta.ActiveFeedCount != 2 {
@@ -62,7 +62,7 @@ func TestDraftFeedCatalogEnsureInsertLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || found.index != 1 {
+	if !ok || found.Index != 1 {
 		t.Fatalf("lookup beta = %+v ok %v, want index 1", found, ok)
 	}
 	if _, ok, err := store.lookupFeed("gamma"); err != nil {
@@ -97,7 +97,7 @@ func TestDraftFeedCatalogInvalidNameRefused(t *testing.T) {
 	}
 	if entry, ok, err := store.lookupFeed(""); err != nil {
 		t.Fatal(err)
-	} else if ok || entry.name != "" {
+	} else if ok || entry.Name != "" {
 		t.Fatal("invalid name reported found")
 	}
 }

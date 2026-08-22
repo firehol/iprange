@@ -261,7 +261,7 @@ func FirstKey[T any](codec Codec[T], store Store, pageNumber uint32, level uint1
 	if err != nil {
 		return Key{}, err
 	}
-	header, err := parse(codec, page, targetTxn, &level)
+	header, err := parse(codec, page, targetTxn, level, true)
 	if err != nil {
 		return Key{}, err
 	}
@@ -354,7 +354,7 @@ func insertBranch[T any](codec Codec[T], store Store, frame Frame, leftFirst Key
 	if err != nil {
 		return branchSplit{}, false, err
 	}
-	header, err := parse(codec, page, targetTxn, nil)
+	header, err := parse(codec, page, targetTxn, 0, false)
 	if err != nil {
 		return branchSplit{}, false, err
 	}
@@ -414,7 +414,7 @@ func applyCells[T any](codec Codec[T], page []byte, header *Header, index int, c
 		return corrupt("B+tree replacement no longer fits")
 	}
 	for offset, cell := range cells[1:] {
-		current, err := parse(codec, page, ^uint64(0), &header.Level)
+		current, err := parse(codec, page, ^uint64(0), header.Level, true)
 		if err != nil {
 			return err
 		}
@@ -565,7 +565,7 @@ func replaceFirstBranch[T any](codec Codec[T], store Store, frame Frame, key Key
 	if err != nil {
 		return branchSplit{}, false, err
 	}
-	header, err := parse(codec, page, targetTxn, nil)
+	header, err := parse(codec, page, targetTxn, 0, false)
 	if err != nil {
 		return branchSplit{}, false, err
 	}
@@ -647,13 +647,15 @@ type existingLeafPosition struct {
 // no address-taken stack value crosses an indirect call.
 func MutateLeafU64[T any](codec Codec[T], store Store, root *uint32, key Key, fieldOffset int, retired RetiredPages, decide func(T) (LeafU64Mutation, error)) (RetiredPages, T, error) {
 	var zero T
-	leaf, retired, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header Header, _ Path) (existingLeaf[T], error) {
-		return existingLeafAt(codec, page, &header, key)
-	})
+	leaf, retired, err := privatePathSelect(codec, store, root, key, retired)
 	if err != nil {
 		return RetiredPages{}, zero, err
 	}
-	found := leaf.Selection
+	header := leaf.Header
+	found, err := existingLeafAt(codec, leaf.Page, &header, key)
+	if err != nil {
+		return RetiredPages{}, zero, err
+	}
 	mutation, err := decide(found.value)
 	if err != nil {
 		return RetiredPages{}, zero, err

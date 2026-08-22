@@ -65,7 +65,7 @@ func NewForwardCursor[T any](codec Codec[T], source ForwardStore, root uint32, c
 		finished:    root == 0,
 	}
 	if !cursor.finished {
-		if err := cursor.descendEdge(root, nil); err != nil {
+		if err := cursor.descendEdge(root, 0, false); err != nil {
 			return nil, err
 		}
 	}
@@ -168,8 +168,7 @@ func (c *ForwardCursor[T]) advanceLeaf() error {
 			return err
 		}
 		work.TreeDescent(1)
-		level := frame.level - 1
-		return c.descendEdge(child, &level)
+		return c.descendEdge(child, frame.level-1, true)
 	}
 	c.needsAdvance = false
 	c.finished = true
@@ -184,8 +183,7 @@ func (c *ForwardCursor[T]) inspectBranch(frame cursorFrame) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	expected := frame.level
-	header, err := parse(c.codec, page, c.selectedTxn, &expected)
+	header, err := parse(c.codec, page, c.selectedTxn, frame.level, true)
 	if err != nil {
 		return 0, err
 	}
@@ -197,13 +195,13 @@ func (c *ForwardCursor[T]) inspectBranch(frame cursorFrame) (uint32, error) {
 
 // descendEdge descends the leftmost edge from pageNumber to the first
 // leaf record, pushing every branch frame (Rust descend_edge).
-func (c *ForwardCursor[T]) descendEdge(pageNumber uint32, expectedLevel *uint16) error {
+func (c *ForwardCursor[T]) descendEdge(pageNumber uint32, expectedLevel uint16, checkLevel bool) error {
 	for {
 		page, err := c.source.Inspect(pageNumber)
 		if err != nil {
 			return err
 		}
-		header, err := parse(c.codec, page, c.selectedTxn, expectedLevel)
+		header, err := parse(c.codec, page, c.selectedTxn, expectedLevel, checkLevel)
 		if err != nil {
 			return err
 		}
@@ -226,8 +224,8 @@ func (c *ForwardCursor[T]) descendEdge(pageNumber uint32, expectedLevel *uint16)
 			return err
 		}
 		pageNumber = child
-		level := header.Level - 1
-		expectedLevel = &level
+		expectedLevel = header.Level - 1
+		checkLevel = true
 		work.TreeDescent(1)
 	}
 }

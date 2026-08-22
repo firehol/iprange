@@ -249,10 +249,10 @@ func insertCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, inde
 // first, then index; either deletion is structural because the entry was
 // proven current (Rust feed_catalog::mutation::delete). Every committed
 // page COW-ed by the deletions is retired through the store.
-func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, entry feedEntry) error {
+func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, entry FeedEntry) error {
 	var retired tree.RetiredPages
 	var err error
-	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(entry.name)), retired)
+	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(entry.Name)), retired)
 	if err != nil {
 		return err
 	}
@@ -260,7 +260,7 @@ func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, e
 		return err
 	}
 	retired = tree.RetiredPages{}
-	retired, err = tree.DeleteExisting(indexCodec{}, store, indexRoot, tree.Key{Hi: uint64(entry.index)}, retired)
+	retired, err = tree.DeleteExisting(indexCodec{}, store, indexRoot, tree.Key{Hi: uint64(entry.Index)}, retired)
 	if err != nil {
 		return err
 	}
@@ -272,18 +272,18 @@ func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, e
 // feed_catalog::mutation::rename): the old name is deleted, the renamed
 // record is inserted under the new name, and the index tree must already
 // hold the record (the rename never moves the index).
-func renameCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, indexRoot *uint32, old feedEntry, newName string) error {
+func renameCatalogEntry(store tree.RetiringStore, scratch []byte, nameRoot, indexRoot *uint32, old FeedEntry, newName string) error {
 	var retired tree.RetiredPages
 	var err error
-	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(old.name)), retired)
+	retired, err = tree.DeleteExisting(nameCodec{}, store, nameRoot, tree.VarKey([]byte(old.Name)), retired)
 	if err != nil {
 		return err
 	}
 	if err := store.RetirePages(retired); err != nil {
 		return err
 	}
-	renamed := feedEntry{name: newName, index: old.index}
-	length, err := encodeCatalogRecord(renamed.name, renamed.index, scratch)
+	renamed := FeedEntry{Name: newName, Index: old.Index}
+	length, err := encodeCatalogRecord(renamed.Name, renamed.Index, scratch)
 	if err != nil {
 		return err
 	}

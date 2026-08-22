@@ -316,3 +316,55 @@ func TestZeroAllocationLookups(t *testing.T) {
 		}
 	})
 }
+
+// TestZeroAllocationFeedSliceIngestion mirrors the Rust
+// slice_ingestion_and_feed_comparison_allocate_nothing_per_record
+// thread-allocation pin on the public writer surface: each 1000-record
+// AddRangesV4 batch over the mmap-backed private draft must allocate
+// zero Go heap bytes (the coverage tree grows only mapped pages). The
+// warm batch starts the ordered-prefix builder and every measured batch
+// continues the strictly ascending stream, exactly like the Rust test
+// measures the first slice of a fresh workflow: re-adding the same
+// ranges would wrap around, prove the input unordered, and legitimately
+// charge the general input's one-time locator, so the measured stream
+// never wraps.
+func TestZeroAllocationFeedSliceIngestion(t *testing.T) {
+	path := testFeedMembership(t)
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	create, err := w.BeginCreateFeed(feedName(t, "feed"), NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := create.AddRangesV4(feedRanges1000()); err != nil {
+		t.Fatal(err)
+	}
+	// 51 continuation batches of 1000 strictly ascending records (one
+	// extra for the AllocsPerRun warmup); the first record of batch b
+	// follows the last record of batch b-1 with the same two-address
+	// stride as the warm batch.
+	const runs = 50
+	batches := make([][]AddressRange4, runs+1)
+	for b := range batches {
+		batches[b] = make([]AddressRange4, 1000)
+		for i := range batches[b] {
+			index := (1000 + b*1000 + i) * 2
+			batches[b][i] = AddressRange4{From: IPv4(index), To: IPv4(index)}
+		}
+	}
+	run := 0
+	if allocs := testing.AllocsPerRun(runs, func() {
+		if err := create.AddRangesV4(batches[run]); err != nil {
+			t.Fatal(err)
+		}
+		run++
+	}); allocs != 0 {
+		t.Fatalf("feed slice ingestion allocates %v objects per batch, want 0", allocs)
+	}
+	if err := w.Abort(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -130,6 +130,13 @@ func newRangeBulkBuilder(bornTxn uint64, valueKind, family uint8) *rangeBulkBuil
 	return &rangeBulkBuilder{bornTxn: bornTxn, valueKind: valueKind, family: family}
 }
 
+// init starts one ordered range tree builder in place (Rust
+// Builder::new): the coverage ordered prefix embeds its builder so the
+// per-workflow ordered path never allocates.
+func (b *rangeBulkBuilder) init(bornTxn uint64, valueKind, family uint8) {
+	*b = rangeBulkBuilder{bornTxn: bornTxn, valueKind: valueKind, family: family}
+}
+
 var errRangeNotCanonical = invalid("ordered output ranges are not canonical")
 
 // push appends one canonical range record; out-of-order or adjacent

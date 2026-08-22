@@ -57,13 +57,9 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 	}
 	index := leaf.Index
 	var following *Following[T]
-	page, err := store.Inspect(leaf.PageNumber)
-	if err != nil {
-		return RemovedRun[T]{}, err
-	}
 	end := index
 	for end < int(leaf.Header.ItemCount) {
-		cell, err := codecCell(codec, page, &leaf.Header, end)
+		cell, err := codecCell(codec, leaf.Page, &leaf.Header, end)
 		if err != nil {
 			return RemovedRun[T]{}, err
 		}
@@ -89,7 +85,7 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 		return RemovedRun[T]{Removed: 0, Following: following}, nil
 	}
 	if following == nil {
-		if adjacent, found, err := adjacentLeaf(codec, store, &leaf.Path, AdjacentAfter); err != nil {
+		if adjacent, found, err := adjacentLeaf(codec, store, leaf.Path, AdjacentAfter); err != nil {
 			return RemovedRun[T]{}, err
 		} else if found {
 			following = &Following[T]{Key: adjacent.key, Leaf: adjacent.leaf}
@@ -178,7 +174,7 @@ func removeEmptyChild[T any](codec Codec[T], store Store, root *uint32, path *Pa
 		if err != nil {
 			return err
 		}
-		header, err := parse(codec, page, targetTxn, nil)
+		header, err := parse(codec, page, targetTxn, 0, false)
 		if err != nil {
 			return err
 		}
@@ -208,7 +204,7 @@ func removeEmptyChild[T any](codec Codec[T], store Store, root *uint32, path *Pa
 			if err != nil {
 				return err
 			}
-			output, err := parse(codec, page, targetTxn, &header.Level)
+			output, err := parse(codec, page, targetTxn, header.Level, true)
 			if err != nil {
 				return err
 			}

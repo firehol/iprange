@@ -42,12 +42,17 @@ func (p *Path) Frame(index int) Frame { return p.frames[index] }
 func (p *Path) Slice() []Frame { return p.frames[:p.depth] }
 
 // PrivateLeaf is the outcome of a COW descent: the private leaf page, its
-// header, the descent path, and the leaf selection. It is a value; the
-// caller moves it (Rust returns the same struct by value).
+// parsed header, the descent path, and the leaf selection. Page is the
+// leaf view the descent already inspected: carrying it avoids a second
+// page inspection after the descent (Rust returns the inspected page
+// view inside the same struct). Page stays valid until the caller
+// mutates the tree; a page re-inspection is required only before an
+// Update. It is a value; the caller moves it.
 type PrivateLeaf struct {
 	Path       Path
 	PageNumber uint32
 	Header     Header
+	Page       []byte
 	Index      int
 	Exists     bool
 }
@@ -63,24 +68,22 @@ type PrivateLeafSelect[T any, S any] struct {
 	Selection  S
 }
 
-// leafSelector decides the leaf position during one COW descent (Rust
-// LeafSelector::select). The selector receives the page view, the parsed
-// header, and the descent path by value: only the leaf page is presented
-// and no address-taken stack value crosses the indirect call, so the
-// descent stays allocation-free. The selection runs before the leaf is
-// privatized, when the page view is still the view the store handed out
-// (a COW copy or a mapping growth never invalidates it).
-type leafSelector[S any] func(page []byte, header Header, path Path) (S, error)
-
 // privatePathSelect is the single authoritative COW root-to-leaf descent
 // (Rust private_path_select). It descends from the root, privatizing
 // every committed page along the path for the draft transaction, and
-// returns the private leaf plus the custom leaf selection.
-func privatePathSelect[T any, S any](codec Codec[T], store Store, root *uint32, key Key, retired RetiredPages, selectLeaf leafSelector[S]) (PrivateLeafSelect[T, S], RetiredPages, error) {
+// returns the private leaf (page number, parsed header, descent path,
+// and the leaf page view). The leaf selection is deliberately NOT part
+// of the descent: a generic selection callback would be instantiated
+// through go.shape interfaces, boxing the selector on every record.
+// Callers run their selection on the returned page view with concrete
+// types; the descent inspects each path page exactly once, matching the
+// Rust inspection counts.
+func privatePathSelect[T any](codec Codec[T], store Store, root *uint32, key Key, retired RetiredPages) (PrivateLeaf, RetiredPages, error) {
 	work.TreeLookup(1)
 	var path Path
 	pageNumber := *root
-	var expectedLevel *uint16
+	var expectedLevel uint16
+	checkLevel := false
 	hasParent := false
 	parentPage := uint32(0)
 	parentIndex := 0
@@ -88,86 +91,91 @@ func privatePathSelect[T any, S any](codec Codec[T], store Store, root *uint32, 
 	for {
 		page, err := store.Inspect(pageNumber)
 		if err != nil {
-			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+			return PrivateLeaf{}, RetiredPages{}, err
 		}
-		header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		header, err := parse(codec, page, store.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
-			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+			return PrivateLeaf{}, RetiredPages{}, err
 		}
 		born := format.U64(page[format.HeaderBorn:])
-		var selection S
-		var index int
-		var child uint32
-		isLeaf := header.Level == 0
-		if isLeaf {
-			selection, err = selectLeaf(page, header, path)
-			if err != nil {
-				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+		if header.Level == 0 {
+			activePage := pageNumber
+			if born != store.TargetTxn() {
+				copied, err := touch(store, pageNumber, &retired)
+				if err != nil {
+					return PrivateLeaf{}, RetiredPages{}, err
+				}
+				activePage = copied
+				if hasParent {
+					if err := replaceBranchChild(codec, store, parentPage, parentIndex, copied); err != nil {
+						return PrivateLeaf{}, RetiredPages{}, err
+					}
+				} else {
+					*root = copied
+				}
+				// The leaf moved to a fresh private page; re-inspect it.
+				// The private page view is required for the caller's
+				// selection, and the source mapping view may be a growth
+				// or COW buffer the draft no longer owns.
+				if page, err = store.Inspect(copied); err != nil {
+					return PrivateLeaf{}, RetiredPages{}, err
+				}
+				if header, err = parse(codec, page, store.TargetTxn(), expectedLevel, checkLevel); err != nil {
+					return PrivateLeaf{}, RetiredPages{}, err
+				}
 			}
-		} else {
-			index, _, err = lowerBound(codec, page, &header, key, false)
-			if err != nil {
-				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
-			}
-			child, err = branchChild(codec, page, &header, index, store.PageLimit())
-			if err != nil {
-				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
-			}
+			return PrivateLeaf{Path: path, PageNumber: activePage, Header: header, Page: page}, retired, nil
 		}
-
+		index, _, err := lowerBound(codec, page, &header, key, false)
+		if err != nil {
+			return PrivateLeaf{}, RetiredPages{}, err
+		}
+		child, err := branchChild(codec, page, &header, index, store.PageLimit())
+		if err != nil {
+			return PrivateLeaf{}, RetiredPages{}, err
+		}
 		activePage := pageNumber
 		if born != store.TargetTxn() {
 			copied, err := touch(store, pageNumber, &retired)
 			if err != nil {
-				return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+				return PrivateLeaf{}, RetiredPages{}, err
 			}
 			activePage = copied
 			if hasParent {
 				if err := replaceBranchChild(codec, store, parentPage, parentIndex, copied); err != nil {
-					return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+					return PrivateLeaf{}, RetiredPages{}, err
 				}
 			} else {
 				*root = copied
 			}
 		}
-		if isLeaf {
-			return PrivateLeafSelect[T, S]{Path: path, PageNumber: activePage, Header: header, Selection: selection}, retired, nil
-		}
 		if err := path.Push(Frame{PageNumber: activePage, Index: index, ItemCount: int(header.ItemCount)}); err != nil {
-			return PrivateLeafSelect[T, S]{}, RetiredPages{}, err
+			return PrivateLeaf{}, RetiredPages{}, err
 		}
 		hasParent = true
 		parentPage = activePage
 		parentIndex = index
 		pageNumber = child
-		level := header.Level - 1
-		expectedLevel = &level
+		expectedLevel = header.Level - 1
+		checkLevel = true
 		work.TreeDescent(1)
 	}
-}
-
-// keySelection is the standard lower-bound leaf selection.
-type keySelection struct {
-	index  int
-	exists bool
 }
 
 // PrivatePath descends from the root, privatizing every committed page
 // along the path for the draft transaction, and returns the private leaf
 // plus the lower-bound selection of key (Rust private_path + KeySelector).
 func PrivatePath[T any](codec Codec[T], store Store, root *uint32, key Key, retired RetiredPages) (PrivateLeaf, RetiredPages, error) {
-	leaf, retired, err := privatePathSelect(codec, store, root, key, retired, func(page []byte, header Header, _ Path) (keySelection, error) {
-		index, exists, err := lowerBound(codec, page, &header, key, true)
-		if err != nil {
-			return keySelection{}, err
-		}
-		return keySelection{index: index, exists: exists}, nil
-	})
+	leaf, retired, err := privatePathSelect(codec, store, root, key, retired)
 	if err != nil {
 		return PrivateLeaf{}, RetiredPages{}, err
 	}
-	sel := leaf.Selection
-	return PrivateLeaf{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: sel.index, Exists: sel.exists}, retired, nil
+	header := leaf.Header
+	index, exists, err := lowerBound(codec, leaf.Page, &header, key, true)
+	if err != nil {
+		return PrivateLeaf{}, RetiredPages{}, err
+	}
+	return PrivateLeaf{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Page: leaf.Page, Index: index, Exists: exists}, retired, nil
 }
 
 // touch allocates a private copy of a committed page and records the
@@ -194,7 +202,7 @@ func replaceBranchChild[T any](codec Codec[T], store Store, pageNumber uint32, i
 	if err != nil {
 		return err
 	}
-	header, err := parse(codec, page, targetTxn, nil)
+	header, err := parse(codec, page, targetTxn, 0, false)
 	if err != nil {
 		return err
 	}

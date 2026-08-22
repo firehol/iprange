@@ -55,7 +55,7 @@ func TestFeedAddToMembershipInterning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestFeedAddToMembershipInterning(t *testing.T) {
 		t.Fatalf("single-bit member = %+v, want nonempty with one word", member)
 	}
 
-	again, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	again, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,13 +79,13 @@ func TestFeedAddToMembershipInterning(t *testing.T) {
 		t.Fatalf("combined = %+v, want a new one-word bitmap", combined)
 	}
 	var probe [2]byte
-	if err := store.selectedMembershipBits(combined.id, []uint32{alpha.index, beta.index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(combined.id, []uint32{alpha.Index, beta.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 1 || probe[1] != 1 {
 		t.Fatalf("combined bits = %v %v, want both feeds present", probe[0], probe[1])
 	}
-	if err := store.selectedMembershipBits(member.id, []uint32{alpha.index, beta.index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(member.id, []uint32{alpha.Index, beta.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 1 || probe[1] != 0 {
@@ -113,7 +113,7 @@ func TestInternAddedBitMissingAndChangedReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestInternAddedBitMissingAndChangedReferences(t *testing.T) {
 	}
 	// A base bitmap that already contains the bit returns the base
 	// record unchanged.
-	reused, err := internAddedBit(store, &state, member.id, member.wordCount, alpha.index)
+	reused, err := internAddedBit(store, &state, member.id, member.wordCount, alpha.Index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +157,8 @@ func TestFeedCatalogRenameAndRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if renamed.name != "gamma" || renamed.index != alpha.index {
-		t.Fatalf("renamed = %+v, want gamma@%d", renamed, alpha.index)
+	if renamed.Name != "gamma" || renamed.Index != alpha.Index {
+		t.Fatalf("renamed = %+v, want gamma@%d", renamed, alpha.Index)
 	}
 	if _, found, err := store.lookupFeed("alpha"); err != nil {
 		t.Fatal(err)
@@ -167,8 +167,8 @@ func TestFeedCatalogRenameAndRemoveLifecycle(t *testing.T) {
 	}
 	if found, ok, err := store.lookupFeed("gamma"); err != nil {
 		t.Fatal(err)
-	} else if !ok || found.index != alpha.index {
-		t.Fatalf("renamed lookup = %+v ok %v, want index %d", found, ok, alpha.index)
+	} else if !ok || found.Index != alpha.Index {
+		t.Fatalf("renamed lookup = %+v ok %v, want index %d", found, ok, alpha.Index)
 	}
 
 	if _, err := store.renameCurrentFeed(beta, "gamma"); err == nil {
@@ -193,8 +193,8 @@ func TestFeedCatalogRenameAndRemoveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created || delta.index != beta.index {
-		t.Fatalf("reused hole = %+v created %v, want index %d", delta, created, beta.index)
+	if !created || delta.Index != beta.Index {
+		t.Fatalf("reused hole = %+v created %v, want index %d", delta, created, beta.Index)
 	}
 	if draft.meta.ActiveFeedCount != 2 {
 		t.Fatalf("active feed count after reuse = %d, want 2", draft.meta.ActiveFeedCount)
@@ -224,14 +224,14 @@ func TestFeedMergeEmptyMapSpliceStaysUntracked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.beginEmptyMapFeed(); err != nil {
 		t.Fatal(err)
 	}
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	for ordinal := 0; ordinal < 2000; ordinal++ {
 		key := uint32(ordinal) * 4
 		if err := store.addEmptyMapFeedRange(key4(key), key4(key+1), member, &input); err != nil {
@@ -271,14 +271,14 @@ func TestFeedMergeEmptyMapCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.beginEmptyMapFeed(); err != nil {
 		t.Fatal(err)
 	}
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	if err := store.addEmptyMapFeedRange(key4(0), key4(9), member, &input); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestFeedMergeCreateEmptyCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), alpha)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), alpha)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,13 +341,13 @@ func TestFeedMergeCreateEmptyCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.inputIntervals != 0 || count129(t, merged.inputAddresses) != 0 {
-		t.Fatalf("empty coverage intervals = %d addresses = %d, want zero", merged.inputIntervals, count129(t, merged.inputAddresses))
+	if merged.InputIntervals != 0 || count129(t, merged.InputAddresses) != 0 {
+		t.Fatalf("empty coverage intervals = %d addresses = %d, want zero", merged.InputIntervals, count129(t, merged.InputAddresses))
 	}
-	if count129(t, merged.comparison.comparison.before) != 0 ||
-		count129(t, merged.comparison.comparison.after) != 0 ||
-		merged.comparison.beforeIntervals != 0 || merged.comparison.afterIntervals != 0 {
-		t.Fatalf("empty comparison = %+v, want zero", merged.comparison)
+	if count129(t, merged.Comparison.Comparison.Before) != 0 ||
+		count129(t, merged.Comparison.Comparison.After) != 0 ||
+		merged.Comparison.BeforeIntervals != 0 || merged.Comparison.AfterIntervals != 0 {
+		t.Fatalf("empty Comparison = %+v, want zero", merged.Comparison)
 	}
 }
 
@@ -355,7 +355,7 @@ func TestFeedMergeCreateEmptyCoverage(t *testing.T) {
 // committed destination (Rust create_feed + FeedPolicy): the workflow
 // coverage [4,12]+[20,22] unions the member into the covered segments
 // only, keeps every uncovered destination segment, and produces the
-// exact comparison (added = covered cardinality, nothing removed) plus
+// exact Comparison (added = covered cardinality, nothing removed) plus
 // the merged draft tree.
 func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
@@ -378,12 +378,12 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := store.addFeedToMembership(emptyMembershipHandle(), memberFeed)
+	member, err := store.addFeedToMembership(EmptyMembershipHandle(), memberFeed)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	if err := store.addFeedCoverage(key4(4), key4(12), &input); err != nil {
 		t.Fatal(err)
 	}
@@ -404,24 +404,24 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 	if store.draft.workflowRangeRoot != 0 || store.draft.workflowRangeCount != 0 {
 		t.Fatal("merge did not consume the workflow coverage tree")
 	}
-	if merged.inputIntervals != 2 {
-		t.Fatalf("input intervals = %d, want 2", merged.inputIntervals)
+	if merged.InputIntervals != 2 {
+		t.Fatalf("input intervals = %d, want 2", merged.InputIntervals)
 	}
-	if count129(t, merged.inputAddresses) != 12 {
-		t.Fatalf("input addresses = %d, want 12", count129(t, merged.inputAddresses))
+	if count129(t, merged.InputAddresses) != 12 {
+		t.Fatalf("input addresses = %d, want 12", count129(t, merged.InputAddresses))
 	}
-	comparison := merged.comparison.comparison
-	if count129(t, comparison.added) != 12 || count129(t, comparison.removed) != 0 {
-		t.Fatalf("added/removed = %d/%d, want 12/0", count129(t, comparison.added), count129(t, comparison.removed))
+	Comparison := merged.Comparison.Comparison
+	if count129(t, Comparison.Added) != 12 || count129(t, Comparison.Removed) != 0 {
+		t.Fatalf("added/removed = %d/%d, want 12/0", count129(t, Comparison.Added), count129(t, Comparison.Removed))
 	}
-	if count129(t, comparison.unchanged) != 0 || count129(t, comparison.changed) != 0 {
-		t.Fatalf("unchanged/changed = %d/%d, want zero", count129(t, comparison.unchanged), count129(t, comparison.changed))
+	if count129(t, Comparison.Unchanged) != 0 || count129(t, Comparison.Changed) != 0 {
+		t.Fatalf("unchanged/changed = %d/%d, want zero", count129(t, Comparison.Unchanged), count129(t, Comparison.Changed))
 	}
-	if count129(t, comparison.before) != 0 || count129(t, comparison.after) != 12 {
-		t.Fatalf("before/after = %d/%d, want 0/12", count129(t, comparison.before), count129(t, comparison.after))
+	if count129(t, Comparison.Before) != 0 || count129(t, Comparison.After) != 12 {
+		t.Fatalf("before/after = %d/%d, want 0/12", count129(t, Comparison.Before), count129(t, Comparison.After))
 	}
-	if merged.comparison.beforeIntervals != 0 || merged.comparison.afterIntervals != 2 {
-		t.Fatalf("before/after intervals = %d/%d, want 0/2", merged.comparison.beforeIntervals, merged.comparison.afterIntervals)
+	if merged.Comparison.BeforeIntervals != 0 || merged.Comparison.AfterIntervals != 2 {
+		t.Fatalf("before/after intervals = %d/%d, want 0/2", merged.Comparison.BeforeIntervals, merged.Comparison.AfterIntervals)
 	}
 	records := readDraftRangeTree(t, store, store.draft.meta)
 	if len(records) != 7 {
@@ -458,13 +458,13 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	var probe [3]byte
-	if err := store.selectedMembershipBits(records[1].value, []uint32{unrelated.index, recent.index, memberFeed.index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(records[1].value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 0 || probe[1] != 1 || probe[2] != 1 {
 		t.Fatalf("[4,4] bits = %v %v %v, want recent+member only", probe[0], probe[1], probe[2])
 	}
-	if err := store.selectedMembershipBits(records[2].value, []uint32{unrelated.index, recent.index, memberFeed.index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(records[2].value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 1 || probe[1] != 1 || probe[2] != 1 {

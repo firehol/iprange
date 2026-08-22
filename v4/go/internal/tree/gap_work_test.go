@@ -23,11 +23,11 @@ func TestGapEdgeVerificationCounts(t *testing.T) {
 		}
 	}
 	cached := RootEdge(root)
-	if _, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(200), &cached, EdgeLast, true, acceptGap[wideLeaf]{}); err != nil {
+	if _, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(200), &cached, EdgeLast, true, acceptGap{}); err != nil {
 		t.Fatal(err)
 	}
 	work.Reset()
-	if _, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(201), &cached, EdgeLast, true, acceptGap[wideLeaf]{}); err != nil {
+	if _, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(201), &cached, EdgeLast, true, acceptGap{}); err != nil {
 		t.Fatal(err)
 	}
 	if snap := work.Read(); snap.EdgePathChecks != 0 {
@@ -43,7 +43,7 @@ func TestGapEdgeVerificationCounts(t *testing.T) {
 		}
 	}
 	newEdge := RootEdge(freshRoot)
-	if _, err := InsertIfEdgeGap(wideCodec{}, fresh, &freshRoot, wideRecord(200), &newEdge, EdgeLast, true, acceptGap[wideLeaf]{}); err != nil {
+	if _, err := InsertIfEdgeGap(wideCodec{}, fresh, &freshRoot, wideRecord(200), &newEdge, EdgeLast, true, acceptGap{}); err != nil {
 		t.Fatal(err)
 	}
 	if snap := work.Read(); snap.EdgePathChecks != 1 {

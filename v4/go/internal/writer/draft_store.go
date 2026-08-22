@@ -52,6 +52,29 @@ type DraftStore struct {
 	hashScratch    [membershipHashKeySize]byte
 	catalogScratch [catalogMaxRecord]byte
 	deltaScratch   [deltaRecordSize]byte
+	// rangeScratch owns the fixed-size range-record encode targets of
+	// this draft (Rust EncodedRange locals). The generic rangeFamily
+	// interface makes stack targets escape, so the range context
+	// borrows this draft-owned array instead of allocating per record.
+	// Slot 0 serves the one-record paths; the up to three cells of one
+	// leaf replacement use slots 0..2 (Rust replace_strictly_inside).
+	rangeScratch [3][format.RangeRecordV6Size]byte
+	// rangeCtx is the mutable range-tree state of one draft operation
+	// (Rust range_mutation function parameters: store, root,
+	// record_count). The range context carries interface fields whose
+	// method calls escape a stack context, so the draft owns one
+	// context and every entry point resets it before the operation;
+	// root/count live in the rangeRoot/rangeCount snapshot fields
+	// below, mirroring the Rust locals written back after the edit
+	// succeeds.
+	rangeCtx rangeCtx
+	// rangeRoot and rangeCount are the operation-local root and record
+	// count snapshots of one range edit (Rust draft_store.rs assign/
+	// clear locals). The range context points at them; entry points
+	// copy the draft meta in before the operation and out after it
+	// succeeds.
+	rangeRoot  uint32
+	rangeCount uint64
 }
 
 // NewDraftStore binds one draft to the opened read-write mapping (Rust

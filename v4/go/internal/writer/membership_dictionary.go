@@ -94,9 +94,16 @@ type membershipInterned struct {
 
 // internMembership returns the dictionary ID for one membership bitmap,
 // creating the record when the bitmap is new (Rust
-// membership_dictionary::intern).
+// membership_dictionary::intern: the entry charge is Rust parity, the
+// inner body is shared with internAddedBit without a second charge).
 func internMembership[W membershipWords](store tree.RetiringStore, state *membershipState, words W) (membershipInterned, error) {
 	work.MembershipIntern(1)
+	return internMembershipInner(store, state, words)
+}
+
+// internMembershipInner is the shared intern body (Rust
+// membership_dictionary::intern_inner): no work charge of its own.
+func internMembershipInner[W membershipWords](store tree.RetiringStore, state *membershipState, words W) (membershipInterned, error) {
 	wordCount := words.WordCount()
 	if wordCount == 0 || wordCount > membershipMaxWordCount {
 		return membershipInterned{}, invalid("membership word count is outside the v4 limit")
@@ -142,7 +149,7 @@ func membershipIDExhausted() error {
 
 // findEqualMembership searches the hash tree for an equal bitmap (Rust
 // find_equal): at_or_after over (digest, word_count, id), word-for-word
-// comparison against the candidate record.
+// Comparison against the candidate record.
 func findEqualMembership[W membershipWords](store tree.Store, state *membershipState, words W, digest [32]byte) (uint32, bool, error) {
 	// Rust find_equal does not count membership_lookup; only record::find
 	// and apply_delta do (membership_dictionary.rs + record.rs).
@@ -611,5 +618,7 @@ func internAddedBit(store tree.RetiringStore, state *membershipState, baseID, ba
 		baseWords: baseWords,
 		bit:       bit,
 	}
-	return internMembership(store, state, source)
+	// Rust intern_added_bit charges once at entry and delegates to the
+	// shared intern_inner body without a second charge.
+	return internMembershipInner(store, state, source)
 }

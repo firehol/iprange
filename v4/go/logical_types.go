@@ -5,6 +5,8 @@
 
 package iprangedb
 
+import "github.com/firehol/iprange/v4/go/internal/writer"
+
 // AddressRange4 is one value-free inclusive IPv4 input interval.
 type AddressRange4 struct {
 	From, To IPv4
@@ -14,6 +16,20 @@ type AddressRange4 struct {
 type AddressRange6 struct {
 	FromHi, FromLo, ToHi, ToLo uint64
 }
+
+// MembershipOperation is one per-address logical membership operation
+// (Rust contract::MembershipOperation). The type and constants alias
+// the internal writer enum so the public SDK and the writer core share
+// one authority and can never drift.
+type MembershipOperation = writer.MembershipOperation
+
+const (
+	MembershipReplace      = writer.MembershipReplace
+	MembershipUnion        = writer.MembershipUnion
+	MembershipDifference   = writer.MembershipDifference
+	MembershipIntersection = writer.MembershipIntersection
+	MembershipXor          = writer.MembershipXor
+)
 
 // WorkflowKind identifies the high-level operation that produced a report.
 type WorkflowKind uint8

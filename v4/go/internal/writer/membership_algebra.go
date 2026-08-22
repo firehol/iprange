@@ -13,16 +13,16 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
-// membershipOperation is one per-address membership operation (Rust
+// MembershipOperation is one per-address membership operation (Rust
 // contract::MembershipOperation).
-type membershipOperation uint8
+type MembershipOperation uint8
 
 const (
-	membershipReplace membershipOperation = iota
-	membershipUnion
-	membershipDifference
-	membershipIntersection
-	membershipXor
+	MembershipReplace MembershipOperation = iota
+	MembershipUnion
+	MembershipDifference
+	MembershipIntersection
+	MembershipXor
 )
 
 // combinedWords is the on-the-fly combination of two stored membership
@@ -36,7 +36,7 @@ type combinedWords struct {
 	leftWords  uint32
 	rightID    uint32
 	rightWords uint32
-	operation  membershipOperation
+	operation  MembershipOperation
 	wordCount  uint32
 }
 
@@ -62,7 +62,7 @@ func (c *combinedWords) ReadChunk(start uint32) (words [membershipChunkWords]uin
 // stored bitmaps, creating the record when the result is new (Rust
 // membership_dictionary::combine): identity shortcuts first, then the
 // canonical trailing-word count, then the intern.
-func combineMembership(store tree.RetiringStore, state *membershipState, leftID, rightID, rightWords uint32, operation membershipOperation) (membershipInterned, error) {
+func combineMembership(store tree.RetiringStore, state *membershipState, leftID, rightID, rightWords uint32, operation MembershipOperation) (membershipInterned, error) {
 	work.MembershipCombination(1)
 	leftWords, err := storedMembershipWordCount(store, state.idRoot, leftID)
 	if err != nil {
@@ -127,7 +127,7 @@ func requireMembershipWords(store tree.Store, root uint32, id uint32, expected u
 // membershipIdentity returns the shortcut result when one combine operand
 // already determines the outcome (Rust identity: the selected operand,
 // the union/difference/intersection/xor identities, or none).
-func membershipIdentity(leftID, leftWords, rightID, rightWords uint32, operation membershipOperation) (membershipInterned, bool) {
+func membershipIdentity(leftID, leftWords, rightID, rightWords uint32, operation MembershipOperation) (membershipInterned, bool) {
 	left := [2]uint32{leftID, leftWords}
 	right := [2]uint32{rightID, rightWords}
 	selected, ok := selectedMembershipIdentity(left, right, operation)
@@ -137,17 +137,17 @@ func membershipIdentity(leftID, leftWords, rightID, rightWords uint32, operation
 	return membershipInterned{id: selected[0], wordCount: selected[1], created: false}, true
 }
 
-func selectedMembershipIdentity(left, right [2]uint32, operation membershipOperation) ([2]uint32, bool) {
+func selectedMembershipIdentity(left, right [2]uint32, operation MembershipOperation) ([2]uint32, bool) {
 	switch operation {
-	case membershipReplace:
+	case MembershipReplace:
 		return right, true
-	case membershipUnion:
+	case MembershipUnion:
 		return unionMembershipIdentity(left, right)
-	case membershipDifference:
+	case MembershipDifference:
 		return differenceMembershipIdentity(left, right)
-	case membershipIntersection:
+	case MembershipIntersection:
 		return intersectionMembershipIdentity(left, right)
-	case membershipXor:
+	case MembershipXor:
 		return xorMembershipIdentity(left, right)
 	default:
 		return [2]uint32{}, false
@@ -206,15 +206,15 @@ func xorMembershipIdentity(left, right [2]uint32) ([2]uint32, bool) {
 
 // rawMembershipWordCount is the uncanonicalized combination length (Rust
 // raw_word_count).
-func rawMembershipWordCount(left, right uint32, operation membershipOperation) uint32 {
+func rawMembershipWordCount(left, right uint32, operation MembershipOperation) uint32 {
 	switch operation {
-	case membershipReplace:
+	case MembershipReplace:
 		return right
-	case membershipUnion, membershipXor:
+	case MembershipUnion, MembershipXor:
 		return maxU32(left, right)
-	case membershipDifference:
+	case MembershipDifference:
 		return left
-	case membershipIntersection:
+	case MembershipIntersection:
 		return minU32(left, right)
 	default:
 		return 0
@@ -272,18 +272,18 @@ func readMembershipOperand(store tree.Store, idRoot, id, wordCount, start uint32
 
 // applyMembershipWords folds one right operand word into the left buffer
 // per operation (Rust apply_words).
-func applyMembershipWords(left []uint64, right []uint64, operation membershipOperation) {
+func applyMembershipWords(left []uint64, right []uint64, operation MembershipOperation) {
 	for index := range left {
 		switch operation {
-		case membershipReplace:
+		case MembershipReplace:
 			left[index] = right[index]
-		case membershipUnion:
+		case MembershipUnion:
 			left[index] |= right[index]
-		case membershipDifference:
+		case MembershipDifference:
 			left[index] &^= right[index]
-		case membershipIntersection:
+		case MembershipIntersection:
 			left[index] &= right[index]
-		case membershipXor:
+		case MembershipXor:
 			left[index] ^= right[index]
 		}
 	}

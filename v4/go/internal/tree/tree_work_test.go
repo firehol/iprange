@@ -19,7 +19,7 @@ func TestOneShotReadsHaveNoHiddenScans(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), nil)
+	header, err := parse(u32Codec{}, m.pages[root][:], m.TargetTxn(), 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

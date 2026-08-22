@@ -101,6 +101,24 @@ func (c *Core) Mutate(operation func(edit *WriterEdit) error) error {
 	return operation(newWriterEdit(store, c.base.Meta))
 }
 
+// BindEdit returns one edit binding over the installed draft (Rust
+// writer_core/edit.rs WriterCore::edit core that holds one store for
+// the draft lifetime). Per-operation Mutate bindings allocate; a
+// workflow that streams many batches (feed slice ingestion) binds once
+// and reuses the edit, so the hot slice path allocates nothing per
+// batch. The draft must already be installed (workflow preconditions
+// guarantee it); the committed base and page count are stable for the
+// draft lifetime, exactly like Mutate's per-call binding.
+func (c *Core) BindEdit() (*WriterEdit, error) {
+	if err := c.requireHealthy(); err != nil {
+		return nil, err
+	}
+	if c.draft == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "no pending transaction"}
+	}
+	return newWriterEdit(NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft), c.base.Meta), nil
+}
+
 // WriterEdit is one edit binding over the open draft (Rust
 // writer_core/edit.rs WriterEdit: DraftStore plus the committed base).
 type WriterEdit struct {
@@ -206,9 +224,9 @@ func (s *DraftStore) finishMembershipWorkflow(check func() error) error {
 // LookupBaseFeed resolves one exact feed name in the committed base
 // catalog (Rust WriterCore::lookup_base_feed): read-only, no draft
 // required, page-bounded to the committed generation.
-func (c *Core) LookupBaseFeed(name string) (feedEntry, bool, error) {
+func (c *Core) LookupBaseFeed(name string) (FeedEntry, bool, error) {
 	if err := c.requireHealthy(); err != nil {
-		return feedEntry{}, false, err
+		return FeedEntry{}, false, err
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
 	return lookupCatalogFeed(store, c.base.Meta, name)
@@ -217,9 +235,9 @@ func (c *Core) LookupBaseFeed(name string) (feedEntry, bool, error) {
 // LookupCurrentFeed resolves one exact feed name in the current catalog
 // generation (Rust WriterCore::lookup_current_feed): the draft meta when
 // a draft is open, otherwise the committed base.
-func (c *Core) LookupCurrentFeed(name string) (feedEntry, bool, error) {
+func (c *Core) LookupCurrentFeed(name string) (FeedEntry, bool, error) {
 	if err := c.requireHealthy(); err != nil {
-		return feedEntry{}, false, err
+		return FeedEntry{}, false, err
 	}
 	meta := c.base.Meta
 	if c.draft != nil {
@@ -233,7 +251,7 @@ func (c *Core) LookupCurrentFeed(name string) (feedEntry, bool, error) {
 // generation (Rust WriterCore::current_feed_cursor: the writer has no
 // reader table until Milestone 4, so the cursor carries no owner
 // identity).
-func (c *Core) CurrentFeedCursor() (*feedCursor, error) {
+func (c *Core) CurrentFeedCursor() (*FeedCursor, error) {
 	if err := c.requireHealthy(); err != nil {
 		return nil, err
 	}
@@ -242,18 +260,18 @@ func (c *Core) CurrentFeedCursor() (*feedCursor, error) {
 		meta = c.draft.meta
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
-	return newFeedCursor(store, meta)
+	return NewFeedCursor(store, meta)
 }
 
 // CompareMaps sweeps the committed base and the current draft range maps
 // and returns the exact six-way address classification (Rust
 // WriterCore::compare_maps over workflow/compare.rs maps).
-func (c *Core) CompareMaps(check func() error) (comparison, error) {
+func (c *Core) CompareMaps(check func() error) (Comparison, error) {
 	if err := c.requireHealthy(); err != nil {
-		return comparison{}, err
+		return Comparison{}, err
 	}
 	if c.draft == nil {
-		return comparison{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
+		return Comparison{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no pending transaction"}
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
 	return compareMaps(store, c.base.Meta, check)
@@ -261,57 +279,57 @@ func (c *Core) CompareMaps(check func() error) (comparison, error) {
 
 // LookupFeed resolves one exact feed name in the draft catalog (Rust
 // WriterEdit::lookup_feed).
-func (e *WriterEdit) LookupFeed(name string) (feedEntry, bool, error) {
+func (e *WriterEdit) LookupFeed(name string) (FeedEntry, bool, error) {
 	return e.store.lookupFeed(name)
 }
 
 // EnsureFeed returns the existing entry or creates the feed (Rust
 // WriterEdit::ensure_feed; the created flag distinguishes the two).
-func (e *WriterEdit) EnsureFeed(name string) (feedEntry, bool, error) {
+func (e *WriterEdit) EnsureFeed(name string) (FeedEntry, bool, error) {
 	return e.store.ensureFeed(name)
 }
 
 // InsertFeed allocates a feed index and inserts the dual catalog
 // records (Rust WriterEdit::insert_feed).
-func (e *WriterEdit) InsertFeed(name string) (feedEntry, error) {
+func (e *WriterEdit) InsertFeed(name string) (FeedEntry, error) {
 	return e.store.insertFeed(name)
 }
 
 // RenameCurrentFeed renames one current feed entry, refusing a name
 // that already exists (Rust WriterEdit::rename_current_feed).
-func (e *WriterEdit) RenameCurrentFeed(entry feedEntry, newName string) (feedEntry, error) {
+func (e *WriterEdit) RenameCurrentFeed(entry FeedEntry, newName string) (FeedEntry, error) {
 	return e.store.renameCurrentFeed(entry, newName)
 }
 
 // RenameCurrentFeedKnownAvailable renames one current feed entry when
 // the new name was already proven available (Rust
 // WriterEdit::rename_current_feed_known_available).
-func (e *WriterEdit) RenameCurrentFeedKnownAvailable(entry feedEntry, newName string) (feedEntry, error) {
+func (e *WriterEdit) RenameCurrentFeedKnownAvailable(entry FeedEntry, newName string) (FeedEntry, error) {
 	return e.store.renameCurrentFeedKnownAvailable(entry, newName)
 }
 
 // AddFeedToMembership interns the member bitmap of one feed over a base
 // bitmap (Rust WriterEdit::add_feed_to_membership).
-func (e *WriterEdit) AddFeedToMembership(base membershipHandle, feed feedEntry) (membershipHandle, error) {
+func (e *WriterEdit) AddFeedToMembership(base MembershipHandle, feed FeedEntry) (MembershipHandle, error) {
 	return e.store.addFeedToMembership(base, feed)
 }
 
 // ApplyMembershipV4 applies one membership operation over an inclusive
 // IPv4 interval (Rust WriterEdit::apply_membership_v4).
-func (e *WriterEdit) ApplyMembershipV4(from, to uint32, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+func (e *WriterEdit) ApplyMembershipV4(from, to uint32, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
 	return e.store.applyMembershipV4(from, to, member, operation, check)
 }
 
 // ApplyMembershipV6 applies one membership operation over an inclusive
 // IPv6 interval (Rust WriterEdit::apply_membership_v6).
-func (e *WriterEdit) ApplyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+func (e *WriterEdit) ApplyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
 	return e.store.applyMembershipV6(fromHi, fromLo, toHi, toLo, member, operation, check)
 }
 
 // DeleteCurrentFeedMembership deletes one feed and clears its bit from
 // every stored membership (Rust
 // WriterEdit::delete_current_feed_membership).
-func (e *WriterEdit) DeleteCurrentFeedMembership(feed feedEntry, check func() error) error {
+func (e *WriterEdit) DeleteCurrentFeedMembership(feed FeedEntry, check func() error) error {
 	return e.store.deleteCurrentFeedMembership(feed, check)
 }
 
@@ -323,30 +341,30 @@ func (e *WriterEdit) BeginEmptyMapFeed() error {
 
 // AddEmptyMapFeedRange pushes one constant member-valued range into the
 // private draft tree (Rust WriterEdit::add_empty_map_feed_range).
-func (e *WriterEdit) AddEmptyMapFeedRange(from, to tree.Key, member membershipHandle, input *unionInput) error {
+func (e *WriterEdit) AddEmptyMapFeedRange(from, to tree.Key, member MembershipHandle, input *UnionInput) error {
 	return e.store.addEmptyMapFeedRange(from, to, member, input)
 }
 
 // FinishEmptyMapFeedRanges seals the constant ranges and accounts the
 // member refcount (Rust WriterEdit::finish_empty_map_feed_ranges).
-func (e *WriterEdit) FinishEmptyMapFeedRanges(member membershipHandle, input *unionInput) (format.Cardinality129, bool, error) {
+func (e *WriterEdit) FinishEmptyMapFeedRanges(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
 	return e.store.finishEmptyMapFeedRanges(member, input)
 }
 
 // AddFeedCoverage pushes one value-1 range into the private workflow
 // coverage tree (Rust WriterEdit::add_feed_coverage).
-func (e *WriterEdit) AddFeedCoverage(from, to tree.Key, input *unionInput) error {
+func (e *WriterEdit) AddFeedCoverage(from, to tree.Key, input *UnionInput) error {
 	return e.store.addFeedCoverage(from, to, input)
 }
 
 // FinishFeedCoverage seals the pending coverage input (Rust
 // WriterEdit::finish_feed_coverage).
-func (e *WriterEdit) FinishFeedCoverage(input *unionInput) error {
+func (e *WriterEdit) FinishFeedCoverage(input *UnionInput) error {
 	return e.store.finishFeedCoverage(input)
 }
 
 // MergeFeed merges the workflow coverage tree over the committed base
 // generation (Rust WriterEdit::merge_feed).
-func (e *WriterEdit) MergeFeed(member membershipHandle, create bool, check func() error) (feedMerge, error) {
+func (e *WriterEdit) MergeFeed(member MembershipHandle, create bool, check func() error) (FeedMerge, error) {
 	return e.store.mergeFeed(e.base, member, create, check)
 }

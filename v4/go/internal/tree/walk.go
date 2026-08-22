@@ -33,7 +33,8 @@ func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() err
 	var stack [maxPath]walkFrame
 	depth := 0
 	current := root
-	var expectedLevel *uint16
+	var expectedLevel uint16
+	checkLevel := false
 
 	var advance func() (bool, error)
 	visit := func() (bool, error) {
@@ -44,7 +45,7 @@ func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() err
 		if err != nil {
 			return false, err
 		}
-		header, err := parse(codec, page, targetTxn, expectedLevel)
+		header, err := parse(codec, page, targetTxn, expectedLevel, checkLevel)
 		if err != nil {
 			return false, err
 		}
@@ -64,8 +65,8 @@ func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() err
 			stack[depth] = walkFrame{pageNumber: current, nextChild: 1, childCount: int(header.ItemCount), level: header.Level}
 			depth++
 			current = firstChild
-			level := header.Level - 1
-			expectedLevel = &level
+			expectedLevel = header.Level - 1
+			checkLevel = true
 			return false, nil
 		}
 		if err := release(current); err != nil {
@@ -87,7 +88,7 @@ func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() err
 				if err != nil {
 					return false, err
 				}
-				header, err := parse(codec, page, targetTxn, &frame.level)
+				header, err := parse(codec, page, targetTxn, frame.level, true)
 				if err != nil {
 					return false, err
 				}
@@ -100,8 +101,8 @@ func walk[T any](codec Codec[T], store Store, root uint32, checkpoint func() err
 				}
 				stack[depth-1].nextChild = frame.nextChild + 1
 				current = child
-				level := frame.level - 1
-				expectedLevel = &level
+				expectedLevel = frame.level - 1
+				checkLevel = true
 				return true, nil
 			}
 			depth--

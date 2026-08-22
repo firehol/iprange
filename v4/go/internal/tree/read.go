@@ -48,7 +48,7 @@ func InspectLeaf[T any](codec Codec[T], store Store, pageNumber uint32, itemCoun
 	if err != nil {
 		return err
 	}
-	header, err := parse(codec, page, store.TargetTxn(), &level)
+	header, err := parse(codec, page, store.TargetTxn(), level, true)
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,8 @@ func cursorLookup[T any](codec Codec[T], store Store, root uint32, key Key, dire
 		return zero, LeafLocation{}, false, corrupt("B+tree root is outside page bounds")
 	}
 	pageNumber := root
-	var expectedLevel *uint16
+	var expectedLevel uint16
+	checkLevel := false
 	var path [maxPath]cursorFrame
 	depth := 0
 	for {
@@ -115,7 +116,7 @@ func cursorLookup[T any](codec Codec[T], store Store, root uint32, key Key, dire
 			var zero T
 			return zero, LeafLocation{}, false, err
 		}
-		header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+		header, err := parse(codec, page, store.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
 			var zero T
 			return zero, LeafLocation{}, false, err
@@ -197,8 +198,8 @@ func cursorLookup[T any](codec Codec[T], store Store, root uint32, key Key, dire
 			level:      header.Level,
 		}
 		depth++
-		level := header.Level - 1
-		expectedLevel = &level
+		expectedLevel = header.Level - 1
+		checkLevel = true
 		pageNumber = child
 		work.TreeDescent(1)
 	}
@@ -233,8 +234,7 @@ func advanceLeaf[T any](codec Codec[T], store Store, path *[maxPath]cursorFrame,
 		if err != nil {
 			return LeafLocation{}, false, err
 		}
-		expected := frame.level
-		header, err := parse(codec, page, store.TargetTxn(), &expected)
+		header, err := parse(codec, page, store.TargetTxn(), frame.level, true)
 		if err != nil {
 			return LeafLocation{}, false, err
 		}
@@ -247,13 +247,13 @@ func advanceLeaf[T any](codec Codec[T], store Store, path *[maxPath]cursorFrame,
 		}
 		level := frame.level - 1
 		pageNumber := child
-		expectedLevel := &level
+		expectedLevel := level
 		for {
 			page, err := store.Inspect(pageNumber)
 			if err != nil {
 				return LeafLocation{}, false, err
 			}
-			header, err := parse(codec, page, store.TargetTxn(), expectedLevel)
+			header, err := parse(codec, page, store.TargetTxn(), expectedLevel, true)
 			if err != nil {
 				return LeafLocation{}, false, err
 			}
@@ -279,8 +279,7 @@ func advanceLeaf[T any](codec Codec[T], store Store, path *[maxPath]cursorFrame,
 			}
 			*depth++
 			pageNumber = child
-			expected := *expectedLevel - 1
-			expectedLevel = &expected
+			expectedLevel = expectedLevel - 1
 			work.TreeDescent(1)
 		}
 	}
@@ -294,7 +293,7 @@ func readOn[T any](codec Codec[T], store Store, location LeafLocation) (T, error
 	if err != nil {
 		return value, err
 	}
-	header, err := parse(codec, page, store.TargetTxn(), &level)
+	header, err := parse(codec, page, store.TargetTxn(), level, true)
 	if err != nil {
 		return value, err
 	}
@@ -324,7 +323,7 @@ func seekCurrentOrNext(position int, _ bool, _ cursorDirection, itemCount int) (
 
 // adjacentLeaf descends the sibling subtree of the deepest branch that has
 // one (Rust adjacent_leaf).
-func adjacentLeaf[T any](codec Codec[T], store Store, path *Path, direction AdjacentLeafDirection) (adjacentLeafResult[T], bool, error) {
+func adjacentLeaf[T any](codec Codec[T], store Store, path Path, direction AdjacentLeafDirection) (adjacentLeafResult[T], bool, error) {
 	depth := path.Depth()
 	for depth > 0 {
 		depth--
@@ -342,7 +341,7 @@ func adjacentLeaf[T any](codec Codec[T], store Store, path *Path, direction Adja
 		if err != nil {
 			return adjacentLeafResult[T]{}, false, err
 		}
-		header, err := parse(codec, page, store.TargetTxn(), nil)
+		header, err := parse(codec, page, store.TargetTxn(), 0, false)
 		if err != nil {
 			return adjacentLeafResult[T]{}, false, err
 		}
@@ -360,7 +359,7 @@ func adjacentLeaf[T any](codec Codec[T], store Store, path *Path, direction Adja
 			if err != nil {
 				return adjacentLeafResult[T]{}, false, err
 			}
-			header, err := parse(codec, page, store.TargetTxn(), &expectedLevel)
+			header, err := parse(codec, page, store.TargetTxn(), expectedLevel, true)
 			if err != nil {
 				return adjacentLeafResult[T]{}, false, err
 			}
@@ -419,7 +418,7 @@ func PrivateLeafFirst[T any](codec Codec[T], store Store, pageNumber uint32) (Ke
 	if err != nil {
 		return Key{}, err
 	}
-	header, err := parse(codec, page, targetTxn, &level)
+	header, err := parse(codec, page, targetTxn, level, true)
 	if err != nil {
 		return Key{}, err
 	}
@@ -433,7 +432,7 @@ func PrivateLeafFirst[T any](codec Codec[T], store Store, pageNumber uint32) (Ke
 // before the leaf named by path, when such a sibling exists (Rust
 // LocalReject::external_predecessor; used by the coverage union run and
 // the assignment rewrite when the gap was not locally complete).
-func ExternalPredecessor[T any](codec Codec[T], store Store, path *Path) (T, bool, error) {
+func ExternalPredecessor[T any](codec Codec[T], store Store, path Path) (T, bool, error) {
 	value, found, err := adjacentLeaf(codec, store, path, AdjacentBefore)
 	if err != nil {
 		var zero T
@@ -445,7 +444,7 @@ func ExternalPredecessor[T any](codec Codec[T], store Store, path *Path) (T, boo
 // ExternalSuccessor returns the first record of the leaf immediately
 // after the leaf named by path, when such a sibling exists (Rust
 // LocalReject::external_successor).
-func ExternalSuccessor[T any](codec Codec[T], store Store, path *Path) (T, bool, error) {
+func ExternalSuccessor[T any](codec Codec[T], store Store, path Path) (T, bool, error) {
 	value, found, err := adjacentLeaf(codec, store, path, AdjacentAfter)
 	if err != nil {
 		var zero T

@@ -11,16 +11,15 @@ import (
 )
 
 // acceptGap is the Rust AcceptGap: every probe accepts the gap. It is
-// generic over the codec leaf value type.
-type acceptGap[T any] struct{}
+// intentionally non-generic: the probe interface must never force a
+// shape-conversion box on the hot path.
+type acceptGap struct{}
 
-func (acceptGap[T]) Previous(bool, []byte) (LocalPrevious, T, error) {
-	var zero T
-	return LocalPreviousAccept, zero, nil
+func (acceptGap) Previous(bool, []byte) (LocalPrevious, []byte, error) {
+	return LocalPreviousAccept, nil, nil
 }
-func (acceptGap[T]) Next([]byte) (LocalNext, T, error) {
-	var zero T
-	return LocalNextAccept, zero, nil
+func (acceptGap) Next([]byte) (LocalNext, []byte, error) {
+	return LocalNextAccept, nil, nil
 }
 
 // privateLocalInsertInspectsAndUpdatesWithoutCopyingTheLeaf mirrors the
@@ -41,7 +40,7 @@ func TestPrivateLocalInsertInspectsAndUpdatesWithoutCopyingTheLeaf(t *testing.T)
 	m.updates = 0
 
 	retired := RetiredPages{}
-	retired, result, err := InsertIfLocalGap(u32Codec{}, m, &root, u32Record(501, 7), retired, acceptGap[u32Leaf]{})
+	retired, result, err := InsertIfLocalGap(u32Codec{}, m, &root, u32Record(501, 7), retired, acceptGap{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +81,7 @@ func TestCachedLeafInsertAcceptsOnlyAValidPrivateInteriorGap(t *testing.T) {
 		}
 	}
 
-	result, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(3, 3), acceptGap[u32Leaf]{})
+	result, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(3, 3), acceptGap{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,14 +94,14 @@ func TestCachedLeafInsertAcceptsOnlyAValidPrivateInteriorGap(t *testing.T) {
 		t.Fatalf("lookup(3) = %d, %v; want 3, true", value, found)
 	}
 
-	if result, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(5, 5), acceptGap[u32Leaf]{}); err != nil {
+	if result, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(5, 5), acceptGap{}); err != nil {
 		t.Fatal(err)
 	} else if result != CachedInsertMiss {
 		t.Fatalf("cached interior gap at the leaf edge = %v, want miss", result)
 	}
 
 	m.targetTxn = 2
-	if _, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(1, 1), acceptGap[u32Leaf]{}); err == nil {
+	if _, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(1, 1), acceptGap{}); err == nil {
 		t.Fatal("cached interior gap accepted a committed leaf")
 	}
 	m.targetTxn = 1
@@ -111,7 +110,7 @@ func TestCachedLeafInsertAcceptsOnlyAValidPrivateInteriorGap(t *testing.T) {
 	for i := format.SlottedHeaderSize; i < format.SlottedHeaderSize+2; i++ {
 		m.pages[root][i] = 0
 	}
-	if _, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(1, 1), acceptGap[u32Leaf]{}); err == nil {
+	if _, err := InsertIfCachedInteriorGap(u32Codec{}, m, root, u32Record(1, 1), acceptGap{}); err == nil {
 		t.Fatal("cached interior gap accepted a corrupted leaf")
 	}
 }
@@ -138,7 +137,7 @@ func TestInsertRejectedGapCompletesALocalInsert(t *testing.T) {
 	if result.Inserted {
 		t.Fatal("blocking gap accepted the local insert")
 	}
-	if result.Reject == nil {
+	if !result.Rejected {
 		t.Fatal("blocking gap returned no rejection")
 	}
 	position, fits, err := InsertRejectedGap(u32Codec{}, m, &root, u32Record(501, 7), result.Reject)
@@ -158,28 +157,27 @@ func TestInsertRejectedGapCompletesALocalInsert(t *testing.T) {
 
 // blockingGap rejects every probe that names an existing neighbor cell and
 // accepts absent sides (the LocalGap contract: an absent neighbor can
-// never bridge the gap).
+// never bridge the gap). The reject returns the raw probing cell; the
+// generic selector decodes it into the reject value.
 type blockingGap struct{}
 
-func (blockingGap) Previous(_ bool, cell []byte) (LocalPrevious, u32Leaf, error) {
+func (blockingGap) Previous(_ bool, cell []byte) (LocalPrevious, []byte, error) {
 	if cell == nil {
-		return LocalPreviousAccept, u32Leaf{}, nil
+		return LocalPreviousAccept, nil, nil
 	}
-	leaf, err := u32Codec{}.ReadLeaf(cell)
-	if err != nil {
-		return 0, u32Leaf{}, err
+	if _, err := (u32Codec{}).ReadLeaf(cell); err != nil {
+		return 0, nil, err
 	}
-	return LocalPreviousReject, leaf, nil
+	return LocalPreviousReject, cell, nil
 }
-func (blockingGap) Next(cell []byte) (LocalNext, u32Leaf, error) {
+func (blockingGap) Next(cell []byte) (LocalNext, []byte, error) {
 	if cell == nil {
-		return LocalNextAccept, u32Leaf{}, nil
+		return LocalNextAccept, nil, nil
 	}
-	leaf, err := u32Codec{}.ReadLeaf(cell)
-	if err != nil {
-		return 0, u32Leaf{}, err
+	if _, err := (u32Codec{}).ReadLeaf(cell); err != nil {
+		return 0, nil, err
 	}
-	return LocalNextReject, leaf, nil
+	return LocalNextReject, cell, nil
 }
 
 // TestEdgeGapInsertSplitsAndKeepsTheEdge covers the cached edge path: a
@@ -196,7 +194,7 @@ func TestEdgeGapInsertSplitsAndKeepsTheEdge(t *testing.T) {
 		}
 	}
 	cached := RootEdge(root)
-	result, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(200), &cached, EdgeLast, true, acceptGap[wideLeaf]{})
+	result, err := InsertIfEdgeGap(wideCodec{}, m, &root, wideRecord(200), &cached, EdgeLast, true, acceptGap{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +211,7 @@ func TestEdgeGapInsertSplitsAndKeepsTheEdge(t *testing.T) {
 
 func workEdgeCheck(t *testing.T, m *memoryStore, root *uint32, cached *PrivateEdge, edge Edge) {
 	t.Helper()
-	result, err := InsertIfEdgeGap(wideCodec{}, m, root, wideRecord(201), cached, edge, true, acceptGap[wideLeaf]{})
+	result, err := InsertIfEdgeGap(wideCodec{}, m, root, wideRecord(201), cached, edge, true, acceptGap{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +225,8 @@ func lookupWide(m *memoryStore, root uint32, key uint32) (uint64, bool, error) {
 		return 0, false, nil
 	}
 	pageNumber := root
-	var expectedLevel *uint16
+	var expectedLevel uint16
+	checkLevel := false
 	for {
 		var value uint64
 		found := false
@@ -236,7 +235,7 @@ func lookupWide(m *memoryStore, root uint32, key uint32) (uint64, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		header, err := parse(wideCodec{}, page, m.TargetTxn(), expectedLevel)
+		header, err := parse(wideCodec{}, page, m.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
 			return 0, false, err
 		}
@@ -263,11 +262,8 @@ func lookupWide(m *memoryStore, root uint32, key uint32) (uint64, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		level := uint16(0)
-		if expectedLevel != nil {
-			level = *expectedLevel
-		}
-		expectedLevel = &level
+		expectedLevel = header.Level - 1
+		checkLevel = true
 		pageNumber = child
 	}
 }

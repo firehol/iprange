@@ -81,13 +81,13 @@ func TestMembershipCombineIdentityShortcuts(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		op          membershipOperation
+		op          MembershipOperation
 		left, right uint32
 		wantID      uint32
 	}{}
 	_ = cases
 
-	check := func(t *testing.T, op membershipOperation, left, right uint32, want uint32) {
+	check := func(t *testing.T, op MembershipOperation, left, right uint32, want uint32) {
 		t.Helper()
 		interned, err := combineMembership(m, state, left, right, storedWordsOf(t, m, state, right), op)
 		if err != nil {
@@ -102,25 +102,25 @@ func TestMembershipCombineIdentityShortcuts(t *testing.T) {
 	}
 
 	// Replace picks the right operand unconditionally.
-	check(t, membershipReplace, a, b, b)
-	check(t, membershipReplace, 0, b, b)
-	check(t, membershipReplace, a, 0, 0)
+	check(t, MembershipReplace, a, b, b)
+	check(t, MembershipReplace, 0, b, b)
+	check(t, MembershipReplace, a, 0, 0)
 	// Union: empty picks the other side; equal IDs collapse.
-	check(t, membershipUnion, 0, b, b)
-	check(t, membershipUnion, a, 0, a)
-	check(t, membershipUnion, a, a, a)
+	check(t, MembershipUnion, 0, b, b)
+	check(t, MembershipUnion, a, 0, a)
+	check(t, MembershipUnion, a, a, a)
 	// Difference: equal IDs and empty-left give the empty bitmap.
-	check(t, membershipDifference, a, a, 0)
-	check(t, membershipDifference, 0, b, 0)
-	check(t, membershipDifference, a, 0, a)
+	check(t, MembershipDifference, a, a, 0)
+	check(t, MembershipDifference, 0, b, 0)
+	check(t, MembershipDifference, a, 0, a)
 	// Intersection: either empty gives the empty bitmap.
-	check(t, membershipIntersection, a, 0, 0)
-	check(t, membershipIntersection, 0, b, 0)
-	check(t, membershipIntersection, a, a, a)
+	check(t, MembershipIntersection, a, 0, 0)
+	check(t, MembershipIntersection, 0, b, 0)
+	check(t, MembershipIntersection, a, a, a)
 	// Xor: equal IDs and empty sides collapse.
-	check(t, membershipXor, a, a, 0)
-	check(t, membershipXor, 0, b, b)
-	check(t, membershipXor, a, 0, a)
+	check(t, MembershipXor, a, a, 0)
+	check(t, MembershipXor, 0, b, b)
+	check(t, MembershipXor, a, 0, a)
 
 	if state.entryCount != entryCount {
 		t.Fatalf("identity shortcuts changed the entry count: %d -> %d", entryCount, state.entryCount)
@@ -149,7 +149,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 	a := internAlgebraWords(t, m, state, 0, 1)
 	b := internAlgebraWords(t, m, state, 0, 2)
 
-	union, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), membershipUnion)
+	union, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipUnion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 		t.Fatalf("union words = %v, want [7]", got)
 	}
 
-	difference, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), membershipDifference)
+	difference, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipDifference)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 		t.Fatalf("difference words = %v, want [2]", got)
 	}
 
-	intersection, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), membershipIntersection)
+	intersection, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipIntersection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 		t.Fatalf("intersection words = %v, want [1]", got)
 	}
 
-	xor, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), membershipXor)
+	xor, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipXor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 	// Canonical trailing zeros: the union with a bit at word 2 keeps
 	// exactly three words even though the raw count is two.
 	sparse := internAlgebraWords(t, m, state, 130)
-	combined, err := combineMembership(m, state, sparse, a, storedWordsOf(t, m, state, a), membershipUnion)
+	combined, err := combineMembership(m, state, sparse, a, storedWordsOf(t, m, state, a), MembershipUnion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestMembershipCombineRealCombinations(t *testing.T) {
 func TestMembershipCombineStaleReference(t *testing.T) {
 	m, state := newAlgebraState()
 	a := internAlgebraWords(t, m, state, 0, 1)
-	if _, err := combineMembership(m, state, a, a, 5, membershipUnion); err == nil {
+	if _, err := combineMembership(m, state, a, a, 5, MembershipUnion); err == nil {
 		t.Fatal("stale right operand accepted")
 	} else if code := errCode(err); code != format.CodeStaleReference {
 		t.Fatalf("code = %d, want StaleReference", code)

@@ -161,13 +161,13 @@ func walkTree(codec Codec[string], m *memoryStore, root uint32, visit func(cell 
 	if root == 0 {
 		return nil
 	}
-	var descend func(pageNumber uint32, expected *uint16) error
-	descend = func(pageNumber uint32, expected *uint16) error {
+	var descend func(pageNumber uint32, expected uint16, check bool) error
+	descend = func(pageNumber uint32, expected uint16, check bool) error {
 		page, err := m.Inspect(pageNumber)
 		if err != nil {
 			return err
 		}
-		h, err := parse(codec, page, m.TargetTxn(), expected)
+		h, err := parse(codec, page, m.TargetTxn(), expected, check)
 		if err != nil {
 			return err
 		}
@@ -182,8 +182,7 @@ func walkTree(codec Codec[string], m *memoryStore, root uint32, visit func(cell 
 				if err != nil {
 					return err
 				}
-				next := header.Level - 1
-				if err := descend(child, &next); err != nil {
+				if err := descend(child, header.Level-1, true); err != nil {
 					return err
 				}
 			}
@@ -204,7 +203,7 @@ func walkTree(codec Codec[string], m *memoryStore, root uint32, visit func(cell 
 		}
 		return nil
 	}
-	return descend(root, nil)
+	return descend(root, 0, false)
 }
 
 // TestVariableRecordInsertOrdered pins the fixed-key variable-leaf insert

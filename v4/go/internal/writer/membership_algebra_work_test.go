@@ -23,7 +23,7 @@ func TestMembershipCombineWorkPins(t *testing.T) {
 	b := internAlgebraWords(t, m, state, 1, 65)
 
 	work.Reset()
-	if _, err := combineMembership(m, state, a, a, storedWordsOf(t, m, state, a), membershipUnion); err != nil {
+	if _, err := combineMembership(m, state, a, a, storedWordsOf(t, m, state, a), MembershipUnion); err != nil {
 		t.Fatal(err)
 	}
 	if work.Read().MembershipCombinations != 1 {
@@ -34,7 +34,7 @@ func TestMembershipCombineWorkPins(t *testing.T) {
 	}
 
 	work.Reset()
-	if _, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), membershipUnion); err != nil {
+	if _, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipUnion); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := work.Read()

@@ -12,12 +12,12 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// feedMerge is the per-feed outcome of one coverage merge (Rust
+// FeedMerge is the per-feed outcome of one coverage merge (Rust
 // FeedMerge).
-type feedMerge struct {
-	inputIntervals uint64
-	inputAddresses format.Cardinality129
-	comparison     scannedComparison
+type FeedMerge struct {
+	InputIntervals uint64
+	InputAddresses format.Cardinality129
+	Comparison     ScannedComparison
 }
 
 // beginEmptyMapFeed starts the empty-map workflow of a value-free base:
@@ -34,7 +34,7 @@ func (s *DraftStore) beginEmptyMapFeed() error {
 
 // addEmptyMapFeedRange pushes one constant member-valued range into the
 // private draft tree (Rust DraftStore::add_empty_map_feed_range).
-func (s *DraftStore) addEmptyMapFeedRange(from, to tree.Key, member membershipHandle, input *unionInput) error {
+func (s *DraftStore) addEmptyMapFeedRange(from, to tree.Key, member MembershipHandle, input *UnionInput) error {
 	memberID, _ := member.stored()
 	return s.addPrivateConstantRange(from, to, memberID, input)
 }
@@ -43,7 +43,7 @@ func (s *DraftStore) addEmptyMapFeedRange(from, to tree.Key, member membershipHa
 // member refcount for every record of the sealed tree, and returns the
 // ordered-prefix address count when one was built (Rust
 // DraftStore::finish_empty_map_feed_ranges).
-func (s *DraftStore) finishEmptyMapFeedRanges(member membershipHandle, input *unionInput) (format.Cardinality129, bool, error) {
+func (s *DraftStore) finishEmptyMapFeedRanges(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
 	if err := s.finishPrivateConstantRanges(input); err != nil {
 		return format.Cardinality129{}, false, err
 	}
@@ -65,37 +65,49 @@ func (s *DraftStore) finishEmptyMapFeedRanges(member membershipHandle, input *un
 // coverage tree, untracked (Rust DraftStore::add_feed_coverage: the
 // coverage tree is the input of the upcoming merge, never part of the
 // published range tree).
-func (s *DraftStore) addFeedCoverage(from, to tree.Key, input *unionInput) error {
+func (s *DraftStore) addFeedCoverage(from, to tree.Key, input *UnionInput) error {
 	family, err := s.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := s.draft.workflowRangeRoot
-	count := s.draft.workflowRangeCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.workflowRangeRoot
+	s.rangeCount = s.draft.workflowRangeCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	if _, err := pushPrivateUntracked(ctx, from, to, 1, input); err != nil {
 		return err
 	}
-	s.draft.workflowRangeRoot = root
-	s.draft.workflowRangeCount = count
+	s.draft.workflowRangeRoot = s.rangeRoot
+	s.draft.workflowRangeCount = s.rangeCount
 	return nil
 }
 
 // finishFeedCoverage seals the pending coverage input (Rust
 // DraftStore::finish_feed_coverage).
-func (s *DraftStore) finishFeedCoverage(input *unionInput) error {
+func (s *DraftStore) finishFeedCoverage(input *UnionInput) error {
 	family, err := s.rangeFamily()
 	if err != nil {
 		return err
 	}
-	root := s.draft.workflowRangeRoot
-	count := s.draft.workflowRangeCount
-	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	s.rangeRoot = s.draft.workflowRangeRoot
+	s.rangeCount = s.draft.workflowRangeCount
+	ctx := &s.rangeCtx
+	ctx.family = family
+	ctx.store = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
 	if _, err := finishInputUntracked(ctx, input); err != nil {
 		return err
 	}
-	s.draft.workflowRangeRoot = root
-	s.draft.workflowRangeCount = count
+	s.draft.workflowRangeRoot = s.rangeRoot
+	s.draft.workflowRangeCount = s.rangeCount
 	return nil
 }
 
@@ -103,7 +115,7 @@ func (s *DraftStore) finishFeedCoverage(input *unionInput) error {
 // generation, applying the member bitmap through the feed policy (Rust
 // DraftStore::merge_feed). A created feed with an empty coverage tree
 // returns the exact no-change result without scanning anything.
-func (s *DraftStore) mergeFeed(base format.Meta, member membershipHandle, create bool, check func() error) (feedMerge, error) {
+func (s *DraftStore) mergeFeed(base format.Meta, member MembershipHandle, create bool, check func() error) (FeedMerge, error) {
 	if create && s.draft.workflowRangeRoot == 0 {
 		return emptyFeedMerge(), nil
 	}
@@ -113,8 +125,8 @@ func (s *DraftStore) mergeFeed(base format.Meta, member membershipHandle, create
 // mergeFeedFamily runs the coverage merge for the base address family
 // (Rust DraftStore::merge_feed_family): the coverage meta is the draft
 // meta with the workflow range roots substituted, and the policy output
-// is the scanned before/after comparison.
-func (s *DraftStore) mergeFeedFamily(base format.Meta, member membershipHandle, check func() error) (feedMerge, error) {
+// is the scanned before/after Comparison.
+func (s *DraftStore) mergeFeedFamily(base format.Meta, member MembershipHandle, check func() error) (FeedMerge, error) {
 	coverageMeta := s.draft.meta
 	coverageMeta.RangeRoot = s.draft.workflowRangeRoot
 	coverageMeta.RangeRecordCount = s.draft.workflowRangeCount
@@ -125,23 +137,23 @@ func (s *DraftStore) mergeFeedFamily(base format.Meta, member membershipHandle, 
 		codec = rangeCodec6{}
 	}
 	policy := newFeedPolicy(member, base.AddressFamily)
-	inputIntervals, finished, err := mergeCoverage[scannedComparison](s, coverageMeta, base, codec, &policy, check, "feed input intervals")
+	inputIntervals, finished, err := mergeCoverage[ScannedComparison](s, coverageMeta, base, codec, &policy, check, "feed input intervals")
 	if err != nil {
-		return feedMerge{}, err
+		return FeedMerge{}, err
 	}
 	s.draft.workflowRangeRoot = 0
 	s.draft.workflowRangeCount = 0
-	return feedMerge{
-		inputIntervals: inputIntervals,
-		inputAddresses: finished.comparison.after,
-		comparison:     finished,
+	return FeedMerge{
+		InputIntervals: inputIntervals,
+		InputAddresses: finished.Comparison.After,
+		Comparison:     finished,
 	}, nil
 }
 
 // emptyFeedMerge is the exact no-change outcome of an empty workflow
 // (Rust empty_result).
-func emptyFeedMerge() feedMerge {
-	return feedMerge{comparison: scannedComparison{comparison: comparison{}}}
+func emptyFeedMerge() FeedMerge {
+	return FeedMerge{Comparison: ScannedComparison{Comparison: Comparison{}}}
 }
 
 // cachedMembership is one cached transform outcome keyed on the old
@@ -157,7 +169,7 @@ type cachedMembership struct {
 // bitmap is unioned into covered segments and differenced out of
 // uncovered segments, with one cache slot and the running projection.
 type feedPolicy struct {
-	member     membershipHandle
+	member     MembershipHandle
 	cached     cachedMembership
 	hasCached  bool
 	projection feedProjection
@@ -167,7 +179,7 @@ type feedPolicy struct {
 // newFeedPolicy starts one feed policy over the member handle and the
 // merge address family (Rust FeedPolicy::new; the projection fixes its
 // family at plan time like HistoryPolicy<K>).
-func newFeedPolicy(member membershipHandle, family uint8) feedPolicy {
+func newFeedPolicy(member MembershipHandle, family uint8) feedPolicy {
 	return feedPolicy{member: member, family: family, projection: feedProjection{family: family}}
 }
 
@@ -187,9 +199,9 @@ func (p *feedPolicy) transform(store *DraftStore, old, incoming optionalValue) (
 	if p.hasCached && p.cached.old == old.value && p.cached.covered == covered {
 		return p.cached.new, nil
 	}
-	operation := membershipUnion
+	operation := MembershipUnion
 	if !covered {
-		operation = membershipDifference
+		operation = MembershipDifference
 	}
 	new, present, err := store.combineMemberships(old.value, memberID, memberWords, operation)
 	if err != nil {
@@ -216,7 +228,7 @@ func (p *feedPolicy) observe(from, to tree.Key, old, incoming, new optionalValue
 
 // finish balances and returns the projection (Rust FeedPolicy::finish
 // over Projection::finish).
-func (p *feedPolicy) finish() (scannedComparison, error) {
+func (p *feedPolicy) finish() (ScannedComparison, error) {
 	return p.projection.finish()
 }
 
@@ -226,11 +238,11 @@ func (p *feedPolicy) finish() (scannedComparison, error) {
 func (p *feedPolicy) preserveWithoutInput() bool { return false }
 
 // feedProjection is the scanned before/after projection of one feed
-// policy (Rust Projection<K>): the exact comparison counts plus the
+// policy (Rust Projection<K>): the exact Comparison counts plus the
 // interval counters, with the adjacency state embedded by value so one
 // observe never allocates.
 type feedProjection struct {
-	result          comparison
+	result          Comparison
 	beforeIntervals uint64
 	afterIntervals  uint64
 	lastTo          tree.Key
@@ -254,7 +266,7 @@ func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
 		return err
 	}
 	if before {
-		p.result.before, err = p.result.before.Add(count)
+		p.result.Before, err = p.result.Before.Add(count)
 		if err != nil {
 			return overflow("ordered merge address count")
 		}
@@ -266,7 +278,7 @@ func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
 		}
 	}
 	if after {
-		p.result.after, err = p.result.after.Add(count)
+		p.result.After, err = p.result.After.Add(count)
 		if err != nil {
 			return overflow("ordered merge address count")
 		}
@@ -279,17 +291,17 @@ func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
 	}
 	switch {
 	case before && after:
-		p.result.unchanged, err = p.result.unchanged.Add(count)
+		p.result.Unchanged, err = p.result.Unchanged.Add(count)
 		if err != nil {
 			return overflow("ordered merge address count")
 		}
 	case before && !after:
-		p.result.removed, err = p.result.removed.Add(count)
+		p.result.Removed, err = p.result.Removed.Add(count)
 		if err != nil {
 			return overflow("ordered merge address count")
 		}
 	case !before && after:
-		p.result.added, err = p.result.added.Add(count)
+		p.result.Added, err = p.result.Added.Add(count)
 		if err != nil {
 			return overflow("ordered merge address count")
 		}
@@ -301,30 +313,30 @@ func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
 	return nil
 }
 
-// finish balances the six counts and returns the scanned comparison
+// finish balances the six counts and returns the scanned Comparison
 // (Rust Projection::finish): the before/after totals must equal the
 // unchanged/removed and unchanged/added sums, the changed class must be
 // empty, and the interval counter must agree with the address count
 // emptiness.
-func (p *feedProjection) finish() (scannedComparison, error) {
-	unchangedRemoved, err := p.result.unchanged.Add(p.result.removed)
+func (p *feedProjection) finish() (ScannedComparison, error) {
+	unchangedRemoved, err := p.result.Unchanged.Add(p.result.Removed)
 	if err != nil {
-		return scannedComparison{}, overflow("ordered merge address count")
+		return ScannedComparison{}, overflow("ordered merge address count")
 	}
-	unchangedAdded, err := p.result.unchanged.Add(p.result.added)
+	unchangedAdded, err := p.result.Unchanged.Add(p.result.Added)
 	if err != nil {
-		return scannedComparison{}, overflow("ordered merge address count")
+		return ScannedComparison{}, overflow("ordered merge address count")
 	}
-	if unchangedRemoved.Compare(p.result.before) != 0 ||
-		unchangedAdded.Compare(p.result.after) != 0 ||
-		p.result.changed.Compare(format.CardinalityZero()) != 0 ||
-		(p.afterIntervals == 0) != (p.result.after.Compare(format.CardinalityZero()) == 0) {
-		return scannedComparison{}, corrupt("feed merge counters do not balance")
+	if unchangedRemoved.Compare(p.result.Before) != 0 ||
+		unchangedAdded.Compare(p.result.After) != 0 ||
+		p.result.Changed.Compare(format.CardinalityZero()) != 0 ||
+		(p.afterIntervals == 0) != (p.result.After.Compare(format.CardinalityZero()) == 0) {
+		return ScannedComparison{}, corrupt("feed merge counters do not balance")
 	}
-	return scannedComparison{
-		comparison:      p.result,
-		beforeIntervals: p.beforeIntervals,
-		afterIntervals:  p.afterIntervals,
+	return ScannedComparison{
+		Comparison:      p.result,
+		BeforeIntervals: p.beforeIntervals,
+		AfterIntervals:  p.afterIntervals,
 	}, nil
 }
 

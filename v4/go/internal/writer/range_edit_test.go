@@ -19,6 +19,8 @@ type rangeMemoryStore struct {
 	discarded []uint32
 	reads     uint64
 	writes    uint64
+	scratch   [3][format.RangeRecordV6Size]byte
+	rangeCtx  rangeCtx
 }
 
 func newRangeMemoryStore() *rangeMemoryStore {
@@ -129,7 +131,14 @@ func rangesV6(m *rangeMemoryStore, root uint32) []format.RangeRecordV6 {
 }
 
 func newV4Ctx(m *rangeMemoryStore, root *uint32, count *uint64) *rangeCtx {
-	return &rangeCtx{family: rangeCodec4{}, store: m, root: root, count: count}
+	ctx := &m.rangeCtx
+	ctx.family = rangeCodec4{}
+	ctx.store = m
+	ctx.root = root
+	ctx.count = count
+	ctx.untracked = false
+	ctx.scratch = &m.scratch
+	return ctx
 }
 
 // TestBigEndianPortableRangeRecordMatchesLiteralBytes mirrors the Rust
@@ -140,7 +149,8 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 		to:    tree.Key{Hi: 0x05060708},
 		value: 0x090a0b0c,
 	}
-	ctx := &rangeCtx{family: rangeCodec4{}}
+	var scratch [3][format.RangeRecordV6Size]byte
+	ctx := &rangeCtx{family: rangeCodec4{}, scratch: &scratch}
 	encoded, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +183,8 @@ func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 		to:    tree.Key{Hi: 0x1112131415161718, Lo: 0x191a1b1c1d1e1f20},
 		value: 0x2a2b2c2d,
 	}
-	ctx := &rangeCtx{family: rangeCodec6{}}
+	var scratch [3][format.RangeRecordV6Size]byte
+	ctx := &rangeCtx{family: rangeCodec6{}, scratch: &scratch}
 	encoded, err := ctx.encodeRecord(0, r)
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +306,13 @@ func TestEndpointArithmeticHandlesBothFullAddressSpaces(t *testing.T) {
 	m6 := newRangeMemoryStore()
 	root6 := uint32(0)
 	count6 := uint64(0)
-	ctx6 := &rangeCtx{family: rangeCodec6{}, store: m6, root: &root6, count: &count6}
+	ctx6 := &m6.rangeCtx
+	ctx6.family = rangeCodec6{}
+	ctx6.store = m6
+	ctx6.root = &root6
+	ctx6.count = &count6
+	ctx6.untracked = false
+	ctx6.scratch = &m6.scratch
 	if _, err := rangeAssign(ctx6, tree.Key{}, tree.Key{Hi: ^uint64(0), Lo: ^uint64(0)}, 21); err != nil {
 		t.Fatal(err)
 	}

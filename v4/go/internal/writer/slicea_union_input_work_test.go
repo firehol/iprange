@@ -28,16 +28,22 @@ func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, v
 	if err != nil {
 		return false, err
 	}
-	root := store.draft.meta.RangeRoot
-	count := store.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	store.rangeRoot = store.draft.meta.RangeRoot
+	store.rangeCount = store.draft.meta.RangeRecordCount
+	ctx := &store.rangeCtx
+	ctx.family = family
+	ctx.store = store
+	ctx.untracked = false
+	ctx.root = &store.rangeRoot
+	ctx.count = &store.rangeCount
+	ctx.scratch = &store.rangeScratch
 	ctx.markUntracked()
 	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
 	if err != nil {
 		return false, err
 	}
-	store.draft.meta.RangeRoot = root
-	store.draft.meta.RangeRecordCount = count
+	store.draft.meta.RangeRoot = store.rangeRoot
+	store.draft.meta.RangeRecordCount = store.rangeCount
 	return changed, nil
 }
 
@@ -49,7 +55,7 @@ func TestWorkUnionInputQueueNormalizes(t *testing.T) {
 	const inputs = 2000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	work.Reset()
 	for key := uint32(0); key < inputs; key++ {
 		if err := pushWorkflowCoverage(store, &input, key4(key), key4(key), 42); err != nil {
@@ -74,7 +80,7 @@ func TestWorkUnionInputAscendingPacked(t *testing.T) {
 	const inputs = 2000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	work.Reset()
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := ordinal * 4
@@ -126,7 +132,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount}, &state); err != nil {
+		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount, scratch: &store.rangeScratch}, &state); err != nil {
 			t.Fatal(err)
 		}
 		snapshot := work.Read()
@@ -189,7 +195,7 @@ func TestWorkUnionInputLeafLocatorHints(t *testing.T) {
 	const inputs = 20000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	input := newUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
+	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 	work.Reset()
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := (ordinal * 15997 % inputs) * 4
@@ -333,15 +339,21 @@ func TestWorkUnionInputFlushKeepsEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := store.draft.meta.RangeRoot
-	count := store.draft.meta.RangeRecordCount
-	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
+	store.rangeRoot = store.draft.meta.RangeRoot
+	store.rangeCount = store.draft.meta.RangeRecordCount
+	ctx := &store.rangeCtx
+	ctx.family = family
+	ctx.store = store
+	ctx.untracked = false
+	ctx.root = &store.rangeRoot
+	ctx.count = &store.rangeCount
+	ctx.scratch = &store.rangeScratch
 	ctx.markUntracked()
 	if err := finishPrivateUntracked(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
-	store.draft.meta.RangeRoot = root
-	store.draft.meta.RangeRecordCount = count
+	store.draft.meta.RangeRoot = store.rangeRoot
+	store.draft.meta.RangeRecordCount = store.rangeCount
 	if !state.hasEdge {
 		t.Fatal("finish_private dropped the cached edge (Rust keeps it after the flush)")
 	}
