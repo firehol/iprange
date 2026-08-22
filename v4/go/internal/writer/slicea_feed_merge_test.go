@@ -251,6 +251,14 @@ func TestFeedMergeEmptyMapSpliceStaysUntracked(t *testing.T) {
 	if delta == nil || delta.change != 1 {
 		t.Fatalf("membership delta after the splice = %+v, want exactly +1 (the coverage splice must stay untracked)", delta)
 	}
+	for index := range store.draft.membershipDeltaPending.used {
+		if store.draft.membershipDeltaPending.used[index] && store.draft.membershipDeltaPending.slots[index].id != member.id {
+			t.Fatalf("a second membership id was charged by the coverage splice: %+v", store.draft.membershipDeltaPending.slots[index])
+		}
+	}
+	if store.draft.membershipDeltaRoot != 0 {
+		t.Fatal("the membership delta tree was allocated; more ids were charged than the pending slots")
+	}
 }
 
 func TestFeedMergeEmptyMapCreate(t *testing.T) {

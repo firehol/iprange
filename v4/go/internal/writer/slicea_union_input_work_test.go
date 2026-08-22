@@ -20,24 +20,25 @@ import (
 )
 
 // directUnionRange applies one range through the monotonic union state
-// without the buffered input, untracked (Rust union_private over the
-// MemoryStore; the value accounting is a no-op exactly like the Rust
-// memory store).
-func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, value uint32) error {
+// without the buffered input, untracked, and reports whether the tree
+// changed (Rust union_private over the MemoryStore; the value
+// accounting is a no-op exactly like the Rust memory store).
+func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, value uint32) (bool, error) {
 	family, err := store.rangeFamily()
 	if err != nil {
-		return err
+		return false, err
 	}
 	root := store.draft.meta.RangeRoot
 	count := store.draft.meta.RangeRecordCount
 	ctx := &rangeCtx{family: family, store: store, root: &root, count: &count}
 	ctx.markUntracked()
-	if _, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state); err != nil {
-		return err
+	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
+	if err != nil {
+		return false, err
 	}
 	store.draft.meta.RangeRoot = root
 	store.draft.meta.RangeRecordCount = count
-	return nil
+	return changed, nil
 }
 
 // TestWorkUnionInputQueueNormalizes pins the Rust
@@ -121,7 +122,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 				key = ordinal
 			}
 			key *= 4
-			if err := directUnionRange(store, &state, key4(key), key4(key+1), 1); err != nil {
+			if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 1); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -166,7 +167,7 @@ func TestWorkUnionInputRandomOrderBounds(t *testing.T) {
 	work.Reset()
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := (ordinal * 1597 % inputs) * 4
-		if err := directUnionRange(store, &state, key4(key), key4(key+1), 1); err != nil {
+		if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -266,5 +267,49 @@ func TestWorkUnionAssignmentLocatorV4V6(t *testing.T) {
 				t.Fatal("IPv6 skipped canonical descent")
 			}
 		}
+	}
+}
+
+// TestWorkUnionInputSpliceLargeRun pins the Rust
+// private_constant_union_splices_a_large_run_without_per_record_searches
+// counters (range_mutation_tests.rs:697-714): the covering range splices
+// a 2,000-record constant run into one record, coalescing every record
+// exactly once, performing exactly one tree lookup per affected leaf,
+// and never rescanning records.
+func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
+	const inputs = 2000
+	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
+	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
+	var state unionState
+	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
+		key := ordinal * 4
+		if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 42); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work.Reset()
+	changed, err := directUnionRange(store, &state, key4(0), key4(8000), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := work.Read()
+	if !changed {
+		t.Fatal("covering splice reported no change")
+	}
+	if store.draft.meta.RangeRecordCount != 1 {
+		t.Fatalf("spliced count = %d, want 1", store.draft.meta.RangeRecordCount)
+	}
+	records := readDraftRangeTree(t, store, store.draft.meta)
+	if len(records) != 1 || records[0].from.Hi != 0 || records[0].to.Hi != 8000 || records[0].value != 42 {
+		t.Fatalf("spliced tree = %+v, want the single covering record [0,8000] value 42", records)
+	}
+	if snapshot.RangesCoalesced != inputs {
+		t.Fatalf("coalesced = %d, want %d", snapshot.RangesCoalesced, inputs)
+	}
+	if snapshot.TreeLookups != 8 {
+		t.Fatalf("tree lookups = %d, want one per affected leaf (8)", snapshot.TreeLookups)
+	}
+	if snapshot.CellProbes >= inputs+200 {
+		t.Fatalf("cell probes = %d >= %d, records were rescanned", snapshot.CellProbes, inputs+200)
 	}
 }

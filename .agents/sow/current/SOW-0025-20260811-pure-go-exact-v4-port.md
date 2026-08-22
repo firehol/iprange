@@ -46,18 +46,49 @@ Status: in-progress
 
 Status: in-progress
 
+### Status (2026-08-22) - slice A records-accuracy round: full battery on the committed HEAD, P3 hardening landed
+
+The five-aspect re-review of HEAD c656b71 (the untracked-accounting
+fix) returned four PASS and one FAIL:
+
+- PASS: Rust parity, Go idioms, performance, wire format/integrity.
+  The P1/P2 fixes were verified; the exact splice counters of the Rust
+  vector hold in Go (coalesced 2000, tree lookups 8, cell probes
+  < 2200).
+- FAIL (APIs/docs, records accuracy only): the round entry claimed the
+  full validation battery (go test ./... and -tags v4work with
+  -count=1 and -race, checkptr=2, six cross-builds) without a recorded
+  run on that HEAD. The full battery was re-run on the fixed tree
+  below and the entry now matches what was executed; the P1 label now
+  names the defect class (untracked accounting / Rust parity) with the
+  reviewing aspect in parentheses, the coverage file is referenced by
+  its full path, and the measured allocation baseline is stated as
+  ~565.
+
+Actionable non-blocking notes from the four PASS aspects were landed
+in the same delta: rangeRecordAdded documents its end-to-end
+accounting contract; the splice regression test also asserts that no
+membership id other than the sealed feed is charged (pending slots
+hold only member.id and the delta tree root stays 0); a new v4work
+counter twin pins the Rust splice vector exactly
+(TestWorkUnionInputSpliceLargeRun); and the rangeCtx.untracked field
+comment warns that a marked context must never be reused for a
+tracked operation.
+
 ### Status (2026-08-22) - slice A second reviewer round: one P1 and two P2 verified and fixed
 
 The aspect-reviewer round on the encode-scratch fix (HEAD 4bd7f82)
 returned three more findings, all verified against the tree:
 
-- **P1 (Performance aspect): insert() bypassed the new untracked
-  flag.** The wrapper removal converted every per-record accounting
-  site except insert(), which still called ctx.store.RangeRecordAdded
-  directly; on the marked-untracked coverage path the union-run splice
-  (unionRun -> insert, coverage.go:725) charged a spurious membership
-  refcount delta into the draft (the old untrackedRangeStore wrapper
-  made it a no-op). Verified end-to-end with the Rust
+- **P1 (defect class: untracked-accounting / Rust parity; found by
+  the Performance-aspect reviewer): insert() bypassed the new
+  untracked flag.** The wrapper removal converted every per-record
+  accounting site except insert(), which still called
+  ctx.store.RangeRecordAdded directly; on the marked-untracked
+  coverage path the union-run splice (unionRun -> insert,
+  v4/go/internal/writer/range_coverage.go:725) charged a spurious
+  membership refcount delta into the draft (the old
+  untrackedRangeStore wrapper made it a no-op). Verified end-to-end with the Rust
   private_constant_union_splices_a_large_run... vector through the
   empty-map feed: before the fix the member delta was +2 (splice +1,
   sealed count +1), after the fix exactly +1. Fix: insert() routes
@@ -70,7 +101,7 @@ returned three more findings, all verified against the tree:
   array, corrupt error on violation.
 - **P2: the general-path alloc ceiling was loose enough to admit one
   new per-record allocation** (826 for 256 records allowed 3.0/record
-  vs the 1.98 baseline). Fix: ceiling tightened to 800 (baseline ~568;
+  vs the 1.98 baseline). Fix: ceiling tightened to 800 (baseline ~565;
   a +1/record regression lands at ~820). The slope-based alternative
   was measured and rejected: the generic gap machinery allocates
   non-linearly (2.89/record at 512 records vs 1.98 at 256), so the pin

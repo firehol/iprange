@@ -34,7 +34,10 @@ type rangeCtx struct {
 	// operation (Rust Untracked wrapper): coverage ranges are internal
 	// to one workflow and never account membership refcounts. One flag
 	// replaces the per-record wrapper context of the coverage input
-	// path.
+	// path. Every untracked entry point builds a fresh context and
+	// marks it before the first operation; a marked context must never
+	// be reused for a tracked operation (the flag would silently skip
+	// membership accounting).
 	untracked bool
 	// encodeScratch owns the fixed-size encode targets of this draft
 	// operation (Rust EncodedRange locals). The generic rangeFamily
@@ -519,6 +522,9 @@ func insertPrivateRejected(ctx *rangeCtx, r rangeRecord, rejected *tree.LocalRej
 	return position, fits, nil
 }
 
+// rangeRecordAdded accounts one added record end to end: the record
+// count, the untracked-aware store charge, and the emitted-work
+// counter (Rust range_record_added under insert).
 func rangeRecordAdded(ctx *rangeCtx, value uint32) error {
 	if err := addCount(ctx.count, 1); err != nil {
 		return err
