@@ -7,6 +7,7 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -219,4 +220,86 @@ func (s *DraftStore) addFeedToMembership(base membershipHandle, feed feedEntry) 
 	}
 	s.storeMembershipState(state)
 	return handleFromInterned(interned), nil
+}
+
+// applyMembership applies one membership operation over the inclusive
+// [from, to] interval of the draft range tree (Rust
+// DraftStore::apply_membership): every present segment is combined with
+// the supplied member bitmap through the authoritative transform walk,
+// the membership dictionary state moves inside each combination, and the
+// range root/count commit only after the walk succeeds. The checkpoint
+// runs before every cell combination (Rust apply_membership calls the
+// checkpoint inside the transform closure).
+func (s *DraftStore) applyMembership(from, to tree.Key, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+	family, err := s.rangeFamily()
+	if err != nil {
+		return false, err
+	}
+	root := s.draft.meta.RangeRoot
+	count := s.draft.meta.RangeRecordCount
+	ctx := &rangeCtx{family: family, store: s, root: &root, count: &count}
+	memberID, memberWords := member.stored()
+	changed, err := rangeTransform(ctx, from, to, func(store RangeStore, value optionalValue) (optionalValue, error) {
+		if err := check(); err != nil {
+			return optionalValue{}, err
+		}
+		current := uint32(0)
+		if value.present {
+			current = value.value
+		}
+		id, present, err := s.combineMemberships(current, memberID, memberWords, operation)
+		if err != nil {
+			return optionalValue{}, err
+		}
+		return optionalValue{value: id, present: present}, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	s.draft.meta.RangeRoot = root
+	s.draft.meta.RangeRecordCount = count
+	s.draft.changed = s.draft.changed || changed
+	return changed, nil
+}
+
+// applyMembershipV4 applies one membership operation over an inclusive
+// IPv4 interval (Rust DraftStore::apply_membership_v4).
+func (s *DraftStore) applyMembershipV4(from, to uint32, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+	return s.applyMembership(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, member, operation, check)
+}
+
+// applyMembershipV6 applies one membership operation over an inclusive
+// IPv6 interval (Rust DraftStore::apply_membership_v6).
+func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member membershipHandle, operation membershipOperation, check func() error) (bool, error) {
+	return s.applyMembership(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, member, operation, check)
+}
+
+// deleteCurrentFeedMembership deletes one feed and clears its bit from
+// every stored membership (Rust
+// DraftStore::delete_current_feed_membership_cancellable): the member
+// bitmap is interned, subtracted from the whole family range through the
+// authoritative transform, and only then is the catalog entry removed.
+func (s *DraftStore) deleteCurrentFeedMembership(feed feedEntry, check func() error) error {
+	if err := check(); err != nil {
+		return err
+	}
+	member, err := s.addFeedToMembership(emptyMembershipHandle(), feed)
+	if err != nil {
+		return err
+	}
+	minimum := tree.Key{}
+	maximum := tree.Key{}
+	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
+		maximum.Hi = 1<<32 - 1
+	} else {
+		maximum.Hi = ^uint64(0)
+		maximum.Lo = ^uint64(0)
+	}
+	if _, err := s.applyMembership(minimum, maximum, member, membershipDifference, check); err != nil {
+		return err
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	return s.removeCurrentFeed(feed)
 }

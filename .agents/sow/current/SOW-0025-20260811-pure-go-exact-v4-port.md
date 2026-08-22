@@ -42,6 +42,45 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-22) - chalk: slice B (public feed workflows) starts
+
+Slice A (internal draft machinery) is gated PASS at HEAD b80295a /
+da1e769 by all five aspects. Slice B implements the public v4/go
+surface over the existing draft machinery, Rust baseline
+live_writer/{feed_workflow,feed_lifecycle,membership,workflow}.rs,
+feed.rs, feed_catalog.rs, workflow.rs, writer_core/{edit,core}.rs,
+draft_store/{feed_merge,membership}.rs:
+
+- Internal writer additions: base-meta feed lookup
+  (Core.LookupBaseFeed), current-meta feed lookup and enumeration
+  (Core.LookupCurrentFeed, feed cursor over the index tree),
+  MembershipOperation apply (DraftStore.applyMembership over the
+  existing rangeTransform + combineMemberships), feed membership
+  delete (deleteCurrentFeedMembership), full-map comparison sweep
+  (Core.CompareMaps, Rust workflow/compare.rs), the WriterEdit feed
+  bindings, and a nonce-returning begin_transaction (Core.BeginTransaction).
+- Public surface: FeedName validated binding, CreateFeed/ReplaceFeed
+  (BeginCreateFeed/BeginReplaceFeed, AddRangesV4/V6(+Slice),
+  FinishInput), FinishedWorkflow/PreparedWorkflow single Go handle
+  (DirectTransaction precedent), PreparedFeedChange for
+  RenameFeed/DeleteFeed, MembershipTransaction with
+  FeedRef/MembershipRef/TransactionFeedCursor, and the public
+  MembershipOperation enum.
+- Tests: mirror Rust feed_workflow_tests.rs (three vectors with exact
+  work counters and zero allocations), the membership transaction
+  surface semantics (references, epochs, apply/ensure/rename/delete,
+  cursor, metadata, commit/abort), work-counter and zeroalloc pins,
+  and Rust cross-open at the close gate.
+
+No open user decisions: the exact-feed workflows mirror the Rust public
+API one-to-one (records: 2026-08-22 chunk-3b-5 entry), and the Go
+handle-collapse precedent (DirectTransaction / FinishedHistoryProjection)
+applies to FinishedWorkflow.
+
+- Next: implement chunk B1 (internal writer), run the pinned battery,
+  commit, then chunk B2 (public surface), then chunk B3 (tests) and the
+  five-aspect close gate.
+
 ### Status (2026-08-22) - slice A round-6 cleanup: all five aspects PASS on b80295a
 
 Round-5 residue landed on top of f1cedb6 and re-validated end-to-end

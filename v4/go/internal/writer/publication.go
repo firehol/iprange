@@ -70,14 +70,29 @@ func (c *Core) StartDraft(nonce [16]byte) error {
 // caller nonce; the all-zero draw refusal of StartDraft stays in force
 // (Rust random::nonzero_128 parity).
 func (c *Core) BeginDraft() error {
+	_, err := c.BeginTransaction()
+	return err
+}
+
+// BeginTransaction starts one COW draft and returns its operation nonce
+// (Rust WriterCore::begin_transaction parity: the nonce is the
+// crash-recovery operation identity that transaction references pin, so
+// the advanced transaction surfaces keep it).
+func (c *Core) BeginTransaction() ([16]byte, error) {
 	if err := c.requireHealthy(); err != nil {
-		return err
+		return [16]byte{}, err
+	}
+	if c.draft != nil {
+		return [16]byte{}, &format.Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
 	}
 	nonce, err := randomNonce()
 	if err != nil {
-		return err
+		return [16]byte{}, err
 	}
-	return c.StartDraft(nonce)
+	if err := c.StartDraft(nonce); err != nil {
+		return [16]byte{}, err
+	}
+	return nonce, nil
 }
 
 // Draft returns the open draft, or nil (Rust WriterCore::draft).

@@ -191,3 +191,27 @@ func (s *DraftStore) removeCurrentFeed(expected feedEntry) error {
 	s.draft.changed = true
 	return nil
 }
+
+// lookupCatalogFeed resolves one exact feed name in one pinned catalog
+// generation (Rust feed_catalog::lookup over a MetaV4): the committed
+// base for the workflow preconditions, or the draft generation for
+// reference currency. The pinned view bounds every page read to the
+// generation's page count and transaction.
+func lookupCatalogFeed(store *DraftStore, meta format.Meta, name string) (feedEntry, bool, error) {
+	work.CatalogLookup(1)
+	work.TreeLookup(1) // charged before the root shortcut (Rust fixed_tree::query)
+	if meta.CatalogNameRoot == 0 {
+		return feedEntry{}, false, nil
+	}
+	value, ok, err := tree.AtOrAfter(nameCodec{}, selectedStore{store: store, meta: meta}, meta.CatalogNameRoot, tree.VarKey([]byte(name)))
+	if err != nil {
+		return feedEntry{}, false, err
+	}
+	if !ok {
+		return feedEntry{}, false, nil
+	}
+	if !nameBytesEqual(name, value.Name) {
+		return feedEntry{}, false, nil
+	}
+	return feedEntry{name: name, index: value.FeedIndex}, true, nil
+}

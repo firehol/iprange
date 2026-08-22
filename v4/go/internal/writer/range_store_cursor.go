@@ -49,6 +49,26 @@ func (s selectedStore) DiscardPrivate(pageNumber uint32) error {
 	return corrupt("selected base source cannot discard pages")
 }
 
+// The mutating Store methods are unreachable on a pinned generation
+// source (base reads and catalog queries never allocate or update); each
+// fails closed like DiscardPrivate, so a future misuse cannot corrupt a
+// pinned generation through this view.
+func (s selectedStore) Allocate() (uint32, error) {
+	return 0, corrupt("selected base source cannot allocate")
+}
+
+func (s selectedStore) Update(pageNumber uint32) ([]byte, uint32, error) {
+	return nil, 0, corrupt("selected base source cannot update")
+}
+
+func (s selectedStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+	return corrupt("selected base source cannot restore")
+}
+
+func (s selectedStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
+	return nil, nil, 0, corrupt("selected base source cannot copy")
+}
+
 // rangeCursor is one forward cursor over a base generation range tree
 // through the draft mapping (Rust Cursor<K> with SelectedStore).
 type rangeCursor struct {
