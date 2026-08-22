@@ -42,6 +42,32 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - slice B gated PASS: all five aspects green on 948aa93
+
+Re-review round 2 closed: Meitner (Rust parity), Anscombe (Go idioms),
+Harvey (performance), Newton (wire/integrity), Aristotle (APIs/docs) all
+PASS at HEAD 948aa93, after the residue fixes committed at f397ebe and
+948aa93:
+
+- f397ebe: applyStructureDelta retire-leak fix (fresh clearedRetired,
+  single retirement), prepare cancellation threading (Rust
+  draft_store.rs:318), AddRangesV4/V6 abort-contract docs,
+  requireActive stale-first ordering, BindEdit CodeNoPendingTransaction,
+  SlottedInsert/TryPush/Finish InvalidArgument classes, zeroalloc
+  bounded runtime-metadata window.
+- 948aa93: alloc-ceiling comment arithmetic (54 + 256 = 310) and the
+  zeroalloc metadata window now falls through to the continuation pin so
+  the exact 0-object/0-byte assertion runs on every invocation.
+- Carried P3s (tracked, non-blocking): comparison.go
+  ScannedComparison.Comparison field stutter; noopCheck vs
+  noopCheckpoint package naming; leaf-re-inspect after COW first-touch
+  (tree/path.go) documented retained cost.
+- Full battery green under nice at the gated HEAD: build, gofmt clean,
+  vet, plain/v4work tests, race, race+v4work, checkptr=2, six
+  cross-compiles.
+- Next: slice C (public projection facade over the ordered merge and
+  workflow surfaces).
+
 ### Status (2026-08-23) - slice B review-fix round 2: re-review verdicts and residue fixes
 
 First fix round committed at c1fd96b; all five aspects re-reviewed. Harvey
