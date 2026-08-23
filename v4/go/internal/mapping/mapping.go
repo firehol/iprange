@@ -65,7 +65,7 @@ type Mapping struct {
 // the committed extent from the meta pair and Remaps to it, so a huge
 // corrupt or unpublished tail never costs VA and never becomes writable at
 // open.
-func openMapping(path string, rdwr bool, check func(clean string) error) (*Mapping, error) {
+func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
 	// Refuse live opens on platforms without proven live coordination
 	// before any path access, mirroring Rust require_live_supported
@@ -89,11 +89,9 @@ func openMapping(path string, rdwr bool, check func(clean string) error) (*Mappi
 	}
 	flags := os.O_RDONLY
 	prot := unix.PROT_READ
-	takeLock := lockLifetimeShared
 	if rdwr {
 		flags = os.O_RDWR
 		prot = unix.PROT_READ | unix.PROT_WRITE
-		takeLock = lockLifetimeExclusive
 	}
 	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -190,7 +188,7 @@ func openMapping(path string, rdwr bool, check func(clean string) error) (*Mappi
 // Geometry refusals carry CodeFormatInvalid; operating-system failures carry
 // CodeIO. See openMapping for the full identity and namespace contract.
 func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
-	return openMapping(path, false, check)
+	return openMapping(path, false, lockLifetimeShared, check)
 }
 
 // OpenMutable opens path for the single live writer: O_RDWR under the
@@ -203,7 +201,17 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 // to OpenImmutable. Only this package may create and destroy mappings; the
 // descriptor never escapes it.
 func OpenMutable(path string, check func(clean string) error) (*Mapping, error) {
-	return openMapping(path, true, check)
+	return openMapping(path, true, lockLifetimeExclusive, check)
+}
+
+// OpenMutableShared opens path read-write under the shared lifetime lock
+// for the live writer (Rust open_main lock_file(MAIN_LIFETIME_LOCK,
+// Shared)): the sidecar writer claim provides writer exclusivity, so the
+// exclusive-lock substitution used by the chunk-1 writer open is not
+// taken here. Geometry, identity, and namespace checks are identical to
+// OpenMutable.
+func OpenMutableShared(path string, check func(clean string) error) (*Mapping, error) {
+	return openMapping(path, true, lockLifetimeShared, check)
 }
 
 // Size returns the currently mapped byte length (2 pages during bootstrap,
@@ -405,8 +413,9 @@ func (m *Mapping) FlushPage(pgno uint32) error {
 
 // FileSize re-stats the locked file and returns its physical length (Rust
 // mapping.rs file().metadata().len()). The tracked PhysicalSize is kept in
-// sync by Grow/Shrink, but the publication and close paths must observe
-// the real locked extent after external truncation.
+// sync by Grow/Shrink and is authoritative for sizing; FileSize observes
+// the real locked extent where the caller must see external truncation
+// (committed selection, draft-length proof, and tail-evidence paths).
 func (m *Mapping) FileSize() (uint64, error) {
 	if m.file == nil {
 		return 0, &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}

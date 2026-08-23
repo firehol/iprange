@@ -339,3 +339,133 @@ func TestPublicClearMetadataJSON(t *testing.T) {
 		t.Fatalf("cleared metadata present %v err %v", present, err)
 	}
 }
+
+// TestPublicDirectOpFailureAbortsDraft pins the Rust mutate
+// abort_after contract on the immutable-mode direct transaction: a
+// failed store op must discard the draft and spend the transaction, so
+// a later Commit can never publish the partial mutation the failed op
+// left behind (Rust DirectState ops route every store error through
+// LiveWriter::mutate -> abort_after).
+func TestPublicDirectOpFailureAbortsDraft(t *testing.T) {
+	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
+	budget := DefaultBudget()
+	budget.MaxHeapBytes = 0
+	w, err := OpenWriter(path, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	tx, err := w.BeginDirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.AssignV4(IPv4(10), IPv4(20), 5); err != nil || !changed {
+		t.Fatalf("assign: changed=%v err=%v", changed, err)
+	}
+	// The metadata compression heap charge fails inside the store (Rust
+	// metadata.rs compress): the op must abort the draft and report the
+	// TransactionAborted class wrapping the cause.
+	if _, err := tx.SetMetadataJSON([]byte("x")); err == nil {
+		t.Fatal("metadata stage succeeded under a zero heap budget")
+	} else if !isPubCode(err, ErrorTransactionAborted) {
+		t.Fatalf("failed op = %v, want TransactionAborted", err)
+	}
+	// The draft is gone: Commit and Abort report the Rust
+	// NoPendingTransaction class (commit_attempt/abort have no nonce
+	// gate on a draft-less core), never WrongState.
+	if _, err := tx.Commit(); err == nil {
+		t.Fatal("commit succeeded after the aborted op")
+	} else if !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit after aborted op = %v, want NoPendingTransaction", err)
+	}
+	if _, err := tx.Commit(); err == nil {
+		t.Fatal("second commit succeeded on the spent transaction")
+	} else if !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("spent commit = %v, want NoPendingTransaction", err)
+	}
+	if err := tx.Abort(); err == nil {
+		t.Fatal("abort succeeded after the aborted op")
+	} else if !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after aborted op = %v, want NoPendingTransaction", err)
+	}
+	// The failure class is not fatal (budget exhaustion): the writer
+	// stays healthy and a fresh transaction commits normally.
+	tx2, err := w.BeginDirect()
+	if err != nil {
+		t.Fatalf("BeginDirect after aborted op: %v", err)
+	}
+	if changed, err := tx2.AssignV4(IPv4(30), IPv4(40), 7); err != nil || !changed {
+		t.Fatalf("post-abort assign: changed=%v err=%v", changed, err)
+	}
+	result, err := tx2.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != CommitCommitted {
+		t.Fatalf("post-abort status = %v, want committed (cause %v)", result.Status, result.Err)
+	}
+	// The failed op's partial mutation never published: the immutable
+	// reader (after the writer releases its exclusive lifetime lock)
+	// sees only the post-abort value, and the first assign's value is
+	// absent because the whole draft was discarded.
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatalf("OpenImmutable: %v", err)
+	}
+	defer r.Close()
+	if _, ok, err := r.LookupDirectV4(IPv4(15)); err != nil || ok {
+		t.Fatalf("LookupDirectV4(15) = (ok %v, err %v), want none after the aborted draft", ok, err)
+	}
+	if got, ok, err := r.LookupDirectV4(IPv4(35)); err != nil || !ok || got != 7 {
+		t.Fatalf("LookupDirectV4(35) = (%d, %v, %v), want (7, true)", got, ok, err)
+	}
+}
+
+// TestPublicDirectOversizedMetadataKeepsDraft pins the Rust
+// stage_metadata_json position on the immutable-mode direct
+// transaction: an oversized payload refuses with ErrorInvalidArgument
+// before the store, so the draft survives and the transaction can still
+// commit its already-staged ranges.
+func TestPublicDirectOversizedMetadataKeepsDraft(t *testing.T) {
+	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	tx, err := w.BeginDirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.AssignV4(IPv4(1), IPv4(9), 3); err != nil || !changed {
+		t.Fatalf("assign: changed=%v err=%v", changed, err)
+	}
+	oversized := make([]byte, 20<<20+1)
+	if _, err := tx.SetMetadataJSON(oversized); err == nil {
+		t.Fatal("oversized metadata stage succeeded")
+	} else if !isPubCode(err, ErrorInvalidArgument) {
+		t.Fatalf("oversized metadata = %v, want InvalidArgument", err)
+	}
+	// The draft survived the refusal: the staged range commits.
+	result, err := tx.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != CommitCommitted {
+		t.Fatalf("status = %v, want committed (cause %v)", result.Status, result.Err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenImmutable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, ok, err := r.LookupDirectV4(IPv4(5)); err != nil || !ok || got != 3 {
+		t.Fatalf("LookupDirectV4(5) = (%d, %v, %v), want (3, true)", got, ok, err)
+	}
+}

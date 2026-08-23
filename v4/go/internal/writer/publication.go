@@ -213,10 +213,12 @@ func (c *Core) Publish(checkpoint func() error) PublishResult {
 		return c.outcomeUnknown(err)
 	}
 	fault.Crash("commit.after_meta_sync")
-	physical, err := c.m.FileSize()
-	if err != nil {
-		return c.outcomeUnknown(err)
-	}
+	// The physical extent is the value observed by the shrink step above
+	// (Rust publish reuses the shrink_or_retain result): under the
+	// lifetime lock no legitimate actor can change the extent between
+	// the shrink and this final sync, so the tracked value avoids a
+	// redundant stat on every commit.
+	physical := c.m.PhysicalSize()
 	c.base = bootstrap.Result{
 		Meta:             meta,
 		Selection:        bootstrap.SelectionProvenCurrent,

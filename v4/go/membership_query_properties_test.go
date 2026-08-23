@@ -32,13 +32,14 @@ func queryPropertyRandom(state *uint64) uint64 {
 	return *state
 }
 
-// queryPropertyBudget mirrors the Rust transaction_budget() (the Go
-// PageBudget has no open-files bound).
+// queryPropertyBudget mirrors the Rust transaction_budget() values,
+// including the live-writer open-files bound.
 func queryPropertyBudget() PageBudget {
 	return PageBudget{
 		MaxHeapBytes:    2 * 1024 * 1024,
 		MaxPrivatePages: 20_000,
 		MaxGrowthPages:  20_000,
+		MaxOpenFiles:    2,
 	}
 }
 

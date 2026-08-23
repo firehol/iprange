@@ -14,25 +14,28 @@ import (
 )
 
 // PageBudget declares the draft resource limits of one opened writer
-// (Rust live_writer::TransactionBudget minus the sidecar file bound):
-// MaxHeapBytes bounds owned scratch (metadata compression), MaxPrivatePages
-// bounds the COW draft extent, MaxGrowthPages bounds the file growth one
-// transaction may claim.
+// (Rust live_writer::TransactionBudget): MaxHeapBytes bounds owned
+// scratch (metadata compression), MaxPrivatePages bounds the COW draft
+// extent, MaxGrowthPages bounds the file growth one transaction may
+// claim, and MaxOpenFiles bounds the descriptors one operation may hold
+// (the live writer validates it at open, Rust TransactionBudget::
+// validate).
 type PageBudget struct {
 	MaxHeapBytes    uint64
 	MaxPrivatePages uint64
 	MaxGrowthPages  uint64
+	MaxOpenFiles    uint32
 }
 
 // DefaultBudget returns the budget proven by the committed corpus
 // generation (the Rust conformance transaction_budget values for the
 // writer work the fixtures exercise).
 func DefaultBudget() PageBudget {
-	return PageBudget{MaxHeapBytes: 32 << 20, MaxPrivatePages: 200_000, MaxGrowthPages: 200_000}
+	return PageBudget{MaxHeapBytes: 32 << 20, MaxPrivatePages: 200_000, MaxGrowthPages: 200_000, MaxOpenFiles: 2}
 }
 
 func (b PageBudget) internal() writer.PageBudget {
-	return writer.PageBudget{MaxHeapBytes: b.MaxHeapBytes, MaxPrivatePages: b.MaxPrivatePages, MaxGrowthPages: b.MaxGrowthPages}
+	return writer.PageBudget{MaxHeapBytes: b.MaxHeapBytes, MaxPrivatePages: b.MaxPrivatePages, MaxGrowthPages: b.MaxGrowthPages, MaxOpenFiles: b.MaxOpenFiles}
 }
 
 // writerNamespaceCheck is the module-root namespace hook: the SDK's
@@ -162,8 +165,12 @@ type DirectTransaction struct {
 	active bool
 }
 
-// requireActive mirrors Rust DirectState::require_active: every op and the
-// terminal transitions refuse a spent transaction.
+// requireActive mirrors Rust DirectState::require_transaction (the
+// operation-nonce gate): every mutation op refuses a spent transaction
+// (Rust WrongState("direct transaction is no longer active") when the
+// nonce left with the discarded draft). The terminal Commit and Abort do
+// not use this gate: Rust commit_attempt and abort have no nonce check
+// and report NoPendingTransaction on a draft-less core.
 func (t *DirectTransaction) requireActive() error {
 	if !t.active || t.w == nil || t.w.core == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
@@ -201,7 +208,15 @@ func (t *DirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, error) 
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
 		return false, err
 	}
-	return t.w.core.AssignV4(uint32(from), uint32(to), value)
+	changed, err := t.w.core.AssignV4(uint32(from), uint32(to), value)
+	if err != nil {
+		// Rust LiveWriter::mutate -> abort_after: a failed store op
+		// discards the draft, spends the transaction, and reports the
+		// TransactionAborted class wrapping the cause.
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // AssignV6 assigns one inclusive IPv6 interval in exact call order (Rust
@@ -210,7 +225,12 @@ func (t *DirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, error) 
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
 		return false, err
 	}
-	return t.w.core.AssignV6(from.Hi, from.Lo, to.Hi, to.Lo, value)
+	changed, err := t.w.core.AssignV6(from.Hi, from.Lo, to.Hi, to.Lo, value)
+	if err != nil {
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // ClearV4 clears one inclusive IPv4 interval (Rust
@@ -219,7 +239,12 @@ func (t *DirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
 		return false, err
 	}
-	return t.w.core.ClearV4(uint32(from), uint32(to))
+	changed, err := t.w.core.ClearV4(uint32(from), uint32(to))
+	if err != nil {
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // ClearV6 clears one inclusive IPv6 interval (Rust
@@ -228,13 +253,21 @@ func (t *DirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
 		return false, err
 	}
-	return t.w.core.ClearV6(from.Hi, from.Lo, to.Hi, to.Lo)
+	changed, err := t.w.core.ClearV6(from.Hi, from.Lo, to.Hi, to.Lo)
+	if err != nil {
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // SetMetadataJSON stages one exact metadata replacement in this
 // transaction (Rust DirectTransaction::set_metadata_json): the payload is
 // bounded by the 20 MiB cap, compressed, and stored as the exact metadata
-// chain. At most one metadata stage is allowed per transaction.
+// chain. At most one metadata stage is allowed per transaction. An
+// oversized payload refuses with ErrorInvalidArgument before the store
+// (Rust stage_metadata_json position) and the draft survives; a failure
+// inside the store aborts the draft like every other mutation error.
 func (t *DirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
 		return false, err
@@ -242,7 +275,15 @@ func (t *DirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if t.w.core.Draft().MetadataStaged() {
 		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
 	}
-	return t.w.core.SetMetadata(input)
+	if uint64(len(input)) > format.MaxMetadataUncompressed {
+		return false, &format.Error{Code: format.CodeInvalidArgument, Detail: "metadata exceeds 20 MiB"}
+	}
+	changed, err := t.w.core.SetMetadata(input)
+	if err != nil {
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // ClearMetadataJSON stages metadata absence in this transaction (Rust
@@ -255,7 +296,12 @@ func (t *DirectTransaction) ClearMetadataJSON() (bool, error) {
 	if t.w.core.Draft().MetadataStaged() {
 		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
 	}
-	return t.w.core.ClearMetadata()
+	changed, err := t.w.core.ClearMetadata()
+	if err != nil {
+		t.active = false
+		return false, t.w.abortAfter(err)
+	}
+	return changed, nil
 }
 
 // CommitStatus classifies one commit outcome (Rust CommitDurability).
@@ -280,10 +326,13 @@ type CommitResult struct {
 
 // Commit publishes this transaction (Rust DirectTransaction::commit). An
 // unchanged transaction is discarded and reports ErrorNoPendingTransaction
-// (Rust commit_attempt parity). A preparation failure returns a
+// (Rust commit_attempt parity); a transaction whose draft a failed
+// operation already aborted also reports ErrorNoPendingTransaction (Rust
+// commit_attempt on a draft-less core). A preparation failure returns a
 // CommitNotCommitted result carrying the cause with the draft discarded; a
 // publication failure reports CommitNotCommitted before the meta write or
-// CommitOutcomeUnknown after it.
+// CommitOutcomeUnknown after it. A spent transaction reports
+// ErrorNoPendingTransaction.
 func (t *DirectTransaction) Commit() (CommitResult, error) {
 	if !t.active {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
@@ -291,10 +340,16 @@ func (t *DirectTransaction) Commit() (CommitResult, error) {
 		// or a cancellation).
 		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	if err := t.requireActive(); err != nil {
-		return CommitResult{}, err
+	if t.w == nil || t.w.core == nil {
+		return CommitResult{}, &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
 	draft := t.w.core.Draft()
+	if draft == nil {
+		// Rust commit_attempt on a draft-less core reports
+		// NoPendingTransaction whatever discarded the draft.
+		t.active = false
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if !draft.Changed() {
 		if err := t.w.core.DiscardUnpublished(); err != nil {
 			t.active = false
@@ -405,15 +460,20 @@ func (e *abortError) As(target any) bool {
 }
 
 // Abort discards this transaction and its unpublished tail (Rust
-// DirectTransaction::abort); the writer stays open and healthy.
+// DirectTransaction::abort); the writer stays open and healthy. A
+// transaction whose draft a failed operation already aborted reports
+// ErrorNoPendingTransaction (Rust LiveWriter::abort has_draft gate). A
+// spent transaction reports ErrorNoPendingTransaction.
 func (t *DirectTransaction) Abort() error {
 	if !t.active {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	if err := t.requireActive(); err != nil {
-		return err
+	if t.w == nil || t.w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
-	err := t.w.core.DiscardUnpublished()
 	t.active = false
-	return err
+	if t.w.core.Draft() == nil {
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
+	return t.w.core.DiscardUnpublished()
 }

@@ -7380,3 +7380,323 @@ the final signed commit; chunk 4-3 closes with this entry.
 
 - Next: signed commit + push of chunk 4-3, then chunk 4-4 (live
   writer open + commit barrier).
+### Status (2026-08-23) - chunk 4-4 design recorded: live writer open + commit barrier
+
+Chunk 4-4 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: live_writer.rs (LiveWriter
+open/open_main/open_locked, State machine, require_healthy/require_
+owner, discard_draft/discard_draft_inner, abort_after/abort_after_
+source, unpublished_tail_cleanup, mutate), live_writer/commit.rs
+(commit_with, commit_attempt, prepare_and_lock, finish_commit_locked_
+with, commit_locked, prepublication_checks, failed_result,
+apply_commit_unlock), live_writer/close.rs (close, close_locked,
+finish_close, closing_failure, close_failure), live_writer/result.rs
+(CommitResult/AbortResult/CloseResult, CommitCleanupArtifact(s),
+AbortOutcome/CloseOutcome), publication/types.rs (CoordinationCleanup,
+CleanupState), writer_core/publication.rs (publish, outcome_unknown),
+writer_core.rs (tail_cleanup_state), and the live crash matrix in
+live_crash_tests.rs + tests/live_roundtrip.rs writer cases.
+
+Key decisions:
+
+- The live writer opens the main under the SHARED lifetime lock (Rust
+  open_main lock_file(MAIN_LIFETIME_LOCK, Shared)); writer exclusivity
+  comes from the sidecar writer claim. The chunk-1 exclusive-lock
+  substitution remains only on the immutable Writer/OpenWriter path.
+- Open order: requireLiveSupported, checkpoint, OpenWriterLive
+  (shared-lock map + bootstrap + remap + terminal identity), identity
+  capture (FileIdentity, parentIdentity, publicIdentity, basename),
+  verifyPath, Sidecar::open (ready), gate exclusive, verifyPair,
+  SelectCommitted, database-id match, scanAtMost, checkpoint,
+  claimWriter, checkpoint, TrimCommittedTail, checkpoint, verifyPair,
+  unlock gate. Every failure releases the gate, the sidecar, and the
+  mapping; require_main_available is a POSIX no-op (live_cleanup.rs)
+  and is not called.
+- Commit runs the gate-around-Publish barrier: commitAttempt (unchanged
+  draft discarded -> NoPendingTransaction), prepareAndLock (Prepare +
+  gate exclusive), commitLocked (checkpoint, verifyPair,
+  RequireUnchangedBase, scanAtMost, RequireDraftLength, verifyPair,
+  checkpoint, Publish), applyCommitUnlock. Fatal classes (IO,
+  FormatInvalid - the Go mapping of Rust Io|Format|Corrupt) fail the
+  writer closed even when the discard succeeds.
+- Close: owner check, idempotent Closed, retryable Closing* states,
+  gate exclusive, closeLocked (verifyPair, PrepareClose, non-
+  cancellable scanAtMost(plan txn), FinishClose, verifyPair), then
+  ClosingWriter -> releaseWriter -> unlockGate -> core.Close (Go
+  mapping Close bundles unmap + lifetime unlock, preserving the Rust
+  lock release order; unmap lands at the same final step) -> Closed.
+  closeFailure matches Rust close_failure exactly (Unusable state,
+  abort outcome only when a draft was pending, cleanup ledger from
+  TailCleanupState).
+- Result surfaces mirror live_writer/result.rs: CommitDurability maps
+  to the existing public CommitStatus; public LiveCommitResult/
+  LiveAbortResult/LiveCloseResult carry public identities, basenames,
+  cleanup ledgers, CoordinationCleanup, and Cause; each result has a
+  CleanupState() method (Rust cleanup_state). Public Close keeps the
+  writer usable after an incomplete close (retryable, Rust parity).
+- Abort uses the Rust discard_draft wrapper: a failed discard fails the
+  writer closed and reports AbortIncomplete with the tail ledger.
+- Fault points: Rust arms only the four writer-core commit points
+  (commit.before_private_sync, commit.after_private_sync,
+  commit.after_meta_write, commit.after_meta_sync); all four are
+  already armed in Go Core.Publish (fault.Crash + the single
+  fault.Fail at after_meta_write). No live_writer-specific points.
+- Windows gets the honest refusal stub for OpenMutableShared (the
+  mapping owner refuses every open in milestone 1), so the five
+  cross-compiles stay green.
+
+- Next: implement + tests (internal live_writer_test.go, public
+  live_writer_public_test.go, v4work crash matrix), full battery,
+  five-aspect review, signed commit + push.
+
+### Status (2026-08-23) - chunk 4-4 implemented: live writer open + commit barrier
+
+Chunk 4-4 delivered on the working tree (design entry above).
+
+Implementation:
+
+- internal/mapping: openMapping refactored to take the lifetime-lock
+  mode as a parameter; OpenMutableShared added (shared lifetime lock
+  for the live writer); OpenImmutable/OpenMutable behavior unchanged;
+  mapping_windows.go refuses OpenMutableShared like every other open.
+- internal/writer: OpenWriterLive (shared-lock variant of the open
+  sequence, via the common openWriter helper; OpenWriter behavior
+  unchanged); TailCleanupState + Core.TailCleanupState() mirroring Rust
+  tail_cleanup_state (greatest of unprovedTailEnd and current file
+  length beyond the committed bytes).
+- internal/live: sidecar.scanAtMost (non-cancellable close-path
+  variant, Rust Sidecar::scan_at_most); live_writer_result.go (the
+  durability/outcome/cleanup/coordination facts); live_writer.go (the
+  LiveWriter state machine: open, commit barrier, abort, close with
+  retryable Closing* states, owner check, discard_draft wrapper).
+- Public facade: live_writer_public.go (OpenLiveWriter,
+  LiveWriter.Info/BeginDirect/Close, LiveDirectTransaction with
+  AssignV4/V6 + ClearV4/V6 + SetMetadataJSON/ClearMetadataJSON,
+  Commit/Abort; public result types and mapping helpers;
+  LiveCommitCleanupArtifact(s), AbortOutcome, CloseOutcome,
+  CoordinationCleanup, CleanupState methods). Immutable-mode Writer/
+  OpenWriter/DirectTransaction paths are unchanged.
+- Design parity fixes found while wiring: LiveWriter.BeginDirect gained
+  the Rust value-kind gate (WrongValueKind for non-direct databases);
+  Commit/close/abort state transitions match Rust close.rs exactly
+  (finish_close refuses non-closing states; close_failure and
+  closing_failure set the abort outcome only when a draft was pending;
+  discard_draft fails the writer closed on a failed discard).
+
+Tests:
+
+- internal/live/live_writer_test.go: open/close round trip, second
+  open WriterBusy, direct commit advances the generation (verified
+  through the immutable reader on a sidecar-free copy, since
+  OpenImmutable refuses live pairs by design), noop commit
+  NoPendingTransaction, abort discards the draft, the commit barrier
+  rejects a newer reader slot (claimed through a separate sidecar
+  descriptor so the slot lock is a separate open-file description,
+  exactly like Rust), open cancellation releases locks, commit
+  cancellation aborts the draft while the writer stays healthy.
+- internal/live/lifecycle_crash_test.go (v4work): the four commit crash
+  points through the live writer (before/after_private_sync keep txn 1
+  and the value absent; after_meta_write/after_meta_sync expose the
+  complete txn 2), and the OutcomeUnknown fail-closed gate
+  (commit.after_meta_write via fault.Fail: operations fail WrongState,
+  Close completes cleanly with no abort payload because the failed
+  publish abandoned the draft - Rust outcome_unknown parity - and the
+  complete new generation is left behind).
+- live_writer_public_test.go: public round trip with result facts,
+  noop+abort, WriterBusy, non-live refusal, cancelled open leaves no
+  lock residue.
+
+Validation on the working tree, all under nice with -count=1: gofmt
+clean, vet clean (plain + v4work), plain/v4work tests, race,
+race+v4work, checkptr=2 (plain + v4work), mmap-trace PASS, five
+cross-compiles (linux/386, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64) plain AND -tags v4work.
+
+- Next: chunk 4-4 five-aspect review (same five agents, adversarial,
+  read-only, Rust authority baseline), fixes, round-2 re-review,
+  signed commit + push.
+
+### Status (2026-08-23) - chunk 4-4 five-aspect review round 1: three FAILs fixed, two PASSes
+
+Round-1 review of the chunk 4-4 working tree, same five reviewers
+(adversarial, read-only, Rust authority baseline). Verdicts: Helmholtz
+(Rust parity) FAIL, Sartre (Go idioms) FAIL, Socrates (performance)
+FAIL, Parfit (wire/integrity) PASS with one P2, Franklin
+(APIs/docs/records) FAIL. All findings fixed on the working tree:
+
+- P1 (Helmholtz) - the six direct ops (AssignV4/V6, ClearV4/V6,
+  SetMetadata/ClearMetadata) returned raw store errors, so a failed op
+  left its partial mutation in the draft and a later Commit could
+  publish it; Rust routes every store error through mutate ->
+  abort_after (live_writer.rs). Every op now wraps core errors in
+  abortAfter (draft discarded, TransactionAborted class, Unusable on
+  fatal IO/Format). SetMetadata gained the pre-mutate 20 MiB check
+  (Rust stage_metadata_json position): oversized input refuses with
+  InvalidArgument and the draft survives. Pin:
+  TestLiveDirectOpFailureAbortsDraft (zero heap budget: assign
+  succeeds, metadata store fails mid-edit, Commit -> NoPendingTransaction,
+  writer healthy, the immutable copy proves the partial mutation never
+  published).
+- P2 (Helmholtz) - abortAfterSource nesting: the outer class is now
+  always TransactionAborted and a failed discard nests the
+  CleanupInProgress class inside (Rust
+  TransactionAborted(CleanupIncomplete)); outer detail "the pending
+  transaction was aborted" (sdk_error.rs Display prefix).
+- P2 (Helmholtz) - PageBudget.MaxOpenFiles added (public + internal),
+  DefaultBudget() = 2, OpenLiveWriter refuses < 2 with
+  CodeInsufficientResourceBudget and the Rust-verbatim detail "a live
+  writer requires two open files" before any path access (Rust
+  TransactionBudget::validate at LiveWriter::open). Pin:
+  TestPublicLiveWriterBudgetValidation (bounds 1 and 0).
+- P2 (Socrates) - os.Getpid() per operation replaced by a package-init
+  cached process identity: zero syscalls on the hot path.
+- P3 (Socrates) - Core.Publish reuses the tracked physical extent set
+  by Shrink instead of a post-sync FileSize(): one fstat saved per
+  commit, byte-identical to Rust shrink_or_retain reuse.
+- P2 (Parfit) - Core.rebootstrap re-stats via FileSize() exactly like
+  Rust select_committed (fresh stat on the shared-lock live-open path);
+  the old "under the exclusive lock" comment was false on that path.
+- P2 (Sartre) - mainPublicIdentity dropped; results carry mainIdentity
+  (publicIdentity is identity-preserving in Go).
+- P3 (Franklin) - SOW "six cross-compiles" corrected to five.
+- P3s (Helmholtz/Parfit/Sartre) - closeFailure/closingFailure factored
+  through abortOutcomeFor(hadPending, hasDraft); public LiveWriter
+  field renamed lw (shadowing); sidecar scanAtMost/scanAtMostCancellable
+  doc comments re-attached; raw type assertions replaced with expectCode
+  (live_writer_test.go, lifecycle_crash_test.go); errorCodeOfPublic
+  deleted in favor of lifecycleCode; crashWriterBudget delegates to
+  liveWriterTestBudget; the floating "LiveCommitStatus is not a new
+  type" comment removed; claimWriter detail aligned to the Rust Display
+  "another live writer owns this database" (sidecar.go:303 =
+  sdk_error.rs:375); outcome-unknown test doc reworded to the
+  clean-close outcome; membership property tests carry MaxOpenFiles: 2
+  and the "no open-files bound" comment is gone.
+
+Recorded conventions from round 1 (all structurally closed or
+accepted, see the complete list in the round-2 entry): per-transaction
+CancellationToken absent, Rust metadata accessors deferred, workflow
+input gates structurally closed, lifetime-lock wait not
+cancellation-polled, verifyPath after mapping open, live_writer.go at
+661 lines accepted, classedError internal mirror kept.
+
+### Status (2026-08-23) - chunk 4-4 five-aspect review round 2: FAILs fixed and re-verified, SOW entry
+
+Round-2 re-review of the fixed tree returned: Socrates (performance)
+PASS, Sartre (Go idioms) PASS, Parfit (wire/integrity) PASS, Helmholtz
+(Rust parity) FAIL with one new P2, Franklin (APIs/docs/records) FAIL
+with one new P2 and one P3. All fixed or recorded:
+
+- P2 (Helmholtz) - public LiveDirectTransaction.Commit and Abort after
+  a failed op reported WrongState ("direct transaction is no longer
+  active") where Rust reports NoPendingTransaction: Rust commit and
+  abort have no transaction-nonce check (live_writer/commit.rs
+  commit_attempt, live_writer.rs abort has_draft gate) and a draft-less
+  core reports NoPendingTransaction (writer_core/publication.rs). The
+  public terminal gates no longer call requireActive; they keep only
+  the spent-nonce check (!t.active -> NoPendingTransaction) and a
+  closed-writer nil guard (WrongState, a Go-only lifetime case Rust
+  cannot express), then delegate to the internal ops, which already
+  produce the Rust-exact classes. The mutation ops keep the draft
+  presence gate: Rust require_transaction fails WrongState on a
+  draft-less transaction (the nonce left with the discarded draft).
+  Pin: TestPublicLiveDirectCommitAbortAfterOpFailure (public path:
+  failed op -> TransactionAborted, Commit and Abort ->
+  NoPendingTransaction, spent Commit -> NoPendingTransaction, fresh
+  transaction commits, partial mutation never published).
+- Same-failure search (SOW validation gate) - the identical defect
+  class existed on the pre-existing immutable-mode DirectTransaction
+  (writer_public.go) and was worse: a failed op left the draft alive
+  and a later Commit PUBLISHED the partial mutation (confirmed by a
+  scratch test). The immutable ops now wrap store errors in
+  Writer.abortAfter and spend the transaction; SetMetadataJSON gained
+  the pre-mutate 20 MiB cap (InvalidArgument, draft survives, Rust
+  stage_metadata_json position); public Commit and Abort report
+  NoPendingTransaction on the draft-less state and WrongState only for
+  the closed-writer nil case. Pins: TestPublicDirectOpFailureAbortsDraft,
+  TestPublicDirectOversizedMetadataKeepsDraft. The carried slice-B P3
+  "feed workflow Commit-after-abort reports WrongState" does NOT
+  reproduce (verified by scratch test: the ops already spend the
+  handle on failure and Commit reports NoPendingTransaction); the
+  record was stale and is closed here.
+- P2 (Franklin) - the round-1 require_main_available comment claimed
+  Rust draws a discarded uniqueness nonce that cannot fail; both halves
+  are false (require_main_available is a pure POSIX no-op in
+  live_cleanup.rs require_available, and random::nonzero_128 returns
+  Result). The comment now states the no-op truth and points the
+  4-3 cleanup-attempt nonce draw at its documented home.
+- P3 (Franklin) - the deferred-convention list below now names all
+  three structural closures (require_owner/ForkedHandle,
+  require_operation_owned/workflow_input_open, the DirectTransaction
+  metadata accessors in addition to the LiveWriter accessors).
+- P3s (Parfit) - the SOW record for this review pass is this entry;
+  the lifetime-lock non-cancellable wait is recorded below as an
+  accepted convention.
+
+Deferred conventions (complete list, all structurally closed or
+accepted with evidence):
+- Per-transaction CancellationToken absent: Go's live writer owns
+  checkpoint injection and the public facade takes no token; Rust
+  DirectTransaction carries one, but every observable class has a Go
+  mapping and no concurrent cancellation source exists.
+- Rust metadata accessors absent: LiveWriter and DirectTransaction
+  metadata_json_len/read_metadata_json/metadata_json
+  (live_writer/direct.rs) are not ported; Go exposes only the staging
+  ops. Deferred surface, tracked here.
+- require_operation_owned / workflow_input_open structurally closed:
+  Rust requires the operation handle not abandoned (Drop ->
+  abandon_operation) and the workflow input closed before direct
+  metadata staging; Go has no operation handles and direct
+  transactions are the only workflow kind reachable, so only the
+  metadata-staged check is observable.
+- require_owner/ForkedHandle structurally closed on the 4-4 writer
+  path: Go cannot fork, so the process identity cached at package init
+  is used; the Rust ProcessIdentity comparison cannot fail in Go.
+- Lifetime-lock acquisition is not cancellation-polled
+  (F_OFD_SETLKW blocks; Rust polls live_writer.rs): live writers, live
+  readers, and immutable readers all take the lifetime lock SHARED and
+  never contend; only the legacy immutable OpenWriter takes it
+  exclusive, so a cancelled live open waits at most on that legacy
+  path and returns Cancelled once the lock is free. Latency-of-
+  cancellation only; no correctness or wire impact.
+- verifyPath runs after the mapping is open (Go bundles
+  open -> lock -> map); Rust verifies the path first. Same observable
+  classes; ordering difference only.
+- Message parity: claimWriter "another live writer owns this database"
+  (sdk_error.rs:375) and abort outer "the pending transaction was
+  aborted" (sdk_error.rs:380-382) are Rust-verbatim; the inner
+  "commit discard failed" prefix on the CleanupInProgress nesting is a
+  documented rendering-only difference (class parity exact).
+- classedError internal mirror kept: the internal live package returns
+  internal classes; the public facade maps them to public codes.
+- live_writer.go at 661 lines accepted: one cohesive state machine;
+  splitting would reduce clarity.
+
+Round-3 re-verify (Helmholtz, Rust parity) of the round-2 fix tree
+found one same-class gap the same-failure search missed and closed:
+- P2 (Helmholtz) - the six public live ops left the handle active
+  after a failed op; once a newer transaction began, the stale handle
+  passed requireActive (the new draft is non-nil) and could mutate and
+  even commit the newer transaction's draft, where Rust refuses
+  WrongState (require_transaction -> operation_is; the nonce lives in
+  the discarded draft). Every live op now spends the handle whenever
+  the failure left no draft (t.active = false when Draft() == nil):
+  pre-mutate refusals (the 20 MiB cap) keep the draft and the handle,
+  store failures spend it. Pin: TestPublicLiveStaleHandleAfterOpFailure
+  (stale op -> WrongState, stale commit -> NoPendingTransaction, the
+  newer draft commits its own value untouched).
+- P3 (Helmholtz, accepted) - the terminal class after a FATAL op error
+  (Io/Format) is NoPendingTransaction on the spent handle where Rust
+  reports WrongMode("writer is unusable") via require_healthy: not
+  reachable through public input today (no store op raises Io/Format;
+  the fault points are armed in commit only), and identical to the
+  immutable path's recorded spent-transaction convention.
+
+Validation on the final fix tree, all under nice with -count=1: gofmt
+clean, vet clean (plain + v4work), plain/v4work tests ./..., race,
+race+v4work, checkptr=2 (plain + v4work), mmap-trace PASS, five
+cross-compiles (linux/386, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64) plain AND -tags v4work. Rust fixtures cross-open
+unchanged.
+
+- Next: signed commit + push of chunk 4-4, then chunk 4-5 (live
+  reader) per the M4 chunk plan.

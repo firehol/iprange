@@ -15,14 +15,18 @@ import (
 )
 
 // PageBudget declares the draft resource limits, mirroring Rust
-// draft_store::PageBudget: MaxHeapBytes bounds owned scratch, MaxPrivate
-// Pages bounds the COW draft extent, MaxGrowthPages bounds the file growth
-// one transaction may claim. The core keeps the declared budget from open
-// so the edit core consumes one budget for the writer's lifetime.
+// draft_store::PageBudget plus the live-writer open-files bound:
+// MaxHeapBytes bounds owned scratch, MaxPrivatePages bounds the COW
+// draft extent, MaxGrowthPages bounds the file growth one transaction
+// may claim, and MaxOpenFiles bounds the descriptors one operation may
+// hold (the live writer validates it at open, Rust
+// TransactionBudget::validate). The core keeps the declared budget from
+// open so the edit core consumes one budget for the writer's lifetime.
 type PageBudget struct {
 	MaxHeapBytes    uint64
 	MaxPrivatePages uint64
 	MaxGrowthPages  uint64
+	MaxOpenFiles    uint32
 }
 
 // WriterInfo is the logical generation facts of the selected committed
@@ -112,7 +116,24 @@ func (c *Core) FileIdentity() (device uint64, inode uint64, err error) {
 // reader's namespace hook and arrives before the sidecar checks of M4. On
 // failure the lock and descriptor are released.
 func OpenWriter(path string, budget PageBudget, check func(clean string) error) (*Core, error) {
-	m, err := mapping.OpenMutable(path, check)
+	return openWriter(path, budget, check, mapping.OpenMutable)
+}
+
+// OpenWriterLive maps path read-write under the shared lifetime lock for
+// the live writer (Rust open_main: lock_file(MAIN_LIFETIME_LOCK, Shared)
+// then WriterCore::map_writer): writer exclusivity comes from the sidecar
+// writer claim taken by the live writer open, not from the exclusive
+// lock. The mapping, bootstrap, remap, and terminal identity checks are
+// identical to OpenWriter.
+func OpenWriterLive(path string, budget PageBudget, check func(clean string) error) (*Core, error) {
+	return openWriter(path, budget, check, mapping.OpenMutableShared)
+}
+
+// openWriter maps path read-write under one lifetime-lock mode and runs
+// the shared open sequence: two-page bootstrap mapping, remap to the
+// committed extent, and the terminal path-identity re-verification.
+func openWriter(path string, budget PageBudget, check func(clean string) error, open func(string, func(string) error) (*mapping.Mapping, error)) (*Core, error) {
+	m, err := open(path, check)
 	if err != nil {
 		return nil, err
 	}
@@ -162,14 +183,10 @@ func Open(path string, budget PageBudget, check func(clean string) error) (*Core
 }
 
 // SelectCommitted re-derives the committed generation from the current
-// physical extent under the still-held exclusive lock, mirroring Rust
-// WriterCore::select_committed (writer_core/open.rs). The writer rule
-// applies: only a provable current generation opens; a sole meta or a
-// transaction-gapped pair is refused. The extent is the mapping's tracked
-// locked value (open size, extended by Grow, shrunk by trim) rather than a
-// fresh stat: under the exclusive lock no legitimate change can occur, and
-// a rogue truncation is caught by the next Shrink/Remap re-stat with the
-// same FormatInvalid class.
+// physical extent, mirroring Rust WriterCore::select_committed
+// (writer_core/open.rs). The writer rule applies: only a provable
+// current generation opens; a sole meta or a transaction-gapped pair is
+// refused.
 func (c *Core) SelectCommitted() error {
 	return c.rebootstrap()
 }
@@ -183,7 +200,18 @@ func (c *Core) rebootstrap() error {
 	if err != nil {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
 	}
-	res, err := bootstrap.Open(p0, p1, c.m.PhysicalSize(), bootstrap.ModeWriter)
+	// Rust select_committed re-stats the file at selection time
+	// (writer_core/open.rs: mapping.file().metadata().len()): the live
+	// writer holds the lifetime lock shared, so the lease holder may
+	// legitimately extend the file between this open's lock acquisition
+	// and this selection, and only the fresh extent proves the new
+	// generation. The tracked PhysicalSize remains authoritative for
+	// hot-path sizing and is kept in sync by Grow/Shrink.
+	size, err := c.m.FileSize()
+	if err != nil {
+		return err
+	}
+	res, err := bootstrap.Open(p0, p1, size, bootstrap.ModeWriter)
 	if err != nil {
 		return err
 	}
@@ -230,6 +258,46 @@ func (c *Core) BaseInfo() WriterInfo {
 // Budget returns the declared page budget (Rust WriterCore::max_heap_bytes
 // family; the full budget is carried for the edit core).
 func (c *Core) Budget() PageBudget { return c.budget }
+
+// TailCleanupState is the unpublished-tail evidence of the committed
+// generation (Rust WriterCore::TailCleanupState): the base identity plus
+// the greatest observed tail length beyond the committed extent.
+type TailCleanupState struct {
+	DatabaseID               [16]byte
+	TransactionID            uint64
+	CommitNonce              [16]byte
+	CommittedLength          uint64
+	ObservedTailEndExclusive *uint64
+}
+
+// TailCleanupState reports the committed generation and the greatest
+// observed physical length beyond it (Rust tail_cleanup_state): the
+// current file extent and the unproved tail remembered by a failed trim,
+// whichever is larger and exceeds the committed length. A metadata
+// failure reports no current extent, exactly like the Rust
+// metadata().ok().
+func (c *Core) TailCleanupState() TailCleanupState {
+	var current *uint64
+	if length, err := c.m.FileSize(); err == nil {
+		current = &length
+	}
+	var observed *uint64
+	for _, candidate := range []*uint64{c.unprovedTailEnd, current} {
+		if candidate == nil || *candidate <= c.base.CommittedBytes {
+			continue
+		}
+		if observed == nil || *candidate > *observed {
+			observed = candidate
+		}
+	}
+	return TailCleanupState{
+		DatabaseID:               c.base.Meta.DatabaseID,
+		TransactionID:            c.base.Meta.TxnID,
+		CommitNonce:              c.base.Meta.CommitNonce,
+		CommittedLength:          c.base.CommittedBytes,
+		ObservedTailEndExclusive: observed,
+	}
+}
 
 // Close releases the mapping and the exclusive lifetime lock.
 func (c *Core) Close() error { return c.m.Close() }

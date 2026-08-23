@@ -300,7 +300,7 @@ func (s *Sidecar) claimWriter() error {
 		return err
 	}
 	if !acquired {
-		return &format.Error{Code: format.CodeWriterBusy, Detail: "live database writer lease is held"}
+		return &format.Error{Code: format.CodeWriterBusy, Detail: "another live writer owns this database"}
 	}
 	return nil
 }
@@ -423,6 +423,13 @@ func (s *Sidecar) scanReadersCancellable(check func() error, observe func(uint64
 		}
 	}
 	return nil
+}
+
+// scanAtMost verifies every active slot names a transaction no newer
+// than the committed generation without cancellation checkpoints (Rust
+// Sidecar::scan_at_most; used by the non-cancellable close path).
+func (s *Sidecar) scanAtMost(committedTxn uint64) error {
+	return s.scanAtMostCancellable(committedTxn, nil)
 }
 
 // scanAtMostCancellable verifies every active slot names a transaction

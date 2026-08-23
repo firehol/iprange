@@ -23,6 +23,13 @@ func OpenMutable(path string, _ func(clean string) error) (*Mapping, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// OpenMutableShared refuses every Windows open in milestone 1 (the live
+// writer path; the sidecar writer lease is also refused on Windows, so
+// this stub is unreachable until the platform milestone).
+func OpenMutableShared(path string, _ func(clean string) error) (*Mapping, error) {
+	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
 // Create refuses every Windows creation in milestone 1.
 func Create(path string, _ uint64, _ func(clean string) error) (*Mapping, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
