@@ -270,7 +270,7 @@ func pathIdentity(path string) (*FileIdentity, error) {
 	clean := filepath.Clean(path)
 	dir, name, err := bindPath(clean)
 	if err != nil {
-		if kind, ok := nsErrorKindOf(err); ok && kind == nsMissing {
+		if nerr, ok := AsNamespaceError(err); ok && nerr.Kind == NamespaceMissing {
 			return nil, nil
 		}
 		return nil, nsMap(err)

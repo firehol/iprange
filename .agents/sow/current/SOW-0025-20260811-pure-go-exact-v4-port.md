@@ -8652,3 +8652,306 @@ configs), GOOS=windows vet green for writer/snapshot/reader/mapping/
 live, `check-mmap-trace.sh` PASS, gofmt clean. Chunk 4-7 committed at
 f2c7ee7 and pushed to origin/master; next chunk 4-8 publication
 resolvers.
+
+### Status (2026-08-23) - chunk 4-8 design recorded: publication resolvers (result/problem surface, reservation machine, resolver, residue, maintenance)
+
+Chunk 4-8 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: publication/resolver.rs (435:
+inspect authority, dispatch desired/other/absent, complete_absent, arm,
+abandon), resolver_authority.rs (106: choose_authority matrix),
+resolver_verification.rs (88: verify_destination/no_later/final_later/
+synchronize), resolver_result.rs (189: desired_result/problem,
+published_output_result, record_cancellation, coordination_access),
+replacement_resolver.rs (372: dispatch unlock/relock + pair inspection,
+resolve_previous/desired/other/not_desired, removable_output,
+desired_cleanup), reservation.rs (542: dual-block codec, select/
+contains_selectable_header, Header/State/Policy/Previous),
+reservation_file.rs (547: draft -> private -> canonical -> armed
+lifecycle), reservation_verify.rs (113: exact custody checks),
+reservation_inspection.rs (451: discover/canonical/exact_private/
+scan_private, require_bound), file_inspection.rs (309: main/private/
+private_owned classification), cleanup.rs (499: discard/discard_recovered,
+link-count removal machine, Summary), attempt.rs (776: publish state
+machine, not_published/outcome_unknown/finish_published, observed
+checkpoints used by recovery/api.rs), main_file.rs (510: rename_main
+per policy, synchronize/prove, retire_steps), output.rs (574:
+CreatedOutput/OutputAttempt/PreparedOutput, resume_secured_output),
+replacement.rs (228: PreviousMain bind/bind_no_rollback),
+replacement_inspection.rs (340: two-inode Pair inspection, desired/
+previous/other content), residue/ (linux.rs 457 + main.rs 137 +
+retirement.rs 158: inspect/remove canonical residue), maintenance.rs
+(396) + maintenance/{common,output,reservation}.rs (820: abandoned
+temp/reservation list+remove), types.rs (342: full public result
+surface), problem.rs (199: class mapping), namespace.rs (254) +
+namespace_mutation.rs (329: rename_noreplace/exchange/
+replace_discarding_destination/unlink_exact/sync) + namespace_scan.rs
+(constant-memory readdir) + namespace_identity.rs (identity encoding).
+Windows-only machines (gc.rs, gc_codec.rs, gc_maintenance.rs, gc_name.rs,
+gc_barrier.rs require_source_available) verified as no-ops or refusal
+arms for this port: gc_barrier is #[cfg(windows)] and compiles to
+nothing on POSIX.
+
+Go current state that composes: internal/writer/publication_staging.go
+(730: one-shot CreateAttempt/Publish/Discard with a simplified
+PublicationResult; callers internal/snapshot/snapshot.go:154,263 and
+membership_publish_set.go:212,280), internal/live/directory.go
+(retained-dir machine: entry/create/openRegular/requireAbsent/
+verifyName/unlinkExact/sync/requireNameLengths), namespace_install_*.go
+(dirfd renameNoReplace/renameExchange/renamePlain linux+darwin; other
+arm refuses freebsd because the live sidecar refuses), internal/live/
+lock.go (byte-range OFD locks linux/darwin; freebsd/windows refusal),
+internal/mapping (MapFile, publish_link_noreplace.go path-based
+FreeBSD link machine + mapping_publish_*.go path-based renames),
+internal/security (CreatorMode, commitmentDomain IPR4PSEC,
+SecureCreatorOnly, CreatorOnlyCommitment), internal/bootstrap
+(open meta pages), internal/format (CRC32CWithZeroed, put/le helpers,
+codes.go full ErrorCode table), internal/fault (Crash/Fail + v4work),
+internal/random (Nonzero128), internal/work (test-only counters).
+
+Problem / root-cause model: the Go immutable publish is one-shot
+(path-based rename with a simplified result) while the Rust v4 format
+owns an exact dual-block reservation inode, a state1/state2 arm
+machine, a resolver that reconstructs the attempt from a supplied
+result or a retained reservation, offline residue removal, and
+abandoned-artifact maintenance. The one-shot path cannot resume after
+a crash, exposes no reservation evidence, and classifies outcomes with
+a reduced surface - a wire-format and crash-durability gap, not just a
+missing API.
+
+Affected contracts and surfaces:
+- internal/writer public-to-internal surfaces consumed by snapshot and
+  membership publish-set (CreateAttempt, Publish, OutputAttempt,
+  PublicationResult, PublicationPreparationFailure, CleanupState,
+  PublicationPolicy, DestinationContent, PublicationStatus).
+- The on-disk reservation record (IPR4RSV1, 8192-byte file, 512-byte
+  dual blocks, CRC32C at 508, section binary-format-v4.md) - Rust
+  cross-open authority; Go must read and write the exact bytes.
+- The destination namespace twin name (`<main>.readers`) and the
+  private attempt/reservation names (.iprange-publish-*.tmp,
+  .iprange-reservation-*.tmp).
+- New public SDK surface (Rust publication.rs pub use + resolve_
+  publication): PublicationResult full shape, PublicationProblem,
+  resolve_publication + PublicationResolutionMode, residue inspect/
+  remove, abandoned temp/reservation list+remove, Windows housekeeping
+  refusal.
+- Platform table: linux/darwin/freebsd supported (lock and rename
+  machines), windows/non-POSIX typed refusal, netbsd follows the Rust
+  no-primitive classes.
+
+Existing patterns to reuse:
+- internal/live retained-directory machine and ns_error classes
+  (directory.go, ns_error.go); extend, do not fork, the machine with
+  the freebsd arms (namespace_install_freebsd.go, openRegularAnyLink,
+  finishNoreplaceTransition, scan) that Rust's publication/namespace
+  provides even though the live sidecar refuses freebsd.
+- internal/live lock.go for the byte-range operation lock; add the
+  Rust live_lock lock_file surface (whole-artifact flock on freebsd,
+  offset OFD on linux/darwin, refusal elsewhere) used on reservation
+  and output files (MAIN_LIFETIME_LOCK 1<<44, OPERATION_LOCK 0).
+- internal/security for creator-only commitments; internal/fault for
+  the publication.* crash points; internal/random for attempt ids;
+  internal/format CRC/put/decode helpers; internal/bootstrap for the
+  finished-output meta proof; internal/mapping.MapFile for mapped
+  reservation/output views (mmap-only, no read/write syscalls).
+- Rust problem.rs class mapping verbatim through format.Error codes and
+  detail strings (the Go port carries no os_code field, matching every
+  earlier chunk).
+
+Risk and blast radius:
+- The retrofit touches the two production publish call sites (snapshot
+  To, membership PublishSet) and their public results; keep the public
+  call signatures and observable classifications, expand the result
+  shape.
+- FreeBSD no-replace moves from the path-based mapping machine to the
+  dirfd machine; the mapping path-based publish machines
+  (mapping_publish_*.go, publish_link_noreplace.go) become dead and are
+  removed with their tests after the retrofit (single authoritative
+  implementation).
+- Crash-matrix and race windows widen: the 13 publication.* crash
+  points need the subprocess crash harness (crash_v4work_test.go
+  pattern) plus resolver resume tests; race tests must cover the
+  lock/discover windows.
+- Windows: all new surfaces are typed refusals (CodeOSUnsupported /
+  CodePublicationUnsupported), no behavior change to the honest-refusal
+  stance.
+- Worker enter_output probes (Rust worker::enter_output before every
+  mapped output access) have no Go counterpart yet: they are pure
+  fault-containment no-ops on healthy files; the Go worker wiring lands
+  with 4-11 and is recorded (no observable semantics change, matching
+  chunks 4-1..4-7).
+- The attempt observed/checkpoint variants (PublicationCheckpoint) are
+  consumed only by recovery/api.rs (4-10) and the worker drive (4-11);
+  Go 4-8 ports the plain variants and records the observed variants
+  with those chunks.
+- Resolver resume of `later` canonical reservations requires the
+  live-sidecar classification in residue; internal/live already owns
+  hasSelectableHeader/readSourceHeader (header.go:106).
+
+Sensitive data handling plan: none; the chunk operates on file
+identities, hashes, and paths only. No secrets, credentials, or
+customer data enter durable artifacts.
+
+Implementation plan (dependency-ordered slices; each slice keeps the
+tree green under `nice go test ./...`):
+- A types+problems: internal/publication types package
+  (PublicationResult full shape, Attempt facts, fixed cleanup ledger,
+  AccessPolicy/ArtifactKind/DestinationContent/LaterCanonical/
+  Housekeeping/etc.) + problem class mapping (problem.rs).
+- B reservation codec: internal/publication/reservation.go (offsets,
+  decode order, select/contains_selectable_header, state2, attempt_eq,
+  identity encoding) over mapped views only.
+- C namespace machine: extend internal/live with the freebsd dirfd
+  arms (renameNoReplace linkat machine, openRegularAnyLink,
+  finishNoreplaceTransition) and the retained-dir scan; internal/
+  publication destination.go (bind, commitment, names,
+  require_fail_if_exists_available).
+- D artifact locks: internal/live lockFile/unlockFile/lockFile
+  Cancellable surface (freebsd flock, linux/darwin OFD, refusal
+  elsewhere) used at OPERATION_LOCK and MAIN_LIFETIME_LOCK.
+- E output+replacement evidence: created/secured/prepared output,
+  digest cancellable, resumed output, PreviousMain bind/bind_no_
+  rollback (replacement.rs).
+- F reservation lifecycle: reservation_file.go draft/private/canonical/
+  armed + reservation_verify.go custody checks + the 13 crash points.
+- G reservation inspection: discover/canonical/exact_private/
+  scan_private, require_bound, unlock_operation/relock_operation.
+- H cleanup: discard_created/discard_attempt/discard_recovered with
+  the exact link-count removal machine + Summary.
+- I attempt+main_file: the publish state machine (fail_if_exists and
+  replace_existing over the reservation), not_published/
+  outcome_unknown/finish_published, rename per policy, prove, retire
+  steps.
+- J resolver core: resolver.go + authority.go + verification.go +
+  result_builder.go (choose_authority, dispatch, complete_absent, arm,
+  abandon, final_later, record_cancellation).
+- K replacement resolver: unlock/relock, pair inspection,
+  resolve_previous/desired/other.
+- L residue: inspect/remove canonical residue with the retained handle
+  and the final coordination-reuse proof.
+- M maintenance: list/remove abandoned publication temps and
+  reservation artifacts (constant-memory scan, exact evidence),
+  Windows housekeeping typed refusals.
+- N Publish retrofit + public surface: publication.Publish over the
+  reservation path; snapshot.To and PublishSet moved to it; the
+  one-shot machine and the mapping path-based publish machines removed;
+  public ResolvePublication/Residue/Abandoned surfaces in iprangedb.
+- O validation + gate: ported Rust tests, crash matrix, work counters
+  where Rust exposes them, docs.
+
+Validation plan: unit tests per slice (codec known-answer vectors with
+hardcoded expected CRCs; select matrix; lifecycle states; inspection
+conflicts; resolver authority matrix incl. supplied-vs-reservation
+cases; replacement evidence; residue classes; maintenance evidence
+guards). Crash matrix via the subprocess harness at every
+publication.* point with resolver resume (Rust crash_tests.rs port).
+Cross-open: Rust-written reservation fixtures selected and verified by
+the Go codec (six fixture cross-opens extend to reservation files).
+Full battery under nice: plain tests, race, vet, checkptr, gofmt,
+six cross-compiles, mmap-trace, zeroalloc. Five-aspect adversarial gate
+per the SOW review rules at chunk close.
+
+Artifact impact plan: SOW records this design and the close-out;
+AGENTS.md unchanged (retained-directory and lock authority notes live
+in package docs); spec binary-format-v4.md gains the reservation record
+only if the current spec lacks it (checked during slice B); docs and
+skills unchanged; the tracked UNIX-socket destination class note is
+resolved by the Rust-exact open_regular errno mapping (ENXIO -> Io,
+ELOOP -> NotRegular -> Conflict), verified in slice C.
+
+Recorded scope decisions (Rust is the baseline; no new user decision
+was required to start, consistent with the M4 plan):
+1. New internal/publication package (mirrors the Rust publication/
+   module boundary) instead of growing internal/writer: writer keeps
+   the OutputBuilder/Core, publication owns namespace publication
+   facts; call sites compose (snapshot, publish-set, the future 4-10
+   recovery api).
+2. FreeBSD publication support is in scope on the reservation path
+   (dirfd linkat machine + flock artifact locks), matching the
+   existing offline/immutable freebsd support; the live sidecar
+   refusal on freebsd is unchanged.
+3. The public SDK surface (resolve_publication, residue, abandoned
+   maintenance) ships in this chunk with the full result shape.
+4. The mapping path-based publish machines become dead after the
+   retrofit and are removed with their tests.
+5. Worker enter_output probes and the observed checkpoint variants are
+   recorded with 4-10/4-11, not stubbed here.
+6. os_code is not carried in Go publication problems (format.Error
+   parity with every earlier chunk); codes and detail strings are
+   Rust-verbatim.
+
+### Status (2026-08-23) - chunk 4-8 slice A implemented: publication types + problem mapping
+
+Slice A delivered on the working tree:
+
+- internal/publication/types.go: full Rust types.rs fact surface
+  (PublicationPolicy/Status, DestinationContent (full 5-class),
+  LaterCanonical, LiveLineage, AccessPolicy, CleanupState,
+  ArtifactKind, DirectoryRole, CoordinationCleanup, Housekeeping +
+  merge, HousekeepingState, ArtifactPresence, CreationSecurity,
+  UnpublishedTailFacts, CleanupArtifact, fixed CleanupArtifacts ledger
+  (capacity 4, overflow panics like the Rust assert), PreviousDestination,
+  PublicationAttempt, PrivateOutputAttempt, HousekeepingArtifact,
+  AbandonedArtifactRemoval, PublicationResult + cleanup_state,
+  PublicationPreparationFailure + cleanup_state, AsProblem).
+- internal/publication/identity.go: portable LocalFileIdentity
+  (kind 1 + 32-byte device/inode encoding; decode rejects zero payload,
+  nonzero tail, foreign kind; Rust namespace_identity.rs).
+- internal/publication/problem.go: problem mapping (problem.rs): every
+  NamespaceError arm Rust-verbatim (incl. LinkCount(0) "has no links",
+  IoAt symlink fold, plain-Io fixed detail), output/reservation/
+  replacement/main/sdk folds; os_code dropped (design decision 6);
+  Windows gc and 4-10/4-11 checkpoint arms recorded, not stubbed.
+- internal/live: nsError exported as live.NamespaceError (Rust
+  publication::namespace NamespaceError peer; os.PathError-style
+  exported facts Kind/Op/Links/Err) with the full 13-kind table;
+  plain-Io vs IoAt split at the machine sites (directory.go
+  "open directory"/"inspect directory"/"inspect retained file" are
+  plain Io; all mutation/scan ops are IoAt); LinkCount now carries the
+  observed count; IsNofollowSymlink exported for the problem surface.
+  The live nsMap fold keeps its existing classes (WrongState ownership
+  fold, DurabilityUnsupported, ForkedHandle passthrough).
+- Tests: enum ordinal pins, housekeeping merge lattice, ledger
+  capacity contract, result cleanup-state methods, identity codec
+  known-answer vector + rejections, and every Rust problem arm.
+- Validation: go build ./..., go vet ./..., go test ./... and
+  -tags v4work live/writer/publication all PASS under nice.
+
+Next slice: B reservation codec (reservation.go offsets, decode order,
+select, contains_selectable_header).
+
+### Status (2026-08-23) - chunk 4-8 slice B implemented: reservation codec
+
+Slice B delivered on the working tree:
+
+- internal/publication/reservation.go: the exact dual-block
+  reservation codec (Rust reservation.rs, 542 lines read in full):
+  fixed offsets, magic IPR4RSV1, 512-byte record in each 4096 page,
+  dual-block select (single-valid with sequence==block+1, equal
+  sequence requires byte-identical pages, adjacent 1->2 transition
+  with attempt_eq, torn-newer fallback), contains_selectable_header,
+  decode order fixed->reserved->checksum->state->policy->attempt->
+  identity->output->previous->basename->security->sequence, state2
+  derivation, encode with whole-page zeroing and CRC-32C seal over
+  the page with the CRC field treated as zero. All reads run directly
+  over mapped views; the decode path is allocation-free.
+- Spec: binary-format-v4.md gained section 15A "Publication
+  reservation file" (the spec lacked the reservation record; checked
+  during this slice per the design). Values are Rust-verbatim; the
+  table also pins the reserved-zero ranges, the absent/present
+  previous layouts, and the selection rules.
+- Tests: full port of Rust reservation_tests.rs (surviving-block
+  authority, adjacent state2 + torn fallback, disagreement/gap/
+  attempt-mismatch/invalid-transition rejections, policy-exact
+  previous fields, reserved/kind/output fail-closed table, wrong-size
+  vs CRC corruption, empty security commitment) plus independent
+  CRC-32C known-answer vectors computed with a separate Python
+  implementation (fail-if-exists 7bf19b18, replace a3026650,
+  replace-no-rollback ad1e394f, state2 955492de) pinning the encode
+  byte-exactness.
+- Validation: go build ./..., go vet ./..., go test ./..., -tags
+  v4work publication/live/writer, gofmt, -race publication/live all
+  PASS under nice. Tree committed with this entry.
+
+Next slice: C namespace machine (freebsd dirfd arms + retained-dir
+scan) and destination.go (bind, commitment, names,
+require_fail_if_exists_available).

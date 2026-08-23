@@ -51,12 +51,12 @@ func openDirectory(path string) (*directory, error) {
 		if os.IsNotExist(err) {
 			return nil, nsMissingError()
 		}
-		return nil, nsIoError("open directory", err)
+		return nil, nsPlainIoError("open directory", err)
 	}
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		f.Close()
-		return nil, nsIoError("inspect directory", err)
+		return nil, nsPlainIoError("inspect directory", err)
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
 		f.Close()
@@ -141,7 +141,7 @@ func (d *directory) openRegular(name string, writable bool) (*regularFile, error
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		f.Close()
-		return nil, nsIoError("inspect retained file", err)
+		return nil, nsPlainIoError("inspect retained file", err)
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		f.Close()
@@ -153,7 +153,7 @@ func (d *directory) openRegular(name string, writable bool) (*regularFile, error
 	}
 	if st.Nlink != 1 {
 		f.Close()
-		return nil, nsLinkCountError()
+		return nil, nsLinkCountError(uint64(st.Nlink))
 	}
 	return &regularFile{
 		file:     f,
@@ -190,7 +190,7 @@ func (d *directory) verifyName(name string, expected FileIdentity) error {
 		return nsIdentityChangedError()
 	}
 	if found.links != 1 {
-		return nsLinkCountError()
+		return nsLinkCountError(found.links)
 	}
 	return nil
 }
@@ -213,7 +213,7 @@ func (d *directory) unlinkExact(name string, expected FileIdentity) (bool, error
 		return false, nsIdentityChangedError()
 	}
 	if found.links != 1 {
-		return false, nsLinkCountError()
+		return false, nsLinkCountError(found.links)
 	}
 	if err := unix.Unlinkat(int(d.file.Fd()), name, 0); err != nil {
 		return false, nsIoError("unlink exact file", err)

@@ -2419,6 +2419,85 @@ Phase-1 constructors are explicit:
 
 None performs general validation, auto-detects mode, or implicitly creates,
 repairs, initializes, relocates, or resets coordination.
+## 15A. Publication reservation file
+
+The publication reservation is the durability record of one immutable
+namespace publication attempt. It is host-local coordination state of the
+destination directory, never part of the portable v4 database bytes, and is
+never distributed with an immutable snapshot. The exact reservation pathname
+is the attempt-id private name `.iprange-reservation-<32 lowercase hex>.tmp`
+in the destination directory.
+
+The reservation file is exactly two pages. Both pages are file-mapped and
+every record byte is read or changed only through that retained mapping; the
+reservation never uses a read/write/seek API, and no complete page is ever
+copied into owned memory.
+
+Each page carries one 512-byte record at offset 0; the remaining 3,584 bytes
+of the page are reserved and MUST be zero. The record layout is:
+
+| Offset | Size | Field | Required value |
+|---:|---:|---|---|
+| 0 | 8 | magic | ASCII `IPR4RSV1` |
+| 8 | 2 | record size | `512` |
+| 10 | 2 | version | `1` |
+| 12 | 4 | state | `1=prepared`, `2=main may have been attempted` |
+| 16 | 16 | database ID | exact main-file `database_id`, nonzero |
+| 32 | 8 | transaction ID | nonzero `u64le` |
+| 40 | 16 | commit nonce | exact main-file commit nonce, nonzero |
+| 56 | 16 | attempt ID | random and nonzero |
+| 72 | 2 | reservation identity kind | `1` (unix device/inode pair) |
+| 74 | 6 | reserved | zero |
+| 80 | 32 | reservation identity | device `u64le` + inode `u64le` + zero tail |
+| 112 | 2 | policy | `1=fail-if-exists`, `2=replace-existing`, `3=replace-existing-no-rollback` |
+| 114 | 2 | output identity kind | `1` |
+| 116 | 4 | previous flags | `0` absent, `1` present |
+| 120 | 8 | output byte length | validated geometry (page-aligned, at least two pages) |
+| 128 | 32 | output identity | device + inode + zero tail, distinct from reservation identity |
+| 160 | 64 | output SHA-512 | digest of the finished output mapping |
+| 224 | 32 | previous identity | present only under replacement policies |
+| 256 | 64 | previous SHA-512 | present only under replacement policies |
+| 320 | 92 | reserved | zero |
+| 412 | 2 | basename encoding | `1` (POSIX bytes) |
+| 414 | 2 | reserved | zero |
+| 416 | 4 | destination basename length | nonzero |
+| 420 | 32 | basename commitment | SHA-256 over the encoded destination basename |
+| 452 | 8 | previous byte length | present only under replacement policies |
+| 460 | 2 | creation security kind | `1` |
+| 462 | 2 | reserved | zero |
+| 464 | 32 | security commitment | creator-only commitment, nonzero |
+| 496 | 8 | sequence | `1` with state `1`, `2` with state `2` |
+| 504 | 4 | reserved | zero |
+| 508 | 4 | CRC-32C | complete page with this field zero |
+
+Fail-if-exists records MUST carry the absent previous layout: flags `0`,
+previous identity zero, previous SHA-512 zero, previous length zero.
+Replacement records MUST carry the present layout with a valid previous
+identity distinct from both the reservation identity and the output identity.
+
+The two pages are the dual-block record: page 0 is sequence 1 (`prepared`, the
+exact state when the reservation is created) and page 1 is the derived state-2
+record (`main may have been attempted`, sequence 2) written only after the
+main-file rename may have reached the destination. Selection reads both pages
+and applies the exact rules:
+
+- wrong total length (not exactly two pages) fails without decoding;
+- a single decodable page is authoritative only when its sequence matches its
+  page index (`1` in page 0, `2` in page 1);
+- two decodable pages with equal sequences are authoritative only when both
+  pages are byte-identical (page 0 wins); otherwise the pair disagrees;
+- two decodable pages with adjacent ascending sequences (1 then 2) are
+  authoritative only when both name the same attempt and form the exact
+  `prepared,1` to `main may have been attempted,2` transition; the newer page
+  wins;
+- any other undecodable byte, sequence gap, attempt mismatch, or invalid
+  transition fails closed and hides nothing: a torn or invalid newer page
+  never shadows an intact prepared page.
+
+Ordinary resolution opens the reservation file only when a private reservation
+artifact is present, accepts only the exact two-page length, and never repairs
+or rewrites a reservation it did not create.
+
 ## 16. Public semantic operations
 
 ### 16.1 Common operation model and direct transactions

@@ -63,3 +63,10 @@ func BasenameFromParts(encoding uint16, bytes []byte) LocalBasename {
 func HousekeepingFromValue(value uint8) housekeeping {
 	return housekeeping(value)
 }
+
+// IsNofollowSymlink reports whether a syscall failure is the no-follow
+// final-symlink class (Rust publication::namespace::
+// is_nofollow_symlink: ELOOP on unix, plus EMLINK on freebsd). The
+// publication problem surface uses it to fold IoAt symlink failures to
+// the Conflict class.
+func IsNofollowSymlink(err error) bool { return isNofollowSymlink(err) }
