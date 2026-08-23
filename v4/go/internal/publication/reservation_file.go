@@ -5,9 +5,10 @@
 // two-page dual-block record created privately, renamed to the
 // coordination twin, and armed with state 2; every state transition
 // re-proves the exact custody facts at the exact physical steps. The
-// observed checkpoint variants and the worker enter_output probes are
-// recorded with the 4-10/4-11 chunks; this file ports the plain
-// variants with their crash points.
+// observed checkpoint variants are implemented here
+// (initialize/acquire/arm are thin wrappers over them); the Rust
+// worker enter_output probes stay recorded with the 4-10/4-11 worker
+// slices and are absent by design.
 
 package publication
 
@@ -356,7 +357,7 @@ func (c *canonicalReservation) armObserved(output *preparedOutput, afterSelectio
 	target, ok := c.header.state2()
 	if !ok {
 		return armedReservation{}, &armingReservationFailure{
-			owner: armingReservation{reservation: *c, target: &target},
+			owner: armingReservation{reservation: *c},
 			cause: reservationHeaderInvariantError(),
 		}
 	}

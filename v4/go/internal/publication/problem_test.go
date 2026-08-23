@@ -162,9 +162,18 @@ func TestReplacementProblemArms(t *testing.T) {
 }
 
 // TestMainProblemArms pins Problem::main (problem.rs main arms; the
-// Checkpoint arm is 4-10/4-11, the Gc arm is Windows-only Phase 2, the
-// Injected arm is test-only; none are ported as production arms).
+// Checkpoint clone-through arm, the Gc arm that is Windows-only Phase
+// 2, and the test-only Injected arm).
 func TestMainProblemArms(t *testing.T) {
+	// The Checkpoint arm passes through unchanged (Rust
+	// Error::Checkpoint(problem) => problem.clone()).
+	injected := &checkpointProblem{problem: problem(format.CodeIO, "injected checkpoint")}
+	if got := mainProblem(injected); got.Code != format.CodeIO || got.Detail != "injected checkpoint" {
+		t.Errorf("checkpoint cause: got (%d, %q)", got.Code, got.Detail)
+	}
+	if got := reservationProblem(injected); got.Code != format.CodeIO || got.Detail != "injected checkpoint" {
+		t.Errorf("reservation checkpoint cause: got (%d, %q)", got.Code, got.Detail)
+	}
 	// Reservation cause folds through the reservation table.
 	got := mainProblem(&format.Error{Code: format.CodeConflict, Detail: "reservation record changed"})
 	if got.Code != format.CodeConflict || got.Detail != "reservation record changed" {

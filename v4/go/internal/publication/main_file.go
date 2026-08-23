@@ -199,21 +199,19 @@ func proveMain(owner *mainAttempt, checkpoint func(mainPoint) error) error {
 	return owner.reservation.verifyAfterMain(owner.output)
 }
 
-// retire retires one published main without checkpoints or observers
-// (Rust PublishedMain::retire).
+// retire retires one published main without checkpoints (Rust
+// PublishedMain::retire). The Rust housekeeping-observer arm is
+// #[cfg(windows)] gc territory; Go publication refuses Windows opens
+// at destination bind (M5), so the observer surface is intentionally
+// absent and housekeeping always stays unobserved on the supported
+// POSIX path.
 func (p *publishedMain) retire() (publishedOutput, *retiringMainFailure) {
-	return retireMain(*p, func(mainPoint) error { return nil }, false, func(*HousekeepingArtifact) error { return nil })
+	return retireMain(*p, func(mainPoint) error { return nil })
 }
 
-// retireObserved retires one published main with the housekeeping
-// observer (Rust PublishedMain::retire_observed).
-func (p *publishedMain) retireObserved(observer func(*HousekeepingArtifact) error) (publishedOutput, *retiringMainFailure) {
-	return retireMain(*p, func(mainPoint) error { return nil }, true, observer)
-}
-
-func retireMain(p publishedMain, checkpoint func(mainPoint) error, observeHousekeeping bool, housekeepingObserver func(*HousekeepingArtifact) error) (publishedOutput, *retiringMainFailure) {
+func retireMain(p publishedMain, checkpoint func(mainPoint) error) (publishedOutput, *retiringMainFailure) {
 	owner := retiringMain{published: p}
-	if err := retireSteps(&owner, checkpoint, observeHousekeeping, housekeepingObserver); err != nil {
+	if err := retireSteps(&owner, checkpoint); err != nil {
 		return publishedOutput{}, &retiringMainFailure{owner: owner, cause: err}
 	}
 	return publishedOutput{
@@ -224,11 +222,11 @@ func retireMain(p publishedMain, checkpoint func(mainPoint) error, observeHousek
 	}, nil
 }
 
-func retireSteps(owner *retiringMain, checkpoint func(mainPoint) error, observeHousekeeping bool, housekeepingObserver func(*HousekeepingArtifact) error) error {
+func retireSteps(owner *retiringMain, checkpoint func(mainPoint) error) error {
 	if err := verifyPublished(owner.published); err != nil {
 		return err
 	}
-	unlinked, err := unlinkPrevious(owner, observeHousekeeping, housekeepingObserver)
+	unlinked, err := unlinkPrevious(owner)
 	if err != nil {
 		return err
 	}
@@ -237,7 +235,7 @@ func retireSteps(owner *retiringMain, checkpoint func(mainPoint) error, observeH
 			return checkpointFailure(err)
 		}
 	}
-	if err := unlinkReservation(owner, observeHousekeeping, housekeepingObserver); err != nil {
+	if err := unlinkReservation(owner); err != nil {
 		return err
 	}
 	if err := checkpoint(mainPointReservationUnlinked); err != nil {
@@ -266,7 +264,7 @@ func verifyPublished(published publishedMain) error {
 // A nil previous proves itself retired; a zero-link previous needs no
 // unlink. The returned bool reports that an unlink ran, which is when
 // the PreviousUnlinked checkpoint fires.
-func unlinkPrevious(owner *retiringMain, _ bool, _ func(*HousekeepingArtifact) error) (bool, error) {
+func unlinkPrevious(owner *retiringMain) (bool, error) {
 	published := &owner.published
 	if published.output.previous == nil {
 		owner.previousRetiredProven = true
@@ -305,7 +303,7 @@ func unlinkPrevious(owner *retiringMain, _ bool, _ func(*HousekeepingArtifact) e
 
 // unlinkReservation removes the coordination reservation name and
 // proves zero links (Rust unlink_reservation unix arm).
-func unlinkReservation(owner *retiringMain, _ bool, _ func(*HousekeepingArtifact) error) error {
+func unlinkReservation(owner *retiringMain) error {
 	published := &owner.published
 	destination := published.output.attempt.destinationOf()
 	unlinked, err := destination.directory().UnlinkExact(destination.coordinationName(), published.reservation.identity)

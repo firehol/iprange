@@ -1,8 +1,9 @@
 // Fixed, allocation-free publication failure details (Rust
 // publication/problem.rs). Every code and detail string is verbatim
-// Rust; Go does not carry os_code (design decision 6), and the
-// Windows-only gc/checkpoint/in-progress arms are recorded with their
-// Phase-2 and 4-10/4-11 chunks, never stubbed here.
+// Rust; Go does not carry os_code (design decision 6). The Checkpoint
+// arm is implemented here (checkpointProblem, the Error::Checkpoint
+// clone-through class); the Windows-only gc arm stays recorded with
+// Phase 2 and is never stubbed.
 
 package publication
 
@@ -197,10 +198,9 @@ func replacementProblem(err error) *format.Error {
 
 // mainProblem maps one main-file failure (Rust Problem::main:
 // Namespace, Sdk, Output, Reservation, Checkpoint, PreviousLinkCount,
-// ReservationLinkCount). The Checkpoint arm is recorded with
-// 4-10/4-11, the Gc arm is Windows-only Phase 2, and the Injected arm
-// is test-only (the Go crash harness maps it at the fault boundary);
-// none are stubbed here.
+// ReservationLinkCount). The Gc arm is Windows-only Phase 2 and the
+// Injected arm is test-only (the Go crash harness maps it at the
+// fault boundary); neither is stubbed here.
 func mainProblem(err error) *format.Error {
 	if _, ok := live.AsNamespaceError(err); ok {
 		return namespaceProblem(err)

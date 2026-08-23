@@ -439,3 +439,74 @@ func TestExistingMainRejectedBeforeState2(t *testing.T) {
 	}
 	armFailure.owner.reservation.Close()
 }
+
+// TestFailureAfterState1SelectionRetainsTheResultBoundary ports the
+// Rust after-selection checkpoint injection (reservation_file_tests.rs
+// failure_after_state1_selection_retains_the_result_boundary): the
+// post-selection checkpoint failure returns the error while the
+// state-1 record stays selectable at block 0.
+func TestFailureAfterState1SelectionRetainsTheResultBoundary(t *testing.T) {
+	dir := t.TempDir()
+	prepared := cleanupTestPrepared(t, dir, "result.v4")
+	defer prepared.Close()
+	draft, err := createReservationDraft(prepared)
+	if err != nil {
+		t.Fatalf("create reservation draft: %v", err)
+	}
+	if err := prepareHeader(draft, prepared); err != nil {
+		t.Fatalf("prepare header: %v", err)
+	}
+	if err := writeState1(draft); err != nil {
+		t.Fatalf("write state 1: %v", err)
+	}
+	injected := problem(format.CodeIO, "injected after-selection checkpoint failure")
+	if err := lockState1With(draft, prepared, func(live.FileIdentity) error { return injected }); err == nil {
+		t.Fatal("lockState1With succeeded despite the injected checkpoint")
+	}
+	if !draft.state1Selected {
+		t.Fatal("state 1 was not marked selected before the checkpoint")
+	}
+	if err := selectExact(draft.mapping, *draft.header, 0); err != nil {
+		t.Fatalf("state-1 record no longer selects after the checkpoint failure: %v", err)
+	}
+	draft.Close()
+}
+
+// TestFailureAfterState2SelectionRetainsTheDurablePhase ports the
+// Rust after-selection checkpoint injection (reservation_file_tests.rs
+// failure_after_state2_selection_retains_the_durable_phase): the
+// post-selection checkpoint failure returns the error while the
+// state-2 record stays selectable at block 1.
+func TestFailureAfterState2SelectionRetainsTheDurablePhase(t *testing.T) {
+	dir := t.TempDir()
+	prepared := cleanupTestPrepared(t, dir, "result.v4")
+	defer prepared.Close()
+	draft, err := createReservationDraft(prepared)
+	if err != nil {
+		t.Fatalf("create reservation draft: %v", err)
+	}
+	private, initFailure := draft.initialize(prepared)
+	if initFailure != nil {
+		t.Fatalf("initialize reservation: %v", initFailure)
+	}
+	canonical, acquireFailure := private.acquire(prepared)
+	if acquireFailure != nil {
+		t.Fatalf("acquire reservation: %v", acquireFailure)
+	}
+	target, ok := canonical.header.state2()
+	if !ok {
+		t.Fatal("state-2 header derivation failed")
+	}
+	injected := problem(format.CodeIO, "injected after-selection checkpoint failure")
+	owner := armingReservation{reservation: canonical, target: &target}
+	if err := armWith(&owner, prepared, func(live.FileIdentity) error { return injected }); err == nil {
+		t.Fatal("armWith succeeded despite the injected checkpoint")
+	}
+	if !owner.state2Selected {
+		t.Fatal("state 2 was not marked selected before the checkpoint")
+	}
+	if err := selectExact(owner.reservation.mapping, target, 1); err != nil {
+		t.Fatalf("state-2 record no longer selects after the checkpoint failure: %v", err)
+	}
+	owner.reservation.Close()
+}

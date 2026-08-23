@@ -47,29 +47,13 @@ const (
 // output.policy must be the fail-if-exists policy (Rust debug
 // asserts; the facade enforces them).
 func failIfExistsCancellable(output *preparedOutput, check func() error) (PublicationResult, *PublicationPreparationFailure) {
-	return publishWithObserver(output, check, func(point attemptPoint) error {
-		if cleanupIgnoresCancellation(point) {
-			return nil
-		}
-		if err := check(); err != nil {
-			return sdkProblem(err)
-		}
-		return nil
-	}, false, func(*publicationCheckpoint) error { return nil })
+	return publishWithObserver(output, check, cancellationCheckpoint(check), false, func(*publicationCheckpoint) error { return nil })
 }
 
 // failIfExistsCancellableObserved publishes with the observer hook
 // (Rust fail_if_exists_cancellable_observed).
 func failIfExistsCancellableObserved(output *preparedOutput, check func() error, observer func(*publicationCheckpoint) error) (PublicationResult, *PublicationPreparationFailure) {
-	return publishWithObserver(output, check, func(point attemptPoint) error {
-		if cleanupIgnoresCancellation(point) {
-			return nil
-		}
-		if err := check(); err != nil {
-			return sdkProblem(err)
-		}
-		return nil
-	}, true, observer)
+	return publishWithObserver(output, check, cancellationCheckpoint(check), true, observer)
 }
 
 // replaceExistingCancellable publishes one prepared output with a
@@ -77,7 +61,15 @@ func failIfExistsCancellableObserved(output *preparedOutput, check func() error,
 // replace_existing_cancellable). output.previous must be present and
 // the policy must be a replacement policy (Rust debug asserts).
 func replaceExistingCancellable(output *preparedOutput, check func() error) (PublicationResult, *PublicationPreparationFailure) {
-	return publishWithObserver(output, check, func(point attemptPoint) error {
+	return publishWithObserver(output, check, cancellationCheckpoint(check), false, func(*publicationCheckpoint) error { return nil })
+}
+
+// cancellationCheckpoint builds the machine checkpoint closure that
+// runs the caller's cancellation check at every non-cleanup point
+// (Rust publish_with_observer checkpoint wiring; cleanup must finish
+// even when the caller was cancelled).
+func cancellationCheckpoint(check func() error) func(attemptPoint) error {
+	return func(point attemptPoint) error {
 		if cleanupIgnoresCancellation(point) {
 			return nil
 		}
@@ -85,7 +77,7 @@ func replaceExistingCancellable(output *preparedOutput, check func() error) (Pub
 			return sdkProblem(err)
 		}
 		return nil
-	}, false, func(*publicationCheckpoint) error { return nil })
+	}
 }
 
 // resumeArmed resumes one publication from an armed reservation after
@@ -317,15 +309,7 @@ func finishPublished(s seed, published publishedMain, cause error) PublicationRe
 
 func finishPublishedObserved(s seed, published publishedMain, cause error, observe bool, observer func(*publicationCheckpoint) error) PublicationResult {
 	reservationIdentity := published.reservation.identity
-	var retirement publishedOutput
-	var retirementFailure *retiringMainFailure
-	if observe {
-		retirement, retirementFailure = published.retireObserved(func(artifact *HousekeepingArtifact) error {
-			return observePublishedHousekeeping(&s, reservationIdentity, artifact, observer)
-		})
-	} else {
-		retirement, retirementFailure = published.retire()
-	}
+	retirement, retirementFailure := published.retire()
 	if retirementFailure == nil {
 		return s.resultWithHousekeeping(finalState{
 			reservationIdentity:               retirement.reservationIdentity,
@@ -369,37 +353,6 @@ func finishPublishedObserved(s seed, published publishedMain, cause error, obser
 		mainAccessPolicy:                  mainAccess,
 		coordinationAccessPolicy:          coordination,
 	}, cleanup, owner.housekeeping, owner.visibleHousekeeping, finalCause)
-}
-
-func observePublishedHousekeeping(s *seed, reservationIdentity live.FileIdentity, artifact *HousekeepingArtifact, observer func(*publicationCheckpoint) error) error {
-	problem := interruptedProblem()
-	checkpointSeed := *s
-	cleanup := newCleanupArtifacts()
-	basename := append([]byte(nil), artifact.SourceBasename...)
-	cleanup.push(CleanupArtifact{
-		Kind:              artifact.Kind,
-		DirectoryRole:     artifact.DirectoryRole,
-		DirectoryIdentity: artifact.DirectoryIdentity,
-		BasenameEncoding:  artifact.BasenameEncoding,
-		Basename:          basename,
-		Identity:          artifact.SourceIdentity,
-		CreationSecurity:  &artifact.CreationSecurity,
-		UnpublishedTail:   nil,
-		Error:             problem,
-	})
-	if artifact.Kind == ArtifactPrivateOutput {
-		cleanup.push(checkpointSeed.artifact(ArtifactPrivateReservation, nameSlotCoordination, identityOptional{present: true, identity: reservationIdentity}, problem))
-	}
-	visible := []HousekeepingArtifact{*artifact}
-	result := checkpointSeed.resultWithHousekeeping(finalState{
-		reservationIdentity:               reservationIdentity,
-		mainNamespaceMayHaveBeenAttempted: true,
-		publication:                       PublicationPublished,
-		destinationContent:                DestinationContentDesired,
-		mainAccessPolicy:                  AccessPolicyCreatorOnly,
-		coordinationAccessPolicy:          AccessPolicyChangedOrUnproven,
-	}, cleanup, HousekeepingVisible, visible, problem)
-	return observer(&publicationCheckpoint{result: &result})
 }
 
 func draftOwner(d *reservationDraft) reservationOwner {

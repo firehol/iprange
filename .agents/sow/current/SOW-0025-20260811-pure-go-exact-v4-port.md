@@ -9575,7 +9575,10 @@ Slice I ports the one-shot publication machine (Rust publication/attempt.rs
 replacement flows composed from the explicit ownership states, the
 atomic main-name publication per policy, the exact retirement of the
 reservation and any replaced previous, the checkpoint/observer surface
-(the slice-F "recorded with 4-10/4-11" deferrals are implemented here),
+(the slice-F deferral for the observed checkpoint variants and the
+two after-selection checkpoint-injection tests is closed here; the
+worker enter_output probes stay recorded with the 4-10/4-11 worker
+slices and remain mapped there, absent by design at their Go sites),
 and every failure class with the exact cleanup ledger. Rust is the
 mandatory baseline; the Go machines mirror the Rust owners and outcome
 classes one to one.
@@ -9584,7 +9587,7 @@ Go files (all !windows; the Rust windows gc-transition arms of
 main_file.rs stay intentionally absent: Go publication refuses Windows
 opens at destination bind per M5):
 
-- internal/publication/attempt.go (469 lines): failIfExistsCancellable,
+- internal/publication/attempt.go (421 lines): failIfExistsCancellable,
   failIfExistsCancellableObserved, replaceExistingCancellable,
   resumeArmed, publishWithObserver, fromPrivate/fromCanonical/fromArmed,
   the five observe* checkpoint builders (interruptedProblem detail "mapped
@@ -9594,7 +9597,7 @@ opens at destination bind per M5):
   cleanupPointOf, cleanupIgnoresCancellation. The Go two-value return
   (PublicationResult, *PublicationPreparationFailure) is the peer of
   Rust Result<_, Box<PreparationFailure>>.
-- internal/publication/main_file.go (363 lines): publishProved/
+- internal/publication/main_file.go (361 lines): publishProved/
   publishObserved/publishWith/publishSteps/verifyBeforeMain/renameMain/
   synchronizeMain/proveMain, retire/retireObserved/retireMain/
   retireSteps/verifyPublished/unlinkPrevious/unlinkReservation/
@@ -9606,20 +9609,22 @@ opens at destination bind per M5):
   return cleanupConflictProblem with the Rust-verbatim details
   ("retired previous destination still has a link" / "retired
   reservation still has a link").
-- internal/publication/seed.go (+90): finalState, result(),
+- internal/publication/seed.go (+76): finalState, result(),
   resultWithHousekeeping(), preparationWithHousekeeping() (Rust
   result.rs 155-266).
-- internal/publication/problem.go (+24): checkpointProblem wrapper and
+- internal/publication/problem.go (+27): checkpointProblem wrapper and
   asCheckpointProblem (Rust Error::Checkpoint clone-through);
   reservationProblem/mainProblem unwrap it first.
 - internal/publication/reservation_file.go (modified): plain
   initialize/acquire/arm are now thin wrappers over the observed
-  machines (nil checkpoint); this slice flattens every machine owner
-  to a value and every success return to a value so the success path
-  stays on the stack (Rust moves values; the failures copy the owner
-  value into the heap failure). Go signature note: the machine takes
-  *preparedOutput and value reservations (caller ownership of the file
-  descriptors; Rust moves the PreparedOutput into the machine).
+  machines (nil checkpoint); the two after-selection
+  checkpoint-injection tests of the Rust suite are ported here too;
+  this slice flattens every machine owner to a value and every
+  success return to a value so the success path stays on the stack
+  (Rust moves values; the failures copy the owner value into the heap
+  failure). Go signature note: the machine takes *preparedOutput and
+  value reservations (caller ownership of the file descriptors; Rust
+  moves the PreparedOutput into the machine).
 
 Go tests:
 
@@ -9691,8 +9696,25 @@ Design notes:
   per-OS test-compiles of internal/publication all PASS. Rust tree
   untouched.
 
-- Review: five-aspect adversarial review pending at slice close
-  (parity/idioms/performance/wire/integrity/records).
+- Review round 1: five-aspect adversarial review at HEAD 74cfc7d:
+  parity PASS (Goodall; P3 crash-count wording and the armObserved
+  header-invariant target pointer - both fixed), wire/integrity PASS
+  (Herschel; P3 flaky pin routed to performance), idioms FAIL then
+  fixed (Gauss: P2-A the MemStats window witnessed background
+  allocations in the full battery - the pin now takes the minimum of
+  5 single-run windows; P2-B the unix-dead housekeeping-observer
+  ceremony of the Rust cfg-shared retire surface removed (M5 note in
+  code); P3-A the triplicated cancellation-checkpoint closure hoisted
+  to cancellationCheckpoint), performance FAIL then fixed
+  (Chandrasekhar: F1 the same pin flake; F2 the pin's per-class
+  enumeration corrected to the escape-analysis-proven claim - zero
+  machine-logic escapes, every one of the pinned 58 objects is an
+  x/sys boundary conversion, a rename class, or result plumbing),
+  records FAIL then fixed (Noether: the 58-budget flake, the
+  deferral-mapping overclaim corrected above, the stale
+  checkpoint-arm comments in problem.go/problem_test.go refreshed,
+  the reservation_file.go header refreshed, line-count wording
+  corrections). Round-2 re-review dispatched after the fixes.
 
 Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
 + resolver_verification 88 + resolver_result 189); the plan after J
