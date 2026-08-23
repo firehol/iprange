@@ -9315,7 +9315,20 @@ freebsd, windows all PASS. Rust tree untouched. FreeBSD arm verified
 with GOOS=freebsd build + vet after the FinishNoreplaceTransition
 export.
 
-Review status: five-aspect adversarial review at HEAD 7fe04f8
+Slice G CLOSED at HEAD 6f3ad8c (2026-08-23): first review round at
+7fe04f8 (parity PASS, idioms FAIL, performance FAIL, wire PASS,
+records PASS) and the fixes commit 6f3ad8c, re-reviewed at 6f3ad8c:
+all five aspects PASS (Dewey parity PASS with no regressions in the
+delta; Peirce idioms PASS after the ownership unification and test
+fixes with two optional P3s; Einstein performance PASS after the
+value-read and zero-alloc-scan fixes, F3 accepted as recorded;
+McClintock wire PASS with no wire-format change and the GOROOT-
+mirrored dirent parser verified per OS; Pasteur records PASS with
+one P3 wording nit on the mapping.rs citation). Residual P3s are
+optional and recorded with the slices. Slice G is complete; next is
+slice H (cleanup).
+
+Five-aspect adversarial review at HEAD 7fe04f8 (first round;
 (2026-08-23): parity PASS (Dewey; P3: sentinel comparisons hardened
 with errors.Is), idioms FAIL then fixed (Peirce): the orphaned
 inspectPrivateReservation test call that leaked an owned inspected
