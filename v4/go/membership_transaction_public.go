@@ -154,7 +154,7 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 		return err
 	})
 	if err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, err
@@ -185,7 +185,7 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 		return err
 	})
 	if err != nil {
-		return false, err
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -212,7 +212,7 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 		return err
 	})
 	if err != nil {
-		return false, err
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -240,7 +240,7 @@ func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 		return err
 	})
 	if err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, err
@@ -270,7 +270,7 @@ func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 		return err
 	})
 	if err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
@@ -299,7 +299,7 @@ func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 		return err
 	})
 	if err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
@@ -325,7 +325,7 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 		return edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check)
 	})
 	if err != nil {
-		return err
+		return t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return err
@@ -345,7 +345,13 @@ func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	}
 	changed, err := t.w.core.SetMetadata(input)
 	if err != nil {
-		return false, err
+		// Rust stage_metadata_json raises the already-staged WrongState
+		// and the 20 MiB cap before mutate; those stay raw. Errors from
+		// inside the edit abort the transaction.
+		if metadataStagePreCheck(err) {
+			return false, err
+		}
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -365,7 +371,13 @@ func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 	}
 	changed, err := t.w.core.ClearMetadata()
 	if err != nil {
-		return false, err
+		// Rust stage_clear_metadata_json raises the already-staged
+		// WrongState before mutate; that stays raw. Errors from inside
+		// the edit abort the transaction.
+		if metadataStagePreCheck(err) {
+			return false, err
+		}
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -376,6 +388,12 @@ func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 // Commit publishes this transaction through the alternate metadata page
 // (Rust MembershipTransaction::commit).
 func (t *MembershipTransaction) Commit() (CommitResult, error) {
+	if t.spent {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// transaction (the draft was discarded by an abort, an op
+		// failure, or a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := t.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -437,6 +455,16 @@ func (t *MembershipTransaction) checkOrAbort() error {
 		return t.w.abortAfter(err)
 	}
 	return nil
+}
+
+// abortEdit mirrors Rust LiveWriter::mutate: an error raised inside the
+// edit (after the pre-mutate require checks) discards the draft, spends
+// the transaction, and reports TransactionAborted wrapping the cause
+// (Rust live_writer.rs mutate -> abort_after; Io/Format causes
+// additionally brand the writer unusable).
+func (t *MembershipTransaction) abortEdit(err error) error {
+	t.spent = true
+	return t.w.abortAfter(err)
 }
 
 // requireCurrentFeed mirrors Rust MembershipState::require_current_feed:

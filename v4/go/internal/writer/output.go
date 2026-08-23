@@ -76,6 +76,12 @@ type OutputBuilder struct {
 	recordScratch  [membershipRecordLimit]byte
 	hashScratch    [membershipHashKeySize]byte
 	catalogScratch [catalogMaxRecord]byte
+	// structureScratch owns the structure intern payload of one output
+	// (Rust intern_payload payload local): the shape-stenciled generic
+	// internStructure leaks its payload argument, so the builder copies
+	// the payload into this field before the call instead of allocating
+	// per intern.
+	structureScratch structurePayload
 	// membershipRefs aggregates recurring membership references so each
 	// id is applied as one refcount delta (Rust ReferenceBatch).
 	membershipRefs membershipReferenceBatch

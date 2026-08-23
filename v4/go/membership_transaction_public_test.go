@@ -7,6 +7,7 @@
 package iprangedb
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -211,12 +212,38 @@ func TestPublicMembershipTransactionSurface(t *testing.T) {
 	if _, err := tx.RenameFeed(alpha, feedName(t, "again")); !isPubCode(err, ErrorStaleReference) {
 		t.Fatalf("rename of stale feed = %v, want stale reference", err)
 	}
-	// A rename onto an existing name is refused (Rust
-	// rename_current_feed NameExists).
-	if _, err := tx.RenameFeed(renamed, feedName(t, "beta")); !isPubCode(err, ErrorNameExists) {
-		t.Fatalf("rename onto existing = %v, want name exists", err)
+	// A rename onto an existing name fails inside the edit (Rust
+	// rename_current_feed inside mutate), so it aborts the transaction
+	// with TransactionAborted wrapping NameExists and the writer is
+	// clean again.
+	if _, err := tx.RenameFeed(renamed, feedName(t, "beta")); err == nil {
+		t.Fatal("rename onto existing name was accepted")
+	} else {
+		var ab *abortError
+		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorNameExists) {
+			t.Fatalf("rename onto existing = %v, want transaction aborted wrapping name exists", err)
+		}
+	}
+	// The transaction is dead: later ops report the inactive class and
+	// Commit/Abort report the writer's clean state (Rust require_active
+	// / commit_attempt / abort after abort_after).
+	if _, err := tx.FeedCursor(); !isPubCode(err, ErrorWrongState) {
+		t.Fatalf("feed cursor on aborted transaction = %v, want wrong state", err)
+	}
+	if _, err := tx.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit on aborted transaction = %v, want no pending transaction", err)
+	}
+	if err := tx.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort on aborted transaction = %v, want no pending transaction", err)
 	}
 
+	// A fresh transaction serves the remaining surface. The aborted
+	// rename was discarded with the draft, so the catalog still shows
+	// the committed alpha/beta names.
+	tx, err = w.BeginMembershipTransaction(cancellation)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cursor, err := tx.FeedCursor()
 	if err != nil {
 		t.Fatal(err)
@@ -232,8 +259,8 @@ func TestPublicMembershipTransactionSurface(t *testing.T) {
 		}
 		names = append(names, ref.Name().String())
 	}
-	if len(names) != 2 || names[0] != "alpha-renamed" || names[1] != "beta" {
-		t.Fatalf("cursor order = %v, want [alpha-renamed beta]", names)
+	if len(names) != 2 || names[0] != "alpha" || names[1] != "beta" {
+		t.Fatalf("cursor order = %v, want [alpha beta]", names)
 	}
 	if changed, err := tx.ClearMetadataJSON(); err != nil {
 		t.Fatal(err)

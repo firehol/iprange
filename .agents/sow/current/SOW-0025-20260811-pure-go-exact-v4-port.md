@@ -42,13 +42,88 @@ Recorded as Review Process below.
 
 Status: in-progress
 
-### Status (2026-08-23) - slice C review round 1: five-aspect FAILs fixed on the working tree
+### Status (2026-08-23) - slice C review round 2: Harvey FAIL fixed on the working tree, four aspects green
+
+The round-2 re-review at ba446fa returned: Anscombe (Go idioms) PASS,
+Newton (wire/integrity) PASS, Aristotle (APIs/docs/records) PASS with
+one P3 record nit, Harvey (performance) FAIL with two findings, Meitner
+(Rust parity) FAIL with one P1 (op errors bypassed Rust mutate's
+abort_after). All three findings are fixed and verified on the working
+tree (uncommitted at the time of writing); the full battery is green
+again under nice:
+
+- P1 (Harvey) - residual internStructurePayload leak: the shape-
+  stenciled generic internStructure still escaped its payload argument
+  (48 B/op, 1 alloc/op measured on the real draft and output intern
+  paths; the round-1 pin tested internStructure directly and missed
+  it). The draft and output builders now own a structureScratch
+  (draft_store.go, output.go, same pattern as recordScratch and
+  rangeScratch) and internStructurePayload copies the payload into that
+  scratch before the generic call (structure_draft.go, structured.go).
+  TestSliceCStructureInternZeroAlloc rewritten to exercise the real
+  path (DraftStore.internNetworkEnrichmentV1 with an empty membership
+  handle) and measures exactly 0 allocations.
+- P2 (Harvey) - trimPredecessor heap rewrite: the function returned
+  *rewrite, so every clear/delete allocated 24 B and one object per
+  operation. rewrite now carries its left and right rangeRecord sides
+  by value with hasLeft/hasRight presence flags and trimPredecessor
+  returns rewrite by value (range_edit.go; call sites
+  rangeReplaceWithHint, trimFollowing, writeReplacement updated). This
+  matches the Rust Option<Rewrite> value semantics. New pin
+  TestSliceCStructuredClearZeroAlloc runs store.ClearV4 on an empty
+  structured tree and measures exactly 0 allocations.
+- P1 (Meitner) - op errors bypassed Rust mutate's abort_after: every
+  edit-touching transaction op returned the raw edit error, so the
+  draft survived an op failure and Commit could publish whatever
+  partial mutation the failed op left behind; Rust discards the draft
+  and reports TransactionAborted wrapping the cause (live_writer.rs
+  mutate -> abort_after, live_writer/commit.rs commit_attempt). The
+  structured and membership transaction ops now spend the transaction
+  and abort through the writer on any error raised inside the edit,
+  while the metadata stage checks Rust raises before mutate
+  (already-staged WrongState and the 20 MiB InvalidArgument cap,
+  live_writer.rs stage_metadata_json) stay raw and keep the
+  transaction alive. Commit on a spent transaction now reports
+  NoPendingTransaction like Rust commit_attempt (previously the
+  inactive WrongState). Membership DeleteFeed keeps its epoch
+  overflow check before mutate: Rust membership delete_feed computes
+  next_epoch with checked_add before the mutate (membership.rs:340),
+  matching the existing Go order.
+  Pins: TestPublicStructuredTransactionOpErrorAborts (intern with
+  out-of-range coordinates and rename onto an existing name both abort
+  with TransactionAborted wrapping the cause; the transaction is dead
+  and the writer clean). TestPublicMembershipTransactionSurface was
+  corrected to the Rust-exact rename-onto-existing abort: it
+  previously pinned the raw NameExists with a surviving transaction,
+  which diverges from Rust (rename_current_feed runs inside mutate).
+  Meitner's example of the double SetMetadataJSON was verified against
+  Rust and kept raw: require_metadata_stage_available runs before
+  mutate (live_writer.rs:290), so the existing WrongState pin is
+  unchanged.
+- P3 (carried, tracked) - the slice-B feed workflow Commit-after-abort
+  reports WrongState (feed_workflow_public.go requireChangedActive)
+  where Rust PreparedWorkflow::commit reports NoPendingTransaction
+  after an op-failure abort; unpinned and pre-existing on a gated
+  surface outside this delta's blast radius, to resolve at the next
+  gate.
+- P3 (Aristotle) - SOW record phrasing: this round-1 entry was
+  reworded to name the commit (ba446fa) instead of pre-commit working
+  tree phrasing, and the "next: commit this round" line now names the
+  re-review gate, so the record reads correctly at HEAD.
+- Full battery green under nice: build, gofmt clean, vet, plain/v4work
+  tests, race, race+v4work, checkptr=2, six cross-compiles, Rust
+  conformance (11 fixtures), Rust mixed-subprocess, Go subprocess
+  cross-open.
+- Next: commit this round, send the delta to the pending reviewers,
+  close slice C only when all five aspects PASS, then slice D.
+
+### Status (2026-08-23) - slice C review round 1: five-aspect FAILs fixed at ba446fa
 
 The five-aspect slice-C review round (Meitner Rust parity, Anscombe Go
 idioms, Harvey performance, Newton wire/integrity, Aristotle APIs/docs)
 returned: Newton PASS; Meitner, Anscombe, Harvey, Aristotle FAIL. Every
-finding is fixed and verified on the working tree; the full battery is
-green again under nice:
+finding is fixed and verified at ba446fa (delta 8bb1daf..ba446fa); the
+full battery is green again under nice:
 
 - P1 (Harvey) - internStructure interface escape: the shape-stenciled
   decodeStructureRecord payload escaped through the codec validate
@@ -101,8 +176,8 @@ green again under nice:
 - Full battery green under nice: build, gofmt clean, vet, plain/v4work
   tests, race, race+v4work, checkptr=2, six cross-compiles, Rust
   conformance, Rust mixed-subprocess, Go subprocess cross-open.
-- Next: commit this round, send the delta to the four FAIL reviewers,
-  close slice C only when all five aspects PASS, then slice D.
+- Next: the round-2 re-review gate on this delta (all five aspects at
+  ba446fa), then slice D.
 
 ### Status (2026-08-23) - slice B gated PASS: all five aspects green on 948aa93
 

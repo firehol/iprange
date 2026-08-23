@@ -12,6 +12,8 @@
 package iprangedb
 
 import (
+	"errors"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -122,7 +124,7 @@ func (t *StructuredTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 	}
 	entry, found, err := t.edit.LookupFeed(string(name))
 	if err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, err
@@ -147,7 +149,7 @@ func (t *StructuredTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	}
 	entry, _, err := t.edit.EnsureFeed(string(name))
 	if err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
@@ -169,7 +171,7 @@ func (t *StructuredTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 	}
 	entry, err := t.edit.RenameCurrentFeed(feed.entry, string(newName))
 	if err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
@@ -188,7 +190,7 @@ func (t *StructuredTransaction) DeleteFeed(feed FeedRef) error {
 		return err
 	}
 	if err := t.edit.DeleteCurrentStructuredFeed(feed.entry, t.cancellation.check); err != nil {
-		return err
+		return t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return err
@@ -227,7 +229,7 @@ func (t *StructuredTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 	}
 	handle, err := t.edit.AddFeedToMembership(membership.handle, feed.entry)
 	if err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, err
@@ -257,7 +259,7 @@ func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmen
 	}
 	structure, err := t.edit.InternNetworkEnrichmentV1(value.internal(), membership.handle)
 	if err != nil {
-		return StructureRef{}, err
+		return StructureRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return StructureRef{}, err
@@ -277,7 +279,7 @@ func (t *StructuredTransaction) AssignV4(from, to IPv4, structure StructureRef) 
 	}
 	changed, err := t.edit.AssignStructureInputV4(uint32(from), uint32(to), structure.handle, &t.inputV4)
 	if err != nil {
-		return false, err
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -296,7 +298,7 @@ func (t *StructuredTransaction) AssignV6(from, to IPv6, structure StructureRef) 
 	}
 	changed, err := t.edit.AssignStructureInputV6(from.Hi, from.Lo, to.Hi, to.Lo, structure.handle, &t.inputV6)
 	if err != nil {
-		return false, err
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -329,7 +331,13 @@ func (t *StructuredTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	}
 	changed, err := t.edit.SetMetadata(input)
 	if err != nil {
-		return false, err
+		// Rust stage_metadata_json raises the already-staged WrongState
+		// and the 20 MiB cap before mutate; those stay raw. Errors from
+		// inside the edit abort the transaction.
+		if metadataStagePreCheck(err) {
+			return false, err
+		}
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -349,7 +357,13 @@ func (t *StructuredTransaction) ClearMetadataJSON() (bool, error) {
 	}
 	changed, err := t.edit.ClearMetadata()
 	if err != nil {
-		return false, err
+		// Rust stage_clear_metadata_json raises the already-staged
+		// WrongState before mutate; that stays raw. Errors from inside
+		// the edit abort the transaction.
+		if metadataStagePreCheck(err) {
+			return false, err
+		}
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
@@ -360,6 +374,12 @@ func (t *StructuredTransaction) ClearMetadataJSON() (bool, error) {
 // Commit publishes this transaction through the alternate metadata page
 // (Rust StructuredTransaction::commit).
 func (t *StructuredTransaction) Commit() (CommitResult, error) {
+	if t.spent {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// transaction (the draft was discarded by an abort, an op
+		// failure, or a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := t.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -434,6 +454,31 @@ func (t *StructuredTransaction) checkOrAbort() error {
 		return t.w.abortAfter(err)
 	}
 	return nil
+}
+
+// metadataStagePreCheck reports whether an edit error is one of the
+// metadata stage checks Rust raises before mutate (Rust
+// LiveWriter::stage_metadata_json and stage_clear_metadata_json): the
+// already-staged WrongState and the 20 MiB InvalidArgument cap stay raw
+// and the transaction survives. Every error raised inside the edit
+// aborts the transaction instead.
+func metadataStagePreCheck(err error) bool {
+	var fe *format.Error
+	if !errors.As(err, &fe) {
+		return false
+	}
+	return fe.Code == format.CodeWrongState || fe.Code == format.CodeInvalidArgument
+}
+
+// abortEdit mirrors Rust LiveWriter::mutate: an error raised inside the
+// edit (after the pre-mutate require checks) discards the draft, spends
+// the transaction, and reports TransactionAborted wrapping the cause
+// (Rust live_writer.rs mutate -> abort_after; Io/Format causes
+// additionally brand the writer unusable). The bound edit is stale
+// after the discard; spent blocks every further use.
+func (t *StructuredTransaction) abortEdit(err error) error {
+	t.spent = true
+	return t.w.abortAfter(err)
 }
 
 // requireCurrentFeed mirrors Rust MembershipState::require_current_feed.

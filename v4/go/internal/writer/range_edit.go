@@ -219,10 +219,10 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint tree.LocalReject[ra
 	if err != nil {
 		return false, err
 	}
-	if err := trimFollowing(ctx, change.from, change.to, rewrite); err != nil {
+	if err := trimFollowing(ctx, change.from, change.to, &rewrite); err != nil {
 		return false, err
 	}
-	return writeReplacement(ctx, change.from, change.to, change.value, rewrite)
+	return writeReplacement(ctx, change.from, change.to, change.value, &rewrite)
 }
 
 // replaceStrictlyInside replaces one range strictly inside an existing
@@ -307,39 +307,45 @@ func replaceStrictCells(ctx *rangeCtx, oldKey tree.Key, cells [][]byte, hint tre
 }
 
 // rewrite accumulates the trimmed sides of one interval rewrite (Rust
-// Rewrite).
+// Rewrite): the sides are carried by value with presence flags, so a
+// clear or delete never allocates (Rust Option<RangeRecord> value
+// semantics; a heap rewrite would allocate per record).
 type rewrite struct {
-	left    *rangeRecord
-	right   *rangeRecord
-	changed bool
+	left     rangeRecord
+	right    rangeRecord
+	hasLeft  bool
+	hasRight bool
+	changed  bool
 }
 
 // trimPredecessor trims the overlapping head of the predecessor range
 // (Rust trim_predecessor).
-func trimPredecessor(ctx *rangeCtx, predecessor rangeRecord, hasPredecessor bool, from, to tree.Key) (*rewrite, error) {
-	rewrite := &rewrite{}
+func trimPredecessor(ctx *rangeCtx, predecessor rangeRecord, hasPredecessor bool, from, to tree.Key) (rewrite, error) {
+	var rewrite rewrite
 	if !hasPredecessor || predecessor.to.Less(from) {
 		return rewrite, nil
 	}
 	if err := rangeRemove(ctx, predecessor); err != nil {
-		return nil, err
+		return rewrite, err
 	}
 	rewrite.changed = true
 	if predecessor.from.Less(from) {
 		previous, ok := ctx.family.Previous(from)
 		if !ok {
-			return nil, corrupt("range rewrite does not advance")
+			return rewrite, corrupt("range rewrite does not advance")
 		}
-		rewrite.left = &rangeRecord{from: predecessor.from, to: previous, value: predecessor.value}
+		rewrite.left = rangeRecord{from: predecessor.from, to: previous, value: predecessor.value}
+		rewrite.hasLeft = true
 	}
 	if to.Less(predecessor.to) {
 		next, ok := ctx.family.Next(to)
 		if !ok {
-			return nil, corrupt("range rewrite does not advance")
+			return rewrite, corrupt("range rewrite does not advance")
 		}
-		rewrite.right = &rangeRecord{from: next, to: predecessor.to, value: predecessor.value}
+		rewrite.right = rangeRecord{from: next, to: predecessor.to, value: predecessor.value}
+		rewrite.hasRight = true
 	}
-	if rewrite.left != nil && rewrite.right != nil {
+	if rewrite.hasLeft && rewrite.hasRight {
 		work.RangeSplit(1)
 	}
 	return rewrite, nil
@@ -368,7 +374,8 @@ func trimFollowing(ctx *rangeCtx, from, to tree.Key, rewrite *rewrite) error {
 			if !ok {
 				return corrupt("range rewrite does not advance")
 			}
-			rewrite.right = &rangeRecord{from: next, to: old.to, value: old.value}
+			rewrite.right = rangeRecord{from: next, to: old.to, value: old.value}
+			rewrite.hasRight = true
 			return nil
 		}
 	}
@@ -377,8 +384,8 @@ func trimFollowing(ctx *rangeCtx, from, to tree.Key, rewrite *rewrite) error {
 // writeReplacement writes the rewritten sides and the new value (Rust
 // write_replacement).
 func writeReplacement(ctx *rangeCtx, from, to tree.Key, value optionalValue, rewrite *rewrite) (bool, error) {
-	if rewrite.left != nil {
-		if err := insertCoalesced(ctx, *rewrite.left); err != nil {
+	if rewrite.hasLeft {
+		if err := insertCoalesced(ctx, rewrite.left); err != nil {
 			return false, err
 		}
 	}
@@ -387,8 +394,8 @@ func writeReplacement(ctx *rangeCtx, from, to tree.Key, value optionalValue, rew
 			return false, err
 		}
 	}
-	if rewrite.right != nil {
-		if err := insertCoalesced(ctx, *rewrite.right); err != nil {
+	if rewrite.hasRight {
+		if err := insertCoalesced(ctx, rewrite.right); err != nil {
 			return false, err
 		}
 	}

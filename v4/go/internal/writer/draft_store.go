@@ -59,6 +59,13 @@ type DraftStore struct {
 	// Slot 0 serves the one-record paths; the up to three cells of one
 	// leaf replacement use slots 0..2 (Rust replace_strictly_inside).
 	rangeScratch [3][format.RangeRecordV6Size]byte
+	// structureScratch owns the structure intern payload of one
+	// operation (Rust intern_payload payload local). The shape-stenciled
+	// generic internStructure leaks its payload argument, so the draft
+	// copies the payload into this field before the call instead of
+	// allocating per intern; the scratch is only live for one nested
+	// intern call at a time.
+	structureScratch structurePayload
 	// rangeCtx is the mutable range-tree state of one draft operation
 	// (Rust range_mutation function parameters: store, root,
 	// record_count). The range context carries interface fields whose

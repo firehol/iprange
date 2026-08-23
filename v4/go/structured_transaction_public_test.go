@@ -10,6 +10,7 @@
 package iprangedb
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -794,5 +795,75 @@ func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
 	}
 	if _, err := tx2.InternNetworkEnrichmentV1(enrichmentValue(64512), empty); !isPubCode(err, ErrorStaleReference) {
 		t.Fatalf("intern with aborted-transaction empty membership = %v, want stale reference", err)
+	}
+}
+
+// TestPublicStructuredTransactionOpErrorAborts pins the Rust mutate
+// abort contract (live_writer.rs mutate -> abort_after): an error
+// raised inside the edit, after the pre-mutate require checks,
+// discards the draft, spends the transaction, and reports
+// TransactionAborted wrapping the cause. The transaction is then dead
+// (next op WrongState, Commit and Abort report the writer's clean
+// state), exactly like Rust require_active / commit_attempt / abort
+// after abort_after.
+func TestPublicStructuredTransactionOpErrorAborts(t *testing.T) {
+	path := structuredDB(t)
+	cancellation := NewCancellationToken()
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	tx, err := w.BeginStructuredTransaction(cancellation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Out-of-range coordinates fail inside the intern encode (Rust
+	// edit.intern_network_enrichment_v1 inside mutate), so the op
+	// aborts with TransactionAborted wrapping InvalidArgument.
+	bad := NetworkEnrichmentV1{ASN: 64512, HasLocation: true, Location: NetworkEnrichmentV1Location{LatitudeMicrodegrees: 90_000_001}}
+	if _, err := tx.InternNetworkEnrichmentV1(bad, MembershipRef{}); err == nil {
+		t.Fatal("intern with out-of-range coordinates was accepted")
+	} else {
+		var ab *abortError
+		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorInvalidArgument) {
+			t.Fatalf("intern coordinates = %v, want transaction aborted wrapping invalid argument", err)
+		}
+	}
+	// The transaction is dead and the writer is clean.
+	if _, err := tx.InternNetworkEnrichmentV1(enrichmentValue(64513), MembershipRef{}); !isPubCode(err, ErrorWrongState) {
+		t.Fatalf("intern on aborted transaction = %v, want wrong state", err)
+	}
+	if _, err := tx.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit on aborted transaction = %v, want no pending transaction", err)
+	}
+	if err := tx.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort on aborted transaction = %v, want no pending transaction", err)
+	}
+
+	// The same contract covers the membership catalog surface: a
+	// rename onto an existing name fails inside the edit.
+	tx, err = w.BeginStructuredTransaction(cancellation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := tx.EnsureFeed(feedName(t, "first-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.EnsureFeed(feedName(t, "second-a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.RenameFeed(first, feedName(t, "second-a")); err == nil {
+		t.Fatal("rename onto existing name was accepted")
+	} else {
+		var ab *abortError
+		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorNameExists) {
+			t.Fatalf("rename onto existing = %v, want transaction aborted wrapping name exists", err)
+		}
+	}
+	if _, err := tx.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit on aborted transaction = %v, want no pending transaction", err)
 	}
 }

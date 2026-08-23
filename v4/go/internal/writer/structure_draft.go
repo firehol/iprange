@@ -94,7 +94,11 @@ func (s *DraftStore) internNetworkEnrichmentV1(value format.NetworkEnrichmentV1,
 // owner refcount before the dictionary state is stored back.
 func (s *DraftStore) internStructurePayload(payload structurePayload) (StructureHandle, error) {
 	state := s.structureState()
-	interned, err := internStructure(structureNetworkEnrichmentV1{}, s, &state, &payload)
+	// The generic intern's shape instantiation leaks its payload
+	// argument, so the draft-owned scratch carries the payload instead
+	// of a stack local (draft_store.go structureScratch).
+	s.structureScratch = payload
+	interned, err := internStructure(structureNetworkEnrichmentV1{}, s, &state, &s.structureScratch)
 	if err != nil {
 		return StructureHandle{}, err
 	}
