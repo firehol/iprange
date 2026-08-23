@@ -9909,15 +9909,16 @@ Go files:
   removableReplacementOutput/desiredCleanupReplacement/
   requireOutputReplacement/requirePreviousReplacement/
   synchronizeReplacement/unlock/relock/attempted.
-- internal/publication/resolver.go (+2): the replacement-policy
-  branch of resolve() now routes to replacementDispatch.
+- internal/publication/resolver.go (+8/-4 at 3d787b9): the
+  replacement-policy branch of resolve() now routes to
+  replacementDispatch.
 - internal/publication/output_resume.go (+35):
   resumePreparedOutputReplacement (PreparedOutput::resume_replacement
   with the previous main).
-- internal/publication/resolver_test.go (+171): the four replacement
-  tests of resolver_tests.rs - complete/remove over every pre-main
-  crash state, both modes over the five post-exchange states, and the
-  supplied replacement result after retirement.
+- internal/publication/resolver_test.go (+138 at 3d787b9): the four
+  replacement tests of resolver_tests.rs - complete/remove over every
+  pre-main crash state, both modes over the five post-exchange states,
+  and the supplied replacement result after retirement.
 
 Validation (all under nice): go build ./..., go vet ./..., plain and
 v4work full trees (14 packages ok each), gofmt clean, -race +
