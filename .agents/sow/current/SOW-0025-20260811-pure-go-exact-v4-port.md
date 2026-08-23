@@ -9394,7 +9394,7 @@ Go files (all !windows; Windows publication opens refuse at destination
 bind per M5, so the Rust cleanup/windows.rs gc-transition arm is
 intentionally absent):
 
-- internal/publication/cleanup.go (487 lines): ownerLocation (Rust
+- internal/publication/cleanup.go (508 lines): ownerLocation (Rust
   ReservationLocation Private/Canonical/Either), reservationOwner
   (identity Option arm), outputOwner, cleanupSummary (artifacts +
   main/coordination absence flags), earlyDiscard, cleanupPoint (Rust
@@ -9410,7 +9410,7 @@ intentionally absent):
   "publication artifact removal was not proved", plus the panic texts
   "cleanup requires one exact name" and "each artifact name is consumed
   once".
-- internal/publication/seed.go (152 lines): nameSlot (Rust NameSlot),
+- internal/publication/seed.go (154 lines): nameSlot (Rust NameSlot),
   seed with the full capture field set (database/transaction/nonce/
   attempt/directory identity/destination basename/output identity and
   digest/policy/previous/creation security/private basename + one-shot
@@ -9451,7 +9451,8 @@ probes because they cannot be reached through real unix namespace state
 (identity decode is best-effort over a regular same-filesystem inode;
 a third name appearing between unlink and re-prove is a race).
 
-Tests (internal/publication/cleanup_test.go, linux, 777 lines):
+Tests (internal/publication/cleanup_test.go, linux, 794 lines, plus the
+allocation pin in cleanup_alloc_test.go, 41 lines):
 
 - discardCreated on a real created output (name gone, links 0, facts
   carried), discardAttempt on a secured attempt, failedAttempt
@@ -9525,7 +9526,10 @@ Records FAIL fixes: corrected the NameSlot citation (result.rs:21 and
 take_name at 292-301, not 241-262) and reworded the phantom slice-G
 residual-P3 cross-reference so it no longer claims the optional P3s
 were recorded with slice G; the v4work validation phrasing now matches
-the plain-test clause (14 ok + 3 no-test-file).
+the plain-test clause (14 ok + 3 no-test-file). The counts in the
+slice-H entry were refreshed to the fix commit (cleanup.go 508,
+seed.go 154, cleanup_test.go 794) and the 41-line cleanup_alloc_test.go
+is named in the test list.
 
 Idioms and wire P3s fixed: the dead test bindings were removed, the
 test fixture wording reads "fully prepared" now, and the missing
@@ -9536,6 +9540,33 @@ revalidated under nice: build, vet, fresh publication tests, v4work,
 race + checkptr=2, gofmt, six cross-compiles, per-OS test-compiles
 all PASS. Re-review dispatched at the fix commit; verdicts recorded
 here when the rounds complete.
+
+Slice H CLOSED at HEAD 441a40d + the records fix on the working tree
+(2026-08-23): round 2 re-review at 441a40d - parity PASS (Dewey,
+machine zero-alloc verification and full regression sweep clean; two
+cosmetic P3s: a bare checkptr-only run would skew the pin, and the
+identityOptional field shadowing reads slightly awkward), idioms PASS
+(Peirce, value-option shapes and flat facts pair natural; optional:
+could add a someIdentity helper, pin count is Go-version sensitive by
+nature), performance PASS (Einstein, F1/F2 resolved with escape
+analysis on HEAD clean - the only remaining success-path allocation is
+the Rust-parity basename copy; the exactly-two pin is honest and
+stable; F3 stays an accepted failure-path P3), wire PASS (McClintock,
+no wire/locking/durability change, P3-2 test added and read-only
+proved, P3-1/P3-3 accepted as recorded), records FAIL then PASS
+(Pasteur: all round-1 citation fixes verified, one new P2 - stale line
+counts in the H entry - fixed on the working tree and re-verified
+exact: cleanup.go 508, seed.go 154, cleanup_test.go 794,
+cleanup_alloc_test.go 41). Slice H is complete; next is slice I.
+
+Chunk-level P3 sweep item (recorded here, not slice H work): Einstein
+noted the same identity-pointer escape class at
+v4/go/internal/publication/reservation_file.go:109 (prepareHeader
+stores d.identity = &identity once per reservation draft; slice F
+territory, publish-attempt frequency). The identityOptional value type
+introduced here is the fix; apply it during the O validation sweep or
+when the attempt/main_file slice touches that owner next, and verify
+with the same -m=2 evidence.
 
 Next: slice I attempt+main_file publish state machine (Rust attempt.rs
 776 + main_file.rs 510); the plan after I stays J resolver core, K
