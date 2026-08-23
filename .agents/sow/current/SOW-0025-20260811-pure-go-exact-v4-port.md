@@ -9656,7 +9656,9 @@ Go tests:
   sure-to-be untouchable outcome-unknown); the outcome-unknown flock
   release, which pins the Rust drop of the failure owner (an abandoned
   reservation flock would stall the slice-J resolver's lockOperation
-  forever).
+  forever), and the pre-lock state-1 failure descriptor release
+  (TestAttemptState1FailureReleasesTheDraftFiles; /proc/self/fd
+  accounting - Go has no drop, the machine closes the draft).
 - attempt_alloc_test.go: the fromPrivate success-path allocation pin
   (Rust post_boundary_success_allocates_no_heap), measured exactly
   once with MemStats like the Rust count_thread_allocations (the
@@ -9666,7 +9668,7 @@ Go tests:
   (the name and attribute NUL-copies of the Entry/VerifyName/
   RequireAbsent/UnlinkExact/RenameNoReplace probes and the Fgetxattr
   attribute-name copies, about 20 in-window), a rename boundary class,
-  or the portable result plumbing (attempt_alloc_test.go:80-95);
+  or the portable result plumbing (attempt_alloc_test.go:63-72);
   escape analysis shows zero machine-logic escapes on the success
   path. To get there the slice also flattened the machine owners to
   values, added the value-returning bootstrap.OpenMeta core (Rust
@@ -9748,8 +9750,34 @@ Design notes:
   folded into finishPublished, matching Rust finish_published with
   observe=false), records (Noether: P2-A stale retireObserved in the
   main_file.go inventory, P2-B the false "all nine" count, P3 the
-  observe*-builder count - all corrected above). Round-3 re-review of
-  the same five aspects dispatched at the corrected HEAD.
+  observe*-builder count - all corrected above). Round-3 outcomes at
+  HEAD 329de57: wire/integrity PASS (Herschel: the retire_observed cfg
+  attribution comment fixed precisely against Rust main_file.rs
+  retire/retire_observed/unix-arm wiring; every owner close runs
+  after the last mapping/file use, so the closes are wire-neutral),
+  performance PASS (Chandrasekhar: pin 58 stable x5 plus the
+  single-window diagnostic; -m=2 shows zero new escapes; the closes
+  are pure munmap/close syscalls at the Rust drop point and add no
+  allocations in the measured window; the finishPublishedObserved
+  fold is allocation-neutral). Three FAILs fixed after 329de57:
+  parity (Goodall: the "every terminal path closes" claim was false -
+  the two initializeObserved failure arms of publishWithObserver
+  returned without closing the draft, leaking one fd and the 8 KiB
+  mapped view per failed attempt where Rust drops the moved
+  ReservationDraft; both arms now close, f87f1e1, and
+  TestAttemptState1FailureReleasesTheDraftFiles pins the descriptor
+  release, failing without the closes), idioms (Gauss: same two arms
+  plus a new P2 - the two resume fixtures double-closed the armed
+  reservation after resumeArmed took ownership; the transfer contract
+  is now documented on resumeArmed (Rust moves the ArmedReservation
+  in) and the fixtures no longer close their copy, 7bf1e87; the
+  canonical-reservation resume contract - the caller closes the
+  returned armed reservation or hands it to resumeArmed, and closes
+  the refusal failure owner - is recorded for the slice-J resolver,
+  which introduces the production callers), records (Noether: same P1
+  plus the phantom attempt_alloc_test.go:80-95 citation, corrected to
+  :63-72). Round-4 confirmation re-review of the same five aspects
+  dispatched at HEAD 7bf1e87.
 
 Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
 + resolver_verification 88 + resolver_result 189); the plan after J
