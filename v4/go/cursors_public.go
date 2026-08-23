@@ -1,8 +1,8 @@
-// Ordered cursors over one opened immutable database (Rust database.rs
-// cursor surface parity): direct-range cursors with seek, the catalog
-// feed cursor, the named-feed range projections, and the
-// network-enrichment cursors. Cursors hold one opened reader; every
-// call re-validates the reader state.
+// Ordered cursors over one opened immutable or live database (Rust
+// database.rs and live_reader.rs cursor surface parity): direct-range
+// cursors with seek, the catalog feed cursor, the named-feed range
+// projections, and the network-enrichment cursors. Cursors hold one
+// opened reader; every call re-validates the reader state.
 
 package iprangedb
 
@@ -10,6 +10,20 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
+
+// cursorHost is the reader surface the ordered cursors and the membership
+// query hold open. Both the immutable and the live public facades
+// implement it, so one cursor implementation serves both reader kinds
+// (Rust parity: the immutable database and LiveReader expose the same
+// cursor set). checkOpen reports the facade open state; core exposes the
+// shared internal reader; addPin and dropPin guard the enrichment
+// cursors' lifetime pins.
+type cursorHost interface {
+	checkOpen() error
+	core() *reader.ImmutableReader
+	addPin() bool
+	dropPin()
+}
 
 // RangeDirection selects the cursor movement direction.
 type RangeDirection uint8
@@ -21,7 +35,7 @@ const (
 
 // DirectCursorV4 walks the committed IPv4 range records in one direction.
 type DirectCursorV4 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.DirectCursor4
 }
 
@@ -70,7 +84,7 @@ func (c *DirectCursorV4) NextRange() (DirectRangeV4, bool, error) {
 
 // DirectCursorV6 walks the committed IPv6 range records in one direction.
 type DirectCursorV6 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.DirectCursor6
 }
 
@@ -119,7 +133,7 @@ func (c *DirectCursorV6) NextRange() (DirectRangeV6, bool, error) {
 
 // FeedCursor walks the catalog in ascending feed-index order.
 type FeedCursor struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.FeedCursor
 }
 
@@ -159,7 +173,7 @@ func (c *FeedCursor) NextFeed() (FeedEntry, bool, error) {
 // FeedRangeCursorV4 returns the coalesced IPv4 intervals of one named
 // feed in one direction.
 type FeedRangeCursorV4 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.FeedRangeProjection4
 }
 
@@ -208,7 +222,7 @@ func (c *FeedRangeCursorV4) NextRange() (AddressRange4, bool, error) {
 // FeedRangeCursorV6 returns the coalesced IPv6 intervals of one named
 // feed in one direction.
 type FeedRangeCursorV6 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.FeedRangeProjection6
 }
 
@@ -266,7 +280,7 @@ type NetworkEnrichmentV1RangeV4 struct {
 // ranges in one direction (Rust NetworkEnrichmentV1CursorV4). Close
 // must be called to release the reader pin the cursor holds.
 type NetworkEnrichmentV1CursorV4 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.NetworkEnrichmentV1Cursor4
 	state *pinState
 }
@@ -289,15 +303,13 @@ func (r *ImmutableReader) NetworkEnrichmentV1CursorV4(direction RangeDirection) 
 	if err != nil {
 		return nil, publicError(err)
 	}
-	r.sh.pins.Add(1)
 	// A Close that raced this cursor either saw the added pin
-	// (HandleBusy) or closed first; the second check makes the loser
-	// return WrongState instead of pinning a closed reader.
-	if r.sh.closed.Load() {
-		r.sh.pins.Add(-1)
+	// (HandleBusy) or closed first; addPin's closed re-check makes the
+	// loser return WrongState instead of pinning a closed reader.
+	if !r.addPin() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
-	return &NetworkEnrichmentV1CursorV4{r: r, inner: inner, state: &pinState{r: r}}, nil
+	return &NetworkEnrichmentV1CursorV4{r: r, inner: inner, state: &pinState{h: r}}, nil
 }
 
 // checkOpen reports the cursor state: every call re-validates the
@@ -319,7 +331,7 @@ func (c *NetworkEnrichmentV1CursorV4) Close() error {
 		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor already closed"}
 	}
 	c.state.closed = true
-	c.r.sh.pins.Add(-1)
+	c.r.dropPin()
 	return nil
 }
 
@@ -366,7 +378,7 @@ type NetworkEnrichmentV1RangeV6 struct {
 // ranges in one direction (Rust NetworkEnrichmentV1CursorV6). Close
 // must be called to release the reader pin the cursor holds.
 type NetworkEnrichmentV1CursorV6 struct {
-	r     *ImmutableReader
+	r     cursorHost
 	inner *reader.NetworkEnrichmentV1Cursor6
 	state *pinState
 }
@@ -389,15 +401,13 @@ func (r *ImmutableReader) NetworkEnrichmentV1CursorV6(direction RangeDirection) 
 	if err != nil {
 		return nil, publicError(err)
 	}
-	r.sh.pins.Add(1)
 	// A Close that raced this cursor either saw the added pin
-	// (HandleBusy) or closed first; the second check makes the loser
-	// return WrongState instead of pinning a closed reader.
-	if r.sh.closed.Load() {
-		r.sh.pins.Add(-1)
+	// (HandleBusy) or closed first; addPin's closed re-check makes the
+	// loser return WrongState instead of pinning a closed reader.
+	if !r.addPin() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
-	return &NetworkEnrichmentV1CursorV6{r: r, inner: inner, state: &pinState{r: r}}, nil
+	return &NetworkEnrichmentV1CursorV6{r: r, inner: inner, state: &pinState{h: r}}, nil
 }
 
 // checkOpen reports the cursor state: every call re-validates the
@@ -419,7 +429,7 @@ func (c *NetworkEnrichmentV1CursorV6) Close() error {
 		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor already closed"}
 	}
 	c.state.closed = true
-	c.r.sh.pins.Add(-1)
+	c.r.dropPin()
 	return nil
 }
 

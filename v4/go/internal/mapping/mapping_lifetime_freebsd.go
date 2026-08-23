@@ -10,7 +10,7 @@ import (
 
 // FreeBSD has no proven OFD byte-range primitive, so live coordination is
 // unsupported there: every live constructor rejects before path access
-// (requireLiveWriter), and the exclusive lock is unreachable. Immutable
+// (requireLiveCoordination), and the exclusive lock is unreachable. Immutable
 // readers remain supported and use the canonical whole-file shared flock
 // lifetime lock (binary-format-v4.md platform table; Rust live_lock.rs
 // freebsd_file_lock), exactly like the Rust open_immutable path.
@@ -26,16 +26,16 @@ func lockLifetimeShared(fd int) error {
 	}
 }
 
-// requireLiveWriter refuses live writer opens on FreeBSD: the spec
-// (binary-format-v4.md:2403-2411) and the Rust authority
-// (live_lock.rs require_live_supported) return LiveCoordinationUnsupported
-// before path access; whole-file flock must not be substituted for the
-// absent OFD coordination.
-func requireLiveWriter() error {
+// requireLiveCoordination refuses every live open (writer and reader) on
+// FreeBSD: the spec (binary-format-v4.md:2403-2411) and the Rust authority
+// (live_lock.rs require_live_supported) return
+// LiveCoordinationUnsupported before path access; whole-file flock must
+// not be substituted for the absent OFD coordination.
+func requireLiveCoordination() error {
 	return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "live coordination is not implemented on this platform"}
 }
 
-// lockLifetimeExclusive is unreachable on FreeBSD (requireLiveWriter
+// lockLifetimeExclusive is unreachable on FreeBSD (requireLiveCoordination
 // refuses first); it stays a typed refusal for defense in depth.
 func lockLifetimeExclusive(fd int) error {
 	return &format.Error{Code: format.CodeOSUnsupported, Detail: "live coordination is not implemented on this platform"}

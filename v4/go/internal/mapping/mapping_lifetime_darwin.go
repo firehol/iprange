@@ -24,9 +24,9 @@ const (
 	lifetimeLockLen    = 1
 )
 
-// requireLiveWriter permits live writer opens on macOS (OFD coordination is
+// requireLiveCoordination permits live writer opens on macOS (OFD coordination is
 // proven here via fcntl F_OFD_SETLK, constants 90/91 declared above).
-func requireLiveWriter() error { return nil }
+func requireLiveCoordination() error { return nil }
 
 // lockLifetimeShared takes the shared OFD byte-range lifetime lock on fd.
 // The lock is blocking (F_OFD_SETLKW), mirroring Rust live_lock: an

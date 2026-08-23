@@ -22,7 +22,7 @@ import (
 // writes the two meta pages through Page() and seals durability with
 // FlushRange + SyncFile (Rust write_empty), then closes.
 func Create(path string, size uint64, check func(clean string) error) (*Mapping, error) {
-	if err := requireLiveWriter(); err != nil {
+	if err := requireLiveCoordination(); err != nil {
 		return nil, err
 	}
 	clean := filepath.Clean(path)

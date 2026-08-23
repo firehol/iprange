@@ -67,11 +67,15 @@ type Mapping struct {
 // open.
 func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(clean string) error) (*Mapping, error) {
 	clean := filepath.Clean(path)
-	// Refuse live opens on platforms without proven live coordination
-	// before any path access, mirroring Rust require_live_supported
-	// (binary-format-v4.md platform table).
+	// Refuse read-write live opens on platforms without proven live
+	// coordination before any path access, mirroring Rust
+	// require_live_supported (binary-format-v4.md platform table). The
+	// read-only immutable path never takes this gate: FreeBSD immutable
+	// readers keep the canonical whole-file shared flock lifetime lock.
+	// OpenLiveReader (also read-only) refuses explicitly before calling
+	// openMapping, matching Rust LiveReaderCore::open -> require_live_supported.
 	if rdwr {
-		if err := requireLiveWriter(); err != nil {
+		if err := requireLiveCoordination(); err != nil {
 			return nil, err
 		}
 	}
@@ -214,6 +218,25 @@ func OpenMutableShared(path string, check func(clean string) error) (*Mapping, e
 	return openMapping(path, true, lockLifetimeShared, check)
 }
 
+// OpenLiveReader opens path read-only under the shared lifetime lock for
+// one registered live reader (Rust LiveReaderCore::open: open_read_only,
+// lock MAIN_LIFETIME_LOCK shared, map_reader OpenMode::LiveReader). The
+// sidecar is required and is opened by the live reader core, never here;
+// no sidecar-absence check runs. Geometry, identity, and namespace checks
+// are identical to OpenImmutable.
+func OpenLiveReader(path string, check func(clean string) error) (*Mapping, error) {
+	// Live readers coordinate with the writer through the OFD lifetime
+	// lock; on platforms without proven coordination they refuse before
+	// any path access, exactly like the live writer (Rust
+	// LiveReaderCore::open -> require_live_supported). The rdwr gate in
+	// openMapping does not cover this read-only open, so the refusal is
+	// explicit here.
+	if err := requireLiveCoordination(); err != nil {
+		return nil, err
+	}
+	return openMapping(path, false, lockLifetimeShared, check)
+}
+
 // Size returns the currently mapped byte length (2 pages during bootstrap,
 // the committed extent after Remap).
 func (m *Mapping) Size() uint64 { return m.size }
@@ -277,21 +300,22 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 	if committedBytes%format.PageSize != 0 {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed size not page-aligned"}
 	}
-	if committedBytes > m.physical {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed exceeds physical extent"}
-	}
 	if committedBytes == m.size {
 		return nil
 	}
 	// Re-stat the locked file to prove the committed extent still fits;
 	// a rogue truncation between open and remap must not map past EOF
-	// (Rust mapping.rs remap -> require_file_extent).
+	// (Rust mapping.rs remap -> require_file_extent). The open-time
+	// physical extent is intentionally not a constraint: a live reader
+	// opens under the shared lifetime lock and may remap to a generation
+	// the writer grew after the open stat, so only the current file size
+	// (sampled here) bounds the remap, exactly like Rust.
 	st, err := m.file.Stat()
 	if err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
 	if uint64(st.Size()) < committedBytes {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "committed extent exceeds current file size"}
+		return &format.Error{Code: format.CodeFormatInvalid, Detail: "mapping exceeds the file extent"}
 	}
 	// Nil the mapping before remapPages so a partial failure (munmap
 	// succeeded but mmap failed on non-Linux) leaves the Mapping in a
@@ -448,7 +472,10 @@ func (m *Mapping) SyncFile() error {
 // package doc).
 func (m *Mapping) View(off, length uint64) ([]byte, error) {
 	if m.data == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
+		// Also reached after Unmap: the mapping object is alive but has
+		// no mapped bytes (Rust map=None), so the state is unavailable,
+		// not closed.
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "mapping unavailable"}
 	}
 	if off > m.size || length > m.size-off {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "view out of mapped extent"}
@@ -470,6 +497,21 @@ func (m *Mapping) VisitPage(pgno uint32, fn func(page []byte) error) error {
 func (m *Mapping) Page(pgno uint32) ([]byte, error) {
 	off := uint64(pgno) << format.PageShift
 	return m.View(off, format.PageSize)
+}
+
+// Unmap releases the current mapping without touching the descriptor or
+// the lifetime lock (Rust Mapping::unmap). The live reader close unmaps
+// before clearing its slot and releases the lifetime lock only at the
+// final close step; the immutable reader never calls Unmap separately.
+func (m *Mapping) Unmap() error {
+	if m.data == nil {
+		return nil
+	}
+	if err := unix.Munmap(m.data); err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+	}
+	m.data = nil
+	return nil
 }
 
 // Close releases the mapping and the shared lifetime lock. Close is

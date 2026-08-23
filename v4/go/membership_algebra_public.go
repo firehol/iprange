@@ -82,7 +82,7 @@ func NewMembershipAlgebra(scopes []*MembershipScope, budget MembershipAlgebraBud
 		if err := sc.r.checkOpen(); err != nil {
 			return nil, err
 		}
-		sources[i] = reader.AlgebraSource{Reader: sc.r.inner, Scope: sc.data}
+		sources[i] = reader.AlgebraSource{Reader: sc.r.core(), Scope: sc.data}
 	}
 	inner, err := reader.NewMembershipAlgebra(sources, reader.MembershipAlgebraBudget{
 		MaxHeapBytes: budget.MaxHeapBytes,

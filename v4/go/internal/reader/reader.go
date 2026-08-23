@@ -156,6 +156,23 @@ func namespaceChecks(path string) error {
 // FormatInvalid for the wrong-magic, short, and unaligned mutations); only
 // an unknown structure kind reports the typed UnsupportedStructure.
 func (r *ImmutableReader) bootstrap() error {
+	return r.bootstrapMode(bootstrap.ModeImmutableReader)
+}
+
+// bootstrapMode is the mode-parameterized selection (Rust
+// bootstrap_mapping) over the tracked open physical extent: the immutable
+// reader requires the exact committed physical length, the live reader
+// requires a proven current generation and tolerates the writer's
+// unpublished tail.
+func (r *ImmutableReader) bootstrapMode(mode bootstrap.Mode) error {
+	return r.bootstrapModeWith(mode, r.m.PhysicalSize())
+}
+
+// bootstrapModeWith runs the selection over an explicit physical extent
+// (Rust open_meta_pages + finish_open). The live reader re-samples the
+// file size under the gate and re-selects through this entry point; the
+// open-time stat is never reused for the registered-generation selection.
+func (r *ImmutableReader) bootstrapModeWith(mode bootstrap.Mode, physical uint64) error {
 	p0, err := r.m.Page(0)
 	if err != nil {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
@@ -164,7 +181,7 @@ func (r *ImmutableReader) bootstrap() error {
 	if err != nil {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
 	}
-	res, err := bootstrap.Open(p0, p1, r.m.PhysicalSize(), bootstrap.ModeImmutableReader)
+	res, err := bootstrap.Open(p0, p1, physical, mode)
 	if err != nil {
 		return err
 	}
@@ -173,8 +190,42 @@ func (r *ImmutableReader) bootstrap() error {
 	return nil
 }
 
+// SelectRegisteredGeneration re-runs the live-mode selection with a
+// freshly sampled physical extent (Rust select_registered_generation):
+// the mapping-open stat is never reused; the fresh stat is sampled under
+// the exclusive reader-table gate, so it observes the writer's latest
+// published extent. The mapping itself is not resized here; the caller
+// remaps to the newly selected committed bytes (Rust register).
+func (r *ImmutableReader) SelectRegisteredGeneration(physical uint64) error {
+	return r.bootstrapModeWith(bootstrap.ModeLiveReader, physical)
+}
+
+// OpenLiveMapped builds the logical reader core over an already-open live
+// mapping (Rust database_file::map_reader with OpenMode::LiveReader): the
+// mapping is bootstrapped in ModeLiveReader over the open stat and
+// remapped to the selected committed extent, giving the caller the
+// database identity needed before the sidecar is opened. The gate-side
+// fresh-stat re-selection runs later through
+// SelectRegisteredGeneration. On error the mapping is left open and owned
+// by the caller, which runs the live open unwind.
+func OpenLiveMapped(m *mapping.Mapping) (*ImmutableReader, error) {
+	r := &ImmutableReader{m: m}
+	if err := r.bootstrapMode(bootstrap.ModeLiveReader); err != nil {
+		return nil, err
+	}
+	if err := m.Remap(r.meta.PageCount * format.PageSize); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 // Close releases the mapping and the shared lifetime lock.
 func (r *ImmutableReader) Close() error { return r.m.Close() }
+
+// Unmap releases the mapping without the descriptor or the lifetime lock
+// (Rust Mapping::unmap); the live reader close drives the exact unmap
+// step itself.
+func (r *ImmutableReader) Unmap() error { return r.m.Unmap() }
 
 // Meta returns the selected committed meta page.
 func (r *ImmutableReader) Meta() format.Meta { return r.meta }

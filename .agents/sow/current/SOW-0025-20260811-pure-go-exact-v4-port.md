@@ -7700,3 +7700,277 @@ unchanged.
 
 - Next: signed commit + push of chunk 4-4, then chunk 4-5 (live
   reader) per the M4 chunk plan.
+
+### Status (2026-08-23) - chunk 4-5 design recorded: live reader open/register/close
+
+Chunk 4-5 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: live_reader.rs (LiveReader,
+ReaderCloseResult, From<LiveReaderClose>), reader_core/live.rs
+(LiveReaderCore state machine: open, register,
+select_registered_generation, verify_registration,
+release_gate_after_failure, close with the eight states, require_open/
+require_owner, reader_closed/reader_close_incomplete),
+reader_core.rs (ReaderCore, DatabaseInfo), bootstrap.rs (OpenMode::
+LiveReader finish rules), process_identity.rs (fork-safe ownership;
+Go uses the spec-15.6 PID fallback because MADV_WIPEONFORK is not
+available to Go).
+
+Key decisions:
+
+- Open order (Rust LiveReaderCore::open): requireLiveSupported,
+  checkpoint, read-only open + SHARED lifetime lock (new
+  mapping.OpenLiveReader; the mapping owner stays the only creator of
+  mappings), identity capture, verifyPath, select_registered_generation
+  (verifyPath, sidecar.verifyPath, FRESH physical stat via FileSize(),
+  bootstrap ModeLiveReader, database-id match against the sidecar
+  header -> WrongState "reader table belongs to a different database",
+  scanAtMostCancellable(committed txn)), remap to committed bytes,
+  claimReaderCancellable, checkpoint, verifyPath, sidecar.verifyPath.
+  The gate is held EXCLUSIVE during registration and released on every
+  failure path (Rust finish_with_cleanup), so registration serializes
+  with commit and with other registrations.
+- Bootstrap ModeLiveReader joins the Go bootstrap authority with the
+  Rust finish_open rules: a live reader requires a PROVEN CURRENT
+  generation (sole meta refused, like the writer) and tolerates an
+  unpublished tail (the reader remaps to committed bytes only, never
+  the writer's in-flight growth). The fresh stat mirrors the 4-4
+  select_committed lesson: the writer may have grown the file between
+  the mapping-open stat and registration.
+- Close order (Rust LiveReaderCore::close state machine): owner check,
+  idempotent Closed; Open|CloseOnly -> gate SHARED (failure:
+  CloseOnly + incomplete); GateHeldSlotActive -> verifyRegistration
+  (failure: release_gate_after_failure, which on a gate-unlock failure
+  nests the CleanupIncomplete class) then Unmap; GateHeldSlotClearing
+  -> clearReader; GateHeldSlotCleared -> unlockReader;
+  GateHeldSlotReleased -> unlockGate; MainLockOnly -> mapping.Close
+  (Go mapping bundles unmap + lifetime unlock; the reader unmaps
+  BEFORE clearing the slot exactly like Rust, so a new
+  mapping.Unmap() separates the two). Every failure returns the
+  factual incomplete result with RetainedReaderCloseRequired and the
+  cause; the reader stays retryable.
+- ForkedHandle ownership: the PID fallback of spec 15.6. The package-
+  init cached PID (already used by the live writer) is compared on
+  every operation; a forked child reports the ForkedHandle class.
+- Public surface: OpenLiveReader + LiveReader mirroring the public
+  ImmutableReader surface over the same logical core (Info,
+  FileIdentity, LookupDirectV4/V6, DirectRangesV4/V6, Cardinality,
+  LookupFeed, MetadataJSON, Pin-protected membership/enrichment
+  lookups) and Close returning ReaderCloseResult (CloseOutcome +
+  CoordinationCleanup + Cause, retryable, reusing the 4-4 public
+  outcome types). The Pin machinery generalizes pinState.r to an
+  interface so both readers share one Pin type.
+- Windows/FreeBSD: the live reader refuses through the same honest
+  stubs as the live writer (mapping_windows.go refuses every open;
+  the live-support gate refuses FreeBSD before path access); the five
+  cross-compiles stay green.
+
+- Next: implement + tests (internal live_reader_test.go, public
+  live_reader_public_test.go, v4work close/registration crash matrix),
+  full battery, five-aspect review, signed commit + push.
+
+### Status (2026-08-23) - chunk 4-5 implemented and validated locally
+
+Implementation complete (the design above, plus two parity corrections
+the implementation exposed):
+
+- v4/go/internal/live/live_reader.go: the LiveReaderCore mirror with
+  the eight-state close machine, verifyRegistration,
+  releaseGateAfterFailure (CleanupInProgress nesting on gate-unlock
+  failure, the Go mirror of Rust Error::CleanupIncomplete via the
+  writer's combineErrors), requireOpen/requireOwner, and the factual
+  LiveReaderClose result. OpenLiveReader runs the exact Rust open
+  order: checkpoint, mapping.OpenLiveReader (shared lifetime lock,
+  requireLiveCoordination refused before path access), identity
+  capture, verifyPath, reader.OpenLiveMapped (map_reader), documented
+  require_main_available POSIX no-op, sidecar open by database id,
+  exclusive cancellable gate, register (verifyPath,
+  sidecar.verifyPath, fresh FileSize stat, SelectRegisteredGeneration,
+  database-id match -> WrongState, scanAtMostCancellable, checkpoint,
+  Remap to committed, claimReaderCancellable, checkpoint, verifyPath,
+  sidecar.verifyPath), gate release via combineErrors on every failure.
+- v4/go/internal/reader: bootstrapMode refactored to
+  bootstrapModeWith(mode, physical); SelectRegisteredGeneration(physical)
+  re-selects ModeLiveReader under the gate with the fresh stat;
+  OpenLiveMapped mirrors Rust map_reader (open-stat bootstrap + remap,
+  giving the database id before the sidecar open); Unmap added.
+- v4/go/internal/mapping: OpenLiveReader (read-only, shared lifetime
+  lock) added with an explicit requireLiveCoordination gate;
+  requireLiveWriter renamed to requireLiveCoordination; Mapping.Unmap
+  added (munmap only, keeps descriptor + lock, Rust Mapping::unmap);
+  Remap no longer bounds the target by the open-time physical extent
+  (Rust require_file_extent re-stats only; the live reader may remap
+  to a generation the writer grew after the open stat). CRITICAL
+  regression caught and fixed during implementation: openMapping's
+  live gate must apply to rdwr opens only, so FreeBSD immutable opens
+  (whole-file flock) keep working; OpenLiveReader refuses explicitly
+  (verified by GOOS=freebsd builds and the pre-existing FreeBSD
+  live-refusal tests).
+- v4/go/internal/bootstrap: ModeLiveReader with the ModeWriter finish
+  rules (sole meta refused, tail tolerated), covered by new
+  bootstrap_test.go cases.
+- v4/go/reader_public.go: pinState.r generalized to the pinHost
+  interface (require* + core + addPin/dropPin) so the immutable and
+  live facades share one Pin implementation; the require* meta checks
+  moved to shared package-level helpers used by both facades.
+- v4/go/live_reader_public.go: public OpenLiveReader + LiveReader with
+  the full immutable-reader surface over the pinned generation
+  (Info, FileIdentity, LookupDirectV4/V6, DirectRangesV4/V6,
+  Cardinality, LookupFeed, MetadataJSON, the eight cursor/query
+  constructors added by review round 1, and Pin-protected membership
+  and enrichment lookups) and Close returning ReaderCloseResult
+  (CloseOutcome + CoordinationCleanup + Cause + CleanupState). Every
+  public operation pays exactly one open-state check (Rust
+  LiveReader::core -> require_open parity); pins refuse on a
+  close-only reader and Close reports HandleBusy while pins are live.
+
+Validation (all under nice, -count=1): gofmt clean; vet plain and
+v4work; full test suite plain and v4work (all packages); race plain
+and v4work; checkptr=2 on live/reader/root plain and v4work;
+check-mmap-trace PASS (no read/pread64/readv/write/writev/pwrite64/
+lseek on any .iprdb descriptor); five cross-compiles (linux/386,
+linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64) plain and
+v4work; cross-vet of the test trees (freebsd/windows/darwin) shows
+only the pre-existing sidecar-test and security-test tag gaps, present
+at the chunk 4-4 base too.
+
+Tests added: internal live_reader_test.go (open/close round trip with
+slot-state proof, the Rust pinned-generation parity scenario
+including ReaderCapacityExhausted and slot reuse, close retry after
+main-path replacement with CloseOnly op refusal, cancellation leaving
+no slot or lock residue, missing-sidecar and different-database
+refusals, ForkedHandle structural check via the cached-PID override),
+public live_reader_public_test.go (round trip with identity parity
+against the creation facts, range split parity, pin read of a live
+membership pair converted by InitializeLive, HandleBusy close with a
+live pin, retry close result facts, cancelled open residue-free),
+bootstrap ModeLiveReader finish-rule cases.
+
+- Next: five-aspect adversarial review of the 4-5 delta (the five
+  kept reviewers), fix findings, append review rounds, signed commit
+  + push, then chunk 4-6 (transitions).
+
+### Status (2026-08-23) - chunk 4-5 review round 1: five findings fixed
+
+The five kept reviewers ran the adversarial five-aspect review of the
+4-5 delta (Rust parity, Go idioms, performance, wire format/integrity,
+APIs/docs/records). Verdicts: 3 FAIL, 1 PASS (performance, one P3),
+1 FAIL (Rust parity). All blocking findings were fixed before the
+battery re-run.
+
+Findings and fixes:
+
+- P1-1 (Go idioms + APIs agree): the live facade's Pin/Close
+  arbitration was broken. Pin touched the internal core before
+  registering its pin and Close read r.lr without atomics, so Pin
+  racing Close could panic on a nil core and data-race the internal
+  state machine (proven by the race detector). Fix: the live facade
+  now ports the immutable arbitration exactly - Close CASes the
+  shared closed flag before touching the internal reader and reverts
+  on HandleBusy, error, or incomplete close; Pin checks closed
+  before and after pins.Add(1) and only then runs the owner/open
+  check, dropping the pin on failure; the internal close can never
+  overlap a registered pin or Pin's check (the CAS blocks new pins
+  once close starts). New TestPublicLiveReaderPinCloseRace hammers
+  the arbitration under -race (both HandleBusy and WrongState
+  outcomes asserted).
+- P1-2 (APIs/docs/records): LiveReader was not the full
+  immutable-reader surface: the eight cursor/query constructors
+  (DirectCursorV4/V6, FeedCursor, FeedRangeCursorV4/V6,
+  NetworkEnrichmentV1CursorV4/V6, MembershipQuery) were missing
+  although the facade docs and the SOW claimed the full surface.
+  Fix (long-term-best): the cursor types now hold one shared
+  cursorHost interface (checkOpen + core + addPin + dropPin) so the
+  same cursor implementations serve both facades; LiveReader gained
+  the eight constructors, each running the owner/open check exactly
+  once (Rust LiveReader::core -> require_open). The membership
+  scope, query, join, aggregation, and algebra hosts were
+  generalized the same way. New public tests cover the direct
+  cursor round trip, the membership cursors and query on a live
+  pair, and the enrichment cursor holding its reader pin
+  (HandleBusy while open, clean close after).
+- P2-1 (Rust parity + wire/integrity agree): the live reader close
+  never released the sidecar. Go has no drop, so every open/close
+  cycle leaked the sidecar read-write mapping (4096 + capacity*16
+  bytes) and its descriptor until GC; the writer closes its sidecar
+  at the terminal close step and Rust drops it with the core. Fix:
+  the terminal MainLockOnly -> Closed transition now calls
+  sidecar.close() after the lifetime unlock, mirroring Rust's drop
+  order; retryable failure paths keep the sidecar open because the
+  close machine still needs the reader table.
+- P3s: Remap extent-refusal detail aligned with Rust require_file_extent
+  ("mapping exceeds the file extent"); post-Unmap View reports
+  "mapping unavailable" instead of "mapping closed"; public Close
+  wraps internal errors (ForkedHandle) and ReaderCloseResult.Cause
+  through publicError; pin lookups capture the internal core at Pin
+  creation (pinState.core) and skip the per-call host dispatch and
+  open check (sound: a reader with live pins cannot close, Rust
+  borrow parity); pinHost trimmed to dropPin-only; bootstrap test
+  reuses mustFormatInvalid; the public identity test decodes with
+  binary.LittleEndian.Uint64; FileIdentity doc reworded; the
+  enrichment cursors register their pin through the shared addPin
+  arbitration on both facades.
+- Dropped promise (APIs/docs/records): the design entry promised a
+  v4work close/registration crash matrix. Rejected with evidence: the
+  close machine has no injectable fault points, the unmap-before-clear
+  crash property is guaranteed by ordering (a crash between them
+  leaves the slot naming a still-valid generation), and the Rust
+  corpus has no reader-close crash matrix either (confirmed by the
+  wire/integrity review of tests/live_roundtrip.rs).
+
+Validation re-run (all under nice, -count=1): gofmt clean; vet plain
+and v4work; full test suite plain and v4work (all packages); race
+plain and v4work; checkptr=2; check-mmap-trace PASS (fixtures mapped,
+never streamed); six cross-compiles (linux/386, linux/arm64,
+darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64); cross-vet
+shows only the pre-existing test-tree tag gaps.
+
+- Next: five-aspect re-review of the fixed delta, then signed commit
+  + push, then chunk 4-6 (transitions).
+
+### Status (2026-08-23) - chunk 4-5 review round 2: all five aspects PASS
+
+Round-2 re-review of the fixed delta, same five reviewers, same
+disjoint aspects:
+
+- Rust parity (Helmholtz): PASS. P2-1 verified (sidecar released only
+  on the terminal transition; retryable paths keep it; crash wire
+  state unchanged); P3-2 verified (Remap detail verbatim Rust); the
+  Pin/Close arbitration, the eight cursor constructors (one
+  require_open each, Rust live_reader.rs:73-181), the pin-captured
+  core, and the cursorHost sharing were walked against the Rust
+  authorities with no divergences.
+- Go idioms (Sartre): FAIL in round 2 on one P2 - the five dead
+  LiveReader.require* methods left over from the pinHost trim, plus a
+  stale comment. Deleted; the core() accessor comment now describes
+  the reader-level operations. P3s also fixed: pinState doc records
+  the nil-core cursor-pin invariant, and the dead startClose channel
+  was removed from the race test. Re-verified: PASS. (Round-2 note:
+  the first deletion attempt was a local script bug - the block was
+  replaced in memory but not written; caught by the reviewer's tree
+  check and re-applied.)
+- Performance (Socrates): PASS. The pinState core cache is confirmed
+  (zero itab, zero Core() per pin lookup; stable because pins block
+  Close); cursor ops pay one itab dispatch per operation and exactly
+  one open-state check per reader (Rust require_open parity); the
+  direct lookup hot paths are unchanged.
+- Wire format and integrity (Parfit): PASS. P2-1 resolved; slot,
+  gate, and lifetime locks are all down before the sidecar release;
+  the pin-core cache reads the same pinned generation with no wire or
+  locking interaction; the mapping delta matches Rust detail strings.
+- APIs, docs, records (Franklin): PASS. Both round-1 P1s verified
+  fixed (the race probe is clean under -race; all eight cursor
+  constructors present with one check each); four doc P3s fixed
+  (FileIdentity wording, cursors/membership file headers now name
+  both facades, double-Close concurrency note in the LiveReader doc,
+  SOW enumeration includes the cursor constructors).
+
+All five aspects report no P0-P2 findings. Validation battery re-run
+after the last fix (all under nice, -count=1): gofmt clean; vet plain
+and v4work; full test suite plain and v4work; race plain and v4work;
+checkptr=2; check-mmap-trace PASS; six cross-compiles; ZeroAlloc
+passes. TestPublicLiveReaderPinCloseRace runs under -race on every
+battery pass.
+
+- Next: signed commit + push of chunk 4-5, then chunk 4-6
+  (transitions: ResetLiveCoordination, ResolveInterruptedLiveTransition,
+  resolve_live_transition, resolve_create_live, .readers.reset).

@@ -219,3 +219,41 @@ func TestOpenPerMetaPhysicalLength(t *testing.T) {
 
 // mustErr returns the error half of an Open call.
 func mustErr(_ *Result, err error) error { return err }
+
+func TestOpenLiveReaderFinishRules(t *testing.T) {
+	// ModeLiveReader shares the ModeWriter finish rules (Rust
+	// finish_open OpenMode::LiveReader): a proven current generation is
+	// required and an unpublished physical tail is tolerated, because
+	// the live reader pins the committed generation and remaps to it.
+	p0 := metaPage(1, 4)
+	p1 := metaPage(1, 4)
+
+	// Tail tolerated: committed 4 pages on a 6-page physical file.
+	res, err := Open(p0, p1, 6*format.PageSize, ModeLiveReader)
+	if err != nil {
+		t.Fatal("live reader with tail:", err)
+	}
+	if res.CommittedBytes != 4*format.PageSize || res.PhysicalBytes != 6*format.PageSize {
+		t.Fatalf("committed %d physical %d, want 4/6 pages", res.CommittedBytes, res.PhysicalBytes)
+	}
+
+	// A sole meta can never prove currency for the live reader, exactly
+	// like the writer (Rust finish_open CurrentGenerationUnprovable).
+	damaged := metaPage(1, 4)
+	damaged[0] = 'X' // damaged magic: not identity-readable
+	if _, err := Open(damaged, p1, 4*format.PageSize, ModeLiveReader); err == nil {
+		t.Fatal("live reader accepted a sole meta")
+	} else {
+		mustFormatInvalid(t, err)
+	}
+
+	// The immutable exact-length rule still does not apply to the live
+	// reader (it is not the immutable reader).
+	res, err = Open(p0, p1, 4*format.PageSize, ModeLiveReader)
+	if err != nil {
+		t.Fatal("live reader exact length:", err)
+	}
+	if res.Selection != SelectionProvenCurrent {
+		t.Fatalf("selection %v, want ProvenCurrent", res.Selection)
+	}
+}

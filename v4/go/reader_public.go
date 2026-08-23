@@ -174,14 +174,16 @@ func (r *ImmutableReader) FileIdentity() (device uint64, inode uint64, err error
 	return device, inode, nil
 }
 
-// The four require* helpers mirror the Rust reader pre-checks exactly:
+// The five require* helpers mirror the Rust reader pre-checks exactly:
 // wrong kind and wrong family are reported before any page is touched
 // (reader_core/generation.rs require_direct/require_membership_family,
 // membership_view.rs require_kind, structured_value/view.rs require_kind,
-// feed_catalog.rs require_membership).
+// feed_catalog.rs require_membership). The meta projections are shared
+// package-level helpers so the immutable and live public facades apply
+// exactly the same pre-checks.
 
-func (r *ImmutableReader) requireDirect(family uint8) error {
-	m := r.inner.Meta()
+func requireDirectMeta(core *reader.ImmutableReader, family uint8) error {
+	m := core.Meta()
 	if m.ValueKind != format.ValueKindDirect {
 		return &Error{Code: ErrorWrongValueKind, Detail: "direct lookup requires a direct-value database"}
 	}
@@ -191,8 +193,8 @@ func (r *ImmutableReader) requireDirect(family uint8) error {
 	return nil
 }
 
-func (r *ImmutableReader) requireMembership(family uint8) error {
-	m := r.inner.Meta()
+func requireMembershipMeta(core *reader.ImmutableReader, family uint8) error {
+	m := core.Meta()
 	if m.ValueKind != format.ValueKindMembership {
 		return &Error{Code: ErrorWrongValueKind, Detail: "membership lookup requires a membership database"}
 	}
@@ -202,8 +204,8 @@ func (r *ImmutableReader) requireMembership(family uint8) error {
 	return nil
 }
 
-func (r *ImmutableReader) requireNetworkEnrichment(family uint8) error {
-	m := r.inner.Meta()
+func requireNetworkEnrichmentMeta(core *reader.ImmutableReader, family uint8) error {
+	m := core.Meta()
 	if m.ValueKind != format.ValueKindStructured || m.StructureKind != format.StructureKindNetworkEnrichmentV1 {
 		return &Error{Code: ErrorWrongStructureKind, Detail: "network enrichment lookup requires its matching structured database"}
 	}
@@ -213,25 +215,73 @@ func (r *ImmutableReader) requireNetworkEnrichment(family uint8) error {
 	return nil
 }
 
-func (r *ImmutableReader) requireMembershipCapable() error {
-	m := r.inner.Meta()
+func requireMembershipCapableMeta(core *reader.ImmutableReader) error {
+	m := core.Meta()
 	if m.ValueKind != format.ValueKindMembership && m.ValueKind != format.ValueKindStructured {
 		return &Error{Code: ErrorWrongValueKind, Detail: "feed access requires a membership-capable database"}
 	}
 	return nil
 }
 
-// requireMembershipQuery applies the strict membership-query gate: the
-// query capability decodes address bitmaps, which only a membership
+// requireMembershipQueryMeta applies the strict membership-query gate:
+// the query capability decodes address bitmaps, which only a membership
 // database defines (Rust membership_query::Query::new; structured
 // databases are refused).
-func (r *ImmutableReader) requireMembershipQuery() error {
-	m := r.inner.Meta()
+func requireMembershipQueryMeta(core *reader.ImmutableReader) error {
+	m := core.Meta()
 	if m.ValueKind != format.ValueKindMembership {
 		return &Error{Code: ErrorWrongValueKind, Detail: "membership query requires a membership database"}
 	}
 	return nil
 }
+
+func (r *ImmutableReader) requireDirect(family uint8) error {
+	return requireDirectMeta(r.inner, family)
+}
+
+func (r *ImmutableReader) requireMembership(family uint8) error {
+	return requireMembershipMeta(r.inner, family)
+}
+
+func (r *ImmutableReader) requireNetworkEnrichment(family uint8) error {
+	return requireNetworkEnrichmentMeta(r.inner, family)
+}
+
+func (r *ImmutableReader) requireMembershipCapable() error {
+	return requireMembershipCapableMeta(r.inner)
+}
+
+func (r *ImmutableReader) requireMembershipQuery() error {
+	return requireMembershipQueryMeta(r.inner)
+}
+
+// pinHost is the minimal reader surface the shared Pin machinery needs.
+// Both the immutable and the live public facades implement it, so one Pin
+// implementation serves both readers (Rust: both reader surfaces expose
+// the same pin-guarded lookup set). Pin lookups run against the core
+// captured at pin creation; the host is retained only so Pin.Close can
+// return the pin to its reader.
+type pinHost interface {
+	dropPin()
+}
+
+// core exposes the shared internal reader core to the pin machinery.
+func (r *ImmutableReader) core() *reader.ImmutableReader { return r.inner }
+
+// addPin registers one pin unless the reader already closed (the closed
+// re-check makes the losing Pin race report WrongState instead of pinning
+// a closed reader).
+func (r *ImmutableReader) addPin() bool {
+	r.sh.pins.Add(1)
+	if r.sh.closed.Load() {
+		r.sh.pins.Add(-1)
+		return false
+	}
+	return true
+}
+
+// dropPin returns one pin to the reader.
+func (r *ImmutableReader) dropPin() { r.sh.pins.Add(-1) }
 
 // Close releases the mapping. A reader with live pins reports HandleBusy
 // without closing; a second Close reports WrongState. Close must not race
@@ -264,22 +314,27 @@ func (r *ImmutableReader) Pin() (*Pin, error) {
 	if r.sh.closed.Load() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
-	r.sh.pins.Add(1)
 	// A Close that raced this Pin either saw the added pin (HandleBusy) or
-	// closed first; the second check makes the loser return WrongState
-	// instead of pinning a closed reader.
-	if r.sh.closed.Load() {
-		r.sh.pins.Add(-1)
+	// closed first; addPin's closed re-check makes the loser return
+	// WrongState instead of pinning a closed reader.
+	if !r.addPin() {
 		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
 	}
-	return &Pin{st: &pinState{r: r}}, nil
+	return &Pin{st: &pinState{h: r, core: r.inner}}, nil
 }
 
 // pinState holds the one close flag shared by every alias and value copy
-// of a single logical pin. Plain state: Pin.Close must not race pin
-// operations.
+// of a single logical pin, plus the reader host the pin guards and the
+// core captured at pin creation. The cached core is stable for the pin
+// lifetime: a reader with live pins refuses Close, so the internal reader
+// cannot close while any pin exists, and pin lookups therefore skip the
+// per-call open check (Rust borrow parity: the pin holds the reader
+// open). Enrichment-cursor pins leave core nil; only the five Pin lookup
+// methods dereference it, and cursor views touch only the closed flag.
+// Plain state: Pin.Close must not race pin operations.
 type pinState struct {
-	r      *ImmutableReader
+	h      pinHost
+	core   *reader.ImmutableReader
 	closed bool
 }
 
@@ -302,7 +357,7 @@ func (p *Pin) Close() error {
 		return &Error{Code: ErrorWrongState, Detail: "pin already closed"}
 	}
 	p.st.closed = true
-	p.st.r.sh.pins.Add(-1)
+	p.st.h.dropPin()
 	return nil
 }
 
@@ -451,10 +506,10 @@ func (p *Pin) LookupFeedInto(name string, dst []byte) (FeedInfo, bool, error) {
 	if !format.FeedNameValidString(name) {
 		return FeedInfo{}, false, &Error{Code: ErrorNameInvalid, Detail: "invalid feed name"}
 	}
-	if err := p.st.r.requireMembershipCapable(); err != nil {
+	if err := requireMembershipCapableMeta(p.st.core); err != nil {
 		return FeedInfo{}, false, err
 	}
-	entry, found, err := p.st.r.inner.LookupFeed(name)
+	entry, found, err := p.st.core.LookupFeed(name)
 	if err != nil {
 		return FeedInfo{}, false, publicError(err)
 	}
@@ -559,10 +614,10 @@ func (p *Pin) LookupMembershipV4(ip IPv4) (MembershipView, bool, error) {
 	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := p.st.r.requireMembership(4); err != nil {
+	if err := requireMembershipMeta(p.st.core, 4); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := p.st.r.inner.LookupMembership4(uint32(ip))
+	view, found, err := p.st.core.LookupMembership4(uint32(ip))
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
@@ -579,10 +634,10 @@ func (p *Pin) LookupMembershipV6(ip IPv6) (MembershipView, bool, error) {
 	if err := p.checkOpen(); err != nil {
 		return MembershipView{}, false, err
 	}
-	if err := p.st.r.requireMembership(6); err != nil {
+	if err := requireMembershipMeta(p.st.core, 6); err != nil {
 		return MembershipView{}, false, err
 	}
-	view, found, err := p.st.r.inner.LookupMembership6(ip.Hi, ip.Lo)
+	view, found, err := p.st.core.LookupMembership6(ip.Hi, ip.Lo)
 	if err != nil {
 		return MembershipView{}, false, publicError(err)
 	}
@@ -679,10 +734,10 @@ func (p *Pin) LookupNetworkEnrichmentV1V4(ip IPv4) (NetworkEnrichmentV1View, boo
 	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := p.st.r.requireNetworkEnrichment(4); err != nil {
+	if err := requireNetworkEnrichmentMeta(p.st.core, 4); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := p.st.r.inner.LookupNetworkEnrichmentV14(uint32(ip))
+	view, found, err := p.st.core.LookupNetworkEnrichmentV14(uint32(ip))
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}
@@ -698,10 +753,10 @@ func (p *Pin) LookupNetworkEnrichmentV1V6(ip IPv6) (NetworkEnrichmentV1View, boo
 	if err := p.checkOpen(); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	if err := p.st.r.requireNetworkEnrichment(6); err != nil {
+	if err := requireNetworkEnrichmentMeta(p.st.core, 6); err != nil {
 		return NetworkEnrichmentV1View{}, false, err
 	}
-	view, found, err := p.st.r.inner.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
+	view, found, err := p.st.core.LookupNetworkEnrichmentV16(ip.Hi, ip.Lo)
 	if err != nil {
 		return NetworkEnrichmentV1View{}, false, publicError(err)
 	}

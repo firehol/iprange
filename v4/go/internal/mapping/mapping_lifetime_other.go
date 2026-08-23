@@ -10,9 +10,9 @@ import (
 // (the OFD byte-range lifetime lock) is not implemented there, so every
 // open is refused with the typed Unsupported error. No content is mapped.
 
-// requireLiveWriter refuses live writer opens, mirroring the Rust platform
-// cfg (require_live_supported).
-func requireLiveWriter() error {
+// requireLiveCoordination refuses every live open (writer and reader),
+// mirroring the Rust platform cfg (require_live_supported).
+func requireLiveCoordination() error {
 	return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "live coordination is not implemented on this platform"}
 }
 

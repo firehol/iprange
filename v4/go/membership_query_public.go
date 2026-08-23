@@ -1,6 +1,6 @@
-// Named membership scopes and point matches over one opened immutable
-// database (Rust membership_query.rs parity). Scopes resolve caller feed
-// selections into bounded reusable entry lists; matching emits every
+// Named membership scopes and point matches over one opened immutable or
+// live database (Rust membership_query.rs parity). Scopes resolve caller
+// feed selections into bounded reusable entry lists; matching emits every
 // feed whose membership bitmap contains one address.
 
 package iprangedb
@@ -25,7 +25,7 @@ type MatchingFeedsReport struct {
 // MembershipQuery is the format-facing query capability over one pinned
 // membership generation.
 type MembershipQuery struct {
-	r *ImmutableReader
+	r cursorHost
 }
 
 // MembershipQuery opens the membership query surface. The database must
@@ -46,7 +46,7 @@ func (q *MembershipQuery) AllFeeds(budget MembershipQueryBudget, cancellation *C
 	if err := q.r.checkOpen(); err != nil {
 		return nil, err
 	}
-	data, err := q.r.inner.ResolveAllFeeds(budget.MaxHeapBytes, cancellation.check)
+	data, err := q.r.core().ResolveAllFeeds(budget.MaxHeapBytes, cancellation.check)
 	if err != nil {
 		return nil, publicError(err)
 	}
@@ -59,7 +59,7 @@ func (q *MembershipQuery) NamedFeeds(names []string, budget MembershipQueryBudge
 	if err := q.r.checkOpen(); err != nil {
 		return nil, err
 	}
-	data, err := q.r.inner.ResolveNamedFeeds(names, budget.MaxHeapBytes, cancellation.check)
+	data, err := q.r.core().ResolveNamedFeeds(names, budget.MaxHeapBytes, cancellation.check)
 	if err != nil {
 		return nil, publicError(err)
 	}
@@ -74,7 +74,7 @@ func (q *MembershipQuery) MatchingFeedsV4(address IPv4, yield func(name string) 
 	if err := q.r.checkOpen(); err != nil {
 		return MatchingFeedsReport{}, err
 	}
-	count, err := q.r.inner.MatchingFeeds4(uint32(address), func(name []byte) error {
+	count, err := q.r.core().MatchingFeeds4(uint32(address), func(name []byte) error {
 		if yield == nil {
 			return nil
 		}
@@ -92,7 +92,7 @@ func (q *MembershipQuery) MatchingFeedsV6(address IPv6, yield func(name string) 
 	if err := q.r.checkOpen(); err != nil {
 		return MatchingFeedsReport{}, err
 	}
-	count, err := q.r.inner.MatchingFeeds6(address.Hi, address.Lo, func(name []byte) error {
+	count, err := q.r.core().MatchingFeeds6(address.Hi, address.Lo, func(name []byte) error {
 		if yield == nil {
 			return nil
 		}
@@ -108,7 +108,7 @@ func (q *MembershipQuery) MatchingFeedsV6(address IPv6, yield func(name string) 
 // The scope keeps the reader pinned for its lifetime; Feeds returns
 // copied entry names (strings owned by the caller, like LookupFeed).
 type MembershipScope struct {
-	r    *ImmutableReader
+	r    cursorHost
 	data *reader.ScopeData
 }
 
@@ -132,5 +132,5 @@ func (s *MembershipScope) Feeds() []FeedEntry {
 
 // family returns the address family of the scope's pinned reader.
 func (s *MembershipScope) family() uint8 {
-	return s.r.inner.Meta().AddressFamily
+	return s.r.core().Meta().AddressFamily
 }

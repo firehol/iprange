@@ -86,7 +86,7 @@ func (s *MembershipScope) JoinDirect(source *ImmutableReader, budget DirectJoinB
 	if err != nil {
 		return DirectJoinReport{}, err
 	}
-	report, err := s.r.inner.JoinDirect(s.data, s.family(), source.inner, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
+	report, err := s.r.core().JoinDirect(s.data, s.family(), source.inner, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
 		if cellYield == nil {
 			return nil
 		}
@@ -121,8 +121,8 @@ func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func
 	if s.family() != right.family() {
 		return MembershipJoinReport{}, &Error{Code: ErrorWrongAddressFamily, Detail: "membership join source families differ"}
 	}
-	report, err := s.r.inner.JoinMembership(
-		s.data, right.data, s.family(), right.r.inner, cancellation.check,
+	report, err := s.r.core().JoinMembership(
+		s.data, right.data, s.family(), right.r.core(), cancellation.check,
 		func(batch []reader.MembershipCrossCell) error {
 			if crossYield == nil {
 				return nil

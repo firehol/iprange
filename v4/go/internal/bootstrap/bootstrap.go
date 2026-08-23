@@ -14,9 +14,7 @@ import (
 )
 
 // Mode selects the open-mode finish rules (binary-format-v4.md section
-// 4.2, Rust bootstrap.rs finish_open). Only the modes this milestone uses
-// exist; the Rust LiveReader mode joins when the live-reader milestone
-// needs it.
+// 4.2, Rust bootstrap.rs finish_open).
 type Mode uint8
 
 const (
@@ -26,6 +24,11 @@ const (
 	// ModeWriter requires a provable current generation (a sole meta can
 	// never prove currency) and tolerates an unpublished physical tail.
 	ModeWriter
+	// ModeLiveReader has the same finish rules as ModeWriter: a live
+	// reader pins one committed generation of a live pair whose writer
+	// may carry an unpublished tail, and a sole meta can never prove
+	// currency (Rust OpenMode::LiveReader).
+	ModeLiveReader
 )
 
 // Selection reports how the selected meta was derived (section 4.2).
@@ -79,15 +82,18 @@ func Open(p0, p1 []byte, physical uint64, mode Mode) (*Result, error) {
 	if meta.ValueKind == format.ValueKindStructured && meta.StructureKind != format.StructureKindNetworkEnrichmentV1 {
 		return nil, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
 	}
-	// A writer open must prove the current generation from the meta pair;
-	// a sole meta cannot (Rust finish_open CurrentGenerationUnprovable).
-	if mode == ModeWriter && selection != SelectionProvenCurrent {
+	// A writer or live-reader open must prove the current generation from
+	// the meta pair; a sole meta cannot (Rust finish_open
+	// CurrentGenerationUnprovable applies to every mode except the
+	// immutable reader).
+	if mode != ModeImmutableReader && selection != SelectionProvenCurrent {
 		return nil, formatErr("current generation not provable")
 	}
 	committed := meta.PageCount * format.PageSize
 	// The immutable reader requires the exact committed physical extent
-	// (Rust finish_open ImmutableLengthMismatch); the writer may carry an
-	// unpublished tail that the caller trims after open.
+	// (Rust finish_open ImmutableLengthMismatch); the writer and the live
+	// reader may carry an unpublished tail (the live reader remaps to the
+	// committed bytes only).
 	if mode == ModeImmutableReader && committed != physical {
 		return nil, formatErr("file size does not match meta page count")
 	}

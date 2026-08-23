@@ -30,6 +30,15 @@ func OpenMutableShared(path string, _ func(clean string) error) (*Mapping, error
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
 }
 
+// OpenLiveReader refuses every Windows open in milestone 1 (the live
+// reader path; live coordination is not implemented on Windows yet).
+func OpenLiveReader(path string, _ func(clean string) error) (*Mapping, error) {
+	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}
+
+// Unmap is unreachable on Windows: no mapping is ever created.
+func (m *Mapping) Unmap() error { return nil }
+
 // Create refuses every Windows creation in milestone 1.
 func Create(path string, _ uint64, _ func(clean string) error) (*Mapping, error) {
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}

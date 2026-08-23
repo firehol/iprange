@@ -81,7 +81,7 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 	if err := s.r.checkOpen(); err != nil {
 		return MembershipAggregationReport{}, err
 	}
-	report, err := s.r.inner.AggregateScope(
+	report, err := s.r.core().AggregateScope(
 		s.data, s.family(), mode.kind, mode.target, mode.pairs, cancellation.check,
 		func(batch []reader.FeedCardinality) error {
 			if feedYield == nil {
