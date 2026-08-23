@@ -9376,3 +9376,125 @@ machines (one-shot writer/publication_staging.go + snapshot.go:154,263
 + membership_publish_set.go:61,212,280; explicit user approval needed
 before deleting files), O validation + gate + push. Do not push
 until chunk 4-8 completes and the five-aspect gate passes.
+
+### Status (2026-08-23) - chunk 4-8 slice H implemented: publication cleanup machine (discard + seed)
+
+Slice H ports the exact-discard machine (Rust publication/cleanup.rs,
+499 lines) and the publication result seed (Rust result.rs Seed +
+NameSlot, result.rs:71-140 and 241-262) to Go. The machine discards
+created, attempted, prepared, and recovered direct-publication
+artifacts before main publication: one removal proves the retained
+name went away, the directory sync + verify run behind the
+DirectorySync checkpoint, and any removal that cannot be proved pushes
+one exact cleanup artifact into the result ledger (Rust
+CleanupArtifacts fixed capacity 4).
+
+Go files (all !windows; Windows publication opens refuse at destination
+bind per M5, so the Rust cleanup/windows.rs gc-transition arm is
+intentionally absent):
+
+- internal/publication/cleanup.go (487 lines): ownerLocation (Rust
+  ReservationLocation Private/Canonical/Either), reservationOwner
+  (identity Option arm), outputOwner, cleanupSummary (artifacts +
+  main/coordination absence flags), earlyDiscard, cleanupPoint (Rust
+  Point), discardCreated/discardAttempt/failedAttempt/confirmedAbsent,
+  discardWith/discardRecovered/discardOwnersWith, the remove machine
+  (removeFile/removeOutput/removeReservation/unlinkNames/
+  requireUnlinked/links), finishOne/finishRemoval, removal +
+  removalState, defaultSlot, earlyArtifact. Every Rust detail string is
+  verbatim: "private output identity was not established", "owned
+  publication artifact has unexpected links", "unlinked publication
+  artifact still has links", "owned publication artifact has no exact
+  retained name", "private output removal was not proved",
+  "publication artifact removal was not proved", plus the panic texts
+  "cleanup requires one exact name" and "each artifact name is consumed
+  once".
+- internal/publication/seed.go (152 lines): nameSlot (Rust NameSlot),
+  seed with the full capture field set (database/transaction/nonce/
+  attempt/directory identity/destination basename/output identity and
+  digest/policy/previous/creation security/private basename + one-shot
+  name inventory), captureSeed (Rust Seed::capture), seed.artifact
+  (Rust Seed::artifact), takeName (one-shot slot consumption), and
+  publicPolicy.
+
+Behavioral parity notes (Rust baseline):
+
+- remove() contract: links 0 -> awaiting sync; exactly 1 -> unlink the
+  candidate names in Rust order; any other count -> the fixed
+  unexpected-links conflict, namespace untouched.
+- unlink_names: Ok(true) proves the slot; Missing/IdentityChanged/
+  NotRegular candidates are skipped; LinkCount is a hard namespace
+  error; any other failure is kept as the first problem and reported
+  only when no name could be unlinked (Rust first_problem).
+- discard_owners_with: each owner runs behind its checkpoint; a
+  checkpoint or removal failure becomes Removal::failed with the
+  default slot of the owner; one shared directory sync proves every
+  success (needs_sync = output or reservation), and the finish order is
+  output first, reservation second, exactly like Rust.
+- remove_reservation infers a missing owner identity from the open file
+  (Rust regular_identity arm); the canonical name set order is
+  canonical-first for Canonical and private-first for Either.
+- main_absent/coordination_absent report the destination require-absent
+  proofs (is_ok == nil), computed after the removals, in Rust order.
+- machine-produced problems pass through composition folds unchanged;
+  raw namespace and SDK errors fold once at the boundary (no double
+  wrapping).
+- discard_recovered passes the always-ok checkpoint closure, exactly
+  like Rust: recovery paths never re-sync through this machine.
+
+No crash matrix for slice H: Rust cleanup.rs contains no fault::crash
+points; reservation retirement crash points belong to slice L (residue),
+where the v4work matrix lands. The EarlyDiscard identity-not-established
+arm and the require_unlinked link-proof arm are covered by direct unit
+probes because they cannot be reached through real unix namespace state
+(identity decode is best-effort over a regular same-filesystem inode;
+a third name appearing between unlink and re-prove is a race).
+
+Tests (internal/publication/cleanup_test.go, linux, 777 lines):
+
+- discardCreated on a real created output (name gone, links 0, facts
+  carried), discardAttempt on a secured attempt, failedAttempt
+  (artifact facts exact, no namespace work), confirmedAbsent (no
+  namespace work), the identity-not-established conflict.
+- discardWith output-only and with private/canonical/either
+  reservation owners: checkpoint order [OutputRemoval,
+  ReservationRemoval, DirectorySync], both names removed, ledger empty,
+  absence flags; the already-absent output arm (links 0 -> awaiting
+  sync); canonical location removing the private name when the
+  canonical twin never appeared; canonical location removing the
+  canonical name after rename; either location preferring the private
+  name.
+- Conflict arms: unexpected links (two names on the reservation inode)
+  is read-only (both names remain, links stay 2) and pushes the exact
+  artifact; no exact retained name after the retained name is renamed
+  away; require_unlinked with links 2; finishOne with the name still
+  present; finishRemoval with links 1 (publication artifact removal was
+  not proved) and with an injected sync problem (sync wins, Rust
+  or_else order).
+- Checkpoint arms: failure at OutputRemoval (no namespace work, artifact
+  carries the injected problem), failure at ReservationRemoval (output
+  still removed, sync still runs, artifact slot defaults to the
+  coordination name for Canonical), both failures consuming the two
+  distinct name slots; the seed name-slot double consumption panics.
+- discardRecovered removes both owners with no checkpoint; identity
+  inference for a reservation owner without identity; absence flags
+  with retained main/coordination names.
+
+Validation (all under nice): go build ./..., go vet ./..., go test
+./... (17 packages: 14 ok + 3 no-test-file - fault/snapshot/work), go
+test -tags v4work ./... (17 ok), fresh -count=1 publication tests, gofmt
+clean, -race + -gcflags=all=-d=checkptr=2 on internal/publication +
+internal/live, the six cross-compiles (linux arm64/386, darwin
+amd64/arm64, freebsd amd64, windows amd64), and per-OS test-compiles of
+publication + live for linux/darwin/freebsd/windows all PASS. Rust tree
+untouched. No deferrals: the slice-G residual P3s (scan buffer pooling,
+BE-endian note, itoa alias, Directory.Scan doc lifetime wording) remain
+optional and recorded with slice G; they are not cleanup-machine work.
+
+Review: five-aspect adversarial review dispatched at the implementation
+commit; verdicts recorded here when the rounds complete.
+
+Next: slice I attempt+main_file publish state machine (Rust attempt.rs
+776 + main_file.rs 510); the plan after I stays J resolver core, K
+replacement resolver, L residue, M maintenance, N Publish retrofit +
+public surface, O validation + gate + push.
