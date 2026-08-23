@@ -42,6 +42,60 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - slice C gated PASS: all five aspects green on 929d4de
+
+The slice-C close gate closed with all five aspects PASS on 929d4de
+(gate delta 8bb1daf..929d4de): Meitner (Rust parity), Anscombe (Go
+idioms), Harvey (performance), Newton (wire/integrity), Aristotle
+(APIs/docs/records). Round 2 returned Harvey FAIL (two findings) and
+Meitner FAIL (one P1); all three were fixed at 7004a84 and re-reviewed
+PASS; Aristotle's two P3 nits were fixed at 929d4de:
+
+- Harvey P1 - residual internStructurePayload leak through the
+  shape-stenciled generic on the real draft/output intern paths
+  (48 B/op, 1 alloc/op): the builders now own a structureScratch and
+  the payload travels through it; the pin was rewritten to drive
+  DraftStore.internNetworkEnrichmentV1 and measures exactly 0 allocs.
+- Harvey P2 - trimPredecessor heap rewrite (24 B/1 alloc per clear):
+  the rewrite struct now carries its sides by value with hasLeft/
+  hasRight presence flags (Rust Option<Rewrite> value semantics); new
+  pin TestSliceCStructuredClearZeroAlloc measures exactly 0 allocs.
+- Meitner P1 - op errors bypassed Rust mutate's abort_after: every
+  edit-touching op on both transactions now spends the transaction and
+  aborts through the writer (TransactionAborted wrapping the cause);
+  the metadata stage classes Rust raises before mutate stay raw;
+  Commit on a spent transaction reports NoPendingTransaction (Rust
+  commit_attempt). Pins: TestPublicStructuredTransactionOpErrorAborts,
+  corrected TestPublicMembershipTransactionSurface.
+- Aristotle F1/F2 - the round-2 SOW next-step line now names the
+  committed delta, and both exported Commit doc comments state the
+  spent-transaction NoPendingTransaction contract.
+
+Carried P3s (tracked, non-blocking, all test-only or intentional):
+- Harvey: OutputBuilder intern path fixed but unpinned; both-sides
+  trim path unpinned; slicea_union_input_alloc_test.go:93 comment
+  arithmetic (58 + 256 vs measured 54).
+- Meitner: metadataStagePreCheck is class-based rather than
+  check-identity-based (exact for the current error inventory; a
+  future WrongState/InvalidArgument inside the metadata edit would
+  stay raw); zero-MembershipRef intern is deliberately stricter than
+  Rust on a dead transaction (documented, intentional).
+- Anscombe: the unreachable metadataWriteChain InvalidArgument would
+  be misclassified raw if it ever fired (cannot fire: the compressor
+  output is always non-empty and within bound); the two abortEdit
+  helpers duplicate per file, consistent with the existing per-file
+  checkOrAbort/requireActive split.
+- Feed workflow Commit-after-abort reports WrongState where Rust
+  PreparedWorkflow::commit reports NoPendingTransaction; pre-existing
+  slice-B surface outside this delta, to resolve at the next gate.
+
+Full battery green under nice at the gated HEAD: build, gofmt clean,
+vet, plain/v4work tests, race, race+v4work, checkptr=2, six
+cross-compiles, Rust suite and --all-features, Rust conformance
+(11 fixtures), Rust mixed-subprocess, Go subprocess cross-open.
+
+- Next: slice D per the SOW plan.
+
 ### Status (2026-08-23) - slice C review round 2: Harvey FAIL fixed on the working tree, four aspects green
 
 The round-2 re-review at ba446fa returned: Anscombe (Go idioms) PASS,
