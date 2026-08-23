@@ -9817,7 +9817,7 @@ Go files (all !windows):
   file_inspection_freebsd.go and the POSIX arms in
   file_inspection_other.go.
 - internal/publication/resolver.go (+510 at 12d936e, 536 lines at
-  59fc0dd): resolve()/resolution (type)/
+  59fc0dd, 538 at 981f8fe): resolve()/resolution (type)/
   dispatch/resolveOther/resolveAbsent/completeAbsent/arm (acquire -
   arm - resume_armed with the unknown/problemed arm classes)/arm
   Failure/resolveDesired (four-value close at scope end like Rust
@@ -10018,6 +10018,25 @@ darwin v4work vet, and the 26 resolver + replacement tests (v4work)
 all PASS. GOOS=windows remains out of scope for publication this
 milestone (resolver.go is !windows; the v4work freebsd link machine
 does not build on windows - pre-existing).
+### Status (2026-08-24) - chunk 4-8 slice J complete: round-2 and round-3 review PASS
+
+Round-2 re-review at 59fc0dd: idioms PASS (Gauss), performance PASS
+(Chandrasekhar), wire/integrity PASS (Herschel), parity FAIL items
+verified fixed (Goodall PASS after re-check of the delta). Round-3 at
+981f8fe confirmed all five aspects PASS (records FAIL items P2-1 stale
+counts and P2-2 missing seed-borrow convention fixed; both re-verified
+with the dated-count phrasing). Every owner-carrying terminal path of
+the resolver now closes exactly once, resolve() closes only the
+destination directory on the dispatch error path, the authority-entry
+leaks stay closed, verification errors reach the result surface
+folded like Rust, and the descriptor pins cover the error paths.
+Slice J is complete; next is the slice-K review round.
+
+Next: slice-K review by the five agents at this HEAD, then slice L
+residue (inspect/remove canonical residue with the retained handle
+and the final coordination-reuse proof); the plan after L stays M
+maintenance, N Publish retrofit + public surface, O validation + gate
++ push.
 
 Next: slice-J round-2 re-review by all five agents at this fix HEAD,
 then the slice-K review by the same five agents, then slice L
