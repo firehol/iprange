@@ -109,6 +109,10 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil
 	}
+	// The reserved sidecar descriptor is owned by this attempt (Rust
+	// drops the Sidecar when create_live returns); every return closes
+	// it after the path-level cleanup.
+	defer sidecar.close()
 	if err := checkpoint(check); err != nil {
 		return attempt.failed(path, sidecar, nil, err), nil
 	}
@@ -129,6 +133,10 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 		return attempt.privateFailure(sidecar, *failure), nil
 	}
 	main := created.file
+	// The created main descriptor is owned by this attempt (Rust drops
+	// database_file::Main when create_live returns); close it on every
+	// return after the path-level cleanup.
+	defer main.Close()
 	mainIdentity := created.identity
 	spec := emptySpec{
 		addressFamily: attempt.addressFamily,
@@ -139,7 +147,6 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 		commitNonce:   attempt.commitNonce,
 	}
 	if err := initializePair(path, main, sidecar, spec, check); err != nil {
-		main.Close()
 		return attempt.failed(path, sidecar, &mainIdentity, err), nil
 	}
 	return attempt.created(mainIdentity, sidecar.localIdentity()), nil

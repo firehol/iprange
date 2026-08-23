@@ -1,12 +1,11 @@
-//go:build v4work
+//go:build v4work && (linux || darwin)
 
-// Crash-point state matrix for CreateLive and InitializeLive (Rust
-// live_crash_tests.rs create/initialize arms): each named point exits
-// the child with code 86 at the exact physical step, and the parent
-// verifies the resulting artifact set and sidecar header state. The
-// resolver-driven recovery assertions land with the publication
-// resolver chunk (4-8); this gate proves the crash leaves exactly the
-// Rust artifact state.
+// Crash-point state matrix for CreateLive, InitializeLive, and
+// ResetLiveCoordination (Rust live_crash_tests.rs create/initialize/
+// reset arms): each named point exits the child with code 86 at the
+// exact physical step, and the parent verifies the resulting artifact
+// set, sidecar header state, and the resultless recovery outcome
+// through ResolveInterruptedLiveTransition.
 
 package live
 
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -48,6 +48,10 @@ func TestLiveCrashChild(t *testing.T) {
 		}
 	case "initialize":
 		if _, err := InitializeLive(path, 2, nil); err != nil {
+			t.Fatal(err)
+		}
+	case "reset":
+		if _, err := ResetLiveCoordination(path, 2, crashResetPolicy(), nil); err != nil {
 			t.Fatal(err)
 		}
 	case "commit":
@@ -389,4 +393,168 @@ func TestLiveOutcomeUnknownChild(t *testing.T) {
 // liveWriterTestBudget helper is reused here.
 func crashWriterBudget() writer.PageBudget {
 	return liveWriterTestBudget()
+}
+
+// crashResetPolicy is the reset policy of the crash children: the
+// rollback-safe exchange when the host supports it, the discarding
+// replacement otherwise (Rust live_crash_tests::reset_policy).
+func crashResetPolicy() LiveResetPolicy {
+	if mapping.ExchangeAvailable() {
+		return LiveResetRollbackSafe
+	}
+	return LiveResetDiscardPrevious
+}
+
+// TestCreateCrashResiduesRecoverWithoutTheLostResult drives the
+// resultless recovery of interrupted creates (Rust
+// live_crash_tests::creation_crashes_are_recoverable_without_the_lost_result):
+// a crash before the main exists rolls the sidecar back to Removed; a
+// crash after the main sync completes the pair to Completed and the
+// live reader opens.
+func TestCreateCrashResiduesRecoverWithoutTheLostResult(t *testing.T) {
+	for _, point := range []string{"create.after_sidecar_sync", "create.after_sidecar_parent_sync"} {
+		t.Run(point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			runCrashChild(t, main, "create", point)
+			recovered, err := ResolveInterruptedLiveTransition(main, LiveTransitionResolutionRollback, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != LiveResidueStatusRemoved {
+				t.Fatalf("status = %v, want Removed", recovered.Status)
+			}
+			if _, err := os.Lstat(main); !os.IsNotExist(err) {
+				t.Fatalf("main exists after rollback: %v", err)
+			}
+			if _, err := os.Lstat(main + ".readers"); !os.IsNotExist(err) {
+				t.Fatalf("sidecar exists after rollback: %v", err)
+			}
+		})
+	}
+	for _, point := range []string{"create.after_main_sync", "create.after_main_parent_sync"} {
+		t.Run(point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			runCrashChild(t, main, "create", point)
+			recovered, err := ResolveInterruptedLiveTransition(main, LiveTransitionResolutionComplete, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != LiveResidueStatusCompleted {
+				t.Fatalf("status = %v, want Completed", recovered.Status)
+			}
+			lr, err := OpenLiveReader(main, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lr.Close()
+		})
+	}
+}
+
+// TestInitializeCrashResiduesRecoverWithoutTheLostResult drives the
+// resultless recovery of interrupted initializes (Rust
+// live_crash_tests::initialization_crashes_are_recoverable_without_the_lost_result):
+// every initialize crash point completes to Completed or Ready and the
+// live reader opens.
+func TestInitializeCrashResiduesRecoverWithoutTheLostResult(t *testing.T) {
+	for _, point := range []string{
+		"live_initialize.after_creating_sync",
+		"live_initialize.after_creating_parent_sync",
+		"live_initialize.after_ready_sync",
+		"live_initialize.after_ready_parent_sync",
+	} {
+		t.Run(point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(main + ".readers"); err != nil {
+				t.Fatal(err)
+			}
+			runCrashChild(t, main, "initialize", point)
+
+			recovered, err := ResolveInterruptedLiveTransition(main, LiveTransitionResolutionComplete, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != LiveResidueStatusCompleted && recovered.Status != LiveResidueStatusReady {
+				t.Fatalf("status = %v, want Completed or Ready", recovered.Status)
+			}
+			lr, err := OpenLiveReader(main, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lr.Close()
+		})
+	}
+}
+
+// TestResetCrashPointsLeaveRetryableOrReadyDatabase drives the
+// resultless recovery of interrupted resets (Rust
+// live_crash_tests::reset_crashes_leave_a_retryable_or_ready_database):
+// a crash before the installation rolls the private sidecar back to
+// Removed and a fresh reset succeeds; a crash after the installation
+// completes or reports Ready and the live reader opens.
+func TestResetCrashPointsLeaveRetryableOrReadyDatabase(t *testing.T) {
+	for _, point := range []string{
+		"live_reset.after_creating_sync",
+		"live_reset.after_ready_sync",
+		"live_reset.after_private_parent_sync",
+		"live_reset.before_replace",
+	} {
+		t.Run(point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runCrashChild(t, main, "reset", point)
+
+			recovered, err := ResolveInterruptedLiveTransition(main, LiveTransitionResolutionRollback, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != LiveResidueStatusRemoved {
+				t.Fatalf("status = %v, want Removed", recovered.Status)
+			}
+			if _, err := os.Lstat(main + ".readers.reset"); !os.IsNotExist(err) {
+				t.Fatalf("reset temp survived rollback: %v", err)
+			}
+			if _, err := ResetLiveCoordination(main, 2, crashResetPolicy(), nil); err != nil {
+				t.Fatal(err)
+			}
+			lr, err := OpenLiveReader(main, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lr.Close()
+		})
+	}
+	for _, point := range []string{"live_reset.after_replace", "live_reset.after_directory_sync"} {
+		t.Run(point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runCrashChild(t, main, "reset", point)
+
+			recovered, err := ResolveInterruptedLiveTransition(main, LiveTransitionResolutionComplete, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != LiveResidueStatusCompleted && recovered.Status != LiveResidueStatusReady {
+				t.Fatalf("status = %v, want Completed or Ready", recovered.Status)
+			}
+			lr, err := OpenLiveReader(main, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lr.Close()
+		})
+	}
 }

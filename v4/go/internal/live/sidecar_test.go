@@ -8,7 +8,6 @@
 package live
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,17 +110,6 @@ func readSlotBytes(t *testing.T, sidecar *Sidecar, slot uint32) [slotSize]byte {
 	var out [slotSize]byte
 	copy(out[:], bytes)
 	return out
-}
-
-func expectCode(t *testing.T, err error, code format.ErrorCode) {
-	t.Helper()
-	var e *format.Error
-	if !errors.As(err, &e) {
-		t.Fatalf("expected code %d, got %v", code, err)
-	}
-	if e.Code != code {
-		t.Fatalf("expected code %d, got %d (%v)", code, e.Code, err)
-	}
 }
 
 func TestReadySidecarReopensWithExactBinding(t *testing.T) {

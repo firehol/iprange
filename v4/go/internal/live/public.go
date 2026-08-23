@@ -28,3 +28,32 @@ func BasenameParts(b LocalBasename) (encoding uint16, bytes []byte) {
 func HousekeepingValue(h housekeeping) uint8 {
 	return uint8(h)
 }
+
+// IdentityFromDeviceInode builds one retained identity from the
+// portable device+inode pair (the inverse of IdentityDeviceInode; the
+// public resolver surfaces supply their facts back to the internal
+// owners).
+func IdentityFromDeviceInode(device, inode uint64) FileIdentity {
+	return FileIdentity{device: device, inode: inode}
+}
+
+// BasenameFromParts builds one local basename from the portable
+// encoding tag and content bytes (the inverse of BasenameParts).
+func BasenameFromParts(encoding uint16, bytes []byte) LocalBasename {
+	var out LocalBasename
+	if len(bytes) > len(out.bytes) {
+		bytes = bytes[:len(out.bytes)]
+	}
+	out.encoding = encoding
+	out.length = uint16(len(bytes))
+	copy(out.bytes[:], bytes)
+	return out
+}
+
+// HousekeepingFromValue builds the internal housekeeping fact class
+// from its numeric discriminant (the inverse of HousekeepingValue; the
+// public resolver entry points supply their facts back to the internal
+// owners).
+func HousekeepingFromValue(value uint8) housekeeping {
+	return housekeeping(value)
+}

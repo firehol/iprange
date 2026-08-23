@@ -31,9 +31,8 @@ const (
 )
 
 // LiveResetPolicy is the namespace guarantee selected for replacing
-// existing live coordination (Rust LiveResetPolicy). Reset is out of
-// the current 4-3 slice (scheduled for chunk 4-6); the enum exists
-// because LiveTransitionResult carries it.
+// existing live coordination (Rust LiveResetPolicy). The enum exists
+// because LiveTransitionResult carries the policy of reset attempts.
 type LiveResetPolicy uint8
 
 const (
@@ -101,18 +100,21 @@ type lockedMain struct {
 }
 
 // liveTransitionAttempt is the immutable identity of one transition
-// attempt (Rust transition::Attempt).
+// attempt (Rust transition::Attempt). previousSidecarIdentity is the
+// public identity of the canonical sidecar being replaced; it is nil
+// on initialize and present on reset.
 type liveTransitionAttempt struct {
-	operation         LiveTransitionOperation
-	resetPolicy       *LiveResetPolicy
-	databaseID        [16]byte
-	transactionID     uint64
-	commitNonce       [16]byte
-	directoryIdentity *FileIdentity
-	mainIdentity      *FileIdentity
-	mainBasename      LocalBasename
-	readerCapacity    uint32
-	sidecarID         [16]byte
+	operation               LiveTransitionOperation
+	resetPolicy             *LiveResetPolicy
+	databaseID              [16]byte
+	transactionID           uint64
+	commitNonce             [16]byte
+	directoryIdentity       *FileIdentity
+	mainIdentity            *FileIdentity
+	mainBasename            LocalBasename
+	readerCapacity          uint32
+	sidecarID               [16]byte
+	previousSidecarIdentity *FileIdentity
 }
 
 // InitializeLive converts one quiescent immutable database into a live
@@ -144,7 +146,7 @@ func InitializeLive(path string, readerCapacity uint32, check func() error) (*Li
 	if err := requireSidecarAbsent(canonical); err != nil {
 		return nil, err
 	}
-	attempt, err := newTransitionAttempt(LiveTransitionInitialize, main, canonical, readerCapacity)
+	attempt, err := newTransitionAttempt(LiveTransitionInitialize, nil, main, canonical, readerCapacity, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +157,10 @@ func InitializeLive(path string, readerCapacity uint32, check func() error) (*Li
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil
 	}
+	// The reserved sidecar descriptor is owned by this transition (Rust
+	// drops the Sidecar when initialize_live returns); every return
+	// closes it after the path-level cleanup.
+	defer sidecar.close()
 	identity := sidecar.localIdentity()
 	if err := checkpoint(check); err != nil {
 		return attempt.cleanupCreated(sidecar, err, LiveCoordinationLocationCanonical), nil
@@ -272,23 +278,26 @@ func bootstrapOf(f *os.File) (*bootstrap.Result, error) {
 }
 
 // newTransitionAttempt captures the locked main's identity facts and
-// draws the cleanup sidecar identity at the canonical path ordinal 1
-// (Rust transition::Attempt::new).
-func newTransitionAttempt(operation LiveTransitionOperation, main *lockedMain, cleanupSource string, readerCapacity uint32) (liveTransitionAttempt, error) {
+// draws the cleanup sidecar identity at the cleanup-source path ordinal
+// 1 (Rust transition::Attempt::new). previousSidecarIdentity is nil on
+// initialize; the reset caller passes the proven canonical identity.
+func newTransitionAttempt(operation LiveTransitionOperation, resetPolicy *LiveResetPolicy, main *lockedMain, cleanupSource string, readerCapacity uint32, previousSidecarIdentity *FileIdentity) (liveTransitionAttempt, error) {
 	sidecarID, err := uniqueAttemptID(cleanupSource, 1)
 	if err != nil {
 		return liveTransitionAttempt{}, err
 	}
 	return liveTransitionAttempt{
-		operation:         operation,
-		databaseID:        main.bootstrap.Meta.DatabaseID,
-		transactionID:     main.bootstrap.Meta.TxnID,
-		commitNonce:       main.bootstrap.Meta.CommitNonce,
-		directoryIdentity: &main.directoryIdentity,
-		mainIdentity:      &main.identity,
-		mainBasename:      main.basename,
-		readerCapacity:    readerCapacity,
-		sidecarID:         sidecarID,
+		operation:               operation,
+		resetPolicy:             resetPolicy,
+		databaseID:              main.bootstrap.Meta.DatabaseID,
+		transactionID:           main.bootstrap.Meta.TxnID,
+		commitNonce:             main.bootstrap.Meta.CommitNonce,
+		directoryIdentity:       &main.directoryIdentity,
+		mainIdentity:            &main.identity,
+		mainBasename:            main.basename,
+		readerCapacity:          readerCapacity,
+		sidecarID:               sidecarID,
+		previousSidecarIdentity: previousSidecarIdentity,
 	}, nil
 }
 
@@ -328,23 +337,24 @@ func (a liveTransitionAttempt) cleanupCreated(sidecar *Sidecar, cause error, loc
 // result assembles the full Rust LiveTransitionResult field surface.
 func (a liveTransitionAttempt) result(status LiveTransitionStatus, newSidecarIdentity *FileIdentity, location LiveCoordinationLocation, facts terminalFacts) *LiveTransitionResult {
 	return &LiveTransitionResult{
-		Operation:           a.operation,
-		ResetPolicy:         a.resetPolicy,
-		Status:              status,
-		DatabaseID:          a.databaseID,
-		TransactionID:       a.transactionID,
-		CommitNonce:         a.commitNonce,
-		DirectoryIdentity:   a.directoryIdentity,
-		MainIdentity:        a.mainIdentity,
-		MainBasename:        a.mainBasename,
-		ReaderCapacity:      a.readerCapacity,
-		SidecarID:           a.sidecarID,
-		NewSidecarIdentity:  newSidecarIdentity,
-		NewSidecarLocation:  location,
-		ResiduePossible:     facts.residuePossible,
-		Housekeeping:        facts.housekeeping,
-		VisibleHousekeeping: facts.visibleHousekeep,
-		Cause:               facts.cause,
+		Operation:               a.operation,
+		ResetPolicy:             a.resetPolicy,
+		Status:                  status,
+		DatabaseID:              a.databaseID,
+		TransactionID:           a.transactionID,
+		CommitNonce:             a.commitNonce,
+		DirectoryIdentity:       a.directoryIdentity,
+		MainIdentity:            a.mainIdentity,
+		MainBasename:            a.mainBasename,
+		ReaderCapacity:          a.readerCapacity,
+		SidecarID:               a.sidecarID,
+		PreviousSidecarIdentity: a.previousSidecarIdentity,
+		NewSidecarIdentity:      newSidecarIdentity,
+		NewSidecarLocation:      location,
+		ResiduePossible:         facts.residuePossible,
+		Housekeeping:            facts.housekeeping,
+		VisibleHousekeeping:     facts.visibleHousekeep,
+		Cause:                   facts.cause,
 	}
 }
 

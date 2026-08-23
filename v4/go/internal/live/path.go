@@ -55,3 +55,23 @@ func invalidCoordinationDetail(name string) string {
 	}
 	return ""
 }
+
+// liveTransitionTemp is the exact private name of one prepared reset
+// sidecar: the main basename plus .readers.reset (Rust
+// path::live_transition_temp). The main basename must be one valid
+// path component that does not itself use the reserved coordination
+// suffix or the reserved .iprange- prefix.
+func liveTransitionTemp(main string) (string, error) {
+	name := filepath.Base(main)
+	if name == "." || name == string(filepath.Separator) {
+		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
+	}
+	if invalidCoordinationName(name) {
+		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: invalidCoordinationDetail(name)}
+	}
+	return filepath.Join(filepath.Dir(main), name+transitionTempSuffix), nil
+}
+
+// transitionTempSuffix is the private reset sidecar name suffix (Rust
+// path::live_transition_temp).
+const transitionTempSuffix = ".readers.reset"

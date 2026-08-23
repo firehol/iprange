@@ -7761,7 +7761,7 @@ Key decisions:
   interface so both readers share one Pin type.
 - Windows/FreeBSD: the live reader refuses through the same honest
   stubs as the live writer (mapping_windows.go refuses every open;
-  the live-support gate refuses FreeBSD before path access); the five
+  the live-support gate refuses FreeBSD before path access); the six
   cross-compiles stay green.
 
 - Next: implement + tests (internal live_reader_test.go, public
@@ -7974,3 +7974,294 @@ battery pass.
 - Next: signed commit + push of chunk 4-5, then chunk 4-6
   (transitions: ResetLiveCoordination, ResolveInterruptedLiveTransition,
   resolve_live_transition, resolve_create_live, .readers.reset).
+
+### Status (2026-08-23) - chunk 4-6 design recorded: transitions (reset + resolvers)
+
+Chunk 4-6 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: live_lifecycle.rs (types:
+LiveTransitionOperation, LiveResetPolicy, LiveTransitionStatus,
+LiveCoordinationLocation, LiveTransitionResult), transition.rs
+(reset_live_coordination, finish_reset, prepare_reset_sidecar,
+existing_identity, verify_previous, remove_exact, require_capacity),
+resolution.rs (LiveTransitionResolutionMode, resolve_live_transition,
+resolve_initialize, resolve_reset, observe, observe_reset_canonical,
+observe_reset_private, require_supplied, require_main, require_attempt,
+is_attempt, require_previous_identity, resolved,
+resolved_after_cleanup, cleanup_attempt, remove_previous),
+create_resolution.rs (resolve_create_live, Main/Coordination
+observation, definitive, complete, rollback, verify_created,
+require_supplied, expected_spec, result folding), residue.rs
+(LiveResidueKind/Status/Result, resolve_interrupted_live_transition,
+resolve_without_main, resolve_with_main, complete_canonical,
+complete_private_reset, remove_valid_private, remove_private_residue,
+retire_observed, facts, after_removal, with_cleanup),
+namespace.rs (install_noreplace / install_replace_discarding /
+install_exchange over publication namespace_mutation.rs
+rename_noreplace/exchange/replace_discarding_destination), path.rs
+(live_transition_temp = main name + ".readers.reset"), plus the ported
+tests: resolution_tests.rs (4), create_resolution_tests.rs (3),
+tests/live_transitions.rs (5 public), live_crash_tests.rs
+(reset_crashes_leave_a_retryable_or_ready_database +
+creation/initialization recoverable arms). The Go infrastructure they
+compose is already ported: lockedMain + verify + attempt
+(lifecycle_initialize.go), Sidecar reserve/reserveAt/openAt/openAny/
+initializeCreating/publishReady/verifyPath/verifyHeader/currentHeader/
+lockGate* (sidecar.go), namespace openRw/createPrivate/removeExact/
+syncParent/pathIdentity/parentIdentity/verifyPath (namespace.go), the
+retained-directory machine (directory.go), the mapping publication
+primitives (mapping_publish_linux.go / darwin / posix / freebsd:
+RenameNoReplace, RenameExchange, RenamePlain, ExchangeAvailable),
+cleanup facts (cleanup.go), fault.Crash points (fault.go), and the
+v4work crash-child harness (lifecycle_crash_test.go).
+
+Key decisions (Rust is the baseline; every message and error class
+mirrors the Rust Display/class exactly):
+
+- ResetLiveCoordination (internal ResetLiveCoordination, public
+  ResetLiveCoordination): requireLiveSupported, requireCapacity,
+  LockedMain::open, canonical + private (.readers.reset via the new
+  liveTransitionTemp path helper), existing_identity at canonical,
+  RollbackSafe + existing coordination requires the atomic name
+  exchange (mapping.ExchangeAvailable; Rust
+  require_exchange_available -> DurabilityUnsupported detail
+  "rollback-safe live reset requires atomic name exchange"), Attempt
+  with previous_sidecar_identity (the 4-3 Go attempt gains the field),
+  reserveAt(private), initializeCreating, publishReady, syncParent,
+  verify_previous (verify_path or absent-check; a fresh canonical is
+  CleanupConflict "canonical sidecar appeared during reset"),
+  namespace::install dispatcher, crash points live_reset.before_replace
+  / after_replace, finish_reset (syncParent, main.verify,
+  verify_path(canonical), sidecar.verify_header, RollbackSafe
+  remove_exact(previous) -> initialized_with_residue on failure,
+  DiscardPrevious requires private absent -> CleanupConflict
+  "discarding reset retained an unexpected private sidecar"), and the
+  factual result folding (reservation_failure / initialized /
+  initialized_with_residue / unknown / cleanup_created) exactly as the
+  4-3 attempt methods.
+- namespace install machinery: bindPair (one retained directory, two
+  names), installNoreplace (verify private, rename_noreplace, sync,
+  require_absent(private) + verify canonical), installReplaceDiscarding
+  (verify both, replace_discarding_destination = rename(2), sync,
+  require_absent private + verify canonical), installExchange
+  (verify both, atomic exchange, verify swapped names, restore on
+  verification failure -> CleanupConflict, double-failure ->
+  CleanupIncomplete via combineErrors), with the freebsd/no-exchange
+  build returning DurabilityUnsupported for exchange exactly like the
+  Rust non-linux/apple arm. The Go primitives compose the existing
+  mapping.RenameNoReplace/RenameExchange/RenamePlain with the
+  retained-directory sync (directory.sync, not mapping.SyncDirectory,
+  so the fd-relative machine stays the authority).
+- ResolveLiveTransition (public ResolveLiveTransition): require
+  live-supported, require_supplied (complete-result validation:
+  nonzero database_id/transaction_id/commit_nonce/reader_capacity/
+  sidecar_id, operation/reset_policy consistency, Windows RollbackSafe
+  refusal kept as a compile-time-free parity comment, OutcomeUnknown
+  requires new_sidecar_identity), LockedMain::open, require_main
+  (basename, directory identity, main identity + generation), observe
+  canonical and private (path_identity -> Sidecar::open_at with
+  database_id -> public identity), initialize arm (private present ->
+  Conflict "initialize transition has an unexpected private sidecar";
+  canonical absent -> Unchanged/Absent; Ready -> Initialized/Canonical;
+  Creating+Complete -> verify, sync_all, sync parent, publish_ready,
+  sync parent, verify -> Initialized; Creating+Rollback -> verify +
+  cleanup_attempt identity-guarded, absorbed verify failure),
+  reset arm (canonical Previous/Attempt classification with
+  require_attempt and ready-state checks, DiscardPrevious+Rollback ->
+  Unresolvable "discarding reset cannot restore the previous sidecar",
+  RollbackSafe previous cleanup at the private name, both-names
+  conflicts, private Attempt + Rollback -> cleanup, private Attempt +
+  Complete -> require_previous_identity, install, sync, verify, header
+  check, remove_exact previous or discard-conflict), result folding
+  with resolved / resolved_after_cleanup (status Unchanged +
+  residue_possible + merged housekeeping + cause).
+- ResolveCreateLive (public ResolveCreateLive): require_live_supported,
+  require_supplied (nonzero ids/capacity, basename match, directory
+  identity proven -> Unresolvable "creation never proved its parent
+  directory identity" when absent, DirectoryIdentityMismatch),
+  observe_main (absent / exact-empty under the lifetime lock /
+  malformed attributed by main_identity), observe_coordination
+  (absent / exact sidecar by sidecar_id + capacity / malformed
+  attributed by sidecar_identity), definitive (ready pair -> Created;
+  Created without ready pair -> Conflict "a completed creation result
+  no longer names a ready pair"; clean NotCreated with both absent ->
+  NotCreated; NotCreated with artifacts -> Conflict "a clean
+  not-created result has unexpected artifacts"; otherwise proceed),
+  Complete (malformed -> Unresolvable; reserve missing sidecar with
+  private-failure folding; write_empty main with the expected EmptySpec
+  when absent; syncs + publish_ready + verify_created; failures ->
+  OutcomeUnknown with retained identities), Rollback (remove main then
+  sidecar identity-guarded by ordinal, cleanup_result folding). The Go
+  emptySpec type and databaseFile::write_empty/requireSidecarAbsent
+  equivalents are the existing create.go initializePair machinery
+  (writeEmptyMain refactor if needed; the existing write-empty path is
+  reused, NOT reimplemented).
+- ResolveInterruptedLiveTransition (public
+  ResolveInterruptedLiveTransition + LiveResidueResult): the
+  resultless residue machine over the same observe primitives (open_any
+  for the Valid observation; Format/Corrupt/WrongState classes fold to
+  Malformed like Rust Sidecar::open_any error arms), the full
+  without-main / with-main matrix ported exactly (absent pair,
+  canonical Ready, canonical Ready + private residue cleanup,
+  canonical Creating + Complete -> complete_canonical under the
+  exclusive gate with finishWithCleanup, private Ready + Complete ->
+  complete_private_reset with require_absent + install, private +
+  Rollback -> remove_valid_private, canonical Malformed -> Unresolvable
+  "canonical live coordination is malformed; explicit reset is
+  required", both-present without main -> Conflict, rollback-without-
+  main retirement), facts/status folding (Absent/Ready/Completed/
+  Removed/OutcomeUnknown, residue_possible, merged housekeeping).
+- finishWithCleanup helper added to cleanup.go (Rust
+  sdk_error::finish_with_cleanup: operation error and unlock error
+  combine through combineErrors).
+- Public surface: ResetLiveCoordination, ResolveLiveTransition,
+  ResolveCreateLive, ResolveInterruptedLiveTransition +
+  LiveTransitionResolutionMode (Complete/Rollback), LiveResidueKind
+  (Canonical/PrivateReset), LiveResidueStatus (Absent/Ready/Completed/
+  Removed/OutcomeUnknown), LiveResidueResult (all facts as pointers
+  where Rust carries Option), reusing publicTransitionResult and a new
+  publicResidueResult mapper; the public CreateResult gains nothing
+  (resolve_create_live returns the existing public CreateResult via
+  publicCreateResult).
+- Tests: internal lifecycle_resolution_test.go (port of
+  resolution_tests.rs: initialize complete/rollback, reset complete
+  over corrupt coordination, exchanged reset cleans the exact previous
+  sidecar, linux/apple-gated), lifecycle_create_resolution_test.go
+  (port of create_resolution_tests.rs: sidecar-only complete/rollback,
+  ready pair never removed), crash-test extension (reset crash points
+  live_reset.after_creating_sync / after_ready_sync /
+  after_private_parent_sync / before_replace -> Rollback residue
+  recovery then re-reset; after_replace / after_directory_sync ->
+  Complete residue recovery; creation/initialize recoverable arms via
+  the residue resolver, porting Rust live_crash_tests.rs),
+  lifecycle_public_test.go extension (live_transitions.rs port:
+  immutable main initialized explicitly + resolve complete, existing
+  coordination never repaired, rollback-safe reset replaces corrupt
+  coordination with the main unchanged + capacity proof, discarding
+  reset reports policy and cannot roll back after installation,
+  cancelled transition leaves the main unchanged).
+- Windows/FreeBSD: the same honest stubs as 4-3/4-5: requireLiveSupported
+  refuses before path access (lock_refuse.go), installExchange refuses
+  DurabilityUnsupported on non-linux/darwin builds, and the six
+  cross-compiles stay green.
+
+- Implemented and validated 2026-08-23 (see the chunk 4-6 validation
+  record below).
+
+### Status (2026-08-23) - chunk 4-6 implemented and validated: transitions
+
+Implemented exactly per the design entry above: ResetLiveCoordination
+with the full prepare/install/finish cascade, ResolveLiveTransition
+(initialize/reset matrices), ResolveCreateLive (main/coordination
+observation matrix), ResolveInterruptedLiveTransition (resultless
+residue matrix), the fd-relative rename machines
+(namespace_install_linux.go renameat2 RENAME_NOREPLACE/RENAME_EXCHANGE,
+namespace_install_darwin.go renameatx_np RENAME_EXCL/RENAME_SWAP,
+namespace_install_other.go honest nsUnsupportedError, Windows
+install refusal), finishWithCleanup, and the public facade with the
+internal<->public identity/basename/housekeeping round trips.
+
+Three defects found and fixed during implementation validation:
+
+1. Descriptor/lock leak across the lifecycle surface: CreateLive,
+   InitializeLive, ResetLiveCoordination, ResolveLiveTransition,
+   ResolveCreateLive, and ResolveInterruptedLiveTransition never
+   closed their owned sidecar/main descriptors. Rust relies on RAII
+   drops; Go needs explicit closes. The leak retained open fds,
+   mappings, exclusive lifetime locks, and gate locks after every
+   operation - proven by TestCreateResolutionReadyPairIsNeverRemoved
+   hanging forever in OpenLiveReader (blocked on the lifetime shared
+   lock held by the leaked exclusive descriptor from
+   resolve_create_live). Fix: one defer per owned descriptor,
+   registered immediately after each observation/reservation so later
+   observation failures cannot leak earlier ones (double close is
+   safe: Sidecar.close nil-checks, os.File.Close returns ErrClosed).
+2. ResetLiveCoordination never reported its reset policy: the Go
+   newTransitionAttempt lacked the Rust Attempt::new
+   reset_policy parameter, so result.ResetPolicy was always nil.
+   Fix: parameter added; reset passes &policy, initialize passes nil.
+3. Cross-v4work vet gaps in the live package: expectCode lived in the
+   linux/darwin-tagged sidecar_test.go while the all-OS lifecycle and
+   crash tests used it. Fix: expectCode moved to the shared
+   expect_test.go; lifecycle_crash_test.go tagged
+   "v4work && (linux || darwin)" because its child actions exercise
+   real paths that honestly refuse on freebsd/windows (same surface
+   class as the 4-5 lock_refuse boundary).
+
+Validation battery (all under nice, -count=1): gofmt clean; vet clean
+plain + v4work; full test suite plain + v4work (all packages); race
+plain + v4work; checkptr=2 plain + v4work; check-mmap-trace PASS
+(fixtures mapped, never streamed); six cross-compiles (linux/386,
+linux/arm64, darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64)
+green; ZeroAlloc passes. Live-package cross-vet is now clean on
+freebsd/windows/darwin plain + v4work.
+
+Pre-existing gaps verified unrelated to this chunk (recorded, not
+fixed here): GOARCH=386 v4work vet reports 1<<32-overflows-int in
+test-only mocks of internal/writer/range_edit_test.go,
+internal/retire/retire_test.go, internal/bitmap/free_test.go, and
+internal/tree/tree_test.go; GOOS=windows v4work vet reports
+unix.Geteuid undefined in internal/security/security_test.go. These
+packages are untouched by chunk 4-6 and the standard battery does not
+cross-vet.
+
+### Review round (2026-08-23) - five-aspect adversarial review, all PASS
+
+Reviewers (same model, level-1, adversarial, disjoint scopes, kept
+open across chunks; scopes recorded at the top of this SOW):
+
+1. Helmholtz (Rust parity): FAIL -> PASS. Round-1 findings:
+   - P2-3 installReplaceDiscarding private verify returned the raw
+     namespace class instead of CleanupConflict; both verifies now
+     fold to CodeCleanupConflict with the Rust detail string
+     (namespace_install.go installReplaceDiscarding).
+   - P2-1 residuePossible over-included CodeCleanupConflict; now only
+     CodeCleanupInProgress, exactly the projection of Rust
+     sdk_error.rs:299-301 matches!(self, CleanupIncomplete{..})
+     (lifecycle_reset.go residuePossible).
+   - P2-2 requireSupplied rejected nil DirectoryIdentity/MainIdentity
+     with InvalidArgument; the nil draws were removed from the
+     InvalidArgument condition (only the five nonzero draws remain,
+     Rust resolution.rs:320-329) and requireMain now classifies a nil
+     draw like a mismatch at the same step: directory nil ->
+     CodeDirectoryIdentityMismatch, main nil -> CodeConflict "live
+     transition main identity or generation changed" (resolution.rs:
+     359-376). Files: lifecycle_resolution.go requireSupplied +
+     requireMain.
+   - P2-4 completeCreate main-absent branch passed nil main identity
+     to unknownAfterPrivateFailure; it now threads failure.identity
+     when non-nil, matching Rust create_resolution.rs:180
+     failure.identity.map(public_identity)
+     (lifecycle_create_resolution.go completeCreate).
+2. Parfit (wire/integrity): FAIL -> PASS. P2-1 was the same
+   installReplaceDiscarding class fix as Helmholtz P2-3; verified all
+   three discarding-reset error sites against Rust (CleanupConflict in
+   install + finish_reset, Conflict in resolve_reset) with exact
+   detail strings.
+3. Sartre (Go idioms): FAIL -> PASS. Round-1 findings fixed:
+   hand-rolled asFormat replaced with errors.As in isFormatClass /
+   isMalformedClass; map-literal ternary in resolvedAfterCleanup
+   replaced with plain if/else; stale public doc header now lists
+   reset + the three resolvers; `_ = file` dead captures, stale chunk
+   labels, `_ = privateFile` suppressions, and the publicHousekeeping
+   no-op loop removed.
+4. Socrates (performance): PASS in round 1; one stale doc comment
+   fixed; no hot-path findings (the fixes are cold-path
+   error-classification changes; no new syscalls or allocations).
+5. Franklin (APIs/docs): FAIL -> PASS. Round-1 findings fixed: SOW
+   design entries now state six cross-compiles (4-5 and 4-6 entries;
+   the remaining "five" occurrences are dated historical records of
+   five-target runs); requireSupplied nil-identity guard documented.
+   A P3 wording note (comment attributed an absent Rust Option to
+   transition identities that Rust models as values) was fixed:
+   lifecycle_resolution.go now states Go models these identities as
+   pointers and nil draws are classified like mismatches.
+
+Final validation battery (all under nice, -count=1): gofmt clean;
+vet clean plain + v4work (full tree); full test suite plain + v4work;
+race plain + v4work; checkptr=2 plain + v4work; check-mmap-trace PASS
+(fixtures mapped, never streamed); ZeroAlloc PASS; six cross-compiles
+(linux/386, linux/arm64, darwin/amd64, darwin/arm64, freebsd/amd64,
+windows/amd64) green; live-package cross-vet clean on all six targets
+plain + v4work.
+
+Chunk 4-6 is ready to close.

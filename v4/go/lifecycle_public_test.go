@@ -5,12 +5,14 @@
 package iprangedb
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
 // lifecycleCode extracts the public error code from either the public
@@ -27,6 +29,11 @@ func lifecycleCode(err error) ErrorCode {
 	}
 	return 0
 }
+
+// exchangeAvailable reports whether the host has the atomic name
+// exchange required by rollback-safe resets (Rust
+// namespace::exchange_available; linux/apple true, other POSIX false).
+func exchangeAvailable() bool { return mapping.ExchangeAvailable() }
 
 func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -165,4 +172,319 @@ func TestPublicLifecycleCancellation(t *testing.T) {
 	if _, err := os.Lstat(main + ".readers"); !os.IsNotExist(err) {
 		t.Fatalf("cancelled initialize left a sidecar: %v", err)
 	}
+}
+
+// TestPublicImmutableMainIsInitializedExplicitly drives the full
+// initialize -> resolve-complete round trip through the public facade
+// (Rust tests/live_transitions.rs::immutable_main_is_initialized_explicitly):
+// the immutable main reports transaction 1, initialize prepares the
+// canonical sidecar, the exact-identity resolver completes it, the
+// immutable reader then refuses the live pair, and the live reader
+// serves the unchanged generation.
+func TestPublicImmutableMainIsInitializedExplicitly(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "db.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal(err)
+	}
+
+	immutable, err := OpenImmutable(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immutableInfo, err := immutable.Info()
+	if err != nil {
+		immutable.Close()
+		t.Fatal(err)
+	}
+	if immutableInfo.TransactionID != 1 {
+		immutable.Close()
+		t.Fatalf("immutable txn = %d, want 1", immutableInfo.TransactionID)
+	}
+	immutable.Close()
+
+	result, err := InitializeLive(main, 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Operation != LiveTransitionInitialize {
+		t.Fatalf("operation = %v, want Initialize", result.Operation)
+	}
+	if result.Status != LiveTransitionStatusInitialized {
+		t.Fatalf("status = %v, want Initialized", result.Status)
+	}
+	if result.NewSidecarLocation != LiveCoordinationLocationCanonical {
+		t.Fatalf("location = %v, want Canonical", result.NewSidecarLocation)
+	}
+	if result.ReaderCapacity != 3 {
+		t.Fatalf("capacity = %d, want 3", result.ReaderCapacity)
+	}
+	if result.Cause != nil {
+		t.Fatalf("cause = %v, want nil", result.Cause)
+	}
+	resolved, err := ResolveLiveTransition(main, result, LiveTransitionResolutionComplete, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != LiveTransitionStatusInitialized {
+		t.Fatalf("resolved status = %v, want Initialized", resolved.Status)
+	}
+
+	if _, err := OpenImmutable(main); err == nil {
+		t.Fatal("immutable open succeeded on the live pair")
+	} else if lifecycleCode(err) != ErrorWrongState {
+		t.Fatalf("immutable open on live pair: %v, want WrongState", err)
+	}
+	lr, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := lr.Info()
+	if err != nil {
+		lr.Close()
+		t.Fatal(err)
+	}
+	if info.TransactionID != 1 {
+		lr.Close()
+		t.Fatalf("live reader txn = %d, want 1", info.TransactionID)
+	}
+	lr.Close()
+}
+
+// TestPublicInitializationNeverRepairsExistingCoordination proves the
+// initialize refusal on a ready pair leaves it untouched (Rust
+// tests/live_transitions.rs::initialization_never_repairs_existing_coordination).
+func TestPublicInitializationNeverRepairsExistingCoordination(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "db.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := InitializeLive(main, 2, nil); err == nil {
+		t.Fatal("initialize succeeded with existing coordination")
+	} else if lifecycleCode(err) != ErrorWrongState {
+		t.Fatalf("initialize with existing sidecar: %v, want WrongState", err)
+	}
+	lr, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lr.Close()
+}
+
+// TestPublicResetReplacesCorruptCoordinationWithoutChangingTheMain
+// drives a rollback-safe reset over a corrupt sidecar and proves the
+// main bytes never change, the exchanged reset resolves, and the fresh
+// capacity applies (Rust
+// tests/live_transitions.rs::reset_replaces_corrupt_coordination_without_changing_the_main).
+// The rollback-safe exchange is linux/apple only.
+func TestPublicResetReplacesCorruptCoordinationWithoutChangingTheMain(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("rollback-safe exchange is linux/apple only")
+	}
+	dir := t.TempDir()
+	main := filepath.Join(dir, "db.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ResetLiveCoordination(main, 2, LiveResetRollbackSafe, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Operation != LiveTransitionReset {
+		t.Fatalf("operation = %v, want Reset", result.Operation)
+	}
+	if result.ResetPolicy == nil || *result.ResetPolicy != LiveResetRollbackSafe {
+		t.Fatalf("reset policy = %v, want RollbackSafe", result.ResetPolicy)
+	}
+	if result.Status != LiveTransitionStatusInitialized {
+		t.Fatalf("status = %v, want Initialized", result.Status)
+	}
+	if result.NewSidecarLocation != LiveCoordinationLocationCanonical {
+		t.Fatalf("location = %v, want Canonical", result.NewSidecarLocation)
+	}
+	if result.PreviousSidecarIdentity == nil || result.NewSidecarIdentity == nil {
+		t.Fatal("reset identities missing")
+	}
+	if *result.PreviousSidecarIdentity == *result.NewSidecarIdentity {
+		t.Fatal("reset reused the previous sidecar identity")
+	}
+	after, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("reset changed the main bytes")
+	}
+	resolved, err := ResolveLiveTransition(main, result, LiveTransitionResolutionComplete, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != LiveTransitionStatusInitialized {
+		t.Fatalf("resolved status = %v, want Initialized", resolved.Status)
+	}
+
+	first, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenLiveReader(main, nil)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	if _, err := OpenLiveReader(main, nil); err == nil {
+		first.Close()
+		second.Close()
+		t.Fatal("third live reader opened beyond capacity")
+	} else if lifecycleCode(err) != ErrorReaderCapacityExhausted {
+		first.Close()
+		second.Close()
+		t.Fatalf("third live reader: %v, want ReaderCapacityExhausted", err)
+	}
+	first.Close()
+	second.Close()
+}
+
+// TestPublicDiscardingResetReportsPolicyAndCannotRollBackAfterInstallation
+// proves the discarding reset reports its policy, cannot restore the
+// previous sidecar under rollback, and leaves a readable live pair
+// (Rust tests/live_transitions.rs::discarding_reset_reports_policy_and_cannot_roll_back_after_installation).
+func TestPublicDiscardingResetReportsPolicyAndCannotRollBackAfterInstallation(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "db.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ResetLiveCoordination(main, 2, LiveResetDiscardPrevious, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != LiveTransitionStatusInitialized {
+		t.Fatalf("status = %v, want Initialized", result.Status)
+	}
+	if result.ResetPolicy == nil || *result.ResetPolicy != LiveResetDiscardPrevious {
+		t.Fatalf("reset policy = %v, want DiscardPrevious", result.ResetPolicy)
+	}
+	after, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("discarding reset changed the main bytes")
+	}
+	canonical, err := os.ReadFile(main + ".readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveLiveTransition(main, result, LiveTransitionResolutionRollback, nil); err == nil {
+		t.Fatal("discarding reset rolled back after installation")
+	} else if lifecycleCode(err) != ErrorUnresolvable {
+		t.Fatalf("rollback after discarding reset: %v, want Unresolvable", err)
+	}
+	canonicalAfter, err := os.ReadFile(main + ".readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonical, canonicalAfter) {
+		t.Fatal("failed rollback changed the canonical sidecar")
+	}
+
+	lr, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lr.Close()
+}
+
+// TestPublicCancelledTransitionLeavesAnImmutableMainUnchanged proves
+// a cancelled initialize changes no artifact and the immutable reader
+// still serves generation 1 (Rust
+// tests/live_transitions.rs::cancelled_transition_leaves_an_immutable_main_unchanged).
+func TestPublicCancelledTransitionLeavesAnImmutableMainUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "db.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := NewCancellationToken()
+	cancelled.Cancel()
+
+	if _, err := InitializeLive(main, 2, cancelled); err == nil {
+		t.Fatal("cancelled initialize succeeded")
+	} else if lifecycleCode(err) != ErrorCancelled {
+		t.Fatalf("cancelled initialize: %v, want Cancelled", err)
+	}
+	after, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("cancelled initialize changed the main bytes")
+	}
+	if _, err := os.Lstat(main + ".readers"); !os.IsNotExist(err) {
+		t.Fatalf("cancelled initialize left a sidecar: %v", err)
+	}
+	immutable, err := OpenImmutable(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immutableInfo, err := immutable.Info()
+	if err != nil {
+		immutable.Close()
+		t.Fatal(err)
+	}
+	if immutableInfo.TransactionID != 1 {
+		immutable.Close()
+		t.Fatalf("immutable txn = %d, want 1", immutableInfo.TransactionID)
+	}
+	immutable.Close()
 }

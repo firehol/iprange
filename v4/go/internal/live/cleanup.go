@@ -113,6 +113,13 @@ func causeFacts(cause error) terminalFacts {
 	return terminalFacts{cause: cause}
 }
 
+// residueFacts reports a failure that leaves residue possible (Rust
+// TerminalFacts::residue: the operation outcome cannot be proven
+// clean, so residue is possible and the cause is retained).
+func residueFacts(cause error) terminalFacts {
+	return terminalFacts{residuePossible: true, cause: cause}
+}
+
 // failedFacts folds one cleanup outcome into the primary failure (Rust
 // TerminalFacts::failed): a failed cleanup makes residue possible and
 // the reported cause becomes CleanupInProgress with both sides.
@@ -134,4 +141,14 @@ func failedFacts(cause error, cleanup cleanupOutcome) terminalFacts {
 // draw; the Windows envelope-collision loop is out of this surface).
 func uniqueAttemptID(_ string, _ uint32) ([16]byte, error) {
 	return random.Nonzero128()
+}
+
+// finishWithCleanup mirrors Rust sdk_error::finish_with_cleanup: the
+// operation result survives a clean unlock; a failed unlock folds
+// through combineErrors into a CleanupInProgress class.
+func finishWithCleanup(operation error, cleanup error) error {
+	if operation != nil {
+		return combineErrors(operation, cleanup)
+	}
+	return cleanup
 }
