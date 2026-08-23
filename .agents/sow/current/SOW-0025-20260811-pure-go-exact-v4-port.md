@@ -9073,3 +9073,67 @@ Slice D (2026-08-23) — artifact locks (Rust live_lock.rs port):
 
 Next slice: E output and replacement evidence (open output for the
 main file, replace-and-discard evidence, main_file_tests.rs ports).
+
+Slice E (2026-08-23) — output and replacement evidence (Rust
+output.rs + output_digest.rs + output_resume.rs + replacement.rs):
+
+- internal/publication/output_digest.go: fixed-memory SHA-512 pass
+  (digest/digestCancellable/digestWith) over mapped views only, 1KiB
+  stack buffer, per-chunk + final checkpoints; the out-of-range and
+  length arms carry the Rust-verbatim Conflict/FormatInvalid classes
+  that problem.go maps (FinishedLengthChanged/FinishedMetaChanged/
+  Bootstrap).
+- internal/publication/finished.go: FinishedOutput (Rust
+  immutable_output::Finished subset consumed by output.rs).
+- internal/publication/output_created.go: CreatedOutput create/
+  create_absent (random nonzero attempt id, .iprange-publish- private
+  name, exclusive creator-only create), facts, secure
+  (secureCreated: identity -> name proof -> creator-only policy ->
+  re-identity -> verify_created). The Rust windows collision-retry
+  loop is unreachable in Go (windows refuses at bind; M5 recorded).
+- internal/publication/output_attempt.go + output_prepared.go:
+  SecuredOutput/intoParts, OutputAttempt facts, prepare_cancellable
+  (custody -> lifetime lock -> inspect_finished -> digest ->
+  finish re-proof), PreparedOutput verify_private/verify_main/
+  verify_destination_before_main, inspect_exact (two meta pages via
+  bootstrap ModeImmutableReader), verify_custody (gc_barrier is a
+  POSIX no-op per Rust cfg(windows); windows refuses earlier).
+- internal/publication/output_resume.go: resume_secured_output /
+  resume_secured_output_for_cleanup / bind_secured_output with the
+  exact fact checks (encoding kind, identity decode, directory
+  identity, basename, security commitment) and Rust-verbatim
+  InvalidArgument details.
+- internal/publication/replacement.go: PreviousMain bind /
+  bind_no_rollback (missing main -> Missing, same inode ->
+  SameIdentity, lifetime lock, sync, read-only view, cancellable
+  digest, pre/post canonical proofs) and the three retention proofs
+  (canonical_namespace/private_or_retired/retired/content).
+- internal/live exports for the machine: RegularIdentity /
+  RegularIdentityAnyLink / RegularLinkCount (unix arms in
+  identity_helpers_unix.go, refusal arms elsewhere), SyncFile
+  (F_FULLFSYNC darwin arm), MainLifetimeOffset, Checkpoint. The
+  identity helpers moved out of link_machine.go (freebsd||v4work
+  tag) so the machine compiles on every target; link_machine_test.go
+  references updated.
+- Recorded deferrals with their later chunks: worker enter_output
+  probes stay with the 4-10/4-11 observed checkpoints (no observable
+  semantics; problem.go already maps the classes), the gc barrier is
+  the Rust #[cfg(windows)] no-op, and the secure-created darwin/
+  freebsd ACL refusal stays the recorded 4-12/M5 item.
+- Tests (linux-tagged where the pure-Go creator-only ACL runs; digest
+  tests !windows): byte-visit order/KAT/cancellation, created facts +
+  name shape, absent main refusal, hard-link refusals at secure and
+  prepare, meta-change refusal, exact digest + retained lifetime
+  lock + release on close, resume + cleanup-evidence round trips,
+  missing/same-identity/content-changed/cancelled replacement binds.
+- Validation: go build, go vet, go test ./..., go test -tags v4work
+  ./... (14/14 packages ok each), gofmt clean, -race + checkptr=2 on
+  internal/live + internal/publication, the six cross-compiles
+  (linux arm64/386, darwin amd64/arm64, freebsd amd64, windows
+  amd64), and per-OS test-compiles of the touched packages for
+  linux, darwin, freebsd, windows all PASS under nice. Rust tree
+  untouched.
+
+Next slice: F reservation lifecycle (reservation_file.go
+draft/private/canonical/armed + reservation_verify.go custody checks
++ the 13 publication crash points).

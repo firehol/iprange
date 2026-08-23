@@ -1,0 +1,136 @@
+//go:build !windows
+
+// Reconstruction of a locked secured output from exact persisted
+// evidence (Rust output.rs resume_secured_output /
+// resume_secured_output_for_cleanup / bind_secured_output). The
+// cleanup and recovery machines rebuild the attempt from its portable
+// facts without any path-based trust: the identity, basename, and
+// creator commitment must all match the bound destination.
+
+package publication
+
+import (
+	"bytes"
+	"os"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
+)
+
+// resumeSecuredOutput opens the secured private output named by one
+// facts record (Rust output.rs resume_secured_output). A missing
+// artifact reports Missing.
+func resumeSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (outputAttempt, *os.File, error) {
+	attempt, file, present, err := openSecuredOutput(destinationPath, facts)
+	if err != nil {
+		return outputAttempt{}, nil, err
+	}
+	if !present {
+		return outputAttempt{}, nil, &live.NamespaceError{Kind: live.NamespaceMissing}
+	}
+	return attempt, file, nil
+}
+
+// resumeSecuredOutputForCleanup opens the secured private output for
+// exact cleanup evidence; an absent artifact is proven absent after a
+// durability sync and reports present=false (Rust
+// output.rs resume_secured_output_for_cleanup).
+func resumeSecuredOutputForCleanup(destinationPath string, facts *PrivateOutputAttempt) (outputAttempt, *os.File, bool, error) {
+	attempt, file, present, err := openSecuredOutput(destinationPath, facts)
+	if err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	if present {
+		return attempt, file, true, nil
+	}
+	d, name, _, err := bindSecuredOutput(destinationPath, facts)
+	if err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	if err := d.directory().Sync(); err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	if err := d.directory().Verify(); err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	if err := d.directory().RequireAbsent(name); err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	return outputAttempt{}, nil, false, nil
+}
+
+// openSecuredOutput binds the facts and opens the artifact without
+// following symlinks (Rust output.rs open_secured_output). present is
+// false only when the artifact is absent.
+func openSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (outputAttempt, *os.File, bool, error) {
+	d, name, identity, err := bindSecuredOutput(destinationPath, facts)
+	if err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	regular, err := d.directory().OpenRegular(name, true)
+	if err != nil {
+		return outputAttempt{}, nil, false, err
+	}
+	if regular == nil {
+		return outputAttempt{}, nil, false, nil
+	}
+	if regular.Identity != identity {
+		regular.File.Close()
+		return outputAttempt{}, nil, false, &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
+	}
+	if err := d.directory().VerifyName(name, identity); err != nil {
+		regular.File.Close()
+		return outputAttempt{}, nil, false, err
+	}
+	if err := d.verifyCreated(regular.File); err != nil {
+		regular.File.Close()
+		return outputAttempt{}, nil, false, err
+	}
+	return outputAttempt{
+		destination: d,
+		attemptID:   facts.PublicationAttemptID,
+		name:        name,
+		identity:    identity,
+	}, regular.File, true, nil
+}
+
+// bindSecuredOutput rebuilds the destination, private name, and
+// identity from one facts record without touching the artifact (Rust
+// output.rs bind_secured_output).
+func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*destination, string, live.FileIdentity, error) {
+	if facts.BasenameEncoding != basenameEncodingKind || facts.CreationSecurity.Kind != creationSecurityKind {
+		return nil, "", live.FileIdentity{}, &format.Error{
+			Code:   format.CodeInvalidArgument,
+			Detail: "worker output facts use an unsupported encoding",
+		}
+	}
+	var identity live.FileIdentity
+	if facts.Identity == nil {
+		return nil, "", live.FileIdentity{}, &format.Error{
+			Code:   format.CodeInvalidArgument,
+			Detail: "worker output identity is invalid",
+		}
+	}
+	device, inode, ok := facts.Identity.deviceInode()
+	if !ok {
+		return nil, "", live.FileIdentity{}, &format.Error{
+			Code:   format.CodeInvalidArgument,
+			Detail: "worker output identity is invalid",
+		}
+	}
+	identity = live.IdentityFromDeviceInode(device, inode)
+	d, err := bindDestination(destinationPath)
+	if err != nil {
+		return nil, "", live.FileIdentity{}, err
+	}
+	name, err := d.outputName(facts.PublicationAttemptID)
+	if err != nil {
+		return nil, "", live.FileIdentity{}, err
+	}
+	if directoryLocalIdentity(d) != facts.DirectoryIdentity ||
+		!bytes.Equal([]byte(name), facts.Basename) ||
+		d.securityCommitment() != facts.CreationSecurity.Commitment {
+		return nil, "", live.FileIdentity{}, &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
+	}
+	return d, name, identity, nil
+}

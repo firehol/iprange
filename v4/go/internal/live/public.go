@@ -70,3 +70,20 @@ func HousekeepingFromValue(value uint8) housekeeping {
 // publication problem surface uses it to fold IoAt symlink failures to
 // the Conflict class.
 func IsNofollowSymlink(err error) bool { return isNofollowSymlink(err) }
+
+// MainLifetimeOffset is the byte-range offset of the artifact lifetime
+// lock of one publication artifact (Rust live_sidecar
+// MAIN_LIFETIME_LOCK = 1u64 << 44; the sidecar writer lease keeps the
+// same constant in sidecar.go). The publication owner locks complete
+// main files and private outputs at this offset.
+const MainLifetimeOffset = mainLifetimeOffset
+
+// Checkpoint runs one cancellation checkpoint; a nil check never
+// cancels (Rust CancellationToken::check; the publication owner passes
+// the writer-core cancellation function, internal callers pass nil).
+func Checkpoint(check func() error) error {
+	if check == nil {
+		return nil
+	}
+	return check()
+}

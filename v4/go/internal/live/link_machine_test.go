@@ -28,7 +28,7 @@ func TestFreebsdTransitionFinishesOnlyTheExactPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := regularIdentityAnyLink(sourceFile, d.id)
+	identity, err := RegularIdentityAnyLink(sourceFile, d.id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestFreebsdTransitionRejectsExtraOrForeignLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := regularIdentityAnyLink(sourceFile, d.id)
+	identity, err := RegularIdentityAnyLink(sourceFile, d.id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestLinkNoReplaceMachinePublishesAndResumes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity, err := regularIdentityAnyLink(sourceFile, d.id)
+		identity, err := RegularIdentityAnyLink(sourceFile, d.id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func TestLinkNoReplaceMachinePublishesAndResumes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity, err := regularIdentityAnyLink(sourceFile, d.id)
+		identity, err := RegularIdentityAnyLink(sourceFile, d.id)
 		if err != nil {
 			t.Fatal(err)
 		}

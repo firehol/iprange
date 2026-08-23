@@ -35,7 +35,7 @@ const (
 // still name it single-link, the linkat creates the destination, and
 // the transition finishes or resumes through the EEXIST arm.
 func (d *Directory) linkNoReplace(source string, sourceFile *os.File, destination string) error {
-	expected, err := regularIdentityAnyLink(sourceFile, d.id)
+	expected, err := RegularIdentityAnyLink(sourceFile, d.id)
 	if err != nil {
 		return err
 	}
@@ -187,24 +187,6 @@ func requireLinkEntry(entry Entry, expected FileIdentity, links uint64) error {
 		return nsLinkCountError(entry.Links)
 	}
 	return nil
-}
-
-// regularIdentityAnyLink proves one open file is a regular file on the
-// directory filesystem, accepting any link count (Rust
-// regular_identity_any_link; the open_regular_any_link caller proves
-// no single-link requirement).
-func regularIdentityAnyLink(f *os.File, directoryIdentity FileIdentity) (FileIdentity, error) {
-	var st unix.Stat_t
-	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
-		return FileIdentity{}, nsPlainIoError("inspect retained file", err)
-	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		return FileIdentity{}, nsNotRegularError()
-	}
-	if uint64(st.Dev) != directoryIdentity.device {
-		return FileIdentity{}, nsCrossFilesystemError()
-	}
-	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
 }
 
 // OpenRegularAnyLink opens one name without following symlinks and
