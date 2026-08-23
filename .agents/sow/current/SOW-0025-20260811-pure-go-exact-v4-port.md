@@ -8649,5 +8649,6 @@ Final battery on the working tree (all under nice): full `go test
 ./...` green, race + `-tags v4work` green for live/snapshot/public,
 `go vet` both green, freebsd/darwin/windows cross-builds green (6
 configs), GOOS=windows vet green for writer/snapshot/reader/mapping/
-live, `check-mmap-trace.sh` PASS, gofmt clean. Chunk 4-7 closes for
-commit; next chunk 4-8 publication resolvers.
+live, `check-mmap-trace.sh` PASS, gofmt clean. Chunk 4-7 committed at
+f2c7ee7 and pushed to origin/master; next chunk 4-8 publication
+resolvers.
