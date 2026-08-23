@@ -39,6 +39,166 @@ Recorded as Review Process below.
 
 
 ## Status
+## Status
+
+### Status (2026-08-23) - chunk 4-2 design recorded: worker SIGBUS spike, Linux amd64
+
+Chunk 4-2 (worker SIGBUS spike) design, recorded before coding per the
+pre-implementation gate. Rust authorities read in full: worker/posix.rs
+(674 lines: Handler install/verify/Drop, signal_handler, owned_fault,
+chain, call_action, apply_mask, redispatch_default, kernel_bus_code,
+the 15-case signal_chain_subprocess_matrix), worker/control.rs fault
+subset (Control::create_parent/open_worker/arm/disarm/fault_record/
+alt_stack/base, CONTROL_LEN 1 MiB, ALT_STACK_LEN 64 KiB,
+OWNED_FAULT_EXIT 197, FAULT_MARKER 0x42555346), worker/fault_memory.rs,
+worker.rs (install point before Context::enter), fault.rs (crash points
+are unrelated: the 86-code fault injection stays in internal/fault).
+
+Design decisions (all Rust-parity, Decision 2A - no cgo, no runtime
+linkname, no swallowed signal, no Rust-worker dependency):
+
+- Package: v4/go/internal/worker (leaf; the 4-11 worker binary and the
+  4-12 per-platform proofs consume it). Control-page layout subset at
+  the exact Rust offsets: magic IPR4WRK\0 at 0, protocol 1 at 8, state
+  at 12, probe armed at 116, handling at 120, generation/base/len at
+  104/128/136, fault record at 144-176 (generation, role, code,
+  relative, address, marker), state Request=1 / Fault=8, roles 1..=4.
+- Go-side Control: createParent (os.TempDir() + .iprange-v4-worker-
+  <16-byte hex nonce>.ctl, 0600 O_EXCL, truncate to 1 MiB,
+  mapping.MapFile read-write MAP_SHARED, zero, magic+protocol+state),
+  openWorker (exact 1 MiB extent), arm/disarm/faultRecord with the
+  exact Rust validation (fault_record cross-checks generation, role,
+  code>0, relative<len, base+relative==address), altStack (last
+  64 KiB), base, removePath, close. The control file is a mapped
+  coordination artifact exactly like the 4-1 sidecar: no read/write
+  syscalls, only MapFile views; atomic fields (armed/handling/state)
+  use sync/atomic over aligned mapped offsets, scalars use format.U64/
+  PutU64, mirroring Rust's AtomicU32 + volatile mix.
+- Signal machinery: sigbus_linux_amd64.s is the project-owned shim
+  (rt_sigaction 13, rt_sigprocmask 14, rt_sigsuspend 130, sigaltstack
+  131, kill 62, getpid 39, exit_group 231). The handler is a naked asm
+  symbol with no Go declaration, entered by the kernel with the C ABI;
+  it never calls Go. Go-callable asm install/verify/restore mirror
+  posix.rs exactly (conflict check, sigaltstack capture, previous
+  action capture and PREVIOUS_ACTION publish before install,
+  SA_SIGINFO|SA_ONSTACK, empty mask, ACTIVE_CONTROL CAS, verify; Drop =
+  disarm, CAS clear, restore action only if still ours, restore stack
+  only if still ours).
+- Owned-fault path: si_code kernel-bus codes 1..=5, armed==1,
+  generation!=0, role 1..=4, len!=0, relative<len, handling CAS 0->1,
+  fault record writes, state=Fault, exit_group(197).
+- Chaining: restore the previous disposition, apply the exact
+  kernel-equivalent mask (64-bit kernel sigset, sigsetsize 8; Rust
+  loops glibc candidates 1..=1023 but only bits 0..=63 - signals
+  1..=64 - are kernel-representable, and all of them propagate;
+  SA_NODEFER/SA_RESETHAND honored),
+  then TAIL-JUMP to the previous handler instead of calling it: the
+  kernel frame stays intact, so the Go runtime's own sigtramp can be
+  chained safely (returns through the frame's restorer) while the
+  observable matrix outcomes stay identical to Rust (each previous
+  test handler exits with its code). SIG_DFL: restore + return on
+  synchronous faults (re-executed instruction dies), kill+sigsuspend
+  loop on asynchronous; SIG_IGN: restore + return.
+- Tests: in-package sigbus_linux_amd64_test.go, subprocess pattern of
+  internal/writer/crash_v4work_test.go (env-stripped spawn, timeout,
+  exit-code assertions). Matrix: owned 197, user-one 81, user-siginfo
+  82, user-mask 88, user-nodefer 89, user-reset 90, captured-reset 92,
+  unarmed 83, out-of-region 83, stale-region 83, nested 83, null-info
+  86, replacement 91, default killed-by-SIGBUS, ignore 84,
+  native-reset 90 (Rust allows 86|90; Linux is 90). Plus
+  owned-fault-record-survives-worker-exit (parent creates the control,
+  child opens/arms/faults, parent reads the exact record: role Scratch,
+  relative == native page, mapping_len == 2 pages) and a Go-specific
+  chaining proof (previous disposition is the Go runtime's own SIGBUS
+  handler; an unarmed fault must chain into the runtime without a hang
+  and never exit 197).
+- Platforms: implemented for linux/amd64 (host proof); every other
+  platform gets the typed refusal stub pattern of the repo
+  (CodeOSUnsupported, "worker SIGBUS isolation is not implemented on
+  this platform"), so the six cross-compiles stay green. Darwin/FreeBSD
+  native proof lands in 4-12.
+
+Validation plan (all under nice; expected cost: matrix children add
+~1-2 s, full battery ~2-3 core-minutes - recorded per the resource
+budget rule): gofmt -l, go vet, plain/v4work tests, race,
+race+v4work, checkptr=2, mmap-trace, six cross-compiles
+(linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64). Then the five-aspect review gate (same five agents),
+SOW close entry, signed commit + push.
+### Status (2026-08-23) - chunk 4-2 design probe: kernel evidence isolates a missing SA_RESTORER
+
+Before coding, the raw-syscall signal path was probed at kernel level
+(plain-C matrix + a Go asm prototype in /tmp scratch) to validate the
+design's kernel-behavior claims. The probe found the recorded design
+would fail on this kernel: every owned-fault test would die 139 instead
+of 197, before the handler's first instruction.
+
+Evidence (kernel 7.1.6-1-MANJARO, x86-64; scratch C matrix /tmp/csig2,
+Go prototype /tmp/sigproto):
+
+- Raw rt_sigaction with SA_SIGINFO|SA_ONSTACK but WITHOUT SA_RESTORER:
+  the handler is never entered; the kernel kills delivery with SIGSEGV
+  si_code=SI_KERNEL si_addr=NULL (exit 139). Identical for the 1-arg ABI,
+  with and without an alternate stack (C modes 1-3).
+- libc sigaction always sets SA_RESTORER -> handler runs (exit 90). Raw
+  rt_sigaction WITH SA_RESTORER set (project naked rt_sigreturn stub,
+  libc's restorer, or even NULL) -> handler runs (exit 90; C modes 5-7).
+  The flag is the trigger, not the restorer value.
+- The Go asm prototype (same raw-syscall sequence inside a Go test
+  binary) reproduces the identical kernel crash at the raise point (the
+  Go runtime turns the SIGSEGV SI_KERNEL into "unexpected fault address
+  0x0"); with SA_RESTORER + a naked rt_sigreturn stub (syscall 15) the
+  child exits 90 (PASS).
+- Rust never hits this: posix.rs installs through libc::sigaction, which
+  sets SA_RESTORER implicitly. The Go shim has no libc, so the flag and
+  a project-owned restorer are mandatory.
+
+Design corrections recorded for chunk 4-2:
+
+1. SA_RESTORER (0x04000000) is a required install flag; the restorer
+   slot holds a project-owned naked rt_sigreturn stub (syscall 15) in
+   sigbus_linux_amd64.s. The stub is also the return path for any chained
+   handler that returns (the kernel frame's pretcode). verify_owned keeps
+   exactly posix.rs's checks (handler identity, required flag subset,
+   no NODEFER/RESETHAND, stack identity, ACTIVE_CONTROL identity);
+   SA_RESTORER presence follows from the handler check.
+2. Go worker threads are not single-threaded: Go migrates goroutines
+   between OS threads and installs a per-thread 32 KiB sigaltstack on
+   every M (observed in the prototype strace). The alternate stack is
+   per-thread, so the thread that installs the handler must be pinned
+   with runtime.LockOSThread() before install (spike test children and
+   the 4-11 worker binary alike). This mirrors Rust's single-threaded
+   worker and keeps verify's stack-identity check stable.
+3. Mapped-control atomics (armed/handling/state and the scalars Rust
+   reads atomically) are Go-callable asm LOCK-prefixed primitives
+   (mapAtomicLoad32/Store32/CAS32 on base+offset) used by BOTH the Go
+   control code and the naked handler: Go's sync/atomic is specified for
+   Go-managed memory only, and the handler needs the same primitives
+   anyway. This is a narrow deviation from the recorded "sync/atomic
+   over aligned mapped offsets" wording, with the same semantics.
+4. Test-only asm: the original probe premise ("_test.s files compile
+   into production builds") was disproven by a counterexample on the
+   repo toolchain (go1.26.4): a symbol defined only in *_test.s is
+   undefined in `go build` - the file is fed to the symbol-ABI pass,
+   never assembled into the package object. The conclusion stands on
+   the verified half: //go:build constraints in assembly are honored,
+   so the matrix's naked previous-handler symbols live in a
+   //go:build v4work .s file exactly like crash_v4work_test.go, and
+   the v4work tag also keeps -tags v4work cross-builds green (the
+   matrix .s additionally carries linux && amd64). The signal matrix
+   runs under -tags v4work; Control unit tests (no signals) run in
+   plain builds. This also matches the Rust matrix's #[cfg(test)]
+   placement: the Go equivalent of "test-only" is the v4work
+   configuration.
+5. Go-specific chaining proof semantics: with the Go runtime's own SIGBUS
+   handler as the previous action (SA_RESTORER+restorer captured
+   verbatim), an unarmed fault restores that exact action, applies the
+   kernel-equivalent mask, and tail-jumps with the kernel frame intact;
+   the runtime handler then fatals ("unexpected fault address", exit 2).
+   The assertion is: exit != 197, exit != 0, no hang (under -race the
+   race runtime may be the previous handler and prints its own fatal).
+
+
 
 ### Status (2026-08-23) - M4 defined: sidecar, lifecycle, validation, recovery, worker, platform
 
@@ -6622,3 +6782,207 @@ new independent final review passes; decision 5A was ratified (option A,
 The approved later scope remains unchanged: Milestone 2 is the writer;
 sidecars, live coordination, and publication remain Milestone 4.
 
+
+### Status (2026-08-23) - chunk 4-2 implemented: worker SIGBUS spike, linux/amd64
+
+Chunk 4-2 delivered on the working tree (design + probe entries above).
+New package v4/go/internal/worker (leaf; 4-11 worker binary and 4-12
+platform proofs consume it):
+
+- control_common.go: portable fault-subset constants and types
+  (controlLen 1 MiB, altStackLen 64 KiB, ownedFaultExit 197, protocol,
+  states, faultMarker, exact Rust offsets, MappingRole 1..=4,
+  roleFromWire, FaultRecord).
+- control.go (linux && amd64): Control with CreateParent (random
+  16-byte nonce, os.TempDir() .iprange-v4-worker-<hex>.ctl, 0600
+  O_EXCL, truncate to 1 MiB, mapping.MapFile read-write, clear +
+  magic + protocol + state=Request), OpenWorker (exact 1 MiB extent,
+  CodeFormatInvalid otherwise), Arm (handling=0, generation, role,
+  base, len, armed=1; empty probe -> CodeInvalidArgument;
+  wire-invalid role outside 1..=4 -> CodeInvalidArgument, restoring
+  Rust's MappingRole enum invariant the enum makes unrepresentable), Disarm,
+  FaultRecord (every Rust cross-check incl. base.checked_add overflow
+  parity), RemovePath, Close, base/altStack/state. The control file is
+  a mapped coordination artifact exactly like the 4-1 sidecar: no
+  read/write syscalls, only mapping views; scalar fields via
+  format.U64/PutU64, atomic fields via mapped LOCK-prefixed asm
+  primitives (design probe item 3).
+- control_other.go (!linux || !amd64): typed-refusal stub (mapping
+  owner pattern; CodeOSUnsupported "worker SIGBUS isolation is not
+  implemented on this platform") so the six cross-compiles stay green;
+  Darwin/FreeBSD native proof lands in 4-12.
+- sigbus_linux_amd64.go + .s: project-owned naked SIGBUS handler and
+  raw-syscall shim (rt_sigaction 13, rt_sigprocmask 14, rt_sigreturn
+  15, kill 62, getpid 39, rt_sigsuspend 130, sigaltstack 131,
+  exit_group 231). Handler mirrors posix.rs signal_handler +
+  owned_fault + chain exactly: owned-fault gate (signal 7, info
+  non-null, si_code 1..=5, armed 1, generation non-zero, role 1..=4,
+  len non-zero, relative<len, handling CAS 0->1), fault-record writes,
+  state=Fault, exit 197; chain restores the previous disposition
+  (SA_RESETHAND arm restores a zeroed SIG_DFL like Rust), applies the
+  kernel-equivalent mask (current OR previous bits 0..=63 (signals 1..=64), SIGBUS
+  re-added unless SA_NODEFER, chain_mask), then TAIL-JUMPS to the
+  previous handler with the original C ABI registers (DI/SI/DX
+  restored from R12/R13/R14) so the kernel frame stays intact;
+  SIG_DFL synchronous faults return to re-execute under the default
+  disposition, asynchronous redispatch via kill + sigsuspend;
+  SIG_IGN restore + return. Install/VerifyOwned/Close mirror
+  posix.rs Handler::install/verify_owned/Drop (conflict check,
+  sigaltstack capture + install, previous-action capture published
+  before install, SA_SIGINFO|SA_ONSTACK|SA_RESTORER with the project
+  rt_sigreturn stub, ACTIVE_CONTROL CAS, verify; Close disarms,
+  restores the action only if still ours, restores the stack only if
+  still ours). runtime.LockOSThread is required of callers because Go
+  migrates goroutines and the alternate stack is per-thread (design
+  probe item 2).
+- Mapped-control atomics (design probe item 3): Go-callable asm
+  LOCK-prefixed mapAtomicLoad32/Store32 over base+offset, used by
+  both the Go control code and the naked handler (Go sync/atomic is
+  specified for Go-managed memory only).
+- Tests: control_test.go (plain build; 13 unit tests: header, unique
+  paths, umask-independent 0600 mode, Close/RemovePath (2),
+  exact-extent open, wrong-extent/missing refusals (2), arm/disarm
+  field verification, empty-probe rejection, invalid-role rejection,
+  fault-record pre-fault conflict, parent/worker shared armed state),
+  sigbus_linux_amd64_test.go (plain build; owned-fault record
+  survives worker exit with the exact Rust record values, and the
+  Go-specific chaining proof: an unarmed fault chains into the Go
+  runtime's own SIGBUS handler with the kernel frame intact - child
+  exits via the runtime fatal, asserted != 0/87/197, no hang),
+  sigbus_matrix_v4work.s + sigbus_matrix_v4work_test.go (v4work
+  build; the 15-case previous-disposition matrix with naked matrix
+  handlers: owned 197, user-one 81, user-siginfo 82, user-mask 88,
+  user-nodefer 89, user-reset 90, captured-reset 92, unarmed 83,
+  out-of-region 83, stale-region 83, nested 83, null-info 86,
+  replacement 91, default killed-by-SIGBUS, ignore 84, native-reset
+  90; plus matrixCallChainNullInfo entering the handler with the
+  null-info shape). The matrix .s carries the v4work AND linux/amd64
+  constraints so -tags v4work cross-builds stay green.
+
+Coding-time corrections (all Rust-parity, recorded against the
+recorded design):
+- Go asm operand order: CMP takes register/memory first and the
+  immediate second (runtime convention verified; the probe file in
+  /tmp/asmtag), and ANDQ rejects unencodable 64-bit immediates (mask
+  loaded via a register).
+- Go ABI0 places results at the 8-byte boundary after the last
+  argument (mapAtomic* FP offsets fixed after go vet).
+- The faulting read must feed an unfoldable branch (if view[0] != 0):
+  a dead `_ = view[0]` load is eliminated by the compiler and the
+  SIGBUS never fires.
+- Tail-jump argument restoration (DI/SI/DX from R12/R13/R14) is
+  required before every chain jump: the chained handler must receive
+  the original signal/info/context (posix.rs call_action).
+- FaultRecord mirrors Rust base.checked_add(relative): an overflow of
+  base+relative is a rejection, not a wrapped comparison.
+
+Validation on the working tree, all under nice (expected cost
+~2-3 core-minutes, recorded in the design entry): gofmt clean, vet
+clean (plain + v4work), plain/v4work module tests, race, race+v4work,
+checkptr=2 (plain + v4work), mmap-trace PASS (no read/write on any
+.iprdb descriptor; worker control files are mapping-only by
+construction and the reviewer gate re-verifies the code evidence),
+six cross-compiles (linux/386, linux/arm, linux/arm64, windows/amd64,
+darwin/arm64, freebsd/amd64) plain AND -tags v4work. Full battery
+wall time ~25 s.
+
+- Next: chunk 4-2 five-aspect review (same five agents, adversarial,
+  one level, disjoint aspects, Rust authority baseline), fix
+  findings, re-review, then signed commit + push and 4-3.
+
+### Status (2026-08-23) - chunk 4-2 five-aspect review round 1: 1xP2 + P3s fixed, re-review dispatched
+
+Round-1 gate on the 4-2 working tree (five adversarial reviewers, one
+level, disjoint aspects, Rust authority baseline): Rust parity PASS,
+Go idioms PASS (7xP3), performance FAIL 1xP2 3xP3, wire/integrity PASS
+1xP3, APIs/docs/records PASS 1xP2 2xP3. All findings verified against
+the Rust authority and fixed on the working tree:
+
+- P2 (performance, real): chain_mask dropped kernel bit 63 (signal 64,
+  SIGRTMAX). Rust's apply_mask loops candidates 1..=1023 over the glibc
+  sigset and the kernel mask is 64 bits (sigsetsize 8), so signals
+  1..=64 (bits 0..=63) all propagate; the Go shortcut constant
+  0x7fffffffffffffff cleared bit 63. Fixed: MOVQ $-1 keeps every
+  kernel bit; asm comment now cites the loop range and the 64-bit
+  kernel mask.
+- P2 (records, real): the design-probe claim "_test.s files compile
+  into production builds (verified)" was disproven by a counterexample
+  (symbol defined only in *_test.s is undefined in go build; the file
+  feeds only the symbol-ABI pass). The v4work-tag conclusion was
+  correct on the verified half (build constraints in assembly are
+  honored) and stands; the record now states the verified premise.
+- P3 (performance): fault-record write re-loaded generation/role after
+  the gate (Rust keeps locals and reuses the gate registers); the
+  handler now holds them in R9/R11 from the gate and writes the record
+  with zero reloads. ACTIVE_CONTROL unpublish is now a single store
+  like Rust's codegen. Dead mapAtomicCAS32 wrapper deleted (the
+  handler's inline LOCK CMPXCHG is the only CAS; Rust's fault subset
+  has no such primitive either).
+- P3 (wire): Arm accepted any MappingRole value (Rust's enum makes
+  invalid roles unrepresentable); Arm now rejects wire-invalid roles
+  with CodeInvalidArgument and a regression test covers roles 0 and 5.
+- P3 (Go idioms): wantCode now uses errors.As like the repo's
+  canonical expectCode; FaultRecord reads state through the
+  mapAtomicLoad32 primitive (state is an atomic_u32 field in Rust,
+  written by the handler); Arm documents its TSO ordering on the Go
+  side; the mapAtomic comment now states the real drivers (the naked
+  handler cannot call Go code; sync/atomic is not specified for mapped
+  memory); package doc names the future cmd/iprange-v4-worker binary
+  instead of SOW chunk labels.
+- P3 (records): control_test.go count corrected to 13 (the umask-mode test and
+  the invalid-role test enumerated); the design record's mask wording now
+  says 64-bit kernel sigset / signals 1..=64 instead of "1024-bit".
+
+Also fixed during the gate (found by the lead while verifying parity
+evidence): CreateParent now fchmods 0600 independent of umask
+(secure_creator_only core, Rust control.rs create_file + security), so
+a restrictive umask can never make the control file unopenable by the
+worker; regression test TestCreateParentModeIndependentOfUmask.
+
+Validation after fixes, all under nice: gofmt clean, vet clean
+(plain + v4work), plain/v4work tests (matrix 16/16), race,
+race+v4work, checkptr=2 (plain + v4work), mmap-trace PASS, six
+cross-compiles plain AND -tags v4work. Re-review of the fixed tree
+dispatched to the same five reviewers.
+
+### Status (2026-08-23) - chunk 4-2 CLOSED: five-aspect re-review PASS on the final working tree
+
+Round-2 re-review on the fixed tree, same five reviewers (one level,
+disjoint aspects, Rust authority baseline): Rust parity PASS (two P3
+nits - stale 1..=63 asm header comment and the Arm role guard not yet
+recorded in the design record, both fixed here), Go idioms PASS,
+performance PASS with three P3s (all fixed here), wire/integrity PASS,
+APIs/docs/records PASS with three P3 record nits (all fixed here).
+
+Round-2 fixes on the final tree:
+
+- P3 (performance, real): chain_mask's AND with -1 was a dead
+  identity after the round-1 bit-63 fix (the previous mask loaded from
+  previousAction+24 already holds the full 64-bit kernel sigset); the
+  two-instruction MOVQ $-1 + ANDQ were deleted, and the stale "signals
+  1..=63" doc comments in the .s header and chain_mask body now say
+  signals 1..=64 (bits 0..=63).
+- P3 (performance): the owned-fault record write no longer re-reads
+  si_code from the siginfo mapping; the gate keeps it in SI from entry
+  to the record write exactly like Rust holds it in ESI (posix.rs
+  release codegen), and len is loaded once into CX at the gate and
+  compared register-register like Rust's R10. Two redundant mapped
+  loads removed from the owned path; the handler is now at instruction
+  parity with the Rust release codegen on every path.
+- P3 (records): implemented-entry test count corrected to 13
+  (TestArmRejectsInvalidRole belongs to the round-1 fix batch);
+  implemented-entry mask phrase corrected to bits 0..=63 (signals
+  1..=64); stale mapAtomicLoad32/Store32/CAS32 record corrected to
+  Load32/Store32 (the CAS wrapper was deleted in round 1); the Arm
+  role guard is now recorded in the design record as a deliberate
+  restoration of Rust's MappingRole enum invariant.
+
+Validation on the final tree, all under nice: gofmt clean, vet clean
+(plain + v4work), plain/v4work tests (matrix 16/16), race,
+race+v4work, checkptr=2 (plain + v4work), mmap-trace PASS, six
+cross-compiles plain AND -tags v4work. Signed commit and push follow
+this entry.
+
+- Next: commit + push chunk 4-2 (explicit file list, signed), then
+  chunk 4-3 (create/initialize: CreateLive, InitializeLive, creation
+  security 0600 + IPR4PSEC commitment surface) per the M4 chunk plan.
