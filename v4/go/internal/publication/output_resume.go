@@ -134,3 +134,32 @@ func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*de
 	}
 	return d, name, identity, nil
 }
+
+// resumePreparedOutput reconstructs one prepared output from the
+// exact inspected private artifact (Rust output_resume.rs
+// PreparedOutput::resume): the inspected file, mapping, meta, byte
+// length, and digest move into the prepared output unchanged. On
+// error the inspected resources are closed (Rust drops the moved
+// ResumedOutput on the error path).
+func resumePreparedOutput(destination *destination, header reservationHeader, inspected *inspectedOutput) (*preparedOutput, error) {
+	name, err := destination.outputName(header.attemptID)
+	if err != nil {
+		_ = inspected.Close()
+		return nil, err
+	}
+	return &preparedOutput{
+		attempt: outputAttempt{
+			destination: destination,
+			attemptID:   header.attemptID,
+			name:        name,
+			identity:    inspected.identity,
+		},
+		file:       inspected.file,
+		mapping:    inspected.mapping,
+		meta:       inspected.meta,
+		byteLength: inspected.byteLength,
+		sha512:     inspected.sha512,
+		policy:     reservationPolicyFailIfExists,
+		previous:   nil,
+	}, nil
+}

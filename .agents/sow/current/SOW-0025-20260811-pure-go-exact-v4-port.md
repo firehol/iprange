@@ -9786,7 +9786,87 @@ Design notes:
   count (444 -> 450, corrected here). Slice I is complete; next is
   slice J (resolver core).
 
-Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
-+ resolver_verification 88 + resolver_result 189); the plan after J
-stays K replacement resolver, L residue, M maintenance, N Publish
-retrofit + public surface, O validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice J implemented: resolver core
+
+Slice J ports the restart resolution machine (Rust resolver.rs 435 +
+resolver_authority 106 + resolver_verification 88 + resolver_result
+189, plus the file_inspection 309 dependency) to Go: the authority
+reconciliation (caller result header_for + binding, choose_authority
+arms), the main-output inspection with the exclusive/shared lifetime
+locks, the desired/other/absent classification, complete (private
+state-2 restore, arm, resume_armed) and remove (abandon with the
+exact post-cleanup proofs), the later-canonical retention and
+reclassification, the cancellation fold, and the reconstructed seed.
+The replacement-policy branch of the Rust resolve entry is recorded
+with slice K (replacement_resolver.go): the Go resolve() documents it
+at the branch point, and no caller can pass a replacement header
+before slice K lands (the public ResolvePublication surface is slice
+N). Every functionally-owned inspected value is closed exactly where
+Rust drops it.
+
+Go files (all !windows):
+
+- internal/publication/file_inspection.go (+314): inspectedOutput
+  owner with Close/verify, inspectMainOutput/inspectPrivateOutput
+  (require_exact_private)/inspectPrivateOutputExact (creator-only
+  access), inspectOutput (lifetime lock, meta pair, digest, double
+  proof), mapBootstrap/readBootstrap (bootstrap.OpenMeta
+  ImmutableReader), classify/classifyAccess; the freebsd arms
+  (open_regular_any_link + finish_noreplace_transition) live in
+  file_inspection_freebsd.go and the POSIX arms in
+  file_inspection_other.go.
+- internal/publication/resolver.go (+503): resolve/resolution/
+  dispatch/resolveOther/resolveAbsent/completeAbsent/arm (acquire -
+  arm - resume_armed with the unknown/problemed arm classes)/arm
+  Failure/resolveDesired (four-value close at scope end like Rust
+  drops)/abandon with the destination- and coordination-post proofs,
+  owner builders, reservationIdentityOf, requireNoLater,
+  conflictProblem/unresolvable, resolverProblem folding.
+- internal/publication/resolver_authority.go (+111):
+  inspectResolution (bind + header_for + reconstruction),
+  inspectAuthority, chooseAuthority (all five arms with their exact
+  conflict classes).
+- internal/publication/resolver_verification.go (+93):
+  verifyDestination/verifyNoLater/finalLater/synchronize/
+  checkCancellation.
+- internal/publication/resolver_result.go (+153):
+  recordCancellation (cleanup-cause equality), desiredResult/
+  desiredProblem/publishedOutputResult/desiredState/coordination
+  Access/withLater/firstProblem.
+- internal/publication/result_header.go (+80): resultHeaderFor with
+  requireResultBinding (directory identity, basename encoding,
+  identity kinds).
+- internal/publication/output_resume.go (+38): resumePreparedOutput
+  (PreparedOutput::resume consumes the inspected output).
+- internal/publication/seed.go (+45): reconstructSeed (Seed::
+  reconstruct from the header payloads).
+- internal/publication/resolver_test.go (+969, v4work+linux): 22
+  tests porting resolver_tests.rs - every pre-main and post-main
+  crash state through Complete and Remove, the private state-2
+  restore, the unresolvable/conflict/cancelled classes, the supplied
+  result binding refusals, the malformed exact reservation, the
+  later-canonical retention, the canonical-reuse reclassification
+  (verify_no_later/final_later), the equivalent desired inode, the
+  unremovable foreign private output residue, the never-overwrite
+  foreign main, the contended-lock cancellation, the no-implicit-
+  validation postcondition, the missing/access-changed private
+  output, the private-output symlink conflict, the no-authority
+  refusal, and the descriptor-leak pin (complete + remove cycles keep
+  /proc/self/fd stable).
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each), gofmt clean, -race +
+-gcflags=all=-d=checkptr=2 on publication/live/bootstrap/security,
+the six cross-compiles (linux arm64/386, darwin amd64/arm64, freebsd
+amd64, windows amd64), and the 22 resolver tests (v4work) all PASS.
+Rust tree untouched. The fd/mapping leak class of slice I is pinned
+for the resolver by TestResolverDoesNotLeakDescriptors; every
+inspected value close is placed exactly where Rust drops the value
+(resolveDesired/abandon scope-end defers, arm consumption into the
+machine owner, completeAbsent output close at every terminal path).
+
+Next: slice K replacement resolver (replacement_resolver.rs 372:
+unlock/relock, pair inspection, resolve_previous/desired/other) which
+also lands the replacement-policy branch of resolve(); the plan after
+K stays L residue, M maintenance, N Publish retrofit + public
+surface, O validation + gate + push.

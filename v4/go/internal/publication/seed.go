@@ -228,3 +228,48 @@ func (s *seed) preparationWithHousekeeping(cleanup CleanupArtifacts, housekeepin
 		Cause:                         cause,
 	}
 }
+
+// reconstructSeed rebuilds the portable fact inventory of one
+// resolution from the bound destination and the authoritative
+// reservation record (Rust Seed::reconstruct). The output identity
+// and previous facts come from the header payloads, so the resolver
+// does not need the private output open to build its ledger.
+func reconstructSeed(destination *destination, header reservationHeader) (seed, error) {
+	privateOutput, err := destination.outputName(header.attemptID)
+	if err != nil {
+		return seed{}, err
+	}
+	privateReservation, err := destination.reservationName(header.attemptID)
+	if err != nil {
+		return seed{}, err
+	}
+	var previous *PreviousDestination
+	if header.previousPresent {
+		previous = &PreviousDestination{
+			Identity:   LocalFileIdentity{Kind: identityKind, Bytes: header.previous.identity},
+			ByteLength: header.previous.byteLength,
+			SHA512:     header.previous.sha512,
+		}
+	}
+	mainName := destination.mainName()
+	return seed{
+		databaseID:            header.databaseID,
+		transactionID:         header.transactionID,
+		commitNonce:           header.commitNonce,
+		attemptID:             header.attemptID,
+		directoryIdentity:     directoryLocalIdentity(destination),
+		destinationBasename:   []byte(mainName),
+		outputIdentity:        LocalFileIdentity{Kind: identityKind, Bytes: header.outputIdentity},
+		outputByteLength:      header.outputByteLength,
+		outputSHA512:          header.outputSHA512,
+		publicationPolicy:     publicPolicy(header.policy),
+		previousDestination:   previous,
+		creationSecurity:      CreationSecurity{Kind: creationSecurityKind, Commitment: header.securityCommitment},
+		privateOutputBasename: []byte(privateOutput),
+		names: seedNames{
+			privateOutput:      []byte(privateOutput),
+			privateReservation: []byte(privateReservation),
+			coordination:       []byte(destination.coordinationName()),
+		},
+	}, nil
+}
