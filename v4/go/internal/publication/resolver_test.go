@@ -23,6 +23,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
 // resolverPreMainPoints are the six reservation crash points before
@@ -219,6 +220,21 @@ func assertResolverClean(t *testing.T, dir, main, label string) {
 	}
 }
 
+// assertResolverMainReopens proves the resolved main opens with the
+// immutable reader and still carries the fixture transaction (Rust
+// matrix ImmutableReader::open + info().transaction_id).
+func assertResolverMainReopens(t *testing.T, main, label string) {
+	t.Helper()
+	r, err := reader.OpenImmutable(main)
+	if err != nil {
+		t.Fatalf("%s: reopen main: %v", label, err)
+	}
+	defer r.Close()
+	if got := r.Meta().TxnID; got != 1 {
+		t.Fatalf("%s: reopened main txn = %d, want 1", label, got)
+	}
+}
+
 // TestResolverCompleteResumesEveryPreMainCrashState ports
 // complete_resumes_every_pre_main_crash_state.
 func TestResolverCompleteResumesEveryPreMainCrashState(t *testing.T) {
@@ -233,6 +249,7 @@ func TestResolverCompleteResumesEveryPreMainCrashState(t *testing.T) {
 		}
 		assertResolverPublished(t, &result, point)
 		assertResolverClean(t, dir, main, point)
+		assertResolverMainReopens(t, main, point)
 	}
 }
 
@@ -301,6 +318,7 @@ func TestResolverBothModesFinishCleanupAfterEveryMainCrashState(t *testing.T) {
 			}
 			assertResolverPublished(t, &result, point)
 			assertResolverClean(t, dir, main, point)
+			assertResolverMainReopens(t, main, point)
 		}
 	}
 }

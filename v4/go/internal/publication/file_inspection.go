@@ -78,9 +78,12 @@ func (o *inspectedOutput) verify(destination *destination) error {
 		return conflictProblem("publication output changed after inspection")
 	}
 	if err := destination.directory().Verify(); err != nil {
-		return err
+		return namespaceProblem(err)
 	}
-	return destination.directory().VerifyName(o.name, o.identity)
+	if err := destination.directory().VerifyName(o.name, o.identity); err != nil {
+		return namespaceProblem(err)
+	}
+	return nil
 }
 
 // inspectMainOutput inspects the main destination output (Rust
@@ -270,18 +273,18 @@ func mapBootstrap(file *os.File) (*mapping.Mapping, format.Meta, uint64, error) 
 func readBootstrap(file *os.File, mapped *mapping.Mapping) (format.Meta, uint64, error) {
 	byteLength, err := fstatSize(file)
 	if err != nil {
-		return format.Meta{}, 0, err
+		return format.Meta{}, 0, sdkProblem(err)
 	}
 	if byteLength != mapped.Size() {
 		return format.Meta{}, 0, conflictProblem("publication destination changed while reading metadata")
 	}
 	page0, err := mapped.Page(0)
 	if err != nil {
-		return format.Meta{}, 0, err
+		return format.Meta{}, 0, sdkProblem(err)
 	}
 	page1, err := mapped.Page(1)
 	if err != nil {
-		return format.Meta{}, 0, err
+		return format.Meta{}, 0, sdkProblem(err)
 	}
 	meta, err := bootstrap.OpenMeta(page0, page1, byteLength, bootstrap.ModeImmutableReader)
 	if err != nil {

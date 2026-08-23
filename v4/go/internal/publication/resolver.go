@@ -285,7 +285,10 @@ func resolveDesired(destination *destination, header reservationHeader, s *seed,
 		if isCancelled(err) {
 			return PublicationResult{}, err
 		}
-		return recordCancellation(outcomeUnknown(*s, reservationIdentityOf(header), resolverProblem(err)), check), nil
+		// Rust returns plain outcome_unknown here (no
+		// record_cancellation fold; the synchronize failure is the
+		// final cause).
+		return outcomeUnknown(*s, reservationIdentityOf(header), resolverProblem(err)), nil
 	}
 	private, err = inspectPrivateOutput(destination, header, check)
 	if err != nil {
@@ -297,7 +300,7 @@ func resolveDesired(destination *destination, header reservationHeader, s *seed,
 		}
 		cleanupCause := resolverProblem(err)
 		summary := discardRecovered(s, destination, nil, reservationOwnerOf(reservation))
-		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: identityFromEncoded(header.outputIdentity)}, cleanupCause))
+		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, optionalEncodedIdentity(header.outputIdentity), cleanupCause))
 		computed, finalErr := finalLater(destination, header, reservation, later, summary)
 		if finalErr != nil {
 			return recordCancellation(desiredProblem(*s, header, summary, finalErr), check), nil
@@ -458,6 +461,17 @@ func identityFromEncoded(bytes [32]byte) live.FileIdentity {
 		panic("encoded identity is valid")
 	}
 	return live.IdentityFromDeviceInode(device, inode)
+}
+
+// optionalEncodedIdentity decodes one encoded identity payload like
+// Rust Identity::decode into the cleanup identity option: a payload
+// that cannot be a local identity produces no identity instead of
+// panicking (Rust Option<Identity> mapped into artifact).
+func optionalEncodedIdentity(bytes [32]byte) identityOptional {
+	if device, inode, ok := identityFromEncodedBytes(bytes); ok {
+		return identityOptional{present: true, identity: live.IdentityFromDeviceInode(device, inode)}
+	}
+	return identityOptional{}
 }
 
 // identityFromEncodedBytes decodes one raw identity payload (Rust

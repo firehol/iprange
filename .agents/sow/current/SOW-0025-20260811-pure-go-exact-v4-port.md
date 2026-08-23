@@ -9969,6 +9969,44 @@ v4work vet, and the 26 resolver + replacement tests (v4work) all
 PASS. GOOS=windows remains out of scope for publication this
 milestone (resolver.go is !windows; the v4work freebsd link machine
 does not build on windows - pre-existing).
+The first-round parity (Goodall) and wire (Herschel) verdicts on
+12d936e arrived during this fix round. Herschel PASSed with two P3s;
+Goodall FAILed with one P1 and two P2s. The P1 (authority error
+paths leak the owned later/exact reservation) is the same leak class
+fixed above at 12d936e. The remaining Goodall findings are fixed in
+this round:
+
+- Goodall P2 (desiredResult cause not folded): inspectedOutput.verify
+  and readBootstrap now fold every failure into the fixed publication
+  problem surface exactly where Rust does (verify: directory proofs
+  via Problem::namespace; readBootstrap: fstat/page failures via
+  Problem::sdk, not-complete via conflict). Every other verify caller
+  (synchronize, verifyDestination, verifyLater) keeps its idempotent
+  resolverProblem fold; the desiredResult and publishedOutputResult
+  causes are no longer raw namespace or mapping errors.
+- Goodall P2 (panic vs Identity::decode None): the private-output
+  cleanup artifact now decodes the header output identity with
+  optionalEncodedIdentity (Rust Identity::decode option - an invalid
+  payload yields no artifact identity instead of a process panic);
+  the reservationIdentityOf expect panic is unchanged (Rust expect on
+  the selected record).
+- Goodall P3 (extra recordCancellation fold): resolveDesired's
+  synchronize-failure arm now returns plain outcomeUnknown exactly
+  like Rust; the fold was provably inert (non-nil cause, empty
+  cleanup) but added a redundant cancellation probe.
+- Herschel P3 (main-reopen parity): the Complete pre-main matrix and
+  both-modes post-main matrix reopen the resolved main with the
+  immutable reader and pin the fixture transaction, exactly like the
+  Rust matrix tests.
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each), gofmt clean, -race +
+-gcflags=all=-d=checkptr=2 on publication/mapping/live/format/reader,
+the linux/freebsd/darwin publication cross-builds and the freebsd/
+darwin v4work vet, and the 26 resolver + replacement tests (v4work)
+all PASS. GOOS=windows remains out of scope for publication this
+milestone (resolver.go is !windows; the v4work freebsd link machine
+does not build on windows - pre-existing).
 
 Next: slice-J round-2 re-review by all five agents at this fix HEAD,
 then the slice-K review by the same five agents, then slice L
