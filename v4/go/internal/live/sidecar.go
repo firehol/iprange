@@ -37,40 +37,46 @@ type Sidecar struct {
 	file     *os.File
 	path     string
 	header   header
-	identity fileIdentity
+	identity FileIdentity
 	mapping  *mapping.Mapping
 }
 
 // reserve creates the sidecar pathname for a new coordination artifact
 // without writing any byte (Rust Sidecar::reserve). The caller then
-// runs initializeCreating and publishReady.
-func reserve(main string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, error) {
+// runs initializeCreating and publishReady. A nil failure returns the
+// reserved sidecar; a non-nil failure carries the exact Rust
+// PrivateCreationFailure facts (the canonical-sidecar derivation
+// failure has a clean cleanup and no identity, exactly like Rust
+// reserve).
+func reserve(main string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, *privateCreationFailure) {
 	path, err := canonicalSidecarPath(main)
 	if err != nil {
-		return nil, err
+		return nil, &privateCreationFailure{cause: err}
 	}
 	return reserveAt(path, databaseID, sidecarID, capacity)
 }
 
 // reserveAt is reserve at an explicit path (Rust Sidecar::reserve_at).
-func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, error) {
+func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, *privateCreationFailure) {
 	if capacity == 0 {
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "reader capacity must be greater than zero"}
+		return nil, &privateCreationFailure{
+			cause: &format.Error{Code: format.CodeInvalidArgument, Detail: "reader capacity must be greater than zero"},
+		}
 	}
-	file, identity, err := createPrivate(path, cleanupAuthority{
+	created, failure := createPrivate(path, cleanupAuthority{
 		attemptID:     sidecarID,
 		ordinal:       1,
 		kind:          cleanupKindOwnedCoordination,
 		directoryRole: cleanupRoleMainFile,
 	})
-	if err != nil {
-		return nil, err
+	if failure != nil {
+		return nil, failure
 	}
 	return &Sidecar{
-		file:     file,
+		file:     created.file,
 		path:     filepath.Clean(path),
 		header:   header{capacity: capacity, databaseID: databaseID, sidecarID: sidecarID},
-		identity: identity,
+		identity: created.identity,
 	}, nil
 }
 
@@ -234,7 +240,7 @@ func (s *Sidecar) verifyPath() error {
 
 // localIdentity returns the retained identity (Rust
 // Sidecar::local_identity).
-func (s *Sidecar) localIdentity() fileIdentity { return s.identity }
+func (s *Sidecar) localIdentity() FileIdentity { return s.identity }
 
 // verifyHeader re-checks the mapped header against the retained one and
 // requires the ready state (Rust Sidecar::verify_header).
@@ -334,7 +340,7 @@ func (s *Sidecar) claimReaderCancellable(txn uint64, check func() error) (uint32
 		}
 		return slot, nil
 	}
-	return 0, &format.Error{Code: format.CodeReaderCapacityExhausted, Detail: "live reader table is full"}
+	return 0, &format.Error{Code: format.CodeReaderCapacityExhausted, Detail: "the live reader table has no free slot"}
 }
 
 // writeSlotOffset writes one slot under the caller-held slot lock at
@@ -575,11 +581,13 @@ func (s *Sidecar) close() {
 }
 
 func slotOffset(slot uint32) (uint64, error) {
-	bytes := uint64(slot) * uint64(slotSize)
-	if slot != 0 && bytes/uint64(slotSize) != uint64(slot) {
+	// 16-byte slots with a uint32 index cannot overflow uint64; the
+	// compare form mirrors Rust's checked_mul (which LLVM proves dead)
+	// without a per-slot division.
+	if uint64(slot) > uint64(^uint64(0))/slotSize {
 		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "reader slot offset overflows"}
 	}
-	return bytes + uint64(format.PageSize), nil
+	return uint64(slot)*uint64(slotSize) + uint64(format.PageSize), nil
 }
 
 func slotOffsetChecked(slot, capacity uint32) (uint64, error) {

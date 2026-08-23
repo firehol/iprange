@@ -23,12 +23,14 @@ func directRanges1000() []DirectRangeV4 {
 }
 
 // assertZeroAllocWindow reports any allocation that exceeds the bounded
-// Go-runtime one-time metadata window (the feed slice pin records the
-// same 48-byte and 16-byte runtime entries). A per-record regression
-// allocates ~1.15 KB per record, far above the window.
+// Go-runtime one-time metadata window. The runtime allocates one-time
+// 48-byte and 16-byte cache entries when new type paths are first
+// exercised; a measurement window occasionally catches two 48-byte
+// entries (96 bytes), so the bound is 160 bytes. A per-record
+// regression allocates ~1.15 KB per record, far above the window.
 func assertZeroAllocWindow(t *testing.T, before, after runtime.MemStats, context string) {
 	t.Helper()
-	if delta := after.TotalAlloc - before.TotalAlloc; delta > 64 {
+	if delta := after.TotalAlloc - before.TotalAlloc; delta > 160 {
 		for i := range after.BySize {
 			if n := int(after.BySize[i].Mallocs) - int(before.BySize[i].Mallocs); n > 0 {
 				t.Logf("%s size %d: +%d mallocs", context, after.BySize[i].Size, n)

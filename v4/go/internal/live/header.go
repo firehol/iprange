@@ -47,15 +47,13 @@ type header struct {
 // sidecarLength is the exact sidecar file length: one header page plus
 // capacity 16-byte slots (spec 15.1). Overflow refuses.
 func sidecarLength(capacity uint32) (uint64, error) {
-	slots := uint64(capacity) * uint64(slotSize)
-	if capacity != 0 && slots/uint64(slotSize) != uint64(capacity) {
+	// 16-byte slots with a uint32 capacity cannot overflow uint64, and
+	// one header page cannot overflow the sum; the compare forms mirror
+	// Rust's checked arithmetic without per-call divisions.
+	if uint64(capacity) > uint64(^uint64(0))/slotSize {
 		return 0, &format.Error{Code: format.CodeInvalidArgument, Detail: "reader table length overflows"}
 	}
-	length := slots + uint64(sidecarPageSize)
-	if length < slots {
-		return 0, &format.Error{Code: format.CodeInvalidArgument, Detail: "reader table length overflows"}
-	}
-	return length, nil
+	return uint64(capacity)*uint64(slotSize) + uint64(sidecarPageSize), nil
 }
 
 // writeHeaderMapping encodes the header into the first page of a

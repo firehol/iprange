@@ -1,199 +1,290 @@
 //go:build !windows
 
 // Exact local namespace operations for live main and coordination files
-// (Rust live_namespace.rs + publication/namespace.rs subset the sidecar
-// needs). Main and sidecar final components are opened without following
-// symlinks, must be regular files with one link, and every handle
-// retains its opened descriptor identity; path re-checks compare the
-// current path entry against the retained inode.
+// (Rust live_namespace.rs over the retained-directory machine in
+// publication/namespace). Main and sidecar final components are opened
+// and inspected without following symlinks through the retained parent
+// directory descriptor, must be regular files with one link on the
+// same filesystem, and every handle retains its opened descriptor
+// identity; path re-checks compare the current path entry against the
+// retained identity.
 
 package live
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
-// fileIdentity is the retained local identity of one opened descriptor
+// FileIdentity is the retained local identity of one opened descriptor
 // (Rust publication::namespace Identity): the device+inode pair. Path
 // verification compares a fresh stat of the path entry against the
-// retained identity with os.SameFile, and the single-link rule uses the
-// hard-link count.
-type fileIdentity struct {
-	info os.FileInfo
+// retained identity, and the single-link rule uses the hard-link count.
+type FileIdentity struct {
+	device uint64
+	inode  uint64
 }
 
 // identityOf captures the retained identity of an open descriptor
 // (Rust live_namespace::identity: retained_regular_identity with the
-// single-link requirement).
-func identityOf(f *os.File) (fileIdentity, error) {
-	st, err := f.Stat()
+// single-link requirement; the wrong-mode classes fold to the Rust
+// ownership-changed detail).
+func identityOf(f *os.File) (FileIdentity, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		return FileIdentity{}, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
+		return FileIdentity{}, &format.Error{Code: format.CodeWrongState, Detail: "live file ownership changed"}
+	}
+	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
+}
+
+// parentOf mirrors Rust Path::parent: a single-component path has the
+// empty parent (whose open reports Missing), "." and ".." have no
+// parent at all.
+func parentOf(clean string) (string, error) {
+	if clean == "." || clean == ".." {
+		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no parent directory"}
+	}
+	if !strings.ContainsRune(clean, filepath.Separator) {
+		return "", nil
+	}
+	return filepath.Dir(clean), nil
+}
+
+// bindPath binds the parent directory of path and its final component
+// (Rust live_namespace::bind_path: Path::parent/file_name,
+// Directory::open, Name::from_component). The returned directory stays
+// open for the caller's operation; the caller closes it.
+func bindPath(path string) (*directory, string, error) {
+	clean := filepath.Clean(path)
+	parent, err := parentOf(clean)
 	if err != nil {
-		return fileIdentity{}, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+		return nil, "", err
 	}
-	if !st.Mode().IsRegular() {
-		return fileIdentity{}, &format.Error{Code: format.CodeWrongState, Detail: "live artifact is not one regular file"}
+	name := filepath.Base(clean)
+	if name == "." || name == string(filepath.Separator) {
+		return nil, "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
-	if links, ok := mapping.RegularLinkCount(st); !ok || links != 1 {
-		return fileIdentity{}, &format.Error{Code: format.CodeWrongState, Detail: "live artifact is not one regular file"}
+	dir, err := openDirectory(parent)
+	if err != nil {
+		return nil, "", err
 	}
-	return fileIdentity{info: st}, nil
+	if err := validNameComponent(name); err != nil {
+		dir.close()
+		return nil, "", err
+	}
+	return dir, name, nil
 }
 
 // verifyPath re-checks that path still names the retained identity as
 // one regular single-link file (Rust live_namespace::verify_path).
-func verifyPath(path string, expected fileIdentity) error {
-	now, err := os.Lstat(filepath.Clean(path))
+func verifyPath(path string, expected FileIdentity) error {
+	clean := filepath.Clean(path)
+	dir, name, err := bindPath(clean)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &format.Error{Code: format.CodeNameNotFound, Detail: "live path removed while open"}
-		}
-		return &format.Error{Code: format.CodeIO, Detail: "lstat: " + err.Error()}
+		return nsMap(err)
 	}
-	if !now.Mode().IsRegular() {
+	defer dir.close()
+	entry, found, err := dir.entry(name)
+	if err != nil {
+		return nsMap(err)
+	}
+	if !found {
+		return &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
+	}
+	if !entry.regular {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path no longer names a regular file"}
 	}
-	if links, ok := mapping.RegularLinkCount(now); !ok || links != 1 {
-		return &format.Error{Code: format.CodeWrongState, Detail: "live path identity changed"}
-	}
-	if !os.SameFile(now, expected.info) {
+	if entry.links != 1 || entry.identity != expected {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path identity changed"}
 	}
 	return nil
 }
 
-// openRw opens the final path component without following symlinks and
-// proves the retained identity (Rust live_namespace::open_rw).
-func openRw(path string) (*os.File, fileIdentity, error) {
+// openRw opens the final path component read-write without following
+// symlinks and proves the retained regular identity (Rust
+// live_namespace::open_rw: bind_path + Directory::open_regular with
+// the single-link and cross-filesystem rules). The caller performs the
+// Rust-exact post-open path verification where the Rust flow does.
+func openRw(path string) (*os.File, FileIdentity, error) {
 	clean := filepath.Clean(path)
-	f, err := os.OpenFile(clean, os.O_RDWR|unix.O_NOFOLLOW, 0)
+	dir, name, err := bindPath(clean)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fileIdentity{}, &format.Error{Code: format.CodeNameNotFound, Detail: "live path does not exist"}
-		}
-		// O_NOFOLLOW on a symbolic link reports ELOOP: the final
-		// component must not be a link (Rust Directory::open_regular
-		// NotRegular class -> WrongMode -> WrongState).
-		if errors.Is(err, unix.ELOOP) {
-			return nil, fileIdentity{}, &format.Error{Code: format.CodeWrongState, Detail: "live path is not one regular file"}
-		}
-		return nil, fileIdentity{}, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
+		return nil, FileIdentity{}, nsMap(err)
 	}
-	identity, err := identityOf(f)
+	defer dir.close()
+	regular, err := dir.openRegular(name, true)
 	if err != nil {
-		f.Close()
-		return nil, fileIdentity{}, err
+		return nil, FileIdentity{}, nsMap(err)
 	}
-	if err := verifyPath(clean, identity); err != nil {
-		f.Close()
-		return nil, fileIdentity{}, err
+	if regular == nil {
+		return nil, FileIdentity{}, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
-	return f, identity, nil
+	return regular.file, regular.identity, nil
 }
 
 // createPrivate creates one coordination artifact with creator-only
 // access (0600, independent of umask) refusing an existing destination
 // (Rust live_namespace::create_private + security::secure_creator_only
-// POSIX profile). On failure after creation the artifact is removed
-// exactly when the path still names the created inode.
-func createPrivate(path string, authority cleanupAuthority) (*os.File, fileIdentity, error) {
+// POSIX profile). A nil failure returns the created artifact; a
+// non-nil failure reports the exact Rust facts (cause, cleanup outcome,
+// and the identity of the artifact when it was proven and then failed
+// the creator-only proof).
+func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *privateCreationFailure) {
 	clean := filepath.Clean(path)
-	f, err := os.OpenFile(clean, os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	cleanFailure := func(cause error) *privateCreationFailure {
+		return &privateCreationFailure{cause: cause}
+	}
+	dir, name, err := bindPath(clean)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, fileIdentity{}, &format.Error{Code: format.CodeNameExists, Detail: "live coordination artifact exists"}
-		}
-		// A missing parent directory reports NameNotFound, exactly like
-		// Rust bind_path (NamespaceError::Missing).
-		if os.IsNotExist(err) {
-			return nil, fileIdentity{}, &format.Error{Code: format.CodeNameNotFound, Detail: "live coordination parent directory does not exist"}
-		}
-		// ELOOP (symlink loop in a parent component) and every other
-		// errno stay CodeIO: Rust Directory::create special-cases only
-		// EEXIST; the not-regular class applies to open_regular, not
-		// to create.
-		return nil, fileIdentity{}, &format.Error{Code: format.CodeIO, Detail: "create: " + err.Error()}
+		return createdPrivate{}, cleanFailure(nsMap(err))
+	}
+	defer dir.close()
+	// The creator profile is captured before creation (Rust
+	// live_namespace::create_private captures before directory.create).
+	profile, err := security.Capture()
+	if err != nil {
+		return createdPrivate{}, cleanFailure(err)
+	}
+	f, err := dir.create(name)
+	if err != nil {
+		return createdPrivate{}, cleanFailure(nsMap(err))
 	}
 	identity, err := identityOf(f)
 	if err != nil {
 		f.Close()
 		// Rust cannot remove exactly without the identity; it records an
-		// unresolvable cleanup and reports CleanupIncomplete.
-		return nil, fileIdentity{}, combineErrors(err, &format.Error{
-			Code:   format.CodeUnresolvable,
-			Detail: "created live artifact has no proven local identity",
-		})
+		// unresolvable cleanup failure alongside the identity cause.
+		return createdPrivate{}, &privateCreationFailure{
+			cause:   err,
+			cleanup: cleanupOutcomeFailed(&format.Error{Code: format.CodeUnresolvable, Detail: "created live artifact has no proven local identity"}),
+		}
 	}
-	// secure_creator_only core: the mode is exactly 0600 independent of
-	// umask. ACL removal and the ownership commitment surface land with
-	// the 4-3 creation-security slice.
-	if err := f.Chmod(0o600); err != nil {
+	// Creator-only surface: mode exactly 0600 independent of umask, no
+	// inherited access ACL, and the ownership commitment proof (Rust
+	// security::secure_creator_only). On failure the artifact is removed
+	// exactly when the path still names the created inode; the removal
+	// outcome and the proven identity are retained for the caller fold.
+	// Security failures fold through the live namespace_error classes
+	// (liveSecurityError), exactly like Rust create_private.
+	if err := security.SecureCreatorOnly(f, profile); err != nil {
 		f.Close()
-		outcome := removeExact(clean, identity)
-		cause := &format.Error{Code: format.CodeIO, Detail: "reader table ownership: " + err.Error()}
-		return nil, fileIdentity{}, combineErrors(cause, outcome.cause)
+		return createdPrivate{}, &privateCreationFailure{
+			cause:    liveSecurityError(err),
+			cleanup:  removeExact(clean, identity),
+			identity: &identity,
+		}
 	}
-	if err := verifyPath(clean, identity); err != nil {
-		f.Close()
-		outcome := removeExact(clean, identity)
-		return nil, fileIdentity{}, combineErrors(err, outcome.cause)
-	}
-	return f, identity, nil
+	return createdPrivate{file: f, identity: identity}, nil
 }
 
 // removeExact removes the path only when it still names the retained
 // identity and synchronizes the parent directory (Rust
 // live_cleanup::remove POSIX remove_exact: verify_name, unlink_exact,
 // directory.sync, require_absent).
-func removeExact(path string, expected fileIdentity) cleanupOutcome {
+func removeExact(path string, expected FileIdentity) cleanupOutcome {
 	clean := filepath.Clean(path)
-	now, err := os.Lstat(clean)
+	dir, name, err := bindPath(clean)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cleanupOutcomeFailed(&format.Error{Code: format.CodeNameNotFound, Detail: "live path removed before cleanup"})
-		}
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeIO, Detail: "cleanup lstat: " + err.Error()})
+		return cleanupOutcomeFailed(nsMap(err))
 	}
-	if !now.Mode().IsRegular() {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeWrongState, Detail: "live artifact is not one regular file"})
+	defer dir.close()
+	if err := dir.verifyName(name, expected); err != nil {
+		return cleanupOutcomeFailed(nsMap(err))
 	}
-	if !os.SameFile(now, expected.info) {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeWrongState, Detail: "live artifact identity changed during cleanup"})
+	removed, err := dir.unlinkExact(name, expected)
+	if err != nil {
+		return cleanupOutcomeFailed(nsMap(err))
 	}
-	if links, ok := mapping.RegularLinkCount(now); !ok || links != 1 {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeWrongState, Detail: "live artifact link count changed during cleanup"})
+	if !removed {
+		return cleanupOutcomeFailed(&format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"})
 	}
-	if err := os.Remove(clean); err != nil {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeIO, Detail: "cleanup remove: " + err.Error()})
+	if err := dir.sync(); err != nil {
+		return cleanupOutcomeFailed(nsMap(err))
 	}
-	if err := syncParent(clean); err != nil {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeIO, Detail: "cleanup parent sync: " + err.Error()})
-	}
-	if _, err := os.Lstat(clean); err == nil {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeNameExists, Detail: "live artifact reappeared during cleanup"})
-	} else if !os.IsNotExist(err) {
-		return cleanupOutcomeFailed(&format.Error{Code: format.CodeIO, Detail: "cleanup recheck: " + err.Error()})
+	if err := dir.requireAbsent(name); err != nil {
+		return cleanupOutcomeFailed(nsMap(err))
 	}
 	return cleanupOutcome{}
 }
 
 // syncParent synchronizes the parent directory of path for durability
-// of a name change (Rust live_namespace::sync_parent).
+// of a name change (Rust live_namespace::sync_parent). A directory
+// that cannot be synced (EINVAL) is the Unsupported class: the parent
+// cannot prove name durability.
 func syncParent(path string) error {
-	dir := filepath.Dir(path)
-	f, err := os.Open(dir)
+	clean := filepath.Clean(path)
+	parent, err := parentOf(clean)
 	if err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "open parent: " + err.Error()}
+		return err
 	}
-	defer f.Close()
-	if err := f.Sync(); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "sync parent: " + err.Error()}
+	dir, err := openDirectory(parent)
+	if err != nil {
+		return nsMap(err)
+	}
+	defer dir.close()
+	if err := dir.sync(); err != nil {
+		return nsMap(err)
 	}
 	return nil
+}
+
+// publicIdentity converts a retained local identity into the portable
+// device+inode pair reported by the SDK (Rust
+// live_namespace::public_identity; the SDK models a local identity as
+// its device and inode numbers).
+func publicIdentity(identity FileIdentity) (device uint64, inode uint64) {
+	return identity.device, identity.inode
+}
+
+// parentIdentity captures the identity of the parent directory of path
+// (Rust live_namespace::parent_identity: Directory::open; a missing
+// parent reports the Io(NotFound) class, unlike the namespace helpers
+// that map Missing to NameNotFound).
+func parentIdentity(path string) (FileIdentity, error) {
+	clean := filepath.Clean(path)
+	parent, err := parentOf(clean)
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	dir, err := openDirectory(parent)
+	if err != nil {
+		return FileIdentity{}, nsMapParentIdentity(err)
+	}
+	defer dir.close()
+	return dir.id, nil
+}
+
+// pathIdentity reports the identity of the path entry when it is one
+// regular single-link file, nil when it is absent, and WrongMode
+// otherwise (Rust live_namespace::path_identity).
+func pathIdentity(path string) (*FileIdentity, error) {
+	clean := filepath.Clean(path)
+	dir, name, err := bindPath(clean)
+	if err != nil {
+		if kind, ok := nsErrorKindOf(err); ok && kind == nsMissing {
+			return nil, nil
+		}
+		return nil, nsMap(err)
+	}
+	defer dir.close()
+	found, present, err := dir.entry(name)
+	if err != nil {
+		return nil, nsMap(err)
+	}
+	if !present {
+		return nil, nil
+	}
+	if !found.regular || found.links != 1 {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "live path is not one regular file"}
+	}
+	return &FileIdentity{device: found.identity.device, inode: found.identity.inode}, nil
 }

@@ -3,7 +3,6 @@
 package worker
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/random"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // Control is the mapped worker coordination record (Rust
@@ -28,23 +29,27 @@ type Control struct {
 // Control::create_parent). The created path is unlinked by RemovePath or
 // Close.
 func CreateParent() (*Control, error) {
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "worker control nonce: " + err.Error()}
+	nonce, err := random.Nonzero128()
+	if err != nil {
+		return nil, err
 	}
-	path := filepath.Join(os.TempDir(), ".iprange-v4-worker-"+hex.EncodeToString(nonce)+".ctl")
+	path := filepath.Join(os.TempDir(), ".iprange-v4-worker-"+hex.EncodeToString(nonce[:])+".ctl")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "worker control create: " + err.Error()}
 	}
-	// secure_creator_only core: the mode is exactly 0600 independent of
-	// umask (Rust control.rs create_file + security::secure_creator_only),
-	// so a restrictive umask can never make the control file unopenable
-	// by the worker.
-	if err := f.Chmod(0o600); err != nil {
+	// creator-only policy: mode exactly 0600, no inherited access ACL,
+	// and the ownership commitment proof (Rust control.rs create_file +
+	// security::secure_creator_only). A restrictive umask can never make
+	// the control file unopenable by the worker.
+	profile, err := security.Capture()
+	if err != nil {
+		return nil, workerSecurityFailure(err)
+	}
+	if err := security.SecureCreatorOnly(f, profile); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
-		return nil, &format.Error{Code: format.CodeIO, Detail: "worker control chmod: " + err.Error()}
+		return nil, workerSecurityFailure(err)
 	}
 	fail := func(cause error) (*Control, error) {
 		_ = f.Close()
@@ -68,6 +73,13 @@ func CreateParent() (*Control, error) {
 	format.PutU32(c.data[offProtocol:offProtocol+4], protocol)
 	format.PutU32(c.data[offState:offState+4], stateRequest)
 	return c, nil
+}
+
+// workerSecurityFailure maps any creator-only policy failure to the
+// worker's Conflict class exactly like Rust control.rs namespace_error
+// (the detail is the exact Rust string; the cause is folded away).
+func workerSecurityFailure(cause error) error {
+	return &format.Error{Code: format.CodeConflict, Detail: "worker control access policy could not be established"}
 }
 
 // OpenWorker opens an existing control file by path and maps its exact

@@ -52,12 +52,9 @@ func regenDirectIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "direct-ipv4.iprdb")
-	created, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag)
+	_, err = Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if created.TransactionID != 1 {
-		t.Fatalf("fresh fixture txn = %d, want 1", created.TransactionID)
 	}
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {

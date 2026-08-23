@@ -7,9 +7,7 @@
 package writer
 
 import (
-	"crypto/rand"
-
-	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/random"
 )
 
 // PreparedReclamation is the installed, prepared reclamation draft (Rust
@@ -71,14 +69,7 @@ func (c *Core) PrepareReclamation(oldestReader *uint64, maxTransactions, maxPage
 }
 
 // randomNonce draws one nonzero 128-bit commit nonce (Rust
-// random::nonzero_128: one fill, all-zero is a hard error).
+// random::nonzero_128) through the shared identity draw.
 func randomNonce() ([16]byte, error) {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return nonce, &format.Error{Code: format.CodeIO, Detail: "commit nonce: " + err.Error()}
-	}
-	if nonce == [16]byte{} {
-		return nonce, &format.Error{Code: format.CodeFormatInvalid, Detail: "operating-system randomness returned an all-zero identity"}
-	}
-	return nonce, nil
+	return random.Nonzero128()
 }

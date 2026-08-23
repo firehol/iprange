@@ -6986,3 +6986,397 @@ this entry.
 - Next: commit + push chunk 4-2 (explicit file list, signed), then
   chunk 4-3 (create/initialize: CreateLive, InitializeLive, creation
   security 0600 + IPR4PSEC commitment surface) per the M4 chunk plan.
+
+### Status (2026-08-23) - chunk 4-3 design recorded: create/initialize + creation security
+
+Chunk 4-3 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: live_lifecycle/creation.rs (398
+lines: create_live, CreateResult/CreationState, Attempt, validate_
+destination, validate_kinds, prepare_sidecar, initialize_pair, cleanup,
+require_absent, the seven create.* crash points), live_lifecycle/
+transition.rs Initialize subset (initialize_live, LockedMain::open/
+verify, Attempt, initialize_sidecar, cleanup_created, reservation_
+failure, require_capacity, the four live_initialize.* crash points),
+publication/security.rs + security/posix.rs + security/linux.rs +
+apple.rs + freebsd.rs (CREATOR_MODE 0600, Profile, commitment =
+SHA256("IPR4PSEC" || uid_le32 || 0600_le32), secure_creator_only,
+creator_only_commitment, Linux xattr ACL removal/proof, darwin/freebsd
+libc ACL machines), live_cleanup.rs POSIX subset (Outcome, TerminalFacts,
+Authority, unique_attempt_id, remove, require_available), live_namespace.rs
+(parent_identity, path_identity, public_identity, create_private with the
+full secure_creator_only), live_writer.rs LocalBasename + result.rs,
+database_file.rs (EmptySpec::live, empty_meta, write_empty,
+bootstrap_file, require_sidecar_absent, require_regular_file),
+random.rs (nonzero_128), live_writer/create.rs public adapter,
+iprange-capi lifecycle_ops.rs + abi_extra.rs (CreateReport,
+LiveTransitionReport wire shapes), tests/live_transitions.rs and
+tests/live_roundtrip.rs create/init cases.
+
+Design decisions (all Rust-parity; the M4 chunk plan already scoped
+this slice):
+
+- internal/live gains two exported lifecycle operations mirroring the
+  Rust library API: CreateLive (creation.rs create_live exact:
+  capacity>0, destination + canonical-sidecar absence, kinds
+  validation, three nonzero_128 draws re-bound through
+  unique_attempt_id, parent identity, sidecar reserve -> initialize
+  creating -> parent sync -> require-absent, create_private main ->
+  write_empty -> parent sync -> publish_ready -> parent sync, with
+  the seven create.* crash points and the exact cleanup cascade
+  ordered by ordinal) and InitializeLive (transition.rs initialize_live
+  exact: LockedMain open under the exclusive lifetime lock with
+  Writer-mode bootstrap and the exact-committed-length rule, sidecar
+  absence, reserve -> initialize creating -> parent sync -> main
+  verify -> publish_ready -> parent sync, with the four
+  live_initialize.* crash points and cleanup_created). Result types
+  carry the full Rust field surface (CreateResult/CreationState,
+  LiveTransitionResult/LiveTransitionOperation/LiveTransitionStatus/
+  LiveCoordinationLocation/LiveResetPolicy, Housekeeping, LocalBasename,
+  identities). Reset (4-6) is out of this slice; the LiveResetPolicy
+  enum is defined now only because LiveTransitionResult carries it.
+- Creation security surface (POSIX): new internal/security package
+  (the single authority for secure_creator_only, mirroring Rust
+  publication/security.rs): Profile capture (geteuid), SHA-256
+  commitment over the IPR4PSEC domain + uid + 0600, fchmod 0600, Linux
+  inherited-ACL removal/proof via system.posix_acl_access xattr
+  (Fremovexattr/Fgetxattr, ENODATA/EOPNOTSUPP tolerated), the
+  single-link + mode + uid commitment proof. Error classes follow
+  Rust problem.rs: AccessPolicy -> CodeAccessPolicyUnsupported,
+  Unsupported -> CodeDurabilityUnsupported, IoAt -> CodeIO.
+  internal/live.createPrivate and internal/worker.CreateParent (the
+  4-2 fchmod-only core, recorded as deferred) both switch to the
+  shared surface; the worker maps security failures to CodeConflict
+  "worker control access policy could not be established" exactly
+  like Rust worker/control.rs namespace_error. Worker CreateParent
+  also switches its nonce draw to random.Nonzero128 (Rust create_
+  parent parity; the 4-2 draw lacked the all-zero check).
+- Darwin/freebsd ACL machines: pure Go has no filesec/acl_* libc
+  bindings in x/sys (verified v0.35.0: no darwin filesec, no freebsd
+  acl_*), and Decision 2A forbids cgo. The Go security surface gives
+  darwin (where live locks work) an honest typed refusal
+  (CodeOSUnsupported "creator-only access policy requires libc ACL
+  APIs unavailable to pure Go"), so darwin CreateLive/InitializeLive
+  fail cleanly instead of silently weakening the creator-only proof;
+  freebsd is already refused earlier by lock_refuse (live locks), and
+  the other targets keep the same honest refusal for the unreachable
+  path. Tracked for the 4-12 platform proof (recorded follow-up).
+- Shared random: new internal/random.Nonzero128 (Rust random.rs exact:
+  one CSPRNG fill, all-zero -> CodeFormatInvalid "operating-system
+  randomness returned an all-zero identity"); writer randomNonce and
+  worker control nonce delegate to it (one authority).
+- Public facade: CreateLive and InitializeLive (with the existing
+  public CancellationToken checkpoint), the public CreateResult
+  extended to the full Rust field set, and new public
+  CreationState/Housekeeping/LocalBasename/FileIdentity/
+  LiveTransitionResult + transition enums. The M3 CreateResult
+  TransactionID field is removed: Rust CreateResult has no such field
+  (the M3 type was explicitly documented as a milestone-4 gap; the
+  transaction is fixed 1 and observable via Writer.Info), one public
+  test assertion updates. Create (immutable main-only convenience)
+  keeps its behavior and fills the new fields truthfully
+  (state=Created, no identities/basename/sidecar, capacity 0).
+- Empty-image codec: internal/live mirrors database_file.rs
+  write_empty over the createPrivate descriptor (set_len, read-write
+  mapping, both meta pages, flush, sync_all) composing format.Meta
+  EncodeMapped; writer/create.go keeps its mapping.Create-based driver
+  (different creation flow; consolidation noted for 4-4 when the live
+  writer open path lands).
+- Validation: live lifecycle unit tests (create success incl. sidecar
+  readiness + main bootstrap, capacity 0, kind mismatch, destination
+  exists, sidecar exists, missing parent, cleanup after late failure,
+  initialize success after sidecar removal, initialize refuses
+  existing sidecar, capacity 0, missing main, uncommitted tail, pre-
+  cancelled token both ops), security tests (commitment vector, mode
+  proof, ACL xattr removal + trivial proof, worker control file
+  proof), crash-point state tests via v4work for the create/init
+  points (the full crash matrix stays 4-12 per the chunk plan), plus
+  the public facade round-trip. All builds/tests under nice.
+
+### Status (2026-08-23) - chunk 4-3 implemented: live create/initialize + creator-only security
+
+Chunk 4-3 delivered on the working tree (design entry above).
+New packages:
+
+- v4/go/internal/random (leaf): random.go Nonzero128 - one CSPRNG
+  fill, all-zero -> CodeFormatInvalid "operating-system randomness
+  returned an all-zero identity" (Rust random.rs exact); writer
+  randomNonce (writer/reclaim.go) and worker control nonce
+  (internal/worker/control.go CreateParent) now delegate to it, one
+  authority.
+- v4/go/internal/security (leaf; the single authority for Rust
+  publication/security.rs): Profile capture (geteuid), SHA-256
+  commitment over "IPR4PSEC" || uid_le32 || 0600_le32,
+  SecureCreatorOnly (fchmod 0600; Linux system.posix_acl_access
+  xattr removal/proof via Fremovexattr/Fgetxattr with ENODATA/
+  EOPNOTSUPP tolerated; single-link + mode + uid proof),
+  CreatorOnlyCommitment. Error classes follow Rust problem.rs:
+  AccessPolicy -> CodeAccessPolicyUnsupported, Unsupported ->
+  CodeDurabilityUnsupported, IoAt -> CodeIO. acl_linux.go keeps the
+  xattr machine; acl_darwin.go/acl_other.go give an honest typed
+  refusal (CodeOSUnsupported, no libc ACL in pure Go, Decision 2A
+  forbids cgo); security_windows.go stub keeps the six cross-
+  compiles green.
+- v4/go/internal/live lifecycle surface: lifecycle_create.go
+  CreateLive (creation.rs create_live exact flow: capacity > 0,
+  destination + canonical-sidecar absence, kinds validation, three
+  nonzero_128 draws re-bound through unique_attempt_id, parent
+  identity, sidecar reserve -> initialize creating -> parent sync ->
+  require-absent, create_private main -> write_empty -> parent sync
+  -> publish_ready -> parent sync, the seven create.* crash points,
+  and the cleanup cascade ordered by ordinal), lifecycle_initialize.go
+  InitializeLive (transition.rs initialize_live exact: LockedMain
+  open under the exclusive lifetime lock with Writer-mode bootstrap
+  and the exact-committed-length rule, sidecar absence, reserve ->
+  initialize creating -> parent sync -> main verify -> publish_ready
+  -> parent sync, the four live_initialize.* crash points,
+  cleanup_created). Full Rust result surfaces: CreateResult/
+  CreationState, LiveTransitionResult/LiveTransitionOperation/
+  LiveTransitionStatus/LiveCoordinationLocation/LiveResetPolicy
+  (reset itself stays 4-6), Housekeeping (housekeeping.go),
+  LocalBasename (basename.go; max 512, encoding 1), FileIdentity
+  (namespace identity encode: dev le64, inode le64, zeros, kind 1),
+  main_empty.go (emptySpec/emptyMeta/writeEmpty over the
+  createPrivate descriptor: set_len, read-write mapping, both meta
+  pages, flush, sync_all, composing format.Meta EncodeMapped).
+  cleanup.go extended (TerminalFacts, absorb, uniqueAttemptID,
+  require_available); namespace.go restructured with
+  namespace_types.go shared result types and namespace_windows.go
+  stubs; createPrivate now returns Rust-exact (createdPrivate,
+  *privateCreationFailure) with cause+cleanup+identity facts (main
+  identity preserved through private failure, sidecar removal only
+  when main cleanup clean); reserve/reserveAt carry
+  *privateCreationFailure; internal/worker.CreateParent switches to
+  random.Nonzero128 and the shared security surface, mapping
+  security failures to CodeConflict "worker control access policy
+  could not be established" exactly like Rust worker/control.rs
+  namespace_error.
+- Public facade v4/go/lifecycle_public.go: CreateLive and
+  InitializeLive with the CancellationToken checkpoint; the public
+  CreateResult extended to the full Rust field set (M3
+  TransactionID removed - Rust CreateResult has no such field; the
+  transaction is fixed 1 via Writer.Info), public CreationState/
+  Housekeeping/LocalBasename/FileIdentity/LiveTransitionResult +
+  transition enums. Create (immutable convenience) fills the new
+  fields truthfully (state=Created, capacity 0, no live surface).
+
+Coding-time corrections (all Rust-parity, recorded against the
+recorded design):
+- publicIdentity used *unix.Stat_t while os.FileInfo.Sys() returns
+  *syscall.Stat_t: the identity bytes were all zeros on Linux.
+  Fixed to syscall.Stat_t (matches mapping.RegularLinkCount
+  pattern); lifecycle_test.go asserts the identity is non-zero and
+  stable across the two meta pages.
+- parentIdentity reported CodeNameNotFound for a missing parent;
+  Rust parent_identity maps NamespaceError::Missing ->
+  Error::Io(NotFound) -> CodeIO. Fixed; TestCreateLiveMissingParentIs
+  NotCreatedWithoutResidue pins CodeIO with no residue.
+
+Validation on the working tree, all under nice: gofmt clean, vet
+clean (plain + v4work), plain/v4work tests, race, race+v4work,
+checkptr=2, mmap-trace PASS (no read/write on any .iprdb or sidecar
+descriptor), five cross-compiles (linux/386, linux/arm64,
+windows/amd64, darwin/arm64, freebsd/amd64) plain AND -tags v4work.
+Lifecycle coverage: create success (bootstrap txn=1 + identical meta
+pages + sidecar ready), hard errors, missing parent, initialize
+success, existing-sidecar refusal, uncommitted-tail refusal, v4work
+crash matrix (7 create points + 4 initialize points, child exit 86,
+artifact state verified), public round trip + cancellation, ACL
+xattr removal + trivial proof, commitment vector, worker control
+proof.
+
+- Next: chunk 4-3 five-aspect review (same five agents, adversarial,
+  one level, disjoint aspects, Rust authority baseline), fix
+  findings, re-review, then signed commit + push and 4-4 (live
+  writer open + commit barrier).
+
+### Status (2026-08-23) - chunk 4-3 five-aspect review round 1: fixes applied
+
+Round-1 review of the chunk 4-3 working tree, same five reviewers
+(one level, disjoint aspects, Rust authority baseline). Verdicts:
+Rust parity FAIL (2 P1, 3 P2, 5 P3), Go idioms FAIL (1 P2, 10 P3),
+performance PASS (2 P3), wire/integrity PASS (1 P3), APIs/docs/records
+PASS (5 P3). All findings fixed on the working tree:
+
+P1-1 (parity) - the Go live namespace now runs on the retained
+directory machine (new internal/live/directory.go + ns_error.go,
+mirroring Rust publication/namespace/unix.rs Directory and
+live_namespace::namespace_error): parent opens use O_DIRECTORY|
+O_NOFOLLOW, prove the directory, require a durability-approved local
+filesystem (Linux f_type whitelist EXT/XFS/BTRFS/F2FS/ZFS/BCACHEFS;
+darwin/freebsd MNT_LOCAL; other targets refuse) and a proven name_max
+(Linux statfs f_namelen, bsd fpathconf _PC_NAME_MAX), and every name
+operation executes against the retained directory descriptor
+(fstatat/openat/unlinkat, at_nofollow per target). bindPath mirrors
+Rust Path::parent/file_name semantics (single-component paths have
+the empty parent whose open reports Missing; "." and ".." report
+InvalidArgument). New focused tests: overlong basename (300 bytes) ->
+CodeNameInvalid before any syscall; symlinked parent -> CodeIO;
+relative single-component create -> CodeIO with no residue.
+ForkedHandle (check_creator) is unreachable in Go: the process cannot
+fork; recorded here so the parity gap is explicit. filepath.Clean
+normalization remains the Go-side path convention (Rust operates on
+raw paths); noted as a deliberate Go idiom.
+
+P1-2 / wire P3-1 (parity) - security failures in the live path now
+fold through the live namespace_error classes exactly like Rust
+create_private (new liveSecurityError in ns_error.go): AccessPolicy
+-> CodeWrongState "live file ownership changed", Unsupported ->
+CodeDurabilityUnsupported; the CodeAccessPolicyUnsupported problem
+class stays with the chunk 4-8 publication resolver surface. Pinned
+by TestLiveSecurityErrorMapsToLiveClasses. The security package doc
+now records the caller-contextual mapping.
+
+P2-1 (parity) - directory sync EINVAL is the Unsupported class
+(DurabilityUnsupported "live file namespace lacks required local
+operations") in syncParent and in every removeExact cleanup outcome
+(Rust Directory::sync + namespace_error).
+
+P2-2 (parity) - createPrivate enforces the directory name_max before
+openat (Directory::create require_name_lengths): an overlong
+basename is CodeNameInvalid, reachable through the canonical sidecar
+name even when the main basename passes the entry probe (Rust
+reachability is identical).
+
+P2-3 (parity, tracked) - darwin creator-only refusal (no pure-Go
+filesec ACL machine, Decision 2A) and the Windows live stubs stay as
+recorded in the design entry (4-12 / M5); no change in this round.
+
+P3 (parity) - message strings aligned to the Rust authorities:
+WrongMode classes all report "live file ownership changed" (identity,
+link-count, not-regular, not-directory, access-policy); NameInvalid/
+NameExists/NameNotFound report "feed name is invalid"/"feed name
+already exists"/"feed name does not exist" (Rust Display payloads,
+matching the existing feed_workflow convention); reader-capacity
+exhaustion reports "the live reader table has no free slot"; path.go
+reports the distinct Rust reserved-prefix and reserved-suffix
+details. createPrivate no longer runs the extra post-security
+verifyPath (Rust has no such re-check); openRw no longer verifies the
+path internally (Rust open_rw binds, opens, and proves the identity
+only; the Rust-exact post-open verify stays at LockedMain::open and
+the sidecar verify surfaces). Edge classes now match Rust: an ENOENT
+after bind is Io (CodeIO), "." is InvalidArgument, a regular-file
+parent is Io via the O_DIRECTORY open.
+
+P2 (idioms) - dead test var errNever deleted; type assertions
+replaced with errors.As/errors.Is in the crash test, security tests,
+and the ACL install helper; nil checked before use in publicIdentity;
+the dead basename empty-name branch deleted; commitmentDomain is a
+const string; commitment tests gained a hardcoded known-answer
+vector for uid 0 (dbf2a75f...); exported security surfaces without
+current production callers (CreatorOnlyCommitment) are documented as
+consumed by the chunk 4-8 resolver slice.
+
+P3 (performance) - slotOffset and sidecarLength dropped the per-call
+64-bit division; the overflow guards stay as provably-dead compare
+forms (Rust's checked_mul is LLVM-eliminated for the same uint32
+range). openRw's redundant pre-lock lstat is gone with the
+verify-path restructure (single post-lock verify, Rust-exact).
+
+P3 (records) - implemented entry cross-compile count corrected to
+five; public facade cites live_lifecycle::initialize_live (not
+live_writer); the reset note says chunk 4-6; LiveTransitionResult
+identity pointers documented as always present; the design entry's
+"cleanup after late failure" validation item is now covered
+functionally by TestCreateLiveMidFlowCancellationCleansTheSidecar
+and TestInitializeLiveMidFlowCancellationCleansTheSidecar (mid-flow
+cancellation after sidecar reservation removes the sidecar exactly,
+main byte-identical, status Unchanged, no residue), in addition to
+the crash-matrix artifact states.
+
+Validation on the working tree, all under nice: gofmt clean, vet
+clean (plain + v4work), plain/v4work tests, race, race+v4work,
+checkptr=2 (plain + v4work), mmap-trace PASS, five cross-compiles
+(linux/386, linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64)
+plain AND -tags v4work.
+
+- Next: chunk 4-3 round-2 re-review (same five agents, adversarial,
+  one level, disjoint aspects), then signed commit + push and 4-4.
+
+### Status (2026-08-23) - chunk 4-3 five-aspect review round 2: fixes applied
+
+Round-2 re-review of the same five reviewers (one level, disjoint
+aspects, adversarial, read-only, Rust authority baseline; focus on the
+round-1 diff). Verdicts: Rust parity PASS (6 P3), Go idioms FAIL (1 P2,
+4 P3), performance PASS (3 P3), wire/integrity PASS (1 P3),
+APIs/docs/records FAIL (1 P2, 2 P3). All P2s and the cheap P3s fixed;
+the remaining P3s are deliberate conventions recorded below.
+
+P2 (idioms) - dead Rust-mirror placeholders with zero consumers
+deleted: nsAccessPolicyError() and the nsAccessPolicy discriminant
+(internal/live/ns_error.go; the wrong-mode kinds still fold to
+WrongState via the nsMap/Error defaults) and residueFacts()
+(internal/live/cleanup.go; Rust uses it only in reset_live_coordination,
+out of this slice - re-added with chunk 4-6).
+
+P2 (records) - the SOW prose said "the five create.* crash points" in
+three places; the create crash matrix has seven points (five call
+sites in Rust creation.rs plus create.after_sidecar_sync and
+create.after_ready_write in live_sidecar.rs), all armed in Go.
+Corrected to "the seven create.* crash points" at the implemented
+entry, the design entry, and the round-1 summary.
+
+P3 (parity) - freebsd final-symlink classification aligned: openat
+ELOOP and (freebsd only) EMLINK now both report the not-regular class
+(Rust namespace::is_nofollow_symlink), via the new
+nofollow_freebsd.go / nofollow_other.go helpers. combineErrors detail
+aligned to Rust Display: "; cleanup also failed: " (sdk_error.rs).
+random.go CodeIO detail aligned to Rust Error::Random Display:
+"operating-system randomness failed: ".
+
+P3 (idioms) - the hand-rolled hex decoder in the commitment
+known-answer test replaced with encoding/hex; the provably-dead
+`name == ""` arms (filepath.Base never returns "") dropped from
+basename.go, path.go, and namespace.go.
+
+P3 (performance) - dirEntry returned by value from Directory::entry
+(the bool reports absence), removing the per-probe heap allocation on
+every namespace probe (verifyName, requireAbsent, unlinkExact,
+verifyPath, pathIdentity); security.Capture returns Profile by value.
+openDirectory returning *directory and pathIdentity returning
+*FileIdentity stay: pointer returns are the Go idiom for a machine
+holding an *os.File and for the optional-identity surface (Rust
+Option<LocalFileIdentity>); both are once-per-operation cold paths,
+recorded here as deliberate.
+
+P3 (records) - the public transition-result doc qualified: the
+directory and main identities are always present; the new-sidecar
+identity is absent when the sidecar was never created; the
+previous-sidecar identity is absent on initialize and present on
+reset (lifecycle_public.go; Rust carries
+Option<LocalFileIdentity>). The internal LiveTransitionResult doc and
+the reset slice note now say "out of the current 4-3 slice, scheduled
+for chunk 4-6".
+
+Recorded message-parity decisions (class parity is exact; text differs
+by design): CodeIO details carry the Go operation prefix (Go
+error-wrapping convention; Rust discards the operation in
+namespace_error); parentIdentity keeps the stable detail "live parent
+directory does not exist" (Rust renders the underlying io::NotFound
+message); bindPath edge shapes ("."/".."/"/" and "foo/.." with a
+missing parent) are class-identical InvalidArgument and unreachable in
+normal use; the worker claimWriter detail "live database writer lease
+is held" is pre-existing and off the 4-3 path. sidecar.go at 598 lines
+stays as one cohesive file (4-3 delta is small), noted in the ledger.
+
+Pre-existing flake fixed in the same close-out: the direct-workflow
+zero-allocation window (assertZeroAllocWindow) measured process-wide
+TotalAlloc deltas against a 64-byte bound that documented the
+one-time 48-byte and 16-byte runtime cache entries; measurement
+windows occasionally caught two 48-byte entries (96 bytes). Proven
+pre-existing by reproduction on the committed HEAD tree (3/30
+isolated runs, always exactly +2 mallocs of 48 bytes; the writer
+path is untouched by this chunk). The bound is now 160 bytes with
+the comment recording the observed entry shape; sensitivity is
+preserved because a per-record regression allocates ~1.15 KB per
+record, far above the window (30/30 isolated runs pass after the
+fix).
+
+Validation on the working tree, all under nice with -count=1: gofmt
+clean, vet clean (plain + v4work), plain/v4work tests, race,
+race+v4work, checkptr=2 (plain + v4work), mmap-trace PASS, five
+cross-compiles (linux/386, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64) plain AND -tags v4work. All round-2 fixes land before
+the final signed commit; chunk 4-3 closes with this entry.
+
+- Next: signed commit + push of chunk 4-3, then chunk 4-4 (live
+  writer open + commit barrier).

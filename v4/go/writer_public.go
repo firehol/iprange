@@ -46,19 +46,6 @@ func writerNamespaceCheck(clean string) error { return nil }
 // package-level no-op implementing the checkpoint formal.
 func noopCheckpoint() error { return nil }
 
-// CreateResult is the factual identity of one created database (Rust
-// CreateResult minus the sidecar/namespace/cleanup surface, milestone-4
-// gap). TransactionID is always 1 for a fresh database.
-type CreateResult struct {
-	Family        AddressFamily
-	ValueKind     ValueKind
-	StructureKind StructureKind
-	ValueTag      ValueTag
-	DatabaseID    [16]byte
-	CommitNonce   [16]byte
-	TransactionID uint64
-}
-
 // Create writes a brand-new empty transaction-1 database at path (Rust
 // create_live minus the sidecar, SOW-0025 chunk-6 design record D2): an
 // existing destination is refused (ErrorNameExists), the value-kind and
@@ -66,7 +53,10 @@ type CreateResult struct {
 // database id and commit nonce are drawn, the identical txn-1 meta is
 // written to both meta pages, flushed and synced. The file is left
 // committed and readable by both readers; open it with OpenWriter to
-// mutate it.
+// mutate it. The returned CreateResult reports the truth of the
+// immutable-only path: State Created with no sidecar, no identities,
+// no basename, and zero reader capacity (the full live-pair surface is
+// reported by CreateLive).
 func Create(path string, family AddressFamily, kind ValueKind, structure StructureKind, tag ValueTag) (CreateResult, error) {
 	created, err := writer.Create(path, uint8(family), uint8(kind), uint8(structure), tag.Wire(), writerNamespaceCheck)
 	if err != nil {
@@ -79,7 +69,7 @@ func Create(path string, family AddressFamily, kind ValueKind, structure Structu
 		ValueTag:      tag,
 		DatabaseID:    created.DatabaseID,
 		CommitNonce:   created.CommitNonce,
-		TransactionID: 1,
+		State:         CreationStateCreated,
 	}, nil
 }
 

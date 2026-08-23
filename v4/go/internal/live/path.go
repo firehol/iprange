@@ -22,11 +22,11 @@ const sidecarSuffix = ".readers"
 // suffix or the reserved .iprange- prefix.
 func canonicalSidecarPath(main string) (string, error) {
 	name := filepath.Base(main)
-	if name == "." || name == string(filepath.Separator) || name == "" {
+	if name == "." || name == string(filepath.Separator) {
 		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	if invalidCoordinationName(name) {
-		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database file name is not one path component"}
+		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: invalidCoordinationDetail(name)}
 	}
 	return filepath.Join(filepath.Dir(main), name+sidecarSuffix), nil
 }
@@ -37,14 +37,21 @@ func canonicalSidecarPath(main string) (string, error) {
 // ASCII-case-insensitive, exactly like the writer destination-name
 // validator (publication_staging.go invalidDestinationName).
 func invalidCoordinationName(name string) bool {
+	return invalidCoordinationDetail(name) != ""
+}
+
+// invalidCoordinationDetail reports the exact Rust rejection detail
+// (path.rs validate_posix_name: distinct reserved prefix and suffix
+// messages; the component-shape failures share the generic detail).
+func invalidCoordinationDetail(name string) string {
 	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
-		return true
+		return "database file name is not one path component"
 	}
 	if format.AsciiFoldHasPrefix(name, format.ReservedBasenamePrefix) {
-		return true
+		return "database file name uses the reserved .iprange- prefix"
 	}
 	if format.AsciiFoldHasSuffix(name, format.CoordinationSuffix) {
-		return true
+		return "database file name uses the reserved .readers suffix"
 	}
-	return false
+	return ""
 }

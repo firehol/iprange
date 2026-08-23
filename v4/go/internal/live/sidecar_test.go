@@ -29,15 +29,16 @@ func testSidecarIdentity() [16]byte  { return [16]byte{2} }
 // authority (Rust create_private_for_test).
 func createTestMain(t *testing.T, path string) {
 	t.Helper()
-	file, _, err := createPrivate(path, cleanupAuthority{
+	created, failure := createPrivate(path, cleanupAuthority{
 		attemptID:     [16]byte{9},
 		ordinal:       0,
 		kind:          cleanupKindOwnedMain,
 		directoryRole: cleanupRoleMainFile,
 	})
-	if err != nil {
-		t.Fatalf("create main: %v", err)
+	if failure != nil {
+		t.Fatalf("create main: %v", failure.cause)
 	}
+	file := created.file
 	file.Close()
 }
 
@@ -46,9 +47,9 @@ func createTestMain(t *testing.T, path string) {
 func createTestReady(t *testing.T, main string, capacity uint32) *Sidecar {
 	t.Helper()
 	createTestMain(t, main)
-	sidecar, err := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), capacity)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
+	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), capacity)
+	if failure != nil {
+		t.Fatalf("reserve: %v", failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
 		t.Fatalf("initializeCreating: %v", err)
@@ -152,14 +153,14 @@ func TestCreatingAndMalformedSidecarsAreRejected(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	createTestMain(t, main)
-	sidecar, err := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), 2)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
+	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), 2)
+	if failure != nil {
+		t.Fatalf("reserve: %v", failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
 		t.Fatalf("initializeCreating: %v", err)
 	}
-	_, err = open(main, testDatabaseIdentity())
+	_, err := open(main, testDatabaseIdentity())
 	expectCode(t, err, format.CodeWrongState)
 
 	if err := sidecar.publishReady(); err != nil {
@@ -169,6 +170,9 @@ func TestCreatingAndMalformedSidecarsAreRejected(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	_, err = open(main, testDatabaseIdentity())
+	if err == nil {
+		t.Fatal("open: want format error after truncate")
+	}
 	expectCode(t, err, format.CodeFormatInvalid)
 
 	// A crash-left residue between create and sizing leaves a shorter
@@ -401,8 +405,8 @@ func TestSidecarLengthGeometry(t *testing.T) {
 	if length != format.PageSize {
 		t.Fatalf("sidecarLength(0) = %d, want %d", length, format.PageSize)
 	}
-	_, err = reserveAt(filepath.Join(t.TempDir(), "zero.iprdb"), testDatabaseIdentity(), testSidecarIdentity(), 0)
-	expectCode(t, err, format.CodeInvalidArgument)
+	_, failure := reserveAt(filepath.Join(t.TempDir(), "zero.iprdb"), testDatabaseIdentity(), testSidecarIdentity(), 0)
+	expectCode(t, failure.cause, format.CodeInvalidArgument)
 }
 
 func TestHeaderCodecRoundTrip(t *testing.T) {

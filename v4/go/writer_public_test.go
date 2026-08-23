@@ -32,8 +32,11 @@ func pubCreate(t *testing.T, family AddressFamily, tag ValueTag) (string, Create
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.TransactionID != 1 || created.DatabaseID == [16]byte{} || created.CommitNonce == [16]byte{} {
-		t.Fatalf("created identity = %+v, want txn 1 with drawn ids", created)
+	if created.DatabaseID == [16]byte{} || created.CommitNonce == [16]byte{} ||
+		created.State != CreationStateCreated || created.SidecarID != [16]byte{} ||
+		created.ReaderCapacity != 0 || created.DirectoryIdentity != nil ||
+		created.MainIdentity != nil || created.SidecarIdentity != nil {
+		t.Fatalf("created identity = %+v, want Created state with drawn ids and no live-pair surface", created)
 	}
 	return path, created
 }
