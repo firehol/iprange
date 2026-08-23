@@ -101,6 +101,14 @@ func TestPublicCreateFeedSliceIngestion(t *testing.T) {
 	if err := finished.Abort(); err != nil {
 		t.Fatal(err)
 	}
+	// The spent handle reports the draftless commit class (Rust
+	// commit_attempt parity: the draft was discarded by Abort).
+	if _, err := finished.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit after abort = %v, want no pending transaction", err)
+	}
+	if err := finished.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after abort = %v, want no pending transaction", err)
+	}
 	// The aborted workflow left the writer clean.
 	if err := w.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
 		t.Fatalf("abort after clean = %v, want no pending transaction", err)
@@ -218,6 +226,13 @@ func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
 	if err := change.Abort(); err != nil {
 		t.Fatal(err)
 	}
+	// The spent prepared change reports the draftless commit class.
+	if _, err := change.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("rename commit after abort = %v, want no pending transaction", err)
+	}
+	if err := change.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("rename abort after abort = %v, want no pending transaction", err)
+	}
 
 	// delete_feed: one lookup, then abort.
 	delete, err := w.DeleteFeed(name, cancellation)
@@ -226,6 +241,9 @@ func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
 	}
 	if err := delete.Abort(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := delete.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("delete commit after abort = %v, want no pending transaction", err)
 	}
 }
 
@@ -353,9 +371,13 @@ func TestPublicPreparedFeedChangeMetadata(t *testing.T) {
 	if result.Status != CommitCommitted {
 		t.Fatalf("rename commit status = %v, want committed", result.Status)
 	}
-	// The spent handle refuses a second commit (Rust type consumption).
-	if _, err := change.Commit(); !isPubCode(err, ErrorWrongState) {
-		t.Fatalf("second commit = %v, want wrong state", err)
+	// The spent handle reports the draftless commit class (Rust
+	// commit_attempt parity: the draft is gone after publication).
+	if _, err := change.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("second commit = %v, want no pending transaction", err)
+	}
+	if err := change.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after commit = %v, want no pending transaction", err)
 	}
 
 	delete, err := w.DeleteFeed(renamed, cancellation)

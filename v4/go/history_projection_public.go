@@ -469,6 +469,12 @@ func (h *FinishedHistoryProjection) ClearMetadataJSON() (bool, error) {
 // publication (Rust commit_with). An unchanged draft is discarded and
 // reports ErrorNoPendingTransaction.
 func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
+	if h.spent {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// projection (the draft was discarded by Abort, an op failure,
+		// or a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := h.requireChangedActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -559,7 +565,7 @@ func (h *FinishedHistoryProjection) commitAbortAfter(attempt writer.CommitAttemp
 // FinishedHistoryProjection::abort parity).
 func (h *FinishedHistoryProjection) Abort() error {
 	if h.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	h.spent = true
 	if !h.changed {

@@ -115,6 +115,43 @@ func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
 	}
 }
 
+// TestDirectWorkflowCommitAfterAbort pins the draftless commit class
+// (Rust commit_attempt parity) on the shared FinishedWorkflow terminal
+// used by direct replacement and the timestamp refreshes: the draft was
+// discarded by Abort, so Commit and a second Abort report
+// ErrorNoPendingTransaction.
+func TestDirectWorkflowCommitAfterAbort(t *testing.T) {
+	path := directWorkflowDB(t, mustTag(t, "direct"))
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	replacement, err := w.BeginDirectReplacement(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.AddRangesV4([]DirectRangeV4{{From: 1, To: 1, Value: 7}}); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := replacement.FinishInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finished.IsChanged() {
+		t.Fatal("direct replacement with one range reported no change")
+	}
+	if err := finished.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := finished.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit after abort = %v, want no pending transaction", err)
+	}
+	if err := finished.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after abort = %v, want no pending transaction", err)
+	}
+}
+
 // TestFirstSeenRefreshRemovalsV4 mirrors the Rust
 // direct_workflows.rs first-seen removal sink test: an empty refresh
 // input expires the whole map, the sink receives bounded 64-record

@@ -483,6 +483,12 @@ func (f *FinishedWorkflow) ClearMetadataJSON() (bool, error) {
 // checked at prepare and during publication (Rust commit_with). An
 // unchanged draft is discarded and reports ErrorNoPendingTransaction.
 func (f *FinishedWorkflow) Commit() (CommitResult, error) {
+	if f.spent {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// workflow (the draft was discarded by Abort, an op failure, or
+		// a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := f.requireChangedActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -495,7 +501,7 @@ func (f *FinishedWorkflow) Commit() (CommitResult, error) {
 // FinishedWorkflow::abort parity).
 func (f *FinishedWorkflow) Abort() error {
 	if f.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	f.spent = true
 	if !f.changed {
@@ -666,6 +672,12 @@ func (p *PreparedFeedChange) ClearMetadataJSON() (bool, error) {
 // Commit publishes this prepared change (Rust
 // PreparedFeedChange::commit).
 func (p *PreparedFeedChange) Commit() (CommitResult, error) {
+	if p.spent {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// prepared change (the draft was discarded by Abort, an op
+		// failure, or a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := p.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -676,7 +688,7 @@ func (p *PreparedFeedChange) Commit() (CommitResult, error) {
 // healthy (Rust PreparedFeedChange::abort).
 func (p *PreparedFeedChange) Abort() error {
 	if p.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	p.spent = true
 	if p.w.core == nil || p.w.core.Draft() == nil {

@@ -62,7 +62,7 @@ func (c *combinedWords) ReadChunk(start uint32) (words [membershipChunkWords]uin
 // stored bitmaps, creating the record when the result is new (Rust
 // membership_dictionary::combine): identity shortcuts first, then the
 // canonical trailing-word count, then the intern.
-func combineMembership(store tree.RetiringStore, state *membershipState, leftID, rightID, rightWords uint32, operation MembershipOperation) (membershipInterned, error) {
+func combineMembership(store tree.RetiringStore, state *membershipState, scratch *combinedWords, leftID, rightID, rightWords uint32, operation MembershipOperation) (membershipInterned, error) {
 	work.MembershipCombination(1)
 	leftWords, err := storedMembershipWordCount(store, state.idRoot, leftID)
 	if err != nil {
@@ -74,7 +74,7 @@ func combineMembership(store tree.RetiringStore, state *membershipState, leftID,
 	if result, ok := membershipIdentity(leftID, leftWords, rightID, rightWords, operation); ok {
 		return result, nil
 	}
-	source := &combinedWords{
+	*scratch = combinedWords{
 		store:      store,
 		idRoot:     state.idRoot,
 		leftID:     leftID,
@@ -84,6 +84,7 @@ func combineMembership(store tree.RetiringStore, state *membershipState, leftID,
 		operation:  operation,
 		wordCount:  rawMembershipWordCount(leftWords, rightWords, operation),
 	}
+	source := scratch
 	source.wordCount, err = canonicalMembershipCount(store, source)
 	if err != nil {
 		return membershipInterned{}, err

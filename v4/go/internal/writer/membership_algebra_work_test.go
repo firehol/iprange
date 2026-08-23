@@ -18,12 +18,13 @@ import (
 // nothing, and a real combination interns once after two operand
 // lookups.
 func TestMembershipCombineWorkPins(t *testing.T) {
+
 	m, state := newAlgebraState()
 	a := internAlgebraWords(t, m, state, 0, 64)
 	b := internAlgebraWords(t, m, state, 1, 65)
 
 	work.Reset()
-	if _, err := combineMembership(m, state, a, a, storedWordsOf(t, m, state, a), MembershipUnion); err != nil {
+	if _, err := combineMembership(m, state, &combineScratch, a, a, storedWordsOf(t, m, state, a), MembershipUnion); err != nil {
 		t.Fatal(err)
 	}
 	if work.Read().MembershipCombinations != 1 {
@@ -34,7 +35,7 @@ func TestMembershipCombineWorkPins(t *testing.T) {
 	}
 
 	work.Reset()
-	if _, err := combineMembership(m, state, a, b, storedWordsOf(t, m, state, b), MembershipUnion); err != nil {
+	if _, err := combineMembership(m, state, &combineScratch, a, b, storedWordsOf(t, m, state, b), MembershipUnion); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := work.Read()

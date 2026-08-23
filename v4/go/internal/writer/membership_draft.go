@@ -81,7 +81,7 @@ func draftInternMembership[W membershipWords](s *DraftStore, words W) (membershi
 // never a Some(0) id.
 func (s *DraftStore) combineMemberships(current, supplied, suppliedWords uint32, operation MembershipOperation) (uint32, bool, error) {
 	state := s.membershipState()
-	interned, err := combineMembership(s, &state, current, supplied, suppliedWords, operation)
+	interned, err := combineMembership(s, &state, &s.combineScratch, current, supplied, suppliedWords, operation)
 	if err != nil {
 		return 0, false, err
 	}

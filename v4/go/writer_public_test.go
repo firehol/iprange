@@ -139,9 +139,13 @@ func TestPublicAbortDiscards(t *testing.T) {
 	if err := tx.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	// Abort is idempotent-spent: a second transition refuses.
-	if _, err := tx.Commit(); !isPubCode(err, ErrorWrongState) {
-		t.Fatalf("commit after abort err = %v, want ErrorWrongState", err)
+	// Abort is idempotent-spent: the draft is gone, so Commit reports
+	// ErrorNoPendingTransaction (Rust commit_attempt parity).
+	if _, err := tx.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit after abort err = %v, want ErrorNoPendingTransaction", err)
+	}
+	if err := tx.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after abort err = %v, want ErrorNoPendingTransaction", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)

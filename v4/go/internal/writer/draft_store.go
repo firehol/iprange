@@ -66,6 +66,12 @@ type DraftStore struct {
 	// allocating per intern; the scratch is only live for one nested
 	// intern call at a time.
 	structureScratch structurePayload
+	// combineScratch owns the combine operand of one membership combine
+	// (Rust Combined local). The shape-stenciled generic membershipWords
+	// dispatch leaks its pointer argument, so the draft reuses this
+	// field instead of allocating per combine; the scratch is only live
+	// for one nested combine at a time.
+	combineScratch combinedWords
 	// rangeCtx is the mutable range-tree state of one draft operation
 	// (Rust range_mutation function parameters: store, root,
 	// record_count). The range context carries interface fields whose

@@ -325,6 +325,14 @@ func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
 	if err := handle.Abort(); err != nil {
 		t.Fatal(err)
 	}
+	// The spent handle reports the draftless commit class (Rust
+	// commit_attempt parity: the draft was discarded by Abort).
+	if _, err := handle.Commit(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("commit after abort = %v, want no pending transaction", err)
+	}
+	if err := handle.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
+		t.Fatalf("abort after abort = %v, want no pending transaction", err)
+	}
 	if err := w.core.Healthy(); err != nil || w.core.HasDraft() {
 		t.Fatalf("writer not healthy and draft-free after abort: %v", err)
 	}

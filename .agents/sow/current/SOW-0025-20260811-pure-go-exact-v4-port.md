@@ -40,6 +40,61 @@ Recorded as Review Process below.
 
 ## Status
 
+### Status (2026-08-23) - M3 milestone CLOSED: five-aspect confirmation PASS on the final working tree
+
+The final milestone-scope confirmation over the full M3 delta
+(499a0e3..3b76f8f plus the working-tree close fixes) returned all five
+aspects PASS with no P0-P2 findings: Meitner (Rust parity), Anscombe
+(Go idioms), Harvey (performance), Newton (wire/integrity), Aristotle
+(APIs/docs/records). Milestone 3 (complete logical SDK: advanced
+transactions, typed workflows, metadata, queries, joins, algebra,
+snapshots, reports, cancellation, cleanup, randomized public models
+over the internal core) is CLOSED.
+
+The last review round fixed or disposed every remaining item:
+
+- F1 (Meitner/Aristotle, P2) - spent Commit/Abort error class on the
+  workflow-terminal handles: FinishedWorkflow, FinishedHistoryProjection,
+  PreparedFeedChange, and DirectTransaction Commit/Abort now report
+  ErrorNoPendingTransaction on a spent handle, matching Rust
+  commit_attempt/abort (writer_core/publication.rs:26-34,
+  live_writer.rs:233-237, live_writer/commit.rs:37-43). The
+  active/closed-writer WrongState classes and the no-change Abort class
+  are unchanged and pinned. New/updated pins: TestDirectWorkflowCommitAfterAbort,
+  TestPublicAbortDiscards, feed rename/delete prepared-change commit
+  after abort, feed FinishedWorkflow commit after abort, history
+  projection commit after abort.
+- P2 (Harvey) - combinedWords heap escape on the membership-combine
+  miss path: DraftStore now owns one combineScratch and
+  combineMembership writes the operand into it (draft_store.go,
+  membership_algebra.go), mirroring structureScratch; verified with
+  -gcflags=-m=2 (no escape) and pinned at exactly 0 allocations/op by
+  TestMembershipCombineZeroAlloc over 200 runs.
+- P3 dispositions all recorded with evidence: general-gap path
+  accepted-remain (measured 54 objects/run vs the 300 ceiling), tracked
+  to the M4 union-input review; beginTimestampState closed-probe-first
+  pattern accepted; ScannedComparison field stutter and noopCheck naming
+  accepted (Rust field-name mirroring); leaf-re-inspect after COW
+  first-touch tracked; Harvey unpinned probes measured 0 allocs/op;
+  requireActive ordering unreachable through the typed surface.
+
+Validation on the final working tree, all under nice: gofmt clean, vet
+clean, plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace
+PASS (no read/write on any .iprdb descriptor), six cross-compiles
+(linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64), Rust source-graph complete, Rust cargo test and
+--all-features, Rust conformance.
+
+Follow-up map at M3 close: the recorded P3 dispositions carry to their
+named M4 review points (union-input review, live sidecar work); no new
+follow-up items remain. SOW-0017 (authenticated public snapshots,
+Phase 2 signing) remains explicitly out of scope, as recorded.
+
+Next: commit this close signed and push, then start Milestone 4
+(live/platform/recovery completion): sidecar coordination, lifecycle
+and publication resolvers, supported-platform boundaries, explicit
+validation/recovery, worker, crash/fault/resource proof.
+
 ### Status (2026-08-23) - chunk 3b-6 slices A-D complete: five-aspect FAILs fixed, re-review pending
 
 Chunk 3b-6 (randomized public models over the internal core) slices
@@ -156,7 +211,141 @@ vet, plain/v4work tests, race, race+v4work, checkptr=2, six
 cross-compiles, mmap-trace PASS, Rust source-graph complete, Rust cargo
 test and --all-features, Rust conformance.
 
-- Next: commit the chunk 3b-6 slices A-D delta signed and push.
+### Status (2026-08-23) - chunk 3b-6 CLOSED and M3 complete: committed at 3b76f8f
+
+Chunk 3b-6 closed at 3b76f8f (signed, pushed): the working-tree delta
+above plus the post-gate P3 fixes landed as one commit, 26 files, +4343
+lines. The five-aspect re-review (Meitner, Anscombe, Harvey, Newton,
+Aristotle) closed PASS before the P3 dispositions; the P3 fixes were
+re-verified by the full battery under nice after landing.
+
+With chunk 3b-6 closed, Milestone 3 (complete logical SDK: advanced
+transactions, typed workflows, metadata, queries, joins, algebra,
+snapshots, reports, cancellation, cleanup, randomized public models
+over the internal core) is functionally complete: every M3 chunk (1, 2,
+3a, 3b-1, 3b-2 slices 1-3, 3b-3 slices A-D, 3b-4, 3b-5, 3b-6) closed
+with the five-aspect gate PASS, each committed and pushed.
+
+- Next: milestone-scope five-aspect confirmation over the full M3 delta
+  (499a0e3..3b76f8f), then Milestone 4 (live/platform/recovery
+  completion): sidecar coordination, lifecycle and publication
+  resolvers, supported-platform boundaries, explicit
+  validation/recovery, worker, crash/fault/resource proof.
+
+### Status (2026-08-23) - M3 milestone confirmation: Aristotle FAIL on the empty follow-up claim, same-class commit/abort class fixed
+
+The milestone-scope confirmation over 499a0e3..3b76f8f returned four
+aspects PASS (Meitner, Anscombe, Harvey, Newton) and Aristotle FAIL
+with one P2: the M3 entry claimed the follow-up map is empty, but the
+feed-workflow Commit-after-abort error class was still open (recorded
+twice as "to resolve at the next gate" at the 3b-5 and slice-C closes).
+Rust commit_attempt reports NoPendingTransaction after the draft is
+gone (writer_core/publication.rs:26-34, live_writer.rs commit_attempt);
+the Go FinishedWorkflow/FinishedHistoryProjection/PreparedFeedChange/
+DirectTransaction Commit and Abort paths reported WrongState("...
+is no longer active") on spent handles, inconsistent with the
+slice-C-fixed structured/membership transactions (spent Commit and
+Abort -> NoPendingTransaction, pinned).
+
+Fixed the whole class on the working tree, following the slice-C
+pattern exactly (spent check first, then the active/closed-writer
+gates):
+
+- FinishedWorkflow.Commit and .Abort (feed_workflow_public.go) - spent
+  handle reports ErrorNoPendingTransaction; the no-change Abort class
+  and the closed-writer WrongState class are unchanged.
+- FinishedHistoryProjection.Commit and .Abort
+  (history_projection_public.go) - same spent-first class.
+- PreparedFeedChange.Commit and .Abort (feed_workflow_public.go) - the
+  rename/delete prepared-change handles now report
+  ErrorNoPendingTransaction when spent.
+- DirectTransaction.Commit and .Abort (writer_public.go) - the
+  pre-existing direct transaction now matches the slice-C transaction
+  class (spent Commit/Abort -> ErrorNoPendingTransaction) instead of
+  the older WrongState mapping.
+- Stale pins updated to the corrected class and new pins added:
+  TestPublicAbortDiscards (direct transaction commit and abort after
+  abort), feed rename/delete prepared-change commit after abort, feed
+  FinishedWorkflow commit after abort, history projection commit after
+  abort, and TestDirectWorkflowCommitAfterAbort covering the shared
+  FinishedWorkflow terminal of the direct workflows.
+
+Full battery green under nice at the fix: gofmt clean, vet,
+plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace PASS.
+
+- Newton's 3b-6 P3 note (requireActive ordering before the workflow-kind
+  gate in requireReplacement; Rust checks the kind gate first):
+  unreachable through the typed surface, align if the path is ever
+  touched; tracked with the other accepted-remain dispositions.
+- Next: Aristotle re-review of the F1 fix on the working tree; when
+  Aristotle reports PASS, record M3 closed with the corrected follow-up
+  map: the recorded dispositions above carry to their named M4 review
+  points, and no new follow-up items remain beyond SOW-0017 Phase-2
+  signing (explicitly out of scope). Commit signed, push, and start
+  Milestone 4 (live/platform/recovery completion): sidecar
+  coordination, lifecycle and publication resolvers,
+  supported-platform boundaries, explicit validation/recovery, worker,
+  crash/fault/resource proof.
+
+### Status (2026-08-23) - M3 milestone confirmation: Meitner/Anscombe/Harvey FAILs fixed on the working tree
+
+The remaining three milestone-scope confirmations over 499a0e3..3b76f8f
+returned FAIL with findings; all are fixed or disposed on the working
+tree:
+
+- Meitner F-1 (P2) - workflow-terminal Commit/Abort WrongState class:
+  the identical finding Aristotle raised; the whole-class fix
+  (FinishedWorkflow, FinishedHistoryProjection, PreparedFeedChange,
+  DirectTransaction spent Commit/Abort -> ErrorNoPendingTransaction)
+  is recorded in the entry above.
+- Meitner F-2 + Anscombe P2-1 (P2, records) - the M3 close-out claimed
+  an empty follow-up map while tracked items were still open. The
+  corrected record is in the entries above and below; the remaining
+  dispositions:
+  - P3-B (optionalCell/rejectCell on the cold general gap protocol):
+    the randomized-models chunk exercised the general path and the
+    ceiling pin holds (measured 54 objects per run against the 300
+    ceiling), so the substance is confirmed P3; disposition
+    accepted-remain, tracked to the M4 union-input review.
+  - Meitner P3 note (beginTimestampState closed-writer probe precedes
+    the ValueKind check; Rust checks the kind gate first): accepted
+    closed-probe-first pattern, consistent with the slice-C ruling,
+    unreachable in the pinned suites; tracked.
+  - ScannedComparison.Comparison field stutter (slice-B carried):
+    accepted-remain, the field name mirrors the Rust struct field
+    (workflow/compare.rs comparison: Comparison), consistent with the
+    direct-mapping convention used across the port.
+  - noopCheck vs noopCheckpoint naming (slice-B carried): accepted,
+    the two nil-checkpoint stand-ins serve different prepare-stage and
+    durability-checkpoint roles in their own packages.
+  - leaf-re-inspect after COW first-touch (tree/path.go): documented
+    retained cost, tracked.
+  - Harvey P3-2 (unpinned performance probes, OutputBuilder intern and
+    both-sides trim): test-only observability gaps, both measured 0
+    allocs/op; tracked.
+- Harvey P2-1 (P2, performance) - combinedWords heap-escapes per
+  membership-combine call (membership_algebra.go): Rust builds the
+  Combined operand on the stack; the Go shape-stenciled generic
+  membershipWords dispatch leaked one &combinedWords (~48-56 B) per
+  combine on the miss path (two distinct non-empty bitmaps), firing on
+  live M3 per-record paths (feed merge transform, history projection
+  per-record merge, membership apply, structure remove-feed). Fixed
+  with the established scratch pattern: DraftStore owns one
+  combineScratch combinedWords field (draft_store.go) and
+  combineMembership writes the operand into it
+  (membership_algebra.go), mirroring structureScratch. Verified:
+  -gcflags=-m=2 shows no remaining combinedWords escape; new pin
+  TestMembershipCombineZeroAlloc (internal/writer/
+  membership_combine_alloc_test.go) measures exactly 0 allocations per
+  miss-path combine over 200 runs.
+
+Full battery green under nice at the fixes: gofmt clean, vet,
+plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace PASS.
+
+- Next: Meitner/Anscombe/Harvey re-review of the fixes on the working
+  tree; when all three report PASS together with Aristotle, record M3
+  closed with the corrected follow-up map, commit signed, push, and
+  start Milestone 4.
 
 Status: in-progress
 

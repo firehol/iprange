@@ -295,6 +295,12 @@ type CommitResult struct {
 // publication failure reports CommitNotCommitted before the meta write or
 // CommitOutcomeUnknown after it.
 func (t *DirectTransaction) Commit() (CommitResult, error) {
+	if !t.active {
+		// Rust commit_attempt reports NoPendingTransaction for a spent
+		// transaction (the draft was discarded by Abort, an op failure,
+		// or a cancellation).
+		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := t.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
@@ -411,6 +417,9 @@ func (e *abortError) As(target any) bool {
 // Abort discards this transaction and its unpublished tail (Rust
 // DirectTransaction::abort); the writer stays open and healthy.
 func (t *DirectTransaction) Abort() error {
+	if !t.active {
+		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+	}
 	if err := t.requireActive(); err != nil {
 		return err
 	}
