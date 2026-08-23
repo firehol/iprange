@@ -114,8 +114,8 @@ again under nice:
   tests, race, race+v4work, checkptr=2, six cross-compiles, Rust
   conformance (11 fixtures), Rust mixed-subprocess, Go subprocess
   cross-open.
-- Next: commit this round, send the delta to the pending reviewers,
-  close slice C only when all five aspects PASS, then slice D.
+- Next: the five-aspect re-review gate on the committed delta
+  7004a84, then slice D.
 
 ### Status (2026-08-23) - slice C review round 1: five-aspect FAILs fixed at ba446fa
 

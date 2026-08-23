@@ -386,7 +386,9 @@ func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 }
 
 // Commit publishes this transaction through the alternate metadata page
-// (Rust MembershipTransaction::commit).
+// (Rust MembershipTransaction::commit). Commit on a spent transaction
+// (aborted by Abort, a failed operation, or a fired cancellation)
+// reports ErrorNoPendingTransaction (Rust commit_attempt parity).
 func (t *MembershipTransaction) Commit() (CommitResult, error) {
 	if t.spent {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
