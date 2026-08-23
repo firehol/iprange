@@ -200,10 +200,10 @@ func proveMain(owner *mainAttempt, checkpoint func(mainPoint) error) error {
 }
 
 // retire retires one published main without checkpoints (Rust
-// PublishedMain::retire). The Rust housekeeping-observer arm is
-// #[cfg(windows)] gc territory; Go publication refuses Windows opens
-// at destination bind (M5), so the observer surface is intentionally
-// absent and housekeeping always stays unobserved on the supported
+// PublishedMain::retire). retire_observed shares the same unix arms;
+// only the #[cfg(windows)] gc wiring observes housekeeping, absent
+// here per M5 (Go publication refuses Windows opens at destination
+// bind), so housekeeping always stays unobserved on the supported
 // POSIX path.
 func (p *publishedMain) retire() (publishedOutput, *retiringMainFailure) {
 	return retireMain(*p, func(mainPoint) error { return nil })

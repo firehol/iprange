@@ -339,6 +339,46 @@ func TestAttemptState2FailureRetainsResolverAuthorityWithoutCleanupResidue(t *te
 	}
 }
 
+// TestAttemptOutcomeUnknownReleasesTheOperationFlock pins the Rust
+// drop of the failure owner on the outcome-unknown terminal path: the
+// machine closes its reservation (file, mapping, operation flock)
+// after building the result, so a fresh exclusive operation lock on
+// the coordination twin must succeed. The armed reservation stays on
+// disk for the resolver, which re-locks the same file (slice J); an
+// abandoned flock would stall it forever.
+func TestAttemptOutcomeUnknownReleasesTheOperationFlock(t *testing.T) {
+	dir := t.TempDir()
+	prepared, _ := attemptTestPrepared(t, dir, "result.v4")
+	defer prepared.Close()
+	d := testBoundDestination(t, dir)
+
+	result, failure := publishWithObserver(prepared, nil, attemptTestCheckpoint(
+		map[attemptPoint]error{attemptPointState2Selected: attemptTestInjected()}, nil), false, noopAttemptObserver)
+	if failure != nil {
+		t.Fatalf("state2 failure returned a preparation failure: %v", failure)
+	}
+	if result.Publication != PublicationOutcomeUnknown {
+		t.Fatalf("publication = %v, want outcome unknown", result.Publication)
+	}
+	if _, present, err := d.directory().Entry(d.coordinationName()); err != nil {
+		t.Fatalf("entry: %v", err)
+	} else if !present {
+		t.Fatal("coordination name removed after the state2 failure")
+	}
+	file, err := os.OpenFile(filepath.Join(dir, d.coordinationName()), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open coordination reservation: %v", err)
+	}
+	defer file.Close()
+	acquired, err := live.TryLockFile(file, reservationOperationLock, live.LockExclusive)
+	if err != nil {
+		t.Fatalf("try operation lock: %v", err)
+	}
+	if !acquired {
+		t.Fatal("operation flock still held after the failed attempt returned")
+	}
+}
+
 func TestAttemptMainRaceAfterState2IsOutcomeUnknownAndNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	prepared, _ := attemptTestPrepared(t, dir, "result.v4")

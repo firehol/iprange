@@ -8,7 +8,9 @@
 // every outcome carries the exact cleanup ledger and housekeeping
 // facts. The Rust observed variants are ported fully (the slice-F
 // "recorded with 4-10/4-11" deferrals are implemented here); the
-// observer is the crash-test hook, inert in production.
+// observer is the crash-test hook, inert in production. Every
+// terminal path closes the machine-owned reservation (file, mapped
+// view, operation flock) exactly where Rust drops the moved owner.
 
 package publication
 
@@ -92,7 +94,9 @@ func resumeArmed(s seed, output *preparedOutput, reservation armedReservation) P
 	if failure.owner.desiredProven {
 		return finishPublished(s, publishedMain{output: failure.owner.output, reservation: failure.owner.reservation}, mainProblem(failure.cause))
 	}
-	return outcomeUnknown(s, failure.owner.reservation.identity, mainProblem(failure.cause))
+	result := outcomeUnknown(s, failure.owner.reservation.identity, mainProblem(failure.cause))
+	_ = failure.owner.reservation.Close()
+	return result
 }
 
 func publishWithObserver(output *preparedOutput, check func() error, checkpoint func(attemptPoint) error, observe bool, observer func(*publicationCheckpoint) error) (PublicationResult, *PublicationPreparationFailure) {
@@ -107,7 +111,9 @@ func publishWithObserver(output *preparedOutput, check func() error, checkpoint 
 	}
 	if err != nil {
 		owner := draftOwner(draft)
-		return PublicationResult{}, preparation(s, output, &owner, err, checkpoint)
+		failure := preparation(s, output, &owner, err, checkpoint)
+		_ = draft.Close()
+		return PublicationResult{}, failure
 	}
 
 	reservation, failure := draft.initializeObserved(output, func(identity live.FileIdentity) error {
@@ -137,7 +143,9 @@ func fromPrivate(s seed, output *preparedOutput, reservation privateReservation,
 	})
 	if failure != nil {
 		owner := acquiringOwner(failure.owner)
-		return notPublished(s, output, owner, failure.owner.reservation.identity, reservationProblem(failure.cause), checkpoint), nil
+		result := notPublished(s, output, owner, failure.owner.reservation.identity, reservationProblem(failure.cause), checkpoint)
+		_ = failure.owner.reservation.Close()
+		return result, nil
 	}
 	return fromCanonical(s, output, canonical, check, checkpoint, observe, observer)
 }
@@ -145,12 +153,16 @@ func fromPrivate(s seed, output *preparedOutput, reservation privateReservation,
 func fromCanonical(s seed, output *preparedOutput, reservation canonicalReservation, check func() error, checkpoint func(attemptPoint) error, observe bool, observer func(*publicationCheckpoint) error) (PublicationResult, *PublicationPreparationFailure) {
 	if err := checkpoint(attemptPointReservationAcquired); err != nil {
 		owner := canonicalOwner(reservation)
-		return notPublished(s, output, owner, reservation.identity, err, checkpoint), nil
+		result := notPublished(s, output, owner, reservation.identity, err, checkpoint)
+		_ = reservation.Close()
+		return result, nil
 	}
 	if previous := output.previous; previous != nil {
 		if err := previous.verifyContent(output.attempt.destinationOf(), check); err != nil {
 			owner := canonicalOwner(reservation)
-			return notPublished(s, output, owner, reservation.identity, replacementProblem(err), checkpoint), nil
+			result := notPublished(s, output, owner, reservation.identity, replacementProblem(err), checkpoint)
+			_ = reservation.Close()
+			return result, nil
 		}
 	}
 	armed, failure := reservation.armObserved(output, func(identity live.FileIdentity) error {
@@ -162,10 +174,14 @@ func fromCanonical(s seed, output *preparedOutput, reservation canonicalReservat
 	if failure != nil {
 		cause := reservationProblem(failure.cause)
 		if failure.owner.state2Selected {
-			return outcomeUnknown(s, failure.owner.reservation.identity, cause), nil
+			result := outcomeUnknown(s, failure.owner.reservation.identity, cause)
+			_ = failure.owner.reservation.Close()
+			return result, nil
 		}
 		owner := armingOwner(failure.owner)
-		return notPublished(s, output, owner, failure.owner.reservation.identity, cause, checkpoint), nil
+		result := notPublished(s, output, owner, failure.owner.reservation.identity, cause, checkpoint)
+		_ = failure.owner.reservation.Close()
+		return result, nil
 	}
 	return fromArmed(s, output, armed, checkpoint, observe, observer)
 }
@@ -184,13 +200,15 @@ func fromArmed(s seed, output *preparedOutput, reservation armedReservation, che
 		return nil
 	})
 	if failure == nil {
-		return finishPublishedObserved(s, published, nil, observe, observer), nil
+		return finishPublished(s, published, nil), nil
 	}
 	cause := mainProblem(failure.cause)
 	if failure.owner.desiredProven {
-		return finishPublishedObserved(s, publishedMain{output: failure.owner.output, reservation: failure.owner.reservation}, cause, observe, observer), nil
+		return finishPublished(s, publishedMain{output: failure.owner.output, reservation: failure.owner.reservation}, cause), nil
 	}
-	return outcomeUnknown(s, failure.owner.reservation.identity, cause), nil
+	result := outcomeUnknown(s, failure.owner.reservation.identity, cause)
+	_ = failure.owner.reservation.Close()
+	return result, nil
 }
 
 func observePreparation(s *seed, output *preparedOutput, reservationIdentity identityOptional, reservationSlot nameSlot, enabled bool, observer func(*publicationCheckpoint) error) error {
@@ -303,15 +321,16 @@ func outcomeUnknown(s seed, reservationIdentity live.FileIdentity, cause error) 
 	}, newCleanupArtifacts(), cause)
 }
 
+// finishPublished closes one published attempt into its final result
+// (Rust finish_published; the housekeeping-observed variant of the
+// Rust surface is the #[cfg(windows)] gc retire, absent here per M5).
+// The armed reservation is released at the end of both arms, exactly
+// where Rust drops the moved PublishedMain or RetiringMain owner.
 func finishPublished(s seed, published publishedMain, cause error) PublicationResult {
-	return finishPublishedObserved(s, published, cause, false, func(*publicationCheckpoint) error { return nil })
-}
-
-func finishPublishedObserved(s seed, published publishedMain, cause error, observe bool, observer func(*publicationCheckpoint) error) PublicationResult {
 	reservationIdentity := published.reservation.identity
 	retirement, retirementFailure := published.retire()
 	if retirementFailure == nil {
-		return s.resultWithHousekeeping(finalState{
+		result := s.resultWithHousekeeping(finalState{
 			reservationIdentity:               retirement.reservationIdentity,
 			mainNamespaceMayHaveBeenAttempted: true,
 			publication:                       PublicationPublished,
@@ -319,6 +338,8 @@ func finishPublishedObserved(s seed, published publishedMain, cause error, obser
 			mainAccessPolicy:                  AccessPolicyCreatorOnly,
 			coordinationAccessPolicy:          AccessPolicyAbsent,
 		}, newCleanupArtifacts(), retirement.housekeeping, retirement.visibleHousekeeping, cause)
+		_ = published.reservation.Close()
+		return result
 	}
 	owner := retirementFailure.owner
 	retirementProblem := mainProblem(retirementFailure.cause)
@@ -345,7 +366,7 @@ func finishPublishedObserved(s seed, published publishedMain, cause error, obser
 	if finalCause == nil {
 		finalCause = retirementProblem
 	}
-	return s.resultWithHousekeeping(finalState{
+	result := s.resultWithHousekeeping(finalState{
 		reservationIdentity:               reservationIdentity,
 		mainNamespaceMayHaveBeenAttempted: true,
 		publication:                       PublicationPublished,
@@ -353,6 +374,8 @@ func finishPublishedObserved(s seed, published publishedMain, cause error, obser
 		mainAccessPolicy:                  mainAccess,
 		coordinationAccessPolicy:          coordination,
 	}, cleanup, owner.housekeeping, owner.visibleHousekeeping, finalCause)
+	_ = published.reservation.Close()
+	return result
 }
 
 func draftOwner(d *reservationDraft) reservationOwner {

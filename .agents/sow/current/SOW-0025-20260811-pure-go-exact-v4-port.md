@@ -9587,25 +9587,31 @@ Go files (all !windows; the Rust windows gc-transition arms of
 main_file.rs stay intentionally absent: Go publication refuses Windows
 opens at destination bind per M5):
 
-- internal/publication/attempt.go (421 lines): failIfExistsCancellable,
+- internal/publication/attempt.go (444 lines): failIfExistsCancellable,
   failIfExistsCancellableObserved, replaceExistingCancellable,
   resumeArmed, publishWithObserver, fromPrivate/fromCanonical/fromArmed,
-  the five observe* checkpoint builders (interruptedProblem detail "mapped
-  output fault interrupted publication"), preparation/notPublished/
-  outcomeUnknown/finishPublished/finishPublishedObserved, the owner
-  builders (draft/acquiring/canonical/arming), optionalFrom,
-  cleanupPointOf, cleanupIgnoresCancellation. The Go two-value return
+  the four observe* checkpoint builders (observePreparation/
+  observeNotPublished/observeOutcomeUnknown/observePublished with the
+  interruptedProblem detail "mapped output fault interrupted
+  publication"), preparation/notPublished/outcomeUnknown/finishPublished
+  (the Rust finish_published_observed surface is the windows-only
+  housekeeping-observed retire, absent per M5), the owner builders
+  (draft/acquiring/canonical/arming), optionalFrom, cleanupPointOf,
+  cleanupIgnoresCancellation. Every terminal path closes the
+  machine-owned reservation (file, mapping, operation flock) exactly
+  where Rust drops the moved owner; the Go two-value return
   (PublicationResult, *PublicationPreparationFailure) is the peer of
   Rust Result<_, Box<PreparationFailure>>.
 - internal/publication/main_file.go (361 lines): publishProved/
   publishObserved/publishWith/publishSteps/verifyBeforeMain/renameMain/
-  synchronizeMain/proveMain, retire/retireObserved/retireMain/
-  retireSteps/verifyPublished/unlinkPrevious/unlinkReservation/
-  syncRetirement/verifyRetired, the mainAttempt/publishedMain/
-  retiringMain/publishedOutput owners, and all nine crash points at the
+  synchronizeMain/proveMain, retire/retireMain/retireSteps/
+  verifyPublished/unlinkPrevious/unlinkReservation/syncRetirement/
+  verifyRetired, the mainAttempt/publishedMain/retiringMain/
+  publishedOutput owners, and all seven main-file crash points at the
   exact Rust steps (publication.after_main_rename/sync/directory_sync/
   proof, after_previous_unlink, after_reservation_unlink,
-  after_retirement_sync). The post-unlink link-count conflict arms
+  after_retirement_sync; the six reservation-file crash points keep
+  their F/G records and the 13-point matrix below). The post-unlink link-count conflict arms
   return cleanupConflictProblem with the Rust-verbatim details
   ("retired previous destination still has a link" / "retired
   reservation still has a link").
@@ -9647,18 +9653,22 @@ Go tests:
   post-proof published retention, the replacement publish/retire and
   the replacement path race before state 2, and the two resumeArmed
   outcome classes (before rename publishes; after rename holds the
-  sure-to-be untouchable outcome-unknown).
+  sure-to-be untouchable outcome-unknown); the outcome-unknown flock
+  release, which pins the Rust drop of the failure owner (an abandoned
+  reservation flock would stall the slice-J resolver's lockOperation
+  forever).
 - attempt_alloc_test.go: the fromPrivate success-path allocation pin
   (Rust post_boundary_success_allocates_no_heap), measured exactly
   once with MemStats like the Rust count_thread_allocations (the
   machine consumes the reservation, so AllocsPerRun's warmup-repeat
   loop would measure a changed state). The pinned budget is 58 objects,
-  all accounted: 22 syscall-boundary name NUL-copies (the accepted
-  x/sys convention of slices F/G/H), 7 Fgetxattr attribute-name
-  copies, 4 rename boundary classes, 5 result-plumbing values, 20
-  fixed escape breathers of the deep verify chain (Go's
-  path-insensitive escape analysis; Rust moves the same values with no
-  heap). To get there the slice also flattened the machine owners to
+  all accounted: every one is an accepted x/sys boundary conversion
+  (the name and attribute NUL-copies of the Entry/VerifyName/
+  RequireAbsent/UnlinkExact/RenameNoReplace probes and the Fgetxattr
+  attribute-name copies, about 20 in-window), a rename boundary class,
+  or the portable result plumbing (attempt_alloc_test.go:80-95);
+  escape analysis shows zero machine-logic escapes on the success
+  path. To get there the slice also flattened the machine owners to
   values, added the value-returning bootstrap.OpenMeta core (Rust
   open_meta_pages; Open keeps its pointer surface for the reader),
   replaced the machine-path os.File.Stat calls with raw unix.Fstat
@@ -9697,8 +9707,9 @@ Design notes:
   untouched.
 
 - Review round 1: five-aspect adversarial review at HEAD 74cfc7d:
-  parity PASS (Goodall; P3 crash-count wording and the armObserved
-  header-invariant target pointer - both fixed), wire/integrity PASS
+  parity PASS (Goodall; the armObserved header-invariant target
+  pointer fixed; the P3 crash-count wording was recorded - the slice
+  record edit it described landed in round 2 below), wire/integrity PASS
   (Herschel; P3 flaky pin routed to performance), idioms FAIL then
   fixed (Gauss: P2-A the MemStats window witnessed background
   allocations in the full battery - the pin now takes the minimum of
@@ -9714,7 +9725,31 @@ Design notes:
   deferral-mapping overclaim corrected above, the stale
   checkpoint-arm comments in problem.go/problem_test.go refreshed,
   the reservation_file.go header refreshed, line-count wording
-  corrections). Round-2 re-review dispatched after the fixes.
+  corrections). Round-2 outcomes at HEAD c036f2e: performance PASS
+  (Chandrasekhar: min-of-5 single-run MemStats windows with fresh
+  fixtures is sound - background allocations can only inflate a
+  window, and the single-window diagnostic still measures 58), and
+  wire/integrity PASS (Herschel: the fix commit touches no wire
+  codec/state-2 arm/selection/locks/crash matrix; both after-selection
+  injection tests re-assert record selectability; the retire-observed
+  removal is behaviorally exact on POSIX; one P3 comment-precision
+  nit). Three FAILs fixed: parity (Goodall: the round-1 crash-count
+  "fixed" claim was stale - the record still said "all nine crash
+  points" and still listed the deleted retireObserved; corrected
+  above), idioms (Gauss: P1 - the machine never closed its own
+  reservation owners on any terminal path, so the fd, the 8 KiB
+  mapping, and the operation flock were abandoned on every attempt
+  (the same-process resolver would stall on the flock after an
+  outcome-unknown attempt); every terminal path now closes the owner
+  exactly where Rust drops it, pinned by
+  TestAttemptOutcomeUnknownReleasesTheOperationFlock, which fails
+  without the close. P2 - finishPublishedObserved's observe/observer
+  parameters were dead after the M5 ceremony removal; the variant is
+  folded into finishPublished, matching Rust finish_published with
+  observe=false), records (Noether: P2-A stale retireObserved in the
+  main_file.go inventory, P2-B the false "all nine" count, P3 the
+  observe*-builder count - all corrected above). Round-3 re-review of
+  the same five aspects dispatched at the corrected HEAD.
 
 Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
 + resolver_verification 88 + resolver_result 189); the plan after J
