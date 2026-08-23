@@ -9974,6 +9974,14 @@ P2s, all fixed in this round:
   inspectedReplacement now stores the meta by value with a presence
   flag, matching inspectedOutput.
 
+The wire/integrity review (round-3 carry-over P1) added one more fix:
+the replacement arms returned an outcome-unknown result on
+non-cancelled synchronize failures, where Rust propagates every
+synchronize failure with ? on both replacement arms (the
+outcome-unknown conversion exists only in the Rust fail-if-exists
+arms). Both replacement arms now close the pair and base
+reservations and return the synchronize error directly.
+
 Validation (all under nice): go build ./..., go vet ./..., plain and
 v4work full trees (14 packages ok each), gofmt clean, -race +
 -gcflags=all=-d=checkptr=2 on publication/mapping/live/format, the

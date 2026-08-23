@@ -210,10 +210,9 @@ func resolveDesiredReplacement(base baseResolution, pair replacementPair, mode r
 		pair.private.closeIfNonNil()
 		closeInspectedReservation(base.exact)
 		closeInspectedReservation(base.later)
-		if isCancelled(err) {
-			return PublicationResult{}, err
-		}
-		return recordCancellation(outcomeUnknown(base.seed, reservationIdentityOf(base.header), resolverProblem(err)), check), nil
+		// Rust propagates every synchronize failure with ? (no
+		// outcome-unknown conversion on the replacement arms).
+		return PublicationResult{}, err
 	}
 	owner, removable, foreign := desiredCleanupReplacement(pair.private, base.header)
 	var output *outputOwner
@@ -281,10 +280,9 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 		pair.private.closeIfNonNil()
 		closeInspectedReservation(base.exact)
 		closeInspectedReservation(base.later)
-		if isCancelled(err) {
-			return PublicationResult{}, err
-		}
-		return recordCancellation(outcomeUnknown(base.seed, reservationIdentityOf(base.header), resolverProblem(err)), check), nil
+		// Rust propagates every synchronize failure with ? (no
+		// outcome-unknown conversion on the replacement arms).
+		return PublicationResult{}, err
 	}
 	owner, removable, err := removableReplacementOutput(pair.private, base.header)
 	if err != nil {
