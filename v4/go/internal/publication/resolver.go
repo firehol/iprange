@@ -6,10 +6,9 @@
 // record, and the attempt is completed, abandoned, or left
 // unresolved with the exact cleanup ledger and access facts. Every
 // functionally-owned inspected value (output and reservation) is
-// closed exactly where Rust drops it. The replacement-policy branch
-// of the Rust resolve entry is recorded with the slice-K replacement
-// resolver; no caller can pass a replacement header before that
-// slice lands (the public ResolvePublication surface is slice N).
+// closed exactly where Rust drops it. Replacement headers route to
+// the slice-K replacement resolver (replacement_resolver.go); the
+// public ResolvePublication surface is slice N.
 
 package publication
 
@@ -37,6 +36,11 @@ func resolve(path string, supplied *PublicationResult, mode resolveMode, check f
 	base, err := inspectResolution(path, supplied, check)
 	if err != nil {
 		return PublicationResult{}, err
+	}
+	// Replacement headers route to the slice-K machine before any
+	// main inspection (Rust resolver::resolve replacement dispatch).
+	if base.header.policy.isReplacement() {
+		return replacementDispatch(base, mode, check)
 	}
 	// base.exact and base.later are owned by this call; every arm of
 	// dispatch closes or consumes them, and the error path closes

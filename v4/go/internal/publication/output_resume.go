@@ -163,3 +163,38 @@ func resumePreparedOutput(destination *destination, header reservationHeader, in
 		previous:   nil,
 	}, nil
 }
+
+// resumePreparedOutputReplacement reconstructs one replacement
+// prepared output from the exact inspected private artifact and the
+// recorded previous main (Rust output_resume.rs
+// PreparedOutput::resume_replacement): the inspected file, mapping,
+// meta, byte length, and digest move into the prepared output with
+// the replacement policy and the previous main. The previous main
+// keeps its own mapping (the prepared output closes the previous on
+// its own Close; Rust moves both values into the prepared output).
+func resumePreparedOutputReplacement(destination *destination, header reservationHeader, inspected *inspectedReplacement, previous *previousMain) (*preparedOutput, error) {
+	if inspected.meta == nil || inspected.mapping == nil {
+		_ = inspected.Close()
+		return nil, conflictProblem("finished replacement output has no selected metadata")
+	}
+	name, err := destination.outputName(header.attemptID)
+	if err != nil {
+		_ = inspected.Close()
+		return nil, err
+	}
+	return &preparedOutput{
+		attempt: outputAttempt{
+			destination: destination,
+			attemptID:   header.attemptID,
+			name:        name,
+			identity:    inspected.identity,
+		},
+		file:       inspected.file,
+		mapping:    inspected.mapping,
+		meta:       *inspected.meta,
+		byteLength: inspected.byteLength,
+		sha512:     inspected.sha512,
+		policy:     header.policy,
+		previous:   previous,
+	}, nil
+}

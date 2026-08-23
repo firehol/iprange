@@ -1000,3 +1000,141 @@ func rewriteReservationDigest(t *testing.T, path string, sha512 [64]byte) {
 	}
 	_ = file.Close()
 }
+
+// resolverReplacementPostMainPoints are the replacement crash points
+// after the exchange (Rust REPLACEMENT_POST_MAIN).
+var resolverReplacementPostMainPoints = []string{
+	"publication.after_main_rename",
+	"publication.after_main_sync",
+	"publication.after_main_directory_sync",
+	"publication.after_main_proof",
+	"publication.after_previous_unlink",
+}
+
+// resolverTestPublishReplacement publishes one replacement fixture
+// over a written previous main and returns the result (Rust
+// publish_replacement).
+func resolverTestPublishReplacement(t *testing.T, main string) PublicationResult {
+	t.Helper()
+	if err := os.WriteFile(main, []byte("previous bytes"), 0o600); err != nil {
+		t.Fatalf("write previous main: %v", err)
+	}
+	created, err := createOutput(main)
+	if err != nil {
+		t.Fatalf("create output: %v", err)
+	}
+	secured, failure := created.secure()
+	if failure != nil {
+		t.Fatalf("secure output: %v", failure)
+	}
+	attempt, file := secured.intoParts()
+	finished, _ := testFinishedOutput(t, file)
+	prepared, prepareFailure := attempt.prepareCancellable(finished, nil)
+	if prepareFailure != nil {
+		t.Fatalf("prepare output: %v", prepareFailure)
+	}
+	bound, bindFailure := bindPrevious(prepared, noopCheck)
+	if bindFailure != nil {
+		t.Fatalf("bind previous: %v", bindFailure)
+	}
+	result, pubFailure := replaceExistingCancellable(bound, noopCheck)
+	_ = prepared.Close()
+	if pubFailure != nil {
+		t.Fatalf("replacement publish: %v", pubFailure)
+	}
+	return result
+}
+
+// TestResolverReplacementCompleteResumesEveryPreMainCrashState ports
+// replacement_complete_resumes_every_pre_main_crash_state.
+func TestResolverReplacementCompleteResumesEveryPreMainCrashState(t *testing.T) {
+	for _, point := range resolverPreMainPoints {
+		dir := t.TempDir()
+		main := filepath.Join(dir, "result.v4")
+		runAttemptCrashChild(t, main, "replace", point)
+
+		result, err := resolve(main, nil, resolveModeComplete, noopCheck)
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", point, err)
+		}
+		assertResolverPublished(t, &result, point)
+		if result.Attempt.PreviousDestination == nil {
+			t.Fatalf("%s: previous destination facts missing", point)
+		}
+		assertResolverClean(t, dir, main, point)
+	}
+}
+
+// TestResolverReplacementRemovePreservesPreviousForEveryPreMainCrash
+// State ports replacement_remove_preserves_previous_for_every_pre_
+// main_crash_state.
+func TestResolverReplacementRemovePreservesPreviousForEveryPreMainCrashState(t *testing.T) {
+	for _, point := range resolverPreMainPoints {
+		dir := t.TempDir()
+		main := filepath.Join(dir, "result.v4")
+		runAttemptCrashChild(t, main, "replace", point)
+
+		result, err := resolve(main, nil, resolveModeRemove, noopCheck)
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", point, err)
+		}
+		if result.Publication != PublicationNotPublished {
+			t.Fatalf("%s: publication = %v, want not published", point, result.Publication)
+		}
+		if result.DestinationContent != DestinationContentPrevious {
+			t.Fatalf("%s: destination content = %v, want previous", point, result.DestinationContent)
+		}
+		bytes, readErr := os.ReadFile(main)
+		if readErr != nil {
+			t.Fatalf("%s: read main: %v", point, readErr)
+		}
+		if string(bytes) != "previous bytes" {
+			t.Fatalf("%s: main content %q, want the previous bytes", point, bytes)
+		}
+		assertResolverClean(t, dir, main, point)
+	}
+}
+
+// TestResolverReplacementBothModesFinishEveryPostExchangeCrashState
+// ports replacement_both_modes_finish_every_post_exchange_crash_
+// state.
+func TestResolverReplacementBothModesFinishEveryPostExchangeCrashState(t *testing.T) {
+	for _, point := range resolverReplacementPostMainPoints {
+		for _, mode := range []resolveMode{resolveModeComplete, resolveModeRemove} {
+			dir := t.TempDir()
+			main := filepath.Join(dir, "result.v4")
+			runAttemptCrashChild(t, main, "replace", point)
+
+			result, err := resolve(main, nil, mode, noopCheck)
+			if err != nil {
+				t.Fatalf("%s: resolve: %v", point, err)
+			}
+			assertResolverPublished(t, &result, point)
+			if result.Attempt.PreviousDestination == nil {
+				t.Fatalf("%s: previous destination facts missing", point)
+			}
+			assertResolverClean(t, dir, main, point)
+		}
+	}
+}
+
+// TestResolverSuppliedReplacementResultResolvesAfterReservation
+// Retirement ports
+// supplied_replacement_result_resolves_after_reservation_retirement.
+func TestResolverSuppliedReplacementResultResolvesAfterReservationRetirement(t *testing.T) {
+	for _, mode := range []resolveMode{resolveModeComplete, resolveModeRemove} {
+		dir := t.TempDir()
+		main := filepath.Join(dir, "result.v4")
+		original := resolverTestPublishReplacement(t, main)
+
+		result, err := resolve(main, &original, mode, noopCheck)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		assertResolverPublished(t, &result, "supplied-replacement-result")
+		if result.Attempt.PreviousDestination == nil {
+			t.Fatal("previous destination facts missing")
+		}
+		assertResolverClean(t, dir, main, "supplied-replacement-result")
+	}
+}

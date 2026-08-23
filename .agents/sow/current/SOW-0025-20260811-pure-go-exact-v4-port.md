@@ -9865,8 +9865,61 @@ inspected value close is placed exactly where Rust drops the value
 (resolveDesired/abandon scope-end defers, arm consumption into the
 machine owner, completeAbsent output close at every terminal path).
 
-Next: slice K replacement resolver (replacement_resolver.rs 372:
-unlock/relock, pair inspection, resolve_previous/desired/other) which
-also lands the replacement-policy branch of resolve(); the plan after
-K stays L residue, M maintenance, N Publish retrofit + public
-surface, O validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice K implemented: replacement resolver
+
+Slice K ports the replacement restart resolution (Rust
+replacement_resolver.rs 372 + replacement_inspection.rs 340) to Go
+and lands the replacement-policy branch of resolve(): the base
+reservation operation locks unlock for the two-inode pair inspection
+and relock after it, the main class selects the arm (previous ->
+complete/remove, desired -> published with the private-output or
+foreign-residue cleanup, other -> restore-and-discard), the previous
+main and prepared output move into the resumed attempt, and the
+no-rollback remove mode is refused with the unresolvable class.
+Every inspected pair entry and base reservation closes exactly where
+Rust drops it.
+
+Go files:
+
+- internal/publication/replacement_inspection.go (+364):
+  replacementContent/inspectedReplacement (Close, verify with the
+  rehash double-check)/replacementPair, inspectReplacementPair (the
+  role-ordered exclusive lifetime locks: recorded output identity,
+  recorded previous identity, remaining entries),
+  openReplacementEntry (single-link regular rule), lock roles,
+  inspectOneReplacement (name proof, read-only mapping, digest,
+  desiredReplacementMeta via bootstrap.OpenMeta, classify,
+  classifyAccess, verifyStableReplacement).
+- internal/publication/replacement_resolver.go (+427):
+  replacementDispatch (unlock/relock pair inspection + the four
+  classification arms), completePreviousReplacement (requires the
+  exact previous main, prepared output, and reservation; the pair
+  entries move into previousMain and the resumed prepared output;
+  arm + resumeArmed + recordCancellation),
+  removePreviousReplacement/resolveNotDesiredReplacement (restore
+  the classified main with the exact ledger),
+  resolveDesiredReplacement (no-rollback remove refusal,
+  desiredCleanupReplacement, verification, withLater),
+  removableReplacementOutput/desiredCleanupReplacement/
+  requireOutputReplacement/requirePreviousReplacement/
+  synchronizeReplacement/unlock/relock/attempted.
+- internal/publication/resolver.go (+2): the replacement-policy
+  branch of resolve() now routes to replacementDispatch.
+- internal/publication/output_resume.go (+35):
+  resumePreparedOutputReplacement (PreparedOutput::resume_replacement
+  with the previous main).
+- internal/publication/resolver_test.go (+171): the four replacement
+  tests of resolver_tests.rs - complete/remove over every pre-main
+  crash state, both modes over the five post-exchange states, and the
+  supplied replacement result after retirement.
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each), gofmt clean, -race +
+-gcflags=all=-d=checkptr=2 on publication/live/bootstrap/security,
+and the six cross-compiles all PASS; the 4 replacement tests plus the
+22 resolver tests pass under v4work.
+
+Next: slice L residue (inspect/remove canonical residue with the
+retained handle and the final coordination-reuse proof); the plan
+after L stays M maintenance, N Publish retrofit + public surface, O
+validation + gate + push.
