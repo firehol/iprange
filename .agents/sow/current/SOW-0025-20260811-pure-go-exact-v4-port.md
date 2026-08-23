@@ -9926,6 +9926,42 @@ v4work full trees (14 packages ok each), gofmt clean, -race +
 and the six cross-compiles all PASS; the 4 replacement tests plus the
 22 resolver tests pass under v4work.
 
+### Status (2026-08-24) - chunk 4-8 slice K fix round (round-1 review)
+
+The slice-K round-1 review returned four PASS-pending and one FAIL
+(idioms, Gauss): P1-1 completePreviousReplacement never closed the
+machine-created previous main (deterministic fd + mapping leak on
+every post-resume terminal; preparedOutput.Close did not release the
+previous and the comment claimed the opposite), P2-1 double close of
+the private entry when resumePreparedOutputReplacement errors, P3-1
+the contradictory ownership comment, P3-2 the finalState shadow, and
+P3-3 the double-pointer inspection helpers. Fixes in this round:
+
+- P1-1/P3-1: preparedOutput.Close now releases the previous main
+  together with the output (Rust drop of PreparedOutput owns
+  PreviousMain), and the resume-construction error arm closes the
+  still-owned previous (the constructor already closed the inspected
+  private artifact on error). The contradictory comments in
+  output_resume.go and output_prepared.go state the true contract.
+  TestResolverReplacementCompleteResumesEveryPreMainCrashState now
+  pins descriptor stability per crash point (fails without the fix:
+  2 leaked descriptors per iteration).
+- P2-1: the completePreviousReplacement resume-error arm no longer
+  re-closes the private entry after the constructor closed it.
+- P3-2: the two finalState shadow variables are renamed state.
+- P3-3: lockReplacementRole/replacementEntryWithIdentity/
+  lockReplacementRemaining/lockReplacementEntry take single
+  inspectedReplacement pointers (nil-checked) instead of
+  double pointers that were only dereferenced.
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each), gofmt clean, -race +
+-gcflags=all=-d=checkptr=2 on publication/mapping/live/format, the
+linux/freebsd/darwin publication cross-builds, and the 26 resolver +
+replacement tests (v4work) all PASS; the new descriptor pin fails
+without the previous-close fix and passes with it.
+
+
 ### Status (2026-08-24) - chunk 4-8 slice J fix round (round-1 FAILs)
 
 The slice-J review round at 12d936e returned three FAILs and two

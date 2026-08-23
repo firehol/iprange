@@ -33,9 +33,11 @@ type preparedOutput struct {
 	previous   *previousMain
 }
 
-// Close releases the prepared mapping and its file descriptor (Rust
-// drop of PreparedOutput; the mapping owner unmaps and closes its
-// duplicated descriptor, and the attempt file closes here).
+// Close releases the prepared mapping and its file descriptor, and
+// the previous main when one rides with the output (Rust drop of
+// PreparedOutput owns PreviousMain; the mapping owner unmaps and
+// closes its duplicated descriptor, and the attempt file closes
+// here).
 func (p *preparedOutput) Close() error {
 	var first error
 	if p.mapping != nil {
@@ -48,8 +50,11 @@ func (p *preparedOutput) Close() error {
 			first = err
 		}
 	}
-	// The previous main stays alive with the prepared output; its own
-	// Close releases it when the caller is done.
+	if p.previous != nil {
+		if err := p.previous.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
 	return first
 }
 

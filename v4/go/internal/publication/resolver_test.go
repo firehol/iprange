@@ -1074,6 +1074,7 @@ func TestResolverReplacementCompleteResumesEveryPreMainCrashState(t *testing.T) 
 		dir := t.TempDir()
 		main := filepath.Join(dir, "result.v4")
 		runAttemptCrashChild(t, main, "replace", point)
+		before := countProcessFds(t)
 
 		result, err := resolve(main, nil, resolveModeComplete, noopCheck)
 		if err != nil {
@@ -1084,6 +1085,9 @@ func TestResolverReplacementCompleteResumesEveryPreMainCrashState(t *testing.T) 
 			t.Fatalf("%s: previous destination facts missing", point)
 		}
 		assertResolverClean(t, dir, main, point)
+		if after := countProcessFds(t); after > before {
+			t.Fatalf("%s: complete replacement resolution left %d descriptors open", point, after-before)
+		}
 	}
 }
 

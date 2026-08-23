@@ -170,8 +170,10 @@ func resumePreparedOutput(destination *destination, header reservationHeader, in
 // PreparedOutput::resume_replacement): the inspected file, mapping,
 // meta, byte length, and digest move into the prepared output with
 // the replacement policy and the previous main. The previous main
-// keeps its own mapping (the prepared output closes the previous on
-// its own Close; Rust moves both values into the prepared output).
+// keeps its own mapping; preparedOutput.Close releases it together
+// with the output, exactly like the Rust drop of PreparedOutput
+// (which owns PreviousMain). On an error here the inspected artifact
+// is closed and the previous main stays owned by the caller.
 func resumePreparedOutputReplacement(destination *destination, header reservationHeader, inspected *inspectedReplacement, previous *previousMain) (*preparedOutput, error) {
 	if inspected.meta == nil || inspected.mapping == nil {
 		_ = inspected.Close()

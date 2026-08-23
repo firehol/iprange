@@ -136,8 +136,11 @@ func completePreviousReplacement(base baseResolution, pair replacementPair, chec
 	main.mapping = nil
 	output, err := resumePreparedOutputReplacement(base.destination, base.header, private, previous)
 	if err != nil {
-		_ = main.Close()
-		_ = private.Close()
+		// The constructor error path already closed the inspected
+		// private artifact; the previous main is still owned here
+		// and must be closed by this arm (Rust drops the moved
+		// PreviousMain inside the failed construction).
+		_ = previous.Close()
 		closeInspectedReservation(reservation)
 		return PublicationResult{}, outputProblem(err)
 	}
@@ -230,7 +233,7 @@ func resolveDesiredReplacement(base baseResolution, pair replacementPair, mode r
 	if verified == nil {
 		publication = PublicationPublished
 	}
-	finalState := finalState{
+	state := finalState{
 		reservationIdentity:               reservationIdentityOf(base.header),
 		mainNamespaceMayHaveBeenAttempted: attemptedReplacement(base.header.state),
 		publication:                       publication,
@@ -239,11 +242,11 @@ func resolveDesiredReplacement(base baseResolution, pair replacementPair, mode r
 		coordinationAccessPolicy:          AccessPolicyUnclassified,
 	}
 	if verified == nil {
-		finalState.destinationContent = DestinationContentDesired
-		finalState.mainAccessPolicy = pair.main.access
-		finalState.coordinationAccessPolicy = coordinationAccess(summary, base.exact, base.later)
+		state.destinationContent = DestinationContentDesired
+		state.mainAccessPolicy = pair.main.access
+		state.coordinationAccessPolicy = coordinationAccess(summary, base.exact, base.later)
 	}
-	result := s.resultWithHousekeeping(finalState, summary.artifacts, summary.housekeeping, summary.visibleHousekeeping, cause)
+	result := s.resultWithHousekeeping(state, summary.artifacts, summary.housekeeping, summary.visibleHousekeeping, cause)
 	result = withLater(result, base.later)
 	pair.main.closeIfNonNil()
 	pair.private.closeIfNonNil()
@@ -298,7 +301,7 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 	if verified == nil {
 		publication = PublicationNotPublished
 	}
-	finalState := finalState{
+	state := finalState{
 		reservationIdentity:               reservationIdentityOf(base.header),
 		mainNamespaceMayHaveBeenAttempted: attemptedReplacement(base.header.state),
 		publication:                       publication,
@@ -307,11 +310,11 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 		coordinationAccessPolicy:          AccessPolicyUnclassified,
 	}
 	if verified == nil {
-		finalState.destinationContent = content
-		finalState.mainAccessPolicy = pair.main.access
-		finalState.coordinationAccessPolicy = coordinationAccess(summary, base.exact, nil)
+		state.destinationContent = content
+		state.mainAccessPolicy = pair.main.access
+		state.coordinationAccessPolicy = coordinationAccess(summary, base.exact, nil)
 	}
-	result := s.resultWithHousekeeping(finalState, summary.artifacts, summary.housekeeping, summary.visibleHousekeeping, cause)
+	result := s.resultWithHousekeeping(state, summary.artifacts, summary.housekeeping, summary.visibleHousekeeping, cause)
 	pair.main.closeIfNonNil()
 	pair.private.closeIfNonNil()
 	closeInspectedReservation(base.exact)

@@ -103,22 +103,22 @@ func inspectReplacementPair(destination *destination, header reservationHeader, 
 		}
 		return replacementPair{}, conflictProblem("replacement inspection requires previous evidence")
 	}
-	if err := lockReplacementRole(&main, &private, header.outputIdentity, check); err != nil {
+	if err := lockReplacementRole(main, private, header.outputIdentity, check); err != nil {
 		main.closeIfNonNil()
 		private.closeIfNonNil()
 		return replacementPair{}, err
 	}
-	if err := lockReplacementRole(&main, &private, header.previous.identity, check); err != nil {
+	if err := lockReplacementRole(main, private, header.previous.identity, check); err != nil {
 		main.closeIfNonNil()
 		private.closeIfNonNil()
 		return replacementPair{}, err
 	}
-	if err := lockReplacementRemaining(&main, check); err != nil {
+	if err := lockReplacementRemaining(main, check); err != nil {
 		main.closeIfNonNil()
 		private.closeIfNonNil()
 		return replacementPair{}, err
 	}
-	if err := lockReplacementRemaining(&private, check); err != nil {
+	if err := lockReplacementRemaining(private, check); err != nil {
 		main.closeIfNonNil()
 		private.closeIfNonNil()
 		return replacementPair{}, err
@@ -168,7 +168,7 @@ func openReplacementEntry(destination *destination, name string, location output
 // whose identity matches one recorded payload (Rust lock_role); an
 // entry that already raced into the other role waits for its own
 // turn.
-func lockReplacementRole(main, private **inspectedReplacement, identity [32]byte, check func() error) error {
+func lockReplacementRole(main, private *inspectedReplacement, identity [32]byte, check func() error) error {
 	entry := replacementEntryWithIdentity(main, private, identity)
 	if entry == nil {
 		return nil
@@ -180,11 +180,11 @@ func lockReplacementRole(main, private **inspectedReplacement, identity [32]byte
 // matches one recorded payload (Rust entry_with_identity; the main
 // wins the tie like Rust, and the private can only carry an identity
 // the main does not have).
-func replacementEntryWithIdentity(main, private **inspectedReplacement, identity [32]byte) **inspectedReplacement {
-	if *main != nil && reservationIdentityBytes((*main).identity) == identity {
+func replacementEntryWithIdentity(main, private *inspectedReplacement, identity [32]byte) *inspectedReplacement {
+	if main != nil && reservationIdentityBytes(main.identity) == identity {
 		return main
 	}
-	if *private != nil && reservationIdentityBytes((*private).identity) == identity {
+	if private != nil && reservationIdentityBytes(private.identity) == identity {
 		return private
 	}
 	return nil
@@ -193,8 +193,8 @@ func replacementEntryWithIdentity(main, private **inspectedReplacement, identity
 // lockReplacementRemaining takes the exclusive lifetime lock of one
 // entry when its role never matched a recorded identity (Rust
 // lock_remaining).
-func lockReplacementRemaining(entry **inspectedReplacement, check func() error) error {
-	if *entry == nil || (*entry).locked {
+func lockReplacementRemaining(entry *inspectedReplacement, check func() error) error {
+	if entry == nil || entry.locked {
 		return nil
 	}
 	return lockReplacementEntry(entry, check)
@@ -203,11 +203,11 @@ func lockReplacementRemaining(entry **inspectedReplacement, check func() error) 
 // lockReplacementEntry takes one exclusive lifetime lock (Rust
 // lock; the MAIN_LIFETIME_LOCK OFD range is shared with the
 // publication owner).
-func lockReplacementEntry(entry **inspectedReplacement, check func() error) error {
-	if err := live.LockFileCancellable((*entry).file, live.MainLifetimeOffset, live.LockExclusive, check); err != nil {
+func lockReplacementEntry(entry *inspectedReplacement, check func() error) error {
+	if err := live.LockFileCancellable(entry.file, live.MainLifetimeOffset, live.LockExclusive, check); err != nil {
 		return resolverProblem(err)
 	}
-	(*entry).locked = true
+	entry.locked = true
 	return nil
 }
 
