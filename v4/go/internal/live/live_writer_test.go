@@ -327,7 +327,7 @@ func TestLiveWriterCommitBarrierRejectsNewerReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reader sidecar open: %v", err)
 	}
-	defer readerSidecar.close()
+	defer readerSidecar.Close()
 	slot, err := readerSidecar.claimReaderCancellable(99, nil)
 	if err != nil {
 		t.Fatalf("claimReader: %v", err)

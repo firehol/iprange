@@ -160,7 +160,7 @@ func InitializeLive(path string, readerCapacity uint32, check func() error) (*Li
 	// The reserved sidecar descriptor is owned by this transition (Rust
 	// drops the Sidecar when initialize_live returns); every return
 	// closes it after the path-level cleanup.
-	defer sidecar.close()
+	defer sidecar.Close()
 	identity := sidecar.localIdentity()
 	if err := checkpoint(check); err != nil {
 		return attempt.cleanupCreated(sidecar, err, LiveCoordinationLocationCanonical), nil

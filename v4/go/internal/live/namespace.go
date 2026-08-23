@@ -4,7 +4,7 @@
 // (Rust live_namespace.rs over the retained-directory machine in
 // publication/namespace). Main and sidecar final components are opened
 // and inspected without following symlinks through the retained parent
-// directory descriptor, must be regular files with one link on the
+// Directory descriptor, must be regular files with one link on the
 // same filesystem, and every handle retains its opened descriptor
 // identity; path re-checks compare the current path entry against the
 // retained identity.
@@ -63,7 +63,7 @@ func parentOf(clean string) (string, error) {
 // (Rust live_namespace::bind_path: Path::parent/file_name,
 // Directory::open, Name::from_component). The returned directory stays
 // open for the caller's operation; the caller closes it.
-func bindPath(path string) (*directory, string, error) {
+func bindPath(path string) (*Directory, string, error) {
 	clean := filepath.Clean(path)
 	parent, err := parentOf(clean)
 	if err != nil {
@@ -73,12 +73,12 @@ func bindPath(path string) (*directory, string, error) {
 	if name == "." || name == string(filepath.Separator) {
 		return nil, "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
-	dir, err := openDirectory(parent)
+	dir, err := OpenDirectory(parent)
 	if err != nil {
 		return nil, "", err
 	}
 	if err := validNameComponent(name); err != nil {
-		dir.close()
+		dir.Close()
 		return nil, "", err
 	}
 	return dir, name, nil
@@ -92,18 +92,18 @@ func verifyPath(path string, expected FileIdentity) error {
 	if err != nil {
 		return nsMap(err)
 	}
-	defer dir.close()
-	entry, found, err := dir.entry(name)
+	defer dir.Close()
+	entry, found, err := dir.Entry(name)
 	if err != nil {
 		return nsMap(err)
 	}
 	if !found {
 		return &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
-	if !entry.regular {
+	if !entry.Regular {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path no longer names a regular file"}
 	}
-	if entry.links != 1 || entry.identity != expected {
+	if entry.Links != 1 || entry.Identity != expected {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path identity changed"}
 	}
 	return nil
@@ -120,15 +120,15 @@ func openRw(path string) (*os.File, FileIdentity, error) {
 	if err != nil {
 		return nil, FileIdentity{}, nsMap(err)
 	}
-	defer dir.close()
-	regular, err := dir.openRegular(name, true)
+	defer dir.Close()
+	regular, err := dir.OpenRegular(name, true)
 	if err != nil {
 		return nil, FileIdentity{}, nsMap(err)
 	}
 	if regular == nil {
 		return nil, FileIdentity{}, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
-	return regular.file, regular.identity, nil
+	return regular.File, regular.Identity, nil
 }
 
 // createPrivate creates one coordination artifact with creator-only
@@ -147,14 +147,14 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 	if err != nil {
 		return createdPrivate{}, cleanFailure(nsMap(err))
 	}
-	defer dir.close()
+	defer dir.Close()
 	// The creator profile is captured before creation (Rust
-	// live_namespace::create_private captures before directory.create).
+	// live_namespace::create_private captures before Directory.create).
 	profile, err := security.Capture()
 	if err != nil {
 		return createdPrivate{}, cleanFailure(err)
 	}
-	f, err := dir.create(name)
+	f, err := dir.Create(name)
 	if err != nil {
 		return createdPrivate{}, cleanFailure(nsMap(err))
 	}
@@ -189,35 +189,35 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 // removeExact removes the path only when it still names the retained
 // identity and synchronizes the parent directory (Rust
 // live_cleanup::remove POSIX remove_exact: verify_name, unlink_exact,
-// directory.sync, require_absent).
+// Directory.sync, require_absent).
 func removeExact(path string, expected FileIdentity) cleanupOutcome {
 	clean := filepath.Clean(path)
 	dir, name, err := bindPath(clean)
 	if err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
-	defer dir.close()
-	if err := dir.verifyName(name, expected); err != nil {
+	defer dir.Close()
+	if err := dir.VerifyName(name, expected); err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
-	removed, err := dir.unlinkExact(name, expected)
+	removed, err := dir.UnlinkExact(name, expected)
 	if err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
 	if !removed {
 		return cleanupOutcomeFailed(&format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"})
 	}
-	if err := dir.sync(); err != nil {
+	if err := dir.Sync(); err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
-	if err := dir.requireAbsent(name); err != nil {
+	if err := dir.RequireAbsent(name); err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
 	return cleanupOutcome{}
 }
 
 // syncParent synchronizes the parent directory of path for durability
-// of a name change (Rust live_namespace::sync_parent). A directory
+// of a name change (Rust live_namespace::sync_parent). A Directory
 // that cannot be synced (EINVAL) is the Unsupported class: the parent
 // cannot prove name durability.
 func syncParent(path string) error {
@@ -226,12 +226,12 @@ func syncParent(path string) error {
 	if err != nil {
 		return err
 	}
-	dir, err := openDirectory(parent)
+	dir, err := OpenDirectory(parent)
 	if err != nil {
 		return nsMap(err)
 	}
-	defer dir.close()
-	if err := dir.sync(); err != nil {
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
 		return nsMap(err)
 	}
 	return nil
@@ -255,11 +255,11 @@ func parentIdentity(path string) (FileIdentity, error) {
 	if err != nil {
 		return FileIdentity{}, err
 	}
-	dir, err := openDirectory(parent)
+	dir, err := OpenDirectory(parent)
 	if err != nil {
 		return FileIdentity{}, nsMapParentIdentity(err)
 	}
-	defer dir.close()
+	defer dir.Close()
 	return dir.id, nil
 }
 
@@ -275,16 +275,16 @@ func pathIdentity(path string) (*FileIdentity, error) {
 		}
 		return nil, nsMap(err)
 	}
-	defer dir.close()
-	found, present, err := dir.entry(name)
+	defer dir.Close()
+	found, present, err := dir.Entry(name)
 	if err != nil {
 		return nil, nsMap(err)
 	}
 	if !present {
 		return nil, nil
 	}
-	if !found.regular || found.links != 1 {
+	if !found.Regular || found.Links != 1 {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "live path is not one regular file"}
 	}
-	return &FileIdentity{device: found.identity.device, inode: found.identity.inode}, nil
+	return &FileIdentity{device: found.Identity.device, inode: found.Identity.inode}, nil
 }

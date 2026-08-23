@@ -112,7 +112,7 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 	// The reserved sidecar descriptor is owned by this attempt (Rust
 	// drops the Sidecar when create_live returns); every return closes
 	// it after the path-level cleanup.
-	defer sidecar.close()
+	defer sidecar.Close()
 	if err := checkpoint(check); err != nil {
 		return attempt.failed(path, sidecar, nil, err), nil
 	}

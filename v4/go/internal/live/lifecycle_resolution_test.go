@@ -84,11 +84,11 @@ func prepareInitialize(t *testing.T, files *resolutionFiles) *LiveTransitionResu
 		t.Fatal(failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		t.Fatal(err)
 	}
 	if err := syncParent(sidecar.path); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		t.Fatal(err)
 	}
 	result := suppliedResult(LiveTransitionInitialize, main, nil, sidecarFacts{
@@ -97,7 +97,7 @@ func prepareInitialize(t *testing.T, files *resolutionFiles) *LiveTransitionResu
 		identity: sidecar.localIdentity(),
 		location: LiveCoordinationLocationCanonical,
 	})
-	sidecar.close()
+	sidecar.Close()
 	return result
 }
 
@@ -186,17 +186,17 @@ func TestResolutionResetOverCorruptCoordinationCanBeCompleted(t *testing.T) {
 		t.Fatal(failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
 	if err := sidecar.publishReady(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
 	if err := syncParent(sidecar.path); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestResolutionResetOverCorruptCoordinationCanBeCompleted(t *testing.T) {
 		identity: sidecar.localIdentity(),
 		location: LiveCoordinationLocationPrivate,
 	})
-	sidecar.close()
+	sidecar.Close()
 	main.file.Close()
 
 	resolved, err := ResolveLiveTransition(files.main, supplied, LiveTransitionResolutionComplete, neverCheck)
@@ -264,12 +264,12 @@ func TestResolutionExchangedResetCleansTheExactPreviousSidecar(t *testing.T) {
 		t.Fatal(failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
 	if err := sidecar.publishReady(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
@@ -282,16 +282,16 @@ func TestResolutionExchangedResetCleansTheExactPreviousSidecar(t *testing.T) {
 		location: LiveCoordinationLocationCanonical,
 	})
 	if err := install(files.private(), files.sidecar(), sidecar.file, sidecar.localIdentity(), previous, LiveResetRollbackSafe); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
 	if err := syncParent(files.sidecar()); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		main.file.Close()
 		t.Fatal(err)
 	}
-	sidecar.close()
+	sidecar.Close()
 	main.file.Close()
 
 	resolved, err := ResolveLiveTransition(files.main, supplied, LiveTransitionResolutionComplete, neverCheck)

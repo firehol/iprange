@@ -130,8 +130,8 @@ func TestReadySidecarReopensWithExactBinding(t *testing.T) {
 	if err := reopened.verifyPath(); err != nil {
 		t.Fatalf("verifyPath: %v", err)
 	}
-	sidecar.close()
-	reopened.close()
+	sidecar.Close()
+	reopened.Close()
 
 	_, err = open(main, [16]byte{3})
 	expectCode(t, err, format.CodeWrongState)
@@ -189,12 +189,12 @@ func TestOneWriterOwnsTheDatabase(t *testing.T) {
 	if err := first.releaseWriter(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	first.close()
+	first.Close()
 	if err := second.claimWriter(); err != nil {
 		t.Fatalf("second claim after release: %v", err)
 	}
 	second.releaseWriter()
-	second.close()
+	second.Close()
 }
 
 func TestReaderSlotsReportCapacityScanAndReuse(t *testing.T) {
@@ -255,10 +255,10 @@ func TestReaderSlotsReportCapacityScanAndReuse(t *testing.T) {
 	}
 	releaseTestReader(t, exhausted, reused)
 	releaseTestReader(t, second, secondSlot)
-	first.close()
-	second.close()
-	exhausted.close()
-	scanner.close()
+	first.Close()
+	second.Close()
+	exhausted.Close()
+	scanner.Close()
 }
 
 func TestStaleSlotBytesAreClearedBeforeReuse(t *testing.T) {
@@ -279,7 +279,7 @@ func TestStaleSlotBytesAreClearedBeforeReuse(t *testing.T) {
 			t.Fatalf("slot byte %d = 0x%02x, want zero", i, b)
 		}
 	}
-	sidecar.close()
+	sidecar.Close()
 }
 
 func TestMalformedOrFutureActiveSlotsFailClosed(t *testing.T) {
@@ -305,8 +305,8 @@ func TestMalformedOrFutureActiveSlotsFailClosed(t *testing.T) {
 	}
 	expectCode(t, scanner.scanAtMostCancellable(7, nil), format.CodeFormatInvalid)
 	releaseTestReader(t, owner, slot)
-	owner.close()
-	scanner.close()
+	owner.Close()
+	scanner.Close()
 }
 
 func TestReadOnlyCapacityInspectionChecksCancellationPerSlot(t *testing.T) {
@@ -326,7 +326,7 @@ func TestReadOnlyCapacityInspectionChecksCancellationPerSlot(t *testing.T) {
 	if polls >= 64 {
 		t.Fatalf("inspection polled %d times, must cancel before capacity", polls)
 	}
-	sidecar.close()
+	sidecar.Close()
 }
 
 func TestReplacementAtTheCanonicalPathIsDetected(t *testing.T) {
@@ -345,7 +345,7 @@ func TestReplacementAtTheCanonicalPathIsDetected(t *testing.T) {
 
 	expectCode(t, sidecar.verifyPath(), format.CodeWrongState)
 	os.Remove(old)
-	sidecar.close()
+	sidecar.Close()
 }
 
 func TestSymlinksAreNotFollowed(t *testing.T) {
@@ -372,7 +372,7 @@ func TestSidecarPathHasAParentForDurabilitySync(t *testing.T) {
 	if err := syncParent(sidecar.path); err != nil {
 		t.Fatalf("syncParent: %v", err)
 	}
-	sidecar.close()
+	sidecar.Close()
 }
 
 func TestSidecarLengthGeometry(t *testing.T) {

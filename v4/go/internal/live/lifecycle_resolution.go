@@ -109,14 +109,14 @@ func ResolveLiveTransition(path string, supplied *LiveTransitionResult, mode Liv
 		// returns); close them after the resolution work, including the
 		// failure paths of the later observations.
 		if canonical != nil {
-			defer canonical.sidecar.close()
+			defer canonical.sidecar.Close()
 		}
 		private, err := observe(privatePath, supplied.DatabaseID)
 		if err != nil {
 			return nil, err
 		}
 		if private != nil {
-			defer private.sidecar.close()
+			defer private.sidecar.Close()
 		}
 		return resolveInitialize(main, supplied, canonical, private, mode)
 	case LiveTransitionReset:
@@ -130,7 +130,7 @@ func ResolveLiveTransition(path string, supplied *LiveTransitionResult, mode Liv
 		// failure paths of the later observations.
 		defer func() {
 			if canonical != nil && canonical.attempt != nil {
-				canonical.attempt.sidecar.close()
+				canonical.attempt.sidecar.Close()
 			}
 		}()
 		private, err := observeResetPrivate(privatePath, supplied)
@@ -139,7 +139,7 @@ func ResolveLiveTransition(path string, supplied *LiveTransitionResult, mode Liv
 		}
 		defer func() {
 			if private != nil && private.attempt != nil {
-				private.attempt.sidecar.close()
+				private.attempt.sidecar.Close()
 			}
 		}()
 		return resolveReset(main, supplied, canonicalPath, canonical, privatePath, private, mode)

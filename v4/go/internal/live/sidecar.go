@@ -155,7 +155,7 @@ func open(main string, databaseID [16]byte) (*Sidecar, error) {
 	if state != stateReady {
 		// Rust drops the sidecar on every open failure: a not-ready
 		// table must not leak the mapped coordination artifact.
-		sidecar.close()
+		sidecar.Close()
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "reader table is not ready"}
 	}
 	return sidecar, nil
@@ -169,7 +169,7 @@ func openAt(path string, databaseID [16]byte) (*Sidecar, sidecarState, error) {
 		return nil, 0, err
 	}
 	if sidecar.header.databaseID != databaseID {
-		sidecar.close()
+		sidecar.Close()
 		return nil, 0, &format.Error{Code: format.CodeWrongState, Detail: "reader table belongs to a different database"}
 	}
 	return sidecar, state, nil
@@ -579,7 +579,7 @@ func (s *Sidecar) clearStale(offset uint64) error {
 // byte ranges (spec 15.6: automatic destructors perform no file or
 // namespace I/O); the caller releases the locks it holds explicitly.
 // close is exclusive: no other method may run concurrently.
-func (s *Sidecar) close() {
+func (s *Sidecar) Close() {
 	if s.mapping != nil {
 		_ = s.mapping.Close()
 		s.mapping = nil

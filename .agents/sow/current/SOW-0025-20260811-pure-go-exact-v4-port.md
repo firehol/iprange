@@ -8955,3 +8955,82 @@ Slice B delivered on the working tree:
 Next slice: C namespace machine (freebsd dirfd arms + retained-dir
 scan) and destination.go (bind, commitment, names,
 require_fail_if_exists_available).
+
+### Status (2026-08-23) - chunk 4-8 slice C implemented: namespace machine (exported directory authority, freebsd linkat transition, retained-dir scan) + destination binding
+
+Slice C delivered on the working tree:
+
+- internal/live directory authority exported (Rust publication/
+  namespace Directory is pub(crate); Go exports the live machine and
+  internal/publication composes it): Directory with Entry/Create/
+  OpenRegular/RequireAbsent/VerifyName/UnlinkExact/Sync/
+  RequireNameLengths/Verify/Scan, RegularFile, Entry, FileIdentity
+  stays opaque with the existing public.go conversions. All live
+  call sites updated; Sidecar.close exported as Close (single naming
+  convention for owned handles).
+- New Verify + Scan (Rust Directory::verify + namespace_scan.rs):
+  constant-memory readdir over ".", pre/post identity+filesystem
+  verify, "." / ".." skipped, stream failures IoAt "open/read
+  retained directory stream", post-verify takes precedence over a
+  visitor error exactly like Rust.
+- FreeBSD no-replace linkat transition machine (Rust
+  namespace_mutation.rs freebsd arms): link_machine.go builds for
+  freebsd OR the v4work test tag (Rust `test` cfg analog), carrying
+  linkNoReplace/finishNoreplaceTransition/linkState/unlinkLinkAlias/
+  proveLinkComplete/requireSource/requireLinkEntry/
+  regularIdentityAnyLink/OpenRegularAnyLink and the four
+  publication.freebsd.* crash points; namespace_install_freebsd.go
+  dispatches RenameNoReplace to the machine, refuses RenameExchange,
+  keeps renameat RenamePlain; namespace_install_other.go now
+  excludes freebsd. The linked-pair fresh-link refusal and the
+  EEXIST-resume semantics are pinned by v4work tests.
+- Parity fix in renameNamespaceResult (pre-existing live bug): the
+  conflict errno now maps to the caller's class, so exchange and
+  plain renames report Missing on ENOENT instead of the Exists class
+  (Rust rename_result passes the conflict error per operation).
+- nofollow_windows.go added (Rust non-unix is_nofollow_symlink
+  false arm): the exported IsNofollowSymlink surface now compiles on
+  windows.
+- internal/publication destination.go: Destination::bind port with
+  raw-Path semantics (no Clean; Rust Path::file_name rules incl.
+  the ".."-terminated None), validate_main_name (Rust path.rs:
+  reserved .iprange- prefix and .readers suffix ASCII-case-
+  insensitive), destination_names (<main>.readers twin), parent
+  open with the live directory authority, require_name_lengths,
+  basename commitment (SHA-256 over IPR4NAME + encoding u16le +
+  length u32le + bytes; KAT 581c...3c20 pinned), creator security
+  profile capture, output/reservation private names
+  (.iprange-publish-/.iprange-reservation- + 32 lowercase hex +
+  .tmp; zero attempt InvalidName), privateAttempt decode (lowercase
+  hex only, zero rejected), require_fail_if_exists_available, and
+  create/secureCreated/verifyCreated with the security-failure fold
+  to the namespace classes (security_namespace.go).
+- Tests: live directory scan facts, the freebsd transition matrix,
+  destination name-rules table, raw-bytes binding + exact attempt
+  name KATs, normative commitment vector, fail-if-exists-available
+  twin refusals, private name round trips, and the linux-only
+  exclusive nofollow creator-only creation test (Rust
+  namespace_tests.rs port). Hygiene fix carried in this slice: the
+  slice-A problem_test.go used unix.EIO/unix.ELOOP constants that do
+  not exist on windows, breaking the windows test compile; the cases
+  now use errors.New erps and a platform probe pair
+  (problem_nofollow_unix_test.go / _other_test.go) so every target
+  compiles and runs its own no-follow expectation.
+- Recorded divergences (no behavior change): the Go security owner
+  has no pure-Go ACL machine on darwin/freebsd (no cgo, Decision
+  2A), so secure_created on those platforms refuses with the
+  Unsupported class where the Rust libc ACL machine proceeds;
+  tracked with the 4-12/M5 platform acceptance. The openbsd
+  cross-compile failure in internal/mapping (publish_link_noreplace
+  references linux/darwin-only Unlink/SyncDirectory helpers) is
+  pre-existing at HEAD and disappears with the slice-N removal of
+  the path-based publish machines.
+- Validation: go build, go vet, go test ./..., -tags v4work ./...
+  (14/14 packages ok each), gofmt clean, -race live+publication,
+  checkptr=2, and the six cross-compiles (linux arm64/386, darwin
+  amd64/arm64, freebsd amd64, windows amd64) all PASS under nice.
+  Rust tree untouched (no re-run needed).
+
+Next slice: D artifact locks (freebsd whole-file flock vs
+linux/darwin offset OFD at OPERATION_LOCK and MAIN_LIFETIME_LOCK,
+reusing internal/live/lock.go).

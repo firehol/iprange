@@ -2,10 +2,10 @@
 
 // Atomic installation of one prepared live sidecar at its canonical
 // name (Rust live_lifecycle/namespace.rs install over the retained
-// directory machine): no-replace first installation, discarding
+// Directory machine): no-replace first installation, discarding
 // replacement, and the rollback-safe atomic exchange with its
 // verification-failure restore. Every mutation runs against the
-// retained directory descriptor (namespace_install_linux.go /
+// retained Directory descriptor (namespace_install_linux.go /
 // _darwin.go / _other.go) and is bracketed by identity proofs exactly
 // like Rust live_namespace.rs.
 
@@ -25,7 +25,7 @@ import (
 // private and canonical, which must share one directory (Rust
 // live_namespace::bind_pair: the parents must be equal, both names
 // must be valid Name components).
-func bindPair(private, canonical string) (*directory, string, string, error) {
+func bindPair(private, canonical string) (*Directory, string, string, error) {
 	private = filepath.Clean(private)
 	canonical = filepath.Clean(canonical)
 	if filepath.Dir(private) != filepath.Dir(canonical) {
@@ -37,7 +37,7 @@ func bindPair(private, canonical string) (*directory, string, string, error) {
 	}
 	canonicalName := filepath.Base(canonical)
 	if err := validNameComponent(canonicalName); err != nil {
-		dir.close()
+		dir.Close()
 		return nil, "", "", nsMap(nsInvalidNameError())
 	}
 	return dir, name, canonicalName, nil
@@ -63,27 +63,27 @@ func install(private, canonical string, privateFile *os.File, privateIdentity Fi
 // installNoreplace renames the prepared private sidecar to the
 // canonical name only when the canonical name is absent (Rust
 // live_namespace::install_noreplace): verify the private identity,
-// rename without replacement, sync the directory, prove the private
+// rename without replacement, sync the Directory, prove the private
 // name absent, and re-verify the canonical identity.
 func installNoreplace(private, canonical string, privateFile *os.File, expected FileIdentity) error {
 	dir, privateName, canonicalName, err := bindPair(private, canonical)
 	if err != nil {
 		return err
 	}
-	defer dir.close()
-	if err := dir.verifyName(privateName, expected); err != nil {
+	defer dir.Close()
+	if err := dir.VerifyName(privateName, expected); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.renameNoReplace(privateName, canonicalName); err != nil {
+	if err := dir.RenameNoReplace(privateName, privateFile, canonicalName); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.sync(); err != nil {
+	if err := dir.Sync(); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.requireAbsent(privateName); err != nil {
+	if err := dir.RequireAbsent(privateName); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.verifyName(canonicalName, expected); err != nil {
+	if err := dir.VerifyName(canonicalName, expected); err != nil {
 		return nsMap(err)
 	}
 	return nil
@@ -99,26 +99,26 @@ func installReplaceDiscarding(private, canonical string, privateFile *os.File, e
 	if err != nil {
 		return err
 	}
-	defer dir.close()
+	defer dir.Close()
 	// Both identities prove before the rename; a failure of either is
 	// the CleanupConflict class exactly like Rust's folded
 	// verify_name().and_then(verify_name).map_err(|_| CleanupConflict).
-	if err := dir.verifyName(privateName, expectedPrivate); err != nil {
+	if err := dir.VerifyName(privateName, expectedPrivate); err != nil {
 		return &format.Error{Code: format.CodeCleanupConflict, Detail: "canonical coordination changed during discarding reset"}
 	}
-	if err := dir.verifyName(canonicalName, expectedCanonical); err != nil {
+	if err := dir.VerifyName(canonicalName, expectedCanonical); err != nil {
 		return &format.Error{Code: format.CodeCleanupConflict, Detail: "canonical coordination changed during discarding reset"}
 	}
-	if err := dir.renamePlain(privateName, canonicalName); err != nil {
+	if err := dir.RenamePlain(privateName, canonicalName); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.sync(); err != nil {
+	if err := dir.Sync(); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.requireAbsent(privateName); err != nil {
+	if err := dir.RequireAbsent(privateName); err != nil {
 		return nsMap(err)
 	}
-	if err := dir.verifyName(canonicalName, expectedPrivate); err != nil {
+	if err := dir.VerifyName(canonicalName, expectedPrivate); err != nil {
 		return nsMap(err)
 	}
 	return nil
@@ -136,37 +136,38 @@ func installExchange(private, canonical string, privateFile *os.File, expectedPr
 	if err != nil {
 		return err
 	}
-	defer dir.close()
-	if err := dir.verifyName(privateName, expectedPrivate); err != nil {
+	defer dir.Close()
+	if err := dir.VerifyName(privateName, expectedPrivate); err != nil {
 		return &format.Error{Code: format.CodeCleanupConflict, Detail: "canonical coordination changed during reset"}
 	}
-	if err := dir.verifyName(canonicalName, expectedCanonical); err != nil {
+	if err := dir.VerifyName(canonicalName, expectedCanonical); err != nil {
 		return &format.Error{Code: format.CodeCleanupConflict, Detail: "canonical coordination changed during reset"}
 	}
-	if err := dir.renameExchange(privateName, canonicalName); err != nil {
+	if err := dir.RenameExchange(privateName, canonicalName); err != nil {
 		return nsMap(err)
 	}
-	if dir.verifyName(canonicalName, expectedPrivate) == nil && dir.verifyName(privateName, expectedCanonical) == nil {
+	if dir.VerifyName(canonicalName, expectedPrivate) == nil && dir.VerifyName(privateName, expectedCanonical) == nil {
 		return nil
 	}
 	cause := &format.Error{Code: format.CodeCleanupConflict, Detail: "canonical coordination changed during reset"}
-	if err := dir.renameExchange(canonicalName, privateName); err != nil {
+	if err := dir.RenameExchange(canonicalName, privateName); err != nil {
 		return &format.Error{Code: format.CodeCleanupInProgress, Detail: cause.Error() + "; cleanup also failed: " + nsMap(err).Error()}
 	}
 	return cause
 }
 
 // renameNamespaceResult classifies one rename errno like Rust
-// rename_result: the conflict errno is the Exists/Missing namespace
-// class, the no-primitive family is Unsupported, every other failure is
-// the operation's Io class.
-func renameNamespaceResult(err error, conflictErrno error, operation string) error {
+// rename_result: the conflict errno maps to the caller's conflict
+// namespace class (EEXIST is Exists, ENOENT is Missing), the
+// no-primitive family is Unsupported, every other failure is the
+// operation's Io class.
+func renameNamespaceResult(err error, conflictErrno error, conflict error, operation string) error {
 	if err == nil {
 		return nil
 	}
 	switch {
 	case conflictErrno != nil && errors.Is(err, conflictErrno):
-		return nsExistsError()
+		return conflict
 	case errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP):
 		return nsUnsupportedError()
 	default:

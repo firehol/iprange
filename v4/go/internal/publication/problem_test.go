@@ -8,21 +8,22 @@ import (
 	"errors"
 	"testing"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
+// problemCase is one problem-mapping expectation (Rust problem.rs).
+type problemCase struct {
+	name   string
+	err    error
+	code   format.ErrorCode
+	detail string
+}
+
 // TestNamespaceProblemArms pins Problem::namespace for every
 // NamespaceError class (problem.rs arm order).
 func TestNamespaceProblemArms(t *testing.T) {
-	tests := []struct {
-		name   string
-		err    error
-		code   format.ErrorCode
-		detail string
-	}{
+	tests := []problemCase{
 		{"invalid name", &live.NamespaceError{Kind: live.NamespaceInvalidName}, format.CodeNameInvalid, "invalid destination name"},
 		{"not directory", &live.NamespaceError{Kind: live.NamespaceNotDirectory}, format.CodeConflict, "destination parent is not a directory"},
 		{"not regular", &live.NamespaceError{Kind: live.NamespaceNotRegular}, format.CodeConflict, "publication name is not a regular file"},
@@ -35,9 +36,9 @@ func TestNamespaceProblemArms(t *testing.T) {
 		{"access policy", &live.NamespaceError{Kind: live.NamespaceAccessPolicy}, format.CodeAccessPolicyUnsupported, "creator-only access policy is not proved"},
 		{"unsupported", &live.NamespaceError{Kind: live.NamespaceUnsupported}, format.CodeDurabilityUnsupported, "filesystem lacks required durable namespace operations"},
 		{"forked handle", &live.NamespaceError{Kind: live.NamespaceForkedHandle}, format.CodeForkedHandle, "publication handle crossed fork"},
-		{"plain io", &live.NamespaceError{Kind: live.NamespaceIo, Op: "open directory", Err: unix.EIO}, format.CodeIO, "publication filesystem operation failed"},
-		{"io at", &live.NamespaceError{Kind: live.NamespaceIoAt, Op: "create private file", Err: unix.EIO}, format.CodeIO, "create private file"},
-		{"io at symlink", &live.NamespaceError{Kind: live.NamespaceIoAt, Op: "inspect retained name", Err: unix.ELOOP}, format.CodeConflict, "publication name is a symlink"},
+		{"plain io", &live.NamespaceError{Kind: live.NamespaceIo, Op: "open directory", Err: errors.New("io")}, format.CodeIO, "publication filesystem operation failed"},
+		{"io at", &live.NamespaceError{Kind: live.NamespaceIoAt, Op: "create private file", Err: errors.New("io")}, format.CodeIO, "create private file"},
+		probeNofollowCase(),
 	}
 	for _, tt := range tests {
 		got := namespaceProblem(tt.err)

@@ -47,11 +47,11 @@ func (f *createResolutionFiles) interruptedSidecarOnly(t *testing.T, created *Cr
 		t.Fatal(failure.cause)
 	}
 	if err := sidecar.initializeCreating(); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		t.Fatal(err)
 	}
 	if err := syncParent(sidecar.path); err != nil {
-		sidecar.close()
+		sidecar.Close()
 		t.Fatal(err)
 	}
 	supplied := *created
@@ -60,7 +60,7 @@ func (f *createResolutionFiles) interruptedSidecarOnly(t *testing.T, created *Cr
 	supplied.MainIdentity = nil
 	identity := sidecar.localIdentity()
 	supplied.SidecarIdentity = &identity
-	sidecar.close()
+	sidecar.Close()
 	return &supplied
 }
 

@@ -67,7 +67,7 @@ func TestLiveReaderOpenCloseRoundTrip(t *testing.T) {
 	// The registered slot is held while the reader is open (probed from
 	// a separate sidecar descriptor; the slot lock reports an owner).
 	sidecar := inspectTestSidecar(t, main, core.Meta().DatabaseID)
-	defer sidecar.close()
+	defer sidecar.Close()
 	if _, ok, err := sidecar.inspectSlot(0); err != nil || !ok {
 		t.Fatalf("slot 0 active = %v err=%v, want an owned slot", ok, err)
 	}

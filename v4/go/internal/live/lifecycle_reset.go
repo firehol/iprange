@@ -72,7 +72,7 @@ func ResetLiveCoordination(path string, readerCapacity uint32, policy LiveResetP
 	// The prepared sidecar descriptor is owned by this transition (Rust
 	// drops the Sidecar when reset_live_coordination returns); every
 	// return closes it after the install and path-level cleanup.
-	defer sidecar.close()
+	defer sidecar.Close()
 	identity := sidecar.localIdentity()
 	if err := checkpoint(check); err != nil {
 		return attempt.cleanupCreated(sidecar, err, LiveCoordinationLocationPrivate), nil

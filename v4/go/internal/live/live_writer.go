@@ -120,7 +120,7 @@ func OpenLiveWriter(path string, budget writer.PageBudget, namespace func(clean 
 		return nil, err
 	}
 	fail := func(err error) (*LiveWriter, error) {
-		sidecar.close()
+		sidecar.Close()
 		core.Close()
 		return nil, err
 	}
@@ -538,7 +538,7 @@ func (w *LiveWriter) closingStep() error {
 		if err := w.core.Close(); err != nil {
 			return err
 		}
-		w.sidecar.close()
+		w.sidecar.Close()
 		w.state = LiveWriterClosed
 		return nil
 	default:

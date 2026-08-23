@@ -161,7 +161,7 @@ func sidecarStateOf(t *testing.T, main string) int {
 		}
 		t.Fatalf("openAny(%s): %v", path, err)
 	}
-	sidecar.close()
+	sidecar.Close()
 	return int(state)
 }
 
@@ -228,7 +228,7 @@ func TestCreateLiveCreatesCompletePair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sidecar.close()
+	defer sidecar.Close()
 	if state != stateReady {
 		t.Fatalf("sidecar state = %d, want ready", state)
 	}
@@ -383,7 +383,7 @@ func TestInitializeLiveConvertsQuiescentMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sidecar.close()
+	defer sidecar.Close()
 	if state != stateReady {
 		t.Fatalf("sidecar state = %d, want ready", state)
 	}

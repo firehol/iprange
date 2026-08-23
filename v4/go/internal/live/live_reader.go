@@ -106,7 +106,7 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 		return fail(err)
 	}
 	fail = func(err error) (*LiveReader, error) {
-		sidecar.close()
+		sidecar.Close()
 		m.Close()
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func (r *LiveReader) Close() (LiveReaderClose, error) {
 		// close completes (the live writer closes its sidecar at the same
 		// terminal step). Retryable failure paths keep the sidecar open
 		// because the close machine may still need the reader table.
-		r.sidecar.close()
+		r.sidecar.Close()
 	}
 	return readerClosed(), nil
 }

@@ -136,7 +136,7 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 		return fail(liveCoordination(err))
 	}
 	fail = func(err error) (*LiveSource, error) {
-		sidecar.close()
+		sidecar.Close()
 		m.Close()
 		return nil, err
 	}
@@ -371,7 +371,7 @@ func (s *LiveSource) release() error {
 	if err := s.core.Close(); err != nil {
 		return err
 	}
-	s.sidecar.close()
+	s.sidecar.Close()
 	return nil
 }
 

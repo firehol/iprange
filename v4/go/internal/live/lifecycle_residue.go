@@ -130,7 +130,7 @@ func ResolveInterruptedLiveTransition(path string, mode LiveTransitionResolution
 	// path, including the failure paths of the later observations.
 	defer func() {
 		if canonical.sidecar != nil {
-			canonical.sidecar.close()
+			canonical.sidecar.Close()
 		}
 		if canonical.file != nil {
 			canonical.file.Close()
@@ -144,7 +144,7 @@ func ResolveInterruptedLiveTransition(path string, mode LiveTransitionResolution
 	// resolution; close it after the resolution work on every path.
 	defer func() {
 		if private.sidecar != nil {
-			private.sidecar.close()
+			private.sidecar.Close()
 		}
 		if private.file != nil {
 			private.file.Close()

@@ -97,7 +97,7 @@ func ResolveCreateLive(path string, supplied *CreateResult, mode LiveTransitionR
 	defer func() {
 		switch coordination.kind {
 		case coordinationExact:
-			coordination.sidecar.close()
+			coordination.sidecar.Close()
 		case coordinationMalformed:
 			if coordination.file != nil {
 				coordination.file.Close()
@@ -161,7 +161,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 	// sidecar is safe: Sidecar.close nil-checks its handles.
 	defer func() {
 		if sidecar != nil {
-			sidecar.close()
+			sidecar.Close()
 		}
 	}()
 	state := stateCreating
@@ -355,7 +355,7 @@ func observeCoordination(path string, supplied *CreateResult) (coordinationObser
 		return coordinationObserved{kind: coordinationExact, sidecar: sidecar, state: state}, nil
 	}
 	if err == nil {
-		sidecar.close()
+		sidecar.Close()
 		return coordinationObserved{}, &format.Error{Code: format.CodeConflict, Detail: "canonical sidecar belongs to another creation"}
 	}
 	if isMalformedClass(err) && supplied.SidecarIdentity != nil && *supplied.SidecarIdentity == *identity {
