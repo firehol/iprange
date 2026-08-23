@@ -77,7 +77,9 @@ func closeInspectedReservation(reservation *inspectedReservation) {
 }
 
 // resolution is one fully inspected non-replacement resolution (Rust
-// Resolution).
+// Resolution). The seed pointer borrows the caller-owned seed value
+// (base.seed in resolve()) for the duration of the dispatch; the
+// arms never retain or free it.
 type resolution struct {
 	destination *destination
 	header      reservationHeader

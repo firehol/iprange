@@ -9806,7 +9806,8 @@ Rust drops it.
 
 Go files (all !windows):
 
-- internal/publication/file_inspection.go (+314): inspectedOutput
+- internal/publication/file_inspection.go (+314 at 12d936e, 317 lines at
+  59fc0dd): inspectedOutput
   owner with Close/verify, inspectMainOutput/inspectPrivateOutput
   (require_exact_private)/inspectPrivateOutputExact (creator-only
   access), inspectOutput (lifetime lock, meta pair, digest, double
@@ -9815,14 +9816,16 @@ Go files (all !windows):
   (open_regular_any_link + finish_noreplace_transition) live in
   file_inspection_freebsd.go and the POSIX arms in
   file_inspection_other.go.
-- internal/publication/resolver.go (+510): resolve()/resolution (type)/
+- internal/publication/resolver.go (+510 at 12d936e, 536 lines at
+  59fc0dd): resolve()/resolution (type)/
   dispatch/resolveOther/resolveAbsent/completeAbsent/arm (acquire -
   arm - resume_armed with the unknown/problemed arm classes)/arm
   Failure/resolveDesired (four-value close at scope end like Rust
   drops)/abandon with the destination- and coordination-post proofs,
   owner builders, reservationIdentityOf, requireNoLater,
   conflictProblem/unresolvable, resolverProblem folding.
-- internal/publication/resolver_authority.go (+111):
+- internal/publication/resolver_authority.go (+111 at 12d936e, 114 lines
+  at 59fc0dd):
   inspectResolution (bind + header_for + reconstruction),
   inspectAuthority, chooseAuthority (all five arms with their exact
   conflict classes).
@@ -9836,12 +9839,15 @@ Go files (all !windows):
 - internal/publication/result_header.go (+86): resultHeaderFor with
   requireResultBinding (directory identity, basename encoding,
   identity kinds).
-- internal/publication/output_resume.go (+29): resumePreparedOutput
+- internal/publication/output_resume.go (+29 at 12d936e; 200 lines at
+  59fc0dd after the +35 slice-K resumePreparedOutputReplacement):
+  resumePreparedOutput
   (PreparedOutput::resume consumes the inspected output).
 - internal/publication/seed.go (+45): reconstructSeed (Seed::
   reconstruct from the header payloads).
-- internal/publication/resolver_test.go (+1002, v4work+linux): 22
-  tests porting resolver_tests.rs - every pre-main and post-main
+- internal/publication/resolver_test.go (+1002 at 12d936e; 1,162 lines,
+  26 tests at 59fc0dd, of which 22 port resolver_tests.rs and 4 are the
+  slice-K replacement tests in the same file): porting resolver_tests.rs - every pre-main and post-main
   crash state through Complete and Remove, the private state-2
   restore, the unresolvable/conflict/cancelled classes, the supplied
   result binding refusals, the malformed exact reservation, the
@@ -9930,9 +9936,14 @@ started. All three FAILs are fixed in this round:
 - Performance P2 (unpinned heap on the resolver success path): the
   reconstructed seed now travels by pointer through resolution/
   dispatch/resolveDesired/resolveOther/resolveAbsent/completeAbsent/
-  abandon instead of being copied to the heap at each arm
-  (base.seed owns the value; the arms borrow it; convention recorded
-  on the resolution type).
+  abandon instead of being copied to the heap at each arm. The
+  borrow-lifetime convention is documented on the resolution type
+  (base.seed owns the value; the arms borrow it). The remaining
+  owner-pointer allocations follow the pointer-owner convention
+  accepted since slice G: Go pointers emulate the Rust move-Option
+  ownership at the machine boundary, not heap-backed handles (Rust
+  File/Mapping are stack values); the cost is a constant 2-4 small
+  objects per cold resolve, closed exactly once by the arms.
 - Idioms P2-1 (mixed close contract): resolve()'s error path now
   closes only the destination directory. Each arm owns the
   exact/later/main values and closes them on every terminal path,
