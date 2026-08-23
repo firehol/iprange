@@ -918,8 +918,9 @@ func TestAttemptResumeArmedBeforeRenamePublishes(t *testing.T) {
 	if armFailure != nil {
 		t.Fatalf("arm reservation: %v", armFailure)
 	}
-	defer armed.Close()
 
+	// resumeArmed owns the reservation from here (Rust moves it in);
+	// the machine closes it, so the fixture must not close its copy.
 	result := resumeArmed(captureSeed(prepared), prepared, armed)
 	if result.Publication != PublicationPublished {
 		t.Fatalf("resume publication = %v, want published", result.Publication)
@@ -968,8 +969,9 @@ func TestAttemptResumeArmedAfterRenameIsOutcomeUnknown(t *testing.T) {
 	if armFailure != nil {
 		t.Fatalf("arm reservation: %v", armFailure)
 	}
-	defer armed.Close()
 
+	// resumeArmed owns the reservation from here (Rust moves it in);
+	// the machine closes it, so the fixture must not close its copy.
 	// Simulate the after_main_rename crash state: the output is at
 	// the main name before the resume runs (Rust resume_armed treats
 	// any pre-rename verification failure as the unprovable outcome).

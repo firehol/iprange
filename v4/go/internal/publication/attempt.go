@@ -85,7 +85,9 @@ func cancellationCheckpoint(check func() error) func(attemptPoint) error {
 // resumeArmed resumes one publication from an armed reservation after
 // a crash (Rust attempt.rs resume_armed): the main namespace was
 // possibly already attempted, so the outcome class follows the
-// desired-proof flag.
+// desired-proof flag. The machine takes ownership of the reservation
+// and closes it on every terminal path (Rust moves it in); the caller
+// must not close or use its copy afterwards.
 func resumeArmed(s seed, output *preparedOutput, reservation armedReservation) PublicationResult {
 	published, failure := publishProved(output, reservation)
 	if failure == nil {
