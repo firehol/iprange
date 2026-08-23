@@ -40,6 +40,255 @@ Recorded as Review Process below.
 
 ## Status
 
+### Status (2026-08-23) - M4 defined: sidecar, lifecycle, validation, recovery, worker, platform
+
+M3 closed at 8c53fce (signed, pushed). Milestone 4 (live/platform/
+recovery completion) scoping completed by five parallel read-only
+investigations over the Rust authorities and the Go tree; the M4 chunk
+plan below is recorded for the gate rounds.
+
+Rust authorities and measured sizes: live coordination surface
+(live_sidecar 518 + header/slot 169 + live_lock 288 + live_namespace
+312 + live_reader 222 + reader_core/live 233 + live_cleanup 289 +
+live_lifecycle 2,709 across creation/create_resolution/transition/
+resolution/residue/namespace + commit_resolution 412 + source_guard/live
+396, ~5.7k), publication resolvers (publication/ scoped set ~5.4k +
+required attempt/cleanup/output/main_file support ~2.1k), validation/
+(~4.8k), recovery/ (~9.7k incl. tests; production ~4.3k), worker/
+(worker.rs + control 859 + posix 674 + client + wire + fault_memory,
+~3.4k + wire codecs), fault.rs, work.rs, live_crash_tests.rs,
+mmap_runtime_tests.rs.
+
+Go gap confirmed: no sidecar file, no byte-range lock primitive beyond
+the main-file lifetime lock (internal/mapping), no gate/writer/slot
+lock ranges, no reader registration, no commit barrier inside
+Core.Publish, no CreateLive/InitializeLive/ResetLiveCoordination/
+ResolveInterruptedLiveTransition, no LiveReader, no explicit Validate,
+no recovery, no worker process or SIGBUS handling, one-shot in-memory
+publication (no reservation files/resolver/residue/security). Go
+current state that composes: internal/mapping (identity, no-follow
+open, OFD lifetime lock linux/darwin, freebsd flock + live refusal,
+windows honest stub, publish link machines linux/darwin/freebsd/netbsd,
+remap, shrink, sync), internal/writer (publication.go CommitAttempt/
+Prepare/Publish outcome classes, publication_staging.go one-shot
+attempt, close.go tail cleanup, create.go main-only create, codecs,
+OutputBuilder, heap), internal/reader (immutable reader, sidecar
+absence refusal, metadata chain reader), internal/snapshot (To() with
+SourceLive refused at snapshot.go:80, budget already reserves 3 live
+files), internal/fault (crash/fail points, v4work env injection,
+exit 86), internal/work (counters), subprocess test pattern
+(subprocess_cross_open_test.go, crash_v4work_test.go).
+
+M4 chunk plan (dependency-ordered; each chunk closes with the
+five-aspect gate, committed signed and pushed):
+
+- 4-1 sidecar core: internal/live/ lock.go + per-OS lock files,
+  header.go, slot.go, sidecar.go (reserve/creating/ready/open/verify/
+  gate/writer/slot ops/scan/oldest), cleanup.go, namespace helpers,
+  fault points; ports live_sidecar_tests.rs + lock tests.
+- 4-2 worker SIGBUS spike (Linux): minimal project-owned assembly
+  sigaction shim per resolved Decision 2A (2026-08-12), armed-region
+  ownership, unrelated-signal chaining matrix, alt-stack discipline;
+  proves the fault-isolation contract before the worker slices.
+- 4-3 create/initialize: CreateLive (sidecar-first ordering,
+  CreateResult/CreationState), InitializeLive (offline conversion),
+  creation security 0600 + IPR4PSEC commitment surface (POSIX).
+- 4-4 live writer open + commit barrier: LiveWriter open
+  (gate + claimWriter + tail cleanup), gate-around-Publish (identity
+  recheck, unchanged base, slot scan, meta write/sync), close releases
+  lease; OpenLiveWriter public; immutable-mode paths unchanged.
+- 4-5 live reader: LiveReaderCore open/register/select/verify/close,
+  ReaderCloseResult, ForkedHandle ownership (PID fallback per spec
+  15.6; MADV_WIPEONFORK not available in Go), OpenLiveReader public.
+- 4-6 transitions: ResetLiveCoordination (RollbackSafe exchange /
+  DiscardPrevious), ResolveInterruptedLiveTransition,
+  resolve_live_transition, resolve_create_live, .readers.reset
+  deterministic private name.
+- 4-7 live snapshot source: SnapshotTo(Live) + recovery source guard
+  (register-like pin, release order).
+- 4-8 publication resolvers: result/problem surface, reservation
+  codec, reservation file lifecycle, reservation inspection,
+  replacement evidence, resolver core + authority + verification,
+  replacement resolver + Publish retrofit to the reservation path,
+  residue + maintenance + security; Windows machinery stays honest
+  refusal (recorded below).
+- 4-9 validation: internal/validation, ImmutableCurrent first
+  (context Claims bitmap, page/tree/range/catalog/bitmap/membership/
+  structure/blob/metadata/retirement validators over the single
+  authority codecs), then LiveCurrent/OfflineCandidate after 4-4/4-6.
+- 4-10 recovery: internal/recovery, classify (recovery-readable meta,
+  generation-order proof, candidate tokens), page set, tables,
+  overlap components, direct build (ordered/in-memory), indirect build
+  (catalog/membership/structure), outputs, source guard, terminal
+  result/report, public RecoverImmutable/RecoverOffline +
+  InspectRecoveryCandidates; external sort + authorized scratch
+  tracked separately (below).
+- 4-11 worker full: worker binary (cmd/iprange-v4-worker), control
+  page + wire codecs, spawn/handshake/drive client, fault memory +
+  unreadable-page retry, worker modes (validate/inspect/recover/
+  cleanup), build-id matching.
+- 4-12 platform completion + proof matrix: native proof on darwin and
+  freebsd (offline validation/recovery not live-gated), mmap-runtime
+  trace for worker+recovery, crash matrix extension (create/init/
+  reset/metadata), budget/fault-injection resource tests, worker-build
+  mismatch tests, code-size/duplication audit.
+
+Recorded scope decisions for M4 (Rust is the baseline; no new user
+decision was required to start):
+
+- Worker boundary: resolved Decision 2A applies (minimal project-owned
+  assembly sigaction shim; no cgo, no runtime linkname, no swallowed
+  signal, no Rust-worker dependency). The 4-2 spike proves it on Linux
+  first; native proof per POSIX platform lands in 4-12.
+- Windows: Go keeps the honest-refusal stance established in M1-M3
+  (mapping_windows.go refuses opens; windows publish stubs refuse).
+  M4 implements the live surface on Linux first with darwin/freebsd
+  gated by the existing OFD/flock machines; Windows live support is
+  recorded as a tracked open item for the M5 platform acceptance
+  review, not silently claimed. SnapshotTo, validation and recovery
+  remain available on FreeBSD in their offline/immutable forms.
+- External sort + authorized scratch (recovery slice F): tracked as a
+  follow-up within M4 (4-10 scope: heap-only first, exact budget
+  accounting; scratch/external-sort/mapped-window machinery added in a
+  later 4-x slice when a Phase-1 consumer needs it), consistent with
+  minimal-complete and the recorded spec allowance for authorized
+  recovery scratch.
+- M4 milestone gate: same five-aspect review process as M3; reviewers
+  restarted at the M3/M4 boundary (completed) and reused across M4
+  chunks.
+
+### Status (2026-08-23) - chunk 4-1 implemented: sidecar core on the working tree, gate pending
+
+Chunk 4-1 (sidecar core) implemented on the working tree over
+8c53fce; five-aspect review dispatched, no commit yet.
+
+Delivered (all under v4/go/):
+
+- internal/live/ (new, 1,468 production lines + 418 test lines):
+  lock.go + lock_linux.go + lock_darwin.go + lock_refuse.go
+  (F_OFD_SETLK/LKW gate/writer/slot ranges, EINTR retry,
+  EACCES/EAGAIN try semantics, freebsd+windows typed refusal),
+  header.go (magic IPRDRS4\0, size 68, slot size 16, state 0/1,
+  CRC-32C at offset 64 over the zeroed field, exact length
+  4096+capacity*16 with overflow refusal), slot.go (16-byte
+  txn+complement codec), sidecar.go (reserve/reserveAt with
+  capacity>0, initializeCreating with truncate -> read-write
+  mapping -> creating header -> flush -> sync -> crash point
+  create.after_sidecar_sync, publishReady with crash point
+  create.after_ready_write -> sync, open/openAt/openAny with
+  exact-length and shape/checksum fail-closed, gate/writer/slot
+  lock ops, claimReaderCancellable with per-slot cancellation,
+  clearReader/unlockReader/verifyReader, scan/inspect/oldest
+  with per-slot cancellation, stale-slot clear on lock success,
+  close without unlock per spec 15.6), cleanup.go (POSIX
+  remove-exact + require-available no-op), namespace.go (0600
+  O_EXCL no-follow create, single-link identity, verify-path,
+  sync-parent), path.go (canonical .readers naming), Windows
+  honest-refusal stubs (namespace_windows.go, mapfile_windows.go)
+  so the six cross-compiles stay green.
+- internal/mapping: MapFile (descriptor-duplicated lock-free
+  exact-extent mapping; kernel rounds the map up, Mapping bounds
+  never reach padding; mirrors Rust memmap2 exact-length mapping),
+  Mapping.locked flag so MapFile mappings close without unlocking,
+  RegularLinkCount moved from writer (linkcount_unix.go /
+  linkcount_windows.go).
+- internal/writer: publication_staging.go now uses
+  mapping.RegularLinkCount; deleted nlink_unix.go/nlink_windows.go.
+
+Port parity: live_sidecar.rs, live_sidecar/header.rs,
+live_sidecar/slot.rs, live_lock.rs (linux/darwin OFD, freebsd
+refusal), live_namespace.rs POSIX subset, live_cleanup.rs POSIX
+subset, live_sidecar_tests.rs (10 tests, plus header-codec and
+length-geometry unit tests). Rust Corrupt -> CodeFormatInvalid,
+Rust WrongMode -> CodeWrongState.
+
+Validation on the working tree, all under nice: gofmt clean, vet
+clean, plain/v4work tests, race, race+v4work, checkptr=2,
+mmap-trace PASS (no read/write on any .iprdb descriptor), six
+cross-compiles (linux/386, linux/arm, linux/arm64, windows/amd64,
+darwin/arm64, freebsd/amd64). internal/live is mmap-only: header
+and slot bytes are read and written only through Mapping views;
+the only heap bytes are the decoded 32-byte ID pair plus capacity,
+matching Rust's decoded Header struct.
+
+### Status (2026-08-23) - chunk 4-1 five-aspect review round 1: FAILs fixed, re-review dispatched
+
+Round-1 gate on the 4-1 working tree: Meitner-role (Rust parity) FAIL
+1xP1 5xP2, Anscombe-role (Go idioms) FAIL 4xP2, Harvey-role
+(performance) FAIL 2xP2 1xP3, Newton-role (wire/integrity) FAIL 1xP1
+1xP2, Aristotle-role (APIs/docs/records) PASS 1xP2 2xP3. All findings
+verified against the Rust authority and fixed on the working tree
+(sidecar_length(0)=Ok(4096) geometry and MapFile exact-length mapping
+were also recorded here; re-review dispatched):
+
+- P1 (x2): mapping.MapFile now proves the file extent before mmap
+  (fstat, refuse size > file size, CodeFormatInvalid "mapping exceeds
+  the file extent"), mirroring Rust require_file_extent; a crash-left
+  short sidecar fails typed instead of SIGBUS. Regression test added
+  (truncate to 0 -> CodeFormatInvalid).
+- Rust-parity P2s: double-fault sites (claim cancel + unlock, slot
+  write + unlock, stale clear + unlock) report CodeCleanupInProgress
+  via combineErrors, mirroring sdk_error::combine_errors /
+  CleanupIncomplete; createPrivate identity-failure mirrors Rust's
+  no-removal + Unresolvable cleanup; createPrivate missing parent
+  reports CodeNameNotFound; removeCreated replaced by removeExact with
+  Rust remove_exact semantics (missing -> NameNotFound, regular +
+  identity + single-link proof, parent-dir sync, require_absent);
+  createPrivate fchmods 0600 independent of umask (secure_creator_only
+  core; ACL/commitment surface stays in 4-3); MapFile dup is
+  close-on-exec (F_SETFD/FD_CLOEXEC, spec 15.6).
+- Go-idiom P2s: local putU16/putU32/putU64/getU16/getU32/getU64
+  helpers deleted, callers use format.PutU16/PutU32/PutU64 and
+  format.U16/U32/U64 (single authoritative codec); dead
+  uniqueAttemptID and cleanupRemove deleted; Sidecar drops its
+  half-guarded mutex and documents exclusive ownership like the
+  mapping owner (close must not race methods); test fake-import
+  `_ = fmt.Sprint()` removed.
+- Performance P2s: scan/claim paths return (uint64, bool) instead of
+  heap-escaped *uint64 (readActiveSlot, scanSlot, inspectSlot,
+  oldestReaderCancellable); scanAtMostCancellable tracks its min on
+  the stack like Rust; claimReaderCancellable threads the precomputed
+  slot offset into the slot write (no recompute). Escape analysis
+  confirms zero hot-path heap escapes (remaining escapes are
+  error-construction only).
+- Records findings: publication_staging.go stale nlink_windows.go
+  citation now cites mapping/linkcount_windows.go; SOW records the
+  sidecar_length(0) geometry decision; mmap-trace claim is qualified
+  to main-file .iprdb descriptors (the sidecar is .readers and the
+  trace pattern covers only .iprdb; internal/live mmap-only rests on
+  the code evidence verified by all five reviewers).
+- Post-fix tree counts: internal/live is 1,451 production + 425 test
+  lines; removeExact lives in namespace.go (the pre-fix "Delivered"
+  entry above recorded the round-1 snapshot).
+
+Validation after fixes, all under nice: gofmt clean, vet clean,
+plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace PASS,
+six cross-compiles PASS.
+
+### Status (2026-08-23) - chunk 4-1 CLOSED: five-aspect re-review PASS on the fixed working tree
+
+Round-2 re-review on the fixed tree: Meitner-role (Rust parity) found
+two new createPrivate error-class P2s (ELOOP -> CodeIO, fchmod failure
+cause -> CodeIO) which were fixed and re-verified in round 3;
+Anscombe-role (Go idioms) PASS, Harvey-role (performance) PASS with
+escape-analysis proof of zero hot-path heap (mu removal verified
+strictly cheaper than Rust's mapping-guard), Newton-role
+(wire/integrity) PASS with byte-identical codec re-verification after
+the format-helper consolidation, Aristotle-role (APIs/docs/records)
+PASS with two P3 record nits fixed (post-fix line counts 1,451
+production + 425 test; removeExact attribution moved to namespace.go;
+"Records findings" heading). Final gate: all five aspects PASS, no
+P0-P2 open.
+
+Validation on the final tree, all under nice: gofmt clean, vet clean,
+plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace PASS
+(main-file .iprdb descriptors only), six cross-compiles
+(linux/386, linux/arm, linux/arm64, windows/amd64, darwin/arm64,
+freebsd/amd64). Signed commit and push follow this entry.
+
+- Next: commit + push chunk 4-1 (explicit file list, signed), then
+  chunk 4-2 (worker SIGBUS spike, Linux) per Decision 2A.
+
 ### Status (2026-08-23) - M3 milestone CLOSED: five-aspect confirmation PASS on the final working tree
 
 The final milestone-scope confirmation over the full M3 delta

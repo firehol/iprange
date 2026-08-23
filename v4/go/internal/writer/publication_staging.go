@@ -513,10 +513,10 @@ func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) 
 	if uint64(fi.Size()) != previous.byteLength {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
 	}
-	links, ok := regularLinkCount(fi)
+	links, ok := mapping.RegularLinkCount(fi)
 	if !ok {
 		// Windows stub: publication is refused before custody proofs, so
-		// the retirement checks never run there (nlink_windows.go).
+		// the retirement checks never run there (mapping/linkcount_windows.go).
 		return nil
 	}
 	source := attempt.AttemptPath()
@@ -556,7 +556,7 @@ func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) 
 	if device != previous.device || inode != previous.inode {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication inode identity changed"}
 	}
-	if links, ok := regularLinkCount(lfi); !ok || links != 1 {
+	if links, ok := mapping.RegularLinkCount(lfi); !ok || links != 1 {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication inode link count changed"}
 	}
 	if err := mapping.Unlink(source); err != nil {
@@ -567,7 +567,7 @@ func retireExchangedPrevious(attempt *OutputAttempt, previous *previousCustody) 
 	// PreviousLinkCount).
 	if fi, err := previous.file.Stat(); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
-	} else if links, ok := regularLinkCount(fi); ok && links != 0 {
+	} else if links, ok := mapping.RegularLinkCount(fi); ok && links != 0 {
 		return &format.Error{Code: format.CodeCleanupConflict, Detail: "retired previous destination still has a link"}
 	}
 	fault.Crash("publication.after_previous_unlink")
@@ -672,7 +672,7 @@ func verifyCustody(attempt *OutputAttempt, policy PublicationPolicy) (device uin
 	// with exactly one hard link (namespace.rs: link count is part of
 	// the custody proof; cleanup discard is identity-guarded the same
 	// way). A changed link count is a conflict class.
-	if nlink, ok := regularLinkCount(fi); !ok || nlink != 1 {
+	if nlink, ok := mapping.RegularLinkCount(fi); !ok || nlink != 1 {
 		if ok && nlink == 0 {
 			return 0, 0, nil, &format.Error{Code: format.CodeConflict, Detail: "publication inode has no links"}
 		}

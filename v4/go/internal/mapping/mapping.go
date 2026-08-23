@@ -44,6 +44,7 @@ type Mapping struct {
 	size     uint64 // currently mapped byte length
 	physical uint64 // file size at open (locked extent)
 	prot     int    // mmap protection of the current mapping
+	locked   bool   // whether the main-file lifetime lock is held
 }
 
 // openMapping implements the shared open path for read-only and read-write
@@ -179,7 +180,7 @@ func openMapping(path string, rdwr bool, check func(clean string) error) (*Mappi
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, prot: prot}
+	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, prot: prot, locked: true}
 	cleanup = false
 	return m, nil
 }
@@ -477,8 +478,10 @@ func (m *Mapping) Close() error {
 		}
 	}
 	m.data = nil
-	if err := unlockLifetime(int(m.file.Fd())); err != nil && first == nil {
-		first = err
+	if m.locked {
+		if err := unlockLifetime(int(m.file.Fd())); err != nil && first == nil {
+			first = err
+		}
 	}
 	if err := m.file.Close(); err != nil && first == nil {
 		first = &format.Error{Code: format.CodeIO, Detail: "close: " + err.Error()}

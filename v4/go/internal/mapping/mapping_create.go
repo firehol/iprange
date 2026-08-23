@@ -110,7 +110,7 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 		unix.Munmap(data)
 		return nil, err
 	}
-	m := &Mapping{file: f, data: data, size: size, physical: size, prot: unix.PROT_READ | unix.PROT_WRITE}
+	m := &Mapping{file: f, data: data, size: size, physical: size, prot: unix.PROT_READ | unix.PROT_WRITE, locked: true}
 	cleanup = false
 	work.MappingGrowth(1)
 	return m, nil
