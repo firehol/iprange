@@ -20,6 +20,8 @@ import (
 func init() {
 	lockSet = setOFD
 	lockUnlock = unlockOFD
+	fileLockSet = setOFD
+	fileLockUnlock = unlockOFD
 }
 
 func flock(offset uint64, lockType int16) (unix.Flock_t, error) {
@@ -29,9 +31,9 @@ func flock(offset uint64, lockType int16) (unix.Flock_t, error) {
 	return unix.Flock_t{Type: lockType, Whence: unix.SEEK_SET, Start: int64(offset), Len: 1}, nil
 }
 
-func setOFD(f *os.File, offset uint64, mode lockMode, wait bool) (bool, error) {
+func setOFD(f *os.File, offset uint64, mode LockMode, wait bool) (bool, error) {
 	lockType := int16(unix.F_RDLCK)
-	if mode == lockExclusive {
+	if mode == LockExclusive {
 		lockType = unix.F_WRLCK
 	}
 	fl, err := flock(offset, lockType)

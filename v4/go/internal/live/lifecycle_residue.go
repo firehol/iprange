@@ -302,7 +302,7 @@ func resolveWithMain(main *lockedMain, residue residues, mode LiveTransitionReso
 // proof, publish ready, parent syncs, re-verify; the gate unlock folds
 // through finishWithCleanup).
 func completeCanonical(main *lockedMain, sidecar *Sidecar, check func() error) (*LiveResidueResult, error) {
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return nil, err
 	}
 	completed := func() error {
@@ -346,7 +346,7 @@ func completeCanonical(main *lockedMain, sidecar *Sidecar, check func() error) (
 // absence, state proof, no-replace install, parent sync, verify, header
 // check under the exclusive gate).
 func completePrivateReset(main *lockedMain, canonicalPath, privatePath string, sidecar *Sidecar, check func() error) (*LiveResidueResult, error) {
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return nil, err
 	}
 	completed := func() error {
@@ -388,7 +388,7 @@ func completePrivateReset(main *lockedMain, canonicalPath, privatePath string, s
 // absorbs into the cleanup outcome).
 func removeValidPrivate(main *lockedMain, path string, sidecar *Sidecar, state sidecarState, check func() error) (*LiveResidueResult, error) {
 	residue := observedResidue{kind: residueValid, sidecar: sidecar, state: state}
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return nil, err
 	}
 	prepared := func() error {
@@ -424,7 +424,7 @@ func removePrivateResidue(main *lockedMain, path string, residue *observedResidu
 		return cleanupOutcome{}, nil
 	case residueValid:
 		sidecar := residue.sidecar
-		if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+		if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 			return cleanupOutcome{}, err
 		}
 		prepared := func() error {

@@ -124,7 +124,7 @@ func OpenLiveWriter(path string, budget writer.PageBudget, namespace func(clean 
 		core.Close()
 		return nil, err
 	}
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return fail(err)
 	}
 	unlockGate := func(err error) (*LiveWriter, error) {
@@ -358,7 +358,7 @@ func (w *LiveWriter) Close() (LiveCloseResult, error) {
 	}
 	hadPending := w.core.HasDraft()
 	w.closingHadPending = hadPending
-	if err := w.sidecar.lockGate(lockExclusive); err != nil {
+	if err := w.sidecar.lockGate(LockExclusive); err != nil {
 		return w.closeFailure(hadPending, err), nil
 	}
 	operation := w.closeLocked()
@@ -395,7 +395,7 @@ func (w *LiveWriter) prepareAndLock(check func() error) error {
 	if err := checkpoint(check); err != nil {
 		return err
 	}
-	return w.sidecar.lockGateCancellable(lockExclusive, check)
+	return w.sidecar.lockGateCancellable(LockExclusive, check)
 }
 
 func (w *LiveWriter) finishCommitLocked(attempt writer.CommitAttempt, check func() error) LiveCommitResult {

@@ -281,12 +281,12 @@ func (s *Sidecar) currentHeader() (sidecarState, header, error) {
 }
 
 // lockGate takes the registration/publication gate (spec 15.2).
-func (s *Sidecar) lockGate(mode lockMode) error {
+func (s *Sidecar) lockGate(mode LockMode) error {
 	return lock(s.file, gateLockOffset, mode)
 }
 
 // lockGateCancellable takes the gate with a cancellation poll loop.
-func (s *Sidecar) lockGateCancellable(mode lockMode, check func() error) error {
+func (s *Sidecar) lockGateCancellable(mode LockMode, check func() error) error {
 	return lockCancellable(s.file, gateLockOffset, mode, check)
 }
 
@@ -298,7 +298,7 @@ func (s *Sidecar) unlockGate() error {
 // claimWriter takes the single-writer lease or reports WriterBusy
 // (Rust Sidecar::claim_writer).
 func (s *Sidecar) claimWriter() error {
-	acquired, err := tryLock(s.file, writerLockOffset, lockExclusive)
+	acquired, err := tryLock(s.file, writerLockOffset, LockExclusive)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func (s *Sidecar) claimReaderCancellable(txn uint64, check func() error) (uint32
 		if err != nil {
 			return 0, err
 		}
-		acquired, err := tryLock(s.file, offset, lockExclusive)
+		acquired, err := tryLock(s.file, offset, LockExclusive)
 		if err != nil {
 			return 0, err
 		}
@@ -500,7 +500,7 @@ func (s *Sidecar) scanSlot(slot uint32) (uint64, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	acquired, err := tryLock(s.file, offset, lockExclusive)
+	acquired, err := tryLock(s.file, offset, LockExclusive)
 	if err != nil {
 		return 0, false, err
 	}
@@ -526,7 +526,7 @@ func (s *Sidecar) inspectSlot(slot uint32) (uint64, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	acquired, err := tryLock(s.file, offset, lockExclusive)
+	acquired, err := tryLock(s.file, offset, LockExclusive)
 	if err != nil {
 		return 0, false, err
 	}

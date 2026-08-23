@@ -110,7 +110,7 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 		m.Close()
 		return nil, err
 	}
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return fail(err)
 	}
 	unlockGate := func(err error) (*LiveReader, error) {
@@ -215,7 +215,7 @@ func (r *LiveReader) Close() (LiveReaderClose, error) {
 		return readerClosed(), nil
 	}
 	if r.state == liveReaderOpen || r.state == liveReaderCloseOnly {
-		if err := r.sidecar.lockGate(lockShared); err != nil {
+		if err := r.sidecar.lockGate(LockShared); err != nil {
 			r.state = liveReaderCloseOnly
 			return readerCloseIncomplete(err), nil
 		}

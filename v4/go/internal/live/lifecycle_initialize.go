@@ -191,7 +191,7 @@ func openLockedMain(path string, check func() error) (*lockedMain, error) {
 		file.Close()
 		return nil, err
 	}
-	if err := lockCancellable(file, mainLifetimeOffset, lockExclusive, check); err != nil {
+	if err := lockCancellable(file, mainLifetimeOffset, LockExclusive, check); err != nil {
 		file.Close()
 		return nil, err
 	}

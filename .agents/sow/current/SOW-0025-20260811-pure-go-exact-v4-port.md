@@ -9034,3 +9034,42 @@ Slice C delivered on the working tree:
 Next slice: D artifact locks (freebsd whole-file flock vs
 linux/darwin offset OFD at OPERATION_LOCK and MAIN_LIFETIME_LOCK,
 reusing internal/live/lock.go).
+
+Slice D (2026-08-23) — artifact locks (Rust live_lock.rs port):
+
+- internal/live/lock.go now exports the artifact lock surface that the
+  publication owner will use: LockMode (LockShared/LockExclusive, the
+  renamed Rust Mode), LockFile, TryLockFile, UnlockFile, and
+  LockFileCancellable, dispatched through the new per-platform
+  fileLockSet/fileLockUnlock vars; the sidecar byte-range surface
+  (lock/tryLock/unlock/lockCancellable) stays package-private. The
+  rename from lockMode/lockShared/lockExclusive is mechanical and
+  touches only internal/live.
+- Linux and macOS delegate the artifact surface to the existing OFD
+  byte-range machine at the caller offset (Rust non-freebsd arm):
+  lock_linux.go and lock_darwin.go inits now also assign
+  fileLockSet/fileLockUnlock.
+- lock_file_freebsd.go (//go:build freebsd): whole-file flock arm with
+  LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN, EINTR retry, EWOULDBLOCK -> false on
+  non-wait, other errors folded to CodeIO; the offset is ignored exactly
+  like the Rust freebsd arm. lock_file_refuse.go
+  (//go:build !linux && !darwin && !freebsd) refuses the artifact
+  surface with the same CodeLiveCoordinationUnsupported refusal as the
+  byte-range surface, so Windows publication refuses before path access
+  (M5 tracked).
+- lock_file_test.go (//go:build !windows, white-box): exclusive
+  contention, release, shared coexistence, cancellable acquisition after
+  release, and check-cancellation, at mainLifetimeOffset like the Rust
+  main_file_tests/output_tests. The freebsd flock arm has identical
+  observable semantics and is covered natively at the 4-12 platform
+  acceptance; there is no v4work host emulation for it (flock is a
+  trivial syscall and the refuse-file tag makes host emulation awkward).
+- Validation: go build, go vet, go test ./..., go test -tags v4work
+  ./... (14/14 packages ok each), gofmt clean, -race + checkptr=2 on
+  internal/live, the six cross-compiles (linux arm64/386, darwin
+  amd64/arm64, freebsd amd64, windows amd64), and per-OS test-compiles
+  of internal/live and internal/publication for linux, darwin, freebsd,
+  windows all PASS under nice. Rust tree untouched.
+
+Next slice: E output and replacement evidence (open output for the
+main file, replace-and-discard evidence, main_file_tests.rs ports).

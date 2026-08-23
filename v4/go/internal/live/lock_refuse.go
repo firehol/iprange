@@ -26,7 +26,7 @@ func liveRefusal() error {
 	return &format.Error{Code: format.CodeLiveCoordinationUnsupported, Detail: "live coordination is not implemented on this platform"}
 }
 
-func refuseSet(_ *os.File, _ uint64, _ lockMode, _ bool) (bool, error) {
+func refuseSet(_ *os.File, _ uint64, _ LockMode, _ bool) (bool, error) {
 	return false, liveRefusal()
 }
 

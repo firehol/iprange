@@ -301,7 +301,7 @@ func observeMain(path string, supplied *CreateResult, check func() error) (mainO
 		file.Close()
 		return mainObserved{}, &format.Error{Code: format.CodeConflict, Detail: "creation main identity changed"}
 	}
-	if err := lockCancellable(file, mainLifetimeOffset, lockExclusive, check); err != nil {
+	if err := lockCancellable(file, mainLifetimeOffset, LockExclusive, check); err != nil {
 		file.Close()
 		return mainObserved{}, err
 	}

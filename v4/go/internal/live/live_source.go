@@ -142,7 +142,7 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 	}
 	// open_sidecar_locked: the exclusive reader-table gate for the
 	// claim window (Rust lock_gate_cancellable, coordination-mapped).
-	if err := sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+	if err := sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 		return fail(liveCoordination(err))
 	}
 	unlockGate := func(err error) (*LiveSource, error) {
@@ -297,7 +297,7 @@ func (s *LiveSource) finalCheck(check func() error) error {
 		return err
 	}
 	if !s.gateLocked {
-		if err := s.sidecar.lockGateCancellable(lockExclusive, check); err != nil {
+		if err := s.sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 			return liveCoordination(err)
 		}
 		s.gateLocked = true
@@ -337,7 +337,7 @@ func (s *LiveSource) release() error {
 	// exactly like the Rust release steps.
 	if s.registration != liveRegistrationReleased {
 		if !s.gateLocked {
-			if err := s.sidecar.lockGate(lockExclusive); err != nil {
+			if err := s.sidecar.lockGate(LockExclusive); err != nil {
 				return liveCoordination(err)
 			}
 			s.gateLocked = true
