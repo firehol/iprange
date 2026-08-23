@@ -224,7 +224,7 @@ func copyMembershipV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 // copy_structured_v4): the payload and the optional threat membership are
 // decoded from the visited view and pushed with the structure batch.
 func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuilder, check func() error) error {
-	cursor, err := source.NewNetworkEnrichmentV1Cursor4()
+	cursor, err := source.NewNetworkEnrichmentV1Cursor4(reader.RangeForward)
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 // copyStructuredV6 copies the IPv6 network_enrichment_v1 ranges (Rust
 // copy_structured_v6).
 func copyStructuredV6(source *reader.ImmutableReader, builder *writer.OutputBuilder, check func() error) error {
-	cursor, err := source.NewNetworkEnrichmentV1Cursor6()
+	cursor, err := source.NewNetworkEnrichmentV1Cursor6(reader.RangeForward)
 	if err != nil {
 		return err
 	}

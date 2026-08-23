@@ -131,7 +131,7 @@ func buildStructuredV6CursorDatabase(t *testing.T) string {
 
 func TestNetworkEnrichmentV1Cursor4(t *testing.T) {
 	r := openFixture(t, "structured-ipv4.iprdb")
-	c, err := r.NewNetworkEnrichmentV1Cursor4()
+	c, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestNetworkEnrichmentV1Cursor4(t *testing.T) {
 
 func TestNetworkEnrichmentV1Cursor4NoThreat(t *testing.T) {
 	r := openFixture(t, "structured-ipv4-nothreat.iprdb")
-	c, err := r.NewNetworkEnrichmentV1Cursor4()
+	c, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestNetworkEnrichmentV1Cursor6(t *testing.T) {
 	}
 	defer r.Close()
 
-	c, err := r.NewNetworkEnrichmentV1Cursor6()
+	c, err := r.NewNetworkEnrichmentV1Cursor6(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,9 +258,9 @@ func TestNetworkEnrichmentV1CursorGuards(t *testing.T) {
 		new     func(*ImmutableReader) error
 		code    format.ErrorCode
 	}{
-		{"ipv4 cursor on direct db", "direct-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor4(); return err }, format.CodeWrongStructureKind},
-		{"ipv4 cursor on membership db", "membership-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor4(); return err }, format.CodeWrongStructureKind},
-		{"ipv6 cursor on ipv4 db", "structured-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor6(); return err }, format.CodeWrongAddressFamily},
+		{"ipv4 cursor on direct db", "direct-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward); return err }, format.CodeWrongStructureKind},
+		{"ipv4 cursor on membership db", "membership-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward); return err }, format.CodeWrongStructureKind},
+		{"ipv6 cursor on ipv4 db", "structured-ipv4.iprdb", func(r *ImmutableReader) error { _, err := r.NewNetworkEnrichmentV1Cursor6(RangeForward); return err }, format.CodeWrongAddressFamily},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -276,7 +276,7 @@ func TestNetworkEnrichmentV1CursorGuards(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer r.Close()
-		if _, err := r.NewNetworkEnrichmentV1Cursor4(); mustCode(err) != format.CodeWrongAddressFamily {
+		if _, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward); mustCode(err) != format.CodeWrongAddressFamily {
 			t.Fatalf("code %v want %v (err %v)", mustCode(err), format.CodeWrongAddressFamily, err)
 		}
 	})
@@ -293,7 +293,7 @@ func TestNetworkEnrichmentV1CursorDangling(t *testing.T) {
 	}
 	defer r.Close()
 
-	c, err := r.NewNetworkEnrichmentV1Cursor4()
+	c, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}

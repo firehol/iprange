@@ -744,3 +744,7 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected tree.LocalReject[ran
 // per-record value refcounts. One flag replaces the per-record wrapper
 // context allocation of the coverage input path.
 func (ctx *rangeCtx) markUntracked() { ctx.untracked = true }
+
+// IsGeneral reports the input fell back to the general assignment path
+// (exported for the public direct workflows; Rust UnionInput::is_general).
+func (u *UnionInput) IsGeneral() bool { return u.isGeneral() }

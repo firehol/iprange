@@ -40,7 +40,214 @@ Recorded as Review Process below.
 
 ## Status
 
+### Status (2026-08-23) - chunk 3b-6 slices A-D complete: five-aspect FAILs fixed, re-review pending
+
+Chunk 3b-6 (randomized public models over the internal core) slices
+A-D are complete on the working tree: slice A (internal/writer
+timestamp_refresh.go with firstSeenPolicy/lastSeenPolicy over
+mergeCoverage, DraftStore mergeFirstSeen/mergeLastSeen, WriterEdit
+AssignInputV4/V6, AddPrivateConstantRangeV4/V6,
+FinishPrivateConstantRanges, MergeFirstSeen/MergeLastSeen), slice B
+(public direct_workflow_public.go with BeginDirectReplacement,
+BeginFirstSeenRefresh, BeginLastSeenRefresh and the exact Rust
+precondition/error classes), slice C (public
+NetworkEnrichmentV1CursorV4/V6 wrappers), and slice D (six Go property
+suites mirroring the Rust tests: workflow_properties.rs,
+structured_value_properties.rs, membership_algebra_properties.rs,
+membership_query_properties.rs, feed_workflow_properties.rs,
+history_projection_properties.rs, plus the direct-workflow surface
+tests in direct_workflow_public_test.go).
+
+The five-aspect gate round returned FAIL with nine findings; every
+finding is fixed and verified on the working tree, and the full battery
+is green under nice again:
+
+- P1 (Anscombe/Harvey) - per-record BindEdit heap allocation in the
+  direct workflows: directWorkflowState now owns one bound edit,
+  created once in beginExactDirectState, and all four input loops
+  (addDirectV4/V6, addTimestampV4/V6) reuse it; the general timestamp
+  branch routes through s.edit.AssignV4/V6 via the new
+  WriterEdit.AssignV4/V6. Per-record DraftStore creation is gone
+  (Rust allocate_nothing_per_record parity).
+- P1 (Harvey) - v4work build broken: structured_cursor_work_test.go
+  now passes the internal reader RangeForward/RangeBackward constants.
+- P1 (Newton) - enrichment cursor lifetime escape: both internal
+  enrichment cursors pin the reader at construction (r.sh.pins.Add(1)),
+  expose Close() that marks the pin closed and releases it, checkOpen()
+  on every operation, Seek on the internal cursors and both public
+  wrappers, and the reader Close reports HandleBusy while a cursor is
+  open (Rust borrow parity).
+- P2 (Meitner/Aristotle) - raw finish errors: finishTimestamp is a
+  closure and both Mutate errors abort through s.w.abortAfter(err);
+  completeDirectWorkflow wraps its error path with
+  w.abortAfter(err); the NoChange discard failure calls
+  w.core.MarkUnresolved(err) before returning. The same NoChange
+  discard gap was fixed in the pre-existing feed_workflow_public.go and
+  history_projection_public.go paths.
+- P2 (Meitner/Aristotle) - timestamp begin error order: beginTimestamp
+  state checks ValueKind != Direct first and returns
+  WrongValueKind("timestamp refresh requires a direct database"),
+  matching Rust live_writer.rs.
+- P2 (Aristotle) - missing finish_input_with_removals_v4/v6: ported as
+  FirstSeenRefresh.FinishInputWithRemovalsV4/V6 over
+  writer.FirstSeenRemoval4Sink/6Sink (batchedRemovals4/6, batch
+  capacity 64 = Rust REMOVAL_BATCH_CAPACITY), DraftStore
+  mergeFirstSeenWithRemovals4/6 with the removal-sink family gate,
+  WriterEdit.MergeFirstSeenWithRemovals4/6, and the new
+  FirstSeenRemovalSink6 logical type.
+- P3 (Meitner) - overflow detail string: timestampCounters.observe
+  returns (Cardinality129, error) and the input-address overflow uses
+  "ordered merge address count" exactly like Rust range_merge.rs.
+- P3 (Newton) - RemoveLeafRun unit tests: TestRemoveLeafRunMidRunRejection
+  and TestRemoveLeafRunWholeLeafAndImmediateRejection added to
+  internal/tree/tree_test.go covering the Rust remove_leaf_run
+  scan-then-remove contract fixed in the slice-D progress entry.
+- P3 (Aristotle) - cursor doc nit: the public enrichment cursor docs
+  now say "in the requested direction".
+- Race battery fix: the zero-allocation pin
+  (TestZeroAllocationDirectWorkflowIngestion) uses MemStats windows,
+  which race shadow memory inflates. The top-level package now has the
+  same raceEnabled build-tag pair as internal/writer (race_enabled.go /
+  race_disabled.go, //go:build race / !race) and the pin skips under
+  -race exactly like TestMetadataDeflateHeapOverheadCoversWorkspace;
+  the functional first-seen removal, family-gate, and cursor-lifetime
+  tests keep running under race.
+
+Full battery green under nice: gofmt clean, vet, plain/v4work tests,
+race, race+v4work, checkptr=2, six cross-compiles (linux/386, linux/arm,
+linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64), mmap-trace
+PASS (no read/write on any .iprdb descriptor), Rust source-graph
+complete, Rust cargo test and --all-features, Rust conformance.
+
+The five-aspect re-review gate closed with all five aspects PASS on
+this working tree (same five reviewers, no respawn): Meitner (Rust
+parity), Anscombe (Go idioms), Harvey (performance), Newton
+(wire/integrity), Aristotle (APIs/docs/records). All previous FAIL
+findings were verified fixed with file:line evidence, Harvey measured
+0 allocs/op on all four direct-workflow input loops, and the battery is
+green. Post-gate P3 dispositions:
+
+- Fixed (Anscombe naming symmetry): the public removal-sink types are
+  now FirstSeenRemoval4Sink/FirstSeenRemoval6Sink, matching the
+  internal writer names and the 4/6 suffix convention (logical_types.go,
+  direct_workflow_public.go method signatures).
+- Fixed (Anscombe header + Newton doc): cursors_public.go header now
+  names the enrichment cursor surface; both cursor type docs state
+  Close must be called; both Close docs reworded to state the pin is
+  the Go mapping of the Rust reader borrow scoped to the cursor
+  lifetime.
+- Fixed (Newton pin symmetry): both enrichment cursor constructors now
+  run the same post-increment closed re-check as Pin(), so a Close
+  racing construction returns WrongState instead of pinning a closed
+  reader.
+- Tracked (Newton, unreachable through the typed surface): requireActive
+  runs before the workflow-kind gate in requireReplacement, where Rust
+  checks the kind gate first; observable only when both preconditions
+  fail, so no pinned test can reach it. Align if the path is ever
+  touched.
+- Tracked (Meitner, accepted closed-probe-first pattern): the nil-core
+  probe precedes the ValueKind check in beginTimestampState, so a
+  closed writer on a non-direct database reports WrongState where Rust
+  reports WrongValueKind; consistent with the accepted slice-C
+  closed-probe-first pattern and unreachable in the pinned suites.
+
+Full battery green under nice at the gated working tree: gofmt clean,
+vet, plain/v4work tests, race, race+v4work, checkptr=2, six
+cross-compiles, mmap-trace PASS, Rust source-graph complete, Rust cargo
+test and --all-features, Rust conformance.
+
+- Next: commit the chunk 3b-6 slices A-D delta signed and push.
+
 Status: in-progress
+
+### Status (2026-08-23) - chunk 3b-6 defined: randomized public models over the internal core
+
+The remaining M3 plan item is the randomized scalar-model property
+suites. Go has no property tests today; the Rust authority is the six
+suites in v4/rust/iprange-livedb/tests/: workflow_properties.rs,
+structured_value_properties.rs, membership_algebra_properties.rs,
+membership_query_properties.rs, feed_workflow_properties.rs, and
+history_projection_properties.rs (membership_import_properties.rs stays
+out: import workflows are the recorded M4 live-sidecar scope).
+
+Scope investigation found three Rust-parity surfaces the property tests
+need and Go does not have yet:
+
+- The public direct workflows (Rust live_writer/direct_workflow.rs
+  begin_direct_replacement / begin_first_seen_refresh /
+  begin_last_seen_refresh with add_ranges_v4/v6_slice and
+  finish_input) are missing entirely; the internal writer core has the
+  range workflow draft, the assignment input
+  (internal/writer/range_locator.go AssignmentInput), the union input
+  and private constant ranges (range_coverage.go, range_draft.go), the
+  ordered merge and its mergeCoverage driver (range_merge.go), and the
+  FinishDirectWorkflow binding, but no timestamp merge policies and no
+  public surface.
+- The first-seen/last-seen timestamp merges (Rust
+  draft_store/timestamp_refresh.rs FirstSeenPolicy/LastSeenPolicy over
+  range_merge::merge_coverage) are missing.
+- The public structured cursor (Rust database.rs
+  network_enrichment_v1_cursor_v4/v6) is missing: the internal reader
+  has NetworkEnrichmentV1Cursor4/6 (internal/reader/
+  structured_cursor.go) but cursors_public.go exposes no wrapper, so
+  the structured property suite cannot assert canonical enrichment
+  ranges.
+- The Go validation surface is Milestone 4 scope; the structured
+  property suite mirrors the Rust validate_clean integrity check with
+  the public reader cross-check instead, recorded here.
+
+Slices (disjoint write scopes, exact Rust baseline):
+
+- A (internal/writer): timestamp_refresh.go with the timestamp merge
+  result, FirstSeenPolicy and LastSeenPolicy (transform/observe/
+  finish over mergeCoverage, reusing the feed projection for the
+  comparison counts plus the input-address counter), DraftStore
+  mergeFirstSeen/mergeLastSeen, and the WriterEdit bindings the public
+  workflows need: AssignInputV4/V6 (direct replacement through the
+  assignment input), AddPrivateConstantRangeV4/V6,
+  FinishPrivateConstantRanges, MergeFirstSeen, and MergeLastSeen.
+- B (public v4/go): direct_workflow_public.go with
+  BeginDirectReplacement, BeginFirstSeenRefresh(refreshValue), and
+  BeginLastSeenRefresh(refreshValue, cutoff) on Writer, the
+  DirectReplacement/FirstSeenRefresh/LastSeenRefresh input handles
+  (AddRangesV4Slice/AddRangesV6Slice, FinishInput), the exact Rust
+  precondition/error classes (WrongValueKind/WrongValueTag/WrongState
+  on family change and workflow kind, abort-after on input errors),
+  and the shared FinishedWorkflow terminal with the replacement
+  report.
+- C (public v4/go cursors): the NetworkEnrichmentV1CursorV4/V6 public
+  wrappers over the internal structured cursor, mirroring the existing
+  public cursor patterns and the Rust database.rs surface.
+- D (public tests): the six Go property suites mirroring the Rust
+  tests with the same deterministic xorshift generators, domains,
+  round counts, and scalar models, asserting through the public reader
+  (lookups, pins, feed-range and enrichment cursors, algebra,
+  aggregation, reports) after every round.
+
+Recorded decisions (no open user decision): the direct replacement
+input type reuses the public DirectRangeV4/V6 value records (the exact
+Rust DirectRange value mirror); the timestamp refresh inputs use the
+value-free AddressRange4/6; the no-change terminal discards the draft
+and the changed terminal retires the base through FinishDirectWorkflow,
+exactly like the feed workflow completion.
+
+- Next: slice A, then B, then C, then D, then the five-aspect close
+  gate like every chunk.
+
+Slice D progress (2026-08-23): workflow_properties.rs parity is
+implemented (direct replacement, first-seen, last-seen randomized
+suites, 100 rounds each on the 128-address domain) and green. The
+last-seen suite exposed a real Go port bug in the shared tree layer:
+v4/go/internal/tree/delete.go RemoveLeafRun returned before applying
+the physical page edit when a rejected record stopped the run
+mid-leaf, while Rust remove_leaf_run scans first and then removes
+[index, end). The Go version reported the rejected prefix without
+removing it, corrupting both the tree (overlapping records retained)
+and the record count (count underflow on the next rewrite). Fixed to
+the Rust shape: scan the leaf, record the first rejected record as the
+following edge, then apply the fixed-range removal for the accepted
+prefix. The fix is Rust-exact, covered by the new randomized last-seen
+and first-seen suites, and the full Go suite stays green.
 
 ### Status (2026-08-23) - chunk 3b-5 complete: feed-workflow slices A/B/C all gated PASS
 

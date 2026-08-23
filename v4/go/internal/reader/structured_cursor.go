@@ -49,16 +49,37 @@ type NetworkEnrichmentV1Cursor4 struct {
 }
 
 // NewNetworkEnrichmentV1Cursor4 opens one ordered IPv4
-// network-enrichment cursor over the committed generation.
-func (r *ImmutableReader) NewNetworkEnrichmentV1Cursor4() (*NetworkEnrichmentV1Cursor4, error) {
+// network-enrichment cursor over the committed generation in direction
+// (Rust NetworkEnrichmentV1CursorV4::new).
+func (r *ImmutableReader) NewNetworkEnrichmentV1Cursor4(direction RangeDirection) (*NetworkEnrichmentV1Cursor4, error) {
 	if err := r.requireStructuredFamilyLocked(format.AddressFamilyIPv4); err != nil {
 		return nil, err
 	}
-	state, err := r.newTreeCursor(r.meta.RangeRoot, cursorDir(RangeForward), format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily))
+	state, err := r.newTreeCursor(r.meta.RangeRoot, cursorDir(direction), format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily))
 	if err != nil {
 		return nil, err
 	}
 	return &NetworkEnrichmentV1Cursor4{state: state}, nil
+}
+
+// Seek repositions to the containing range or the nearest range in the
+// cursor's direction. Seeks are repeatable on an exhausted cursor (Rust
+// CursorState.seek parity).
+func (c *NetworkEnrichmentV1Cursor4) Seek(target uint32) error {
+	c.state.seek4 = target
+	if err := c.state.seekPosition(); err != nil {
+		return err
+	}
+	if c.state.finished {
+		return nil
+	}
+	if c.state.index >= int(c.state.itemCount) {
+		c.state.index = int(c.state.itemCount) - 1
+		if _, _, err := c.state.advance(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Next returns the next enrichment range; ok reports whether a range was
@@ -98,16 +119,38 @@ type NetworkEnrichmentV1Cursor6 struct {
 }
 
 // NewNetworkEnrichmentV1Cursor6 opens one ordered IPv6
-// network-enrichment cursor over the committed generation.
-func (r *ImmutableReader) NewNetworkEnrichmentV1Cursor6() (*NetworkEnrichmentV1Cursor6, error) {
+// network-enrichment cursor over the committed generation in direction
+// (Rust NetworkEnrichmentV1CursorV6::new).
+func (r *ImmutableReader) NewNetworkEnrichmentV1Cursor6(direction RangeDirection) (*NetworkEnrichmentV1Cursor6, error) {
 	if err := r.requireStructuredFamilyLocked(format.AddressFamilyIPv6); err != nil {
 		return nil, err
 	}
-	state, err := r.newTreeCursor(r.meta.RangeRoot, cursorDir(RangeForward), format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily))
+	state, err := r.newTreeCursor(r.meta.RangeRoot, cursorDir(direction), format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily))
 	if err != nil {
 		return nil, err
 	}
 	return &NetworkEnrichmentV1Cursor6{state: state}, nil
+}
+
+// Seek repositions to the containing range or the nearest range in the
+// cursor's direction. Seeks are repeatable on an exhausted cursor (Rust
+// CursorState.seek parity).
+func (c *NetworkEnrichmentV1Cursor6) Seek(targetHi, targetLo uint64) error {
+	c.state.seekHi = targetHi
+	c.state.seekLo = targetLo
+	if err := c.state.seekPosition(); err != nil {
+		return err
+	}
+	if c.state.finished {
+		return nil
+	}
+	if c.state.index >= int(c.state.itemCount) {
+		c.state.index = int(c.state.itemCount) - 1
+		if _, _, err := c.state.advance(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Next returns the next enrichment range; ok reports whether a range was

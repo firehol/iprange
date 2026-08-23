@@ -531,3 +531,113 @@ func TestBranchSplitsCreateAndSearchThreeLevelTree(t *testing.T) {
 		t.Fatalf("predecessor(4999) = %#v", pred)
 	}
 }
+
+// TestRemoveLeafRunMidRunRejection removes only the accepted prefix when
+// the include predicate rejects a record in the middle of the leaf (Rust
+// remove_leaf_run parity). Regression: the early-return shape reported
+// the accepted prefix without applying the physical page edit, leaving
+// the prefix in the tree and the removal count at zero.
+func TestRemoveLeafRunMidRunRejection(t *testing.T) {
+	m := newMemoryStore()
+	root := uint32(0)
+	for _, key := range []uint32{0, 1, 2} {
+		retired := RetiredPages{}
+		retired, _, err := Insert(u32Codec{}, m, &root, u32Record(key, key+10), retired)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retired.Len() != 0 {
+			t.Fatalf("insert of key %d retired pages", key)
+		}
+	}
+	run, err := RemoveLeafRun(u32Codec{}, m, &root, u32Key(0), func(leaf u32Leaf) (bool, error) {
+		return leaf.key == 0, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Removed != 1 {
+		t.Fatalf("Removed = %d, want 1", run.Removed)
+	}
+	if run.Following == nil {
+		t.Fatal("Following is nil, want the rejected record at key 1")
+	}
+	if !run.Following.Key.Equal(u32Key(1)) || run.Following.Leaf.key != 1 || run.Following.Leaf.value != 11 {
+		t.Fatalf("Following = %#v, want key 1 value 11", run.Following)
+	}
+	for _, key := range []uint32{0, 1, 2} {
+		got, ok, err := lookupU32(m, root, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantPresent := key != 0
+		if ok != wantPresent {
+			t.Fatalf("key %d present = %v, want %v", key, ok, wantPresent)
+		}
+		if ok && got != key+10 {
+			t.Fatalf("key %d value = %d, want %d", key, got, key+10)
+		}
+	}
+}
+
+// TestRemoveLeafRunWholeLeafAndImmediateRejection covers the run
+// endpoints: a run covering the whole leaf discards the leaf and reports
+// no following edge; an include predicate that rejects the first record
+// removes nothing and reports the rejected record as the following edge.
+func TestRemoveLeafRunWholeLeafAndImmediateRejection(t *testing.T) {
+	m := newMemoryStore()
+	root := uint32(0)
+	for _, key := range []uint32{0, 1, 2} {
+		retired := RetiredPages{}
+		retired, _, err := Insert(u32Codec{}, m, &root, u32Record(key, key+10), retired)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	run, err := RemoveLeafRun(u32Codec{}, m, &root, u32Key(0), func(leaf u32Leaf) (bool, error) {
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Removed != 3 {
+		t.Fatalf("whole-leaf Removed = %d, want 3", run.Removed)
+	}
+	if run.Following != nil {
+		t.Fatalf("whole-leaf Following = %#v, want nil", run.Following)
+	}
+	if root != 0 {
+		t.Fatalf("whole-leaf removal left root %d, want empty root", root)
+	}
+
+	m2 := newMemoryStore()
+	root2 := uint32(0)
+	for _, key := range []uint32{0, 1, 2} {
+		retired := RetiredPages{}
+		retired, _, err := Insert(u32Codec{}, m2, &root2, u32Record(key, key+10), retired)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	run, err = RemoveLeafRun(u32Codec{}, m2, &root2, u32Key(0), func(leaf u32Leaf) (bool, error) {
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Removed != 0 {
+		t.Fatalf("immediate-rejection Removed = %d, want 0", run.Removed)
+	}
+	if run.Following == nil || !run.Following.Key.Equal(u32Key(0)) {
+		t.Fatalf("immediate-rejection Following = %#v, want key 0", run.Following)
+	}
+	for _, key := range []uint32{0, 1, 2} {
+		got, ok, err := lookupU32(m2, root2, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || got != key+10 {
+			t.Fatalf("key %d changed by rejected removal: (%d, %v)", key, got, ok)
+		}
+	}
+}

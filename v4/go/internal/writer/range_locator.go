@@ -409,3 +409,8 @@ func probeCached(ctx *rangeCtx, r rangeRecord, input *privateInput) (cachedProbe
 	work.LeafLocatorFallback(1)
 	return cachedProbe{candidate: selected, hasCandidate: true}, nil
 }
+
+// Release drops the locator and the pending budget of one assignment
+// input (exported for the public direct workflows; Rust
+// AssignmentInput::release).
+func (a *AssignmentInput) Release() { a.release() }

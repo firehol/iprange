@@ -396,3 +396,76 @@ func (e *WriterEdit) FinishFeedCoverage(input *UnionInput) error {
 func (e *WriterEdit) MergeFeed(member MembershipHandle, create bool, check func() error) (FeedMerge, error) {
 	return e.store.mergeFeed(e.base, member, create, check)
 }
+
+// AssignInputV4 assigns one IPv4 range through the direct replacement
+// assignment input (Rust WriterEdit::assign_input_v4).
+func (e *WriterEdit) AssignInputV4(from, to uint32, value uint32, input *AssignmentInput) (bool, error) {
+	return e.store.assignInput(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value, (*privateInput)(input))
+}
+
+// AssignInputV6 assigns one IPv6 range through the direct replacement
+// assignment input (Rust WriterEdit::assign_input_v6).
+func (e *WriterEdit) AssignInputV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *AssignmentInput) (bool, error) {
+	return e.store.assignInput(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, value, (*privateInput)(input))
+}
+
+// AddPrivateConstantRangeV4 pushes one untracked constant IPv4 range
+// into the draft range tree (Rust WriterEdit::add_private_constant_range
+// for IPv4; timestamp refresh inputs).
+func (e *WriterEdit) AddPrivateConstantRangeV4(from, to uint32, value uint32, input *UnionInput) error {
+	return e.store.addPrivateConstantRange(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value, input)
+}
+
+// AddPrivateConstantRangeV6 pushes one untracked constant IPv6 range
+// into the draft range tree (Rust WriterEdit::add_private_constant_range
+// for IPv6; timestamp refresh inputs).
+func (e *WriterEdit) AddPrivateConstantRangeV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *UnionInput) error {
+	return e.store.addPrivateConstantRange(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, value, input)
+}
+
+// FinishPrivateConstantRanges seals one untracked constant-range input
+// (Rust WriterEdit::finish_private_constant_ranges).
+func (e *WriterEdit) FinishPrivateConstantRanges(input *UnionInput) error {
+	return e.store.finishPrivateConstantRanges(input)
+}
+
+// MergeFirstSeen merges the timestamp coverage tree over the committed
+// base with the first-seen policy (Rust
+// WriterEdit::merge_first_seen).
+func (e *WriterEdit) MergeFirstSeen(refreshValue uint32, check func() error) (TimestampMerge, error) {
+	return e.store.mergeFirstSeen(e.base, refreshValue, check)
+}
+
+// MergeLastSeen merges the timestamp coverage tree over the committed
+// base with the last-seen policy (Rust WriterEdit::merge_last_seen).
+func (e *WriterEdit) MergeLastSeen(refreshValue, cutoff uint32, check func() error) (TimestampMerge, error) {
+	return e.store.mergeLastSeen(e.base, refreshValue, cutoff, check)
+}
+
+// MergeFirstSeenWithRemovals4 merges with the first-seen policy and
+// streams every removed IPv4 interval through the sink in bounded
+// batches (Rust WriterEdit::merge_first_seen_v4_with_removals).
+func (e *WriterEdit) MergeFirstSeenWithRemovals4(refreshValue uint32, sink FirstSeenRemoval4Sink, check func() error) (TimestampMerge, error) {
+	return e.store.mergeFirstSeenWithRemovals4(e.base, refreshValue, sink, check)
+}
+
+// MergeFirstSeenWithRemovals6 merges with the first-seen policy and
+// streams every removed IPv6 interval through the sink in bounded
+// batches (Rust WriterEdit::merge_first_seen_v6_with_removals).
+func (e *WriterEdit) MergeFirstSeenWithRemovals6(refreshValue uint32, sink FirstSeenRemoval6Sink, check func() error) (TimestampMerge, error) {
+	return e.store.mergeFirstSeenWithRemovals6(e.base, refreshValue, sink, check)
+}
+
+// AssignV4 assigns one inclusive IPv4 interval on the open draft
+// through this edit binding (Rust WriterEdit::assign_v4). The general
+// timestamp-input path uses the bound edit so the hot path never binds
+// a fresh DraftStore per record.
+func (e *WriterEdit) AssignV4(from, to uint32, value uint32) (bool, error) {
+	return e.store.AssignV4(from, to, value)
+}
+
+// AssignV6 assigns one inclusive IPv6 interval on the open draft
+// through this edit binding (Rust WriterEdit::assign_v6).
+func (e *WriterEdit) AssignV6(fromHi, fromLo, toHi, toLo uint64, value uint32) (bool, error) {
+	return e.store.AssignV6(fromHi, fromLo, toHi, toLo, value)
+}

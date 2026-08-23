@@ -844,6 +844,7 @@ func classifyComparison(comparison writer.Comparison) LogicalChange {
 func completeFeedWorkflow(w *Writer, report *WorkflowReport, cancellation *CancellationToken) (finishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
 		if err := w.core.DiscardUnpublished(); err != nil {
+			w.core.MarkUnresolved(err)
 			return finishedWorkflow{}, err
 		}
 		return finishedWorkflow{report: report}, nil

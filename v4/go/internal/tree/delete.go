@@ -77,7 +77,7 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 				return RemovedRun[T]{}, err
 			}
 			following = &Following[T]{Key: key, Leaf: item}
-			return RemovedRun[T]{Removed: 0, Following: following}, nil
+			break
 		}
 		end++
 	}

@@ -1,7 +1,8 @@
 // Ordered cursors over one opened immutable database (Rust database.rs
 // cursor surface parity): direct-range cursors with seek, the catalog
-// feed cursor, and the named-feed range projections. Cursors hold one
-// opened reader; every call re-validates the reader state.
+// feed cursor, the named-feed range projections, and the
+// network-enrichment cursors. Cursors hold one opened reader; every
+// call re-validates the reader state.
 
 package iprangedb
 
@@ -251,4 +252,203 @@ func (c *FeedRangeCursorV6) NextRange() (AddressRange6, bool, error) {
 		return AddressRange6{}, false, nil
 	}
 	return AddressRange6{FromHi: rec.FromHi, FromLo: rec.FromLo, ToHi: rec.ToHi, ToLo: rec.ToLo}, true, nil
+}
+
+// NetworkEnrichmentV1RangeV4 is one typed IPv4 enrichment interval
+// (Rust network_enrichment_v1_cursor_v4 next_range). The Value view is
+// valid while the cursor is open.
+type NetworkEnrichmentV1RangeV4 struct {
+	From, To IPv4
+	Value    NetworkEnrichmentV1View
+}
+
+// NetworkEnrichmentV1CursorV4 walks the committed IPv4 enrichment
+// ranges in one direction (Rust NetworkEnrichmentV1CursorV4). Close
+// must be called to release the reader pin the cursor holds.
+type NetworkEnrichmentV1CursorV4 struct {
+	r     *ImmutableReader
+	inner *reader.NetworkEnrichmentV1Cursor4
+	state *pinState
+}
+
+// NetworkEnrichmentV1CursorV4 opens the IPv4 enrichment cursor in the
+// requested direction. The cursor holds one reader lifetime pin (Rust
+// borrow parity): the reader refuses to close while the cursor is open,
+// and Close releases the pin.
+func (r *ImmutableReader) NetworkEnrichmentV1CursorV4(direction RangeDirection) (*NetworkEnrichmentV1CursorV4, error) {
+	if err := r.checkOpen(); err != nil {
+		return nil, err
+	}
+	if r.inner.Meta().ValueKind != format.ValueKindStructured || r.inner.Meta().StructureKind != format.StructureKindNetworkEnrichmentV1 {
+		return nil, &Error{Code: ErrorWrongStructureKind, Detail: "network enrichment lookup requires its matching structured database"}
+	}
+	if r.inner.Meta().AddressFamily != 4 {
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "lookup address family does not match the database"}
+	}
+	inner, err := r.inner.NewNetworkEnrichmentV1Cursor4(reader.RangeDirection(direction))
+	if err != nil {
+		return nil, publicError(err)
+	}
+	r.sh.pins.Add(1)
+	// A Close that raced this cursor either saw the added pin
+	// (HandleBusy) or closed first; the second check makes the loser
+	// return WrongState instead of pinning a closed reader.
+	if r.sh.closed.Load() {
+		r.sh.pins.Add(-1)
+		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
+	}
+	return &NetworkEnrichmentV1CursorV4{r: r, inner: inner, state: &pinState{r: r}}, nil
+}
+
+// checkOpen reports the cursor state: every call re-validates the
+// reader state and the cursor's own open flag.
+func (c *NetworkEnrichmentV1CursorV4) checkOpen() error {
+	if c.state == nil || c.state.closed {
+		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor is closed"}
+	}
+	return c.r.checkOpen()
+}
+
+// Close releases the cursor's reader pin. The reader refuses to close
+// while any enrichment cursor is open; a second Close reports
+// WrongState. Views are readable while the cursor is open and refuse
+// after Close; the cursor pin is the Go mapping of the Rust reader
+// borrow, scoped to the cursor lifetime.
+func (c *NetworkEnrichmentV1CursorV4) Close() error {
+	if c.state == nil || c.state.closed {
+		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor already closed"}
+	}
+	c.state.closed = true
+	c.r.sh.pins.Add(-1)
+	return nil
+}
+
+// Seek repositions to the containing range or the nearest range in the
+// cursor's direction. Seeks are repeatable on an exhausted cursor (Rust
+// CursorState.seek parity).
+func (c *NetworkEnrichmentV1CursorV4) Seek(target IPv4) error {
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
+	return publicError(c.inner.Seek(uint32(target)))
+}
+
+// NextRange returns the next enrichment range in the cursor's direction;
+// ok reports whether a range was produced. The range value is decoded
+// during the visit; a value naming an absent structure ID is corruption.
+func (c *NetworkEnrichmentV1CursorV4) NextRange() (NetworkEnrichmentV1RangeV4, bool, error) {
+	if err := c.checkOpen(); err != nil {
+		return NetworkEnrichmentV1RangeV4{}, false, err
+	}
+	rec, ok, err := c.inner.Next()
+	if err != nil {
+		return NetworkEnrichmentV1RangeV4{}, false, publicError(err)
+	}
+	if !ok {
+		return NetworkEnrichmentV1RangeV4{}, false, nil
+	}
+	return NetworkEnrichmentV1RangeV4{
+		From:  IPv4(rec.From),
+		To:    IPv4(rec.To),
+		Value: NetworkEnrichmentV1View{st: c.state, inner: rec.Value},
+	}, true, nil
+}
+
+// NetworkEnrichmentV1RangeV6 is one typed IPv6 enrichment interval
+// (Rust network_enrichment_v1_cursor_v6 next_range). The Value view is
+// valid while the cursor is open.
+type NetworkEnrichmentV1RangeV6 struct {
+	FromHi, FromLo, ToHi, ToLo uint64
+	Value                      NetworkEnrichmentV1View
+}
+
+// NetworkEnrichmentV1CursorV6 walks the committed IPv6 enrichment
+// ranges in one direction (Rust NetworkEnrichmentV1CursorV6). Close
+// must be called to release the reader pin the cursor holds.
+type NetworkEnrichmentV1CursorV6 struct {
+	r     *ImmutableReader
+	inner *reader.NetworkEnrichmentV1Cursor6
+	state *pinState
+}
+
+// NetworkEnrichmentV1CursorV6 opens the IPv6 enrichment cursor in the
+// requested direction. The cursor holds one reader lifetime pin (Rust
+// borrow parity): the reader refuses to close while the cursor is open,
+// and Close releases the pin.
+func (r *ImmutableReader) NetworkEnrichmentV1CursorV6(direction RangeDirection) (*NetworkEnrichmentV1CursorV6, error) {
+	if err := r.checkOpen(); err != nil {
+		return nil, err
+	}
+	if r.inner.Meta().ValueKind != format.ValueKindStructured || r.inner.Meta().StructureKind != format.StructureKindNetworkEnrichmentV1 {
+		return nil, &Error{Code: ErrorWrongStructureKind, Detail: "network enrichment lookup requires its matching structured database"}
+	}
+	if r.inner.Meta().AddressFamily != 6 {
+		return nil, &Error{Code: ErrorWrongAddressFamily, Detail: "lookup address family does not match the database"}
+	}
+	inner, err := r.inner.NewNetworkEnrichmentV1Cursor6(reader.RangeDirection(direction))
+	if err != nil {
+		return nil, publicError(err)
+	}
+	r.sh.pins.Add(1)
+	// A Close that raced this cursor either saw the added pin
+	// (HandleBusy) or closed first; the second check makes the loser
+	// return WrongState instead of pinning a closed reader.
+	if r.sh.closed.Load() {
+		r.sh.pins.Add(-1)
+		return nil, &Error{Code: ErrorWrongState, Detail: "reader closed"}
+	}
+	return &NetworkEnrichmentV1CursorV6{r: r, inner: inner, state: &pinState{r: r}}, nil
+}
+
+// checkOpen reports the cursor state: every call re-validates the
+// reader state and the cursor's own open flag.
+func (c *NetworkEnrichmentV1CursorV6) checkOpen() error {
+	if c.state == nil || c.state.closed {
+		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor is closed"}
+	}
+	return c.r.checkOpen()
+}
+
+// Close releases the cursor's reader pin. The reader refuses to close
+// while any enrichment cursor is open; a second Close reports
+// WrongState. Views are readable while the cursor is open and refuse
+// after Close; the cursor pin is the Go mapping of the Rust reader
+// borrow, scoped to the cursor lifetime.
+func (c *NetworkEnrichmentV1CursorV6) Close() error {
+	if c.state == nil || c.state.closed {
+		return &Error{Code: ErrorWrongState, Detail: "enrichment cursor already closed"}
+	}
+	c.state.closed = true
+	c.r.sh.pins.Add(-1)
+	return nil
+}
+
+// Seek repositions to the containing range or the nearest range in the
+// cursor's direction. Seeks are repeatable on an exhausted cursor (Rust
+// CursorState.seek parity).
+func (c *NetworkEnrichmentV1CursorV6) Seek(target IPv6) error {
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
+	return publicError(c.inner.Seek(target.Hi, target.Lo))
+}
+
+// NextRange returns the next enrichment range in the cursor's direction;
+// ok reports whether a range was produced. The range value is decoded
+// during the visit; a value naming an absent structure ID is corruption.
+func (c *NetworkEnrichmentV1CursorV6) NextRange() (NetworkEnrichmentV1RangeV6, bool, error) {
+	if err := c.checkOpen(); err != nil {
+		return NetworkEnrichmentV1RangeV6{}, false, err
+	}
+	rec, ok, err := c.inner.Next()
+	if err != nil {
+		return NetworkEnrichmentV1RangeV6{}, false, publicError(err)
+	}
+	if !ok {
+		return NetworkEnrichmentV1RangeV6{}, false, nil
+	}
+	return NetworkEnrichmentV1RangeV6{
+		FromHi: rec.FromHi, FromLo: rec.FromLo, ToHi: rec.ToHi, ToLo: rec.ToLo,
+		Value: NetworkEnrichmentV1View{st: c.state, inner: rec.Value},
+	}, true, nil
 }

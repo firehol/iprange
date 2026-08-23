@@ -68,9 +68,17 @@ type FirstSeenRemoval6 struct {
 	Addresses                  Cardinality129
 }
 
-// FirstSeenRemovalSink receives bounded batches of first-seen removals.
-// Errors stop the refresh workflow and pass through unchanged.
-type FirstSeenRemovalSink func(removals []FirstSeenRemoval4) error
+// FirstSeenRemoval4Sink receives bounded batches of first-seen IPv4
+// removals. The batch slice is borrowed for the synchronous call and
+// must not be retained. Errors stop the refresh workflow and pass
+// through unchanged.
+type FirstSeenRemoval4Sink func(removals []FirstSeenRemoval4) error
+
+// FirstSeenRemoval6Sink receives bounded batches of first-seen IPv6
+// removals. The batch slice is borrowed for the synchronous call and
+// must not be retained. Errors stop the refresh workflow and pass
+// through unchanged.
+type FirstSeenRemoval6Sink func(removals []FirstSeenRemoval6) error
 
 // WorkflowReport is the exact semantic statistics produced before
 // publication by one typed workflow.

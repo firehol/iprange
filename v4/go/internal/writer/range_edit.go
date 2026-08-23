@@ -188,6 +188,7 @@ func rangeReplaceWithHint(ctx *rangeCtx, change change, hint tree.LocalReject[ra
 	if change.to.Less(change.from) {
 		return false, invalid("range start is after its end")
 	}
+
 	var predecessor rangeRecord
 	var hasPredecessor bool
 	if hasHint {

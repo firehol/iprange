@@ -25,7 +25,7 @@ func TestWorkNetworkEnrichmentV1Cursor4(t *testing.T) {
 	defer r.Close()
 
 	work.Reset()
-	c, err := r.NewNetworkEnrichmentV1Cursor4()
+	c, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestWorkNetworkEnrichmentV1Cursor4(t *testing.T) {
 	// A second cursor walks the same tree again: the leaf is re-read on
 	// its first Next like the direct cursor.
 	work.Reset()
-	c2, err := r.NewNetworkEnrichmentV1Cursor4()
+	c2, err := r.NewNetworkEnrichmentV1Cursor4(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestWorkNetworkEnrichmentV1Cursor6(t *testing.T) {
 	defer r.Close()
 
 	work.Reset()
-	c, err := r.NewNetworkEnrichmentV1Cursor6()
+	c, err := r.NewNetworkEnrichmentV1Cursor6(RangeForward)
 	if err != nil {
 		t.Fatal(err)
 	}

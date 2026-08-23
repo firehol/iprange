@@ -291,6 +291,7 @@ func (w *Writer) finishHistoryProjection(report *writer.HistoryProjectionReport,
 	public := publicHistoryReport(report)
 	if report.LogicalChange == writer.LogicalNoChange {
 		if err := w.core.DiscardUnpublished(); err != nil {
+			w.core.MarkUnresolved(err)
 			return nil, err
 		}
 		return &FinishedHistoryProjection{w: w, report: public, cancellation: cancellation}, nil
