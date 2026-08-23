@@ -9971,8 +9971,9 @@ P2s, all fixed in this round:
   a presence flag; the callers take the address inside their own
   frame (the slice-H value-owner pattern).
 - P2: desiredReplacementMeta returned *format.Meta (heap escape).
-  inspectedReplacement now stores the meta by value with a presence
-  flag, matching inspectedOutput.
+  inspectedReplacement now stores the meta by value with a
+  replacement-specific presence flag (inspectedOutput already stores
+  the meta by value without a flag).
 
 The parity review (round-4 carry-over P2-2) added one more fix:
 zero-length pair entries now inspect like Rust Mapping::view maps
@@ -9996,11 +9997,15 @@ reservations and return the synchronize error directly.
 Validation (all under nice): go build ./..., go vet ./..., plain and
 v4work full trees (14 packages ok each), gofmt clean, -race +
 -gcflags=all=-d=checkptr=2 on publication/mapping/live/format, the
-linux/freebsd/darwin publication cross-builds, and the 26 resolver +
+linux/freebsd/darwin publication cross-builds, and the 27 resolver +
 replacement tests (v4work) all PASS; the new descriptor pin fails
 without the previous-close fix and passes with it; the allocation pin
 fails without the artifact security-copy fix (58 objects) and passes
-with it (57).
+with it (57); the zero-length test fails without the empty-entry
+classification fix. Present-state counts at d7cb015:
+replacement_resolver.go 435, replacement_inspection.go 398,
+output_resume.go 202, seed.go 276, attempt_alloc_test.go 80,
+resolver_test.go 1,198 (27 tests).
 
 
 ### Status (2026-08-24) - chunk 4-8 slice J fix round (round-1 FAILs)
