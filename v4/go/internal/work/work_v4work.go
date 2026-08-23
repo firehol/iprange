@@ -17,6 +17,7 @@ type counters struct {
 	wordReads                 atomic.Uint64
 	membershipDecodes         atomic.Uint64
 	structureDecodes          atomic.Uint64
+	structureInterns          atomic.Uint64
 	mappingRemaps             atomic.Uint64
 	mappingGrowths            atomic.Uint64
 	mappingFlushes            atomic.Uint64
@@ -73,6 +74,7 @@ func LeafValidation(n uint64)   { current.leafValidations.Add(n) }
 func WordRead(n uint64)         { current.wordReads.Add(n) }
 func MembershipDecode(n uint64) { current.membershipDecodes.Add(n) }
 func StructureDecode(n uint64)  { current.structureDecodes.Add(n) }
+func StructureIntern(n uint64)  { current.structureInterns.Add(n) }
 func MappingRemap(n uint64)     { current.mappingRemaps.Add(n) }
 func MappingGrowth(n uint64)    { current.mappingGrowths.Add(n) }
 func MappingFlush(n uint64)     { current.mappingFlushes.Add(n) }
@@ -103,6 +105,7 @@ type Snapshot struct {
 	WordReads                 uint64
 	MembershipDecodes         uint64
 	StructureDecodes          uint64
+	StructureInterns          uint64
 	MappingRemaps             uint64
 	MappingGrowths            uint64
 	MappingFlushes            uint64
@@ -160,6 +163,7 @@ func Read() Snapshot {
 		WordReads:                 current.wordReads.Load(),
 		MembershipDecodes:         current.membershipDecodes.Load(),
 		StructureDecodes:          current.structureDecodes.Load(),
+		StructureInterns:          current.structureInterns.Load(),
 		MappingRemaps:             current.mappingRemaps.Load(),
 		MappingGrowths:            current.mappingGrowths.Load(),
 		MappingFlushes:            current.mappingFlushes.Load(),
@@ -211,7 +215,8 @@ func Reset() {
 	for _, atomic := range []*atomic.Uint64{
 		&current.treeLookups, &current.treeDescents, &current.pagesVisited,
 		&current.pagesParsed, &current.keyProbes, &current.leafValidations,
-		&current.wordReads, &current.membershipDecodes, &current.structureDecodes, &current.mappingRemaps,
+		&current.wordReads, &current.membershipDecodes, &current.structureDecodes,
+		&current.structureInterns, &current.mappingRemaps,
 		&current.mappingGrowths, &current.mappingFlushes, &current.fileSyncs,
 		&current.cellProbes, &current.slotReads, &current.slotScanSteps,
 		&current.editFitProbes, &current.bitmapProbes, &current.pagesCreated,

@@ -79,14 +79,14 @@ func (s *DraftStore) ClearV6(fromHi, fromLo, toHi, toLo uint64) (bool, error) {
 
 // RangeRecordAdded accounts one range record with value (Rust
 // draft_store/membership.rs range_record_added). Direct databases carry no
-// per-value accounting; membership refcounts feed the draft delta state;
-// structured refcounts arrive with the structure edit core.
+// per-value accounting; membership refcounts feed the draft membership
+// delta state and structured refcounts the structure delta state.
 func (s *DraftStore) RangeRecordAdded(value uint32) error {
 	switch s.draft.meta.ValueKind {
 	case format.ValueKindMembership:
 		return s.trackMembershipRefcount(value, 1)
 	case format.ValueKindStructured:
-		return unsupported("structured range accounting is not implemented yet")
+		return s.trackStructureRefcount(value, 1)
 	default:
 		return nil
 	}
@@ -99,7 +99,7 @@ func (s *DraftStore) RangeRecordRemoved(value uint32) error {
 	case format.ValueKindMembership:
 		return s.trackMembershipRefcount(value, -1)
 	case format.ValueKindStructured:
-		return unsupported("structured range accounting is not implemented yet")
+		return s.trackStructureRefcount(value, -1)
 	default:
 		return nil
 	}

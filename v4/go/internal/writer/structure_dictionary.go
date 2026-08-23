@@ -13,6 +13,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // structureState is the writable dictionary state (Rust State).
@@ -42,6 +43,7 @@ func structureIDExhausted() error {
 // validation first, then the digest lookup, then the lowest free ID and
 // both tree records.
 func internStructure(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, payload structurePayload) (structureInterned, error) {
+	work.StructureIntern(1)
 	if err := codec.validate(payload.Slice()); err != nil {
 		return structureInterned{}, err
 	}

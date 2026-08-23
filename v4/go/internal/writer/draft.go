@@ -57,6 +57,13 @@ type Draft struct {
 	// membershipDeltaPending is the two-slot delta buffer in front of
 	// the delta tree (Rust membership_delta_pending).
 	membershipDeltaPending deltaPending
+	// structureDeltaRoot is the private structure refcount delta tree of
+	// the open workflow (Rust structure_delta_root; flushed and drained
+	// by finishStructureDeltasWithCheckpoint).
+	structureDeltaRoot uint32
+	// structureDeltaPending is the two-slot delta buffer in front of the
+	// structure delta tree (Rust structure_delta_pending).
+	structureDeltaPending deltaPending
 	// workflowRangeRoot is the private coverage tree of an exact feed
 	// workflow that has not started merging yet (Rust
 	// workflow_range_root): each add_feed_coverage call builds it

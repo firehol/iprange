@@ -157,6 +157,21 @@ func encodeNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membershipID ui
 	return newStructurePayload(bytes[:])
 }
 
+// withMembership returns one canonical payload with the membership
+// field replaced in place (Rust Codec::with_membership): validation runs
+// first so a corrupt stored payload is refused like any intern input,
+// and every other byte is preserved exactly.
+func (structureNetworkEnrichmentV1) withMembership(payload structurePayload, membershipID uint32) (structurePayload, error) {
+	codec := structureNetworkEnrichmentV1{}
+	if err := codec.validate(payload.Slice()); err != nil {
+		return structurePayload{}, err
+	}
+	var bytes [format.NetworkEnrichmentV1PayloadSize]byte
+	copy(bytes[:], payload.Slice())
+	format.PutU32(bytes[enrichmentMembershipOff:enrichmentMembershipOff+4], membershipID)
+	return newStructurePayload(bytes[:])
+}
+
 // structurePayloadDigest is the SHA-256 structure identity (Rust
 // payload_digest): the "IPR4STRUCT" domain prefix, the structure kind, the
 // little-endian payload length, and the canonical payload bytes.

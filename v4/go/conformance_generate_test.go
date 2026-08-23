@@ -1,11 +1,12 @@
 package iprangedb
 
 // Go-produced conformance fixture generation (SOW-0025 chunk-6 design
-// record D5): the two direct fixtures the Go writer can currently produce
-// use the exact op sequence of the Rust generators, with producer-tagged
-// metadata, so both readers cross-open them. Membership/structured
-// fixtures are blocked on their edit cores (later chunks) and stay
-// Rust-only.
+// record D5, extended by slice C): each Go fixture uses the exact op
+// sequence of the matching Rust generator, with producer-tagged metadata
+// where the Rust generator writes text, so both readers cross-open them.
+// Membership (history projection) and structured (network_enrichment_v1)
+// fixtures are Go-produced since slices B and C; recovery fixtures stay
+// Rust-only until the Go recovery milestone.
 //
 // The test is env-gated (IPRANGE_V4_GO_REGENERATE_FIXTURES=1), mirroring
 // the Rust #[ignore] regeneration entry point: a normal suite run never
@@ -220,7 +221,149 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	}
 }
 
-// TestRegenerateGoFixtures regenerates the three Go-produced fixtures with
+// regenStructuredIPv4 writes structured-ipv4.iprdb into dir with the
+// exact op sequence of the Rust structured_ipv4 generator
+// (generate.rs:76): feeds botnet/scanner, two interned
+// network_enrichment_v1 payloads linked to those memberships, the
+// broad/narrow assigns, the clear, and text metadata.
+func regenStructuredIPv4(t *testing.T, dir string) {
+	t.Helper()
+	tag, err := NewValueTag([]byte("enrichment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "structured-ipv4.iprdb")
+	if _, err := Create(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.BeginStructuredTransaction(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	botnet, err := tx.EnsureFeed(FeedName("botnet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := tx.EnsureFeed(FeedName("scanner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := tx.EmptyMembership()
+	if err != nil {
+		t.Fatal(err)
+	}
+	botnetMembership, err := tx.AddFeed(empty, botnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scannerMembership, err := tx.AddFeed(empty, scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broad, err := tx.InternNetworkEnrichmentV1(NetworkEnrichmentV1{
+		ASN:         64512,
+		CountryID:   1,
+		StateID:     2,
+		CityID:      3,
+		Location:    NetworkEnrichmentV1Location{LatitudeMicrodegrees: 37_983_810, LongitudeMicrodegrees: 23_727_539},
+		HasLocation: true,
+	}, botnetMembership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, err := tx.InternNetworkEnrichmentV1(NetworkEnrichmentV1{
+		ASN:       64513,
+		CountryID: 4,
+		StateID:   5,
+		CityID:    6,
+	}, scannerMembership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.AssignV4(IPv4(0x0a010000), IPv4(0x0a0100ff), broad); err != nil || !changed {
+		t.Fatalf("broad assign = changed %v err %v", changed, err)
+	}
+	if changed, err := tx.AssignV4(IPv4(0x0a010040), IPv4(0x0a01007f), narrow); err != nil || !changed {
+		t.Fatalf("narrow assign = changed %v err %v", changed, err)
+	}
+	if changed, err := tx.ClearV4(IPv4(0x0a010064), IPv4(0x0a01006d)); err != nil || !changed {
+		t.Fatalf("clear = changed %v err %v", changed, err)
+	}
+	if changed, err := tx.SetMetadataJSON([]byte(`{"fixture":"go-structured-ipv4","producer":"go"}`)); err != nil || !changed {
+		t.Fatalf("metadata set = changed %v err %v", changed, err)
+	}
+	res, err := tx.Commit()
+	if err != nil || res.Status != CommitCommitted {
+		t.Fatalf("fixture commit = %+v err %v", res, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// regenStructuredIPv4NoThreat writes structured-ipv4-nothreat.iprdb into
+// dir with the exact op sequence of the Rust structured_ipv4_nothreat
+// generator (generate.rs:139): every interned enrichment carries
+// membership id zero (feeds absent), pinning the canonical absence result
+// in both readers, and no metadata is written.
+func regenStructuredIPv4NoThreat(t *testing.T, dir string) {
+	t.Helper()
+	tag, err := NewValueTag([]byte("enrichment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "structured-ipv4-nothreat.iprdb")
+	if _, err := Create(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.BeginStructuredTransaction(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := tx.InternNetworkEnrichmentV1(NetworkEnrichmentV1{
+		ASN:         64514,
+		CountryID:   7,
+		StateID:     8,
+		CityID:      9,
+		Location:    NetworkEnrichmentV1Location{LatitudeMicrodegrees: 40_640_060, LongitudeMicrodegrees: 22_944_420},
+		HasLocation: true,
+	}, MembershipRef{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := tx.InternNetworkEnrichmentV1(NetworkEnrichmentV1{
+		ASN:       64515,
+		CountryID: 10,
+		StateID:   11,
+		CityID:    12,
+	}, MembershipRef{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.AssignV4(IPv4(0x0a020000), IPv4(0x0a02007f), plain); err != nil || !changed {
+		t.Fatalf("plain assign = changed %v err %v", changed, err)
+	}
+	if changed, err := tx.AssignV4(IPv4(0x0a020080), IPv4(0x0a0200ff), bare); err != nil || !changed {
+		t.Fatalf("bare assign = changed %v err %v", changed, err)
+	}
+	res, err := tx.Commit()
+	if err != nil || res.Status != CommitCommitted {
+		t.Fatalf("fixture commit = %+v err %v", res, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRegenerateGoFixtures regenerates the five Go-produced fixtures with
 // the Rust two-phase contract: generate all files into a staging corpus,
 // verify the staging corpus with the exact same conformance suite in a
 // subprocess, and only then publish each file next to its committed
@@ -264,6 +407,8 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	regenDirectIPv4(t, goDir)
 	regenFirstSeenIPv6(t, goDir)
 	regenHistoryMembershipIPv4(t, goDir)
+	regenStructuredIPv4(t, goDir)
+	regenStructuredIPv4NoThreat(t, goDir)
 
 	// Verify: the staged corpus must pass the full conformance suite
 	// (same binary, same test, corpus root redirected by env).
@@ -312,4 +457,6 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	publish("direct-ipv4.iprdb")
 	publish("first-seen-ipv6.iprdb")
 	publish("history-membership-ipv4.iprdb")
+	publish("structured-ipv4.iprdb")
+	publish("structured-ipv4-nothreat.iprdb")
 }

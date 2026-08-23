@@ -8618,6 +8618,120 @@
      ]
     }
    ]
+  },
+  {
+   "file": "go/structured-ipv4.iprdb",
+   "producer": "go",
+   "family": "ipv4",
+   "kind": "structured",
+   "structure": "network-enrichment-v1",
+   "tag": "enrichment",
+   "metadata": {
+    "state": "text",
+    "value": "{\"fixture\":\"go-structured-ipv4\",\"producer\":\"go\"}"
+   },
+   "address_count": "246",
+   "feeds": [
+    {
+     "name": "botnet",
+     "index": 0
+    },
+    {
+     "name": "scanner",
+     "index": 1
+    }
+   ],
+   "structured_ranges": [
+    {
+     "from": "10.1.0.0",
+     "to": "10.1.0.63",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
+    },
+    {
+     "from": "10.1.0.64",
+     "to": "10.1.0.99",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "10.1.0.110",
+     "to": "10.1.0.127",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "10.1.0.128",
+     "to": "10.1.0.255",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "go/structured-ipv4-nothreat.iprdb",
+   "producer": "go",
+   "family": "ipv4",
+   "kind": "structured",
+   "structure": "network-enrichment-v1",
+   "tag": "enrichment",
+   "metadata": {
+    "state": "absent"
+   },
+   "address_count": "256",
+   "feeds": [],
+   "structured_ranges": [
+    {
+     "from": "10.2.0.0",
+     "to": "10.2.0.127",
+     "asn": 64514,
+     "country_id": 7,
+     "state_id": 8,
+     "city_id": 9,
+     "location": {
+      "latitude_microdegrees": 40640060,
+      "longitude_microdegrees": 22944420
+     },
+     "feeds": []
+    },
+    {
+     "from": "10.2.0.128",
+     "to": "10.2.0.255",
+     "asn": 64515,
+     "country_id": 10,
+     "state_id": 11,
+     "city_id": 12,
+     "feeds": []
+    }
+   ]
   }
  ],
  "invalid_cases": [

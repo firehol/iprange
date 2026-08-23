@@ -65,8 +65,59 @@ PASS at HEAD 948aa93, after the residue fixes committed at f397ebe and
 - Full battery green under nice at the gated HEAD: build, gofmt clean,
   vet, plain/v4work tests, race, race+v4work, checkptr=2, six
   cross-compiles.
-- Next: slice C (public projection facade over the ordered merge and
-  workflow surfaces).
+- Next: slice C (internal/writer structured apply + public
+  StructuredTransaction).
+
+### Status (2026-08-23) - slice C implemented: StructuredTransaction surface, structured writer apply, Go structured fixtures
+
+Slice C (the internal/writer structured apply and the public
+StructuredTransaction) is implemented and green; the close gate (five
+aspects on this delta) is next. Committed scope at e04750f + this
+working tree:
+
+- New public surface (v4/go/structured_transaction_public.go): the
+  advanced transaction over a clean writer (Rust live_writer/structured.rs
+  parity) with StructureRef pinning (database id, operation nonce,
+  reference epoch), feed/membership catalog reuse (EnsureFeed,
+  EmptyMembership, AddFeed, LookupFeed, RenameFeed, DeleteFeed), typed
+  interning (InternNetworkEnrichmentV1 with lazy threat membership,
+  dedup by payload), assign/clear v4/v6 with family and ordered-range
+  guards, metadata staging with the Rust wrong-state second-set
+  contract, and Commit/Abort that spend the transaction and its
+  references.
+- New writer core (v4/go/internal/writer/structure_draft.go): the
+  structure draft (intern with payload encode + structure refcounts +
+  membership owner refcounts, assign/clear through the assignment
+  input, delete_current_structured_feed with remove_feed_from_structure
+  payload re-intern, finish_structure_deltas with structure_dictionary
+  apply_delta + released-membership accounting), plus workflow bindings
+  (WriterEdit) and the structure dictionary intern counter parity
+  (work.StructureIntern).
+- structure_codec.go now patches membership bytes in place (Rust
+  with_membership parity) instead of decode/re-encode, so a corrupt
+  flags byte errors instead of being silently masked.
+- range_draft.go structured RangeRecordAdded/Removed now route through
+  trackStructureRefcount (Rust parity); draft_prepare.go threads the
+  caller's checkpoint through finishStructureDeltasWithCheckpoint
+  (nil-safe, Rust draft_store.rs parity).
+- Tests: v4/go/structured_transaction_public_test.go (4 tests mirroring
+  Rust structured_values.rs: reference pinning, abort/dedup/release/
+  reuse clean graph, metadata wrong-state, snapshot of the committed
+  graph) and v4/go/structured_transaction_v4work_test.go (work-counter
+  pins: intern attempts, dedup, assign/clear silence, delete-feed
+  re-interns).
+- Rust cross-open evidence: two Go-produced structured fixtures
+  (structured-ipv4, structured-ipv4-nothreat) regenerated from the exact
+  Rust generator op sequences (v4/go/conformance_generate_test.go),
+  added to v4/conformance/cases.json, verified by the Go conformance
+  suite, by the Rust conformance suite (all 11 manifest fixtures), and
+  by the Rust mixed-subprocess smoke (typed lookups, feeds, cleared
+  hole, no-threat absence).
+- Full battery green under nice: build, gofmt clean, vet, plain/v4work
+  tests, race, race+v4work, checkptr=2, six cross-compiles, Rust suite
+  580 passed 0 failed.
+- Next: the five-aspect close gate on this delta (Meitner, Anscombe,
+  Harvey, Newton, Aristotle), then slice D per the slice plan.
 
 ### Status (2026-08-23) - slice B review-fix round 2: re-review verdicts and residue fixes
 

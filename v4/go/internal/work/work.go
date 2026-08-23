@@ -45,6 +45,10 @@ func MembershipDecode(uint64) {}
 // StructureDecode counts one structured payload decode.
 func StructureDecode(uint64) {}
 
+// StructureIntern counts one structured payload intern (Rust
+// work::structure_intern parity).
+func StructureIntern(uint64) {}
+
 // MappingRemap counts one actual mapping resize (remap or shrink that
 // re-establishes the mapping); same-size no-ops do not count.
 func MappingRemap(uint64) {}

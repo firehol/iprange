@@ -212,6 +212,19 @@ func (l *leafLocator) release() {
 // PrivateInput<K, ADAPTIVE>). adaptive mirrors the Rust const generic: the
 // assignment input never adapts, the union input stops probing after
 // local conflicts and releases the locator at the conflict limit.
+// AssignmentInput is the exported view of the private assignment input
+// (Rust range_mutation::AssignmentInput): the structured transaction
+// owns one input per family and passes it through the edit bindings so
+// the leaf-locator state survives across assigns on a private range
+// tree.
+type AssignmentInput = privateInput
+
+// NewAssignmentInput starts one assignment input for the family with the
+// declared heap budget (Rust AssignmentInput::new).
+func NewAssignmentInput(family uint8, maxHeapBytes uint64) AssignmentInput {
+	return newAssignmentInput(family, maxHeapBytes)
+}
+
 type privateInput struct {
 	locator             leafLocator
 	probeLocator        bool

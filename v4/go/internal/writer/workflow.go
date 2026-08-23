@@ -175,6 +175,35 @@ func (e *WriterEdit) FinishDirectWorkflow(check func() error) error {
 	return e.store.finishDirectWorkflow(e.base, check)
 }
 
+// InternNetworkEnrichmentV1 interns one typed enrichment value with the
+// optional threat membership (Rust
+// WriterEdit::intern_network_enrichment_v1).
+func (e *WriterEdit) InternNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membership MembershipHandle) (StructureHandle, error) {
+	handle, err := e.store.internNetworkEnrichmentV1(value, membership)
+	return StructureHandle(handle), err
+}
+
+// AssignStructureInputV4 assigns one structured IPv4 range through the
+// transaction assignment input (Rust
+// WriterEdit::assign_structure_input_v4).
+func (e *WriterEdit) AssignStructureInputV4(from, to uint32, structure StructureHandle, input *AssignmentInput) (bool, error) {
+	return e.store.assignStructureInputV4(from, to, structureHandle(structure), (*privateInput)(input))
+}
+
+// AssignStructureInputV6 assigns one structured IPv6 range through the
+// transaction assignment input (Rust
+// WriterEdit::assign_structure_input_v6).
+func (e *WriterEdit) AssignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *AssignmentInput) (bool, error) {
+	return e.store.assignStructureInputV6(fromHi, fromLo, toHi, toLo, structureHandle(structure), (*privateInput)(input))
+}
+
+// DeleteCurrentStructuredFeed deletes one feed and removes it from every
+// stored structure payload (Rust
+// WriterEdit::delete_current_structured_feed).
+func (e *WriterEdit) DeleteCurrentStructuredFeed(feed FeedEntry, check func() error) error {
+	return e.store.deleteCurrentStructuredFeed(feed, check)
+}
+
 // finishDirectWorkflow completes a direct (range) workflow (Rust
 // draft_store/workflow.rs finish_direct_workflow): the committed base
 // range tree is retired unless the merge already retired it, then the

@@ -85,12 +85,10 @@ func TestDraftStoreAssignV6RunsTheV6Family(t *testing.T) {
 }
 
 // TestDraftStoreRangeAccountingRoutesMembershipRefcounts pins the
-// membership accounting fence since Slice A/B: range edits on
-// membership-kind drafts succeed and route every record into the
-// operation-private refcount delta state (Rust
-// RangeStore::range_record_added/removed + track_membership_refcount),
-// while structured-kind range edits still fail closed until the
-// structure edit core arrives.
+// membership accounting fence: range edits on membership-kind drafts
+// succeed and route every record into the operation-private refcount
+// delta state (Rust RangeStore::range_record_added/removed +
+// track_membership_refcount).
 func TestDraftStoreRangeAccountingRoutesMembershipRefcounts(t *testing.T) {
 	path := makeEmptyDBPagesKind(t, 64, format.AddressFamilyIPv4)
 	raw := make([]byte, 64*format.PageSize)
@@ -145,12 +143,12 @@ func TestDraftStoreRangeAccountingRoutesMembershipRefcounts(t *testing.T) {
 	}
 }
 
-// TestDraftStoreRangeAccountingFailsClosedOnStructuredKinds pins the
-// remaining fail-closed fence: structured-kind range edits are refused
-// until the structure edit core arrives, and a refused edit must leave
-// the draft meta at its pre-call state (Rust draft_store.rs snapshots
-// root/count into locals and commits them only after the edit succeeds).
-func TestDraftStoreRangeAccountingFailsClosedOnStructuredKinds(t *testing.T) {
+// TestDraftStoreRangeAccountingRoutesStructureRefcounts pins the
+// structured accounting fence since the structure edit core: range
+// edits on structured-kind drafts succeed and route every record into
+// the structure refcount delta state (Rust RangeStore::
+// range_record_added/removed + track_structure_refcount).
+func TestDraftStoreRangeAccountingRoutesStructureRefcounts(t *testing.T) {
 	path := makeEmptyDBPagesKind(t, 64, format.AddressFamilyIPv4)
 	raw := make([]byte, 64*format.PageSize)
 	for i := uint64(0); i < 2; i++ {
@@ -168,21 +166,41 @@ func TestDraftStoreRangeAccountingFailsClosedOnStructuredKinds(t *testing.T) {
 	}
 	budget := PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100}
 	_, store, _ := openDraftStore(t, path, budget, [16]byte{7})
-	rootBefore := store.draft.meta.RangeRoot
-	countBefore := store.draft.meta.RangeRecordCount
-	if _, err := store.AssignV4(0, 10, 1); err == nil {
-		t.Fatal("structured-kind range assign did not fail closed")
+
+	changed, err := store.AssignV4(0, 10, 1)
+	if err != nil || !changed {
+		t.Fatalf("structured-kind AssignV4 = %v, %v", changed, err)
 	}
-	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
-		t.Fatalf("failed assign mutated draft meta: root %d->%d count %d->%d",
-			rootBefore, store.draft.meta.RangeRoot, countBefore, store.draft.meta.RangeRecordCount)
+	if store.draft.meta.RangeRecordCount != 1 {
+		t.Fatalf("structured assign record count = %d, want 1", store.draft.meta.RangeRecordCount)
 	}
-	if _, err := store.AssignV4(0, 10, 1); err == nil {
-		t.Fatal("structured-kind range assign retry did not fail closed")
+	// The record charged one refcount for structure id 1 into the
+	// pending structure delta buffer.
+	if store.draft.structureDeltaPending.isEmpty() {
+		t.Fatal("structure assign left the refcount delta buffer empty")
 	}
-	if store.draft.meta.RangeRoot != rootBefore || store.draft.meta.RangeRecordCount != countBefore {
-		t.Fatalf("failed assign retry mutated draft meta: root %d->%d count %d->%d",
-			rootBefore, store.draft.meta.RangeRoot, countBefore, store.draft.meta.RangeRecordCount)
+	if !store.draft.structureDeltaPending.used[0] {
+		t.Fatal("pending structure delta slot 0 is empty, want {1 +1}")
+	}
+	slot := store.draft.structureDeltaPending.slots[0]
+	if slot.id != 1 || slot.change != 1 {
+		t.Fatalf("pending structure delta = %+v, want {1 +1}", slot)
+	}
+
+	// Clearing the range accounts the removal; the same pending slot
+	// merges to a zero change (Rust track_buffered coalescing).
+	if changed, err := store.ClearV4(0, 10); err != nil || !changed {
+		t.Fatalf("structured-kind ClearV4 = %v, %v", changed, err)
+	}
+	if store.draft.meta.RangeRecordCount != 0 {
+		t.Fatalf("structured clear record count = %d, want 0", store.draft.meta.RangeRecordCount)
+	}
+	if !store.draft.structureDeltaPending.used[0] {
+		t.Fatal("pending structure delta slot 0 is empty after clear, want {1 0}")
+	}
+	slot = store.draft.structureDeltaPending.slots[0]
+	if slot.id != 1 || slot.change != 0 {
+		t.Fatalf("pending structure delta after clear = %+v, want {1 0}", slot)
 	}
 }
 

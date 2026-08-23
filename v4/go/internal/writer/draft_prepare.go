@@ -1,11 +1,10 @@
 // Draft prepare and reclamation (Rust draft_store.rs
 // prepare_with_checkpoint / select_reclamation / apply_reclamation /
 // reclaim_extent). Prepare is the physical staging before publication:
-// release private pages back to the allocator machinery, finish the free
-// bitmap shape, then seal every dirty data page. The structure and
-// membership delta finishing stages of the Rust sequence are structural
-// no-ops here until those edit cores exist (direct drafts carry no
-// deltas).
+// finish the buffered structure and membership refcount deltas, release
+// private pages back to the allocator machinery, finish the free bitmap
+// shape, then seal every dirty data page. Direct drafts carry no deltas
+// and pass the empty-delta gates trivially.
 
 package writer
 
@@ -34,12 +33,17 @@ func (s *DraftStore) PrepareWithCheckpoint(checkpoint func() error) error {
 			return err
 		}
 	}
-	// finish_structure_deltas: no-op until the structure edit core
-	// (direct drafts carry no structure deltas).
+	// finish_structure_deltas: flush and drain the buffered structure
+	// refcount deltas of structured drafts (Rust
+	// prepare_with_checkpoint threads the caller checkpoint through the
+	// drain); direct and membership drafts carry no structure deltas and
+	// the empty-delta gate passes trivially.
+	structureCheck := noopCheck
 	if checkpoint != nil {
-		if err := checkpoint(); err != nil {
-			return err
-		}
+		structureCheck = checkpoint
+	}
+	if err := s.finishStructureDeltasWithCheckpoint(structureCheck); err != nil {
+		return err
 	}
 	// finish_membership_deltas: drain and apply the buffered refcount
 	// deltas of membership and structured drafts (Rust
