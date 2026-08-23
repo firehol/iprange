@@ -9315,7 +9315,40 @@ freebsd, windows all PASS. Rust tree untouched. FreeBSD arm verified
 with GOOS=freebsd build + vet after the FinishNoreplaceTransition
 export.
 
-Review status: pending five-aspect adversarial review at slice close.
+Review status: five-aspect adversarial review at HEAD 7fe04f8
+(2026-08-23): parity PASS (Dewey; P3: sentinel comparisons hardened
+with errors.Is), idioms FAIL then fixed (Peirce): the orphaned
+inspectPrivateReservation test call that leaked an owned inspected
+reservation was removed, exactPrivateReservation was unified to the
+same named-return + defer ownership pattern as its two siblings (the
+explicit per-arm closes and the dead named return are gone), the
+hand-rolled test itoa was replaced with strconv.Itoa, the
+operation-lock assertion now fails instead of passing vacuously, and
+the cancellable-scan test now exercises the per-entry scan
+checkpoints. Performance FAIL then fixed (Einstein): readSelected now
+returns selectedReservation by value (zero allocation, Rust parity)
+instead of a ~370-byte heap object per probe, and the retained
+directory scan was rewritten from os.File.Readdirnames(1) to one
+reused 32 KiB getdents/getdirentries buffer with a zero-alloc dirent
+parser (constant memory, no per-entry allocations or syscalls, Rust
+namespace_scan.rs parity; the live scan test suite still passes
+unchanged). The performance finding that mapReservation "double
+stats" was re-examined and rejected: Rust map_reservation performs
+two metadata calls itself (the exact-size check at
+reservation_inspection.rs:394-399 and require_file_extent inside
+Mapping::view at mapping.rs:326-333), so Go's stat inside
+mapReservation plus the fstat inside MapFile is parity; the only
+syscall delta is the dup + cloexec fcntl (+1 close at drop) of the
+pre-existing accepted Go mapping-owner lifetime design, unchanged
+since the mapping slice. Wire/integrity PASS (McClintock; note for
+slice H: machine-produced problems must pass through the composition
+folds unchanged; raw namespace/SDK errors fold once at the
+boundary). Records PASS (Pasteur; the close-out entry will record
+this fix commit identity). All fixes re-validated under nice: build,
+vet, plain + v4work tests (17 packages: 14 ok + 3 no-test-file -
+fault/snapshot/work), gofmt clean, race + checkptr=2 on
+publication + live, six cross-compiles, per-OS test-compiles for
+linux/darwin/freebsd/windows all PASS. Rust tree untouched.
 
 Slice plan after G: H cleanup (discard_created/discard_attempt/
 discard_recovered + link-count removal machine + Summary; Rust

@@ -15,7 +15,6 @@ package live
 
 import (
 	"errors"
-	"io"
 	"os"
 	"strings"
 
@@ -287,26 +286,8 @@ func (d *Directory) Scan(visitor func([]byte) error) error {
 	if err != nil {
 		return nsIoError("open retained directory stream", err)
 	}
-	stream := os.NewFile(uintptr(fd), ".")
-	visited := func() error {
-		defer stream.Close()
-		for {
-			names, err := stream.Readdirnames(1)
-			for _, name := range names {
-				if name != "." && name != ".." {
-					if err := visitor([]byte(name)); err != nil {
-						return err
-					}
-				}
-			}
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				return nsIoError("read retained directory stream", err)
-			}
-		}
-	}()
+	defer unix.Close(fd)
+	visited := scanDirStream(fd, visitor)
 	if err := d.Verify(); err != nil {
 		return err
 	}

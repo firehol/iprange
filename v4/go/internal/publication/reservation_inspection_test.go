@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -51,15 +52,16 @@ func assertProblemCodeDetail(t *testing.T, err error, code format.ErrorCode, det
 func assertOperationLockHeld(t *testing.T, inspected *inspectedReservation) {
 	t.Helper()
 	contender, err := os.OpenFile("/proc/self/fd/"+itoa(int(inspected.file.Fd())), os.O_RDWR, 0)
-	if err == nil {
-		defer contender.Close()
-		acquired, err := live.TryLockFile(contender, reservationOperationLock, live.LockExclusive)
-		if err != nil {
-			t.Fatalf("contender try-lock: %v", err)
-		}
-		if acquired {
-			t.Fatal("contender acquired the operation lock of an inspected reservation")
-		}
+	if err != nil {
+		t.Fatalf("open contender on the inspected descriptor: %v", err)
+	}
+	defer contender.Close()
+	acquired, err := live.TryLockFile(contender, reservationOperationLock, live.LockExclusive)
+	if err != nil {
+		t.Fatalf("contender try-lock: %v", err)
+	}
+	if acquired {
+		t.Fatal("contender acquired the operation lock of an inspected reservation")
 	}
 }
 
@@ -82,19 +84,7 @@ func checkSelectableReservation(t *testing.T, path string) reservationHeader {
 	return selected.header
 }
 
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	return string(buf[i:])
-}
+func itoa(v int) string { return strconv.Itoa(v) }
 
 // TestDiscoverCanonicalAcquiredReservation proves the canonical first
 // path: after acquire the coordination twin is found, the inspected
@@ -478,8 +468,6 @@ func TestRequireBoundMismatchClasses(t *testing.T) {
 
 	wrongSelf := header
 	wrongSelf.reservationIdentity[0] ^= 0xff
-	_, err = inspectPrivateReservation(destination, privateReservationName(t, destination, attempt), attempt, nil)
-	_ = err
 	// The direct require_bound unit arms:
 	if err := requireBound(destination, wrongSelf, identity, &attempt); err == nil {
 		t.Fatal("self-identity mismatch accepted")

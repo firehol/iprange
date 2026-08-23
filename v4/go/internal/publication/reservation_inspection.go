@@ -13,6 +13,7 @@
 package publication
 
 import (
+	"errors"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -139,30 +140,34 @@ func exactPrivateReservation(destination *destination, expected reservationHeade
 	if regular == nil {
 		return nil, nil
 	}
+	// ownership: the mapped view and the descriptor stay owned by this
+	// function until the successful return transfers them to the
+	// inspected owner; every error and skip path closes both, exactly
+	// like the Rust drop of mapping and regular.
+	var mapped *mapping.Mapping
+	defer func() {
+		if inspected == nil {
+			_ = closeReservationOwner(regular.File, mapped)
+		}
+	}()
 	if err := lockOperation(regular, check); err != nil {
-		_ = closeReservationOwner(regular.File, nil)
 		return nil, err
 	}
 	if err := destination.directory().VerifyName(name, regular.Identity); err != nil {
-		_ = closeReservationOwner(regular.File, nil)
 		return nil, err
 	}
-	mapped, err := mapReservation(regular.File)
+	mapped, err = mapReservation(regular.File)
 	if err != nil {
-		_ = closeReservationOwner(regular.File, nil)
 		return nil, strictRecord(err)
 	}
 	selected, err := readSelected(mapped)
 	if err != nil {
-		_ = closeReservationOwner(regular.File, mapped)
 		return nil, strictRecord(err)
 	}
 	if err := requireBound(destination, selected.header, regular.Identity, &expected.attemptID); err != nil {
-		_ = closeReservationOwner(regular.File, mapped)
 		return nil, err
 	}
 	if selected.header != expected {
-		_ = closeReservationOwner(regular.File, mapped)
 		return nil, conflictProblem("caller result and private reservation disagree")
 	}
 	return inspectedReservationOf(name, regular, mapped, selected, reservationLocationPrivate), nil
@@ -196,7 +201,7 @@ func inspectCanonicalReservation(destination *destination, regular *live.Regular
 	if err != nil {
 		return nil, strictRecord(err)
 	}
-	if *rechecked != *selected {
+	if rechecked != selected {
 		return nil, conflictProblem("publication reservation changed while acquiring its lock")
 	}
 	if err := requireBound(destination, selected.header, regular.Identity, nil); err != nil {
@@ -216,7 +221,7 @@ func inspectCanonicalReservation(destination *destination, regular *live.Regular
 	if err != nil {
 		return nil, strictRecord(err)
 	}
-	if *rechecked != *selected {
+	if rechecked != selected {
 		return nil, conflictProblem("publication reservation changed during inspection")
 	}
 	if err := destination.directory().Verify(); err != nil {
@@ -293,14 +298,14 @@ func inspectPrivateReservation(destination *destination, name string, attemptID 
 	}()
 	mapped, err = mapReservation(regular.File)
 	if err != nil {
-		if err == errReservationInvalid {
+		if errors.Is(err, errReservationInvalid) {
 			return nil, nil
 		}
 		return nil, strictRecord(err)
 	}
 	selected, err := readSelected(mapped)
 	if err != nil {
-		if err == errReservationInvalid {
+		if errors.Is(err, errReservationInvalid) {
 			return nil, nil
 		}
 		return nil, strictRecord(err)
@@ -318,7 +323,7 @@ func inspectPrivateReservation(destination *destination, name string, attemptID 
 	if err != nil {
 		return nil, strictRecord(err)
 	}
-	if *rechecked != *selected {
+	if rechecked != selected {
 		return nil, conflictProblem("private reservation changed during inspection")
 	}
 	return inspectedReservationOf(name, regular, mapped, selected, reservationLocationPrivate), nil
@@ -358,21 +363,21 @@ func mapReservation(file *os.File) (*mapping.Mapping, error) {
 // readSelected decodes the selectable reservation record of one
 // mapped view (Rust read_selected; a select refusal is the Invalid
 // marker).
-func readSelected(m *mapping.Mapping) (*selectedReservation, error) {
+func readSelected(m *mapping.Mapping) (selectedReservation, error) {
 	bytes, err := m.View(0, reservationFileSize)
 	if err != nil {
-		return nil, err
+		return selectedReservation{}, err
 	}
 	selected, err := selectReservation(bytes)
 	if err != nil {
-		return nil, errReservationInvalid
+		return selectedReservation{}, errReservationInvalid
 	}
-	return &selected, nil
+	return selected, nil
 }
 
 // inspectedReservationOf builds the inspected owner with the
 // creator-only evidence classification (Rust inspected).
-func inspectedReservationOf(name string, regular *live.RegularFile, m *mapping.Mapping, selected *selectedReservation, location reservationLocation) *inspectedReservation {
+func inspectedReservationOf(name string, regular *live.RegularFile, m *mapping.Mapping, selected selectedReservation, location reservationLocation) *inspectedReservation {
 	access := AccessPolicyChangedOrUnproven
 	if commitment, err := security.CreatorOnlyCommitment(regular.File); err == nil && commitment == selected.header.securityCommitment {
 		access = AccessPolicyCreatorOnly
@@ -424,7 +429,7 @@ func invalidPrivateEntry(err error) bool {
 // Invalid to the fixed Unresolvable problem, SDK errors preserve
 // their class with the fixed SDK detail).
 func strictRecord(err error) *format.Error {
-	if err == errReservationInvalid {
+	if errors.Is(err, errReservationInvalid) {
 		return errReservationInvalid
 	}
 	return sdkProblem(err)

@@ -209,8 +209,20 @@ func TestPrivateScanIsCancellable(t *testing.T) {
 	}
 
 	want := errors.New("cancelled")
-	_, err = discoverReservation(destination, func() error { return want })
+	calls := 0
+	_, err = discoverReservation(destination, func() error {
+		calls++
+		// First call is the canonical probe; cancellation inside the
+		// private scan must surface the same error.
+		if calls > 1 {
+			return want
+		}
+		return nil
+	})
 	if !errors.Is(err, want) {
 		t.Fatalf("cancellation error %v, got %v", want, err)
+	}
+	if calls < 2 {
+		t.Fatalf("cancellation did not reach the scan checkpoints (calls=%d)", calls)
 	}
 }
