@@ -13,6 +13,7 @@
 package publication
 
 import (
+	"crypto/sha512"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
@@ -235,18 +236,36 @@ func inspectOneReplacement(destination *destination, header reservationHeader, e
 		_ = entry.Close()
 		return nil, resolverProblem(err)
 	}
+	if byteLength == 0 {
+		// A zero-length entry carries no mapping: Rust
+		// Mapping::view maps nothing (map_nonempty returns None for
+		// len 0) and the empty digest is the SHA-512 of no bytes. No
+		// meta can be selected, so the class follows the previous
+		// evidence like any other non-desired entry.
+		entry.mapping = nil
+		entry.byteLength = 0
+		entry.sha512 = sha512.Sum512(nil)
+		entry.metaPresent = false
+		entry.content = classifyReplacementEntry(entry, header)
+		entry.access = classifyReplacementAccess(entry, header)
+		if err := verifyStableReplacement(destination, entry); err != nil {
+			_ = entry.Close()
+			return nil, err
+		}
+		return entry, nil
+	}
 	mapped, err := mapping.MapFile(entry.file, byteLength, false)
 	if err != nil {
 		_ = entry.Close()
 		return nil, resolverProblem(err)
 	}
-	sha512, err := digestCancellable(mapped, byteLength, check)
+	digest, err := digestCancellable(mapped, byteLength, check)
 	if err != nil {
 		_ = mapped.Close()
 		_ = entry.Close()
 		return nil, outputProblem(err)
 	}
-	meta, metaPresent, err := desiredReplacementMeta(mapped, byteLength, sha512, header)
+	meta, metaPresent, err := desiredReplacementMeta(mapped, byteLength, digest, header)
 	if err != nil {
 		_ = mapped.Close()
 		_ = entry.Close()
@@ -254,7 +273,7 @@ func inspectOneReplacement(destination *destination, header reservationHeader, e
 	}
 	entry.mapping = mapped
 	entry.byteLength = byteLength
-	entry.sha512 = sha512
+	entry.sha512 = digest
 	entry.meta = meta
 	entry.metaPresent = metaPresent
 	entry.content = classifyReplacementEntry(entry, header)
@@ -346,15 +365,28 @@ func verifyStableReplacement(destination *destination, entry *inspectedReplaceme
 // (Rust Inspected::verify: the stability double-check, the rehash,
 // and the digest equality).
 func (o *inspectedReplacement) verify(destination *destination, check func() error) error {
-	if o.mapping == nil {
+	if o.mapping == nil && o.byteLength != 0 {
 		return conflictProblem("finished replacement inspection retains its mapping")
 	}
 	if err := verifyStableReplacement(destination, o); err != nil {
 		return err
 	}
-	digest, err := digestCancellable(o.mapping, o.byteLength, check)
-	if err != nil {
-		return outputProblem(err)
+	var digest [64]byte
+	if o.mapping != nil {
+		computed, err := digestCancellable(o.mapping, o.byteLength, check)
+		if err != nil {
+			return outputProblem(err)
+		}
+		digest = computed
+	} else {
+		// Zero-length entries never carried a mapping (Rust maps
+		// nothing for len 0); their stored digest is the SHA-512 of
+		// no bytes, and the cancellation probe replaces the digest
+		// pass's final checkpoint.
+		digest = sha512.Sum512(nil)
+		if err := live.Checkpoint(check); err != nil {
+			return err
+		}
 	}
 	if err := verifyStableReplacement(destination, o); err != nil {
 		return err

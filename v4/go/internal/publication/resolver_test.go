@@ -1144,6 +1144,38 @@ func TestResolverReplacementBothModesFinishEveryPostExchangeCrashState(t *testin
 	}
 }
 
+// TestResolverZeroLengthReplacementEntryClassifiesInsteadOfFailing
+// proves a zero-length pair entry (crash residue or external empty
+// leftover) inspects like Rust Mapping::view maps nothing: the
+// resolve must not fail with the zero-size mapping refusal. The main
+// truncation to zero bytes classifies the entry Other, so remove
+// restores through the foreign-main arm with the not-published
+// outcome and leaves the foreign zero-length main in place, exactly
+// like Rust.
+func TestResolverZeroLengthReplacementEntryClassifiesInsteadOfFailing(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "result.v4")
+	runAttemptCrashChild(t, main, "replace", resolverPreMainPoints[1])
+	if err := os.Truncate(main, 0); err != nil {
+		t.Fatalf("truncate main: %v", err)
+	}
+
+	result, err := resolve(main, nil, resolveModeRemove, noopCheck)
+	if err != nil {
+		t.Fatalf("resolve with zero-length main: %v", err)
+	}
+	if result.Publication != PublicationNotPublished {
+		t.Fatalf("publication = %v, want not published", result.Publication)
+	}
+	if result.DestinationContent != DestinationContentOther {
+		t.Fatalf("destination content = %v, want other", result.DestinationContent)
+	}
+	assertResolverClean(t, dir, main, "zero-length-main")
+	if info, err := os.Lstat(main); err != nil || info.Size() != 0 {
+		t.Fatalf("zero-length main not preserved: err=%v size=%d", err, info.Size())
+	}
+}
+
 // TestResolverSuppliedReplacementResultResolvesAfterReservation
 // Retirement ports
 // supplied_replacement_result_resolves_after_reservation_retirement.

@@ -9974,6 +9974,17 @@ P2s, all fixed in this round:
   inspectedReplacement now stores the meta by value with a presence
   flag, matching inspectedOutput.
 
+The parity review (round-4 carry-over P2-2) added one more fix:
+zero-length pair entries now inspect like Rust Mapping::view maps
+nothing. inspectOneReplacement classifies a zero-length entry with
+the empty SHA-512 digest and no mapping (never the zero-size mapping
+refusal), and inspectedReplacement.verify proves the empty digest
+with the cancellation probe in place of the digest pass, so a
+zero-byte main or private leftover resolves through the foreign-main
+arm exactly like Rust instead of failing the whole pair inspection
+with CodeFormatInvalid. TestResolverZeroLengthReplacementEntry
+ClassifiesInsteadOfFailing pins the behavior (fails without the fix).
+
 The wire/integrity review (round-3 carry-over P1) added one more fix:
 the replacement arms returned an outcome-unknown result on
 non-cancelled synchronize failures, where Rust propagates every
