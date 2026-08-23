@@ -9380,8 +9380,9 @@ until chunk 4-8 completes and the five-aspect gate passes.
 ### Status (2026-08-23) - chunk 4-8 slice H implemented: publication cleanup machine (discard + seed)
 
 Slice H ports the exact-discard machine (Rust publication/cleanup.rs,
-499 lines) and the publication result seed (Rust result.rs Seed +
-NameSlot, result.rs:71-140 and 241-262) to Go. The machine discards
+499 lines) and the publication result seed (Rust result.rs Seed,
+result.rs:71-140; NameSlot at result.rs:21, take_name at
+result.rs:292-301) to Go. The machine discards
 created, attempted, prepared, and recovered direct-publication
 artifacts before main publication: one removal proves the retained
 name went away, the directory sync + verify run behind the
@@ -9482,17 +9483,59 @@ Tests (internal/publication/cleanup_test.go, linux, 777 lines):
 
 Validation (all under nice): go build ./..., go vet ./..., go test
 ./... (17 packages: 14 ok + 3 no-test-file - fault/snapshot/work), go
-test -tags v4work ./... (17 ok), fresh -count=1 publication tests, gofmt
+test -tags v4work ./... (14 ok + 3 no-test-file - fault/snapshot/work),
+fresh -count=1 publication tests, gofmt
 clean, -race + -gcflags=all=-d=checkptr=2 on internal/publication +
 internal/live, the six cross-compiles (linux arm64/386, darwin
 amd64/arm64, freebsd amd64, windows amd64), and per-OS test-compiles of
 publication + live for linux/darwin/freebsd/windows all PASS. Rust tree
-untouched. No deferrals: the slice-G residual P3s (scan buffer pooling,
-BE-endian note, itoa alias, Directory.Scan doc lifetime wording) remain
-optional and recorded with slice G; they are not cleanup-machine work.
+untouched. No deferrals. The slice-G review rounds also noted optional
+P3s (scan buffer pooling for Directory.Scan, a big-endian portability
+note, a test itoa alias, Directory.Scan doc lifetime wording); they are
+not cleanup-machine work, they stay optional, and this entry does not
+claim they are recorded elsewhere.
 
-Review: five-aspect adversarial review dispatched at the implementation
-commit; verdicts recorded here when the rounds complete.
+Slice H review round 1 at HEAD 8911450 (2026-08-23): parity PASS
+(Dewey, no findings), idioms PASS (Peirce, one P3 removed), performance
+FAIL (Einstein), wire PASS (McClintock, three P3s), records FAIL
+(Pasteur, two P2 citation defects). The reviews also listed optional
+P3s (dead test bindings, missing direct LinkCount-arm test, wording).
+
+Performance FAIL findings (review F1/F2): the success path of one
+discard heap-allocated 3-4 objects while Rust allocates zero. Go
+emulated Rust Option<Identity> with pointers into local values
+(awaitingSyncRemoval identity escape, discardOwnersWith reservation
+identity copy, the discardWith outputOwner literal, and the
+PrivateOutputAttempt identity pointer built by outputFacts). Fixed by
+introducing the value identityOptional (present flag + value, Rust
+Option<Identity> Copy semantics) for the machine structs and a flat
+Identity + IdentityPresent pair in the shared PrivateOutputAttempt
+fact shape: the machine success path is now allocation-free, and the
+new TestDiscardWithZeroAllocations pin proves it. The pin asserts
+exactly two allocations per discard, both the x/sys
+ByteSliceFromString NUL-termination copies of the two require-absent
+name probes: Go's runtime copies every name per syscall while Rust
+amortizes it in the Name CString at construction. This is a
+runtime-syscall-boundary trait (the Go standard library pays it too),
+not machine logic; the machine itself is at zero allocations. Review
+F3 (seed.artifact portable-identity pointer, failure path only) stays
+as the accepted optional P3.
+
+Records FAIL fixes: corrected the NameSlot citation (result.rs:21 and
+take_name at 292-301, not 241-262) and reworded the phantom slice-G
+residual-P3 cross-reference so it no longer claims the optional P3s
+were recorded with slice G; the v4work validation phrasing now matches
+the plain-test clause (14 ok + 3 no-test-file).
+
+Idioms and wire P3s fixed: the dead test bindings were removed, the
+test fixture wording reads "fully prepared" now, and the missing
+direct arm test was added (TestUnlinkNamesLinkCountHardError pins the
+hard LinkCount namespace fold, which a race can otherwise reach only
+between the pre-unlink link probe and UnlinkExact). All fixes
+revalidated under nice: build, vet, fresh publication tests, v4work,
+race + checkptr=2, gofmt, six cross-compiles, per-OS test-compiles
+all PASS. Re-review dispatched at the fix commit; verdicts recorded
+here when the rounds complete.
 
 Next: slice I attempt+main_file publish state machine (Rust attempt.rs
 776 + main_file.rs 510); the plan after I stays J resolver core, K

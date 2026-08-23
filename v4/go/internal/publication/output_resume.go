@@ -105,7 +105,7 @@ func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*de
 		}
 	}
 	var identity live.FileIdentity
-	if facts.Identity == nil {
+	if !facts.IdentityPresent {
 		return nil, "", live.FileIdentity{}, &format.Error{
 			Code:   format.CodeInvalidArgument,
 			Detail: "worker output identity is invalid",

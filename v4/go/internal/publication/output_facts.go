@@ -12,12 +12,14 @@ import (
 
 // outputFacts builds the portable private-output facts of one attempt
 // (Rust output.rs facts). A nil identity reports the absent identity
-// fact.
+// fact; the identity is copied by value so building the facts never
+// allocates (Rust Option<LocalFileIdentity> Copy semantics).
 func outputFacts(d *destination, attemptID [16]byte, name string, identity *live.FileIdentity) PrivateOutputAttempt {
-	var local *LocalFileIdentity
+	var local LocalFileIdentity
+	present := false
 	if identity != nil {
-		converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
-		local = &converted
+		local = localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
+		present = true
 	}
 	return PrivateOutputAttempt{
 		PublicationAttemptID: attemptID,
@@ -25,6 +27,7 @@ func outputFacts(d *destination, attemptID [16]byte, name string, identity *live
 		BasenameEncoding:     basenameEncodingKind,
 		Basename:             []byte(name),
 		Identity:             local,
+		IdentityPresent:      present,
 		CreationSecurity: CreationSecurity{
 			Kind:       creationSecurityKind,
 			Commitment: d.securityCommitment(),

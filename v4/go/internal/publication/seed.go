@@ -98,11 +98,13 @@ func captureSeed(output *preparedOutput) seed {
 // artifact builds one exact cleanup artifact of the seed (Rust
 // Seed::artifact): the basename leaves its one-shot slot and the
 // portable identity and creation-security facts fold in. identity is
-// nil when the removal never established the inode identity.
-func (s *seed) artifact(kind ArtifactKind, slot nameSlot, identity *live.FileIdentity, problem error) CleanupArtifact {
+// absent when the removal never established the inode identity; the
+// portable-identity pointer of the shared artifact shape stays on the
+// failure path only, exactly where the ledger is pushed.
+func (s *seed) artifact(kind ArtifactKind, slot nameSlot, identity identityOptional, problem error) CleanupArtifact {
 	var local *LocalFileIdentity
-	if identity != nil {
-		converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
+	if identity.present {
+		converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(&identity.identity))
 		local = &converted
 	}
 	return CleanupArtifact{

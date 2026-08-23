@@ -17,6 +17,14 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
+// identityOptional is the Go peer of Rust Option<Identity> for the
+// cleanup machine: a value presence flag that keeps every success
+// path on the stack (Rust Copy semantics).
+type identityOptional struct {
+	identity live.FileIdentity
+	present  bool
+}
+
 // ownerLocation classifies the name set one cleanup reservation owner
 // may hold (Rust cleanup.rs ReservationLocation: Private, Canonical,
 // or Either). The reservation custody position of reservation_verify.go
@@ -30,11 +38,11 @@ const (
 )
 
 // reservationOwner is one still-owned private reservation (Rust
-// ReservationOwner). identity is nil when the owner cannot present
+// ReservationOwner). identity is absent when the owner cannot present
 // the reservation identity yet (Rust Option<Identity>).
 type reservationOwner struct {
 	file        *os.File
-	identity    *live.FileIdentity
+	identity    identityOptional
 	privateName string
 	location    ownerLocation
 }
@@ -80,11 +88,10 @@ const (
 // is best-effort (Rust discard_created).
 func discardCreated(created *createdOutput) earlyDiscard {
 	facts := created.facts()
-	var identity *live.FileIdentity
-	if facts.Identity != nil {
+	var identity identityOptional
+	if facts.IdentityPresent {
 		if device, inode, ok := facts.Identity.deviceInode(); ok {
-			id := live.IdentityFromDeviceInode(device, inode)
-			identity = &id
+			identity = identityOptional{present: true, identity: live.IdentityFromDeviceInode(device, inode)}
 		}
 	}
 	problem := discardOne(created.destinationOf().directory(), created.nameOf(), created.fileHandle(), identity)
@@ -100,8 +107,8 @@ func discardCreated(created *createdOutput) earlyDiscard {
 // is established (Rust discard_attempt).
 func discardAttempt(attempt *outputAttempt, file *os.File) earlyDiscard {
 	facts := attempt.facts()
-	identity := attempt.identityOf()
-	problem := discardOne(attempt.destinationOf().directory(), attempt.nameOf(), file, &identity)
+	identity := identityOptional{present: true, identity: attempt.identityOf()}
+	problem := discardOne(attempt.destinationOf().directory(), attempt.nameOf(), file, identity)
 	var artifact *CleanupArtifact
 	if problem != nil {
 		a := earlyArtifact(&facts, problem)
@@ -128,56 +135,68 @@ func confirmedAbsent(facts PrivateOutputAttempt) earlyDiscard {
 // reservation (Rust discard_with): every removal runs behind its
 // checkpoint.
 func discardWith(s *seed, output *preparedOutput, reservation *reservationOwner, checkpoint func(cleanupPoint) error) cleanupSummary {
+	d := output.attempt.destinationOf()
 	identity := output.attempt.identityOf()
-	return discardOwnersWith(s, output.attempt.destinationOf(),
-		&outputOwner{file: output.file, identity: identity, name: output.attempt.nameOf()},
-		reservation, checkpoint)
+	owner := outputOwner{file: output.file, identity: identity, name: output.attempt.nameOf()}
+	var res reservationOwner
+	hasReservation := reservation != nil
+	if hasReservation {
+		res = *reservation
+	}
+	return discardOwnersWith(s, d, owner, true, res, hasReservation, checkpoint)
 }
 
 // discardRecovered discards one recovered output and reservation with
 // no checkpoint (Rust discard_recovered passes the always-ok closure,
 // so recovery paths never re-sync through this machine).
 func discardRecovered(s *seed, destination *destination, output *outputOwner, reservation *reservationOwner) cleanupSummary {
-	return discardOwnersWith(s, destination, output, reservation, func(cleanupPoint) error { return nil })
+	var owner outputOwner
+	hasOutput := output != nil
+	if hasOutput {
+		owner = *output
+	}
+	var res reservationOwner
+	hasReservation := reservation != nil
+	if hasReservation {
+		res = *reservation
+	}
+	return discardOwnersWith(s, destination, owner, hasOutput, res, hasReservation, func(cleanupPoint) error { return nil })
 }
 
 // discardOwnersWith is the shared discard core (Rust
 // discard_owners_with): each owner runs behind its checkpoint, one
 // directory sync proves every successful removal, and each failing
 // removal pushes one exact artifact into the ledger.
-func discardOwnersWith(s *seed, destination *destination, output *outputOwner, reservation *reservationOwner, checkpoint func(cleanupPoint) error) cleanupSummary {
+func discardOwnersWith(s *seed, destination *destination, output outputOwner, hasOutput bool, reservation reservationOwner, hasReservation bool, checkpoint func(cleanupPoint) error) cleanupSummary {
 	directory := destination.directory()
-	var outputRemoval *removal
-	if output != nil {
+	hasOutputRemoval := hasOutput
+	var outputRemoval removal
+	if hasOutput {
 		var r removal
 		if err := checkpoint(cleanupPointOutputRemoval); err != nil {
-			r = failedRemoval(ArtifactPrivateOutput, nameSlotPrivateOutput, &output.identity, err)
-		} else if rr, err := removeOutput(directory, *output); err != nil {
-			r = failedRemoval(ArtifactPrivateOutput, nameSlotPrivateOutput, &output.identity, err)
+			r = failedRemoval(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: output.identity}, err)
+		} else if rr, err := removeOutput(directory, output); err != nil {
+			r = failedRemoval(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: output.identity}, err)
 		} else {
 			r = rr
 		}
-		outputRemoval = &r
+		outputRemoval = r
 	}
-	var reservationRemoval *removal
-	if reservation != nil {
+	hasReservationRemoval := hasReservation
+	var reservationRemoval removal
+	if hasReservation {
 		var r removal
-		var identity *live.FileIdentity
-		if reservation.identity != nil {
-			id := *reservation.identity
-			identity = &id
-		}
 		if err := checkpoint(cleanupPointReservationRemoval); err != nil {
-			r = failedRemoval(ArtifactPrivateReservation, defaultSlot(reservation.location), identity, err)
-		} else if rr, err := removeReservation(directory, destination.coordinationName(), *reservation); err != nil {
-			r = failedRemoval(ArtifactPrivateReservation, defaultSlot(reservation.location), identity, err)
+			r = failedRemoval(ArtifactPrivateReservation, defaultSlot(reservation.location), reservation.identity, err)
+		} else if rr, err := removeReservation(directory, destination.coordinationName(), reservation); err != nil {
+			r = failedRemoval(ArtifactPrivateReservation, defaultSlot(reservation.location), reservation.identity, err)
 		} else {
 			r = rr
 		}
-		reservationRemoval = &r
+		reservationRemoval = r
 	}
-	needsSync := outputRemoval != nil && outputRemoval.needsSync() ||
-		reservationRemoval != nil && reservationRemoval.needsSync()
+	needsSync := hasOutputRemoval && outputRemoval.needsSync() ||
+		hasReservationRemoval && reservationRemoval.needsSync()
 	var syncProblem error
 	if needsSync {
 		if err := checkpoint(cleanupPointDirectorySync); err != nil {
@@ -189,11 +208,11 @@ func discardOwnersWith(s *seed, destination *destination, output *outputOwner, r
 		}
 	}
 	artifacts := newCleanupArtifacts()
-	if outputRemoval != nil {
-		finishRemoval(s, *outputRemoval, syncProblem, &artifacts)
+	if hasOutputRemoval {
+		finishRemoval(s, outputRemoval, syncProblem, &artifacts)
 	}
-	if reservationRemoval != nil {
-		finishRemoval(s, *reservationRemoval, syncProblem, &artifacts)
+	if hasReservationRemoval {
+		finishRemoval(s, reservationRemoval, syncProblem, &artifacts)
 	}
 	return cleanupSummary{
 		artifacts:           artifacts,
@@ -207,11 +226,11 @@ func discardOwnersWith(s *seed, destination *destination, output *outputOwner, r
 // discardOne proves one private output fully gone (Rust discard_one):
 // the identity must be established, then the output removal runs and
 // the directory sync proves it.
-func discardOne(directory *live.Directory, name string, file *os.File, identity *live.FileIdentity) error {
-	if identity == nil {
+func discardOne(directory *live.Directory, name string, file *os.File, identity identityOptional) error {
+	if !identity.present {
 		return cleanupConflictProblem("private output identity was not established")
 	}
-	removal, err := removeOutput(directory, outputOwner{file: file, identity: *identity, name: name})
+	removal, err := removeOutput(directory, outputOwner{file: file, identity: identity.identity, name: name})
 	if err != nil {
 		return err
 	}
@@ -248,8 +267,8 @@ func finishOne(directory *live.Directory, r removal) error {
 // problem.
 func earlyArtifact(facts *PrivateOutputAttempt, problem error) CleanupArtifact {
 	var identity *LocalFileIdentity
-	if facts.Identity != nil {
-		converted := *facts.Identity
+	if facts.IdentityPresent {
+		converted := facts.Identity
 		identity = &converted
 	}
 	security := facts.CreationSecurity
@@ -278,15 +297,13 @@ func removeOutput(directory *live.Directory, output outputOwner) (removal, error
 // owner's location; a missing owner identity is re-proved from the
 // open file.
 func removeReservation(directory *live.Directory, canonical string, owner reservationOwner) (removal, error) {
-	var identity live.FileIdentity
-	if owner.identity != nil {
-		identity = *owner.identity
-	} else {
+	identity := owner.identity
+	if !identity.present {
 		id, err := live.RegularIdentity(owner.file, directory.Identity())
 		if err != nil {
 			return removal{}, namespaceProblem(err)
 		}
-		identity = id
+		identity = identityOptional{present: true, identity: id}
 	}
 	var names [2]nameEntry
 	switch owner.location {
@@ -303,7 +320,7 @@ func removeReservation(directory *live.Directory, canonical string, owner reserv
 	default: // ownerLocationPrivate
 		names = [2]nameEntry{{name: owner.privateName, slot: nameSlotPrivateReservation, ok: true}}
 	}
-	return removeFile(directory, owner.file, identity, ArtifactPrivateReservation, names)
+	return removeFile(directory, owner.file, identity.identity, ArtifactPrivateReservation, names)
 }
 
 // nameEntry is one exact removal candidate (Rust Option<(&Name,
@@ -446,7 +463,7 @@ func finishRemoval(s *seed, r removal, syncProblem error, artifacts *CleanupArti
 type removal struct {
 	kind     ArtifactKind
 	name     nameSlot
-	identity *live.FileIdentity
+	identity identityOptional
 	state    removalState
 }
 
@@ -460,14 +477,18 @@ type removalState struct {
 // awaitingSyncRemoval marks one removal that only needs the directory
 // sync to prove the name went away (Rust Removal::awaiting_sync).
 func awaitingSyncRemoval(kind ArtifactKind, slot nameSlot, identity live.FileIdentity, file *os.File) removal {
-	id := identity
-	return removal{kind: kind, name: slot, identity: &id, state: removalState{file: file}}
+	return removal{
+		kind:     kind,
+		name:     slot,
+		identity: identityOptional{present: true, identity: identity},
+		state:    removalState{file: file},
+	}
 }
 
 // failedRemoval marks one removal that already failed (Rust
-// Removal::failed). identity is nil when the removal never established
-// the inode identity.
-func failedRemoval(kind ArtifactKind, slot nameSlot, identity *live.FileIdentity, problem error) removal {
+// Removal::failed). identity is absent when the removal never
+// established the inode identity.
+func failedRemoval(kind ArtifactKind, slot nameSlot, identity identityOptional, problem error) removal {
 	return removal{kind: kind, name: slot, identity: identity, state: removalState{problem: problem}}
 }
 

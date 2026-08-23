@@ -51,7 +51,7 @@ func TestCreateOutputSecureFactsAndResume(t *testing.T) {
 	if !strings.EqualFold(string(createdFacts.Basename), created.name) {
 		t.Fatalf("facts basename %q, want %q", createdFacts.Basename, created.name)
 	}
-	if createdFacts.Identity == nil {
+	if !createdFacts.IdentityPresent {
 		t.Fatal("created facts must include the retained identity")
 	}
 	if createdFacts.CreationSecurity.Kind != creationSecurityKind {

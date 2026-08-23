@@ -21,7 +21,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
-// cleanupTestPrepared builds one really prepared output of a secured
+// cleanupTestPrepared builds one fully prepared output of a secured
 // attempt inside dir (Rust output.rs prepare path, like
 // output_prepared_test.go).
 func cleanupTestPrepared(t *testing.T, dir, mainName string) *preparedOutput {
@@ -150,7 +150,7 @@ func TestDiscardCreatedRemovesPrivateOutput(t *testing.T) {
 	if discard.artifact != nil {
 		t.Fatalf("discard artifact %+v, want nil", discard.artifact)
 	}
-	if discard.output.Identity == nil {
+	if !discard.output.IdentityPresent {
 		t.Fatal("created output facts carry no identity")
 	}
 	if _, present, err := d.directory().Entry(created.nameOf()); err != nil {
@@ -180,7 +180,7 @@ func TestDiscardCreatedIdentityNotEstablishedConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create output: %v", err)
 	}
-	problem := discardOne(d.directory(), created.nameOf(), created.fileHandle(), nil)
+	problem := discardOne(d.directory(), created.nameOf(), created.fileHandle(), identityOptional{})
 	assertProblemCodeDetail(t, problem, format.CodeCleanupConflict, "private output identity was not established")
 }
 
@@ -218,7 +218,7 @@ func TestFailedAttemptCarriesExactArtifact(t *testing.T) {
 	if discard.artifact == nil {
 		t.Fatal("failed attempt has no artifact")
 	}
-	assertCleanupArtifact(t, discard.artifact, ArtifactPrivateOutput, attempt.nameOf(), facts.Identity, facts.CreationSecurity, problem)
+	assertCleanupArtifact(t, discard.artifact, ArtifactPrivateOutput, attempt.nameOf(), &facts.Identity, facts.CreationSecurity, problem)
 	if !reflect.DeepEqual(discard.output, facts) {
 		t.Fatalf("discard output facts %+v, want %+v", discard.output, facts)
 	}
@@ -305,7 +305,7 @@ func TestDiscardWithPrivateReservation(t *testing.T) {
 	defer reservationFile.Close()
 	owner := &reservationOwner{
 		file:        reservationFile,
-		identity:    &identity,
+		identity:    identityOptional{present: true, identity: identity},
 		privateName: name,
 		location:    ownerLocationPrivate,
 	}
@@ -342,7 +342,7 @@ func TestDiscardWithCanonicalReservationRemovesPrivateName(t *testing.T) {
 	defer reservationFile.Close()
 	owner := &reservationOwner{
 		file:        reservationFile,
-		identity:    &identity,
+		identity:    identityOptional{present: true, identity: identity},
 		privateName: name,
 		location:    ownerLocationCanonical,
 	}
@@ -374,7 +374,7 @@ func TestDiscardWithCanonicalReservationRemovesCanonicalName(t *testing.T) {
 	}
 	owner := &reservationOwner{
 		file:        reservationFile,
-		identity:    &identity,
+		identity:    identityOptional{present: true, identity: identity},
 		privateName: name,
 		location:    ownerLocationCanonical,
 	}
@@ -399,7 +399,7 @@ func TestDiscardWithEitherReservationPreferPrivate(t *testing.T) {
 	defer reservationFile.Close()
 	owner := &reservationOwner{
 		file:        reservationFile,
-		identity:    &identity,
+		identity:    identityOptional{present: true, identity: identity},
 		privateName: name,
 		location:    ownerLocationEither,
 	}
@@ -429,7 +429,7 @@ func TestRemoveReservationUnexpectedLinksConflict(t *testing.T) {
 	}
 	owner := &reservationOwner{
 		file:        reservationFile,
-		identity:    &identity,
+		identity:    identityOptional{present: true, identity: identity},
 		privateName: name,
 		location:    ownerLocationPrivate,
 	}
@@ -447,7 +447,7 @@ func TestRemoveReservationUnexpectedLinksIsReadOnly(t *testing.T) {
 	if err := os.Link(filepath.Join(dir, name), filepath.Join(dir, d.coordinationName())); err != nil {
 		t.Fatalf("link reservation alias: %v", err)
 	}
-	owner := &reservationOwner{file: reservationFile, identity: &identity, privateName: name, location: ownerLocationPrivate}
+	owner := &reservationOwner{file: reservationFile, identity: identityOptional{present: true, identity: identity}, privateName: name, location: ownerLocationPrivate}
 	seed := captureSeed(prepared)
 	checkpoint := &recordingCleanupCheckpoint{fail: map[cleanupPoint]error{}}
 	summary := discardWith(&seed, prepared, owner, checkpoint.run)
@@ -493,7 +493,7 @@ func TestDiscardNoExactRetainedNameConflict(t *testing.T) {
 	if err := os.Rename(filepath.Join(dir, name), filepath.Join(dir, "foreign.tmp")); err != nil {
 		t.Fatalf("rename reservation away: %v", err)
 	}
-	owner := &reservationOwner{file: reservationFile, identity: &identity, privateName: name, location: ownerLocationPrivate}
+	owner := &reservationOwner{file: reservationFile, identity: identityOptional{present: true, identity: identity}, privateName: name, location: ownerLocationPrivate}
 	seed := captureSeed(prepared)
 	checkpoint := &recordingCleanupCheckpoint{fail: map[cleanupPoint]error{}}
 	summary := discardWith(&seed, prepared, owner, checkpoint.run)
@@ -539,7 +539,7 @@ func TestDiscardCheckpointFailsReservationRemoval(t *testing.T) {
 	defer prepared.Close()
 	reservationFile, identity, name := cleanupTestReservation(t, d, prepared.attempt.attemptIDOf())
 	defer reservationFile.Close()
-	owner := &reservationOwner{file: reservationFile, identity: &identity, privateName: name, location: ownerLocationCanonical}
+	owner := &reservationOwner{file: reservationFile, identity: identityOptional{present: true, identity: identity}, privateName: name, location: ownerLocationCanonical}
 	seed := captureSeed(prepared)
 	injected := problem(format.CodeIO, "injected checkpoint failure")
 	checkpoint := &recordingCleanupCheckpoint{fail: map[cleanupPoint]error{cleanupPointReservationRemoval: injected}}
@@ -565,7 +565,7 @@ func TestDiscardBothCheckpointsFailConsumeDistinctSlots(t *testing.T) {
 	defer prepared.Close()
 	reservationFile, identity, name := cleanupTestReservation(t, d, prepared.attempt.attemptIDOf())
 	defer reservationFile.Close()
-	owner := &reservationOwner{file: reservationFile, identity: &identity, privateName: name, location: ownerLocationPrivate}
+	owner := &reservationOwner{file: reservationFile, identity: identityOptional{present: true, identity: identity}, privateName: name, location: ownerLocationPrivate}
 	seed := captureSeed(prepared)
 	injected := problem(format.CodeIO, "injected checkpoint failure")
 	checkpoint := &recordingCleanupCheckpoint{fail: map[cleanupPoint]error{
@@ -592,13 +592,13 @@ func TestCleanupSeedNameSlotConsumedOnce(t *testing.T) {
 	seed := captureSeed(prepared)
 	identity := prepared.attempt.identityOf()
 	problem := cleanupConflictProblem("injected")
-	_ = seed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, &identity, problem)
+	_ = seed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: identity}, problem)
 	defer func() {
 		if recover() == nil {
 			t.Fatal("double artifact name consumption did not panic")
 		}
 	}()
-	_ = seed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, &identity, problem)
+	_ = seed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: identity}, problem)
 }
 
 func TestDiscardRecoveredRemovesBothOwners(t *testing.T) {
@@ -611,7 +611,7 @@ func TestDiscardRecoveredRemovesBothOwners(t *testing.T) {
 	outputIdentity := prepared.attempt.identityOf()
 	seed := captureSeed(prepared)
 	output := &outputOwner{file: prepared.file, identity: outputIdentity, name: prepared.attempt.nameOf()}
-	reservation := &reservationOwner{file: reservationFile, identity: &identity, privateName: name, location: ownerLocationPrivate}
+	reservation := &reservationOwner{file: reservationFile, identity: identityOptional{present: true, identity: identity}, privateName: name, location: ownerLocationPrivate}
 	summary := discardRecovered(&seed, prepared.attempt.destinationOf(), output, reservation)
 	if !summary.artifacts.Empty() {
 		t.Fatalf("ledger %+v, want empty", summary.artifacts.Slice())
@@ -723,7 +723,6 @@ func TestUnlinkedArtifactStillHasLinks(t *testing.T) {
 
 func TestFinishRemovalPublicationArtifactNotProved(t *testing.T) {
 	dir := t.TempDir()
-	d := testBoundDestination(t, dir)
 	prepared := cleanupTestPrepared(t, dir, "result.v4")
 	defer prepared.Close()
 	seed := captureSeed(prepared)
@@ -739,12 +738,10 @@ func TestFinishRemovalPublicationArtifactNotProved(t *testing.T) {
 	assertCleanupArtifact(t, artifacts.At(0), ArtifactPrivateOutput, prepared.attempt.nameOf(),
 		cleanupLocalIdentity(&identity), seed.creationSecurity,
 		cleanupConflictProblem("publication artifact removal was not proved"))
-	_ = d
 }
 
 func TestFinishRemovalSyncProblemWinsOverLinkProof(t *testing.T) {
 	dir := t.TempDir()
-	d := testBoundDestination(t, dir)
 	prepared := cleanupTestPrepared(t, dir, "result.v4")
 	defer prepared.Close()
 	seed := captureSeed(prepared)
@@ -758,7 +755,6 @@ func TestFinishRemovalSyncProblemWinsOverLinkProof(t *testing.T) {
 	if artifacts.At(0).Error != injected {
 		t.Fatalf("artifact error %v, want the injected sync problem", artifacts.At(0).Error)
 	}
-	_ = d
 }
 
 func TestDiscardOneRemovalFailedCarriesProblem(t *testing.T) {
@@ -772,6 +768,27 @@ func TestDiscardOneRemovalFailedCarriesProblem(t *testing.T) {
 		t.Fatalf("link alias: %v", err)
 	}
 	identity := attempt.identityOf()
-	problem := discardOne(d.directory(), attempt.nameOf(), file, &identity)
+	problem := discardOne(d.directory(), attempt.nameOf(), file, identityOptional{present: true, identity: identity})
 	assertProblemCodeDetail(t, problem, format.CodeCleanupConflict, "owned publication artifact has unexpected links")
+}
+
+func TestUnlinkNamesLinkCountHardError(t *testing.T) {
+	dir := t.TempDir()
+	d := testBoundDestination(t, dir)
+	attempt, file := testSecuredAttempt(t, dir, "result.v4")
+	defer file.Close()
+	// A second name changes the entry link count; UnlinkExact reports
+	// the LinkCount class and unlink_names returns it as a hard
+	// namespace error, never a skip (Rust unlink_names).
+	if err := os.Link(filepath.Join(dir, attempt.nameOf()), filepath.Join(dir, "alias.tmp")); err != nil {
+		t.Fatalf("link alias: %v", err)
+	}
+	_, _, err := unlinkNames(d.directory(), attempt.identityOf(),
+		[2]nameEntry{{name: attempt.nameOf(), slot: nameSlotPrivateOutput, ok: true}})
+	assertProblemCodeDetail(t, err, format.CodeConflict, "publication inode link count changed")
+	if _, present, err := d.directory().Entry(attempt.nameOf()); err != nil {
+		t.Fatalf("entry: %v", err)
+	} else if !present {
+		t.Fatal("private output name removed by the hard link-count refusal")
+	}
 }

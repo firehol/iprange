@@ -294,13 +294,17 @@ type PublicationAttempt struct {
 }
 
 // PrivateOutputAttempt is the identity of one private output artifact
-// (Rust PrivateOutputAttempt).
+// (Rust PrivateOutputAttempt). Identity is the retained inode pair as
+// a value with IdentityPresent as its Option presence tag, so the
+// facts builders never allocate (Rust Option<LocalFileIdentity> is a
+// Copy value).
 type PrivateOutputAttempt struct {
 	PublicationAttemptID [16]byte
 	DirectoryIdentity    LocalFileIdentity
 	BasenameEncoding     uint16
 	Basename             []byte
-	Identity             *LocalFileIdentity
+	Identity             LocalFileIdentity
+	IdentityPresent      bool
 	CreationSecurity     CreationSecurity
 }
 
