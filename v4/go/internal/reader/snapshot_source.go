@@ -9,6 +9,8 @@ package reader
 // survived the build before the publish rename.
 
 import (
+	"path/filepath"
+
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -45,45 +47,80 @@ func (r *ImmutableReader) FileIdentity() (device uint64, inode uint64, err error
 // ConfirmUnchanged re-verifies that path still names the opened database
 // and that the committed generation is still the one this reader captured
 // (Rust BasicSource::final_check over the Current selection, whose
-// bind_current re-runs verify_path -> bootstrap -> verify_path). The
-// snapshot builder calls it between builder finish and publish: a
-// replaced path or a republished generation during the build refuses the
-// publication with the RecoveryCandidateChanged class (code 51), the
-// exact class bind_current's candidate_changed wrapping produces for
-// identity failures.
-func (r *ImmutableReader) ConfirmUnchanged(path string) error {
+// bind_current re-runs verify_path -> cancellation checkpoint ->
+// bootstrap -> verify_path; verify_path proves both the path identity
+// and sidecar absence, folding every failure into the changed-candidate
+// class). The snapshot builder calls it between builder finish and
+// publish: a replaced path, an appeared .readers sidecar, or a
+// republished generation during the build refuses the publication with
+// the RecoveryCandidateChanged class (code 51), the exact class
+// bind_current's candidate_changed wrapping produces for identity
+// failures. check is the cancellation checkpoint (nil means
+// uncancellable); its error propagates unwrapped like Rust
+// cancellation.check().
+func (r *ImmutableReader) ConfirmUnchanged(path string, check func() error) error {
 	// bind_current's first verify_path: the path must still name the
-	// opened inode; every identity or namespace failure collapses to
-	// RecoveryCandidateChanged (Rust candidate_changed(_) => Error::
-	// RecoveryCandidateChanged).
+	// opened inode and the sidecar must still be absent (Rust
+	// verify_path_any_link + require_sidecar_absent; every identity or
+	// namespace failure collapses to RecoveryCandidateChanged through
+	// candidate_changed).
 	if err := r.m.VerifyIdentity(path); err != nil {
-		return &format.Error{Code: format.CodeRecoveryCandidateChanged, Detail: "the selected recovery candidate changed"}
+		return candidateChanged()
+	}
+	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+		return candidateChanged()
+	}
+	// bind_current's cancellation checkpoint between the first path
+	// proof and the re-selection (Rust cancellation.check()).
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	// bind_current's bootstrap_file: re-select the committed generation
-	// over the mapped meta pair and prove it is unchanged. Bootstrap
+	// over the mapped meta pair with a fresh physical extent and prove
+	// it is unchanged. Bootstrap
 	// failures keep their own class (Rust propagates bootstrap errors
 	// unwrapped); only a different selection is the changed-candidate
 	// class, exactly like final_check's `selected != used`.
-	meta, err := r.reselectMeta()
+	meta, err := r.ReselectMeta()
 	if err != nil {
 		return err
 	}
 	if meta != r.meta {
-		return &format.Error{Code: format.CodeRecoveryCandidateChanged, Detail: "the selected recovery candidate changed"}
+		return candidateChanged()
 	}
 	// bind_current's second verify_path: catch a namespace replacement
-	// during the re-read window.
+	// or a sidecar appearing during the re-read window.
 	if err := r.m.VerifyIdentity(path); err != nil {
-		return &format.Error{Code: format.CodeRecoveryCandidateChanged, Detail: "the selected recovery candidate changed"}
+		return candidateChanged()
+	}
+	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+		return candidateChanged()
 	}
 	return nil
 }
 
-// reselectMeta re-runs the two-meta bootstrap selection over the mapped
-// pages without mutating the reader (Rust bind_current's bootstrap_file).
-// The immutable mapping is pinned to the committed extent, so the
-// selection observes exactly the same physical length as the open did.
-func (r *ImmutableReader) reselectMeta() (format.Meta, error) {
+// candidateChanged is the class-51 fold of every bind_current path
+// proof failure (Rust candidate_changed(_) => Error::
+// RecoveryCandidateChanged).
+func candidateChanged() error {
+	return &format.Error{Code: format.CodeRecoveryCandidateChanged, Detail: "the selected recovery candidate changed"}
+}
+
+// ReselectMeta re-runs the immutable two-meta selection over the mapped
+// pages without mutating the reader, with a freshly sampled physical
+// extent (Rust BasicSource final_check's bind_current bootstrap_file:
+// file.metadata().len() at the bootstrap moment). The fresh stat makes
+// an externally grown or truncated main file refuse with the bootstrap
+// classes (ImmutableLengthMismatch when committed != physical) instead
+// of silently re-confirming the pinned open-time generation. Live-mode
+// re-selection uses SelectRegisteredGeneration, never this helper.
+func (r *ImmutableReader) ReselectMeta() (format.Meta, error) {
+	physical, err := r.m.FileSize()
+	if err != nil {
+		return format.Meta{}, err
+	}
 	p0, err := r.m.Page(0)
 	if err != nil {
 		return format.Meta{}, &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
@@ -92,7 +129,7 @@ func (r *ImmutableReader) reselectMeta() (format.Meta, error) {
 	if err != nil {
 		return format.Meta{}, &format.Error{Code: format.CodeFormatInvalid, Detail: err.Error()}
 	}
-	res, err := bootstrap.Open(p0, p1, r.m.PhysicalSize(), bootstrap.ModeImmutableReader)
+	res, err := bootstrap.Open(p0, p1, physical, bootstrap.ModeImmutableReader)
 	if err != nil {
 		return format.Meta{}, err
 	}

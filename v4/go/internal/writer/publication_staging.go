@@ -194,6 +194,21 @@ func invalidDestinationName(name string) bool {
 // opens, so no Windows bound is needed.
 const destinationNameMax = 255
 
+// ValidDestinationName reports whether one destination path satisfies
+// the Rust Destination::bind name rules (path::validate_main_name plus
+// require_name_lengths over the cleaned main component). CreateAttempt
+// and the live snapshot self-replacement probe apply it before any
+// filesystem access, exactly like Rust, which binds and validates the
+// destination before opening anything.
+func ValidDestinationName(destination string) bool {
+	clean := filepath.Clean(destination)
+	name := filepath.Base(clean)
+	if invalidDestinationName(name) {
+		return false
+	}
+	return len(name) <= destinationNameMax && len(name)+len(format.CoordinationSuffix) <= destinationNameMax
+}
+
 // CreateAttempt validates the destination and names one publication
 // attempt (Rust workflow::create + CreatedOutput::create_with):
 // rollback-safe replacement requires the atomic name exchange, and the
@@ -211,27 +226,17 @@ func CreateAttempt(destination string, policy PublicationPolicy) (*OutputAttempt
 		return nil, &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "rollback-safe replacement requires atomic name exchange"}
 	}
 	clean := filepath.Clean(destination)
-	name := filepath.Base(clean)
-	if invalidDestinationName(name) {
-		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
-	}
-	// Rust Directory::require_name_lengths: the main component and its
-	// .readers coordination twin must both fit the directory name bound;
-	// an overlong basename refuses here with the name error instead of
-	// failing at the rename with a generic IO class.
-	if len(name) > destinationNameMax || len(name)+len(format.CoordinationSuffix) > destinationNameMax {
+	if !ValidDestinationName(clean) {
 		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := filepath.Dir(clean)
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, &format.Error{Code: format.CodeNameNotFound, Detail: "publication name is missing"}
-		}
-		return nil, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
-	}
-	if !fi.IsDir() {
-		return nil, &format.Error{Code: format.CodeConflict, Detail: "destination parent is not a directory"}
+	// Rust Destination::bind -> Directory::open proves the parent is a
+	// plain directory before any namespace operation; the class mapping
+	// is platform-split (CheckPublicationParent): POSIX folds ELOOP and
+	// ENOTDIR into the IO class, Windows keeps the NotDirectory Conflict
+	// arm for non-directory and reparse-point parents.
+	if err := CheckPublicationParent(dir); err != nil {
+		return nil, err
 	}
 	if policy == PolicyFailIfExists {
 		// Rust require_fail_if_exists_available checks the main name

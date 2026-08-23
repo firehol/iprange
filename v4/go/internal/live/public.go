@@ -7,6 +7,12 @@
 
 package live
 
+// CheckSupported reports whether the live coordination primitives are
+// proven on this platform (Rust require_live_supported). The snapshot
+// and recovery machines call it before budget validation, at the Rust
+// api.rs refusal position; the owners repeat it before any path access.
+func CheckSupported() error { return requireLiveSupported() }
+
 // IdentityDeviceInode reports the portable device+inode pair of one
 // retained identity (Rust live_namespace::public_identity). A nil
 // identity reports the zero pair.

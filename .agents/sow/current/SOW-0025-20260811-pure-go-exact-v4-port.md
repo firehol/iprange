@@ -8265,3 +8265,389 @@ windows/amd64) green; live-package cross-vet clean on all six targets
 plain + v4work.
 
 Chunk 4-6 is ready to close.
+
+### Status (2026-08-23) - chunk 4-7 design recorded: live snapshot source + recovery source guard
+
+Chunk 4-7 design, recorded before coding per the pre-implementation
+gate. Rust authorities read in full: snapshot/api.rs (snapshot_to:
+require_live_supported, open_source, reject_live_self, construct,
+finish, fail_attempt, fail_source), snapshot.rs (SnapshotSourceMode,
+SnapshotBudget::validate with the live third-file draw),
+snapshot/terminal.rs (SnapshotPreparationFailure surface: output,
+cleanup, coordination_cleanup, housekeeping, source_cleanup guard,
+cause; cleanup_state = Clean iff cleanup empty AND coordination_cleanup
+None), snapshot/build.rs + snapshot/source.rs (GenerationReader over
+source.mapping + source.meta), recovery/source_guard.rs (Source
+enum, SourceEnd, SourceOpenFailure, terminal folding,
+cleanup_for_cause, open_problem, live_coordination wrapper),
+recovery/source_guard/live.rs (LiveSource::open_current full machine:
+open_file, bind_current, open_sidecar_locked, prepare_claim,
+claim_prepared, verify_live_claim, verify_live_paths; final_check;
+release in the slot -> gate -> lifetime order; RegistrationState
+Active/Clearing/Cleared/Released), plus the ported tests:
+tests/snapshot_operations.rs live arms (live_membership_snapshot_...
+live_snapshot_requires_the_sidecar_descriptor_budget,
+live_snapshot_cannot_replace_its_own_source_path,
+live_snapshot_race_with_writer_commit_is_refused,
+live_snapshot_pins_its_generation_while_a_writer_advances),
+mmap_runtime_tests.rs (SnapshotSourceMode::Live in the full live
+round trip), freebsd_boundary.rs (Live snapshot -> ErrorCode::
+LiveCoordinationUnsupported before any path access; no output),
+history_projection.rs / mapped_chaining.rs / metadata_roundtrip.rs /
+structured_values.rs (SnapshotSourceMode::Live arms).
+
+The Go infrastructure they compose is already ported: mapping
+(OpenLiveReader: open_read_only + shared lifetime lock + two-page
+bootstrap map; MapFile for the bare descriptor read; StatIdentity),
+reader (OpenLiveMapped: ModeLiveReader bootstrap + committed remap;
+SelectRegisteredGeneration; reselectMeta; ImmutableReader cursor
+surface + snapshot_source.go: MetadataJSONLen / FileIdentity /
+ConfirmUnchanged), live (Sidecar open/lockGateCancellable/
+scanAtMostCancellable/claimReaderCancellable/verifyPath/verifyHeader/
+verifyReader/clearReader/unlockReader/unlockGate/close, checkpoint,
+combineErrors, directory + openRegular + FileIdentity,
+canonicalSidecarPath, format.Error classes), writer (CreateAttempt /
+OutputAttempt / Discard / Publish, PublicationPolicy,
+mapping.StatIdentity), and the public snapshot facade
+(snapshot_public.go).
+
+Key decisions (Rust is the baseline; every class and message mirrors
+Rust exactly):
+
+- New internal liveSource type (v4/go/internal/live/live_source.go)
+  porting Rust recovery/source_guard/live.rs LiveSource for the
+  current-selection open (open_current); the recovery-candidate
+  variant (bind_candidate, candidate label proof) is chunk 4-10
+  scope. The type is distinct from LiveReaderCore because Rust keeps
+  them distinct: the source guard owns one mapping + one claimed slot
+  with a simpler registration state machine (Active/Clearing/Cleared/
+  Released) and its final check re-locks the gate EXCLUSIVE
+  (ensure_gate_cancellable), unlike the reader-close shared-gate
+  machine. It lives in internal/live (it composes the sidecar, lock,
+  and namespace primitives directly) and is exported for the snapshot
+  package; chunk 4-10 recovery composes the same guard.
+- OpenLiveSourceCurrent(path, check): requireLiveSupported before any
+  path access (mapping.OpenLiveReader already refuses; the explicit
+  API-layer call mirrors api.rs require_live_supported, which runs
+  before budget validation), then open_file (mapping.OpenLiveReader ->
+  FileIdentity -> verifyPath), bind_current (verifyPath, bootstrap
+  ModeLiveReader via reader.OpenLiveMapped, verifyPath again; the
+  require_main_available POSIX no-op is omitted like every other Go
+  live open), Sidecar::open, gate exclusive cancellable, prepare_claim
+  (verify_live_paths = main verifyPath + sidecar verifyPath +
+  verifyHeader, checkpoint, bind_current re-run = verifyPath +
+  reselectMeta + verifyPath, database-id equality with the sidecar
+  header -> CodeRecoveryCandidateChanged, scanAtMostCancellable),
+  claim_prepared (claimReaderCancellable under the held gate, then
+  verify_live_claim = verify_live_paths + verifyReader(slot, txn)),
+  then gate unlock before return; registration Active, lifetime locked,
+  owner PID retained. Every failure closes the sidecar and mapping in
+  the Rust Unclaimed/Claimed order (a claimed source abandons through
+  the terminal fold, producing the retryable guard state).
+- Final check (FinishCurrent): requireOwner, checkpoint,
+  ensureGateCancellable (re-lock the gate exclusive), meta unchanged
+  (self.meta == used; the snapshot passes the claimed meta, so the
+  check is the Rust structural equality), verify_live_paths,
+  verifyReader(slot, used txn). Release follows in the Rust order:
+  releaseSlot (ensure gate, clearReader, unlockReader), releaseGate,
+  releaseLifetime (mapping Close = unmap + lifetime unlock + fd
+  close, the Go equivalent of the Rust drop after unlock_file).
+- Terminal fold (liveSourceEnd{Cause, Residue}): release failure with
+  a clean check folds Cause = CleanupConflict "source recovery
+  protection was not released" (ForkedHandle keeps its class) and
+  Residue = true (Rust guard present -> coordination_cleanup
+  CleanupGuard -> cleanup_state ResiduePossible); a failed check with
+  a clean release folds the check cause with Residue false; both
+  failing combine (combineErrors) with Residue true. The Go
+  SnapshotPreparationFailure collapse keeps the established
+  Cause + CleanupState shape; the source-guard presence maps to
+  CleanupStateResiduePossible (the Rust cleanup_state projection),
+  and the retryable guard itself is not carried (the Go precedent
+  documented in the current Failure type; recovery chunk 4-10 ports
+  the guard when the recovery surface needs it).
+- SnapshotTo(Live) wiring (internal/snapshot): the live refusal
+  replaced by the real source. Source open before the destination
+  create (api.rs order). reject_live_self after the source open and
+  before the attempt: Live + ReplaceExisting/ReplaceExistingNoRollback
+  only, bind the destination parent + main name (missing parent ->
+  NameNotFound "publication name is missing"; non-directory ->
+  Conflict; overlong/invalid name -> NameInvalid), open the main name
+  O_NOFOLLOW read-only (absent -> no rejection; symlink/non-regular ->
+  Conflict with the writer's replacement messages), compare
+  device+inode with the source identity; equal -> InvalidArgument
+  "a live snapshot cannot replace its own source path" (Rust
+  reject_live_self + problem()). The existing identity-compare after
+  the attempt creation stays for both modes (source vs private output).
+- The copy consumes the same reader core for both modes
+  (ImmutableReader cursor surface); the live source exposes Core()
+  like LiveReader, so build/copy.go is untouched. FinishCurrent
+  replaces ConfirmUnchanged for the live mode and runs between builder
+  finish and publish (api.rs finish_current position); failure paths
+  call ReleaseOnly (fail_source) and fold the residue into
+  CleanupState.
+- Public surface (v4/go/snapshot_public.go): SnapshotSourceLive is
+  no longer refused; the boundary-refusal test is replaced by the
+  ported live tests. Budget validation already draws the live
+  third file (internal Budget.Validate). The SnapshotPreparationFailure
+  doc comment updates: the source-guard state now maps to
+  CleanupStateResiduePossible instead of "always empty".
+- Tests (public level): port live_membership_snapshot_... (live
+  membership pair, snapshot Live, verify identity/feeds/bitmaps/
+  metadata through the immutable output), live_snapshot_requires_the_
+  sidecar_descriptor_budget (budget 2 + Live -> InsufficientResource
+  Budget, no output), live_snapshot_cannot_replace_its_own_source_path
+  (Live + supported replacement over its own path -> InvalidArgument,
+  source bytes unchanged, no private artifacts; replaces the old
+  boundary-refusal self arm), and on linux the two concurrency tests:
+  live_snapshot_pins_its_generation_while_a_writer_advances (snapshot
+  thread, wait for the reader claim bytes in the sidecar, writer
+  commit during the copy, snapshot publishes the OLD txn, live reader
+  sees the NEW txn) and live_snapshot_race_with_writer_commit_is_
+  refused (controller moves the source under the live claim, snapshot
+  fails RecoveryCandidateChanged | LiveRecoveryCoordinationUnavailable,
+  no output, no private artifacts). freebsd/windows keep the
+  LiveCoordinationUnsupported refusal (mapping refusal), pinned by the
+  existing TestSnapshotLiveRefusedAtBoundary adapted to the honest
+  platform class.
+
+### Status (2026-08-23) - chunk 4-7 implemented: live snapshot source + recovery source guard
+
+Implemented and validated on linux; branch pushed after review (chunk 4-6).
+
+Implementation:
+- `v4/go/internal/live/live_source.go` (new): `LiveSource` with
+  `OpenLiveSourceCurrent` (Rust `open_current` through `claim_prepared`
+  and `verify_live_claim`), `FinishCurrent` (final_check then release),
+  `ReleaseOnly`, the slot/gate/lifetime release order with the exact
+  Rust registration state machine, `terminal`/`cleanupForCause`
+  (ForkedHandle keeps its class, everything else
+  CleanupConflict "source recovery protection was not released"), and
+  the `live_coordination` mapping applied at exactly the Rust call
+  sites (`verify_live_paths`, slot scan, reader claim/proofs, gate
+  ops; the database-identity mismatch stays the raw
+  RecoveryCandidateChanged, mirroring Rust prepare_claim).
+- `v4/go/internal/snapshot/snapshot.go` (rewritten): `To()` now follows
+  the Rust api.rs order exactly: live supported-refusal (api layer)
+  before budget validation, budget validation before the source open,
+  source open before the destination create, `reject_live_self`
+  before the create, the source `finishCurrent` (Rust
+  `Source::finish_current`: final check plus the unconditional single
+  release, folded through the terminal) between builder finish and
+  publish, and the publish-gate cancellation discard. The immutable
+  finishCurrent closes the reader on the success path (the previous
+  version leaked the mapping on success), and a live final-check
+  failure no longer double-releases (Rust finish carries the guard
+  only when the release itself failed; Go folds that to the cleanup
+  classification).
+- `v4/go/internal/live/public.go`: exported `CheckSupported`
+  (Rust require_live_supported at the api.rs refusal position).
+- `v4/go/internal/snapshot/snapshot_unix.go` / `snapshot_windows.go`
+  (new): platform split of the nofollow open + device/inode probe used
+  by `reject_live_self`; windows stubs follow the mapping-owner
+  precedent (live mode is refused before the probe on windows).
+- `v4/go/snapshot_operations_test.go`: `TestSnapshotLiveMembership
+  PreservesNamesIndexesBitmapsAndMetadata`,
+  `TestSnapshotLiveRequiresSidecarDescriptorBudget`,
+  `TestSnapshotLiveCannotReplaceItsOwnSourcePath`; boundary test
+  renamed to `TestSnapshotLiveRefusedOnUnsupportedPlatforms`.
+- `v4/go/snapshot_live_race_linux_test.go` (new, linux tag):
+  `TestSnapshotLivePinsItsGenerationWhileWriterAdvances`,
+  `TestSnapshotLiveSourceReplacementAfterReaderClaimBlocksPublication`
+  (controller polls the claimed slot bytes, takes the gate OFD lock,
+  renames the source; snapshot refuses with
+  RecoveryCandidateChanged | LiveRecoveryCoordinationUnavailable).
+- Findings fixed during implementation: (1) Go `release()` was missing
+  the Rust `require_owner` first step; (2) budget validation ran after
+  the source open, mis-ordering the Rust api.rs (and claiming a live
+  slot before the budget refusal); (3) immutable success path leaked
+  the reader mapping (FinishCurrent now closes); (4) live
+  final-check failure double-released through failSource; (5) the
+  pre-publish cancellation path leaked the builder mapping
+  (now closed before the discard); (6) LiveSource path/sidecar proof
+  errors surfaced raw (NameNotFound) instead of the Rust
+  LiveRecoveryCoordinationUnavailable class.
+
+Validation (all under nice): full `go test ./...` green, race +
+`-tags v4work` green for live/snapshot/public, `go vet ./...` and
+`-tags v4work` green (incl. freebsd/darwin cross-vet of the live and
+snapshot packages), all six cross-builds (linux/386, linux/arm64,
+darwin/amd64, darwin/arm64, freebsd/amd64, windows/amd64) green,
+`check-mmap-trace.sh` PASS.
+
+### Chunk 4-7 round-1 review (2026-08-23): findings and fixes
+
+The five-reviewer swarm (Helmholtz Rust parity, Sartre Go idioms,
+Socrates performance, Parfit wire/integrity, Franklin API/docs)
+reviewed the chunk 4-7 delta adversarially; all five returned with
+verified P0-P2 findings, all fixed and re-validated:
+
+- P1 (four reviewers, independently): the live gate-time re-bind used
+  the immutable selection mode with the open-time extent
+  (`ReselectMeta` -> `ModeImmutableReader` over `PhysicalSize`), so a
+  live database with an in-progress writer tail or a commit between
+  the snapshot open and the exclusive gate refused (FormatInvalid) or
+  silently pinned the open-time generation where Rust re-binds under
+  the gate with a fresh stat (`OpenMode::LiveReader`) and maps the
+  selected extent. Fixed: `prepare_claim` now mirrors the live-reader
+  register sequence under the gate - fresh `m.FileSize()` ->
+  `core.SelectRegisteredGeneration` -> database-id proof -> second
+  path proof -> slot scan -> `m.Remap(selected committed bytes)` ->
+  claim. `ReselectMeta` is the immutable-only helper again and its doc
+  no longer claims live coverage. New race test
+  `TestSnapshotLiveSourceReselectsGenerationCommittedWhileOpen` proves
+  the snapshot publishes the commitment staged between open and gate.
+- P1/P2 (three reviewers): `rejectLiveSelf` omitted Rust's
+  `regular_identity` rules. Fixed: the destination main name is
+  validated before any path access (`writer.ValidDestinationName`,
+  exported and shared with `CreateAttempt`; empty/./.. and overlong
+  names refuse `NameInvalid` exactly like `Destination::bind`), and
+  the open destination is proved same-filesystem as its parent
+  (`PublicationUnsupported`) with exactly one link (`Conflict`
+  "publication inode link count changed"), with the Rust-verbatim
+  detail strings. Regression tests:
+  `TestSnapshotLiveRejectsInvalidDestinationNames`,
+  `TestSnapshotLiveRejectsHardLinkedDestination`.
+- P2 (two reviewers): the claimed-open unwind dropped the release
+  residue. Fixed: `live.OpenFailure` carries the fold residue out of
+  `releaseUnclaimed`; the snapshot machine maps it to
+  `CleanupStateResiduePossible` (Rust `SourceOpenFailure.guard`).
+- P2: `LiveSource.FileIdentity()` re-statted the descriptor although
+  the open identity is immutable; it now returns the retained
+  identity (Rust `Source::identity`, zero extra syscalls).
+- P2: `Sidecar::open` leaked the mapped sidecar on the not-ready
+  state; it now closes it before refusing (Rust drops it), so a
+  crash-left sidecar no longer grows RSS per retry.
+- P3 fixes: `failSource` keeps the primary cause pure (Rust
+  `fail_source`); publish-gate cancellation uses `checkCancellation`;
+  the duplicated post-finish fold became `abortAfterFinish`; the dead
+  attachClose conditional was removed; the race-test `bytes` shadow
+  renamed; the replacement-race controller re-checks the claim while
+  holding the gate before renaming (starve guard); the snapshot
+  budget doc names the live sidecar as the third file.
+- Test fidelity: the live membership snapshot test now ports the Rust
+  `b"{}"` metadata assertion (the fixture stages the metadata and the
+  output must preserve it).
+- Tracked follow-up (outside this delta, pre-existing in the
+  immutable snapshot path, candidate for chunk 4-8+):
+  `internal/snapshot/copy.go` `membershipWords` materializes each
+  bitmap into a heap slice and the writer re-copies it; Rust interns
+  membership words from the mapped view in bounded chunks. Needs a
+  view-based writer interning entry point before it can be removed.
+
+Re-validation after the fixes (all under nice): full `go test ./...`
+green, race + `-tags v4work` green, `go vet` (both) green
+(freebsd/darwin cross-vet green), all six cross-builds green,
+`check-mmap-trace.sh` PASS, gofmt clean. Delta round 2 dispatched to
+all five reviewers.
+
+### Chunk 4-7 round-2 review (2026-08-23): two FAILs verified, fixed, verdicts
+
+Round-2 delta review by the same five reviewers. Socrates (performance),
+Parfit (wire/integrity), and Sartre (Go idioms) PASSed. Franklin
+(API/docs) and Helmholtz (Rust parity) returned findings; both resolved:
+
+- Helmholtz P1 (verified, fixed): `BasicSource::final_check` ->
+  `bind_current` runs `verify_path` (inode plus
+  `require_sidecar_absent`) before and after the bootstrap, plus a
+  cancellation checkpoint inside; Go `ConfirmUnchanged` only re-checked
+  the inode, so a `.readers` sidecar appearing mid-build could be
+  ignored. Fixed:
+  `v4/go/internal/reader/snapshot_source.go` `ConfirmUnchanged(path,
+  check)` now proves sidecar absence under the lock on both sides of
+  the re-selection with the checkpoint between the first proof and the
+  re-selection, folding every path/sidecar failure to
+  `RecoveryCandidateChanged` (Rust `candidate_changed`); the caller
+  passes the snapshot checkpoint through. Regression tests: the unit
+  "sidecar appeared" sub-test in `snapshot_source_test.go` and
+  `TestSnapshotImmutableSidecarAppearingDuringBuildBlocksPublication`
+  (sidecar injected at the first checkpoint; class 51, no output, no
+  artifacts).
+- Helmholtz P2 (verified, fixed): the open-time live bootstrap reused
+  the open stat while Rust `map_reader`/`bootstrap_file` re-stats
+  `file.metadata().len()` at the bootstrap moment; two writer commits
+  inside the window could fail the Go open with FormatInvalid where
+  Rust succeeds. Fixed at the single shared authority:
+  `OpenLiveMapped` now samples `m.FileSize()` before the live-mode
+  selection (covers the live reader and the live snapshot source
+  together; the gate-side `SelectRegisteredGeneration` remains
+  authoritative).
+- Helmholtz P3-1 (verified, fixed): the `rejectLiveSelf` parent probe
+  classed a symlink parent as Conflict; Rust `O_DIRECTORY|O_NOFOLLOW`
+  folds ELOOP (and ENOTDIR for any other non-directory) into
+  `NamespaceError::Io` -> CodeIO.
+- Helmholtz P3-2 (verified, fixed): immutable release errors now route
+  through `live.CleanupForCause` (Rust `terminal`/`cleanup_for_cause`:
+  ForkedHandle keeps its class, everything else CleanupConflict) in
+  both `finishCurrent` and the `openSource` release closure.
+- Franklin FAIL -> PASS by rebuttal: its `out/.` NameInvalid claim was
+  disproven with the active toolchain's std source
+  (`Path::new("out/.").file_name() == Some("out")`, Go `Clean` equals
+  Rust on the whole edge set), and its symlink-detail claim was
+  corrected against `problem.rs:72-73` (the IoAt symlink branch exists
+  but is unreachable from the `reject_live_self` probe on unix, so the
+  Go verbatim NotRegular detail stands).
+
+### Chunk 4-7 round-3 review (2026-08-23): all five PASS, residuals fixed
+
+Round-3 delta review after the Helmholtz fixes: Helmholtz, Sartre,
+Socrates, Parfit, and Franklin all PASSed. Residual P3 items were fixed
+on the same working tree before close-out:
+
+- Non-directory parent collapse: `rejectLiveSelf` (and later the
+  writer's `CreateAttempt`) classed every non-directory parent CodeIO,
+  matching the POSIX ELOOP/ENOTDIR fold; the Rust NotDirectory ->
+  Conflict arm is unreachable from a path open on POSIX.
+- `ReselectMeta` fresh extent: the immutable final-check re-selection
+  now samples `m.FileSize()` and bootstraps ModeImmutableReader over
+  the fresh extent (Rust `bootstrap_file` parity), so an externally
+  grown or truncated main file refuses with the bootstrap classes
+  (ImmutableLengthMismatch when committed != physical) instead of
+  re-confirming the pinned open-time generation.
+- Barrier select: the gate-barrier race test now closes a done channel
+  after the snapshot goroutine returns and selects on it, reporting
+  "the reselect race never ran" with the actual cause instead of a
+  misleading failure message on successful early completion.
+- `ConfirmUnchanged` doc now names the sidecar-absence proofs and the
+  checkpoint.
+
+### Chunk 4-7 final confirmation (2026-08-23): Windows parent split, all PASS
+
+Parfit's final re-review found one Windows parity defect in the
+parent-collapse change: Rust Windows `Directory::open` keeps the
+NotDirectory -> Conflict arm (`FILE_ATTRIBUTE_DIRECTORY` clear or
+`FILE_ATTRIBUTE_REPARSE_POINT` set, probed through CreateFileW with
+`FILE_FLAG_OPEN_REPARSE_POINT`), so a junction, directory symlink, or
+non-directory destination parent must be Conflict on Windows while
+POSIX folds ELOOP/ENOTDIR to CodeIO. Fixed with one shared
+platform-split authority, `writer.CheckPublicationParent`
+(`v4/go/internal/writer/publication_parent_unix.go` +
+`publication_parent_windows.go`), used by both `writer.CreateAttempt`
+and `snapshot.rejectLiveSelf`; the Windows variant mirrors the Rust
+CreateFileW probe and attribute check exactly (missing parent ->
+NameNotFound, open/attribute failure -> CodeIO, non-directory or
+reparse-point parent -> Conflict). All five reviewers confirmed PASS on
+the final tree.
+
+Tracked deferred items (recorded for the next chunks):
+
+- `v4/go/internal/snapshot/copy.go` `membershipWords`
+  heap-materializes each membership bitmap (pre-existing immutable
+  snapshot path; needs a view-based writer interning entry point before
+  it can be removed; candidate for chunk 4-8).
+- UNIX-socket destination main name (live + replace policy) classes
+  CodeConflict "publication name is not a regular file" in Go vs the
+  Rust openat ENXIO Io class; refuse-only on an exotic input, no test
+  or contract depends on it; carry into the chunk 4-8
+  publication-resolver work.
+- Rust Windows-only `require_main_available` (publication-GC
+  availability under `#[cfg(windows)]`) has no Go Windows equivalent;
+  it is a pure no-op on the validated POSIX platforms and the live
+  machine is refused on Windows this milestone; track with the Phase-2
+  GC surface.
+
+Final battery on the working tree (all under nice): full `go test
+./...` green, race + `-tags v4work` green for live/snapshot/public,
+`go vet` both green, freebsd/darwin/windows cross-builds green (6
+configs), GOOS=windows vet green for writer/snapshot/reader/mapping/
+live, `check-mmap-trace.sh` PASS, gofmt clean. Chunk 4-7 closes for
+commit; next chunk 4-8 publication resolvers.

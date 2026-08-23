@@ -202,15 +202,22 @@ func (r *ImmutableReader) SelectRegisteredGeneration(physical uint64) error {
 
 // OpenLiveMapped builds the logical reader core over an already-open live
 // mapping (Rust database_file::map_reader with OpenMode::LiveReader): the
-// mapping is bootstrapped in ModeLiveReader over the open stat and
-// remapped to the selected committed extent, giving the caller the
-// database identity needed before the sidecar is opened. The gate-side
-// fresh-stat re-selection runs later through
+// mapping is bootstrapped in ModeLiveReader over a freshly sampled
+// physical extent and remapped to the selected committed extent, giving
+// the caller the database identity needed before the sidecar is opened.
+// The fresh stat matches Rust bootstrap_file's file.metadata().len() at
+// the bootstrap moment: the open-time stat may already be stale because
+// the writer commits without holding the shared lifetime lock. The
+// gate-side fresh-stat re-selection runs later through
 // SelectRegisteredGeneration. On error the mapping is left open and owned
 // by the caller, which runs the live open unwind.
 func OpenLiveMapped(m *mapping.Mapping) (*ImmutableReader, error) {
+	physical, err := m.FileSize()
+	if err != nil {
+		return nil, err
+	}
 	r := &ImmutableReader{m: m}
-	if err := r.bootstrapMode(bootstrap.ModeLiveReader); err != nil {
+	if err := r.bootstrapModeWith(bootstrap.ModeLiveReader, physical); err != nil {
 		return nil, err
 	}
 	if err := m.Remap(r.meta.PageCount * format.PageSize); err != nil {

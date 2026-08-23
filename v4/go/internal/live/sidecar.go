@@ -153,6 +153,9 @@ func open(main string, databaseID [16]byte) (*Sidecar, error) {
 		return nil, err
 	}
 	if state != stateReady {
+		// Rust drops the sidecar on every open failure: a not-ready
+		// table must not leak the mapped coordination artifact.
+		sidecar.close()
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "reader table is not ready"}
 	}
 	return sidecar, nil

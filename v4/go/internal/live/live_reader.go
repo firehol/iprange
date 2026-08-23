@@ -89,10 +89,11 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 	if err := verifyPath(path, mainIdentity); err != nil {
 		return fail(err)
 	}
-	// map_reader: bootstrap the committed generation over the open stat
-	// and remap to it, giving the database identity needed before the
-	// sidecar is opened (Rust database_file::map_reader with
-	// OpenMode::LiveReader).
+	// map_reader: bootstrap the committed generation over a freshly
+	// sampled extent and remap to it, giving the database identity
+	// needed before the sidecar is opened (Rust
+	// database_file::map_reader with OpenMode::LiveReader re-stats the
+	// descriptor at the bootstrap moment).
 	core, err := reader.OpenLiveMapped(m)
 	if err != nil {
 		return fail(err)

@@ -45,6 +45,11 @@ func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The Rust populated_membership fixture carries the b"{}" metadata;
+	// the live snapshot test asserts the snapshot preserves it.
+	if _, err := finished.SetMetadataJSON([]byte("{}")); err != nil {
+		t.Fatal(err)
+	}
 	result, err := finished.Commit()
 	if err != nil {
 		t.Fatal(err)

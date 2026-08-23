@@ -18,6 +18,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/snapshot"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -69,6 +70,17 @@ func supportedSnapshotReplacement() SnapshotPublicationPolicy {
 		return PolicyReplaceExisting
 	}
 	return PolicyReplaceExistingNoRollback
+}
+
+// internalCode returns the internal ErrorCode of one machine failure
+// cause.
+func internalCode(t *testing.T, err error) format.ErrorCode {
+	t.Helper()
+	var internal *format.Error
+	if !errors.As(err, &internal) {
+		t.Fatalf("cause not an internal *format.Error: %v", err)
+	}
+	return internal.Code
 }
 
 // failureCode returns the public ErrorCode of one preparation failure.
@@ -475,29 +487,25 @@ func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T
 	assertNoSnapshotArtifacts(t, snapshotDir(complete))
 }
 
-// TestSnapshotLiveRefusedAtBoundary pins the approved Go divergence: the
-// live source refuses at the API boundary with ErrorOSUnsupported before
-// budget validation (Rust require_live_supported position), so even a
-// zero-budget live snapshot reports the refusal, and a live self
-// replacement can never reach Rust's reject_live_self InvalidArgument.
-func TestSnapshotLiveRefusedAtBoundary(t *testing.T) {
+// TestSnapshotLiveRefusedOnUnsupportedPlatforms pins the honest live
+// refusal on platforms without proven sidecar coordination (Rust
+// freebsd_boundary.rs every_constructible_live_entry_rejects_before_
+// mutation): the refusal class is ErrorLiveCoordinationUnsupported
+// before any path access, before budget validation, and no output is
+// produced. On linux/darwin the live mode is real and this boundary is
+// covered by the ported live snapshot tests below.
+func TestSnapshotLiveRefusedOnUnsupportedPlatforms(t *testing.T) {
+	if exchangeAvailable() {
+		t.Skip("live coordination is implemented on this platform")
+	}
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "live.iprdb")
 	_, err := SnapshotTo(sourceFile, SnapshotSourceLive, destination, PolicyFailIfExists, snapshotBudget(0), nil)
-	if code := failureCode(t, err); code != ErrorOSUnsupported {
-		t.Fatalf("cause code = %v, want os unsupported", code)
+	if code := failureCode(t, err); code != ErrorLiveCoordinationUnsupported {
+		t.Fatalf("cause code = %v, want live coordination unsupported", code)
 	}
 	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
 		t.Fatalf("live snapshot produced an output: %v", statErr)
-	}
-
-	self := snapshotDest(t, "live-self.iprdb")
-	if err := copyFixture(t, "direct-ipv4.iprdb", self); err != nil {
-		t.Fatal("copy fixture:", err)
-	}
-	_, err = SnapshotTo(self, SnapshotSourceLive, self, supportedSnapshotReplacement(), snapshotBudget(3), nil)
-	if code := failureCode(t, err); code != ErrorOSUnsupported {
-		t.Fatalf("live self cause code = %v, want os unsupported", code)
 	}
 }
 
@@ -825,6 +833,47 @@ func TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication(t *testin
 	assertNoSnapshotArtifacts(t, dir)
 }
 
+// TestSnapshotImmutableSidecarAppearingDuringBuildBlocksPublication
+// pins the bind_current sidecar proof (Rust verify_path's
+// require_sidecar_absent inside BasicSource::final_check): a .readers
+// sidecar appearing after the immutable open but before the final check
+// refuses the publication with the RecoveryCandidateChanged class even
+// though the main-file identity never changed. The sidecar is injected
+// from the first cancellation checkpoint, which runs after the source
+// open and before the attempt creation, so the appearance window is
+// guaranteed. The public SnapshotTo cannot inject a side effect into
+// the checkpoint, so the test drives the machine directly, like the
+// live-race suite.
+func TestSnapshotImmutableSidecarAppearingDuringBuildBlocksPublication(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.iprdb")
+	destination := filepath.Join(dir, "output.iprdb")
+	if err := copyFixture(t, "direct-ipv4.iprdb", source); err != nil {
+		t.Fatal("copy fixture:", err)
+	}
+
+	injected := false
+	_, failure := snapshot.To(source, snapshot.SourceImmutable, destination, writer.PolicyFailIfExists, &snapshot.Budget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, func() error {
+		if !injected {
+			injected = true
+			if err := os.WriteFile(snapshotSidecar(source), []byte("readers"), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if failure == nil {
+		t.Fatalf("sidecar-appearing snapshot succeeded, want recovery candidate changed")
+	}
+	if code := internalCode(t, failure.Cause); code != format.CodeRecoveryCandidateChanged {
+		t.Fatalf("cause code = %v, want recovery candidate changed (err %v)", code, failure.Cause)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("blocked snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, dir)
+}
+
 // buildLargeDirectSource constructs one sealed 20k-range direct database
 // directly at path through the one-shot writer (the published-file
 // format, no Publish needed): the snapshot source race needs a copy that
@@ -925,4 +974,177 @@ func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
 	if outputInfo.RangeRecordCount != sourceInfo.RangeRecordCount {
 		t.Errorf("content diverged: ranges %d/%d", outputInfo.RangeRecordCount, sourceInfo.RangeRecordCount)
 	}
+}
+
+// TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata
+// ports the Rust live_membership_snapshot_preserves_names_indexes_
+// bitmaps_and_metadata test: one live membership pair snapshot through
+// the live source coordinator, then the published output proves the
+// database identity, the generation, the feed indexes, the membership
+// bitmap, and the metadata of the pinned generation, exactly like the
+// immutable source.
+func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("live coordination is not implemented on this platform")
+	}
+	source := createLiveMembershipPair(t, 2)
+	live, err := OpenLiveReader(source, nil)
+	if err != nil {
+		t.Fatal("live reader:", err)
+	}
+	sourceInfo, err := live.Info()
+	if err != nil {
+		t.Fatal("live info:", err)
+	}
+	first, found, err := live.LookupFeed("first")
+	if err != nil || !found {
+		t.Fatalf("feed first: found=%v err=%v", found, err)
+	}
+	if _, err := live.Close(); err != nil {
+		t.Fatal("live close:", err)
+	}
+
+	destination := snapshotDest(t, "live-membership-snapshot.iprdb")
+	result, err := SnapshotTo(source, SnapshotSourceLive, destination, PolicyFailIfExists, snapshotBudget(3), nil)
+	if err != nil {
+		t.Fatal("live snapshot:", err)
+	}
+	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+		t.Fatalf("publication = %+v", result.Publication)
+	}
+
+	output := openPublished(t, destination)
+	defer output.Close()
+	outputInfo, err := output.Info()
+	if err != nil {
+		t.Fatal("output info:", err)
+	}
+	if outputInfo.DatabaseID != sourceInfo.DatabaseID {
+		t.Errorf("database id diverged: %x != %x", outputInfo.DatabaseID, sourceInfo.DatabaseID)
+	}
+	if outputInfo.TransactionID != sourceInfo.TransactionID {
+		t.Errorf("transaction diverged: %d != %d", outputInfo.TransactionID, sourceInfo.TransactionID)
+	}
+	outputFirst, found, err := output.LookupFeed("first")
+	if err != nil || !found || outputFirst.Index != first.Index {
+		t.Errorf("feed first preserved: index=%d found=%v err=%v (want %d)", outputFirst.Index, found, err, first.Index)
+	}
+	pin, err := output.Pin()
+	if err != nil {
+		t.Fatal("pin:", err)
+	}
+	defer pin.Close()
+	probe, found, err := pin.LookupMembershipV4(parseV4("0.0.0.6"))
+	if err != nil || !found {
+		t.Fatalf("probe membership: found=%v err=%v", found, err)
+	}
+	has, err := probe.ContainsIndex(first.Index)
+	if err != nil {
+		t.Fatal("contains:", err)
+	}
+	if !has {
+		t.Errorf("probe bitmap lost feed %d", first.Index)
+	}
+	outputMeta, outputOK, err := output.MetadataJSON()
+	if err != nil {
+		t.Fatal("output metadata:", err)
+	}
+	if !outputOK || string(outputMeta) != "{}" {
+		t.Errorf("live membership snapshot preserved metadata = (%q, %v), want (\"{}\", true)", outputMeta, outputOK)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotLiveRequiresSidecarDescriptorBudget ports the Rust
+// live_snapshot_requires_the_sidecar_descriptor_budget test: the live
+// source costs a third descriptor (the coordination artifact), so the
+// two-file budget refuses before any source or destination work, with
+// no output and no private artifacts.
+func TestSnapshotLiveRequiresSidecarDescriptorBudget(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("live coordination is not implemented on this platform")
+	}
+	source, _ := createLivePublicPair(t, 2)
+	destination := snapshotDest(t, "live-budget.iprdb")
+	_, err := SnapshotTo(source, SnapshotSourceLive, destination, PolicyFailIfExists, snapshotBudget(2), nil)
+	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
+		t.Fatalf("cause code = %v, want insufficient resource budget (err %v)", code, err)
+	}
+	if _, statErr := os.Lstat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("refused snapshot produced an output: %v", statErr)
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(destination))
+}
+
+// TestSnapshotLiveCannotReplaceItsOwnSourcePath ports the live arm of
+// the Rust replacement_requires_an_existing_destination_and_rejects_
+// live_self test: a live snapshot that would replace its own source path
+// is refused with InvalidArgument after the source open and before the
+// destination create, the source bytes stay untouched, and no private
+// artifact appears.
+func TestSnapshotLiveCannotReplaceItsOwnSourcePath(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("live coordination is not implemented on this platform")
+	}
+	source, _ := createLivePublicPair(t, 2)
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal("read source:", err)
+	}
+	_, err = SnapshotTo(source, SnapshotSourceLive, source, supportedSnapshotReplacement(), snapshotBudget(3), nil)
+	if code := failureCode(t, err); code != ErrorInvalidArgument {
+		t.Fatalf("cause code = %v, want invalid argument (err %v)", code, err)
+	}
+	after, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal("read source after:", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("live source bytes changed by the refused self-replacement")
+	}
+	assertNoSnapshotArtifacts(t, snapshotDir(source))
+}
+
+// TestSnapshotLiveRejectsInvalidDestinationNames pins the Rust
+// Destination::bind name rules on the live self-replacement probe: a
+// destination without a usable main name (empty, "." or "..") refuses
+// with NameInvalid before any filesystem access (Rust path.file_name()
+// returns None for these, mapping to InvalidName).
+func TestSnapshotLiveRejectsInvalidDestinationNames(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("live coordination is not implemented on this platform")
+	}
+	source, _ := createLivePublicPair(t, 2)
+	for _, destination := range []string{"", ".", ".."} {
+		_, err := SnapshotTo(source, SnapshotSourceLive, destination, supportedSnapshotReplacement(), snapshotBudget(3), nil)
+		if code := failureCode(t, err); code != ErrorNameInvalid {
+			t.Fatalf("destination %q cause code = %v, want name invalid (err %v)", destination, code, err)
+		}
+	}
+}
+
+// TestSnapshotLiveRejectsHardLinkedDestination pins the Rust
+// regular_identity single-link rule on the live self-replacement probe:
+// a destination with more than one link refuses with Conflict before
+// any attempt is created (Rust open_regular require_single_link ->
+// LinkCount "publication inode link count changed").
+func TestSnapshotLiveRejectsHardLinkedDestination(t *testing.T) {
+	if !exchangeAvailable() {
+		t.Skip("live coordination is not implemented on this platform")
+	}
+	source, _ := createLivePublicPair(t, 2)
+	dir := t.TempDir()
+	other := filepath.Join(dir, "other.iprdb")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal("write other:", err)
+	}
+	destination := filepath.Join(dir, "dest.iprdb")
+	if err := os.Link(other, destination); err != nil {
+		t.Fatal("hard link:", err)
+	}
+	_, err := SnapshotTo(source, SnapshotSourceLive, destination, supportedSnapshotReplacement(), snapshotBudget(3), nil)
+	if code := failureCode(t, err); code != ErrorConflict {
+		t.Fatalf("cause code = %v, want conflict (err %v)", code, err)
+	}
+	assertNoSnapshotArtifacts(t, dir)
 }

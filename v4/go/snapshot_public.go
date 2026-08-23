@@ -1,11 +1,12 @@
 // Compact unsigned snapshot surface (Rust snapshot::snapshot_to parity):
-// one pinned immutable v4 generation is copied into a fresh published
-// output under a caller budget, preserving the source identity, ranges,
-// feeds, memberships, structures, and metadata. The machine mirrors
-// iprange-livedb/src/snapshot/{api.rs,build.rs,terminal.rs}: the source
-// opens before the destination create, the source final check runs
-// between the build and the publish rename, and every failure collapses
-// to Cause plus CleanupState like AlgebraPreparationFailure.
+// one pinned v4 generation (immutable or live) is copied into a fresh
+// published output under a caller budget, preserving the source identity,
+// ranges, feeds, memberships, structures, and metadata. The machine
+// mirrors iprange-livedb/src/snapshot/{api.rs,build.rs,terminal.rs}: the
+// source opens before the destination create, a live snapshot cannot
+// replace its own source path, the source final check runs between the
+// build and the publish rename, and every failure collapses to Cause plus
+// CleanupState like AlgebraPreparationFailure.
 
 package iprangedb
 
@@ -14,16 +15,19 @@ import (
 )
 
 // SnapshotSourceMode is the source coordination of one snapshot (Rust
-// SnapshotSourceMode). The live mode is refused until Milestone 4 with
-// ErrorOSUnsupported.
+// SnapshotSourceMode).
 type SnapshotSourceMode uint8
 
 const (
 	// SnapshotSourceImmutable snapshots the committed generation of one
 	// immutable database path under a shared lifetime lock.
 	SnapshotSourceImmutable SnapshotSourceMode = iota
-	// SnapshotSourceLive would snapshot one live database generation
-	// through the sidecar coordination; the Go SDK refuses it for now.
+	// SnapshotSourceLive snapshots one live database generation through
+	// the sidecar coordination: the source claims one reader slot (the
+	// register-like pin), copies under it, re-proves the generation, and
+	// releases the slot, the gate, and the lifetime lock in the Rust
+	// order. On platforms without proven live coordination the refusal
+	// class is ErrorLiveCoordinationUnsupported before any path access.
 	SnapshotSourceLive
 )
 
@@ -37,7 +41,8 @@ type SnapshotPublicationPolicy = PublicationPolicy
 // count, and the maximum simultaneously open files. Validation mirrors
 // Rust SnapshotBudget::validate: at least two output pages, and open
 // files must cover the source plus the private attempt, with a third file
-// for the replace policies (the coordination artifact).
+// for the live sidecar and the replace policies (the coordination
+// artifact).
 type SnapshotBudget struct {
 	MaxHeapBytes   uint64
 	MaxOutputPages uint64
@@ -58,7 +63,9 @@ func (r SnapshotResult) CleanupState() CleanupState {
 // SnapshotPreparationFailure is the failing terminal of one snapshot
 // (Rust SnapshotPreparationFailure collapsed to the Go-visible fields,
 // the AlgebraPreparationFailure precedent): the primary cause and the
-// cleanup state of the private attempt artifact.
+// cleanup state of the private attempt artifact. A failed source release
+// reports CleanupStateResiduePossible, the Go projection of the Rust
+// source-cleanup-guard state.
 type SnapshotPreparationFailure struct {
 	Cause   error
 	Cleanup CleanupState

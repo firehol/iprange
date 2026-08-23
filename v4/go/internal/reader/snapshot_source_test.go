@@ -75,7 +75,7 @@ func TestConfirmUnchanged(t *testing.T) {
 	defer r.Close()
 
 	// Unchanged path and generation pass.
-	if err := r.ConfirmUnchanged(path); err != nil {
+	if err := r.ConfirmUnchanged(path, nil); err != nil {
 		t.Fatalf("unchanged: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestConfirmUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Rename(moved, path)
-		if err := r.ConfirmUnchanged(path); mustCode(err) != format.CodeRecoveryCandidateChanged {
+		if err := r.ConfirmUnchanged(path, nil); mustCode(err) != format.CodeRecoveryCandidateChanged {
 			t.Fatalf("removed: code %v want %v (err %v)", mustCode(err), format.CodeRecoveryCandidateChanged, err)
 		}
 	})
@@ -107,7 +107,7 @@ func TestConfirmUnchanged(t *testing.T) {
 		if err := os.WriteFile(path, raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.ConfirmUnchanged(path); mustCode(err) != format.CodeRecoveryCandidateChanged {
+		if err := r.ConfirmUnchanged(path, nil); mustCode(err) != format.CodeRecoveryCandidateChanged {
 			t.Fatalf("replaced: code %v want %v (err %v)", mustCode(err), format.CodeRecoveryCandidateChanged, err)
 		}
 	})
@@ -147,14 +147,31 @@ func TestConfirmUnchanged(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.ConfirmUnchanged(path); mustCode(err) != format.CodeRecoveryCandidateChanged {
+		if err := r.ConfirmUnchanged(path, nil); mustCode(err) != format.CodeRecoveryCandidateChanged {
 			t.Fatalf("overwritten: code %v want %v (err %v)", mustCode(err), format.CodeRecoveryCandidateChanged, err)
+		}
+	})
+
+	// A .readers sidecar appearing after the open is the same
+	// changed-candidate class: bind_current's verify_path proves
+	// sidecar absence both before and after the re-bootstrap, so a
+	// database that turned live mid-build can never publish an
+	// immutable snapshot (Rust require_sidecar_absent folded through
+	// candidate_changed).
+	t.Run("sidecar appeared", func(t *testing.T) {
+		sidecar := path + format.CoordinationSuffix
+		if err := os.WriteFile(sidecar, []byte("readers"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(sidecar)
+		if err := r.ConfirmUnchanged(path, nil); mustCode(err) != format.CodeRecoveryCandidateChanged {
+			t.Fatalf("sidecar: code %v want %v (err %v)", mustCode(err), format.CodeRecoveryCandidateChanged, err)
 		}
 	})
 
 	// After the mutation sub-tests the original content is gone; the
 	// reader itself still mirrors the open-time generation.
-	if err := r.ConfirmUnchanged(filepath.Join(t.TempDir(), "missing.iprdb")); mustCode(err) != format.CodeRecoveryCandidateChanged {
+	if err := r.ConfirmUnchanged(filepath.Join(t.TempDir(), "missing.iprdb"), nil); mustCode(err) != format.CodeRecoveryCandidateChanged {
 		t.Fatalf("missing path: code %v", mustCode(err))
 	}
 }
