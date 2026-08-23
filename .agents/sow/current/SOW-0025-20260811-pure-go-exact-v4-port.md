@@ -9134,6 +9134,59 @@ output.rs + output_digest.rs + output_resume.rs + replacement.rs):
   linux, darwin, freebsd, windows all PASS under nice. Rust tree
   untouched.
 
-Next slice: F reservation lifecycle (reservation_file.go
-draft/private/canonical/armed + reservation_verify.go custody checks
-+ the 13 publication crash points).
+Slice F (2026-08-23) — reservation lifecycle (Rust
+reservation_file.rs 547 + reservation_verify.rs 113, read in full):
+
+- internal/publication/reservation_verify.go: the three-part custody
+  proof (verify_inode / verify_location / verify_contents) over the
+  mapped reservation view only, with the canonical private-name
+  absence rule and the ExactExpected/select_exact header-changed and
+  codec classes. The Rust gc_barrier availability call is the
+  #[cfg(windows)] no-op on POSIX (recorded with the Phase-2 GC
+  surface, matching verify_custody in slice E).
+- internal/publication/reservation_file.go: the full lifecycle owners
+  with the exact Rust failure owners: reservationDraft (create),
+  privateReservation (initialize: prepare_header -> write_state1 ->
+  lock_state1_with with the operation lock), canonicalReservation
+  (acquire: verify -> no-replace rename -> directory sync -> canonical
+  re-proof; resume_armed), armedReservation (arm: state2 derivation,
+  page-1 encode/flush, sync, select, canonical re-proof) with
+  verify_before_main/verify_after_main, and the acquiring/arming
+  failure-owner structs preserving namespace_call_started and
+  state2_selected for the slice-H cleanup machine. Header builder
+  carries the exact evidence (database/txn/nonce, attempt, identities,
+  policy, byte length, sha512, previous, basename/security
+  commitments, sequence 1); the Rust basename_len try_from overflow
+  arm is unreachable after the bind name-max proof and recorded so.
+  The observed checkpoint variants and worker enter_output probes
+  stay recorded with 4-10/4-11; plain variants only, like slice E.
+- The six reservation crash points are live:
+  publication.after_reservation_state1_sync / after_reservation_
+  rename / after_reservation_directory_sync / after_reservation_
+  state2_write / after_reservation_state2_sync / after_reservation_
+  state2_selection (the plan's "13 publication crash points" wording
+  spans the whole machine: the 4 freebsd.* points shipped with slice
+  C and the 9 main_file points land with slice I).
+- Tests: full port of Rust reservation_file_tests.rs (exact header /
+  0600 mode / operation-lock contention, acquire+arm inode and
+  state-2 selection, canonical Exists conflict with the
+  namespace_call_started owner, AccessPolicy initialization refusal
+  with the never-truncated owner, hard-link LinkCount(2) refusals at
+  prepare and arm, existing-main Exists refusal before state 2,
+  resume_armed header-invariant gate plus the on-disk-reconstructed
+  canonical resume path) and the Rust crash matrix
+  (reservation_crashes_leave_one_complete_output_and_selectable_
+  authority): each of the six points exits the child with Rust's
+  code 86 and the parent proves the private/canonical placement, the
+  selectable state (either at state2_write), the output-identity
+  binding, and the complete fixture output via bootstrap.
+- Validation: go build, go vet, go test ./..., go test -tags v4work
+  ./... (16/16 packages ok each), gofmt clean, -race +
+  -gcflags=all=-d=checkptr=2 on internal/publication + internal/live,
+  the six cross-compiles (linux arm64/386, darwin amd64/arm64,
+  freebsd amd64, windows amd64), and per-OS test-compiles of the
+  touched packages for linux, darwin, freebsd, windows all PASS under
+  nice. Rust tree untouched.
+
+Next slice: G reservation inspection (discover/canonical/exact_private/
+scan_private + require_bound + unlock_operation/relock_operation).
