@@ -12,6 +12,7 @@
 package publication
 
 import (
+	"errors"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/fault"
@@ -65,14 +66,21 @@ func (f *reservationDraftFailure) Error() string { return f.cause.Error() }
 func (f *reservationDraftFailure) Unwrap() error { return f.cause }
 
 // initialize runs prepare, state-1 write, and the state-1 lock and
-// proof (Rust ReservationDraft::initialize; the observed checkpoint
-// variant is recorded with 4-10/4-11).
+// proof without a checkpoint (Rust ReservationDraft::initialize).
 func (d *reservationDraft) initialize(output *preparedOutput) (*privateReservation, *reservationDraftFailure) {
-	if err := initializeReservation(d, output); err != nil {
+	return d.initializeObserved(output, nil)
+}
+
+// initializeObserved runs the same machine with one exact checkpoint
+// after the state-1 selection, before the operation lock (Rust
+// ReservationDraft::initialize_observed; a failing checkpoint is the
+// Error::Checkpoint clone-through arm).
+func (d *reservationDraft) initializeObserved(output *preparedOutput, afterSelection func(live.FileIdentity) error) (*privateReservation, *reservationDraftFailure) {
+	if err := initializeReservationObserved(d, output, afterSelection); err != nil {
 		return nil, &reservationDraftFailure{owner: d, cause: err}
 	}
 	// The initialized reservation fields are present by construction:
-	// initializeReservation succeeded through prepare_header.
+	// the machine succeeded through prepare_header.
 	return &privateReservation{
 		name:     d.name,
 		file:     d.file,
@@ -83,13 +91,17 @@ func (d *reservationDraft) initialize(output *preparedOutput) (*privateReservati
 }
 
 func initializeReservation(d *reservationDraft, output *preparedOutput) error {
+	return initializeReservationObserved(d, output, nil)
+}
+
+func initializeReservationObserved(d *reservationDraft, output *preparedOutput, afterSelection func(live.FileIdentity) error) error {
 	if err := prepareHeader(d, output); err != nil {
 		return err
 	}
 	if err := writeState1(d); err != nil {
 		return err
 	}
-	return lockState1With(d, output)
+	return lockState1With(d, output, afterSelection)
 }
 
 // prepareHeader proves the destination state, binds the reservation
@@ -153,10 +165,10 @@ func writeState1(d *reservationDraft) error {
 }
 
 // lockState1With proves the state-1 record, remembers the selection,
-// takes the operation lock, and re-proves the record (Rust
-// lock_state1_with; the observed checkpoint between selection and
-// lock is recorded with 4-10/4-11).
-func lockState1With(d *reservationDraft, output *preparedOutput) error {
+// runs the optional selection checkpoint, takes the operation lock,
+// and re-proves the record (Rust lock_state1_with; the checkpoint
+// failure is the Error::Checkpoint arm).
+func lockState1With(d *reservationDraft, output *preparedOutput, afterSelection func(live.FileIdentity) error) error {
 	if d.mapping == nil || d.header == nil || d.identity == nil {
 		return reservationHeaderInvariantError()
 	}
@@ -165,10 +177,28 @@ func lockState1With(d *reservationDraft, output *preparedOutput) error {
 		return err
 	}
 	d.state1Selected = true
+	if afterSelection != nil {
+		if err := afterSelection(*d.identity); err != nil {
+			return checkpointFailure(err)
+		}
+	}
 	if err := live.LockFile(d.file, reservationOperationLock, live.LockExclusive); err != nil {
 		return err
 	}
 	return verifyDraftPrivate(d, output, header, 0)
+}
+
+// checkpointFailure wraps one machine checkpoint problem in the
+// Error::Checkpoint clone-through class (Rust maps the publication
+// problem into reservation_file::Error::Checkpoint /
+// main_file::Error::Checkpoint; the composition folds return it
+// unchanged).
+func checkpointFailure(err error) error {
+	var fe *format.Error
+	if errors.As(err, &fe) {
+		return &checkpointProblem{problem: fe}
+	}
+	return &checkpointProblem{problem: sdkProblem(err)}
 }
 
 // verifyDraftPrivate proves the initialized draft reservation at its
@@ -201,15 +231,22 @@ type privateReservation struct {
 func (p *privateReservation) Close() error { return closeReservationOwner(p.file, p.mapping) }
 
 // acquire moves the reservation to the canonical coordination twin
-// with an atomic no-replace rename (Rust
-// PrivateReservation::acquire; the observed checkpoint variant is
-// recorded with 4-10/4-11).
-func (p *privateReservation) acquire(output *preparedOutput) (*canonicalReservation, *acquiringReservationFailure) {
-	owner := &acquiringReservation{reservation: *p}
-	if err := acquireReservation(owner, output); err != nil {
-		return nil, &acquiringReservationFailure{owner: owner, cause: err}
+// with an atomic no-replace rename and no checkpoint (Rust
+// PrivateReservation::acquire).
+func (p *privateReservation) acquire(output *preparedOutput) (canonicalReservation, *acquiringReservationFailure) {
+	return p.acquireObserved(output, nil)
+}
+
+// acquireObserved runs the same machine with one exact checkpoint
+// between the atomic rename and the directory sync (Rust
+// PrivateReservation::acquire_observed; the checkpoint failure is the
+// Error::Checkpoint arm).
+func (p *privateReservation) acquireObserved(output *preparedOutput, afterRename func(live.FileIdentity) error) (canonicalReservation, *acquiringReservationFailure) {
+	owner := acquiringReservation{reservation: *p}
+	if err := acquireReservation(&owner, output, afterRename); err != nil {
+		return canonicalReservation{}, &acquiringReservationFailure{owner: owner, cause: err}
 	}
-	return &canonicalReservation{
+	return canonicalReservation{
 		name:     owner.reservation.name,
 		file:     owner.reservation.file,
 		mapping:  owner.reservation.mapping,
@@ -228,9 +265,11 @@ type acquiringReservation struct {
 
 // acquiringReservationFailure is one acquisition failure carrying the
 // still-owned acquiring reservation (Rust
-// Failure<AcquiringReservation>).
+// Failure<AcquiringReservation>). The owner rides by value so the
+// success path of the machine stays on the stack (Rust moves the
+// owner; Go copies it into the failure only on the failure path).
 type acquiringReservationFailure struct {
-	owner *acquiringReservation
+	owner acquiringReservation
 	cause error
 }
 
@@ -238,9 +277,10 @@ func (f *acquiringReservationFailure) Error() string { return f.cause.Error() }
 func (f *acquiringReservationFailure) Unwrap() error { return f.cause }
 
 // acquireReservation re-proves the private reservation, verifies the
-// directory, renames it to the coordination twin, syncs the
-// directory, and re-proves the canonical placement (Rust acquire).
-func acquireReservation(owner *acquiringReservation, output *preparedOutput) error {
+// directory, renames it to the coordination twin, runs the optional
+// after-rename checkpoint, syncs the directory, and re-proves the
+// canonical placement (Rust acquire).
+func acquireReservation(owner *acquiringReservation, output *preparedOutput, afterRename func(live.FileIdentity) error) error {
 	if err := verifyPrivateReservation(&owner.reservation, output); err != nil {
 		return err
 	}
@@ -251,6 +291,11 @@ func acquireReservation(owner *acquiringReservation, output *preparedOutput) err
 	owner.namespaceCallStarted = true
 	if err := destination.directory().RenameNoReplace(owner.reservation.name, owner.reservation.file, destination.coordinationName()); err != nil {
 		return err
+	}
+	if afterRename != nil {
+		if err := afterRename(owner.reservation.identity); err != nil {
+			return checkpointFailure(err)
+		}
 	}
 	fault.Crash("publication.after_reservation_rename")
 	if err := destination.directory().Sync(); err != nil {
@@ -297,22 +342,29 @@ type canonicalReservation struct {
 // Close releases the reservation resources (Rust drop).
 func (c *canonicalReservation) Close() error { return closeReservationOwner(c.file, c.mapping) }
 
-// arm writes and selects state 2 over the canonical reservation
-// (Rust CanonicalReservation::arm; the observed checkpoint variant is
-// recorded with 4-10/4-11).
-func (c *canonicalReservation) arm(output *preparedOutput) (*armedReservation, *armingReservationFailure) {
+// arm writes and selects state 2 over the canonical reservation with
+// no checkpoint (Rust CanonicalReservation::arm).
+func (c *canonicalReservation) arm(output *preparedOutput) (armedReservation, *armingReservationFailure) {
+	return c.armObserved(output, nil)
+}
+
+// armObserved runs the same machine with one exact checkpoint after
+// the state-2 selection and before the final canonical proof (Rust
+// CanonicalReservation::arm_observed; the checkpoint failure is the
+// Error::Checkpoint arm).
+func (c *canonicalReservation) armObserved(output *preparedOutput, afterSelection func(live.FileIdentity) error) (armedReservation, *armingReservationFailure) {
 	target, ok := c.header.state2()
 	if !ok {
-		return nil, &armingReservationFailure{
-			owner: &armingReservation{reservation: *c},
+		return armedReservation{}, &armingReservationFailure{
+			owner: armingReservation{reservation: *c, target: &target},
 			cause: reservationHeaderInvariantError(),
 		}
 	}
-	owner := &armingReservation{reservation: *c, target: &target}
-	if err := armWith(owner, output); err != nil {
-		return nil, &armingReservationFailure{owner: owner, cause: err}
+	owner := armingReservation{reservation: *c, target: &target}
+	if err := armWith(&owner, output, afterSelection); err != nil {
+		return armedReservation{}, &armingReservationFailure{owner: owner, cause: err}
 	}
-	return &armedReservation{
+	return armedReservation{
 		name:     owner.reservation.name,
 		file:     owner.reservation.file,
 		mapping:  owner.reservation.mapping,
@@ -324,14 +376,14 @@ func (c *canonicalReservation) arm(output *preparedOutput) (*armedReservation, *
 // resumeArmed resumes an armed reservation after a crash (Rust
 // CanonicalReservation::resume_armed: state 2 must already be
 // selected).
-func (c *canonicalReservation) resumeArmed(output *preparedOutput) (*armedReservation, *canonicalReservationFailure) {
+func (c *canonicalReservation) resumeArmed(output *preparedOutput) (armedReservation, *canonicalReservationFailure) {
 	if c.header.state != reservationStateMainMayHaveBeenAttempted || c.header.sequence != 2 {
-		return nil, &canonicalReservationFailure{owner: c, cause: reservationHeaderInvariantError()}
+		return armedReservation{}, &canonicalReservationFailure{owner: *c, cause: reservationHeaderInvariantError()}
 	}
 	if err := verifyCanonicalReservation(c, output); err != nil {
-		return nil, &canonicalReservationFailure{owner: c, cause: err}
+		return armedReservation{}, &canonicalReservationFailure{owner: *c, cause: err}
 	}
-	return &armedReservation{
+	return armedReservation{
 		name:     c.name,
 		file:     c.file,
 		mapping:  c.mapping,
@@ -343,7 +395,7 @@ func (c *canonicalReservation) resumeArmed(output *preparedOutput) (*armedReserv
 // canonicalReservationFailure is one resume failure carrying the
 // still-owned canonical reservation (Rust Failure<CanonicalReservation>).
 type canonicalReservationFailure struct {
-	owner *canonicalReservation
+	owner canonicalReservation
 	cause error
 }
 
@@ -362,7 +414,7 @@ type armingReservation struct {
 // armingReservationFailure is one arm failure carrying the still-owned
 // arming reservation (Rust Failure<ArmingReservation>).
 type armingReservationFailure struct {
-	owner *armingReservation
+	owner armingReservation
 	cause error
 }
 
@@ -370,10 +422,10 @@ func (f *armingReservationFailure) Error() string { return f.cause.Error() }
 func (f *armingReservationFailure) Unwrap() error { return f.cause }
 
 // armWith proves the canonical reservation, writes and selects the
-// state-2 record at the exact physical steps, and re-proves the
-// canonical placement (Rust arm_with; the observed checkpoint between
-// selection and the final proof is recorded with 4-10/4-11).
-func armWith(owner *armingReservation, output *preparedOutput) error {
+// state-2 record at the exact physical steps, runs the optional
+// after-selection checkpoint, and re-proves the canonical placement
+// (Rust arm_with).
+func armWith(owner *armingReservation, output *preparedOutput, afterSelection func(live.FileIdentity) error) error {
 	if owner.target == nil {
 		return reservationHeaderInvariantError()
 	}
@@ -409,6 +461,11 @@ func armWith(owner *armingReservation, output *preparedOutput) error {
 	}
 	owner.state2Selected = true
 	fault.Crash("publication.after_reservation_state2_selection")
+	if afterSelection != nil {
+		if err := afterSelection(owner.reservation.identity); err != nil {
+			return checkpointFailure(err)
+		}
+	}
 	return verifyCanonicalAt(
 		owner.reservation.file,
 		owner.reservation.mapping,

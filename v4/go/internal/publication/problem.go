@@ -24,6 +24,27 @@ func cleanupConflictProblem(detail string) *format.Error {
 	return problem(format.CodeCleanupConflict, detail)
 }
 
+// checkpointProblem is the Go peer of the Rust Error::Checkpoint
+// (reservation_file::Error / main_file::Error) and Result::Checkpoint
+// arms: one observer or machine checkpoint problem that is already in
+// its final fixed shape and must pass every composition fold
+// unchanged, exactly like the Rust problem clone.
+type checkpointProblem struct {
+	problem *format.Error
+}
+
+func (e *checkpointProblem) Error() string { return e.problem.Error() }
+func (e *checkpointProblem) Unwrap() error { return e.problem }
+
+// asCheckpointProblem unwraps one checkpoint problem, or nil.
+func asCheckpointProblem(err error) *format.Error {
+	var checkpoint *checkpointProblem
+	if errors.As(err, &checkpoint) {
+		return checkpoint.problem
+	}
+	return nil
+}
+
 // namespaceProblem maps one retained-directory namespace error to the
 // fixed publication problem (Rust Problem::namespace). The plain Io
 // class always reports the fixed filesystem-operation detail; the
@@ -117,6 +138,9 @@ func reservationProblem(err error) *format.Error {
 	if _, ok := live.AsNamespaceError(err); ok {
 		return namespaceProblem(err)
 	}
+	if checkpoint := asCheckpointProblem(err); checkpoint != nil {
+		return checkpoint
+	}
 	var fe *format.Error
 	if !errors.As(err, &fe) {
 		return sdkProblem(err)
@@ -180,6 +204,9 @@ func replacementProblem(err error) *format.Error {
 func mainProblem(err error) *format.Error {
 	if _, ok := live.AsNamespaceError(err); ok {
 		return namespaceProblem(err)
+	}
+	if checkpoint := asCheckpointProblem(err); checkpoint != nil {
+		return checkpoint
 	}
 	var fe *format.Error
 	if !errors.As(err, &fe) {

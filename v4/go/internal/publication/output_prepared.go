@@ -174,11 +174,10 @@ func inspectExact(attempt *outputAttempt, file *os.File, mapping *mapping.Mappin
 	if err := verifyCustody(attempt, file, location); err != nil {
 		return 0, err
 	}
-	st, err := file.Stat()
+	byteLength, err := fstatSize(file)
 	if err != nil {
 		return 0, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
-	byteLength := uint64(st.Size())
 	page0, err := mapping.Page(0)
 	if err != nil {
 		return 0, err
@@ -187,11 +186,11 @@ func inspectExact(attempt *outputAttempt, file *os.File, mapping *mapping.Mappin
 	if err != nil {
 		return 0, err
 	}
-	opened, err := bootstrap.Open(page0, page1, byteLength, bootstrap.ModeImmutableReader)
+	openedMeta, err := bootstrap.OpenMeta(page0, page1, byteLength, bootstrap.ModeImmutableReader)
 	if err != nil {
 		return 0, outputBootstrapError()
 	}
-	if opened.Meta != expected {
+	if openedMeta != expected {
 		return 0, finishedMetaChanged()
 	}
 	return byteLength, nil

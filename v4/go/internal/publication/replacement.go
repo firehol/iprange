@@ -179,11 +179,11 @@ func (p *previousMain) verifyPrivateOrRetired(destination *destination, privateN
 	if err != nil {
 		return err
 	}
-	st, err := p.file.Stat()
+	size, err := fstatSize(p.file)
 	if err != nil {
 		return &live.NamespaceError{Kind: live.NamespaceIo, Op: "inspect retained file", Err: err}
 	}
-	if identity != p.identity || uint64(st.Size()) != p.byteLength {
+	if identity != p.identity || size != p.byteLength {
 		return &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
 	}
 	links, err := live.RegularLinkCount(p.file)
@@ -216,11 +216,11 @@ func (p *previousMain) verifyRetired(destination *destination, privateName strin
 	if identity != p.identity {
 		return &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
 	}
-	st, err := p.file.Stat()
+	size, err := fstatSize(p.file)
 	if err != nil {
 		return &live.NamespaceError{Kind: live.NamespaceIo, Op: "inspect retained file", Err: err}
 	}
-	if uint64(st.Size()) != p.byteLength {
+	if size != p.byteLength {
 		return &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
 	}
 	links, err := live.RegularLinkCount(p.file)

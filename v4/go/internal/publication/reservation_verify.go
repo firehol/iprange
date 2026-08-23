@@ -40,10 +40,10 @@ type reservationExpected struct {
 // verifyReservation runs the three-part custody proof (Rust verify):
 // inode evidence, namespace placement, and record contents.
 func verifyReservation(file *os.File, m *mapping.Mapping, output *preparedOutput, expected reservationExpected) error {
-	if err := verifyReservationInode(file, output, &expected); err != nil {
+	if err := verifyReservationInode(file, output, expected); err != nil {
 		return err
 	}
-	if err := verifyReservationLocation(output, &expected); err != nil {
+	if err := verifyReservationLocation(output, expected); err != nil {
 		return err
 	}
 	return verifyReservationContents(file, m, expected.header, expected.block)
@@ -53,7 +53,7 @@ func verifyReservation(file *os.File, m *mapping.Mapping, output *preparedOutput
 // position, the retained directory is stable, and the reservation
 // file is the expected single-link inode with the creator commitment
 // (Rust verify_inode).
-func verifyReservationInode(file *os.File, output *preparedOutput, expected *reservationExpected) error {
+func verifyReservationInode(file *os.File, output *preparedOutput, expected reservationExpected) error {
 	switch expected.outputLocation {
 	case outputLocationPrivate:
 		if err := output.verifyPrivate(); err != nil {
@@ -84,7 +84,7 @@ func verifyReservationInode(file *os.File, output *preparedOutput, expected *res
 // verify_location). The Rust gc_barrier availability call is
 // #[cfg(windows)] and compiles to nothing on POSIX; Go publication
 // refuses Windows before this point (Phase-2 GC surface).
-func verifyReservationLocation(output *preparedOutput, expected *reservationExpected) error {
+func verifyReservationLocation(output *preparedOutput, expected reservationExpected) error {
 	destination := output.attempt.destinationOf()
 	directory := destination.directory()
 	name := expected.privateName
@@ -103,11 +103,11 @@ func verifyReservationLocation(output *preparedOutput, expected *reservationExpe
 // verifyReservationContents proves the reservation file keeps its
 // exact size and its selected record (Rust verify_contents).
 func verifyReservationContents(file *os.File, m *mapping.Mapping, header reservationHeader, block int) error {
-	st, err := file.Stat()
+	size, err := fstatSize(file)
 	if err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
-	if uint64(st.Size()) != reservationFileSize {
+	if size != reservationFileSize {
 		return reservationLengthChangedError()
 	}
 	return selectExact(m, header, block)

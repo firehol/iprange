@@ -9568,7 +9568,133 @@ introduced here is the fix; apply it during the O validation sweep or
 when the attempt/main_file slice touches that owner next, and verify
 with the same -m=2 evidence.
 
-Next: slice I attempt+main_file publish state machine (Rust attempt.rs
-776 + main_file.rs 510); the plan after I stays J resolver core, K
-replacement resolver, L residue, M maintenance, N Publish retrofit +
-public surface, O validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice I implemented: attempt + main_file publish state machine
+
+Slice I ports the one-shot publication machine (Rust publication/attempt.rs
+776 lines + main_file.rs 510 lines) to Go: the fail-if-exists and
+replacement flows composed from the explicit ownership states, the
+atomic main-name publication per policy, the exact retirement of the
+reservation and any replaced previous, the checkpoint/observer surface
+(the slice-F "recorded with 4-10/4-11" deferrals are implemented here),
+and every failure class with the exact cleanup ledger. Rust is the
+mandatory baseline; the Go machines mirror the Rust owners and outcome
+classes one to one.
+
+Go files (all !windows; the Rust windows gc-transition arms of
+main_file.rs stay intentionally absent: Go publication refuses Windows
+opens at destination bind per M5):
+
+- internal/publication/attempt.go (469 lines): failIfExistsCancellable,
+  failIfExistsCancellableObserved, replaceExistingCancellable,
+  resumeArmed, publishWithObserver, fromPrivate/fromCanonical/fromArmed,
+  the five observe* checkpoint builders (interruptedProblem detail "mapped
+  output fault interrupted publication"), preparation/notPublished/
+  outcomeUnknown/finishPublished/finishPublishedObserved, the owner
+  builders (draft/acquiring/canonical/arming), optionalFrom,
+  cleanupPointOf, cleanupIgnoresCancellation. The Go two-value return
+  (PublicationResult, *PublicationPreparationFailure) is the peer of
+  Rust Result<_, Box<PreparationFailure>>.
+- internal/publication/main_file.go (363 lines): publishProved/
+  publishObserved/publishWith/publishSteps/verifyBeforeMain/renameMain/
+  synchronizeMain/proveMain, retire/retireObserved/retireMain/
+  retireSteps/verifyPublished/unlinkPrevious/unlinkReservation/
+  syncRetirement/verifyRetired, the mainAttempt/publishedMain/
+  retiringMain/publishedOutput owners, and all nine crash points at the
+  exact Rust steps (publication.after_main_rename/sync/directory_sync/
+  proof, after_previous_unlink, after_reservation_unlink,
+  after_retirement_sync). The post-unlink link-count conflict arms
+  return cleanupConflictProblem with the Rust-verbatim details
+  ("retired previous destination still has a link" / "retired
+  reservation still has a link").
+- internal/publication/seed.go (+90): finalState, result(),
+  resultWithHousekeeping(), preparationWithHousekeeping() (Rust
+  result.rs 155-266).
+- internal/publication/problem.go (+24): checkpointProblem wrapper and
+  asCheckpointProblem (Rust Error::Checkpoint clone-through);
+  reservationProblem/mainProblem unwrap it first.
+- internal/publication/reservation_file.go (modified): plain
+  initialize/acquire/arm are now thin wrappers over the observed
+  machines (nil checkpoint); this slice flattens every machine owner
+  to a value and every success return to a value so the success path
+  stays on the stack (Rust moves values; the failures copy the owner
+  value into the heap failure). Go signature note: the machine takes
+  *preparedOutput and value reservations (caller ownership of the file
+  descriptors; Rust moves the PreparedOutput into the machine).
+
+Go tests:
+
+- main_file_test.go (Rust main_file_tests.rs arms): the clean
+  publish+retire facts, the post-rename checkpoint failure retaining
+  the ambiguous complete main, the verify-stage single-link custody
+  refusals when a hard alias pre-exists retirement (Rust classifies
+  them at verify_published/verify_private_or_retired with
+  NamespaceError::LinkCount, verified against the running Rust suite),
+  and the exchange/retire flow. The post-unlink PreviousLinkCount/
+  ReservationLinkCount classes are race arms in both implementations;
+  their exact problem surface is pinned via TestCleanupConflictProblem
+  Mapping.
+- attempt_test.go (Rust attempt_tests.rs arms): success facts + no
+  residue, pre-boundary preparation failure with exact cleanup, the
+  state1/acquire/state2 failure classifications, the main-race after
+  state2 (outcome unknown, never overwrites), shared and individual
+  cleanup-failure ledgers, the foreign-coordination and existing-main
+  refusals, the published reservation-link conflict residue, the
+  post-proof published retention, the replacement publish/retire and
+  the replacement path race before state 2, and the two resumeArmed
+  outcome classes (before rename publishes; after rename holds the
+  sure-to-be untouchable outcome-unknown).
+- attempt_alloc_test.go: the fromPrivate success-path allocation pin
+  (Rust post_boundary_success_allocates_no_heap), measured exactly
+  once with MemStats like the Rust count_thread_allocations (the
+  machine consumes the reservation, so AllocsPerRun's warmup-repeat
+  loop would measure a changed state). The pinned budget is 58 objects,
+  all accounted: 22 syscall-boundary name NUL-copies (the accepted
+  x/sys convention of slices F/G/H), 7 Fgetxattr attribute-name
+  copies, 4 rename boundary classes, 5 result-plumbing values, 20
+  fixed escape breathers of the deep verify chain (Go's
+  path-insensitive escape analysis; Rust moves the same values with no
+  heap). To get there the slice also flattened the machine owners to
+  values, added the value-returning bootstrap.OpenMeta core (Rust
+  open_meta_pages; Open keeps its pointer surface for the reader),
+  replaced the machine-path os.File.Stat calls with raw unix.Fstat
+  (fstatSize), made the security commitment use sha256.Sum256 on the
+  stack (Rust commitment is register-only), and switched
+  live.Directory.Sync to raw Fsync (Rust libc fsync). The pin excludes
+  race and v4work builds exactly like the discard pin: race/checkptr
+  and the crash harness allocate inside the measured path themselves.
+- attempt_crash_v4work_test.go (Rust crash_tests.rs): the 4
+  after_main_* points leave the complete desired main with the
+  selectable canonical reservation (state MainMayHaveBeenAttempted,
+  output identity bound) and no private artifacts; the 2 retirement
+  points leave the complete main with no coordination; the 13-point
+  replacement matrix preserves the previous bytes before the rename,
+  the previous at the private name after it, and the retired state at
+  the retirement points - all with child exit 86 at the exact step.
+  The Rust ImmutableReader::open refusal while the reservation is
+  armed is wired with the reader authority slices (J resolver core, N
+  publish retrofit), recorded here, not stubbed.
+
+Design notes:
+
+- Gofmt clean; all Rust-verbatim problem details in place; the Go
+  machines hold no dead code and the checkpointFailure wrapper is
+  shared by the reservation and main-file machines (same package).
+- Chunk-level P3 sweep item (reservation_file.go:109 identity-pointer
+  escape) is still recorded for the O validation sweep, untouched this
+  slice (the draft identity owner is outside the measured success
+  path).
+- Validation (all under nice): go build ./..., go vet ./..., plain and
+  v4work test batteries (14 packages ok each + the 3 no-test-file
+  packages), gofmt clean, -race + -gcflags=all=-d=checkptr=2 on
+  publication/live/bootstrap/security, the six cross-compiles (linux
+  arm64/386, darwin amd64/arm64, freebsd amd64, windows amd64), and
+  per-OS test-compiles of internal/publication all PASS. Rust tree
+  untouched.
+
+- Review: five-aspect adversarial review pending at slice close
+  (parity/idioms/performance/wire/integrity/records).
+
+Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
++ resolver_verification 88 + resolver_result 189); the plan after J
+stays K replacement resolver, L residue, M maintenance, N Publish
+retrofit + public surface, O validation + gate + push.

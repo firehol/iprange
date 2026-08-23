@@ -56,38 +56,64 @@ type Result struct {
 // structured file reports UnsupportedStructure after pair selection (Rust
 // finish_open), exactly like the reader's historical open.
 func Open(p0, p1 []byte, physical uint64, mode Mode) (*Result, error) {
+	result, err := openMetaPages(p0, p1, physical, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// OpenMeta validates and selects one committed meta pair and returns
+// the selected meta by value (Rust open_meta_pages). The value core
+// keeps inspect paths allocation-free; the reader-facing Open keeps
+// the pointer result for its own surface. Both share one selection
+// authority.
+func OpenMeta(p0, p1 []byte, physical uint64, mode Mode) (format.Meta, error) {
+	result, err := openMetaPages(p0, p1, physical, mode)
+	if err != nil {
+		return format.Meta{}, err
+	}
+	return result.Meta, nil
+}
+
+// openMetaPages is the value-returning selection core of Open and
+// OpenMeta (Rust open_meta_pages + finish_open; every failure except
+// an unknown structured-file kind is the FormatInvalid class; an
+// unknown kind on a structured file reports UnsupportedStructure
+// after pair selection, exactly like the reader's historical open).
+func openMetaPages(p0, p1 []byte, physical uint64, mode Mode) (Result, error) {
 	if len(p0) != format.PageSize || len(p1) != format.PageSize {
-		return nil, formatErr("meta page not a complete page")
+		return Result{}, formatErr("meta page not a complete page")
 	}
 	if physical < 2*format.PageSize {
-		return nil, formatErr("file smaller than two pages")
+		return Result{}, formatErr("file smaller than two pages")
 	}
 	if physical%format.PageSize != 0 {
-		return nil, formatErr("file size not page-aligned")
+		return Result{}, formatErr("file size not page-aligned")
 	}
 	m0, ok0 := format.ParseIdentity(p0)
 	m1, ok1 := format.ParseIdentity(p1)
 	if ok0 && ok1 && !sameIdentity(m0, m1) {
-		return nil, formatErr("conflicting meta identity")
+		return Result{}, formatErr("conflicting meta identity")
 	}
 	e0 := validateMeta(m0, ok0, physical)
 	e1 := validateMeta(m1, ok1, physical)
 	meta, selection, page, err := selectBetween(p0, p1, m0, m1, ok0 && e0 == nil, ok1 && e1 == nil)
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	// An unknown structure kind on a structured file is reported only
 	// after the meta pair is selected (Rust finish_open), never as a
 	// validation failure (the count/root checks still ran).
 	if meta.ValueKind == format.ValueKindStructured && meta.StructureKind != format.StructureKindNetworkEnrichmentV1 {
-		return nil, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
+		return Result{}, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
 	}
 	// A writer or live-reader open must prove the current generation from
 	// the meta pair; a sole meta cannot (Rust finish_open
 	// CurrentGenerationUnprovable applies to every mode except the
 	// immutable reader).
 	if mode != ModeImmutableReader && selection != SelectionProvenCurrent {
-		return nil, formatErr("current generation not provable")
+		return Result{}, formatErr("current generation not provable")
 	}
 	committed := meta.PageCount * format.PageSize
 	// The immutable reader requires the exact committed physical extent
@@ -95,9 +121,9 @@ func Open(p0, p1 []byte, physical uint64, mode Mode) (*Result, error) {
 	// reader may carry an unpublished tail (the live reader remaps to the
 	// committed bytes only).
 	if mode == ModeImmutableReader && committed != physical {
-		return nil, formatErr("file size does not match meta page count")
+		return Result{}, formatErr("file size does not match meta page count")
 	}
-	return &Result{
+	return Result{
 		Meta:             meta,
 		Selection:        selection,
 		SelectedMetaPage: page,

@@ -234,7 +234,7 @@ func (d *Directory) UnlinkExact(name string, expected FileIdentity) (bool, error
 // the Unsupported class: filesystems that cannot sync a directory
 // cannot prove name durability.
 func (d *Directory) Sync() error {
-	if err := d.file.Sync(); err != nil {
+	if err := unix.Fsync(int(d.file.Fd())); err != nil {
 		if errors.Is(err, unix.EINVAL) {
 			return nsUnsupportedError()
 		}

@@ -115,18 +115,17 @@ func creatorOnlyMetadata(f *os.File) (unix.Stat_t, error) {
 
 // commitment is the SHA-256 ownership commitment over the exact domain,
 // the little-endian uid, and the little-endian creator mode (Rust
-// security commitment).
+// security commitment). Sum256 keeps the digest on the stack, so the
+// verify path never allocates.
 func commitment(uid uint32) [32]byte {
 	var leUID, leMode [4]byte
 	binary.LittleEndian.PutUint32(leUID[:], uid)
 	binary.LittleEndian.PutUint32(leMode[:], CreatorMode)
-	h := sha256.New()
-	h.Write([]byte(commitmentDomain))
-	h.Write(leUID[:])
-	h.Write(leMode[:])
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	var input [16]byte
+	copy(input[0:8], commitmentDomain)
+	copy(input[8:12], leUID[:])
+	copy(input[12:16], leMode[:])
+	return sha256.Sum256(input[:])
 }
 
 func accessPolicy() error {

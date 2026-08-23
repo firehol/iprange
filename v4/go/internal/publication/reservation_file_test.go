@@ -167,7 +167,7 @@ func TestResumeArmedRequiresState2(t *testing.T) {
 	if !ok || fe.Code != format.CodeFormatInvalid || fe.Detail != "reservation state is inconsistent" {
 		t.Fatalf("resumeArmed refusal = %v, want header invariant", resumeFailure.cause)
 	}
-	if resumed != nil {
+	if resumed.file != nil || resumed.mapping != nil {
 		t.Fatal("resumeArmed returned a reservation on refusal")
 	}
 	resumeFailure.owner.Close()

@@ -152,3 +152,79 @@ func publicPolicy(policy reservationPolicy) PublicationPolicy {
 		return PolicyReplaceExistingNoRollback
 	}
 }
+
+// finalState is the portable outcome state of one publication attempt
+// (Rust result.rs FinalState): the wire reservation identity and the
+// six fact classes of the finished attempt.
+type finalState struct {
+	reservationIdentity               live.FileIdentity
+	mainNamespaceMayHaveBeenAttempted bool
+	publication                       PublicationStatus
+	destinationContent                DestinationContent
+	mainAccessPolicy                  AccessPolicy
+	coordinationAccessPolicy          AccessPolicy
+}
+
+// result builds the portable publication result of one attempt (Rust
+// Seed::result): the captured attempt facts, the cleanup ledger, and
+// the optional fixed cause, with no housekeeping evidence.
+func (s *seed) result(state finalState, cleanup CleanupArtifacts, cause error) PublicationResult {
+	return s.resultWithHousekeeping(state, cleanup, HousekeepingNone, nil, cause)
+}
+
+// resultWithHousekeeping builds the portable publication result with
+// exact housekeeping evidence (Rust
+// Seed::result_with_housekeeping).
+func (s *seed) resultWithHousekeeping(state finalState, cleanup CleanupArtifacts, housekeeping Housekeeping, visibleHousekeeping []HousekeepingArtifact, cause error) PublicationResult {
+	return PublicationResult{
+		Attempt: PublicationAttempt{
+			DatabaseID:                  s.databaseID,
+			TransactionID:               s.transactionID,
+			CommitNonce:                 s.commitNonce,
+			PublicationAttemptID:        s.attemptID,
+			DirectoryIdentity:           s.directoryIdentity,
+			DestinationBasenameEncoding: basenameEncodingKind,
+			DestinationBasename:         s.destinationBasename,
+			OutputIdentity:              s.outputIdentity,
+			OutputByteLength:            s.outputByteLength,
+			OutputSHA512:                s.outputSHA512,
+			PublicationPolicy:           s.publicationPolicy,
+			PreviousDestination:         s.previousDestination,
+			ReservationIdentity:         localIdentityFromDeviceInode(live.IdentityDeviceInode(&state.reservationIdentity)),
+			CreationSecurity:            s.creationSecurity,
+		},
+		MainNamespaceMayHaveBeenAttempted: state.mainNamespaceMayHaveBeenAttempted,
+		Publication:                       state.publication,
+		DestinationContent:                state.destinationContent,
+		LaterCanonical:                    LaterCanonicalNone,
+		LiveLineage:                       nil,
+		LaterAttemptOrSidecarID:           nil,
+		LaterSelectedTransactionID:        nil,
+		LaterSelectedCommitNonce:          nil,
+		MainAccessPolicy:                  state.mainAccessPolicy,
+		CoordinationAccessPolicy:          state.coordinationAccessPolicy,
+		Cleanup:                           cleanup,
+		CoordinationCleanup:               CoordinationCleanupNone,
+		Housekeeping:                      housekeeping,
+		VisibleHousekeeping:               visibleHousekeeping,
+		Cause:                             cause,
+	}
+}
+
+// preparationWithHousekeeping builds the portable preparation failure
+// of one attempt (Rust Seed::preparation_with_housekeeping).
+func (s *seed) preparationWithHousekeeping(cleanup CleanupArtifacts, housekeeping Housekeeping, visibleHousekeeping []HousekeepingArtifact, cause error) PublicationPreparationFailure {
+	return PublicationPreparationFailure{
+		PublicationAttemptID:          s.attemptID,
+		DirectoryIdentity:             s.directoryIdentity,
+		PrivateOutputBasenameEncoding: basenameEncodingKind,
+		PrivateOutputBasename:         s.privateOutputBasename,
+		OutputIdentity:                s.outputIdentity,
+		CreationSecurity:              s.creationSecurity,
+		Cleanup:                       cleanup,
+		CoordinationCleanup:           CoordinationCleanupNone,
+		Housekeeping:                  housekeeping,
+		VisibleHousekeeping:           visibleHousekeeping,
+		Cause:                         cause,
+	}
+}
