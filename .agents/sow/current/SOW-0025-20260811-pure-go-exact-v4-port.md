@@ -42,6 +42,41 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - chunk 3b-5 complete: feed-workflow slices A/B/C all gated PASS
+
+Chunk 3b-5 (complete feed workflows, M3 surface) is complete: slice A
+(draft machinery), slice B (public feed workflows), and slice C
+(structured transaction) each closed with all five aspects PASS. The
+carried P3 dispositions for this phase:
+
+- P3-A (newEncodedRange per-record escape) landed and was fixed in
+  slice A (rangeCtx encodeScratch, 0 allocs on the ordered path).
+- P3-B (rejectCell/optionalCell on the cold general gap protocol)
+  remains tracked: the general fallback keeps its recorded ~1.98
+  allocs/record with no production caller beyond the union inputs;
+  disposition at the randomized-models chunk where the general path
+  gets its strongest exercise.
+- P3-C (segmentAt by value) landed with the rangeTransform work in
+  slice A (rangeRecord, bool, error return).
+- Harvey's slice-C P3 note on slicea_union_input_alloc_test.go:93
+  comment arithmetic was verified against the file: the comment states
+  the measured 54 objects and the 54 + 256 = 310 arithmetic is
+  consistent, so no fix was needed.
+- The unpinned performance probes (OutputBuilder intern path, both-
+  sides trim path; both measured 0 allocs/op) stay tracked as test-
+  only observability gaps, not production defects.
+- The feed-workflow Commit-after-abort error class and the other
+  carried P3s from the slice-C gate stay tracked as recorded.
+
+Full battery green under nice at the gated HEAD 2dc13aa.
+
+- Next: chunk 3b-6 (randomized public models over the internal core,
+  the remaining M3 plan item): Go property-model tests mirroring the
+  Rust property suites (workflow_properties.rs,
+  structured_value_properties.rs, membership_algebra_properties.rs,
+  membership_query_properties.rs, feed_workflow_properties.rs,
+  history_projection_properties.rs), then the five-aspect close gate.
+
 ### Status (2026-08-23) - slice C gated PASS: all five aspects green on 929d4de
 
 The slice-C close gate closed with all five aspects PASS on 929d4de
@@ -94,7 +129,9 @@ vet, plain/v4work tests, race, race+v4work, checkptr=2, six
 cross-compiles, Rust suite and --all-features, Rust conformance
 (11 fixtures), Rust mixed-subprocess, Go subprocess cross-open.
 
-- Next: slice D per the SOW plan.
+- Next: chunk 3b-6 (randomized public models over the internal core,
+  the remaining M3 plan item); the chunk-3b-5 slice plan defines
+  slices A/B/C only.
 
 ### Status (2026-08-23) - slice C review round 2: Harvey FAIL fixed on the working tree, four aspects green
 
@@ -169,7 +206,7 @@ again under nice:
   conformance (11 fixtures), Rust mixed-subprocess, Go subprocess
   cross-open.
 - Next: the five-aspect re-review gate on the committed delta
-  7004a84, then slice D.
+  7004a84, then the chunk 3b-6 close per the M3 plan.
 
 ### Status (2026-08-23) - slice C review round 1: five-aspect FAILs fixed at ba446fa
 
@@ -231,7 +268,7 @@ full battery is green again under nice:
   tests, race, race+v4work, checkptr=2, six cross-compiles, Rust
   conformance, Rust mixed-subprocess, Go subprocess cross-open.
 - Next: the round-2 re-review gate on this delta (all five aspects at
-  ba446fa), then slice D.
+  ba446fa), then the remaining chunk 3b-5 work per the M3 plan.
 
 ### Status (2026-08-23) - slice B gated PASS: all five aspects green on 948aa93
 
@@ -309,7 +346,8 @@ of it:
   tests, race, race+v4work, checkptr=2, six cross-compiles, Rust suite
   580 passed 0 failed.
 - Next: the five-aspect close gate on this delta (Meitner, Anscombe,
-  Harvey, Newton, Aristotle), then slice D per the slice plan.
+  Harvey, Newton, Aristotle), then the remaining chunk 3b-5 work per
+  the M3 plan.
 
 ### Status (2026-08-23) - slice B review-fix round 2: re-review verdicts and residue fixes
 
