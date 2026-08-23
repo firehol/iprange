@@ -10039,10 +10039,4 @@ and the final coordination-reuse proof); the plan after L stays M
 maintenance, N Publish retrofit + public surface, O validation + gate
 + push.
 
-Next: slice-J round-2 re-review by all five agents at this fix HEAD,
-then the slice-K review by the same five agents, then slice L
-residue (inspect/remove canonical residue with the retained handle
-and the final coordination-reuse proof); the plan after L stays M
-maintenance, N Publish retrofit + public surface, O validation + gate
-+ push.
 
