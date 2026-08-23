@@ -9990,9 +9990,11 @@ The wire/integrity review (round-3 carry-over P1) added one more fix:
 the replacement arms returned an outcome-unknown result on
 non-cancelled synchronize failures, where Rust propagates every
 synchronize failure with ? on both replacement arms (the
-outcome-unknown conversion exists only in the Rust fail-if-exists
-arms). Both replacement arms now close the pair and base
-reservations and return the synchronize error directly.
+outcome-unknown conversion exists on the Rust fail-if-exists
+synchronize arms and on the common completion/arm-failure paths, not
+on the replacement synchronize arms). Both replacement arms now close
+the pair and base reservations and return the synchronize error
+directly.
 
 Validation (all under nice): go build ./..., go vet ./..., plain and
 v4work full trees (14 packages ok each), gofmt clean, -race +
@@ -10115,10 +10117,25 @@ leaks stay closed, verification errors reach the result surface
 folded like Rust, and the descriptor pins cover the error paths.
 Slice J is complete; next is the slice-K review round.
 
-Next: slice-K review by the five agents at this HEAD, then slice L
-residue (inspect/remove canonical residue with the retained handle
-and the final coordination-reuse proof); the plan after L stays M
-maintenance, N Publish retrofit + public surface, O validation + gate
-+ push.
+### Status (2026-08-24) - chunk 4-8 slice K complete: review rounds 1-5 PASS
+
+Slice K closed after five review rounds. Round-1 FAILs (idioms
+P1/P2/P3, records P2/P3) were fixed in the fix round (previous-main
+close with the descriptor pin, resume-error single close, double
+pointer removal, record deltas +138 and +8/-4). Round-2/3 carry-over
+findings fixed: the replacement-arm heap escapes (seed borrow with
+the artifact security copy and the 58-to-57 allocation-pin step,
+outputOwner value returns, meta value with presence flag) and the
+wire P1 (synchronize failures propagate like Rust on both
+replacement arms). Round-4/5 carry-over findings fixed: zero-length
+pair entries classify like Rust Mapping::view maps nothing (new
+regression test) and the live record counts. All five aspects PASS
+at 9872815.
+
+Next: slice L residue (inspect/remove canonical residue with the
+retained handle and the final coordination-reuse proof); the plan
+after L stays M maintenance, N Publish retrofit + public surface, O
+validation + gate + push.
+
 
 
