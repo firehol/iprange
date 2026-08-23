@@ -9587,7 +9587,7 @@ Go files (all !windows; the Rust windows gc-transition arms of
 main_file.rs stay intentionally absent: Go publication refuses Windows
 opens at destination bind per M5):
 
-- internal/publication/attempt.go (444 lines): failIfExistsCancellable,
+- internal/publication/attempt.go (450 lines): failIfExistsCancellable,
   failIfExistsCancellableObserved, replaceExistingCancellable,
   resumeArmed, publishWithObserver, fromPrivate/fromCanonical/fromArmed,
   the four observe* checkpoint builders (observePreparation/
@@ -9776,8 +9776,15 @@ Design notes:
   the refusal failure owner - is recorded for the slice-J resolver,
   which introduces the production callers), records (Noether: same P1
   plus the phantom attempt_alloc_test.go:80-95 citation, corrected to
-  :63-72). Round-4 confirmation re-review of the same five aspects
-  dispatched at HEAD 7bf1e87.
+  :63-72). Round-4 outcomes at HEAD e7b1d7e: all five aspects PASS
+  (parity Goodall, idioms Gauss, performance Chandrasekhar, wire/
+  integrity Herschel, records Noether) with no P0-P2 findings; the
+  terminal-close invariant is verified arm-by-arm (14 owner-carrying
+  terminal paths, each closing exactly once, no use-after-close, no
+  double-close), the flock and fd-count pins both fail without their
+  fixes, and the only remaining item was the attempt.go inventory
+  count (444 -> 450, corrected here). Slice I is complete; next is
+  slice J (resolver core).
 
 Next: slice J resolver core (resolver.rs 435 + resolver_authority 106
 + resolver_verification 88 + resolver_result 189); the plan after J
