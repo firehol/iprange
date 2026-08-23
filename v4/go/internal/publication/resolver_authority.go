@@ -50,6 +50,8 @@ func inspectResolution(path string, supplied *PublicationResult, check func() er
 	}
 	seed, err := reconstructSeed(destination, auth.header)
 	if err != nil {
+		closeInspectedReservation(auth.exact)
+		closeInspectedReservation(auth.later)
 		destination.directory().Close()
 		return baseResolution{}, err
 	}
@@ -80,6 +82,7 @@ func inspectAuthority(destination *destination, suppliedHeader *reservationHeade
 	if suppliedHeader != nil && auth.exact == nil {
 		exact, err := exactPrivateReservation(destination, *suppliedHeader, check)
 		if err != nil {
+			closeInspectedReservation(auth.later)
 			return authority{}, err
 		}
 		auth.exact = exact

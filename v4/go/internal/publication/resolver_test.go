@@ -679,6 +679,7 @@ func TestResolverMalformedMainAndCancelledResolutionChangeNothing(t *testing.T) 
 		if cancelled {
 			cancellation.cancelled.Store(true)
 		}
+		before := countProcessFds(t)
 
 		_, err := resolve(main, nil, resolveModeRemove, cancellation.check)
 		if err == nil {
@@ -690,6 +691,9 @@ func TestResolverMalformedMainAndCancelledResolutionChangeNothing(t *testing.T) 
 		}
 		if codeOf(err) != want {
 			t.Fatalf("problem = %v, want %v", err, want)
+		}
+		if after := countProcessFds(t); after > before {
+			t.Fatalf("error resolution left %d descriptors open", after-before)
 		}
 		artifacts := inspectResolverArtifacts(t, dir, main)
 		if len(artifacts.privateOutputs) != 1 || len(artifacts.privateReservations) != 1 {

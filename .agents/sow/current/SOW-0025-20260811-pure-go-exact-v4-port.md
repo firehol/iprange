@@ -9811,11 +9811,11 @@ Go files (all !windows):
   (require_exact_private)/inspectPrivateOutputExact (creator-only
   access), inspectOutput (lifetime lock, meta pair, digest, double
   proof), mapBootstrap/readBootstrap (bootstrap.OpenMeta
-  ImmutableReader), classify/classifyAccess; the freebsd arms
+  ImmutableReader), classify/classifyOutputAccess; the freebsd arms
   (open_regular_any_link + finish_noreplace_transition) live in
   file_inspection_freebsd.go and the POSIX arms in
   file_inspection_other.go.
-- internal/publication/resolver.go (+503): resolve/resolution/
+- internal/publication/resolver.go (+510): resolve()/resolution (type)/
   dispatch/resolveOther/resolveAbsent/completeAbsent/arm (acquire -
   arm - resume_armed with the unknown/problemed arm classes)/arm
   Failure/resolveDesired (four-value close at scope end like Rust
@@ -9833,14 +9833,14 @@ Go files (all !windows):
   recordCancellation (cleanup-cause equality), desiredResult/
   desiredProblem/publishedOutputResult/desiredState/coordination
   Access/withLater/firstProblem.
-- internal/publication/result_header.go (+80): resultHeaderFor with
+- internal/publication/result_header.go (+86): resultHeaderFor with
   requireResultBinding (directory identity, basename encoding,
   identity kinds).
-- internal/publication/output_resume.go (+38): resumePreparedOutput
+- internal/publication/output_resume.go (+29): resumePreparedOutput
   (PreparedOutput::resume consumes the inspected output).
 - internal/publication/seed.go (+45): reconstructSeed (Seed::
   reconstruct from the header payloads).
-- internal/publication/resolver_test.go (+969, v4work+linux): 22
+- internal/publication/resolver_test.go (+1002, v4work+linux): 22
   tests porting resolver_tests.rs - every pre-main and post-main
   crash state through Complete and Remove, the private state-2
   restore, the unresolvable/conflict/cancelled classes, the supplied
@@ -9919,7 +9919,61 @@ v4work full trees (14 packages ok each), gofmt clean, -race +
 and the six cross-compiles all PASS; the 4 replacement tests plus the
 22 resolver tests pass under v4work.
 
-Next: slice L residue (inspect/remove canonical residue with the
-retained handle and the final coordination-reuse proof); the plan
-after L stays M maintenance, N Publish retrofit + public surface, O
-validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice J fix round (round-1 FAILs)
+
+The slice-J review round at 12d936e returned three FAILs and two
+pending verdicts: performance (Chandrasekhar P2), idioms (Gauss
+P2-1/P2-2/P3), and records (Noether P2/P3); the parity and wire
+verdicts (Goodall, Herschel) were still running when this fix round
+started. All three FAILs are fixed in this round:
+
+- Performance P2 (unpinned heap on the resolver success path): the
+  reconstructed seed now travels by pointer through resolution/
+  dispatch/resolveDesired/resolveOther/resolveAbsent/completeAbsent/
+  abandon instead of being copied to the heap at each arm
+  (base.seed owns the value; the arms borrow it; convention recorded
+  on the resolution type).
+- Idioms P2-1 (mixed close contract): resolve()'s error path now
+  closes only the destination directory. Each arm owns the
+  exact/later/main values and closes them on every terminal path,
+  matching the Rust drop points exactly: resolveDesired and abandon
+  keep their scope-end defers; completeAbsent's reservation defer
+  reads the variable at return time so the post-arm nil transfer
+  prevents a second close after arm's failure owners or
+  resumeArmed/finishPublished already closed the moved fields;
+  resolveOther's requireNoLater and cancelled-synchronize error paths
+  close exact+main where Rust drops them; resolveAbsent's
+  requireNoLater error closes exact+later; and resolve() itself
+  closes exact/later only when inspectMainOutput fails before any
+  arm can run.
+- Idioms P2-2 (authority leak): inspectAuthority closes auth.later
+  when the exactPrivateReservation fallback errors, exactly where
+  Rust drops the Authority value.
+- Idioms P3 (seed reconstruction leak): inspectResolution closes
+  auth.exact/auth.later when Seed::reconstruct fails, exactly where
+  Rust drops the Authority value.
+- Records P2/P3: resolver.go +510 (not +503), result_header.go +86
+  (not +80), resolver_test.go +1002 (not +969), output_resume.go +29
+  (not +38), classifyOutputAccess (not classifyAccess), and
+  resolution is a type, not a function.
+- TestResolverMalformedMainAndCancelledResolutionChangeNothing now
+  pins descriptor stability on both its error paths (fd count before
+  and after each resolve), covering the exact/later closes that the
+  new contract requires of resolve() when no arm runs.
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each), gofmt clean, -race +
+-gcflags=all=-d=checkptr=2 on publication/mapping/live/format, the
+linux/freebsd/darwin publication cross-builds and the freebsd/darwin
+v4work vet, and the 26 resolver + replacement tests (v4work) all
+PASS. GOOS=windows remains out of scope for publication this
+milestone (resolver.go is !windows; the v4work freebsd link machine
+does not build on windows - pre-existing).
+
+Next: slice-J round-2 re-review by all five agents at this fix HEAD,
+then the slice-K review by the same five agents, then slice L
+residue (inspect/remove canonical residue with the retained handle
+and the final coordination-reuse proof); the plan after L stays M
+maintenance, N Publish retrofit + public surface, O validation + gate
++ push.
+

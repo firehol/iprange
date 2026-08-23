@@ -43,8 +43,7 @@ func resolve(path string, supplied *PublicationResult, mode resolveMode, check f
 		return replacementDispatch(base, mode, check)
 	}
 	// base.exact and base.later are owned by this call; every arm of
-	// dispatch closes or consumes them, and the error path closes
-	// them here (Rust drops the resolution value on Err).
+	// dispatch closes or consumes them on every terminal path.
 	main, err := inspectMainOutput(base.destination, base.header, check)
 	if err != nil {
 		closeInspectedReservation(base.exact)
@@ -55,17 +54,12 @@ func resolve(path string, supplied *PublicationResult, mode resolveMode, check f
 	result, err := dispatch(resolution{
 		destination: base.destination,
 		header:      base.header,
-		seed:        base.seed,
+		seed:        &base.seed,
 		exact:       base.exact,
 		later:       base.later,
 		main:        main,
 	}, mode, check)
 	if err != nil {
-		closeInspectedReservation(base.exact)
-		closeInspectedReservation(base.later)
-		if main != nil {
-			_ = main.Close()
-		}
 		base.destination.directory().Close()
 		return PublicationResult{}, resolverProblem(err)
 	}
@@ -87,16 +81,16 @@ func closeInspectedReservation(reservation *inspectedReservation) {
 type resolution struct {
 	destination *destination
 	header      reservationHeader
-	seed        seed
+	seed        *seed
 	exact       *inspectedReservation
 	later       *inspectedReservation
 	main        *inspectedOutput
 }
 
 // dispatch classifies one inspected main and runs the exact arm
-// (Rust dispatch). Each arm takes ownership of the exact/later/main
-// values and closes them on its own terminal paths; on a propagated
-// error the caller (resolve) closes them.
+// (Rust dispatch). Each arm owns the exact/later/main values and
+// closes them on every terminal path, success and error alike
+// (resolve()'s error path only closes the destination directory).
 func dispatch(resolution resolution, mode resolveMode, check func() error) (PublicationResult, error) {
 	switch {
 	case resolution.main != nil && resolution.main.content == outputContentDesired:
@@ -112,12 +106,23 @@ func dispatch(resolution resolution, mode resolveMode, check func() error) (Publ
 // bytes (Rust resolve_other): a synchronize failure is the unprovable
 // outcome with no discard, otherwise the foreign main is preserved
 // and the attempt artifacts are discarded.
-func resolveOther(destination *destination, header reservationHeader, s seed, exact, later *inspectedReservation, main *inspectedOutput, check func() error) (PublicationResult, error) {
+func resolveOther(destination *destination, header reservationHeader, s *seed, exact, later *inspectedReservation, main *inspectedOutput, check func() error) (PublicationResult, error) {
 	if err := requireNoLater(later); err != nil {
+		closeInspectedReservation(exact)
+		closeInspectedReservation(later)
+		if main != nil {
+			_ = main.Close()
+		}
 		return PublicationResult{}, err
 	}
 	if err := synchronize(destination, main, check); err != nil {
 		if isCancelled(err) {
+			// Rust drops the owned exact reservation and inspected
+			// main when resolve_other returns Err.
+			closeInspectedReservation(exact)
+			if main != nil {
+				_ = main.Close()
+			}
 			return PublicationResult{}, err
 		}
 		// Rust drops the owned exact reservation and inspected main
@@ -127,7 +132,7 @@ func resolveOther(destination *destination, header reservationHeader, s seed, ex
 		if main != nil {
 			_ = main.Close()
 		}
-		return outcomeUnknown(s, reservationIdentityOf(header), resolverProblem(err)), nil
+		return outcomeUnknown(*s, reservationIdentityOf(header), resolverProblem(err)), nil
 	}
 	return abandon(destination, header, s, exact, main, DestinationContentOther, check)
 }
@@ -135,8 +140,10 @@ func resolveOther(destination *destination, header reservationHeader, s seed, ex
 // resolveAbsent resolves an absent main (Rust resolve_absent): remove
 // mode discards everything; complete mode requires the exact private
 // output and reservation to resume the attempt.
-func resolveAbsent(destination *destination, header reservationHeader, s seed, exact, later *inspectedReservation, mode resolveMode, check func() error) (PublicationResult, error) {
+func resolveAbsent(destination *destination, header reservationHeader, s *seed, exact, later *inspectedReservation, mode resolveMode, check func() error) (PublicationResult, error) {
 	if err := requireNoLater(later); err != nil {
+		closeInspectedReservation(exact)
+		closeInspectedReservation(later)
 		return PublicationResult{}, err
 	}
 	if mode == resolveModeComplete {
@@ -147,13 +154,15 @@ func resolveAbsent(destination *destination, header reservationHeader, s seed, e
 
 // completeAbsent resumes the interrupted attempt from its exact
 // private output and reservation (Rust complete_absent). The
-// inspected reservation is consumed by arm (the machine closes the
-// owner); the resumed prepared output is closed by this function on
-// every terminal path, exactly where Rust drops it.
-func completeAbsent(destination *destination, header reservationHeader, s seed, reservation *inspectedReservation, check func() error) (PublicationResult, error) {
+// inspected reservation is closed by this function on every error
+// path before arm, then consumed by arm (the machine closes the
+// owner once arm has moved the fields); the resumed prepared output
+// is closed on every terminal path, exactly where Rust drops it.
+func completeAbsent(destination *destination, header reservationHeader, s *seed, reservation *inspectedReservation, check func() error) (result PublicationResult, err error) {
 	if reservation == nil {
 		return PublicationResult{}, unresolvable("completion requires the exact recorded reservation inode")
 	}
+	defer func() { closeInspectedReservation(reservation) }()
 	inspected, err := inspectPrivateOutputExact(destination, header, check)
 	if err != nil {
 		return PublicationResult{}, resolverProblem(err)
@@ -165,21 +174,20 @@ func completeAbsent(destination *destination, header reservationHeader, s seed, 
 	if err != nil {
 		return PublicationResult{}, outputProblem(err)
 	}
+	defer func() { _ = output.Close() }()
 	if err := checkCancellation(check); err != nil {
-		_ = output.Close()
 		return PublicationResult{}, err
 	}
 	reservationIdentity := reservation.identity
 	armed, armFailure := arm(reservation, output)
+	reservation = nil // the machine owns the reservation fields from here
 	if armFailure != nil {
-		_ = output.Close()
 		if armFailure.unknown {
-			return recordCancellation(outcomeUnknown(s, reservationIdentity, armFailure.problem), check), nil
+			return recordCancellation(outcomeUnknown(*s, reservationIdentity, armFailure.problem), check), nil
 		}
 		return PublicationResult{}, armFailure.problem
 	}
-	result := resumeArmed(s, output, armed)
-	_ = output.Close()
+	result = resumeArmed(*s, output, armed)
 	return recordCancellation(result, check), nil
 }
 
@@ -255,7 +263,7 @@ func arm(inspected *inspectedReservation, output *preparedOutput) (armedReservat
 // and any later canonical owner is retained and reported. All four
 // inspected values are closed at the scope end exactly where Rust
 // drops them.
-func resolveDesired(destination *destination, header reservationHeader, s seed, reservation, later *inspectedReservation, main *inspectedOutput, check func() error) (result PublicationResult, err error) {
+func resolveDesired(destination *destination, header reservationHeader, s *seed, reservation, later *inspectedReservation, main *inspectedOutput, check func() error) (result PublicationResult, err error) {
 	defer func() {
 		if main != nil {
 			_ = main.Close()
@@ -277,7 +285,7 @@ func resolveDesired(destination *destination, header reservationHeader, s seed, 
 		if isCancelled(err) {
 			return PublicationResult{}, err
 		}
-		return recordCancellation(outcomeUnknown(s, reservationIdentityOf(header), resolverProblem(err)), check), nil
+		return recordCancellation(outcomeUnknown(*s, reservationIdentityOf(header), resolverProblem(err)), check), nil
 	}
 	private, err = inspectPrivateOutput(destination, header, check)
 	if err != nil {
@@ -288,16 +296,16 @@ func resolveDesired(destination *destination, header reservationHeader, s seed, 
 			return PublicationResult{}, err
 		}
 		cleanupCause := resolverProblem(err)
-		summary := discardRecovered(&s, destination, nil, reservationOwnerOf(reservation))
+		summary := discardRecovered(s, destination, nil, reservationOwnerOf(reservation))
 		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: identityFromEncoded(header.outputIdentity)}, cleanupCause))
 		computed, finalErr := finalLater(destination, header, reservation, later, summary)
 		if finalErr != nil {
-			return recordCancellation(desiredProblem(s, header, summary, finalErr), check), nil
+			return recordCancellation(desiredProblem(*s, header, summary, finalErr), check), nil
 		}
 		if computed != nil && computed != later {
 			defer func() { _ = computed.Close() }()
 		}
-		return recordCancellation(publishedOutputResult(s, summary, cleanupCause, desiredContext{
+		return recordCancellation(publishedOutputResult(*s, summary, cleanupCause, desiredContext{
 			destination: destination, header: header, reservation: reservation, later: computed, main: main,
 		}), check), nil
 	}
@@ -309,15 +317,15 @@ func resolveDesired(destination *destination, header reservationHeader, s seed, 
 		owner := outputOwnerOf(private)
 		privateOwner = &owner
 	}
-	summary := discardRecovered(&s, destination, privateOwner, reservationOwnerOf(reservation))
+	summary := discardRecovered(s, destination, privateOwner, reservationOwnerOf(reservation))
 	computed, finalErr := finalLater(destination, header, reservation, later, summary)
 	if finalErr != nil {
-		return recordCancellation(desiredProblem(s, header, summary, finalErr), check), nil
+		return recordCancellation(desiredProblem(*s, header, summary, finalErr), check), nil
 	}
 	if computed != nil && computed != later {
 		defer func() { _ = computed.Close() }()
 	}
-	return recordCancellation(desiredResult(s, summary, desiredContext{
+	return recordCancellation(desiredResult(*s, summary, desiredContext{
 		destination: destination, header: header, reservation: reservation, later: computed, main: main,
 	}), check), nil
 }
@@ -326,7 +334,7 @@ func resolveDesired(destination *destination, header reservationHeader, s seed, 
 // abandon): the private output and reservation are removed, the
 // destination is re-proved against the classified content, and the
 // result is NotPublished only when every proof holds.
-func abandon(destination *destination, header reservationHeader, s seed, reservation *inspectedReservation, main *inspectedOutput, content DestinationContent, check func() error) (PublicationResult, error) {
+func abandon(destination *destination, header reservationHeader, s *seed, reservation *inspectedReservation, main *inspectedOutput, content DestinationContent, check func() error) (PublicationResult, error) {
 	if reservation != nil {
 		defer func() { _ = reservation.Close() }()
 	}
@@ -348,7 +356,7 @@ func abandon(destination *destination, header reservationHeader, s seed, reserva
 		owner := outputOwnerOf(private)
 		privateOwner = &owner
 	}
-	summary := discardRecovered(&s, destination, privateOwner, reservationOwnerOf(reservation))
+	summary := discardRecovered(s, destination, privateOwner, reservationOwnerOf(reservation))
 	verification := verifyDestination(destination, content, main, summary)
 	if verification == nil {
 		verification = verifyNoLater(destination, reservation, summary)
