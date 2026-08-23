@@ -215,9 +215,13 @@ func resolveDesiredReplacement(base baseResolution, pair replacementPair, mode r
 		}
 		return recordCancellation(outcomeUnknown(base.seed, reservationIdentityOf(base.header), resolverProblem(err)), check), nil
 	}
-	output, foreign := desiredCleanupReplacement(pair.private, base.header)
-	s := base.seed
-	summary := discardRecovered(&s, base.destination, output, reservationOwnerOf(base.exact))
+	owner, removable, foreign := desiredCleanupReplacement(pair.private, base.header)
+	var output *outputOwner
+	if removable {
+		output = &owner
+	}
+	s := &base.seed
+	summary := discardRecovered(s, base.destination, output, reservationOwnerOf(base.exact))
 	if foreign != nil {
 		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: foreign.identity}, conflictProblem("private replacement artifact does not match recorded ownership")))
 	}
@@ -282,7 +286,7 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 		}
 		return recordCancellation(outcomeUnknown(base.seed, reservationIdentityOf(base.header), resolverProblem(err)), check), nil
 	}
-	output, err := removableReplacementOutput(pair.private, base.header)
+	owner, removable, err := removableReplacementOutput(pair.private, base.header)
 	if err != nil {
 		pair.main.closeIfNonNil()
 		pair.private.closeIfNonNil()
@@ -290,8 +294,12 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 		closeInspectedReservation(base.later)
 		return PublicationResult{}, err
 	}
-	s := base.seed
-	summary := discardRecovered(&s, base.destination, output, reservationOwnerOf(base.exact))
+	var output *outputOwner
+	if removable {
+		output = &owner
+	}
+	s := &base.seed
+	summary := discardRecovered(s, base.destination, output, reservationOwnerOf(base.exact))
 	verified := resolverProblem(pair.main.verify(base.destination, noopCheck))
 	cause := verified
 	if cause == nil {
@@ -325,35 +333,34 @@ func resolveNotDesiredReplacement(base baseResolution, pair replacementPair, con
 // removableReplacementOutput keeps the prepared-output owner only
 // when the private artifact is exactly the recorded output (Rust
 // removable_output: any other private artifact is the conflict
-// class).
-func removableReplacementOutput(private *inspectedReplacement, header reservationHeader) (*outputOwner, error) {
+// class). The owner returns by value; the caller takes its address
+// only within its own frame.
+func removableReplacementOutput(private *inspectedReplacement, header reservationHeader) (outputOwner, bool, error) {
 	if private == nil {
-		return nil, nil
+		return outputOwner{}, false, nil
 	}
 	if private.content == replacementContentDesired && reservationIdentityBytes(private.identity) == header.outputIdentity {
-		owner := replacementOwnerOf(private)
-		return &owner, nil
+		return replacementOwnerOf(private), true, nil
 	}
-	return nil, conflictProblem("private replacement artifact does not match the prepared output")
+	return outputOwner{}, false, conflictProblem("private replacement artifact does not match the prepared output")
 }
 
 // desiredCleanupReplacement separates the recorded private output
 // from a foreign private residue (Rust desired_cleanup: the recorded
 // output or the recorded previous inode is removed; anything else is
-// left as residue with its artifact).
-func desiredCleanupReplacement(private *inspectedReplacement, header reservationHeader) (*outputOwner, *inspectedReplacement) {
+// left as residue with its artifact). The owner returns by value; the
+// caller takes its address only within its own frame.
+func desiredCleanupReplacement(private *inspectedReplacement, header reservationHeader) (outputOwner, bool, *inspectedReplacement) {
 	if private == nil {
-		return nil, nil
+		return outputOwner{}, false, nil
 	}
 	if private.content == replacementContentDesired && reservationIdentityBytes(private.identity) == header.outputIdentity {
-		owner := replacementOwnerOf(private)
-		return &owner, nil
+		return replacementOwnerOf(private), true, nil
 	}
 	if private.content == replacementContentPrevious && header.previousPresent && reservationIdentityBytes(private.identity) == header.previous.identity {
-		owner := replacementOwnerOf(private)
-		return &owner, nil
+		return replacementOwnerOf(private), true, nil
 	}
-	return nil, private
+	return outputOwner{}, false, private
 }
 
 // replacementOwnerOf builds the cleanup owner of one inspected

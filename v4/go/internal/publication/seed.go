@@ -102,6 +102,7 @@ func captureSeed(output *preparedOutput) seed {
 // portable-identity pointer of the shared artifact shape stays on the
 // failure path only, exactly where the ledger is pushed.
 func (s *seed) artifact(kind ArtifactKind, slot nameSlot, identity identityOptional, problem error) CleanupArtifact {
+	security := s.creationSecurity
 	var local *LocalFileIdentity
 	if identity.present {
 		converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(&identity.identity))
@@ -114,7 +115,7 @@ func (s *seed) artifact(kind ArtifactKind, slot nameSlot, identity identityOptio
 		BasenameEncoding:  basenameEncodingKind,
 		Basename:          s.takeName(slot),
 		Identity:          local,
-		CreationSecurity:  &s.creationSecurity,
+		CreationSecurity:  &security,
 		UnpublishedTail:   nil,
 		Error:             problem,
 	}

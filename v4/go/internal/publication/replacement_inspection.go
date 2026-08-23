@@ -37,18 +37,19 @@ const (
 // absent until the entry is finished. Close releases the mapped view
 // and the descriptor exactly where Rust drops the value.
 type inspectedReplacement struct {
-	name       string
-	file       *os.File
-	mapping    *mapping.Mapping
-	identity   live.FileIdentity
-	meta       *format.Meta
-	byteLength uint64
-	sha512     [64]byte
-	content    replacementContent
-	location   outputLocation
-	access     AccessPolicy
-	attemptID  [16]byte
-	locked     bool
+	name        string
+	file        *os.File
+	mapping     *mapping.Mapping
+	identity    live.FileIdentity
+	meta        format.Meta
+	metaPresent bool
+	byteLength  uint64
+	sha512      [64]byte
+	content     replacementContent
+	location    outputLocation
+	access      AccessPolicy
+	attemptID   [16]byte
+	locked      bool
 }
 
 // Close releases the inspected replacement resources (Rust drop).
@@ -245,7 +246,7 @@ func inspectOneReplacement(destination *destination, header reservationHeader, e
 		_ = entry.Close()
 		return nil, outputProblem(err)
 	}
-	meta, err := desiredReplacementMeta(mapped, byteLength, sha512, header)
+	meta, metaPresent, err := desiredReplacementMeta(mapped, byteLength, sha512, header)
 	if err != nil {
 		_ = mapped.Close()
 		_ = entry.Close()
@@ -255,6 +256,7 @@ func inspectOneReplacement(destination *destination, header reservationHeader, e
 	entry.byteLength = byteLength
 	entry.sha512 = sha512
 	entry.meta = meta
+	entry.metaPresent = metaPresent
 	entry.content = classifyReplacementEntry(entry, header)
 	entry.access = classifyReplacementAccess(entry, header)
 	if err := verifyStableReplacement(destination, entry); err != nil {
@@ -267,36 +269,36 @@ func inspectOneReplacement(destination *destination, header reservationHeader, e
 // desiredReplacementMeta derives the selected meta of one entry only
 // when its length and digest match the record and the meta identity
 // matches (Rust desired_meta: everything else stays absent).
-func desiredReplacementMeta(mapped *mapping.Mapping, byteLength uint64, sha512 [64]byte, header reservationHeader) (*format.Meta, error) {
+func desiredReplacementMeta(mapped *mapping.Mapping, byteLength uint64, sha512 [64]byte, header reservationHeader) (format.Meta, bool, error) {
 	if byteLength != header.outputByteLength || sha512 != header.outputSHA512 {
-		return nil, nil
+		return format.Meta{}, false, nil
 	}
 	if !reservationGeometryValid(byteLength) {
-		return nil, nil
+		return format.Meta{}, false, nil
 	}
 	page0, err := mapped.Page(0)
 	if err != nil {
-		return nil, resolverProblem(err)
+		return format.Meta{}, false, resolverProblem(err)
 	}
 	page1, err := mapped.Page(1)
 	if err != nil {
-		return nil, resolverProblem(err)
+		return format.Meta{}, false, resolverProblem(err)
 	}
 	meta, err := bootstrap.OpenMeta(page0, page1, byteLength, bootstrap.ModeImmutableReader)
 	if err != nil {
-		return nil, nil
+		return format.Meta{}, false, nil
 	}
 	if meta.DatabaseID != header.databaseID || meta.TxnID != header.transactionID || meta.CommitNonce != header.commitNonce {
-		return nil, nil
+		return format.Meta{}, false, nil
 	}
-	return &meta, nil
+	return meta, true, nil
 }
 
 // classifyReplacementEntry classifies one finished entry (Rust
 // classify: the selected meta is Desired, an exact previous-evidence
 // match is Previous, everything else is Other).
 func classifyReplacementEntry(entry *inspectedReplacement, header reservationHeader) replacementContent {
-	if entry.meta != nil {
+	if entry.metaPresent {
 		return replacementContentDesired
 	}
 	if !header.previousPresent {

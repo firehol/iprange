@@ -175,7 +175,7 @@ func resumePreparedOutput(destination *destination, header reservationHeader, in
 // (which owns PreviousMain). On an error here the inspected artifact
 // is closed and the previous main stays owned by the caller.
 func resumePreparedOutputReplacement(destination *destination, header reservationHeader, inspected *inspectedReplacement, previous *previousMain) (*preparedOutput, error) {
-	if inspected.meta == nil || inspected.mapping == nil {
+	if !inspected.metaPresent || inspected.mapping == nil {
 		_ = inspected.Close()
 		return nil, conflictProblem("finished replacement output has no selected metadata")
 	}
@@ -193,7 +193,7 @@ func resumePreparedOutputReplacement(destination *destination, header reservatio
 		},
 		file:       inspected.file,
 		mapping:    inspected.mapping,
-		meta:       *inspected.meta,
+		meta:       inspected.meta,
 		byteLength: inspected.byteLength,
 		sha512:     inspected.sha512,
 		policy:     header.policy,

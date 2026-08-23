@@ -66,11 +66,15 @@ func TestAttemptPostBoundarySuccessAllocatesNoHeap(t *testing.T) {
 	// RequireAbsent/UnlinkExact/RenameNoReplace probes and the
 	// Fgetxattr attribute-name copies), a rename boundary class, or
 	// the portable result plumbing. Escape analysis shows zero
-	// machine-logic escapes on the success path (the measured 58 has
+	// machine-logic escapes on the success path (the measured 57 has
 	// no unaccounted class; the machine adds nothing on top of the
 	// boundary, matching Rust's zero modulo the x/sys string
-	// conversion convention recorded in slices F/G/H).
-	if minimum != 58 {
-		t.Fatalf("fromPrivate success path allocates %d objects (min of %d windows), want 58", minimum, attemptPinWindows)
+	// conversion convention recorded in slices F/G/H; the 58-to-57
+	// step came from the seed artifact builder copying the creation
+	// security out of the seed instead of borrowing it, so the
+	// observed not-published artifact no longer forces the seed to
+	// the heap).
+	if minimum != 57 {
+		t.Fatalf("fromPrivate success path allocates %d objects (min of %d windows), want 57", minimum, attemptPinWindows)
 	}
 }

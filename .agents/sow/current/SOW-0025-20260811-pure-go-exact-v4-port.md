@@ -9954,12 +9954,34 @@ P3-3 the double-pointer inspection helpers. Fixes in this round:
   inspectedReplacement pointers (nil-checked) instead of
   double pointers that were only dereferenced.
 
+The performance review (round-2 carry-over from round-1) added three
+P2s, all fixed in this round:
+
+- P2: the replacement arms copied base.seed to the heap on every
+  call. The arms now borrow &base.seed (the slice-J convention), and
+  the seed artifact builder copies the creation security out of the
+  seed instead of borrowing it, so no replacement arm moves the seed
+  or the base resolution to the heap (verified with -gcflags=-m=2:
+  the only remaining seed-adjacent move is the 48-byte security copy
+  on artifact paths, the accepted pre-existing class; the
+  TestAttemptPostBoundarySuccessAllocatesNoHeap pin dropped 58 to 57
+  objects, causal link proven by reverting the builder).
+- P2: removableReplacementOutput/desiredCleanupReplacement returned
+  *outputOwner (heap escape). They now return the owner by value with
+  a presence flag; the callers take the address inside their own
+  frame (the slice-H value-owner pattern).
+- P2: desiredReplacementMeta returned *format.Meta (heap escape).
+  inspectedReplacement now stores the meta by value with a presence
+  flag, matching inspectedOutput.
+
 Validation (all under nice): go build ./..., go vet ./..., plain and
 v4work full trees (14 packages ok each), gofmt clean, -race +
 -gcflags=all=-d=checkptr=2 on publication/mapping/live/format, the
 linux/freebsd/darwin publication cross-builds, and the 26 resolver +
 replacement tests (v4work) all PASS; the new descriptor pin fails
-without the previous-close fix and passes with it.
+without the previous-close fix and passes with it; the allocation pin
+fails without the artifact security-copy fix (58 objects) and passes
+with it (57).
 
 
 ### Status (2026-08-24) - chunk 4-8 slice J fix round (round-1 FAILs)
