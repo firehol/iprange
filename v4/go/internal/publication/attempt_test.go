@@ -264,6 +264,44 @@ func TestAttemptState1FailureIsNotPublishedAndCleansBothArtifacts(t *testing.T) 
 	}
 }
 
+// TestAttemptState1FailureReleasesTheDraftFiles pins the Rust drop of
+// the draft owner on the pre-lock failure arm: the machine closes the
+// draft file descriptor and mapped view after the discard, so no fd
+// survives the failed attempt (Go has no drop; the machine closes
+// explicitly). Descriptor accounting runs only around the machine
+// call, after the fixture and destination are fully bound.
+func TestAttemptState1FailureReleasesTheDraftFiles(t *testing.T) {
+	dir := t.TempDir()
+	prepared, _ := attemptTestPrepared(t, dir, "result.v4")
+	defer prepared.Close()
+	testBoundDestination(t, dir)
+
+	before := countProcessFds(t)
+	result, failure := publishWithObserver(prepared, nil, attemptTestCheckpoint(
+		map[attemptPoint]error{attemptPointState1Selected: attemptTestInjected()}, nil), false, noopAttemptObserver)
+	if failure != nil {
+		t.Fatalf("state1 failure returned a preparation failure: %v", failure)
+	}
+	if result.Publication != PublicationNotPublished {
+		t.Fatalf("publication = %v, want not published", result.Publication)
+	}
+	if after := countProcessFds(t); after > before {
+		t.Fatalf("state1 failure left %d file descriptors open", after-before)
+	}
+}
+
+// countProcessFds returns the open descriptor count of this process
+// (Linux /proc/self/fd; the tests in this package run sequentially,
+// so the count is stable across a single machine call).
+func countProcessFds(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read /proc/self/fd: %v", err)
+	}
+	return len(entries)
+}
+
 func TestAttemptAcquiredState1FailureRetiresTheCanonicalReservation(t *testing.T) {
 	dir := t.TempDir()
 	prepared, _ := attemptTestPrepared(t, dir, "result.v4")

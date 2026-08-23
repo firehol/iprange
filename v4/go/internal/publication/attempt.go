@@ -129,10 +129,14 @@ func publishWithObserver(output *preparedOutput, check func() error, checkpoint 
 				panic("selected state 1 has reservation identity")
 			}
 			owner := draftOwner(failure.owner)
-			return notPublished(s, output, owner, *failure.owner.identity, cause, checkpoint), nil
+			result := notPublished(s, output, owner, *failure.owner.identity, cause, checkpoint)
+			_ = failure.owner.Close()
+			return result, nil
 		}
 		owner := draftOwner(failure.owner)
-		return PublicationResult{}, preparation(s, output, &owner, cause, checkpoint)
+		failureResult := preparation(s, output, &owner, cause, checkpoint)
+		_ = failure.owner.Close()
+		return PublicationResult{}, failureResult
 	}
 	return fromPrivate(s, output, *reservation, check, checkpoint, observe, observer)
 }
