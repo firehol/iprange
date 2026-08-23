@@ -8,7 +8,7 @@ are not compatibility inputs.
 ## Corpus
 
 `cases.json` is the language-neutral semantic manifest. The corpus contains
-nine compact immutable snapshots produced through the public writers of both
+eleven compact immutable snapshots produced through the public writers of both
 implementations. The Rust-produced files come from the public Rust live writer
 and public snapshot operation; the Go-produced files come from the public Go
 writer (`v4/go` `Create`/`OpenWriter`/`BeginDirect`/`ProjectHistory`/`Commit`,
@@ -33,7 +33,14 @@ no snapshot operation yet - Go writes the compact main file directly):
   Go public `Writer.ProjectHistory` workflow from 1000 singleton last-seen
   points, projected through three last-seen feeds (cutoffs 9/10/11 over
   `last_seen = 10 + index % 3`), pinning the Rust `one_source_pass` vector and
-  window semantics in both readers.
+  window semantics in both readers;
+- `go/structured-ipv4.iprdb`: the same typed network enrichment, named threat
+  feeds, arrival-order overwrites, clearing, lazy membership, and exact
+  metadata as the Rust structured fixture, produced by the Go structured
+  transaction (`BeginStructuredTransaction`); and
+- `go/structured-ipv4-nothreat.iprdb`: structured values without threat feeds
+  (membership id zero) produced by the Go writer, pinning the canonical absence
+  result in both readers.
 
 The Rust test actually opens and explicitly validates every listed file. It
 compares every direct or structured range, typed enrichment field, feed
@@ -62,20 +69,23 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 ## Cross-language gate
 
 Both producer sets are now committed, and each reader opens and semantically
-verifies both producer sets (Rust conformance opens all nine files; the Go
+verifies both producer sets (Rust conformance opens all eleven files; the Go
 conformance inventory lists each fixture file with its producer and the Go
 reader verifies both sets).
 
 - Mixed subprocess smoke gates run the same cross-open verdicts from a
   fresh process: `v4/go/subprocess_cross_open_test.go` spawns the Go test
-  binary as a child that opens the Rust fixture, the Go historical fixtures,
-  and runs one full create-commit-read-back roundtrip;
+  binary as a child that opens `rust/direct-ipv4.iprdb`,
+  `go/direct-ipv4.iprdb`, and `go/history-membership-ipv4.iprdb`, and runs
+  one full create-commit-read-back roundtrip;
   `v4/rust/iprange-livedb/tests/mixed_subprocess.rs` spawns the Rust test
-  binary as a child that opens `rust/direct-ipv4.iprdb`, `go/direct-ipv4.iprdb`,
-  and the Go history fixture with `ImmutableReader`, checking the three
-  last-seen feed indexes and the 1000-range tree. The full manifest
-  verdicts (every range, metadata state, cardinality, and invalid
-  mutation) are proven in-process by the Go and Rust conformance suites.
+  binary as a child that opens `rust/direct-ipv4.iprdb`,
+  `go/direct-ipv4.iprdb`, the Go history fixture, and both Go structured
+  fixtures with `ImmutableReader`, checking the last-seen feed indexes, the
+  1000-range tree, and one typed enrichment lookup per structured fixture.
+  The full manifest verdicts (every range, metadata state, cardinality, and
+  invalid mutation) are proven in-process by the Go and Rust conformance
+  suites.
 - Malformed transformations must produce equivalent public errors (the
   invalid-cases checks in both conformance suites cover this).
 - Byte-identical files are not required. Page placement, mutable tree shape,

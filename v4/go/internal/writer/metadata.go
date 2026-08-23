@@ -333,3 +333,16 @@ func (b *OutputBuilder) WriteMetadata(input []byte, maxHeapBytes uint64) error {
 		return nil
 	})
 }
+
+// SetMetadata stages one exact metadata replacement through the bound
+// edit (Rust WriterEdit::set_metadata): the transaction reuses its
+// draft-lifetime edit instead of allocating a fresh store per call.
+func (e *WriterEdit) SetMetadata(input []byte) (bool, error) {
+	return e.store.SetMetadata(input)
+}
+
+// ClearMetadata stages metadata absence through the bound edit (Rust
+// WriterEdit::clear_metadata).
+func (e *WriterEdit) ClearMetadata() (bool, error) {
+	return e.store.ClearMetadata()
+}

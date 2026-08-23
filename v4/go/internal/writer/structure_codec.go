@@ -60,7 +60,7 @@ func newStructurePayload(source []byte) (structurePayload, error) {
 type structurePayloadCodec interface {
 	kind() uint8
 	payloadSize() int
-	validate(payload []byte) error
+	validate(payload structurePayload) error
 	membershipID(payload *structurePayload) uint32
 	isAbsent(payload *structurePayload) bool
 }
@@ -96,16 +96,16 @@ func (structureNetworkEnrichmentV1) payloadSize() int {
 // validate mirrors the Rust PayloadCodec::validate on one canonical
 // 32-byte payload: unknown flag bits, an absent location with nonzero
 // coordinates, and out-of-range present coordinates are all corruption.
-func (structureNetworkEnrichmentV1) validate(payload []byte) error {
-	if len(payload) != format.NetworkEnrichmentV1PayloadSize {
+func (structureNetworkEnrichmentV1) validate(payload structurePayload) error {
+	if int(payload.length) != format.NetworkEnrichmentV1PayloadSize {
 		return corrupt("network enrichment payload length is invalid")
 	}
-	flags := format.U32(payload[enrichmentFlagsOffset : enrichmentFlagsOffset+4])
+	flags := format.U32(payload.bytes[enrichmentFlagsOffset : enrichmentFlagsOffset+4])
 	if flags & ^format.NetworkEnrichmentV1HasLocation != 0 {
 		return corrupt("network enrichment payload flags are invalid")
 	}
-	latitude := int32(format.U32(payload[enrichmentLatOffset : enrichmentLatOffset+4]))
-	longitude := int32(format.U32(payload[enrichmentLonOffset : enrichmentLonOffset+4]))
+	latitude := int32(format.U32(payload.bytes[enrichmentLatOffset : enrichmentLatOffset+4]))
+	longitude := int32(format.U32(payload.bytes[enrichmentLonOffset : enrichmentLonOffset+4]))
 	if flags == 0 {
 		if latitude != 0 || longitude != 0 {
 			return corrupt("absent network location has nonzero coordinates")
@@ -162,8 +162,7 @@ func encodeNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membershipID ui
 // first so a corrupt stored payload is refused like any intern input,
 // and every other byte is preserved exactly.
 func (structureNetworkEnrichmentV1) withMembership(payload structurePayload, membershipID uint32) (structurePayload, error) {
-	codec := structureNetworkEnrichmentV1{}
-	if err := codec.validate(payload.Slice()); err != nil {
+	if err := (structureNetworkEnrichmentV1{}).validate(payload); err != nil {
 		return structurePayload{}, err
 	}
 	var bytes [format.NetworkEnrichmentV1PayloadSize]byte
@@ -175,7 +174,7 @@ func (structureNetworkEnrichmentV1) withMembership(payload structurePayload, mem
 // structurePayloadDigest is the SHA-256 structure identity (Rust
 // payload_digest): the "IPR4STRUCT" domain prefix, the structure kind, the
 // little-endian payload length, and the canonical payload bytes.
-func structurePayloadDigest(codec structurePayloadCodec, payload *structurePayload) ([32]byte, error) {
+func structurePayloadDigest[C structurePayloadCodec](codec C, payload *structurePayload) ([32]byte, error) {
 	if uint64(payload.length) > 0xFFFF {
 		return [32]byte{}, invalid("structure payload is too large")
 	}
@@ -213,7 +212,7 @@ func (e structureEncoded) Slice() []byte { return e.bytes[:e.length] }
 // encodeStructureRecord builds the ID-tree record for one structure entry
 // (Rust codec::encode): length, zero reserved, id, zero refcount, digest,
 // payload.
-func encodeStructureRecord(codec structurePayloadCodec, id uint32, digest [32]byte, payload *structurePayload) (structureEncoded, error) {
+func encodeStructureRecord[C structurePayloadCodec](codec C, id uint32, digest [32]byte, payload *structurePayload) (structureEncoded, error) {
 	if err := requireStructurePayload(codec, payload); err != nil {
 		return structureEncoded{}, err
 	}
@@ -232,18 +231,18 @@ func encodeStructureRecord(codec structurePayloadCodec, id uint32, digest [32]by
 
 // requireStructurePayload mirrors codec.rs require_payload: the payload
 // must be exactly the registry size and pass the typed validation.
-func requireStructurePayload(codec structurePayloadCodec, payload *structurePayload) error {
+func requireStructurePayload[C structurePayloadCodec](codec C, payload *structurePayload) error {
 	if int(payload.length) != codec.payloadSize() || codec.payloadSize() > structureMaxPayloadSize {
 		return invalid("structure payload does not match its hardcoded kind")
 	}
-	return codec.validate(payload.Slice())
+	return codec.validate(*payload)
 }
 
 // decodeStructureRecord validates one structure record cell and returns
 // the canonical view (Rust codec::decode_record + payload_source): the
 // cell length and stored length field must be the exact record size, the
 // reserved bytes zero, the id nonzero, and the payload typed-valid.
-func decodeStructureRecord(codec structurePayloadCodec, cell []byte) (structureRecord, error) {
+func decodeStructureRecord[C structurePayloadCodec](codec C, cell []byte) (structureRecord, error) {
 	expected := structurePayloadOffset + codec.payloadSize()
 	if len(cell) != expected ||
 		binary.LittleEndian.Uint16(cell[structureLengthOffset:]) != uint16(expected) ||
@@ -254,12 +253,12 @@ func decodeStructureRecord(codec structurePayloadCodec, cell []byte) (structureR
 	if id == 0 {
 		return structureRecord{}, corrupt("structure dictionary contains ID zero")
 	}
-	if err := codec.validate(cell[structurePayloadOffset:expected]); err != nil {
-		return structureRecord{}, err
-	}
 	var payload structurePayload
 	payload.length = uint16(codec.payloadSize())
 	copy(payload.bytes[:], cell[structurePayloadOffset:expected])
+	if err := codec.validate(payload); err != nil {
+		return structureRecord{}, err
+	}
 	var digest [32]byte
 	copy(digest[:], cell[structureDigestOffset:structurePayloadOffset])
 	return structureRecord{

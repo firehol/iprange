@@ -42,6 +42,68 @@ Recorded as Review Process below.
 
 Status: in-progress
 
+### Status (2026-08-23) - slice C review round 1: five-aspect FAILs fixed on the working tree
+
+The five-aspect slice-C review round (Meitner Rust parity, Anscombe Go
+idioms, Harvey performance, Newton wire/integrity, Aristotle APIs/docs)
+returned: Newton PASS; Meitner, Anscombe, Harvey, Aristotle FAIL. Every
+finding is fixed and verified on the working tree; the full battery is
+green again under nice:
+
+- P1 (Harvey) - internStructure interface escape: the shape-stenciled
+  decodeStructureRecord payload escaped through the codec validate
+  dictionary call (measured 96 B/op, 2 allocs/op before the slice-C
+  generics, 48 B/op 1 alloc/op after, Rust 0). The payload validate now
+  takes the payload by value, so no decode local has its address taken:
+  0 B/op, 0 allocs/op on the dedup path. Permanent pin added
+  (TestSliceCStructureInternZeroAlloc, writer package).
+- P2 (Harvey) - per-op Mutate allocations: the transaction now binds one
+  WriterEdit at begin (t.edit) and every operation routes through it,
+  including metadata staging (WriterEdit.SetMetadata/ClearMetadata
+  passthroughs), so no operation allocates a DraftStore or closure.
+- P2 (Anscombe + Harvey) - assignment input family: inputV4/inputV6 are
+  built with their literal families (Rust typed assignment inputs), so
+  an IPv4 database carries no dead 256 KiB IPv6 locator.
+- P2 (Meitner F-1 + Aristotle) - begin guard order: now the Rust exact
+  sequence (closed-writer probe, structure-kind outer guard,
+  cancellation, healthy, value-kind inner guard); a fired token on a
+  non-structured database reports WrongStructureKind, not Cancelled
+  (pinned in TestPublicStructuredTransactionSurface).
+- P2 (Meitner F-2) - zero-handle MembershipRef mapping: only the literal
+  zero MembershipRef is None; EmptyMembership and every other
+  transaction-produced reference validate as Some, so a stale or
+  foreign empty-handle ref is refused (pinned in
+  TestPublicStructuredTransactionStaleEmptyMembership).
+- P2 (Meitner F-3) - inter-drain checkpoint: PrepareWithCheckpoint now
+  checkpoints between the structure and membership drains (Rust
+  draft_store.rs:317).
+- P3 (Meitner F-4) - pre-mutate checkOrAbort removed from
+  intern/assign; the post-mutate check stays (Rust parity).
+- P3 (Meitner F-5) - the delete-feed transform closure no longer checks
+  per cell; removeFeedFromStructure checks once per present cell (Rust
+  draft_store/structured.rs parity).
+- P3 (Meitner F-6) - DeleteFeed epoch overflow now checks after mutate
+  and checkOrAbort (Rust invalidate_memberships order).
+- P3 (Anscombe) - single exported StructureHandle type (internal
+  structureHandle double type removed); all 25 structurePayloadCodec
+  functions converted to generics.
+- P3 (Aristotle) - conformance README: corpus count 9 -> 11, the two
+  Go structured fixtures listed, mixed-subprocess wording updated; the
+  slice-C-implemented status entry no longer uses hidden-context
+  phrasing.
+- P3 (Aristotle) - the surface-test doc comment now states the actual
+  coverage: the value-kind inner guard is unreachable through open
+  because bootstrap refuses every kind combination that could carry a
+  structure kind without the structured value kind (Go
+  ValidateKindInvariants, Rust bootstrap.rs KindInvariant), so the
+  guard is Rust-parity defense and the wrong-kind open class is
+  FormatInvalid, pinned by the open tests.
+- Full battery green under nice: build, gofmt clean, vet, plain/v4work
+  tests, race, race+v4work, checkptr=2, six cross-compiles, Rust
+  conformance, Rust mixed-subprocess, Go subprocess cross-open.
+- Next: commit this round, send the delta to the four FAIL reviewers,
+  close slice C only when all five aspects PASS, then slice D.
+
 ### Status (2026-08-23) - slice B gated PASS: all five aspects green on 948aa93
 
 Re-review round 2 closed: Meitner (Rust parity), Anscombe (Go idioms),
@@ -72,8 +134,9 @@ PASS at HEAD 948aa93, after the residue fixes committed at f397ebe and
 
 Slice C (the internal/writer structured apply and the public
 StructuredTransaction) is implemented and green; the close gate (five
-aspects on this delta) is next. Committed scope at e04750f + this
-working tree:
+aspects on this delta) is next. The implementation is committed at
+8bb1daf; the review-fix round below is the current working tree on top
+of it:
 
 - New public surface (v4/go/structured_transaction_public.go): the
   advanced transaction over a clean writer (Rust live_writer/structured.rs

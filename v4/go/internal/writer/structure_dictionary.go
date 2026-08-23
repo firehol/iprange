@@ -42,30 +42,30 @@ func structureIDExhausted() error {
 // record when the payload is new (Rust structured_value::intern): typed
 // validation first, then the digest lookup, then the lowest free ID and
 // both tree records.
-func internStructure(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, payload structurePayload) (structureInterned, error) {
+func internStructure[C structurePayloadCodec](codec C, store tree.RetiringStore, state *structureState, payload *structurePayload) (structureInterned, error) {
 	work.StructureIntern(1)
-	if err := codec.validate(payload.Slice()); err != nil {
+	if err := codec.validate(*payload); err != nil {
 		return structureInterned{}, err
 	}
-	membershipID := codec.membershipID(&payload)
-	if codec.isAbsent(&payload) {
+	membershipID := codec.membershipID(payload)
+	if codec.isAbsent(payload) {
 		return structureInterned{id: 0, membershipID: 0, created: false}, nil
 	}
-	digest, err := structurePayloadDigest(codec, &payload)
+	digest, err := structurePayloadDigest(codec, payload)
 	if err != nil {
 		return structureInterned{}, err
 	}
-	if id, found, err := findEqualStructure(codec, store, state, &payload, digest); err != nil {
+	if id, found, err := findEqualStructure(codec, store, state, payload, digest); err != nil {
 		return structureInterned{}, err
 	} else if found {
 		return structureInterned{id: id, membershipID: membershipID, created: false}, nil
 	}
-	return insertNewStructure(codec, store, state, &payload, digest, membershipID)
+	return insertNewStructure(codec, store, state, payload, digest, membershipID)
 }
 
 // insertNewStructure allocates the lowest free ID and inserts both tree
 // records (Rust insert_new).
-func insertNewStructure(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, payload *structurePayload, digest [32]byte, membershipID uint32) (structureInterned, error) {
+func insertNewStructure[C structurePayloadCodec](codec C, store tree.RetiringStore, state *structureState, payload *structurePayload, digest [32]byte, membershipID uint32) (structureInterned, error) {
 	id, err := bitmap.AllocateLowestID(store, &state.usedRoot, &state.idLimit, state.entryCount,
 		bitmap.KindStructure, structureIDExhausted)
 	if err != nil {
@@ -110,7 +110,7 @@ func insertStructureHashRecord(store tree.RetiringStore, codec tree.Codec[struct
 // findEqualStructure searches the hash tree for an equal payload (Rust
 // find_equal): at_or_after over (digest, id), then the record's exact
 // payload Comparison.
-func findEqualStructure(codec structurePayloadCodec, store tree.Store, state *structureState, payload *structurePayload, digest [32]byte) (uint32, bool, error) {
+func findEqualStructure[C structurePayloadCodec](codec C, store tree.Store, state *structureState, payload *structurePayload, digest [32]byte) (uint32, bool, error) {
 	if state.hashRoot == 0 {
 		return 0, false, nil
 	}
@@ -150,7 +150,7 @@ func findEqualStructure(codec structurePayloadCodec, store tree.Store, state *st
 // references, so records never leave the dictionary there; the deletion
 // contract mirrors the authority and is exercised by the dictionary
 // tests.
-func applyStructureDelta(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, id uint32, change int64) (uint32, error) {
+func applyStructureDelta[C structurePayloadCodec](codec C, store tree.RetiringStore, state *structureState, id uint32, change int64) (uint32, error) {
 	record, deleted, err := structureTableChangeRefcount(codec, store, &state.idRoot, state.idLimit, id, change)
 	if err != nil {
 		return 0, err

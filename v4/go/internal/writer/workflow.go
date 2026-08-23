@@ -179,22 +179,21 @@ func (e *WriterEdit) FinishDirectWorkflow(check func() error) error {
 // optional threat membership (Rust
 // WriterEdit::intern_network_enrichment_v1).
 func (e *WriterEdit) InternNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membership MembershipHandle) (StructureHandle, error) {
-	handle, err := e.store.internNetworkEnrichmentV1(value, membership)
-	return StructureHandle(handle), err
+	return e.store.internNetworkEnrichmentV1(value, membership)
 }
 
 // AssignStructureInputV4 assigns one structured IPv4 range through the
 // transaction assignment input (Rust
 // WriterEdit::assign_structure_input_v4).
 func (e *WriterEdit) AssignStructureInputV4(from, to uint32, structure StructureHandle, input *AssignmentInput) (bool, error) {
-	return e.store.assignStructureInputV4(from, to, structureHandle(structure), (*privateInput)(input))
+	return e.store.assignStructureInputV4(from, to, structure, (*privateInput)(input))
 }
 
 // AssignStructureInputV6 assigns one structured IPv6 range through the
 // transaction assignment input (Rust
 // WriterEdit::assign_structure_input_v6).
 func (e *WriterEdit) AssignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *AssignmentInput) (bool, error) {
-	return e.store.assignStructureInputV6(fromHi, fromLo, toHi, toLo, structureHandle(structure), (*privateInput)(input))
+	return e.store.assignStructureInputV6(fromHi, fromLo, toHi, toLo, structure, (*privateInput)(input))
 }
 
 // DeleteCurrentStructuredFeed deletes one feed and removes it from every

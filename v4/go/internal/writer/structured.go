@@ -86,7 +86,7 @@ func (b *OutputBuilder) internNetworkEnrichmentV1(value format.NetworkEnrichment
 		return 0, err
 	}
 	state := b.structureState()
-	interned, err := internStructure(structureNetworkEnrichmentV1{}, b, &state, payload)
+	interned, err := internStructure(structureNetworkEnrichmentV1{}, b, &state, &payload)
 	if err != nil {
 		return 0, err
 	}

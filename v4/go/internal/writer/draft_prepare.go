@@ -45,6 +45,14 @@ func (s *DraftStore) PrepareWithCheckpoint(checkpoint func() error) error {
 	if err := s.finishStructureDeltasWithCheckpoint(structureCheck); err != nil {
 		return err
 	}
+	// The Rust sequence checkpoints between the structure and membership
+	// drains (draft_store.rs:317) so a token firing between the two is
+	// observed before the membership drain runs.
+	if checkpoint != nil {
+		if err := checkpoint(); err != nil {
+			return err
+		}
+	}
 	// finish_membership_deltas: drain and apply the buffered refcount
 	// deltas of membership and structured drafts (Rust
 	// prepare_with_checkpoint threads the caller checkpoint through the

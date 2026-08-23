@@ -12,6 +12,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // structureNetCodec is the registry codec under test.
@@ -27,6 +28,13 @@ func structureTestState() structureState {
 // payload(bytes) with TestCodec payloads: the first bytes name the value,
 // the rest are zero, so every payload passes the network_enrichment_v1
 // validation).
+// internStructureTest interns one payload value (the production
+// internStructure takes the address of a caller-owned payload; the test
+// helper owns the value).
+func internStructureTest(codec structurePayloadCodec, store tree.RetiringStore, state *structureState, value structurePayload) (structureInterned, error) {
+	return internStructure(codec, store, state, &value)
+}
+
 func structureTestPayload(value ...byte) structurePayload {
 	var bytes [format.NetworkEnrichmentV1PayloadSize]byte
 	copy(bytes[:], value)
@@ -55,15 +63,15 @@ func structureTestRootLevel(t *testing.T, store *rangeMemoryStore, root uint32) 
 func TestStructureEqualPayloadsDeduplicateAndLowestReleasedIDIsReused(t *testing.T) {
 	store := newRangeMemoryStore()
 	state := structureTestState()
-	first, err := internStructure(structureNetCodec, store, &state, structureTestPayload(1, 2, 3, 4))
+	first, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload(1, 2, 3, 4))
 	if err != nil {
 		t.Fatalf("intern first: %v", err)
 	}
-	same, err := internStructure(structureNetCodec, store, &state, structureTestPayload(1, 2, 3, 4))
+	same, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload(1, 2, 3, 4))
 	if err != nil {
 		t.Fatalf("intern same: %v", err)
 	}
-	second, err := internStructure(structureNetCodec, store, &state, structureTestPayload(5, 6, 7, 8))
+	second, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload(5, 6, 7, 8))
 	if err != nil {
 		t.Fatalf("intern second: %v", err)
 	}
@@ -82,7 +90,7 @@ func TestStructureEqualPayloadsDeduplicateAndLowestReleasedIDIsReused(t *testing
 	if _, err := applyStructureDelta(structureNetCodec, store, &state, first.id, -1); err != nil {
 		t.Fatalf("apply -1 for id %d: %v", first.id, err)
 	}
-	replacement, err := internStructure(structureNetCodec, store, &state, structureTestPayload(9, 10, 11, 12))
+	replacement, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload(9, 10, 11, 12))
 	if err != nil {
 		t.Fatalf("intern replacement: %v", err)
 	}
@@ -97,7 +105,7 @@ func TestStructureEqualPayloadsDeduplicateAndLowestReleasedIDIsReused(t *testing
 func TestStructureRefcountAccumulatesAndReleases(t *testing.T) {
 	store := newRangeMemoryStore()
 	state := structureTestState()
-	interned, err := internStructure(structureNetCodec, store, &state, structureTestPayload(1, 0, 0, 0))
+	interned, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload(1, 0, 0, 0))
 	if err != nil {
 		t.Fatalf("intern: %v", err)
 	}
@@ -164,7 +172,7 @@ func TestStructureEqualDigestWithUnequalPayloadDoesNotMerge(t *testing.T) {
 	}
 	state.entryCount = 1
 
-	actual, err := internStructure(structureNetCodec, store, &state, wanted)
+	actual, err := internStructure(structureNetCodec, store, &state, &wanted)
 	if err != nil {
 		t.Fatalf("intern wanted: %v", err)
 	}
@@ -181,7 +189,8 @@ func TestStructureIDAndHashIndexesRemainExactAfterBranchGrowth(t *testing.T) {
 	state := structureTestState()
 	ids := make(map[uint32]uint32, 512)
 	for value := uint32(1); value <= 512; value++ {
-		interned, err := internStructure(structureNetCodec, store, &state, structureTestPayload(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)))
+		payload := structureTestPayload(byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
+		interned, err := internStructure(structureNetCodec, store, &state, &payload)
 		if err != nil {
 			t.Fatalf("intern %d: %v", value, err)
 		}
@@ -201,7 +210,8 @@ func TestStructureIDAndHashIndexesRemainExactAfterBranchGrowth(t *testing.T) {
 		if !found || !bytes.Equal(record.payload.Slice(), structureTestPayload(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)).Slice()) {
 			t.Fatalf("record %d payload mismatch", id)
 		}
-		duplicate, err := internStructure(structureNetCodec, store, &state, structureTestPayload(byte(value), byte(value>>8), byte(value>>16), byte(value>>24)))
+		duplicatePayload := structureTestPayload(byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
+		duplicate, err := internStructure(structureNetCodec, store, &state, &duplicatePayload)
 		if err != nil {
 			t.Fatalf("duplicate intern %d: %v", value, err)
 		}
@@ -216,7 +226,8 @@ func TestStructureDirectTableRootShrinksWhenTrailingIDsAreReleased(t *testing.T)
 	state := structureTestState()
 	count := format.StructureRecordSlots + 2
 	for value := uint32(1); value <= uint32(count); value++ {
-		interned, err := internStructure(structureNetCodec, store, &state, structureTestPayload(byte(value), 0, 0, 0))
+		payload := structureTestPayload(byte(value), 0, 0, 0)
+		interned, err := internStructure(structureNetCodec, store, &state, &payload)
 		if err != nil {
 			t.Fatalf("intern %d: %v", value, err)
 		}
@@ -244,7 +255,7 @@ func TestStructureDirectTableRootShrinksWhenTrailingIDsAreReleased(t *testing.T)
 func TestStructureAbsentPayloadNeverInterns(t *testing.T) {
 	store := newRangeMemoryStore()
 	state := structureTestState()
-	interned, err := internStructure(structureNetCodec, store, &state, structureTestPayload())
+	interned, err := internStructureTest(structureNetCodec, store, &state, structureTestPayload())
 	if err != nil {
 		t.Fatalf("intern absent: %v", err)
 	}
@@ -309,7 +320,11 @@ func TestNetworkEnrichmentV1PayloadMatchesLiteralBytes(t *testing.T) {
 func TestNetworkEnrichmentV1RejectsNoncanonicalAbsentLocation(t *testing.T) {
 	var bytes [format.NetworkEnrichmentV1PayloadSize]byte
 	bytes[enrichmentLatOffset] = 1
-	if err := structureNetCodec.validate(bytes[:]); err == nil {
+	payload, err := newStructurePayload(bytes[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := structureNetCodec.validate(payload); err == nil {
 		t.Fatalf("absent location with nonzero coordinates accepted")
 	}
 }
@@ -350,7 +365,7 @@ func TestNetworkEnrichmentV1EncodeClearsUnknownFlagBits(t *testing.T) {
 	if decoded.LatitudeMicrodegrees != 1 {
 		t.Fatalf("latitude lost: got %d, want 1", decoded.LatitudeMicrodegrees)
 	}
-	if err := structureNetCodec.validate(payload.Slice()); err != nil {
+	if err := structureNetCodec.validate(payload); err != nil {
 		t.Fatalf("canonical payload rejected: %v", err)
 	}
 }

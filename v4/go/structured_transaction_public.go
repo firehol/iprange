@@ -35,6 +35,7 @@ type StructureRef struct {
 // that structured values link to.
 type StructuredTransaction struct {
 	w               *Writer
+	edit            *writer.WriterEdit
 	databaseID      [16]byte
 	operationNonce  [16]byte
 	membershipEpoch uint64
@@ -48,19 +49,23 @@ type StructuredTransaction struct {
 // on a clean writer (Rust LiveWriter::begin_structured_transaction): a
 // network_enrichment_v1 structured database is required and the
 // operation nonce pins every reference produced by the transaction. The
-// cancellation check runs first so a fired token classifies as Cancelled
-// even on a closed writer, matching the membership transaction
-// convention; the structure-kind check then mirrors the Rust outer
-// guard, and the value-kind check the Rust inner guard.
+// guard order is the Rust exact sequence: the closed-writer probe (a
+// state Rust cannot express because it consumes the writer), then the
+// structure-kind outer guard, then cancellation, healthy, and the
+// value-kind inner guard. The draft installed by BeginTransaction is
+// bound once so every operation reuses one edit (Rust writer.mutate
+// borrows the draft for the transaction lifetime); each input locator
+// is built for its own literal family like the Rust typed assignment
+// inputs, so an IPv4 database carries no dead IPv6 locator.
 func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
-	if err := cancellation.check(); err != nil {
-		return nil, err
-	}
 	if w.core == nil {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if w.core.BaseInfo().StructureKind != format.StructureKindNetworkEnrichmentV1 {
 		return nil, &format.Error{Code: format.CodeWrongStructureKind, Detail: "no typed transaction exists for this structure kind"}
+	}
+	if err := cancellation.check(); err != nil {
+		return nil, err
 	}
 	if err := w.core.Healthy(); err != nil {
 		return nil, err
@@ -72,14 +77,18 @@ func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*S
 	if err != nil {
 		return nil, err
 	}
-	family := w.core.BaseInfo().AddressFamily
+	edit, err := w.core.BindEdit()
+	if err != nil {
+		return nil, err
+	}
 	return &StructuredTransaction{
 		w:              w,
+		edit:           edit,
 		databaseID:     w.core.BaseInfo().DatabaseID,
 		operationNonce: nonce,
 		cancellation:   cancellation,
-		inputV4:        writer.NewAssignmentInput(family, w.core.Budget().MaxHeapBytes),
-		inputV6:        writer.NewAssignmentInput(family, w.core.Budget().MaxHeapBytes),
+		inputV4:        writer.NewAssignmentInput(format.AddressFamilyIPv4, w.core.Budget().MaxHeapBytes),
+		inputV6:        writer.NewAssignmentInput(format.AddressFamilyIPv6, w.core.Budget().MaxHeapBytes),
 	}, nil
 }
 
@@ -111,13 +120,7 @@ func (t *StructuredTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, err
 	}
-	var entry writer.FeedEntry
-	var found bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, found, err = edit.LookupFeed(string(name))
-		return err
-	})
+	entry, found, err := t.edit.LookupFeed(string(name))
 	if err != nil {
 		return FeedRef{}, false, err
 	}
@@ -142,12 +145,7 @@ func (t *StructuredTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
 	}
-	var entry writer.FeedEntry
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, _, err = edit.EnsureFeed(string(name))
-		return err
-	})
+	entry, _, err := t.edit.EnsureFeed(string(name))
 	if err != nil {
 		return FeedRef{}, err
 	}
@@ -169,12 +167,7 @@ func (t *StructuredTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, err
 	}
-	var entry writer.FeedEntry
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, err = edit.RenameCurrentFeed(feed.entry, string(newName))
-		return err
-	})
+	entry, err := t.edit.RenameCurrentFeed(feed.entry, string(newName))
 	if err != nil {
 		return FeedRef{}, err
 	}
@@ -194,18 +187,15 @@ func (t *StructuredTransaction) DeleteFeed(feed FeedRef) error {
 	if err := t.checkOrAbort(); err != nil {
 		return err
 	}
-	nextEpoch := t.membershipEpoch + 1
-	if nextEpoch == 0 {
-		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
-	}
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		return edit.DeleteCurrentStructuredFeed(feed.entry, t.cancellation.check)
-	})
-	if err != nil {
+	if err := t.edit.DeleteCurrentStructuredFeed(feed.entry, t.cancellation.check); err != nil {
 		return err
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return err
+	}
+	nextEpoch := t.membershipEpoch + 1
+	if nextEpoch == 0 {
+		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
 	t.membershipEpoch = nextEpoch
 	return nil
@@ -235,12 +225,7 @@ func (t *StructuredTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, err
 	}
-	var handle writer.MembershipHandle
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		handle, err = edit.AddFeedToMembership(membership.handle, feed.entry)
-		return err
-	})
+	handle, err := t.edit.AddFeedToMembership(membership.handle, feed.entry)
 	if err != nil {
 		return MembershipRef{}, err
 	}
@@ -260,25 +245,17 @@ func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmen
 	}
 	// Rust: Some(membership) validates the reference and supplies its
 	// handle; None interns with the empty handle. The Go zero
-	// MembershipRef is the None case; any transaction-produced reference
-	// (including EmptyMembership) is the Some case and validates when its
-	// handle is non-zero. A stale or foreign empty-handle reference
-	// carries no membership state, so ignoring it matches the outcome of
-	// None (documented Go mapping; Rust rejects it with StaleReference).
-	if membership.handle != (writer.MembershipHandle{}) {
+	// MembershipRef is the None case. Every other value is a reference
+	// some transaction produced (including EmptyMembership, whose handle
+	// is zero but whose database id and nonce are pinned) and validates
+	// exactly like Rust's Some, so a stale or foreign reference is
+	// refused even when it carries the empty handle.
+	if membership != (MembershipRef{}) {
 		if err := t.requireCurrentMembership(membership); err != nil {
 			return StructureRef{}, err
 		}
 	}
-	if err := t.checkOrAbort(); err != nil {
-		return StructureRef{}, err
-	}
-	var structure writer.StructureHandle
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		structure, err = edit.InternNetworkEnrichmentV1(value.internal(), membership.handle)
-		return err
-	})
+	structure, err := t.edit.InternNetworkEnrichmentV1(value.internal(), membership.handle)
 	if err != nil {
 		return StructureRef{}, err
 	}
@@ -298,15 +275,7 @@ func (t *StructuredTransaction) AssignV4(from, to IPv4, structure StructureRef) 
 	if err := t.requireCurrentStructure(structure); err != nil {
 		return false, err
 	}
-	if err := t.checkOrAbort(); err != nil {
-		return false, err
-	}
-	var changed bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		changed, err = edit.AssignStructureInputV4(uint32(from), uint32(to), structure.handle, &t.inputV4)
-		return err
-	})
+	changed, err := t.edit.AssignStructureInputV4(uint32(from), uint32(to), structure.handle, &t.inputV4)
 	if err != nil {
 		return false, err
 	}
@@ -325,15 +294,7 @@ func (t *StructuredTransaction) AssignV6(from, to IPv6, structure StructureRef) 
 	if err := t.requireCurrentStructure(structure); err != nil {
 		return false, err
 	}
-	if err := t.checkOrAbort(); err != nil {
-		return false, err
-	}
-	var changed bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		changed, err = edit.AssignStructureInputV6(from.Hi, from.Lo, to.Hi, to.Lo, structure.handle, &t.inputV6)
-		return err
-	})
+	changed, err := t.edit.AssignStructureInputV6(from.Hi, from.Lo, to.Hi, to.Lo, structure.handle, &t.inputV6)
 	if err != nil {
 		return false, err
 	}
@@ -366,7 +327,7 @@ func (t *StructuredTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
-	changed, err := t.w.core.SetMetadata(input)
+	changed, err := t.edit.SetMetadata(input)
 	if err != nil {
 		return false, err
 	}
@@ -386,7 +347,7 @@ func (t *StructuredTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
-	changed, err := t.w.core.ClearMetadata()
+	changed, err := t.edit.ClearMetadata()
 	if err != nil {
 		return false, err
 	}

@@ -592,10 +592,16 @@ func assertEnrichmentSnapshot(t *testing.T, path string, threatIndex uint32) {
 // TestPublicStructuredTransactionSurface pins the structured begin
 // guards and error classes (Rust begin_structured_transaction +
 // MembershipState surface): the structure-kind outer guard fires on
-// direct and membership databases, the value-kind inner guard on a
-// structured database of the wrong value kind, and the mutation
+// direct and membership databases and precedes the cancellation state
+// (a fired token cannot mask the wrong-kind class), and the mutation
 // surface reports the exact invalid-argument, wrong-family, stale,
-// inactive, cancelled, and no-pending-transaction classes.
+// inactive, cancelled, and no-pending-transaction classes. The
+// value-kind inner guard (Rust begin_structured_state) is not directly
+// reachable here: bootstrap open refuses every kind combination that
+// could carry a structure kind without the structured value kind
+// (meta.go ValidateKindInvariants, Rust bootstrap.rs KindInvariant),
+// so the guard is Rust-parity defense and the wrong-kind open class is
+// FormatInvalid, pinned by the open tests.
 func TestPublicStructuredTransactionSurface(t *testing.T) {
 	cancellation := NewCancellationToken()
 
@@ -627,6 +633,23 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	}
 	if _, err := w.BeginStructuredTransaction(cancellation); !isPubCode(err, ErrorWrongStructureKind) {
 		t.Fatalf("begin on membership database = %v, want wrong structure kind", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fired token still reports the outer structure-kind guard
+	// first: Rust begin_structured_transaction checks the kind before
+	// the cancellation state, so the fired token cannot mask the
+	// wrong-kind class.
+	fired := NewCancellationToken()
+	fired.Cancel()
+	w, err = OpenWriter(membershipPath, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.BeginStructuredTransaction(fired); !isPubCode(err, ErrorWrongStructureKind) {
+		t.Fatalf("begin with fired token on membership database = %v, want wrong structure kind", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -737,5 +760,39 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	cancellation.Cancel()
 	if _, err := tx.InternNetworkEnrichmentV1(enrichmentValue(64515), MembershipRef{}); !isPubCode(err, ErrorTransactionAborted) {
 		t.Fatalf("intern after cancel = %v, want transaction aborted", err)
+	}
+}
+
+// TestPublicStructuredTransactionStaleEmptyMembership pins the intern
+// None sentinel: only the literal zero MembershipRef is None, while the
+// empty membership of an aborted transaction is a real reference that
+// another transaction refuses as stale (Rust
+// intern_network_enrichment_v1 Some require_current_membership).
+func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
+	path := structuredDB(t)
+	w, err := OpenWriter(path, DefaultBudget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	tx1, err := w.BeginStructuredTransaction(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := tx1.EmptyMembership()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx1.Abort(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx2, err := w.BeginStructuredTransaction(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx2.InternNetworkEnrichmentV1(enrichmentValue(64512), empty); !isPubCode(err, ErrorStaleReference) {
+		t.Fatalf("intern with aborted-transaction empty membership = %v, want stale reference", err)
 	}
 }

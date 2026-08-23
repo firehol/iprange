@@ -11,25 +11,20 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// structureHandle is one draft-owned structure reference (Rust
+// StructureHandle is one draft-owned structure reference (Rust
 // StructureHandle): the zero handle is the empty structure that clears
-// ranges.
-type structureHandle struct {
+// ranges. Values are opaque to callers; the internal id round-trips
+// through the edit bindings.
+type StructureHandle struct {
 	id uint32
 }
-
-// StructureHandle is the exported view of one draft-owned structure
-// reference (Rust StructureHandle): the zero handle is the empty
-// structure that clears ranges. Values are opaque to callers; the
-// internal id round-trips through the edit bindings.
-type StructureHandle structureHandle
 
 // EmptyStructureHandle returns the empty structure handle (Rust
 // StructureHandle::empty), the canonical operand of a structured clear.
 func EmptyStructureHandle() StructureHandle { return StructureHandle{} }
 
 // stored returns the structure dictionary id (Rust StructureHandle::id).
-func (h structureHandle) stored() uint32 { return h.id }
+func (h StructureHandle) stored() uint32 { return h.id }
 
 // requireNetworkEnrichmentV1 mirrors Rust
 // DraftStore::require_network_enrichment_v1: the draft must be a
@@ -81,14 +76,14 @@ func (s *DraftStore) trackStructureRefcount(id uint32, change int64) error {
 // DraftStore::intern_network_enrichment_v1): a created record buffers a
 // zero structure refcount delta and a +1 owner refcount for the
 // membership it links.
-func (s *DraftStore) internNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membership MembershipHandle) (structureHandle, error) {
+func (s *DraftStore) internNetworkEnrichmentV1(value format.NetworkEnrichmentV1, membership MembershipHandle) (StructureHandle, error) {
 	if err := s.requireNetworkEnrichmentV1(); err != nil {
-		return structureHandle{}, err
+		return StructureHandle{}, err
 	}
 	membershipID, _ := membership.stored()
 	payload, err := encodeNetworkEnrichmentV1(value, membershipID)
 	if err != nil {
-		return structureHandle{}, err
+		return StructureHandle{}, err
 	}
 	return s.internStructurePayload(payload)
 }
@@ -97,29 +92,29 @@ func (s *DraftStore) internNetworkEnrichmentV1(value format.NetworkEnrichmentV1,
 // structure dictionary (Rust DraftStore::intern_payload): a created
 // record buffers the structure refcount delta marker and the membership
 // owner refcount before the dictionary state is stored back.
-func (s *DraftStore) internStructurePayload(payload structurePayload) (structureHandle, error) {
+func (s *DraftStore) internStructurePayload(payload structurePayload) (StructureHandle, error) {
 	state := s.structureState()
-	interned, err := internStructure(structureNetworkEnrichmentV1{}, s, &state, payload)
+	interned, err := internStructure(structureNetworkEnrichmentV1{}, s, &state, &payload)
 	if err != nil {
-		return structureHandle{}, err
+		return StructureHandle{}, err
 	}
 	if interned.created {
 		if err := s.trackStructureRefcount(interned.id, 0); err != nil {
-			return structureHandle{}, err
+			return StructureHandle{}, err
 		}
 		if err := s.trackMembershipOwnerRefcount(interned.membershipID, 1); err != nil {
-			return structureHandle{}, err
+			return StructureHandle{}, err
 		}
 	}
 	s.storeStructureState(state)
-	return structureHandle{id: interned.id}, nil
+	return StructureHandle{id: interned.id}, nil
 }
 
 // assignStructureInputV4 assigns one structured IPv4 range (Rust
 // DraftStore::assign_structure_input_v4): the empty structure clears,
 // a private range tree assigns through the leaf-locator input, and a
 // shared committed tree assigns directly.
-func (s *DraftStore) assignStructureInputV4(from, to uint32, structure structureHandle, input *privateInput) (bool, error) {
+func (s *DraftStore) assignStructureInputV4(from, to uint32, structure StructureHandle, input *privateInput) (bool, error) {
 	if structure.id == 0 {
 		return s.ClearV4(from, to)
 	}
@@ -131,7 +126,7 @@ func (s *DraftStore) assignStructureInputV4(from, to uint32, structure structure
 
 // assignStructureInputV6 assigns one structured IPv6 range (Rust
 // DraftStore::assign_structure_input_v6).
-func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure structureHandle, input *privateInput) (bool, error) {
+func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *privateInput) (bool, error) {
 	if structure.id == 0 {
 		return s.ClearV6(fromHi, fromLo, toHi, toLo)
 	}
@@ -171,9 +166,6 @@ func (s *DraftStore) deleteCurrentStructuredFeed(feed FeedEntry, check func() er
 		maximum.Lo = ^uint64(0)
 	}
 	changed, err := rangeTransform(ctx, minimum, maximum, func(store RangeStore, value optionalValue) (optionalValue, error) {
-		if err := check(); err != nil {
-			return optionalValue{}, err
-		}
 		if !value.present {
 			return optionalValue{}, nil
 		}

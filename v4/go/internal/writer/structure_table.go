@@ -71,7 +71,7 @@ func (p *structurePath) push(frame structurePathFrame) error {
 // structureTableFind locates and decodes one structure record (Rust
 // table::find + read_record): an absent root or empty slot is a clean
 // miss; a nonzero slot that decodes to a different id is corruption.
-func structureTableFind(codec structurePayloadCodec, store tree.Store, root uint32, idLimit uint64, id uint32) (structureRecord, bool, error) {
+func structureTableFind[C structurePayloadCodec](codec C, store tree.Store, root uint32, idLimit uint64, id uint32) (structureRecord, bool, error) {
 	leaf, found, err := structureTableLocateLeaf(codec, store, root, idLimit, id)
 	if err != nil || !found {
 		return structureRecord{}, false, err
@@ -104,7 +104,7 @@ func structureTableFind(codec structurePayloadCodec, store tree.Store, root uint
 // structureTableLocateLeaf descends the radix path of id (Rust
 // locate_leaf): id zero or at/above the limit, an empty root, or an empty
 // directory child is a clean miss.
-func structureTableLocateLeaf(codec structurePayloadCodec, store tree.Store, root uint32, idLimit uint64, id uint32) (uint32, bool, error) {
+func structureTableLocateLeaf[C structurePayloadCodec](codec C, store tree.Store, root uint32, idLimit uint64, id uint32) (uint32, bool, error) {
 	if id == 0 || uint64(id) >= idLimit || root == 0 {
 		return 0, false, nil
 	}
@@ -146,7 +146,7 @@ func structureTableLocateLeaf(codec structurePayloadCodec, store tree.Store, roo
 // structureTableInsert writes one record into the radix table, growing
 // the root and creating subtrees as needed (Rust table::insert): the ID
 // must be below the limit, and the record slot must be empty.
-func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore, root *uint32, idLimit uint64, record []byte) error {
+func structureTableInsert[C structurePayloadCodec](codec C, store tree.RetiringStore, root *uint32, idLimit uint64, record []byte) error {
 	decoded, err := decodeStructureRecord(codec, record)
 	if err != nil {
 		return err
@@ -242,7 +242,7 @@ func structureTableInsert(codec structurePayloadCodec, store tree.RetiringStore,
 // structureTableChangeRefcount applies one refcount change to one record,
 // deleting the record and collapsing empty pages when the refcount reaches
 // zero (Rust table::change_refcount).
-func structureTableChangeRefcount(codec structurePayloadCodec, store tree.RetiringStore, root *uint32, idLimit uint64, id uint32, change int64) (structureRecord, bool, error) {
+func structureTableChangeRefcount[C structurePayloadCodec](codec C, store tree.RetiringStore, root *uint32, idLimit uint64, id uint32, change int64) (structureRecord, bool, error) {
 	if id == 0 || uint64(id) >= idLimit || *root == 0 {
 		return structureRecord{}, false, corrupt("structure refcount names an absent ID")
 	}
@@ -351,7 +351,7 @@ func structureTableChangeRefcount(codec structurePayloadCodec, store tree.Retiri
 
 // structureTableShrink lowers the root while its only child is the whole
 // tree (Rust table::shrink).
-func structureTableShrink(codec structurePayloadCodec, store tree.RetiringStore, root *uint32, idLimit uint64) error {
+func structureTableShrink[C structurePayloadCodec](codec C, store tree.RetiringStore, root *uint32, idLimit uint64) error {
 	if *root == 0 {
 		if idLimit != 1 {
 			return corrupt("empty structure table has a nonempty limit")
@@ -409,7 +409,7 @@ func structureTableShrink(codec structurePayloadCodec, store tree.RetiringStore,
 
 // structureTableParse validates one page header (Rust table::parse):
 // every defect class maps to the exact Rust detail string.
-func structureTableParse(codec structurePayloadCodec, page []byte, selectedTxn uint64, expectedLevel *uint16) (structureTableHeader, error) {
+func structureTableParse[C structurePayloadCodec](codec C, page []byte, selectedTxn uint64, expectedLevel *uint16) (structureTableHeader, error) {
 	header, problem := structureInspectHeader(codec, page, selectedTxn, expectedLevel)
 	switch problem {
 	case structureHeaderProblemHeader:
@@ -428,7 +428,7 @@ func structureTableParse(codec structurePayloadCodec, page []byte, selectedTxn u
 
 // structureParsePage parses one store page (Rust shrink's
 // inspect_page + parse).
-func structureParsePage(codec structurePayloadCodec, store tree.Store, pageNumber uint32, expectedLevel *uint16) (structureTableHeader, error) {
+func structureParsePage[C structurePayloadCodec](codec C, store tree.Store, pageNumber uint32, expectedLevel *uint16) (structureTableHeader, error) {
 	page, err := store.Inspect(pageNumber)
 	if err != nil {
 		return structureTableHeader{}, err
@@ -440,7 +440,7 @@ func structureParsePage(codec structurePayloadCodec, store tree.Store, pageNumbe
 // classification: common header, born transaction, level bound, page type
 // and aux, and the fixed geometry (leaf_end or branch_end lower, page-size
 // upper, nonzero item count within the level maximum).
-func structureInspectHeader(codec structurePayloadCodec, page []byte, selectedTxn uint64, expectedLevel *uint16) (structureTableHeader, structureHeaderProblem) {
+func structureInspectHeader[C structurePayloadCodec](codec C, page []byte, selectedTxn uint64, expectedLevel *uint16) (structureTableHeader, structureHeaderProblem) {
 	if !structureCommonValid(page) {
 		return structureTableHeader{}, structureHeaderProblemHeader
 	}
@@ -501,7 +501,7 @@ func structureRequiredLevel(idLimit uint64) (uint16, error) {
 
 // structureGrowRoot lifts the root while the target level is above the
 // current one (Rust grow_root).
-func structureGrowRoot(codec structurePayloadCodec, store tree.RetiringStore, root *uint32, wanted uint16) error {
+func structureGrowRoot[C structurePayloadCodec](codec C, store tree.RetiringStore, root *uint32, wanted uint16) error {
 	if *root == 0 {
 		return nil
 	}
@@ -539,7 +539,7 @@ func structureGrowRoot(codec structurePayloadCodec, store tree.RetiringStore, ro
 
 // structureParseLevel parses the root level without an expected bound
 // (Rust grow_root).
-func structureParseLevel(codec structurePayloadCodec, store tree.Store, root uint32) (uint16, error) {
+func structureParseLevel[C structurePayloadCodec](codec C, store tree.Store, root uint32) (uint16, error) {
 	header, err := structureParsePage(codec, store, root, nil)
 	if err != nil {
 		return 0, err
@@ -551,7 +551,7 @@ func structureParseLevel(codec structurePayloadCodec, store tree.Store, root uin
 // new_subtree): a level-0 page initializes with item count one and writes
 // the record at its id slot; a directory page creates the child subtree
 // and stores it at the id-derived child index.
-func structureNewSubtree(codec structurePayloadCodec, store tree.RetiringStore, level uint16, id uint32, record []byte) (uint32, error) {
+func structureNewSubtree[C structurePayloadCodec](codec C, store tree.RetiringStore, level uint16, id uint32, record []byte) (uint32, error) {
 	pageNumber, err := store.Allocate()
 	if err != nil {
 		return 0, err
@@ -601,7 +601,7 @@ func structureNewSubtree(codec structurePayloadCodec, store tree.RetiringStore, 
 // when it predates the target transaction (Rust touch): pages born in the
 // target transaction are already private, so the append-only output
 // builder never copies and never retires.
-func structureTableTouch(codec structurePayloadCodec, store tree.RetiringStore, pageNumber uint32, level uint16, retired *tree.RetiredPages) (uint32, structureTableHeader, error) {
+func structureTableTouch[C structurePayloadCodec](codec C, store tree.RetiringStore, pageNumber uint32, level uint16, retired *tree.RetiredPages) (uint32, structureTableHeader, error) {
 	header, private, err := structureTouchHeader(codec, store, pageNumber, level)
 	if err != nil {
 		return 0, structureTableHeader{}, err
@@ -624,7 +624,7 @@ func structureTableTouch(codec structurePayloadCodec, store tree.RetiringStore, 
 
 // structureTouchHeader inspects one page and reports whether it is
 // already private (born in the target transaction).
-func structureTouchHeader(codec structurePayloadCodec, store tree.Store, pageNumber uint32, level uint16) (structureTableHeader, bool, error) {
+func structureTouchHeader[C structurePayloadCodec](codec C, store tree.Store, pageNumber uint32, level uint16) (structureTableHeader, bool, error) {
 	page, err := store.Inspect(pageNumber)
 	if err != nil {
 		return structureTableHeader{}, false, err
@@ -641,7 +641,7 @@ func structureTouchHeader(codec structurePayloadCodec, store tree.Store, pageNum
 // record or directory page type, the level geometry bounds, and the
 // structure kind as aux. The header write is infallible on a mapped page
 // (Rust initialize returns Result only because its sink methods can).
-func structureInitialize(codec structurePayloadCodec, page []byte, txn uint64, level uint16, itemCount uint16) {
+func structureInitialize[C structurePayloadCodec](codec C, page []byte, txn uint64, level uint16, itemCount uint16) {
 	pageType := format.PageTypeStructureIDRecord
 	lower := uint16(format.StructureLeafEnd)
 	if level != 0 {
@@ -653,7 +653,7 @@ func structureInitialize(codec structurePayloadCodec, page []byte, txn uint64, l
 
 // structureInsertLeaf writes one record into its empty id slot and bumps
 // the item count (Rust insert_leaf).
-func structureInsertLeaf(codec structurePayloadCodec, page []byte, header structureTableHeader, record []byte) error {
+func structureInsertLeaf[C structurePayloadCodec](codec C, page []byte, header structureTableHeader, record []byte) error {
 	decoded, err := decodeStructureRecord(codec, record)
 	if err != nil {
 		return err
@@ -722,7 +722,7 @@ func structureRemoveEmptyPath(store tree.Store, root *uint32, child uint32, chil
 
 // structureReadRecordAt reads one record at its id slot of one leaf page
 // (Rust change_refcount's read_record).
-func structureReadRecordAt(codec structurePayloadCodec, store tree.Store, pageNumber uint32, id uint32) (structureRecord, bool, error) {
+func structureReadRecordAt[C structurePayloadCodec](codec C, store tree.Store, pageNumber uint32, id uint32) (structureRecord, bool, error) {
 	page, err := store.Inspect(pageNumber)
 	if err != nil {
 		return structureRecord{}, false, err
@@ -776,7 +776,7 @@ func structureRecordOffset(id uint32) int {
 }
 
 // structureTableLeafCell returns one fixed record slot (Rust leaf_cell).
-func structureTableLeafCell(codec structurePayloadCodec, page []byte, id uint32) ([]byte, error) {
+func structureTableLeafCell[C structurePayloadCodec](codec C, page []byte, id uint32) ([]byte, error) {
 	slot := structureLeafIndex(id)
 	if slot >= format.StructureRecordSlots {
 		return nil, corrupt("structure table record slot is invalid")
