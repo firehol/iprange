@@ -215,6 +215,7 @@ func reopenCanonicalReservation(t *testing.T, canonicalPath, privateName string)
 	}
 	mapped, err := mapping.MapFile(f, reservationFileSize, true)
 	if err != nil {
+		_ = f.Close()
 		t.Fatalf("map canonical reservation: %v", err)
 	}
 	view, err := mapped.View(0, reservationFileSize)
