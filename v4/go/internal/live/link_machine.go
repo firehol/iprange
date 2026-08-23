@@ -49,22 +49,22 @@ func (d *Directory) linkNoReplace(source string, sourceFile *os.File, destinatio
 			// Rust swallows a link_state error under EEXIST and reports
 			// the plain Exists class; only the exact Linked pair resumes.
 			if serr == nil && state == linkStateLinked {
-				return d.finishNoreplaceTransition(source, destination, expected)
+				return d.FinishNoreplaceTransition(source, destination, expected)
 			}
 			return nsExistsError()
 		}
 		return nsIoError("link publication name without replacement", err)
 	}
 	fault.Crash("publication.freebsd.after_noreplace_link")
-	return d.finishNoreplaceTransition(source, destination, expected)
+	return d.FinishNoreplaceTransition(source, destination, expected)
 }
 
-// finishNoreplaceTransition completes or resumes a linkat transition
+// FinishNoreplaceTransition completes or resumes a linkat transition
 // (Rust Directory::finish_noreplace_transition): SourceOnly is the
 // Missing class, Complete proves the pair, Linked syncs, unlinks the
 // private alias, syncs again, and proves the final single-link name.
 // The three named crash points sit between the durable steps.
-func (d *Directory) finishNoreplaceTransition(source, destination string, expected FileIdentity) error {
+func (d *Directory) FinishNoreplaceTransition(source, destination string, expected FileIdentity) error {
 	state, err := d.linkState(source, destination, expected)
 	if err != nil {
 		return err

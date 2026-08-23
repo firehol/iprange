@@ -45,7 +45,7 @@ func TestFreebsdTransitionFinishesOnlyTheExactPair(t *testing.T) {
 	if retained.Identity != identity {
 		t.Fatalf("retained identity = %+v, want %+v", retained.Identity, identity)
 	}
-	if err := d.finishNoreplaceTransition(source, "output.v4", identity); err != nil {
+	if err := d.FinishNoreplaceTransition(source, "output.v4", identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.VerifyName("output.v4", identity); err != nil {
@@ -55,7 +55,7 @@ func TestFreebsdTransitionFinishesOnlyTheExactPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A completed transition is idempotent (Rust repeats the call).
-	if err := d.finishNoreplaceTransition(source, "output.v4", identity); err != nil {
+	if err := d.FinishNoreplaceTransition(source, "output.v4", identity); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -81,7 +81,7 @@ func TestFreebsdTransitionRejectsExtraOrForeignLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	err = d.finishNoreplaceTransition(source, "output.v4", identity)
+	err = d.FinishNoreplaceTransition(source, "output.v4", identity)
 	nerr, ok := AsNamespaceError(err)
 	if !ok || nerr.Kind != NamespaceLinkCount || nerr.Links != 3 {
 		t.Fatalf("transition error = %v, want LinkCount(3)", err)
@@ -127,7 +127,7 @@ func TestLinkNoReplaceMachinePublishesAndResumes(t *testing.T) {
 	// the identity with two links. The machine refuses a fresh
 	// linkNoReplace at require_source with the exact LinkCount class
 	// (Rust link_noreplace require_source); the caller resumes through
-	// finishNoreplaceTransition instead, exactly like Rust
+	// FinishNoreplaceTransition instead, exactly like Rust
 	// file_inspection.rs.
 	t.Run("linked pair refuses fresh link", func(t *testing.T) {
 		dir := t.TempDir()
@@ -153,7 +153,7 @@ func TestLinkNoReplaceMachinePublishesAndResumes(t *testing.T) {
 		if !ok || nerr.Kind != NamespaceLinkCount || nerr.Links != 2 {
 			t.Fatalf("fresh link on linked pair = %v, want LinkCount(2)", err)
 		}
-		if err := d.finishNoreplaceTransition(source, "output.v4", identity); err != nil {
+		if err := d.FinishNoreplaceTransition(source, "output.v4", identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.VerifyName("output.v4", identity); err != nil {

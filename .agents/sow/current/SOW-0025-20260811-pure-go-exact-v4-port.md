@@ -9204,5 +9204,129 @@ reservation_file.rs 547 + reservation_verify.rs 113, read in full):
   4-10/4-11. Production code unchanged by the fixes; tree re-tested
   green after them.
 
-Next slice: G reservation inspection (discover/canonical/exact_private/
-scan_private + require_bound + unlock_operation/relock_operation).
+Slice G (2026-08-23) — reservation inspection (Rust
+reservation_inspection.rs 451 lines, read in full; Rust
+gc_barrier.rs require_source_available verified as the #[cfg(windows)]
+no-op on POSIX, so the Go port omits it exactly like every earlier
+slice). IMPLEMENTED on the working tree; review not yet dispatched.
+
+Production code:
+
+- internal/publication/reservation_inspection.go: the exact discovery
+  machine. inspectedReservation (name/file/mapping/identity/header/
+  location/access + Close/verify/unlockOperation/relockOperation),
+  discoverReservation (canonical first, then scan_private, then the
+  coordination-absent re-proof with the found owner closed on the
+  conflict), inspectedCanonical, exactPrivateReservation,
+  inspectCanonicalReservation, scanPrivateReservations,
+  inspectPrivateReservation, requireBound, mapReservation (exact
+  8192-size proof -> Invalid marker), readSelected (select refusal ->
+  Invalid marker), inspectedReservationOf (creator-only classification
+  via security.CreatorOnlyCommitment), lockOperation/lockOperationFile,
+  invalidPrivateEntry (NotRegular / LinkCount / CrossFilesystem /
+  nofollow-symlink IoAt -> skip), strictRecord (Invalid -> the fixed
+  Unresolvable problem, SDK errors fold through sdkProblem to the fixed
+  "publication SDK operation failed" detail - the Rust
+  ReadError::Sdk arm), conflictProblem / destinationNameMismatchProblem
+  with the Rust-verbatim detail strings.
+- Resource ownership: every error and skip path closes the opened
+  regular descriptor and the mapped view exactly like the Rust drop of
+  Regular and Mapping (Go has no drop; explicit closeReservationOwner
+  on each arm). The skip arms of inspectPrivateReservation and the
+  multiple-bound and coordination-changed conflicts close the owned
+  candidates; the ownership audit in the chunk plan was completed
+  before the tests (no fd/mapping leaks on any refusal arm).
+- internal/publication/reservation_inspection_freebsd.go + _other.go:
+  the per-OS joints: freebsd OpenRegularAnyLink + FinishNoreplace
+  Transition, POSIX OpenRegular + no-op finish (the atomic rename
+  leaves nothing to finish).
+- internal/live/link_machine.go: finishNoreplaceTransition exported as
+  FinishNoreplaceTransition (the publication freebsd arm is another
+  package and must call the exported name); link_machine_test.go
+  updated to the exported name.
+
+Correctness choices applied during the port (vs Rust):
+
+- exact_private locks the operation lock BEFORE verify_name and
+  require_bound, in the Rust order.
+- inspect_private recheck after the lock is strict (changed ->
+  Conflict "private reservation changed during inspection"), never a
+  skip; the require_bound and record-read skip arms are the only
+  Ok(None) paths, exactly like Rust.
+- inspect_canonical re-checks after the per-OS finish; canonical name
+  verified after the transition.
+- gc_barrier availability calls omitted on POSIX (verified no-ops in
+  Rust gc_barrier.rs).
+
+Rust-verbatim problem details carried: "publication reservation changed
+after inspection", "publication reservation changed while acquiring its
+lock", "publication reservation changed during inspection", "private
+reservation changed during inspection", "reservation self identity does
+not match its inode", "private reservation name has another attempt
+id", "multiple bound private publication reservations exist",
+"coordination changed during reservation scan", "caller result and
+private reservation disagree", the Unresolvable "publication
+reservation record is not selectable", the DestinationNameMismatch
+"reservation belongs to another destination name", and the fixed
+sdkProblem detail.
+
+Tests (new files):
+
+- reservation_inspection_test.go (linux): canonical discover on an
+  acquired reservation and on an armed state-2 reservation (location,
+  private name derived from the attempt, identity, header, creator-only
+  access, held operation lock, verify), exact_private on an
+  initialized private reservation (lock held, exact header,
+  creator-only), exact_private caller-result disagreement -> Conflict,
+  the private-scan skip matrix with one inode per malformed class
+  (wrong size, unselectable, extra hard link, foreign attempt name)
+  proving each skip arm on its own, multiple-bound private
+  reservations -> Conflict, coordination-appears-during-scan ->
+  Conflict (via the checkpoint injection), the require_bound mismatch
+  classes (self-identity / filename-attempt / basename length /
+  basename commitment) plus the accept arm, unlock/relock round trip
+  (contender can lock between, not after relock), relock after an
+  external lock steal with a selectable record rewrite -> the
+  changed-after-inspection Conflict, creator-only vs chmod 0644 ->
+  ChangedOrUnproven classification, and the malformed-canonical zone
+  (zeros at the coordination twin -> Unresolvable, never a private-scan
+  fallback, private reservation bytes untouched). A leak probe runs
+  the wrong-size skip arm 64 times.
+- reservation_inspection_v4work_test.go (v4work && linux): the Rust
+  crash discover matrix after all six reservation crash points
+  (placement, state, output-identity binding, creator-only access,
+  held lock, verify), the state2_write either-state selection, two
+  state1 crash artifacts -> the multiple-bound Conflict (Rust
+  private_scan_requires_one_unique_bound_reservation), the malformed
+  canonical zeros -> Unresolvable with the file byte-identical (Rust
+  malformed_canonical_reservation_is_not_private_scan_authority), and
+  the cancellable foreign-entry scan.
+- freebsd-only transition tests deferred to 4-12 platform acceptance
+  (the v4work tag cannot emulate freebsd), recorded with the slice.
+
+Validation (all under nice): go build ./..., go vet ./..., go test
+./... (14/14 packages ok), go test -tags v4work ./... (14/14 ok;
+internal/fault, internal/snapshot, internal/work report no test
+files), gofmt clean, -race + -gcflags=all=-d=checkptr=2 on
+internal/publication + internal/live, the six cross-compiles (linux
+arm64/386, darwin amd64/arm64, freebsd amd64, windows amd64), and
+per-OS test-compiles of the touched packages for linux, darwin,
+freebsd, windows all PASS. Rust tree untouched. FreeBSD arm verified
+with GOOS=freebsd build + vet after the FinishNoreplaceTransition
+export.
+
+Review status: pending five-aspect adversarial review at slice close.
+
+Slice plan after G: H cleanup (discard_created/discard_attempt/
+discard_recovered + link-count removal machine + Summary; Rust
+cleanup.rs 499), I attempt+main_file publish state machine
+(attempt.rs 776 + main_file.rs 510), J resolver core (resolver.rs 435
++ resolver_authority 106 + resolver_verification 88 + resolver_result
+189), K replacement resolver (replacement_resolver.rs 372), L residue
+(residue/linux.rs 457 + main.rs 137 + retirement.rs 158), M
+maintenance (maintenance.rs 396 + common/output/reservation 820), N
+Publish retrofit + public surface + delete dead mapping publish
+machines (one-shot writer/publication_staging.go + snapshot.go:154,263
++ membership_publish_set.go:61,212,280; explicit user approval needed
+before deleting files), O validation + gate + push. Do not push
+until chunk 4-8 completes and the five-aspect gate passes.
