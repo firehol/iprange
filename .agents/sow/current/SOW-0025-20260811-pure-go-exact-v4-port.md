@@ -11014,5 +11014,57 @@ windows/amd64) plain + v4work; all pass.
 The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21) once all chunk 4-9 slices land.
 
-Next: chunk 4-9 slice D (bitmap + membership + membership_table +
-blob validators).
+### Status (2026-08-24) - chunk 4-9 slice D implemented at 127b4e6
+
+Slice D ships the membership, blob, and free-bitmap validators (the
+Rust membership.rs, blob.rs, and the remaining bitmap.rs arms) over
+the single-authority format and reader codecs:
+
+- internal/validation/membership.go: the ID and hash tree walks with
+  the record bitmap scan (word stream, active-feed window, trailing
+  word, and sha256 digest proofs), the adjacent same-digest collision
+  compare over the reader membership view, the membership used-bitmap
+  count, and the bounded slot finish (refcount, reverse, and used
+  arms; an occupied undefined slot reports the refcount class exactly
+  like Rust).
+- internal/validation/blob.go: the membership blob span walk with the
+  branch offset continuity, leaf geometry, reserved tail, and span
+  end proofs, feeding the record bitmap scan.
+- internal/validation/word_cache.go: the one-leaf bitmap word cache
+  over the raw mapping for the active-feed and slot-used reads (Rust
+  WordCache), re-verifying every walked header.
+- internal/validation/bitmap.go: the free-bitmap arm marks every free
+  page in the allocation partition (Kind::Free candidate and
+  has-one summary rules).
+- format membership/blob raw codecs (DecodeMembershipRecord,
+  DecodeMembershipHashKey, DecodeMembershipIDBranchFields,
+  DecodeBlobBranchFields, DecodeBlobLeafGeometry, the blob common and
+  born identity helpers) at Rust codec parity; the context membership
+  table wrappers; the membership/free-bitmap stubs removed.
+
+Tests: full sweeps over the membership fixtures stay clean (the
+structured fixture reaches a clean sweep with the slice-E structure
+walk, which counts the membership owners and claims the structure
+pages; its dictionary walk here reports exactly the two pending
+refcount classes), eleven membership mutations pin the exact reason
+classes and page attribution (refcount, id window, leaf order,
+duplicate define, digest, reverse mark, active feed, trailing word,
+used bitmap, range refcount, blob scan clean and digest), six free
+bitmap cases over synthetic generations cover the reserved pair, the
+item-count, and the branch summary arms (the branch cases run over a
+sparse 64000-page generation), and a v4work pin fixes the full
+membership sweep at 298 cell probes, 298 slot reads, 1079 bitmap
+probes, and 72 reader page parses.
+
+Suite counts at 127b4e6: validation 69 tests plain / 72 with v4work
+(52/54 at be154f6), format 47, unchanged. Battery re-validated under
+nice before the commit: gofmt clean; vet plain + v4work on
+linux/windows/freebsd; plain and v4work full trees (15 test-bearing
+packages ok each); race + checkptr on validation/format/retire/
+bootstrap/reader/live/publication/mapping/tree and the root, both tag
+sets; seven cross-builds plain + v4work; all pass.
+
+The five-aspect adversarial gate runs at the milestone close per the
+standing review rules (2026-08-21) once all chunk 4-9 slices land.
+
+Next: chunk 4-9 slice E (structure + structure_table validators).
