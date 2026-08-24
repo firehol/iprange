@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 	"github.com/firehol/iprange/v4/go/internal/worker"
@@ -185,19 +186,25 @@ func runRecovery(control *worker.Control) (*recovery.RecoverySourceCleanupGuard,
 }
 
 // runCleanup serves one CleanupRecoveryAttempt session (Rust
-// worker/cleanup.rs run_worker): the request envelope flows through the
-// 4-11A codec. The discard machine arms of the Go tree
-// (internal/publication cleanup.go discard_attempt / confirmed_absent
-// / failed_attempt and output_resume.go resume_secured_output_for_
-// cleanup) are package-private; the SOW plan records cleanup +
-// publication wire arms for slice 4-11E. Until that slice exports the
-// machine, this driver reports the missing arm as a typed Conflict
-// instead of fabricating discard facts.
+// worker/cleanup.rs run_worker:14-27): the cleanup request is decoded
+// through the 4-11A codec, and the secured-attempt discard runs through
+// the exported publication seam over the exact Rust three arms (present
+// -> discard_attempt, proven absent -> confirmed_absent, resume failure
+// -> failed_attempt with the Problem::output fold). Rust cleanup does
+// not call set_unreadable_source_pages (worker.rs:416 installs the
+// fault memory only for inspect/validate/recover), so no fault memory
+// is armed here. The scratch cleanup stays the recorded 4-10 deferral
+// (CleanupCheckpoint), then the result is written and the session
+// returns without a cleanup guard (Rust returns Ok(None)).
 func runCleanup(control *worker.Control) error {
-	if _, err := worker.ReadCleanupRequest(control); err != nil {
+	request, err := worker.ReadCleanupRequest(control)
+	if err != nil {
 		return err
 	}
-	return &format.Error{Code: format.CodeConflict, Detail: "worker cleanup machine is not wired in this build"}
+	discarded := publication.DiscardSecuredAttempt(request.DestinationPath, &request.Output)
+	facts := worker.WireEarlyDiscardOf(discarded)
+	scratch := worker.CleanupCheckpoint(request.ScratchDirectory, request.Scratch)
+	return worker.WriteCleanupResult(control, &facts, scratch)
 }
 
 // serveCleanup drives the retained source cleanup guard (Rust worker.rs

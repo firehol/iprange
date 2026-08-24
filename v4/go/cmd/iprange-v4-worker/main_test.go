@@ -388,15 +388,82 @@ func TestWorkerCleanupDispatch(t *testing.T) {
 	if err := worker.WriteCleanupRequest(parent.control, filepath.Join(t.TempDir(), "out.v4"), output, nil, nil); err != nil {
 		t.Fatal("write request:", err)
 	}
-	if code := parent.driveDispatch(t, stateFailed); code != 0 {
+	if code := parent.driveDispatch(t, stateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
 	if parent.control.GuardPending() {
 		t.Fatal("cleanup reported a pending guard")
 	}
-	cause, err := worker.ReadWorkerError(parent.control)
+	discarded, scratch, err := worker.ReadCleanupResult(parent.control)
 	if err != nil {
-		t.Fatal("read worker error:", err)
+		t.Fatal("read cleanup result:", err)
 	}
-	wantCode(t, cause, format.CodeConflict)
+	if discarded == nil || discarded.Artifact == nil {
+		t.Fatalf("discarded = %+v, want the failed-attempt artifact for zero facts", discarded)
+	}
+	if scratch != nil {
+		t.Fatalf("scratch = %+v, want nil", scratch)
+	}
+	wantCode(t, discarded.Artifact.Error, format.CodeInvalidArgument)
+}
+
+// patchBuildID overwrites the 64 build-id header bytes of one control
+// file with a different valid-length value before any worker spawns
+// (test-only; the Rust worker-side refusal is verify_request
+// control.rs:214-223, and the control keeps every other header field).
+// The write lands in the file's page cache through a fresh writable
+// mapping, so every existing mapping of the control observes it.
+func patchBuildID(t *testing.T, path, value string) {
+	t.Helper()
+	if len(value) != buildIDLen {
+		t.Fatalf("patch build id length = %d, want %d", len(value), buildIDLen)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal("patch control open:", err)
+	}
+	m, err := mapping.MapFile(f, fixtureControlLen, true)
+	if err != nil {
+		t.Fatal("patch control map:", err)
+	}
+	data, err := m.View(0, fixtureControlLen)
+	if err != nil {
+		t.Fatal("patch control view:", err)
+	}
+	copy(data[fixtureBuildOffset:fixtureBuildOffset+buildIDLen], value)
+	if err := m.Close(); err != nil {
+		t.Fatal("patch control close map:", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal("patch control close:", err)
+	}
+}
+
+// TestProtocolRefusalBuildIDMismatch proves the worker refuses a
+// control whose 64 build-id bytes differ with the exact Conflict class
+// and exit code 65, before WorkerReady (Rust control.rs
+// verify_request:214-223 and worker.rs EXIT_PROTOCOL parity).
+func TestProtocolRefusalBuildIDMismatch(t *testing.T) {
+	parent := newFakeParent(t)
+	defer parent.close()
+	patchBuildID(t, parent.path, strings.Repeat("x", buildIDLen))
+	if code := run([]string{"--control", parent.path}); code != exitProtocol {
+		t.Errorf("run = %d, want %d", code, exitProtocol)
+	}
+	if code := runWorkerMain(t, "--control", parent.path); code != exitProtocol {
+		t.Errorf("subprocess protocol = %d, want %d", code, exitProtocol)
+	}
+	control, err := worker.OpenWorker(parent.path)
+	if err != nil {
+		t.Fatal("open patched control:", err)
+	}
+	defer control.Close()
+	err = control.VerifyRequest()
+	if err == nil {
+		t.Fatal("patched control verified")
+	}
+	var fe *format.Error
+	if !errors.As(err, &fe) || fe.Code != format.CodeConflict || fe.Detail != "worker protocol does not match the SDK" {
+		t.Fatalf("verify error = %v, want the exact protocol Conflict", err)
+	}
 }

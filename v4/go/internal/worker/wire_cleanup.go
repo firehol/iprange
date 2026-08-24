@@ -448,3 +448,60 @@ func readScratchCleanup(r *WireReader) (*ScratchCleanup, error) {
 	}
 	return cleanup, nil
 }
+
+// WireEarlyDiscardOf converts the publication machine's exported
+// discard facts to the cleanup-wire EarlyDiscard (Rust wire_cleanup.rs
+// write_result over publication::cleanup::EarlyDiscard). The
+// conversion is a thin field move: publication owns the facts, the
+// worker boundary owns the wire shape, and neither imports the other's
+// wire machine.
+func WireEarlyDiscardOf(facts publication.EarlyDiscardFacts) EarlyDiscard {
+	return EarlyDiscard{
+		Output:              facts.Output,
+		Artifact:            facts.Artifact,
+		Housekeeping:        facts.Housekeeping,
+		VisibleHousekeeping: facts.VisibleHousekeeping,
+	}
+}
+
+// CleanupCheckpoint builds the worker-side scratch-cleanup facts of
+// one cleanup request (Rust client/recovery.rs cleanup_checkpoint:433):
+// a nil checkpoint is the clean nil cleanup, and a present checkpoint
+// reports one removal outcome per checkpoint entry. The Go recovery
+// machine never creates authorized scratch (SOW-0025 chunk 4-10 record:
+// "external sort + authorized scratch ... tracked as a follow-up ...
+// recorded as deferred, not ported"), so the removal arm of the Rust
+// machine (recovery.rs:439-499, remove_checkpointed_scratch) is a
+// recorded deferral: a present checkpoint admits the deferral honestly
+// as one residue per entry with the fixed Conflict problem, the same
+// failed-removal residue shape Rust pushes per entry
+// (recovery.rs:502-524), so the wire contract stays meaningful and the
+// parent sees every entry it must handle. No scratch-removal
+// implementation is invented here.
+func CleanupCheckpoint(directory *string, checkpoint *ScratchCheckpoint) *ScratchCleanup {
+	if checkpoint == nil {
+		return nil
+	}
+	cleanup := &ScratchCleanup{
+		AttemptID:                  checkpoint.AttemptID,
+		DirectoryIdentity:          checkpoint.DirectoryIdentity,
+		CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
+		CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
+	}
+	problem := ScratchProblem{
+		Code:   format.CodeConflict,
+		Detail: "worker scratch cleanup machine is not ported",
+	}
+	for _, entry := range checkpoint.Entries {
+		cleanup.Residues = append(cleanup.Residues, ScratchResidue{
+			Ordinal:                    entry.Ordinal,
+			DirectoryIdentity:          checkpoint.DirectoryIdentity,
+			Basename:                   checkpointBasename(checkpoint.AttemptID, entry.Ordinal),
+			Identity:                   entry.Identity,
+			CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
+			CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
+			Problem:                    problem,
+		})
+	}
+	return cleanup
+}
