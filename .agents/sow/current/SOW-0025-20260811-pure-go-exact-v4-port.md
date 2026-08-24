@@ -10349,6 +10349,16 @@ d21c4d5, 184 in publication of which 11 are the maintenance tests),
 vet, -race + -gcflags=all=-d=checkptr=2 on internal/publication,
 freebsd/darwin cross-builds, gofmt clean, all PASS at d21c4d5.
 
+### Status (2026-08-24) - chunk 4-8 slice M complete: review rounds 1-3 PASS
+
+Round-2 re-review: parity (Goodall) PASS, performance
+(Chandrasekhar) PASS, wire/integrity (Herschel) PASS, idioms (Gauss)
+PASS with one residual P3, records (Noether) PASS with one wording
+note. Round-3 at 86b8716: the two written-identity decodes
+consolidate into one parameterized selectedIdentity with the
+Rust-verbatim expect texts preserved, and the record wording matches
+the Next-line structure; all five aspects PASS. Slice M is complete.
+
 Next: slice N Publish retrofit + public surface (publication.Publish
 over the reservation path; snapshot.To and PublishSet moved to it;
 the one-shot machine and the mapping path-based publish machines
