@@ -10769,3 +10769,67 @@ corpus ports of the Rust validation tests, then the five-aspect gate
 and the milestone push.
 
 Next: chunk 4-9 slice A implementation.
+
+### Status (2026-08-24) - chunk 4-9 slice A implemented: validation core and immutable sweep entry at 4ba6a39
+
+Slice A ships the Rust-parity validation surface and the immutable
+sweep entry (Rust validation.rs validate/validate_local/
+validate_immutable + validation/types.rs + context.rs + source.rs +
+membership_table.rs):
+
+- internal/validation/types.go: ValidationMode (wire values 1..3),
+  ValidationBudget with the exact refusal classes ("validation
+  requires at least one open file", scratch pairing rules), the 47
+  ValidationReason and 17 ValidationObject classes in wire order,
+  PhysicalByteInterval, ValidationAddressFence, ValidationFinding,
+  ValidationSinkControl, the sink interface, ValidatedGeneration
+  (the 13-root vector), ValidationProgress (findings_for/
+  examined_for/counting with the ArithmeticOverflow classes), and
+  ValidationResult/ValidationFailure with the CleanupState
+  projection over the 4-8 publication ledger.
+- internal/validation/context.go: the 2-bit claims partition
+  (ceil(page_count/4) bytes, BudgetExceeded class), heap accounting,
+  reserveAllocatorPages/markAllocated/validatePartition with the
+  exact finding classes and byte offsets, the graph page read with
+  cycle/alias/CRC handling, and the sink emit with Stop/SinkFailed
+  classes.
+- internal/validation/membership_table.go: the bounded open-
+  addressing reverse table (next-power-of-two capacity, 64-step
+  probe checkpoints, the Rust hash mixer, InsertResult/CountResult).
+- internal/validation/source.go: ImmutableSource (canonical sidecar,
+  pre-open sidecar refusal, no-follow read-only open, any-link
+  identity, shared lifetime lock, post-lock verification).
+- internal/validation/validation.go: Validate entry (preflight:
+  live-platform gate, budget validation, cancellation; mode dispatch
+  with the exact per-mode open-file minimums), the immutable sweep
+  (bootstrap over a 2-page read-only mapping, allocation reserve,
+  partition sweep, source re-verification), and the bootstrap-refusal
+  finding report (the per-page magic split selects MetaUnavailable
+  against MetaInvalid exactly like Rust report_meta_problem).
+- Supporting authorities: internal/bootstrap now classifies every
+  refusal with the Rust BootstrapError variant (ProblemError carries
+  the SDK format error, the kind, and the per-page magic bits);
+  existing callers keep their classes through errors.As (the reader
+  and bootstrap/reader tests updated from type assertions to
+  unwrap checks). internal/live exports CanonicalSidecarPath,
+  RequireSidecarAbsent, VerifyPathAnyLink, IdentityAnyLink and the
+  verify-path inner core (with the Windows refusal stub).
+  internal/publication exports LocalFileIdentityFromDeviceInode (the
+  validation public-identity encoding authority).
+- Recorded scope positions: LiveCurrent and OfflineCandidate refuse
+  honestly at the dispatch (the live registration and offline source
+  arms arrive with slices F and chunk 4-10); validateSelected ships
+  empty (slices B-E add the structure validators); the worker
+  routing arrives with 4-11. The slice-A sweep claims only the
+  allocator reserve plus the partition paths, so a clean PASS
+  requires the slice-B validators (recorded, not silent).
+
+Validation (all under nice): plain and v4work full trees 14 packages
+ok each, vet plain + v4work (linux, windows, freebsd), race +
+checkptr on validation/bootstrap/reader/live/publication and the
+root, seven cross-builds both tag sets, gofmt clean, all PASS at
+4ba6a39 (5 new validation tests: budget/mode refusals, both
+bootstrap-report arms, sink stop, claims and table units).
+
+Next: chunk 4-9 slice A five-aspect review gate, then slice B
+(page/tree/metadata/retirement validators).
