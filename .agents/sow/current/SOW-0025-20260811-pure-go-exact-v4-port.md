@@ -12006,13 +12006,6 @@ on all four legs including the recovery-construction leg (no
 read/pread/readv/write/writev/pwrite/lseek on any v4 artifact
 descriptor).
 
-Next: milestone 2 chunk 4-10 gate - delta re-review round 2 to all five
-aspects over the ae3c41e review-fix delta; on five-aspect PASS, the
-chunk close-out (gate record, Status completed, move to
-.agents/sow/done/, single commit + push); the worker process boundary
-(4-11) and the authorized scratch/external sort stay the recorded
-follow-ups.
-
 ### Status (2026-08-24) - milestone 2 review round 2: parity and hot-path findings cleared, battery green, delta re-review dispatched
 
 Round 2 verdicts at 3e83c00: Herschel PASS (wire), Noether FAIL
