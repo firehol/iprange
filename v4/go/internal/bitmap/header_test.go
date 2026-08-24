@@ -25,25 +25,25 @@ func TestHeaderProblemRejectsTornCommonHeader(t *testing.T) {
 	format.PutU16(page[format.HeaderCount:], 1)
 
 	level := uint16(1)
-	if err := headerProblem(page, 1, KindFree, &level); err != nil {
-		t.Fatalf("valid bitmap page rejected: %v", err)
+	if _, problem := CheckedHeader(page, 1, KindFree, &level); problem != HeaderProblemNone {
+		t.Fatalf("valid bitmap page rejected: %v", problem)
 	}
 
 	torn := append([]byte(nil), page...)
 	torn[0] ^= 0xFF
-	if err := headerProblem(torn, 1, KindFree, &level); err == nil {
+	if _, problem := CheckedHeader(torn, 1, KindFree, &level); problem != HeaderProblemHeader {
 		t.Fatal("torn magic accepted")
 	}
 
 	flags := append([]byte(nil), page...)
 	flags[format.HeaderFlags] = 1
-	if err := headerProblem(flags, 1, KindFree, &level); err == nil {
+	if _, problem := CheckedHeader(flags, 1, KindFree, &level); problem != HeaderProblemHeader {
 		t.Fatal("nonzero flags accepted")
 	}
 
 	size := append([]byte(nil), page...)
 	format.PutU16(size[format.HeaderSizePos:], 24)
-	if err := headerProblem(size, 1, KindFree, &level); err == nil {
+	if _, problem := CheckedHeader(size, 1, KindFree, &level); problem != HeaderProblemHeader {
 		t.Fatal("non-32 header size accepted")
 	}
 }

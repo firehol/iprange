@@ -168,6 +168,26 @@ func (c *context) releaseHeap(bytes uint64) {
 	c.heapUsed -= bytes
 }
 
+// countMembershipOwner counts one range leaf value in the membership
+// reverse table (Rust Context::count_membership_owner: Unavailable when
+// no table exists, Full when the bounded table saturates, Cancelled on
+// a probe checkpoint failure).
+func (c *context) countMembershipOwner(id uint32) CountResult {
+	if c.memberships == nil {
+		return CountUnavailable
+	}
+	return c.memberships.countRange(id, c.check)
+}
+
+// countStructureRange counts one range leaf value in the structure
+// reverse table (Rust Context::count_structure_range).
+func (c *context) countStructureRange(id uint32) CountResult {
+	if c.structures == nil {
+		return CountUnavailable
+	}
+	return c.structures.countRange(id, c.check)
+}
+
 // markUntraversable counts one untraversable subgraph (Rust
 // Context::mark_untraversable).
 func (c *context) markUntraversable(unbounded bool) error {

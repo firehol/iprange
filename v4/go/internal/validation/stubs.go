@@ -4,14 +4,6 @@ package validation
 // (validation.rs:460): the no-op stubs keep the composition visible and
 // the sweep executable while slices C-E land. Each stub names its slice.
 
-// validateRange runs the range tree validators (Rust range::validate;
-// slice C).
-func validateRange(*context) error { return nil }
-
-// validateCatalog runs the catalog tree validators (Rust catalog::validate;
-// slice C).
-func validateCatalog(*context) error { return nil }
-
 // validateStructure runs the structure table validators (Rust
 // structure::validate; slice E).
 func validateStructure(*context) error { return nil }

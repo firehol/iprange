@@ -44,6 +44,16 @@ type ImmutableReader struct {
 	selection MetaSelection
 }
 
+// NewImmutable wraps an already-selected mapping and generation into an
+// immutable reader for composed reads (the validation cross-checks
+// consume the catalog lookup and the feed cursor over the raw
+// generation, mirroring Rust validation composing feed_catalog over the
+// mapping). The caller owns the mapping lifetime and proved the
+// generation; the selection is not reported by this path.
+func NewImmutable(m *mapping.Mapping, meta format.Meta) *ImmutableReader {
+	return &ImmutableReader{m: m, meta: meta}
+}
+
 // OpenImmutable opens path as an immutable v4 database with the exact
 // bootstrap rules of sections 3 and 4.
 func OpenImmutable(path string) (*ImmutableReader, error) {

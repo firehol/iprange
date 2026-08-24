@@ -60,8 +60,24 @@ func PageLower(level uint16) int {
 	return BranchEnd
 }
 
-// headerProblem classifies one bitmap page header defect.
-func headerProblem(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) error {
+// HeaderProblemNone reports a healthy bitmap header; the other classes
+// mirror Rust bitmap_page::HeaderProblem and select the validation
+// reason.
+type HeaderProblem uint8
+
+const (
+	HeaderProblemNone HeaderProblem = iota
+	HeaderProblemHeader
+	HeaderProblemBorn
+	HeaderProblemLevel
+	HeaderProblemType
+)
+
+// CheckedHeader inspects one bitmap page and classifies its defect (Rust
+// bitmap_page::checked_header): Header, Born, Level, or Type select the
+// validation reason classes, and the geometry is returned only for a
+// healthy header.
+func CheckedHeader(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) (Header, HeaderProblem) {
 	level := format.U16(page[format.HeaderLevel:])
 	lower := PageLower(level)
 	// Rust page_header::common_valid runs on every bitmap parse (private
@@ -76,21 +92,21 @@ func headerProblem(page []byte, selectedTxn uint64, kind Kind, expectedLevel *ui
 		int(format.U16(page[format.HeaderSizePos:])) != format.SlottedHeaderSize ||
 		int(format.U16(page[format.HeaderLower:])) != lower ||
 		int(format.U16(page[format.HeaderUpper:])) != format.PageSize {
-		return corrupt("bitmap page header is invalid")
+		return Header{}, HeaderProblemHeader
 	}
 	born := format.U64(page[format.HeaderBorn:])
 	if born == 0 || born > selectedTxn {
-		return corrupt("bitmap page transaction is invalid")
+		return Header{}, HeaderProblemBorn
 	}
 	if level > MaxLevel || (expectedLevel != nil && *expectedLevel != level) {
-		return corrupt("bitmap page level is invalid")
+		return Header{}, HeaderProblemLevel
 	}
 	expectedType := format.PageTypeBitmapLeaf
 	if level != 0 {
 		expectedType = format.PageTypeBitmapBranch
 	}
 	if page[format.HeaderType] != byte(expectedType) || format.U32(page[format.HeaderAux:]) != uint32(kind) {
-		return corrupt("bitmap page type or discriminator is invalid")
+		return Header{}, HeaderProblemType
 	}
 	count := int(format.U16(page[format.HeaderCount:]))
 	maximum := LeafWords
@@ -98,18 +114,35 @@ func headerProblem(page []byte, selectedTxn uint64, kind Kind, expectedLevel *ui
 		maximum = BranchChildren
 	}
 	if count == 0 || count > maximum {
-		return corrupt("bitmap page header is invalid")
+		return Header{}, HeaderProblemHeader
 	}
-	return nil
+	return Header{Level: level, ItemCount: count}, HeaderProblemNone
 }
 
 // InspectHeader validates one bitmap page and returns its geometry (Rust
-// bitmap_page::inspect_header).
+// bitmap_page::inspect_header); the classified defect becomes the
+// Corrupt class for the healthy-read callers.
 func InspectHeader(page []byte, selectedTxn uint64, kind Kind, expectedLevel *uint16) (Header, error) {
-	if err := headerProblem(page, selectedTxn, kind, expectedLevel); err != nil {
-		return Header{}, err
+	header, problem := CheckedHeader(page, selectedTxn, kind, expectedLevel)
+	if problem != HeaderProblemNone {
+		return Header{}, corrupt(headerProblemDetail(problem))
 	}
-	return Header{Level: format.U16(page[format.HeaderLevel:]), ItemCount: int(format.U16(page[format.HeaderCount:]))}, nil
+	return header, nil
+}
+
+// headerProblemDetail is the Corrupt message of one header problem
+// class (the pre-classification messages are unchanged).
+func headerProblemDetail(problem HeaderProblem) string {
+	switch problem {
+	case HeaderProblemBorn:
+		return "bitmap page transaction is invalid"
+	case HeaderProblemLevel:
+		return "bitmap page level is invalid"
+	case HeaderProblemType:
+		return "bitmap page type or discriminator is invalid"
+	default:
+		return "bitmap page header is invalid"
+	}
 }
 
 // ReservedZero reports whether the reserved tail is all zeroes (Rust
