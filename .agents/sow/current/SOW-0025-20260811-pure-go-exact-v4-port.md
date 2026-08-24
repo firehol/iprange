@@ -10634,3 +10634,45 @@ All validation PASS at 6d9ab2f.
 Next: five-aspect review of the slice-O delta (same five reviewers;
 the review-round-2 verdicts on slice N are recorded above), then the
 milestone-1 close push per the user decision.
+
+### Status (2026-08-24) - milestone 1 close: all five aspects PASS on the chunk 4-8 delta
+
+The chunk 4-8 delta (slices A-O; this entry records the slice-N and
+slice-O close verdicts) passes the five-aspect review gate. Heads are
+7d95412 for the slice-N round-2 fixes and 426d597 for the slice-O
+close; both were reviewed by the same five level-1 reviewers on the
+lead's model, adversarial mode, scopes per the top-of-SOW split:
+
+- Rust parity (Goodall): PASS. The rejectLiveSelf symlink fold at
+  7d95412 matches the Rust open_regular O_NOFOLLOW -> NotRegular
+  path; the slice-O build-tag guards are parity-neutral on every host
+  where the suite runs.
+- Go idioms (Gauss): PASS. Build-tag placement and comments follow
+  the repo's platform-split conventions; one records nit fixed at
+  6400b93.
+- Absolute performance (Chandrasekhar): PASS. No host's compiled
+  surface changed in the slice-O delta; the zero-alloc gates re-ran
+  green at HEAD.
+- Wire format and integrity (Herschel): PASS. Zero diff across the
+  whole slice range in the codecs, lock offsets, reservation
+  machines, and the conformance corpus; Go cross-open and
+  invalid-mutation gates green; the Rust suite unchanged.
+- APIs, docs, records (Noether): PASS after the records fixes at
+  6400b93 and 426d597 (cross-build count, Removed-bullet accuracy,
+  superseded Next lines, commit anchors, provenance wording).
+
+The full validation battery (recorded in the slice-O entry) ran under
+nice on the real tree: vet plain + v4work (linux and windows, the
+latter green for the first time with the two pre-existing gaps
+closed at 6d9ab2f), plain and v4work full trees 14 packages ok each
+(833 v4work test functions, 194 in publication), race + checkptr on
+the core packages, seven cross-builds both tag sets, zero-alloc and
+conformance gates, and the unchanged Rust suite. The branch pushes to
+origin/master with this entry (61 commits ahead at the close, all
+signed); milestone 1 (the pure-Go exact v4 port with the singular
+fixed-tree authority, the mmap-only ownership split, and the
+reviewer-enforced gates) is closed per the user decision.
+
+Next: milestone 2 - the next M3 surface (feed workflows,
+draft_store membership and structured applies, and the range-edit
+callers), following the same review process.
