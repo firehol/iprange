@@ -18,15 +18,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
-// FileIdentity is the exact local identity of one retained inode (Rust
-// validation::LocalFileIdentity): the platform kind tag (1 = POSIX)
-// and the encoded identity bytes (device little-endian, inode
-// little-endian, zero padding).
-type FileIdentity struct {
-	Kind  uint16
-	Bytes [32]byte
-}
-
 // LocalBasename is one platform basename copied without allocation
 // (Rust live_writer::LocalBasename), bounded to the portable result
 // bound of 512 bytes.
