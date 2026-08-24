@@ -359,3 +359,11 @@ func absentBitmapResult(base, span, limit uint64, kind bitmap.Kind) *bitmapNodeR
 	}
 	return &bitmapNodeResult{setBits: 0, hasOne: false, hasCandidate: candidate}
 }
+
+// validateFreeBitmap runs the free bitmap validator over the whole
+// committed generation (Rust validate_selected's bitmap::validate with
+// Kind::Free and the page count as the bit limit).
+func validateFreeBitmap(ctx *context) error {
+	_, err := validateBitmap(ctx, ctx.meta.FreeBitmapRoot, ctx.meta.PageCount, bitmap.KindFree)
+	return err
+}

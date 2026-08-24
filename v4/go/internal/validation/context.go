@@ -188,6 +188,44 @@ func (c *context) countStructureRange(id uint32) CountResult {
 	return c.structures.countRange(id, c.check)
 }
 
+// defineMembership records one dictionary record's stored facts (Rust
+// Context::define_membership; the membership/structured gates of the
+// validator keep the table present).
+func (c *context) defineMembership(id uint32, refcount uint64, wordCount uint32, digest [32]byte) (InsertResult, error) {
+	if c.memberships == nil {
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "direct validation has no membership table"}
+	}
+	return c.memberships.define(id, refcount, wordCount, digest, c.check)
+}
+
+// markMembershipReverse records one reverse-index observation (Rust
+// Context::mark_membership_reverse).
+func (c *context) markMembershipReverse(id uint32, wordCount uint32, digest [32]byte) (bool, error) {
+	if c.memberships == nil {
+		return false, &format.Error{Code: format.CodeFormatInvalid, Detail: "direct validation has no membership table"}
+	}
+	return c.memberships.markReverse(id, wordCount, digest, c.check)
+}
+
+// membershipSlots returns the membership table capacity (Rust
+// Context::membership_slots).
+func (c *context) membershipSlots() (int, error) {
+	if c.memberships == nil {
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "direct validation has no membership table"}
+	}
+	return c.memberships.len(), nil
+}
+
+// membershipSlot returns one occupied membership table entry (Rust
+// Context::membership_slot).
+func (c *context) membershipSlot(index int) (Slot, bool, error) {
+	if c.memberships == nil {
+		return Slot{}, false, &format.Error{Code: format.CodeFormatInvalid, Detail: "direct validation has no membership table"}
+	}
+	slot, ok := c.memberships.slot(index)
+	return slot, ok, nil
+}
+
 // markUntraversable counts one untraversable subgraph (Rust
 // Context::mark_untraversable).
 func (c *context) markUntraversable(unbounded bool) error {

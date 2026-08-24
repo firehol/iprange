@@ -131,3 +131,137 @@ func MembershipIDLeafKey(b []byte) (uint32, error) {
 	}
 	return U32(b[4:8]), nil
 }
+
+// Raw membership record and hash codecs for the validation walkers (Rust
+// membership_dictionary::codec::decode/decode_hash/decode_id_branch/
+// decode_hash_branch parity): the fields decode without the reader's
+// extra refcount and page-range checks so the validators can report
+// those classes as findings.
+
+// MembershipRecord is one raw dictionary record (Rust Record).
+type MembershipRecord struct {
+	ID        uint32
+	Refcount  uint64
+	WordCount uint32
+	Digest    [32]byte
+	Storage   MembershipStorage
+	BlobRoot  uint32
+}
+
+// MembershipIDRecordMin is the fixed head of one membership record
+// (Rust ID_BASE).
+const MembershipIDRecordMin = membershipLeafFixed
+
+// MaxMembershipIDRecord is the largest membership record the slotted
+// layout can carry (Rust MAX_ID_RECORD).
+const MaxMembershipIDRecord = PageSize - SlottedHeaderSize - 2
+
+// DecodeMembershipRecord parses one variable membership record (Rust
+// codec::decode): the stored record length proves the record span, the
+// fields are canonical (nonzero id, in-range word count, bitmap length
+// equal to the word count times eight), and the storage flag picks the
+// inline or blob layout. Refcount is deliberately not checked: the
+// validation walk reports a zero refcount as the refcount finding.
+func DecodeMembershipRecord(b []byte) (MembershipRecord, error) {
+	if len(b) < membershipLeafFixed {
+		return MembershipRecord{}, headerErr("membership record is too short")
+	}
+	if int(U16(b[0:2])) != len(b) {
+		return MembershipRecord{}, headerErr("membership record length mismatch")
+	}
+	if b[3] != 0 {
+		return MembershipRecord{}, headerErr("membership record reserved byte")
+	}
+	r := MembershipRecord{
+		ID:        U32(b[4:8]),
+		Refcount:  U64(b[8:16]),
+		WordCount: U32(b[16:20]),
+		Digest:    [32]byte(b[32:64]),
+		BlobRoot:  U32(b[24:28]),
+	}
+	if U32(b[28:32]) != 0 {
+		return MembershipRecord{}, headerErr("membership record reserved field")
+	}
+	bitmapLen := U32(b[20:24])
+	if r.ID == 0 {
+		return MembershipRecord{}, headerErr("membership id is zero")
+	}
+	if r.WordCount < 1 || r.WordCount > MaxMembershipWordCount {
+		return MembershipRecord{}, headerErr("membership word count %d", r.WordCount)
+	}
+	if uint64(bitmapLen) != uint64(r.WordCount)*8 {
+		return MembershipRecord{}, headerErr("membership bitmap length %d vs words %d", bitmapLen, r.WordCount)
+	}
+	switch b[2] {
+	case 0:
+		if r.BlobRoot != 0 || len(b) != membershipLeafFixed+int(bitmapLen) {
+			return MembershipRecord{}, headerErr("membership inline storage is malformed")
+		}
+		r.Storage = MembershipStorageInline
+	case 1:
+		if r.BlobRoot < 2 || len(b) != membershipLeafFixed {
+			return MembershipRecord{}, headerErr("membership blob storage is malformed")
+		}
+		r.Storage = MembershipStorageBlob
+	default:
+		return MembershipRecord{}, headerErr("membership storage %d", b[2])
+	}
+	return r, nil
+}
+
+// MembershipHashKey is one reverse-index hash key (Rust HashKey:
+// digest, word count, id; ordered lexicographically by those fields).
+type MembershipHashKey struct {
+	Digest    [32]byte
+	WordCount uint32
+	ID        uint32
+}
+
+const (
+	// MembershipHashKeySize is the fixed hash leaf record size (Rust
+	// HASH_KEY_SIZE).
+	MembershipHashKeySize = 40
+	// MembershipHashBranchSize is the fixed hash branch entry size
+	// (Rust HASH_BRANCH_SIZE).
+	MembershipHashBranchSize = 44
+)
+
+// DecodeMembershipHashKey parses one fixed 40-byte reverse-index key
+// (Rust codec::decode_hash).
+func DecodeMembershipHashKey(b []byte) (MembershipHashKey, error) {
+	if len(b) != MembershipHashKeySize {
+		return MembershipHashKey{}, headerErr("membership hash record size %d", len(b))
+	}
+	key := MembershipHashKey{
+		Digest:    [32]byte(b[0:32]),
+		WordCount: U32(b[32:36]),
+		ID:        U32(b[36:40]),
+	}
+	if key.WordCount == 0 || key.WordCount > MaxMembershipWordCount || key.ID == 0 {
+		return MembershipHashKey{}, headerErr("membership hash record is malformed")
+	}
+	return key, nil
+}
+
+// DecodeMembershipHashBranchFields parses one fixed 44-byte hash branch
+// entry without the child-page-number check (Rust codec::
+// decode_hash_branch: the key decodes in place and the child is raw).
+func DecodeMembershipHashBranchFields(b []byte) (MembershipHashKey, uint32, error) {
+	if len(b) != MembershipHashBranchSize {
+		return MembershipHashKey{}, 0, headerErr("membership hash branch size %d", len(b))
+	}
+	key, err := DecodeMembershipHashKey(b[0:MembershipHashKeySize])
+	if err != nil {
+		return MembershipHashKey{}, 0, err
+	}
+	return key, U32(b[40:44]), nil
+}
+
+// DecodeMembershipIDBranchFields parses one fixed 8-byte ID branch entry
+// without the child-page-number check (Rust codec::decode_id_branch).
+func DecodeMembershipIDBranchFields(b []byte) (firstID uint32, child uint32, err error) {
+	if len(b) != MembershipIDBranchSize {
+		return 0, 0, headerErr("membership id branch size %d", len(b))
+	}
+	return U32(b[0:4]), U32(b[4:8]), nil
+}
