@@ -145,6 +145,9 @@ func listAbandonedPublicationTemps(path string, check func() error, sink func(en
 // remove_abandoned_publication_temp: readable content requires exact
 // tuple and digest evidence; partial content requires both absent).
 func removeAbandonedPublicationTemp(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, expectedArtifact LocalFileIdentity, expectedTuple *residueTuple, expectedDigest *residueDigest, check func() error) (AbandonedArtifactRemoval, error) {
+	if err := live.Checkpoint(check); err != nil {
+		return AbandonedArtifactRemoval{}, sdkProblem(err)
+	}
 	if (expectedTuple != nil) != (expectedDigest != nil) {
 		return AbandonedArtifactRemoval{}, problem(format.CodeInvalidArgument, "publication tuple and digest evidence must both be present or absent")
 	}
@@ -191,6 +194,9 @@ func listAbandonedReservationArtifacts(path string, check func() error, sink fun
 // reservation after caller-certified quiescence (Rust
 // remove_abandoned_reservation_artifact).
 func removeAbandonedReservationArtifact(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, expectedArtifact LocalFileIdentity, check func() error) (AbandonedArtifactRemoval, error) {
+	if err := live.Checkpoint(check); err != nil {
+		return AbandonedArtifactRemoval{}, sdkProblem(err)
+	}
 	return maintenanceReservationArtifact.remove(path, expectedDirectory, attempt, expectedArtifact, reservationOperationLock, check, func(file *os.File, identity live.FileIdentity) error {
 		return requireReadableReservationBinding(file, attempt, identity)
 	})
@@ -201,13 +207,13 @@ func removeAbandonedReservationArtifact(path string, expectedDirectory LocalFile
 // candidate types live only in Rust because Go publication refuses
 // Windows opens at destination bind like every other surface).
 func listWindowsHousekeeping(path string, check func() error) error {
-	return problem(format.CodeOSUnsupported, "windows housekeeping is unavailable on this platform")
+	return problem(format.CodeOSUnsupported, "Windows housekeeping is unavailable on this platform")
 }
 
 // removeWindowsHousekeeping is the refused Windows-only housekeeping
 // removal (Rust remove_windows_housekeeping non-windows arm; M5).
 func removeWindowsHousekeeping(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, ordinal uint32, expectedEnvelope LocalFileIdentity, expectedPayloadIdentity *residuePayloadIdentity, check func() error) error {
-	return problem(format.CodeOSUnsupported, "windows housekeeping is unavailable on this platform")
+	return problem(format.CodeOSUnsupported, "Windows housekeeping is unavailable on this platform")
 }
 
 // residuePayloadIdentity is the optional exact content evidence of

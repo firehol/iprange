@@ -10,6 +10,7 @@
 package publication
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,7 +106,7 @@ func TestMaintenanceListingReportsOnlyStableExactNamesAndOptionalContentEvidence
 		t.Fatalf("complete output missing: %v", err)
 	}
 	partialID := [16]byte{2}
-	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(outputPrefix, partialID)), []byte("partial"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(t, outputPrefix, partialID)), []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write partial: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".iprange-publish-NOT-AN-ATTEMPT.tmp"), []byte("foreign"), 0o600); err != nil {
@@ -152,7 +153,7 @@ func TestMaintenanceExactRemovalHandlesCompletePartialAndAlreadyAbsentOutputs(t 
 	before := countProcessFds(t)
 	completePath, completeAttempt := maintenanceTestCompleteOutput(t, dir, "result.v4")
 	partialID := [16]byte{4}
-	partialPath := filepath.Join(dir, maintenanceTestName(outputPrefix, partialID))
+	partialPath := filepath.Join(dir, maintenanceTestName(t, outputPrefix, partialID))
 	if err := os.WriteFile(partialPath, []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write partial: %v", err)
 	}
@@ -202,10 +203,11 @@ func TestMaintenanceExactRemovalHandlesCompletePartialAndAlreadyAbsentOutputs(t 
 
 // maintenanceTestName builds one private artifact name for the tests
 // (Rust name/reservation_name).
-func maintenanceTestName(prefix string, attempt [16]byte) string {
+func maintenanceTestName(t *testing.T, prefix string, attempt [16]byte) string {
+	t.Helper()
 	name, err := privateName(prefix, attempt)
 	if err != nil {
-		panic(err)
+		t.Fatalf("private name: %v", err)
 	}
 	return name
 }
@@ -336,7 +338,7 @@ func TestMaintenanceReservationListingReportsBoundPolicyPhaseAndPreviousEvidence
 func TestMaintenanceReservationListingIncludesMalformedExactNamesWithoutEvidence(t *testing.T) {
 	dir := t.TempDir()
 	malformedID := [16]byte{7}
-	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(reservationPrefix, malformedID)), []byte("partial"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(t, reservationPrefix, malformedID)), []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write malformed: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".iprange-reservation-NOT-AN-ATTEMPT.tmp"), []byte("foreign"), 0o600); err != nil {
@@ -365,7 +367,7 @@ func TestMaintenanceReservationRemovalHandlesBoundMalformedAndAlreadyAbsentArtif
 	main := filepath.Join(dir, "result.v4")
 	runAttemptCrashChild(t, main, "publish", resolverPreMainPoints[0])
 	bound := maintenanceTestListReservations(t, dir)[0]
-	boundPath := filepath.Join(dir, maintenanceTestName(reservationPrefix, bound.attempt))
+	boundPath := filepath.Join(dir, maintenanceTestName(t, reservationPrefix, bound.attempt))
 	result, err := removeAbandonedReservationArtifact(dir, bound.directoryIdentity, bound.attempt, bound.artifactIdentity, noopCheck)
 	if err != nil {
 		t.Fatalf("remove bound: %v", err)
@@ -378,7 +380,7 @@ func TestMaintenanceReservationRemovalHandlesBoundMalformedAndAlreadyAbsentArtif
 	}
 
 	malformedID := [16]byte{8}
-	malformedPath := filepath.Join(dir, maintenanceTestName(reservationPrefix, malformedID))
+	malformedPath := filepath.Join(dir, maintenanceTestName(t, reservationPrefix, malformedID))
 	if err := os.WriteFile(malformedPath, []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write malformed: %v", err)
 	}
@@ -420,9 +422,9 @@ func TestMaintenanceReservationRemovalRejectsWrongDirectoryIdentityAndHeaderBind
 		t.Fatalf("wrong-directory problem = %v, want directory identity mismatch", err)
 	}
 
-	sourcePath := filepath.Join(dir, maintenanceTestName(reservationPrefix, bound.attempt))
+	sourcePath := filepath.Join(dir, maintenanceTestName(t, reservationPrefix, bound.attempt))
 	copiedID := [16]byte{9}
-	copiedPath := filepath.Join(dir, maintenanceTestName(reservationPrefix, copiedID))
+	copiedPath := filepath.Join(dir, maintenanceTestName(t, reservationPrefix, copiedID))
 	if err := copyFile(sourcePath, copiedPath); err != nil {
 		t.Fatalf("copy reservation: %v", err)
 	}
@@ -444,7 +446,7 @@ func TestMaintenanceReservationRemovalRejectsWrongDirectoryIdentityAndHeaderBind
 // sink_failure.
 func TestMaintenanceReservationListingHonorsCancellationStopAndSinkFailure(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(reservationPrefix, [16]byte{10})), []byte("partial"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, maintenanceTestName(t, reservationPrefix, [16]byte{10})), []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write reservation: %v", err)
 	}
 
@@ -475,6 +477,8 @@ func TestMaintenanceWindowsHousekeepingIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	if err := listWindowsHousekeeping(dir, noopCheck); codeOf(err) != format.CodeOSUnsupported {
 		t.Fatalf("list housekeeping problem = %v, want os unsupported", err)
+	} else if detailOf(err) != "Windows housekeeping is unavailable on this platform" {
+		t.Fatalf("list housekeeping detail %q, want the Rust message", detailOf(err))
 	}
 	var identity LocalFileIdentity
 	identity.Kind = identityKind
@@ -482,5 +486,41 @@ func TestMaintenanceWindowsHousekeepingIsRefused(t *testing.T) {
 	attempt[0] = 1
 	if err := removeWindowsHousekeeping(dir, identity, attempt, 0, identity, nil, noopCheck); codeOf(err) != format.CodeOSUnsupported {
 		t.Fatalf("remove housekeeping problem = %v, want os unsupported", err)
+	} else if detailOf(err) != "Windows housekeeping is unavailable on this platform" {
+		t.Fatalf("remove housekeeping detail %q, want the Rust message", detailOf(err))
 	}
+}
+
+// TestMaintenanceRemoveHonorsLeadingCancellation ports the
+// cancellation.check()? that precedes both Rust remove arms: a
+// pre-cancelled token wins over the evidence-pair argument class and
+// over the absent-artifact clean result.
+func TestMaintenanceRemoveHonorsLeadingCancellation(t *testing.T) {
+	dir := t.TempDir()
+	cancelled := &resolverTestCancellation{}
+	cancelled.cancelled.Store(true)
+	number := localIdentityFromDeviceInode(1, 2)
+	attempt := [16]byte{1}
+
+	_, err := removeAbandonedPublicationTemp(dir, number, attempt, number, nil, nil, cancelled.check)
+	if codeOf(err) != format.CodeCancelled {
+		t.Fatalf("absent output problem = %v, want cancelled", err)
+	}
+	_, err = removeAbandonedPublicationTemp(dir, number, attempt, number, &residueTuple{}, nil, cancelled.check)
+	if codeOf(err) != format.CodeCancelled {
+		t.Fatalf("invalid-pair output problem = %v, want cancelled", err)
+	}
+	_, err = removeAbandonedReservationArtifact(dir, number, attempt, number, cancelled.check)
+	if codeOf(err) != format.CodeCancelled {
+		t.Fatalf("absent reservation problem = %v, want cancelled", err)
+	}
+}
+
+// detailOf extracts the fixed detail of one problem surface error.
+func detailOf(err error) string {
+	var fe *format.Error
+	if errors.As(err, &fe) {
+		return fe.Detail
+	}
+	return ""
 }

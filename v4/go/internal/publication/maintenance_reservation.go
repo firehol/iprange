@@ -45,7 +45,7 @@ func inspectAbandonedReservation(dir *live.Directory, directoryIdentity LocalFil
 	}
 	return &abandonedReservationEntry{
 		directoryIdentity: directoryIdentity,
-		artifactIdentity:  localIdentityFromEncoded(identity),
+		artifactIdentity:  residueLocalIdentity(&identity),
 		attempt:           attempt,
 		evidence:          evidence,
 	}, nil
@@ -94,7 +94,7 @@ func requireReadableReservationBinding(file *os.File, attempt [16]byte, identity
 // is the panic-free expect of the ported codec).
 func reservationMaintenanceEvidence(header reservationHeader) *abandonedReservationEvidence {
 	output := publicationOutputEvidence{
-		identity: identityFromEncodedLocal(header.outputIdentity),
+		identity: selectedOutputIdentity(header.outputIdentity),
 		tuple: residueTuple{
 			databaseID:    header.databaseID,
 			transactionID: header.transactionID,
@@ -109,7 +109,7 @@ func reservationMaintenanceEvidence(header reservationHeader) *abandonedReservat
 	}
 	if header.previousPresent {
 		evidence.previous = &reservationPreviousEvidence{
-			identity: identityFromEncodedLocal(header.previous.identity),
+			identity: selectedPreviousIdentity(header.previous.identity),
 			digest:   residueDigest{byteLength: header.previous.byteLength, sha512: header.previous.sha512},
 		}
 	}
@@ -140,8 +140,24 @@ func reservationMaintenancePhase(state reservationState) abandonedReservationPha
 	return abandonedReservationPhasePrepared
 }
 
-// identityFromEncodedLocal decodes one written identity payload to
-// the portable identity (Rust Identity::decode expect arms).
-func identityFromEncodedLocal(bytes [32]byte) LocalFileIdentity {
-	return localIdentityFromEncoded(identityFromEncoded(bytes))
+// selectedOutputIdentity decodes the written output identity payload
+// (Rust reservation.rs evidence expect: "selected output identity is
+// valid"; the codec only selects records that carry a valid one).
+func selectedOutputIdentity(bytes [32]byte) LocalFileIdentity {
+	device, inode, ok := identityFromEncodedBytes(bytes)
+	if !ok {
+		panic("selected output identity is valid")
+	}
+	return localIdentityFromDeviceInode(device, inode)
+}
+
+// selectedPreviousIdentity decodes the written previous identity
+// payload (Rust reservation.rs evidence expect: "selected previous
+// identity is valid").
+func selectedPreviousIdentity(bytes [32]byte) LocalFileIdentity {
+	device, inode, ok := identityFromEncodedBytes(bytes)
+	if !ok {
+		panic("selected previous identity is valid")
+	}
+	return localIdentityFromDeviceInode(device, inode)
 }

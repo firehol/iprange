@@ -48,7 +48,7 @@ func inspectAbandonedPublicationTemp(dir *live.Directory, directoryIdentity Loca
 	}
 	return &abandonedPublicationTempEntry{
 		directoryIdentity: directoryIdentity,
-		artifactIdentity:  localIdentityFromEncoded(identity),
+		artifactIdentity:  residueLocalIdentity(&identity),
 		attempt:           attempt,
 		tuple:             tuple,
 		digest:            digest,
@@ -65,7 +65,7 @@ func contentEvidence(file *os.File, check func() error) (*publicationOutputEvide
 	}
 	byteLength, err := fstatSize(file)
 	if err != nil {
-		return nil, err
+		return nil, sdkProblem(err)
 	}
 	if !reservationGeometryValid(byteLength) {
 		return nil, nil
@@ -115,11 +115,4 @@ func contentEvidence(file *os.File, check func() error) (*publicationOutputEvide
 func maintenanceFormatClass(err error) bool {
 	var fe *format.Error
 	return errors.As(err, &fe) && fe.Code == format.CodeFormatInvalid
-}
-
-// localIdentityFromEncoded builds the portable identity of one
-// retained inode proven by inspectStable (Rust namespace::local).
-func localIdentityFromEncoded(identity live.FileIdentity) LocalFileIdentity {
-	device, inode := live.IdentityDeviceInode(&identity)
-	return localIdentityFromDeviceInode(device, inode)
 }

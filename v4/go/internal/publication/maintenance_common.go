@@ -292,10 +292,8 @@ func (a *maintenanceArtifact) namespaceError(err error) *format.Error {
 		return problem(format.CodeInvalidArgument, a.invalidName)
 	case live.NamespaceForkedHandle:
 		return problem(format.CodeForkedHandle, "publication handle crossed fork")
-	case live.NamespaceIo:
+	case live.NamespaceIo, live.NamespaceIoAt:
 		return problem(format.CodeIO, "publication filesystem operation failed")
-	case live.NamespaceIoAt:
-		return problem(format.CodeIO, nerr.Op)
 	case live.NamespaceUnsupported, live.NamespaceCrossFilesystem:
 		return problem(format.CodeOSUnsupported, "publication directory lacks required local operations")
 	default:
@@ -312,10 +310,8 @@ func (a *maintenanceArtifact) cleanupError(err error) *format.Error {
 		return sdkProblem(err)
 	}
 	switch nerr.Kind {
-	case live.NamespaceIo:
+	case live.NamespaceIo, live.NamespaceIoAt:
 		return problem(format.CodeIO, "publication filesystem operation failed")
-	case live.NamespaceIoAt:
-		return problem(format.CodeIO, nerr.Op)
 	case live.NamespaceForkedHandle:
 		return problem(format.CodeForkedHandle, "publication handle crossed fork")
 	default:
@@ -328,8 +324,7 @@ func (a *maintenanceArtifact) cleanupError(err error) *format.Error {
 // Directory::identity).
 func maintenanceDirectoryIdentity(dir *live.Directory) LocalFileIdentity {
 	identity := dir.Identity()
-	device, inode := live.IdentityDeviceInode(&identity)
-	return localIdentityFromDeviceInode(device, inode)
+	return residueLocalIdentity(&identity)
 }
 
 // directoryIdentityMismatchProblem is the fixed directory identity
