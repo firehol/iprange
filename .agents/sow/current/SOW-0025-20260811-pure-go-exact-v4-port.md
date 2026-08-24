@@ -10487,7 +10487,66 @@ internal/writer, and the root package (plain and v4work),
 linux/arm64 + freebsd/amd64 + darwin/arm64 + windows/amd64
 cross-builds, gofmt clean, all PASS at a78eced.
 
-Next: add the public root surfaces (ResolvePublication, residue
-inspect/remove, abandoned maintenance list/remove), then slice-N
-review (five level-1 reviewers, one level, adversarial), then O
-validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice N implemented: public publication surfaces
+
+Slice N step-3 at commit 7b0f1a0 adds the SDK-facing publication
+surfaces (Rust publication.rs re-exports): interrupted-publication
+resolution, canonical residue inspection/removal, and
+abandoned-artifact maintenance. The publication package exports the
+boundary types and entry points; the root iprangedb facade aliases
+the Rust-parity shapes and folds the cancellation token.
+
+Go changes:
+
+- internal/publication/public.go (+473): PublicationResolutionMode
+  and ResolvePublication (Complete/Remove over one supplied result or
+  the retained reservation), PublicationTuple/PublicationDigest,
+  PublicationResidueCoordination/MainContent/Main/Handle/Inspection/
+  Removal with the exact conversions (mapResidueRemoval keeps the
+  residual authority of an incomplete removal), the consumed-handle
+  rule enforced by nil-ing the wrapper after Remove/Close (Rust move
+  semantics), the abandoned reservation policy/phase/evidence/entry/
+  list and publication-temp entry/list shapes with the exact
+  evidence mappings, the exported ErrMaintenanceSinkStop control, and
+  the four list/remove entry points.
+- internal/publication/public_windows.go (+150): typed Windows stubs
+  for every new symbol (M5 honest refusal, same class as the POSIX
+  destination bind); the type names exist only so the SDK facade
+  compiles on Windows.
+- internal/publication/public_test.go (+230): boundary ports of the
+  malformed-residue removal (with the consumed-handle refusal and fd
+  pin), the resolver Complete/Remove modes over real crash states,
+  the abandoned-temp listing/removal with the exact tuple/digest
+  facts and the sink-stop/sink-failure classes, and the reservation
+  listing evidence mapping (policy/phase/output/previous).
+- v4/go/publication_public.go (+260): the iprangedb entry points
+  (ResolvePublication, InspectPublicationResidue,
+  RemovePublicationResidue, ListAbandonedPublicationTemps,
+  RemoveAbandonedPublicationTemp, ListAbandonedReservationArtifacts,
+  RemoveAbandonedReservationArtifact, ErrMaintenanceSinkStop) as type
+  aliases and wrappers; publicationCheck converts the SDK token's
+  cancelled state to the exact machine Cancelled problem so the class
+  survives the machines that fold unknown check errors to the SDK IO
+  class (the internal tests use the format surface directly).
+- v4/go/publication_public_test.go (+150): end-to-end residue and
+  maintenance through the SDK boundary over hand-built namespace
+  state, the unresolvable refusal, and the leading-cancellation
+  refusals of every entry point.
+- v4/go/lifecycle_public.go: the root FileIdentity becomes an alias
+  of the publication LocalFileIdentity (identical byte shape), so
+  listed entries pass back into the removal entry points without
+  conversion.
+
+Validation (all under nice): plain and v4work full trees (14 packages
+ok each; 854 Test functions runnable under v4work at 7b0f1a0, 193 in
+publication of which 7 are the boundary tests), vet, -race +
+-gcflags=all=-d=checkptr=2 on internal/publication and the root
+package (v4work), linux/arm64 + freebsd/amd64 + darwin/arm64 +
+windows/amd64 cross-builds, gofmt clean, all PASS at 7b0f1a0. (The
+GOOS=windows vet of internal/security's tests fails on the
+pre-existing unix.Geteuid use in security_test.go, added at slice
+4-3; it is outside this slice's blast radius and tracked for the
+slice-O sweep.)
+
+Next: slice-N review (five level-1 reviewers, one level,
+adversarial), then slice O: full validation + gate + push.
