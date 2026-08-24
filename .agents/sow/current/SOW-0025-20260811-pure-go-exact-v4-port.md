@@ -11787,3 +11787,59 @@ structures, ranges and metadata, and indirect_build.go with the Mode
 construct/build/retained_bytes/failure terminals; membership output
 ports the writer membershipState intern machinery and structure support
 ports the NetworkEnrichmentV1 codec.
+
+### Status (2026-08-24) - milestone 2 slice D3 delivered: indirect membership and structured recovery output
+
+Slice D3 delivers the indirect recovery analysis and both
+membership-backed output modes (Rust recovery/membership.rs,
+indirect_build.rs, membership_build.rs, membership_output.rs,
+structured_build.rs, structured_output.rs, structure_index.rs,
+structure_table.rs parity):
+
+- internal/writer: the chunk word-source seam (MembershipWordSource)
+  and the words push variants (PushMembershipV4Words/V6Words,
+  PushNetworkEnrichmentV1V4Words/V6Words); the shape, feed-activity,
+  and intern paths are generic over the seam, so recovery output
+  re-interns verified source bitmaps without materializing them. The
+  existing concrete pushes keep their behavior.
+- internal/recovery/indirect.go: the analyze pass (budget and kind
+  preflight, the half-heap page set, the counts into the tables
+  reserve, the catalog/membership/structure recovery, the range
+  analysis, and the tables-retained metadata read).
+- internal/recovery/indirect_build.go: the shared construct (the
+  destination proof, the recovered feeds, the retained tables heap,
+  and the complete-ranges finish over the mode output).
+- internal/recovery/membership_build.go + membership_output.go: the
+  membership mode (no-structure proof) and the coalescing
+  membership-range policy with the missing-membership fence; the
+  verified locator words stream through the seam.
+- internal/recovery/structure_table.go + structure_index.go: the
+  48-byte structure locator over the shared id table and the dense
+  structure-tree scan (fixed record and directory pages, slot-implied
+  ids, coverage-scaled child bases, the kind aux proof, the payload
+  digest and membership-dependence validations, the id-conflict
+  reconciliation, and the outcome report).
+- internal/recovery/structured_build.go + structured_output.go: the
+  structured mode (network-enrichment proof) and the typed range
+  policy pushing decoded values with their optional membership
+  bitmaps.
+- Tests: the clean membership recovery construct arm (feeds, wide and
+  inline bitmaps, metadata, high water), the damaged-blob arm, the
+  catalog-conflict arm, and the structured arms (digest-damaged
+  record, missing membership, out-of-bounds branch pointer with
+  49/2 best-effort recovery); recovery suite now 62 Test functions.
+
+Slice D3 validation (all under nice; ~2 core-minutes): gofmt clean;
+vet plain + v4work on linux/windows/freebsd; plain and v4work full
+trees; race + checkptr=2 on recovery/writer/validation/live/bootstrap/
+publication and the root, both tag sets; seven cross-builds plain +
+v4work (linux/386, linux/arm64, darwin/amd64, darwin/arm64,
+freebsd/amd64, netbsd/amd64, windows/amd64).
+
+Next: milestone 2 chunk 4-10 slice D4 - the recovery API assembly and
+the live recovery entry (Rust recovery/api.rs, construction.rs,
+source_guard.rs parity): the public recovery entry over the kind split
+(direct, membership, structured), the live writer recovery path, the
+report terminal, and the scratch cleanup authority; then slice E - the
+public API facade over the recovered live stores and the conformance
+cross-checks.
