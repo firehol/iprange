@@ -120,8 +120,8 @@ func TestPublishSetUnionPreserveFeedsV4(t *testing.T) {
 	if err != nil {
 		t.Fatal("publish:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("publication status %v, want published", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication status %v, want published", result.Publication.Publication)
 	}
 	if result.CleanupState() != CleanupStateClean {
 		t.Fatalf("cleanup %v, want clean", result.CleanupState())
@@ -281,8 +281,8 @@ func TestPublishSetReplacementPoliciesV4(t *testing.T) {
 		if err != nil {
 			t.Fatalf("replacement %v: %v", policy, err)
 		}
-		if result.Publication.Status != PublicationPublished {
-			t.Fatalf("replacement %v status %v, want published", policy, result.Publication.Status)
+		if result.Publication.Publication != PublicationPublished {
+			t.Fatalf("replacement %v status %v, want published", policy, result.Publication.Publication)
 		}
 		if result.Publication.DestinationContent != DestinationContentDesired {
 			t.Fatalf("replacement %v content %v, want desired", policy, result.Publication.DestinationContent)

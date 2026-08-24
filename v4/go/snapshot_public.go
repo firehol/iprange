@@ -57,7 +57,7 @@ type SnapshotResult struct {
 
 // CleanupState reports the artifact state after the publication.
 func (r SnapshotResult) CleanupState() CleanupState {
-	return r.Publication.Cleanup
+	return r.Publication.CleanupState()
 }
 
 // SnapshotPreparationFailure is the failing terminal of one snapshot
@@ -115,7 +115,7 @@ func SnapshotTo(sourcePath string, sourceMode SnapshotSourceMode, destinationPat
 	if failure != nil {
 		return zero, &SnapshotPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.Cleanup}
 	}
-	return SnapshotResult{Publication: *result}, nil
+	return SnapshotResult{Publication: result}, nil
 }
 
 // internal converts the public budget onto the machine budget (the

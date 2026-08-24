@@ -26,9 +26,9 @@ import (
 // attempt file (Rust snapshot publish flow: workflow::create then
 // constructing the Finished). The caller consumes the attempt with
 // Finish; a helper failure abandons the attempt with Close.
-func publishTestAttempt(t *testing.T, main string, policy reservationPolicy) (*PublishAttempt, FinishedOutput, [64]byte) {
+func publishTestAttempt(t *testing.T, main string, policy PublicationPolicy) (*PublishAttempt, FinishedOutput, [64]byte) {
 	t.Helper()
-	attempt, failure := CreatePublishAttempt(main, policy, noopCheck)
+	attempt, failure := CreatePublishAttempt(main, policy)
 	if failure != nil {
 		t.Fatalf("create publish attempt: %v", failure)
 	}
@@ -70,7 +70,7 @@ func publishTestMain(t *testing.T, main string) [64]byte {
 func TestPublishFailIfExistsSuccessReturnsExactPublishedFactsAndNoResidue(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "result.v4")
-	attempt, finished, sum := publishTestAttempt(t, main, reservationPolicyFailIfExists)
+	attempt, finished, sum := publishTestAttempt(t, main, PolicyFailIfExists)
 	before := countProcessFds(t)
 	result, failure := attempt.Finish(finished, noopCheck)
 	if failure != nil {
@@ -120,7 +120,7 @@ func TestPublishFailIfExistsRefusesAnExistingMainAndCoordination(t *testing.T) {
 		t.Fatalf("write main: %v", err)
 	}
 	before := countProcessFds(t)
-	_, failure := CreatePublishAttempt(main, reservationPolicyFailIfExists, noopCheck)
+	_, failure := CreatePublishAttempt(main, PolicyFailIfExists)
 	if codeOf(failure.Cause) != format.CodeNameExists {
 		t.Fatalf("existing-main problem = %v, want name exists", failure.Cause)
 	}
@@ -139,7 +139,7 @@ func TestPublishFailIfExistsRefusesAnExistingMainAndCoordination(t *testing.T) {
 		t.Fatalf("write coordination: %v", err)
 	}
 	before = countProcessFds(t)
-	_, failure = CreatePublishAttempt(filepath.Join(dir2, "result.v4"), reservationPolicyFailIfExists, noopCheck)
+	_, failure = CreatePublishAttempt(filepath.Join(dir2, "result.v4"), PolicyFailIfExists)
 	if codeOf(failure.Cause) != format.CodeNameExists {
 		t.Fatalf("existing-twin problem = %v, want name exists", failure.Cause)
 	}
@@ -159,7 +159,7 @@ func TestPublishReplacementOverPreviousMain(t *testing.T) {
 	if err := os.WriteFile(main, []byte("previous bytes"), 0o600); err != nil {
 		t.Fatalf("write previous main: %v", err)
 	}
-	attempt, finished, sum := publishTestAttempt(t, main, reservationPolicyReplaceExisting)
+	attempt, finished, sum := publishTestAttempt(t, main, PolicyReplaceExisting)
 	before := countProcessFds(t)
 	result, failure := attempt.Finish(finished, noopCheck)
 	if failure != nil {
@@ -197,7 +197,7 @@ func TestPublishReplacementOverPreviousMain(t *testing.T) {
 func TestPublishPreparationFailureDiscardsTheAttempt(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "result.v4")
-	attempt, finished, _ := publishTestAttempt(t, main, reservationPolicyFailIfExists)
+	attempt, finished, _ := publishTestAttempt(t, main, PolicyFailIfExists)
 	cancelled := &resolverTestCancellation{}
 	cancelled.cancelled.Store(true)
 	before := countProcessFds(t)
@@ -227,7 +227,7 @@ func TestPublishPreparationFailureDiscardsTheAttempt(t *testing.T) {
 func TestPublishReplacementRefusesAMissingPreviousMain(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "result.v4")
-	attempt, finished, _ := publishTestAttempt(t, main, reservationPolicyReplaceExisting)
+	attempt, finished, _ := publishTestAttempt(t, main, PolicyReplaceExisting)
 	before := countProcessFds(t)
 	_, failure := attempt.Finish(finished, noopCheck)
 	if failure == nil {

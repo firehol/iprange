@@ -2,63 +2,66 @@
 // membership_query/algebra/output.rs publish parity). PublishSet builds
 // one set operation over pinned membership scopes directly into its own
 // immutable v4 file: the budget and cancellation gates, the prepared
-// plan, the private publication attempt, the one-shot output builder
-// (feed catalog, metadata, the ordered output sweep), and the staged
-// publication complete with the Rust-verbatim error surface.
+// plan, the reservation-path publication attempt, the output builder
+// over the attempt file (feed catalog, metadata, the ordered output
+// sweep), and the composition publish complete with the Rust-verbatim
+// error surface.
 
 package iprangedb
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // PublicationPolicy is the namespace policy of one published output
-// (Rust PublicationPolicy; the writer staging authority).
-type PublicationPolicy = writer.PublicationPolicy
+// (Rust PublicationPolicy; the reservation-path publication authority).
+type PublicationPolicy = publication.PublicationPolicy
 
 const (
-	PolicyFailIfExists              = writer.PolicyFailIfExists
-	PolicyReplaceExisting           = writer.PolicyReplaceExisting
-	PolicyReplaceExistingNoRollback = writer.PolicyReplaceExistingNoRollback
+	PolicyFailIfExists              = publication.PolicyFailIfExists
+	PolicyReplaceExisting           = publication.PolicyReplaceExisting
+	PolicyReplaceExistingNoRollback = publication.PolicyReplaceExistingNoRollback
 )
 
 // CleanupState reports whether an abandoned attempt artifact was
 // provably removed (Rust CleanupState).
-type CleanupState = writer.CleanupState
+type CleanupState = publication.CleanupState
 
 const (
-	CleanupStateClean           = writer.CleanupStateClean
-	CleanupStateResiduePossible = writer.CleanupStateResiduePossible
+	CleanupStateClean           = publication.CleanupStateClean
+	CleanupStateResiduePossible = publication.CleanupStateResiduePossible
 )
 
 // PublicationStatus classifies one publication outcome (Rust
 // PublicationStatus).
-type PublicationStatus = writer.PublicationStatus
+type PublicationStatus = publication.PublicationStatus
 
 const (
-	PublicationNotPublished   = writer.PublicationNotPublished
-	PublicationPublished      = writer.PublicationPublished
-	PublicationOutcomeUnknown = writer.PublicationOutcomeUnknown
+	PublicationNotPublished   = publication.PublicationNotPublished
+	PublicationPublished      = publication.PublicationPublished
+	PublicationOutcomeUnknown = publication.PublicationOutcomeUnknown
 )
 
 // DestinationContent describes the destination slot after one
 // publication attempt (Rust DestinationContent).
-type DestinationContent = writer.DestinationContent
+type DestinationContent = publication.DestinationContent
 
 const (
-	DestinationContentDesired      = writer.DestinationContentDesired
-	DestinationContentAbsent       = writer.DestinationContentAbsent
-	DestinationContentUnclassified = writer.DestinationContentUnclassified
+	DestinationContentDesired      = publication.DestinationContentDesired
+	DestinationContentPrevious     = publication.DestinationContentPrevious
+	DestinationContentAbsent       = publication.DestinationContentAbsent
+	DestinationContentOther        = publication.DestinationContentOther
+	DestinationContentUnclassified = publication.DestinationContentUnclassified
 )
 
 // PublicationResult is the factual outcome of one publish call (Rust
-// PublicationResult).
-type PublicationResult = writer.PublicationResult
+// PublicationResult; the exact facts of the reservation-path machine).
+type PublicationResult = publication.PublicationResult
 
 // AlgebraOutputBudget bounds one published set output (Rust
 // AlgebraOutputBudget: max output pages and the maximum simultaneous
@@ -146,7 +149,7 @@ type AlgebraSetResult struct {
 
 // CleanupState reports the attempt cleanup of one failed publication.
 func (r AlgebraSetResult) CleanupState() CleanupState {
-	return r.Publication.Cleanup
+	return r.Publication.CleanupState()
 }
 
 // AlgebraPreparationFailure classes one failed set publication before
@@ -209,9 +212,12 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err != nil {
 		return zero, early(err)
 	}
-	attempt, err := writer.CreateAttempt(destination, policy)
-	if err != nil {
-		return zero, early(err)
+	// Rust publication::workflow::create: the exchange probe, the
+	// creation, and the security proof fold their discard evidence into
+	// the preparation failure ledger.
+	attempt, failure := publication.CreatePublishAttempt(destination, policy)
+	if failure != nil {
+		return zero, &AlgebraPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
 	}
 	spec, err := writer.FreshOutputSpec(a.inner.AddressFamily(), format.ValueKindMembership, format.StructureKindNone, valueTag.Wire(), uint64(prepared.OutputFeedCount()))
 	if err != nil {
@@ -225,23 +231,13 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
 	}
-	builder, err := writer.NewOutputBuilder(attempt.AttemptPath(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, refEntries, nil)
+	builder, err := writer.NewOutputBuilderOverFile(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, refEntries)
 	if err != nil {
 		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
 	}
-	// Capture the attempt-file identity from the builder's own
-	// descriptor: every later Discard is identity-guarded (Rust
-	// CreatedOutput::create_with binds cleanup to the created inode).
-	device, inode, idErr := builder.FileIdentity()
-	if idErr != nil {
-		closeErr := builder.Close()
-		cleanup := attempt.Discard()
-		if closeErr != nil {
-			idErr = mergeErrors(idErr, closeErr)
-		}
-		return zero, &AlgebraPreparationFailure{Cause: publicError(idErr), Cleanup: cleanup}
-	}
-	attempt.SetFileIdentity(device, inode)
+	// The attempt identity is captured by the secured composition owner
+	// (Rust OutputAttempt::identity at workflow::create): every Discard
+	// is identity-guarded (Rust binds cleanup to the created inode).
 	discarded := func(cause error) (AlgebraSetResult, error) {
 		// Rust drops the mapped writer in every path; Go must release the
 		// exclusive lifetime lock before the caller can reopen the
@@ -270,54 +266,17 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	if err := builder.Finish(); err != nil {
 		return discarded(err)
 	}
-	// Rust publish re-checks cancellation at the publication gate
-	// (workflow::publish prepare_cancellable and the policy
-	// *_cancellable steps): a token cancelled during the build must not
-	// proceed to the rename.
-	if err := cancellation.check(); err != nil {
-		return discarded(err)
-	}
-	result, err := writer.Publish(attempt, builder, policy)
-	closeErr := builder.Close()
-	if err != nil {
-		var failure *writer.PublicationPreparationFailure
-		if errors.As(err, &failure) {
-			return zero, &AlgebraPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.Cleanup}
-		}
-		return zero, publicError(err)
-	}
-	if closeErr != nil {
-		if result.Cause != nil {
-			// A refused or outcome-unknown publish keeps its Rust Ok
-			// classification; the close failure is cleanup-side and is
-			// attached as the secondary cause (Rust has no fallible
-			// step after publish Ok - the builder drop is infallible).
-			// The caller still inspects Status, DestinationContent,
-			// and the result's own Cleanup state.
-			if merged := mergeErrors(result.Cause, closeErr); merged != nil {
-				result.Cause = merged
-			}
-			return AlgebraSetResult{
-				Report: AlgebraSetReport{
-					SourceCount:        built.SourceCount,
-					SourceRangeCount:   built.SourceRangeCount,
-					JoinedSegmentCount: built.JoinedSegmentCount,
-					OutputFeedCount:    built.OutputFeedCount,
-					OutputRangeCount:   built.OutputRangeCount,
-					OutputAddresses:    built.OutputAddresses,
-				},
-				Publication: *result,
-			}, nil
-		}
-		// The destination provably holds the published file; the close
-		// failure is still reported as a hard error, conservative and
-		// unchanged: the caller must not assume the sealed mapping was
-		// released.
-		return zero, &AlgebraPreparationFailure{Cause: publicError(closeErr), Cleanup: CleanupStateClean}
+	// Rust workflow::publish: the prepare machine re-checks cancellation
+	// at its gate and throughout, the finished output (the attempt file
+	// and the builder mapping) is consumed on every terminal, and the
+	// one preparation failure surface carries the folded cleanup state.
+	result, failure := attempt.Finish(publication.FinishedOutput{File: attempt.File(), Mapping: builder.Mapping(), Meta: builder.Meta()}, cancellation.check)
+	if failure != nil {
+		return zero, &AlgebraPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
 	}
 	// A refused or outcome-unknown publish is a Rust Ok result carrying
-	// its Cause, not an error: the caller inspects Status,
-	// DestinationContent, and Cleanup.
+	// its Cause, not an error: the caller inspects Publication,
+	// DestinationContent, and CleanupState.
 	return AlgebraSetResult{
 		Report: AlgebraSetReport{
 			SourceCount:        built.SourceCount,
@@ -327,7 +286,7 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 			OutputRangeCount:   built.OutputRangeCount,
 			OutputAddresses:    built.OutputAddresses,
 		},
-		Publication: *result,
+		Publication: result,
 	}, nil
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -45,12 +46,12 @@ type Budget struct {
 // attempt (two files) with a third file for the coordination artifact of
 // the replace policies and live mode. Every refusal carries the
 // Rust-verbatim InsufficientResourceBudget detail.
-func (b *Budget) Validate(mode SourceMode, policy writer.PublicationPolicy) error {
+func (b *Budget) Validate(mode SourceMode, policy publication.PublicationPolicy) error {
 	if b.MaxOutputPages < 2 {
 		return &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "snapshot output pages"}
 	}
 	required := uint32(2)
-	if mode == SourceLive || policy == writer.PolicyReplaceExisting || policy == writer.PolicyReplaceExistingNoRollback {
+	if mode == SourceLive || policy == publication.PolicyReplaceExisting || policy == publication.PolicyReplaceExistingNoRollback {
 		required = 3
 	}
 	if b.MaxOpenFiles < required {
@@ -68,7 +69,7 @@ func (b *Budget) Validate(mode SourceMode, policy writer.PublicationPolicy) erro
 // when its surface needs it).
 type Failure struct {
 	Cause   error
-	Cleanup writer.CleanupState
+	Cleanup publication.CleanupState
 }
 
 // source is one opened snapshot source (Rust recovery/source_guard.rs
@@ -101,32 +102,32 @@ type sourceEnd struct {
 // before the publish rename, and the publish mapping to the terminal
 // shapes. check is the cancellation checkpoint (nil means
 // uncancellable).
-func To(sourcePath string, mode SourceMode, destinationPath string, policy writer.PublicationPolicy, budget *Budget, check func() error) (*writer.PublicationResult, *Failure) {
+func To(sourcePath string, mode SourceMode, destinationPath string, policy publication.PublicationPolicy, budget *Budget, check func() error) (publication.PublicationResult, *Failure) {
 	// api.rs refuses the live source before the platform machine, hence
 	// before budget validation, on platforms without proven
 	// coordination (require_live_supported). openSource repeats the
 	// check before any path access for direct machine callers.
 	if mode == SourceLive {
 		if err := live.CheckSupported(); err != nil {
-			return nil, &Failure{Cause: err}
+			return publication.PublicationResult{}, &Failure{Cause: err}
 		}
 	}
 	if err := budget.Validate(mode, policy); err != nil {
-		return nil, &Failure{Cause: err}
+		return publication.PublicationResult{}, &Failure{Cause: err}
 	}
 	// Source first (api.rs open_source before publication::workflow::
 	// create): the opened generation pins its identity and holds its
 	// coordination before any destination artifact exists.
 	src, fail, release := openSource(sourcePath, mode, check)
 	if fail != nil {
-		return nil, fail
+		return publication.PublicationResult{}, fail
 	}
 	// failSource folds one failing pre-finish step (Rust fail_source):
 	// the source releases without the final check, and a failed release
 	// reports residue possible. After finishCurrent the source is never
 	// released again (Rust finish_current already released it; the
 	// carried guard projects to the cleanup classification).
-	failSource := func(cause error, cleanup writer.CleanupState) (*writer.PublicationResult, *Failure) {
+	failSource := func(cause error, cleanup publication.CleanupState) (publication.PublicationResult, *Failure) {
 		// Rust fail_source keeps the primary cause pure and surfaces a
 		// failed release only through the cleanup guard; the residue
 		// classification is the Go projection of that guard.
@@ -135,25 +136,29 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 			cause = end.cause
 		}
 		if end.residue {
-			cleanup = writer.CleanupStateResiduePossible
+			cleanup = publication.CleanupStateResiduePossible
 		}
-		return nil, &Failure{Cause: cause, Cleanup: cleanup}
+		return publication.PublicationResult{}, &Failure{Cause: cause, Cleanup: cleanup}
 	}
 	// api.rs rejects a live snapshot that would replace its own source
 	// path, after the source open and before the destination create.
 	if err := rejectLiveSelf(src, mode, destinationPath, policy); err != nil {
-		return failSource(err, writer.CleanupStateClean)
+		return failSource(err, publication.CleanupStateClean)
 	}
 	// A pre-cancelled snapshot refuses before any destination artifact
 	// exists (Rust source_guard lock_file_cancellable refuses at the
 	// source-open cancellation lock): the attempt is never created, so
 	// there is nothing to discard.
 	if err := checkCancellation(check); err != nil {
-		return failSource(err, writer.CleanupStateClean)
+		return failSource(err, publication.CleanupStateClean)
 	}
-	attempt, err := writer.CreateAttempt(destinationPath, policy)
-	if err != nil {
-		return failSource(err, writer.CleanupStateClean)
+	// api.rs publication::workflow::create: the exchange probe, the
+	// creation, and the security proof fold their discard evidence into
+	// the preparation failure ledger (the source is released by
+	// failSource below).
+	attempt, failure := publication.CreatePublishAttempt(destinationPath, policy)
+	if failure != nil {
+		return failSource(failure.Cause, failure.CleanupState())
 	}
 	// The output identity is preserved from the source meta verbatim
 	// (GenerationReader::output_spec): database id, transaction id, and
@@ -185,25 +190,17 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 		structureEntries = chargeReferenceBatch(&heap)
 	}
 	available := &Budget{MaxHeapBytes: heap, MaxOutputPages: budget.MaxOutputPages, MaxOpenFiles: budget.MaxOpenFiles}
-	builder, err := writer.NewStructuredOutputBuilder(attempt.AttemptPath(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, membershipEntries, structureEntries, nil)
+	builder, err := writer.NewStructuredOutputBuilderOverFile(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, membershipEntries, structureEntries)
 	if err != nil {
+		// Rust build::copy folds a builder-construction failure with the
+		// still-owned file into fail_attempt: discard the attempt.
 		return failSource(err, attempt.Discard())
 	}
-	// Capture the attempt-file identity from the builder's own descriptor
-	// (Rust CreatedOutput::create_with + attempt.identity()): every later
-	// Discard is identity-guarded, and the source/private-output compare
-	// has its probe.
-	device, inode, err := builder.FileIdentity()
-	if err != nil {
-		closeErr := builder.Close()
-		cleanup := attempt.Discard()
-		if closeErr != nil {
-			err = attachClose(err, closeErr)
-		}
-		return failSource(err, cleanup)
-	}
-	attempt.SetFileIdentity(device, inode)
-	discarded := func(cause error) (*writer.PublicationResult, *Failure) {
+	// The attempt identity comes from the secured composition owner
+	// (Rust OutputAttempt::identity captured at workflow::create):
+	// every Discard is identity-guarded, and the source/private-output
+	// compare has its probe.
+	discarded := func(cause error) (publication.PublicationResult, *Failure) {
 		// Rust drops the mapped writer in every failing path; Go must
 		// release the builder before the attempt discard.
 		closeErr := builder.Close()
@@ -219,16 +216,16 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 	// has already been released by finishCurrent; nothing here
 	// releases it again (Rust finish_current released, and the carried
 	// guard projects to the cleanup state).
-	abortAfterFinish := func(cause error, residue bool) (*writer.PublicationResult, *Failure) {
+	abortAfterFinish := func(cause error, residue bool) (publication.PublicationResult, *Failure) {
 		closeErr := builder.Close()
 		cleanup := attempt.Discard()
 		if closeErr != nil {
 			cause = attachClose(cause, closeErr)
 		}
 		if residue {
-			cleanup = writer.CleanupStateResiduePossible
+			cleanup = publication.CleanupStateResiduePossible
 		}
-		return nil, &Failure{Cause: cause, Cleanup: cleanup}
+		return publication.PublicationResult{}, &Failure{Cause: cause, Cleanup: cleanup}
 	}
 	// api.rs compares the source identity with the private output
 	// identity and refuses before any copy starts.
@@ -236,7 +233,8 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 	if err != nil {
 		return discarded(err)
 	}
-	if encodeIdentity(srcDevice, srcInode) == encodeIdentity(device, inode) {
+	attemptDevice, attemptInode := attempt.FileIdentity()
+	if encodeIdentity(srcDevice, srcInode) == encodeIdentity(attemptDevice, attemptInode) {
 		return discarded(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and snapshot output identities match"})
 	}
 	if err := copyInto(src.Core(), builder, available, check); err != nil {
@@ -254,30 +252,13 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy write
 	if end.cause != nil {
 		return abortAfterFinish(end.cause, end.residue)
 	}
-	// Rust workflow::publish re-checks cancellation at the publication
-	// gate: a token cancelled during the build must not proceed to the
-	// rename.
-	if err := checkCancellation(check); err != nil {
-		return abortAfterFinish(err, false)
-	}
-	result, err := writer.Publish(attempt, builder, policy)
-	closeErr := builder.Close()
-	if err != nil {
-		var failure *writer.PublicationPreparationFailure
-		if errors.As(err, &failure) {
-			return nil, &Failure{Cause: attachClose(failure.Cause, closeErr), Cleanup: failure.Cleanup}
-		}
-		return nil, &Failure{Cause: attachClose(err, closeErr), Cleanup: writer.CleanupStateClean}
-	}
-	if closeErr != nil {
-		// A refused or outcome-unknown publish keeps its Rust Ok
-		// classification; the close failure attaches as the secondary
-		// cause (publish_set precedent).
-		if result.Cause != nil {
-			result.Cause = attachClose(result.Cause, closeErr)
-			return result, nil
-		}
-		return nil, &Failure{Cause: closeErr, Cleanup: writer.CleanupStateClean}
+	// Rust workflow::publish: the prepare machine re-checks cancellation
+	// at its gate and throughout; the finished output (the attempt file
+	// and the builder mapping) is consumed on every terminal, exactly
+	// like the Rust move of the Finished value.
+	result, failure := attempt.Finish(publication.FinishedOutput{File: attempt.File(), Mapping: builder.Mapping(), Meta: builder.Meta()}, check)
+	if failure != nil {
+		return publication.PublicationResult{}, &Failure{Cause: failure.Cause, Cleanup: failure.CleanupState()}
 	}
 	return result, nil
 }
@@ -308,7 +289,7 @@ func openSource(path string, mode SourceMode, check func() error) (source, *Fail
 			fail := &Failure{Cause: err}
 			var open *live.OpenFailure
 			if errors.As(err, &open) && open.Residue {
-				fail.Cleanup = writer.CleanupStateResiduePossible
+				fail.Cleanup = publication.CleanupStateResiduePossible
 			}
 			return nil, fail, nil
 		}
@@ -386,27 +367,27 @@ func (s immutableSource) finishCurrent(check func() error) sourceEnd {
 // and compares the current destination inode with the source identity.
 // A missing or non-regular destination is not a rejection; the
 // destination creation reports it with the exact publication class.
-func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy writer.PublicationPolicy) error {
+func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy publication.PublicationPolicy) error {
 	if mode != SourceLive ||
-		(policy != writer.PolicyReplaceExisting && policy != writer.PolicyReplaceExistingNoRollback) {
+		(policy != publication.PolicyReplaceExisting && policy != publication.PolicyReplaceExistingNoRollback) {
 		return nil
 	}
 	// Rust Destination::bind validates the destination main name before
 	// any filesystem access (path::validate_main_name plus
 	// require_name_lengths); the writer's CreateAttempt applies the
 	// same rules at the attempt creation.
-	if !writer.ValidDestinationName(destinationPath) {
+	if !publication.ValidDestinationName(destinationPath) {
 		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	clean := filepath.Clean(destinationPath)
 	dir := filepath.Dir(clean)
 	// Rust Destination::bind -> Directory::open proves the parent is a
 	// plain directory before any namespace operation; the class mapping
-	// is platform-split (writer.CheckPublicationParent): POSIX folds
+	// is platform-split (publication.CheckPublicationParent): POSIX folds
 	// ELOOP and ENOTDIR into the IO class, Windows keeps the
 	// NotDirectory Conflict arm for non-directory and reparse-point
 	// parents.
-	if err := writer.CheckPublicationParent(dir); err != nil {
+	if err := publication.CheckPublicationParent(dir); err != nil {
 		return err
 	}
 	parentDevice, _, err := directoryIdentityOf(dir)

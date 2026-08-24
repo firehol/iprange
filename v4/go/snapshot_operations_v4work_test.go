@@ -35,8 +35,8 @@ func TestSnapshotCopyVisitsEachRangeExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal("snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("status = %v", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("status = %v", result.Publication.Publication)
 	}
 	after := work.Read()
 
@@ -65,8 +65,8 @@ func TestSnapshotCopyWorkIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal("first snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("first status = %v", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("first status = %v", result.Publication.Publication)
 	}
 	before := work.Read()
 	second := snapshotDest(t, "second.iprdb")
@@ -74,8 +74,8 @@ func TestSnapshotCopyWorkIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal("second snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("second status = %v", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("second status = %v", result.Publication.Publication)
 	}
 	after := work.Read()
 

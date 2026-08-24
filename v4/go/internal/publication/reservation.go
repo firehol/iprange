@@ -95,6 +95,23 @@ func decodeReservationPolicy(value uint16) (reservationPolicy, bool) {
 	return 0, false
 }
 
+// reservationPolicyOf maps one published policy onto its
+// reservation-wire peer (the three Rust Policy discriminants; an
+// invalid published policy cannot be named by the exported surface
+// and is refused defensively).
+func reservationPolicyOf(policy PublicationPolicy) (reservationPolicy, bool) {
+	switch policy {
+	case PolicyFailIfExists:
+		return reservationPolicyFailIfExists, true
+	case PolicyReplaceExisting:
+		return reservationPolicyReplaceExisting, true
+	case PolicyReplaceExistingNoRollback:
+		return reservationPolicyReplaceExistingNoRollback, true
+	default:
+		return 0, false
+	}
+}
+
 func (p reservationPolicy) isReplacement() bool {
 	return p == reservationPolicyReplaceExisting || p == reservationPolicyReplaceExistingNoRollback
 }

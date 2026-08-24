@@ -1,6 +1,6 @@
 //go:build !windows
 
-package writer
+package publication
 
 // Destination-parent proof, POSIX variant (Rust publication/namespace/
 // unix.rs Directory::open): the parent is opened with O_DIRECTORY |

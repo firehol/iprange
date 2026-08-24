@@ -1,6 +1,6 @@
 //go:build windows
 
-package writer
+package publication
 
 // Destination-parent proof, Windows variant (Rust publication/namespace/
 // windows.rs Directory::open): CreateFileW with

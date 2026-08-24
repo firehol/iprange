@@ -8,6 +8,8 @@
 package writer
 
 import (
+	"os"
+
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -162,6 +164,69 @@ func newOutputBuilder(path string, spec OutputSpec, budget OutputBudget, members
 	if err != nil {
 		return nil, err
 	}
+	return assembleOutputBuilder(m, path, spec, budget, membershipBatchEntries, structureBatchEntries), nil
+}
+
+// NewOutputBuilderOverFile starts one immutable output over an
+// existing empty file (Rust new_owned_with_extent over the
+// workflow::create file, the snapshot and publish_set construction
+// path): the file must be empty, is extended to the budget extent,
+// and is mapped read-write through a duplicated descriptor. The
+// caller keeps the original descriptor; the returned builder owns
+// only its mapping, and no lifetime lock is taken here: the
+// reservation-path publication engine takes it at its prepare step
+// (Rust prepare_cancellable) and the private attempt name keeps the
+// in-progress file out of reader reach during the build. The
+// direct-value outputs built through this constructor run with the
+// structure reference batch disabled like the five-argument
+// NewOutputBuilder.
+func NewOutputBuilderOverFile(file *os.File, spec OutputSpec, budget OutputBudget, referenceBatchEntries int) (*OutputBuilder, error) {
+	return newOutputBuilderOverFile(file, spec, budget, referenceBatchEntries, 0)
+}
+
+// NewStructuredOutputBuilderOverFile starts one structured immutable
+// output over an existing empty file with both reference batches sized
+// from the operation heap (Rust new_owned_with_extent over the
+// workflow::create file: membershipBatchEntries is charged first and
+// structureBatchEntries second; each a power of two up to
+// ReferenceBatchEntryLimit, 0 disables that batch).
+func NewStructuredOutputBuilderOverFile(file *os.File, spec OutputSpec, budget OutputBudget, membershipBatchEntries, structureBatchEntries int) (*OutputBuilder, error) {
+	return newOutputBuilderOverFile(file, spec, budget, membershipBatchEntries, structureBatchEntries)
+}
+
+func newOutputBuilderOverFile(file *os.File, spec OutputSpec, budget OutputBudget, membershipBatchEntries, structureBatchEntries int) (*OutputBuilder, error) {
+	if err := requireNewOutput(spec, budget); err != nil {
+		return nil, err
+	}
+	if budget.MaxOutputPages < 2 || budget.MaxOutputPages > 1<<32 {
+		return nil, invalid("immutable construction extent is invalid")
+	}
+	extent := budget.MaxOutputPages * format.PageSize
+	// Rust require_new_output proves the created file is still empty
+	// before the extent extension: an already-written file is never
+	// adopted into a fresh output.
+	fi, err := file.Stat()
+	if err != nil {
+		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if fi.Size() != 0 {
+		return nil, invalid("immutable output file is not empty")
+	}
+	if err := file.Truncate(int64(extent)); err != nil {
+		return nil, &format.Error{Code: format.CodeIO, Detail: "truncate: " + err.Error()}
+	}
+	m, err := mapping.MapFile(file, extent, true)
+	if err != nil {
+		return nil, err
+	}
+	return assembleOutputBuilder(m, file.Name(), spec, budget, membershipBatchEntries, structureBatchEntries), nil
+}
+
+// assembleOutputBuilder builds the append-only output state over one
+// read-write mapping (the shared tail of the path-based and over-file
+// constructors; the reference batches are sized from the operation
+// heap by the caller and capped here).
+func assembleOutputBuilder(m *mapping.Mapping, path string, spec OutputSpec, budget OutputBudget, membershipBatchEntries, structureBatchEntries int) *OutputBuilder {
 	meta := outputEmptyMeta(spec)
 	batchCapacity := 0
 	if spec.ValueKind == format.ValueKindMembership || spec.ValueKind == format.ValueKindStructured {
@@ -191,7 +256,7 @@ func newOutputBuilder(path string, spec OutputSpec, budget OutputBudget, members
 		ranges:         newRangeBulkBuilder(meta.TxnID, meta.ValueKind, meta.AddressFamily),
 		membershipRefs: newMembershipReferenceBatch(batchCapacity),
 		structureRefs:  newMembershipReferenceBatch(structureCapacity),
-	}, nil
+	}
 }
 
 // outputEmptyMeta mirrors database_file.rs empty_meta for the output spec.

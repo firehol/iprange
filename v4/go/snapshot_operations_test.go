@@ -122,8 +122,8 @@ func TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata(t *
 	if err != nil {
 		t.Fatal("snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("status = %v, want published", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("status = %v, want published", result.Publication.Publication)
 	}
 	if result.CleanupState() != CleanupStateClean {
 		t.Fatalf("cleanup = %v, want clean", result.CleanupState())
@@ -205,7 +205,7 @@ func TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata(t *t
 	if err != nil {
 		t.Fatal("snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 
@@ -303,7 +303,7 @@ func TestSnapshotImmutableStructuredPreservesRangesAndMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal("snapshot:", err)
 			}
-			if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+			if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 				t.Fatalf("publication = %+v", result.Publication)
 			}
 			output := openPublished(t, destination)
@@ -481,8 +481,8 @@ func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T
 	if err != nil {
 		t.Fatal("complete snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished {
-		t.Fatalf("complete status = %v", result.Publication.Status)
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("complete status = %v", result.Publication.Publication)
 	}
 	assertNoSnapshotArtifacts(t, snapshotDir(complete))
 }
@@ -522,7 +522,7 @@ func TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent(t *test
 	if err != nil {
 		t.Fatal("replacement snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 	output := openPublished(t, destination)
@@ -548,7 +548,7 @@ func TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublicati
 	if err != nil {
 		t.Fatal("no-rollback snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 	published, err := os.ReadFile(destination)
@@ -588,7 +588,7 @@ func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal("self snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 	if _, err := os.Lstat(snapshotSidecar(sourcePath)); !os.IsNotExist(err) {
@@ -853,7 +853,7 @@ func TestSnapshotImmutableSidecarAppearingDuringBuildBlocksPublication(t *testin
 	}
 
 	injected := false
-	_, failure := snapshot.To(source, snapshot.SourceImmutable, destination, writer.PolicyFailIfExists, &snapshot.Budget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, func() error {
+	_, failure := snapshot.To(source, snapshot.SourceImmutable, destination, PolicyFailIfExists, &snapshot.Budget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, func() error {
 		if !injected {
 			injected = true
 			if err := os.WriteFile(snapshotSidecar(source), []byte("readers"), 0o644); err != nil {
@@ -915,7 +915,7 @@ func TestSnapshotTinyHeapMembershipPublishesWithBatchDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal("tiny-heap membership snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 	output := openPublished(t, destination)
@@ -956,7 +956,7 @@ func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal("tiny-heap nothreat snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 	output := openPublished(t, destination)
@@ -1009,7 +1009,7 @@ func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testin
 	if err != nil {
 		t.Fatal("live snapshot:", err)
 	}
-	if result.Publication.Status != PublicationPublished || result.CleanupState() != CleanupStateClean {
+	if result.Publication.Publication != PublicationPublished || result.CleanupState() != CleanupStateClean {
 		t.Fatalf("publication = %+v", result.Publication)
 	}
 

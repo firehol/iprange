@@ -22,8 +22,8 @@ func TestSnapshotOutputWarmLookupsZeroAllocation(t *testing.T) {
 			if err != nil {
 				t.Fatal("snapshot:", err)
 			}
-			if result.Publication.Status != PublicationPublished {
-				t.Fatalf("status = %v", result.Publication.Status)
+			if result.Publication.Publication != PublicationPublished {
+				t.Fatalf("status = %v", result.Publication.Publication)
 			}
 			output := openPublished(t, destination)
 			defer output.Close()

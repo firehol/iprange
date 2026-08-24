@@ -20,6 +20,7 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
@@ -51,15 +52,21 @@ func (a *PublishAttempt) Close() {
 // creation for the rollback-safe policy, the fail-if-exists policy
 // proves the main and the twin absent, and every failure closes the
 // bound destination directory like the Rust drop of the consumed
-// owners).
-func CreatePublishAttempt(destinationPath string, policy reservationPolicy, check func() error) (*PublishAttempt, *PublicationPreparationFailure) {
-	if policy == reservationPolicyReplaceExisting && !mapping.ExchangeAvailable() {
+// owners). policy is the published policy of the caller surface; the
+// attempt machine carries its reservation-wire peer.
+func CreatePublishAttempt(destinationPath string, policy PublicationPolicy) (*PublishAttempt, *PublicationPreparationFailure) {
+	reservation, ok := reservationPolicyOf(policy)
+	if !ok {
+		return nil, earlyPreparationFailure(
+			problem(format.CodeInvalidArgument, "publication policy is invalid"), nil)
+	}
+	if reservation == reservationPolicyReplaceExisting && !mapping.ExchangeAvailable() {
 		return nil, earlyPreparationFailure(
 			problem(format.CodeDurabilityUnsupported, "rollback-safe replacement requires atomic name exchange"), nil)
 	}
 	var created *createdOutput
 	var err error
-	if policy == reservationPolicyFailIfExists {
+	if reservation == reservationPolicyFailIfExists {
 		created, err = createOutputAbsent(destinationPath)
 	} else {
 		created, err = createOutput(destinationPath)
@@ -75,7 +82,31 @@ func CreatePublishAttempt(destinationPath string, policy reservationPolicy, chec
 		return nil, earlyPreparationFailure(outputProblem(failure.cause), &discarded)
 	}
 	attempt, file := secured.intoParts()
-	return &PublishAttempt{attempt: attempt, file: file, policy: policy}, nil
+	return &PublishAttempt{attempt: attempt, file: file, policy: reservation}, nil
+}
+
+// FileIdentity returns the secured device+inode identity of the
+// attempt file (Rust OutputAttempt::identity; the snapshot and
+// publish_set identity-comparison probes use it before the build).
+func (a *PublishAttempt) FileIdentity() (device uint64, inode uint64) {
+	identity := a.attempt.identityOf()
+	return live.IdentityDeviceInode(&identity)
+}
+
+// Discard removes the not-yet-finished private attempt artifact
+// (Rust cleanup::discard_attempt: identity-guarded unlink and the
+// retained-directory sync) and releases the attempt file and the
+// bound destination directory. The attempt is consumed: no Finish or
+// Close may follow. The returned state classifies the removal exactly
+// like the discard ledger of the Rust Failure::Early arms.
+func (a *PublishAttempt) Discard() CleanupState {
+	discarded := discardAttempt(&a.attempt, a.file)
+	_ = a.file.Close()
+	closeDestinationDirectory(a.attempt.destinationOf())
+	if discarded.artifact != nil {
+		return CleanupStateResiduePossible
+	}
+	return CleanupStateClean
 }
 
 // Finish prepares, binds, and publishes the finished output built

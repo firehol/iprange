@@ -20,7 +20,6 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/snapshot"
-	"github.com/firehol/iprange/v4/go/internal/writer"
 	"golang.org/x/sys/unix"
 )
 
@@ -234,7 +233,7 @@ func TestSnapshotLiveSourceReselectsGenerationCommittedWhileOpen(t *testing.T) {
 		defer close(done)
 		// The internal machine takes the checkpoint hook directly; the
 		// public facade only exposes Cancel-based tokens.
-		_, failure := snapshot.To(source, snapshot.SourceLive, destination, writer.PolicyFailIfExists, &snapshot.Budget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 3}, check)
+		_, failure := snapshot.To(source, snapshot.SourceLive, destination, PolicyFailIfExists, &snapshot.Budget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 3}, check)
 		if failure != nil {
 			resultCh <- failure.Cause
 			return
