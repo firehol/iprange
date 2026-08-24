@@ -10179,10 +10179,13 @@ Go files:
   residue machine.
 
 Validation (all under nice): go build ./..., go vet ./..., plain and
-v4work full trees (14 packages ok; 647 tests under v4work, 172 in
-publication of which 9 are the new residue tests), gofmt clean,
+v4work full trees (14 packages ok; 857 Test functions runnable under
+v4work at 22ffd1f via go test -tags v4work -list '^Test' ./..., 172
+in publication of which 9 are the new residue tests), gofmt clean,
 -race + -gcflags=all=-d=checkptr=2 on internal/publication, and the
-freebsd/darwin cross-builds all PASS at 22ffd1f.
+freebsd/darwin cross-builds all PASS at 22ffd1f. (The tree total is
+restated with its counting method here because an earlier draft
+omitted the root package and internal/bitmap.)
 
 ### Status (2026-08-24) - chunk 4-8 slice L fix round (round-1 review)
 
@@ -10223,6 +10226,27 @@ Validation (all under nice): plain and v4work full trees (14
 packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
 internal/publication, freebsd/darwin cross-builds, gofmt clean, all
 PASS at b0be0df.
+
+### Status (2026-08-24) - chunk 4-8 slice L round-3: all five aspects PASS
+
+Round-2 re-review: parity (Goodall) PASS, performance
+(Chandrasekhar) PASS, wire/integrity (Herschel) PASS, idioms (Gauss)
+PASS with two P3 residuals, records (Noether) FAIL (P2: the old 647
+statement survived in the implemented record). Fixes at f4b7bc3 and
+the in-place record correction above:
+
+- P3 (idioms): the handle-level retry wrapper is renamed
+  retryRetiredResidueHandle so the two retry names diverge in
+  content, and the retry-cancellation test asserts the main guard
+  exists before the cancelled retry, keeping its fd pin non-vacuous.
+- P2 (records): the implemented record now states the method-stated
+  count (857 under v4work at 22ffd1f) and is consistent with the
+  fix-round record (858 at b0be0df, 10 residue tests).
+
+Round-3 delta re-verified by verbose re-runs: plain and v4work trees
+(14 packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
+internal/publication, freebsd/darwin cross-builds, gofmt clean, all
+PASS at f4b7bc3. All five aspects PASS; slice L is complete.
 
 Next: slice M maintenance (list/remove abandoned publication temps
 and reservation artifacts); after M stays N Publish retrofit +
