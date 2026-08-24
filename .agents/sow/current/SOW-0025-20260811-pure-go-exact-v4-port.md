@@ -11843,3 +11843,116 @@ source_guard.rs parity): the public recovery entry over the kind split
 report terminal, and the scratch cleanup authority; then slice E - the
 public API facade over the recovered live stores and the conformance
 cross-checks.
+### Status (2026-08-24) - milestone 2 slice E delivered: recovery api wiring, public facade, recover_live
+
+Slice E of chunk 4-10 (the api wiring + public facade + recover_live
+arm of the recorded design gate; the D3 record's "slice D4" naming
+referred to this exact slice and is corrected here) is complete on the
+working tree. The in-process recovery machine now mirrors Rust
+recovery/api.rs recover_precreated plus the worker-client create
+position, the live recovery source registers through the sidecar with
+the newest-only candidate rule, and the root package exposes the full
+recovery surface.
+
+Delivered surface:
+
+- internal/bootstrap/recovery_pair.go: the two-page recovery meta
+  pair classification and the exact newest-candidate selection token
+  (Rust ClassifiedMetas order proof, moved from recovery/classify.go to
+  the package both the recovery and live packages import; one order
+  authority).
+- internal/recovery/classify.go + inspection.go: classifiedMetas now
+  composes the bootstrap pair (candidates, selected_meta, progress
+  unchanged); classify_test.go pins the pair accessors.
+- internal/live/live_source_candidate.go: OpenLiveSourceCandidate (Rust
+  LiveSource::open over open_candidate_locked) - the shared
+  registration machinery with the candidate bind (path identity proof,
+  pair classification, token selection under the exclusive gate, the
+  initial-meta and reader-table identity proofs, the slot scan, the
+  claim, the verify_live_claim unwind) and the candidate-bound final
+  check. The candidate-bound source retains no reader core: recovery
+  reads pages through the mapping owner, and the mapping close is the
+  lifetime release (documented at live_source.go and
+  live_source_candidate.go).
+- internal/live/live_source.go: finalCheck now proves the used meta
+  and the retained candidate transaction (Rust LiveSource::final_check
+  over the recover_live arm), FinishCandidate/Release/Abandon exports
+  for the recovery terminal, and the core-optional release.
+- internal/recovery/source_guard.go: recoverySource dispatches the
+  basic and live arms (mapping/meta/identity/finish/finish_current/
+  abandon/release_only/release); the live open arm refuses every
+  non-newest label with InvalidArgument before any path access,
+  converts the token, and composes OpenLiveSourceCandidate; liveEnd
+  folds the live terminal with the retained cleanup guard.
+- internal/recovery/api.go: the in-process machine (budget preflight
+  with the live open-file reserve, pre-creation cancellation, the
+  fail-if-exists attempt created before the source open like the Rust
+  worker client, the source-open failure with the attempt discard and
+  exact facts, the source/private-output identity compare, the fresh
+  spec, the reference-batch-free builder, the kind-split build, the
+  final source check, the publication terminal) and the exported
+  RecoverImmutable/RecoverOffline/RecoverLive entries. Every internal
+  cause folds through the fixed recovery problem exactly like the Rust
+  source_guard::problem (code preserved, fixed detail), publication
+  failures pass through; a nil check normalizes once to the
+  uncancellable hook because the publication machine always calls its
+  checkpoint.
+- internal/publication: PublishAttempt.Facts/DiscardFacts (the exact
+  ledger facts of the attempt discard, Rust cleanup::discard_attempt
+  fold), their Windows stubs, and LocalFileIdentity.DeviceInode for
+  the recovery identity compare.
+- v4/go/recovery_public.go: the public RecoverImmutable/RecoverOffline
+  (with the OfflineQuiescenceCertification boundary)/RecoverLive/
+  InspectRecoveryCandidates and the Rust recovery re-exports
+  (budget with RecoveryHeapOnly, candidate label/token/inspection,
+  report/sink types, scratch attempt, result, preparation failure,
+  cleanup guard, private attempt and ledger types); the public token
+  checkpoint converts onto the internal error class so the recovery
+  problem folds classify it (internalCheck); the public causes convert
+  onto the public Error class (publicRecoveryFailure); the nil budget
+  refuses with InvalidArgument like the snapshot surface.
+- v4/go/live_writer_public.go + lifecycle_public.go: CoordinationCleanup,
+  Housekeeping, and HousekeepingArtifact are now aliases of the
+  publication machine types (identical constants; one type system for
+  the recovery terminal).
+- internal/recovery/membership_test.go: reopenMember moves to the
+  internal reader so the recovery package tests stay free of the root
+  import cycle once the facade composes the recovery machine (the
+  root Info surface is the Meta peer in the internal reader).
+
+Tests (recovery suite now 62 Test functions, verified): the four Rust
+api_tests arms ported (sink failure with the partial report and the
+private output removed, final source-identity recheck blocked with
+RecoveryCandidateChanged and clean output removal, cancellation after
+damage delivery before publication, destination race returning the
+terminal non-publication result with the foreign content preserved)
+plus the happy recover_immutable over the incomplete source (one
+I/O-unreadable envelope, published two-page output without ranges),
+the two live arms (recover_live publishes the newest candidate;
+non-newest refusal with InvalidArgument and no private residue), and
+three root facade pins (public error class of the failing sink, the
+nil-budget boundary refusal, the pre-creation cancellation refusal).
+
+Recorded deviations (consistent with the in-process composition, noted
+in code): the attempt creation order matches the Rust worker client
+(create before source open), so an attempt-creation failure never
+opens the source and the source-open failure discards the created
+attempt with its facts; the candidate-bound live source retains no
+reader core (documented); the attempt-failure output facts appear only
+when the discard ledger retained them, the committed Go publication
+design (Rust always reports the removed-attempt facts in the
+secure-failure arm).
+
+Slice E validation (all under nice; ~2 core-minutes): gofmt clean; vet
+plain + v4work; plain and v4work full trees (19 test-bearing packages
+ok each); race + checkptr=2 on recovery/writer/publication/live/
+bootstrap and the root, both tag sets; seven cross-builds plain +
+v4work (linux/386, linux/arm, linux/arm64, windows/amd64,
+darwin/arm64, freebsd/amd64, linux/amd64).
+
+Next: milestone 2 chunk 4-10 gate - the five-aspect adversarial review
+(Goddall Rust parity, Gauss Go idioms, Chandrasekhar performance,
+Herschel wire format, Noether APIs) over the full chunk (slices A-E),
+then the chunk battery record and the milestone push; the worker
+process boundary (4-11) and the authorized scratch/external sort stay
+the recorded follow-ups.
