@@ -10963,4 +10963,56 @@ v4work on linux/windows/freebsd, race + checkptr on validation/format/
 retire/bootstrap/reader/live/publication/mapping/tree and the root,
 seven cross-builds plain + v4work, gofmt clean.
 
-Next: chunk 4-9 slice C (range + catalog validators).
+### Status (2026-08-24) - chunk 4-9 slice C implemented at be154f6
+
+Slice C ships the range and catalog validators (the Rust range.rs and
+catalog.rs authorities, including the used-bitmap arm) over the
+single-authority format and reader codecs:
+
+- internal/validation/range.go: the family walk over the committed
+  range tree with the leaf order, reversed, overlap, and not-coalesced
+  findings, the membership/structured value arms against the reverse
+  tables, and the root record-count proof (zero root and walk-count
+  arms). IPv4 and IPv6 family walks share the page/branch authorities.
+- internal/validation/catalog.go: the name and index tree walks with
+  the per-record feed-index-limit proof, the used-bitmap count proof,
+  and the feed bijection cross-check (FeedCursor + LookupFeedBytes +
+  bitmapContains over the raw generation, outside the graph claims).
+- internal/validation/bitmap.go + bitmap_query.go: the hierarchical
+  bitmap walk authority with header problems, out-of-range summary
+  bits, summary/item-count disagreements, and the free-kind allocation
+  marking; the catalog cross-check containment query re-verifies the
+  header at every level. The free/membership/structure bitmap arms
+  compose this authority when their slices land (slice D).
+- format range/catalog raw field decoders (skip the reader-only
+  child-page checks, Rust codec parity), bitmap CheckedHeader with the
+  HeaderProblem class, reader LookupFeedBytes/NewFeedCursor and
+  NewImmutable for composed reads, context membership/structure count
+  helpers.
+
+Tests: corpus-clean range and catalog walks over all six conformance
+fixtures (plus the Direct-kind skip), nine mutation cases (reversed,
+overlap, not-coalesced, range count mismatch, membership/structured
+zero-value arms, catalog index limit, name grammar, used-bitmap
+count), four synthetic two-level IPv4 tree cases (multi-level clean,
+branch order and fence with exact page attribution, drifted fence,
+degenerate root), and the v4work range walk pin at twelve cell probes
+and twelve slot reads (branch two entries + two two-record leaves;
+the validation sweep itself never counts page parses).
+
+Suite counts at be154f6: validation 52 tests plain / 54 with v4work
+(36/37 at ad43a43; the two v4work-only tests are the retirement and
+range work pins), format 47, metadata chain cases 13, unchanged.
+Battery re-validated under nice before the commit: gofmt clean; vet
+plain + v4work on linux/windows/freebsd; plain and v4work full trees
+(15 test-bearing packages ok each); race + checkptr on validation/
+format/retire/bootstrap/reader/live/publication/mapping/tree and the
+root, both tag sets; seven cross-builds (linux/386, linux/arm64,
+darwin/amd64, darwin/arm64, freebsd/amd64, netbsd/amd64,
+windows/amd64) plain + v4work; all pass.
+
+The five-aspect adversarial gate runs at the milestone close per the
+standing review rules (2026-08-21) once all chunk 4-9 slices land.
+
+Next: chunk 4-9 slice D (bitmap + membership + membership_table +
+blob validators).
