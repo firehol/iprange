@@ -13,7 +13,7 @@
 // before the domain machine runs, exactly like Rust worker.rs:316-333;
 // the mapping-application arms consume the list at the Rust
 // validation.rs:310 / source_guard / inspection.rs:260 parity points,
-// and the classification arms consult SourcePageUnreadable at the Rust
+// and the classification arms consult the mapping leaf session query at the Rust
 // inspection.rs:260 parity point. The worker-facing API surface is
 // SetSourceUnreadablePages; duplicates are refused verbatim before
 // any machine runs.

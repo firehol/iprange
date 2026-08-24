@@ -39,10 +39,6 @@ func (p WireProblem) Err() error {
 	return &format.Error{Code: p.Code, Detail: p.Detail}
 }
 
-// wireProblemOf folds one Go error into the wire problem shape: a
-// format.Error keeps its class and detail, an errno chain reports the
-// Io class with the raw errno, and any other error is the fixed
-// Conflict class of an unknown failure.
 // WireProblemOf folds one Go error into the wire problem shape (Rust
 // publication problem folding): a format.Error keeps its class and
 // detail, an errno chain reports the Io class with the raw errno, and

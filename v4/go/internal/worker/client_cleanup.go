@@ -7,7 +7,7 @@
 // created, the CleanupRecoveryAttempt opcode recorded, the request
 // written, the child spawned and started (Rust discard_inner:48-61),
 // and the session driven with no per-mode events; the terminal folds
-// the exact classes (DiscardRecoveryAttempt: pipe Complete with
+// the exact classes (discardRecoveryAttempt: pipe Complete with
 // guard_pending=false into the decoded result, refuse a guard-pending
 // completion with the verbatim Conflict, and fold a mapped fault
 // through fault_problem exactly like Rust

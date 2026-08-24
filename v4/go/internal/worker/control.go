@@ -233,7 +233,6 @@ func (c *Control) altStack() (uintptr, uintptr) {
 	return baseOf(c.data) + uintptr(controlLen-altStackLen), uintptr(altStackLen)
 }
 
-// state reads the control state word.
 // SetBuildID pins the worker build identity of this process before
 // any control access (the runtime analog of Rust env! at build time:
 // the cmd binary resolves IPRANGE_V4_BUILD_ID or the fixed default and
@@ -253,6 +252,7 @@ func SetBuildID(value string) error {
 // parent-liveness spins Rust runs inside the crate).
 func (c *Control) State() uint32 { return c.state() }
 
+// state reads the control state word.
 func (c *Control) state() uint32 {
 	return mapAtomicLoad32(baseOf(c.data), offState)
 }

@@ -12391,14 +12391,6 @@ next: the five-aspect adversarial review (same-model reviewers,
 restarted between milestones) over slices A-E, then the milestone-3
 close-out.
 
-Next: milestone 3 chunk gate - restart the five same-model reviewers
-(Goodall parity, Gauss idioms, Chandrasekhar performance, Herschel wire
-format and integrity, Noether APIs/docs) and run the adversarial
-five-aspect rounds over slices 4-11A-E, fix every P0-P2, then close
-milestone 3 and proceed to milestone 4 (chunk 4-12 platform
-completion: native darwin/freebsd proofs, crash-matrix extension with
-the probe_source arm, build-mismatch matrix, code-size audit).
-
 ### Status (2026-08-25) - milestone 3 chunk gate round 1: five-aspect review FAILs (parity, idioms, wire, APIs) fixed; performance PASS; re-review dispatched
 
 The chunk 4-11 gate opened with five fresh same-model reviewers over
@@ -12437,7 +12429,7 @@ performance PASS (three P3). The fix round landed on the working tree
   Rust duplicate-authority wording; the recovery Fault and
   callback-failure arms now surface a corrupt scratch checkpoint as a
   Failed terminal with nil scratch (Rust client/recovery.rs:114-117,
-  347-352); client_cleanup.go dropped the unused directory parameter;
+  347-352); CleanupCheckpoint dropped the unused directory parameter;
   the duplicated problemWireOf folding now composes the one exported
   worker.WireProblemOf; the cmd state-word and build-id constants come
   from the worker package instead of hand-repeated tables; the

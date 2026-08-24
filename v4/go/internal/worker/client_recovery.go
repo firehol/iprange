@@ -19,7 +19,7 @@
 // guardSourceWorker slot is reserved), so a guard-pending terminal
 // retains the child through WorkerCleanup and the arm returns that
 // retained cleanup alongside the outcome. The parent-side
-// DiscardRecoveryAttempt cleanup arm exists (client_cleanup.go) but
+// discardRecoveryAttempt cleanup arm exists (client_cleanup.go) but
 // the production recovery arms do not compose it: the parent owns no
 // attempt facts (the Go machine creates its own output).
 package worker
@@ -83,7 +83,7 @@ func recoverWithWorker(sourcePath, destinationPath string, candidate *recovery.R
 			}
 			// The parent owns no output attempt (recorded Go stance),
 			// so the Rust discard arm is trivially clean; the
-			// publication discard arms compose DiscardRecoveryAttempt
+			// publication discard arms compose discardRecoveryAttempt
 			// once a parent-owned attempt exists.
 			if attempt.fault.Role != RoleSource {
 				return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(faultProblem(attempt.fault.Role), recovery.RecoveryReport{}, attempt.scratch)}, nil
@@ -359,7 +359,7 @@ func earlyRecoveryFailureOf(cause error) *recovery.RecoveryPreparationFailure {
 
 // discardedRecoveryFailureOf builds one recovery preparation failure
 // with the given report and scratch and the clean discard ledger (Rust
-// RecoveryPreparationFailure::discarded over the 4-11E discard arms).
+// RecoveryPreparationFailure::discarded over the worker discard arms).
 func discardedRecoveryFailureOf(cause error, report recovery.RecoveryReport, scratch *recovery.RecoveryScratchAttempt) *recovery.RecoveryPreparationFailure {
 	return &recovery.RecoveryPreparationFailure{
 		Cause:               cause,

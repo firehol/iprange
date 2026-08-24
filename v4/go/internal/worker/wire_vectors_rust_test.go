@@ -11,8 +11,9 @@
 // that proof gap.
 //
 // Rust commit (v4/rust tree at generation time): 304d99a2350f
-// (repo HEAD `git rev-parse --short=12 HEAD` while the temporary Rust
-// generator was checked in; generation ran `nice cargo test
+// (repo HEAD `git rev-parse --short=12 HEAD` when the temporary Rust
+// generator file was present in the working tree; it was never
+// committed; generation ran `nice cargo test
 // --manifest-path v4/rust/Cargo.toml -p iprange-livedb --lib
 // wire_vector_gen -- --nocapture`).
 //

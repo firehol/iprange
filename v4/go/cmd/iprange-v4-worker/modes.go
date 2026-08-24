@@ -67,11 +67,13 @@ func newWorkerCheckpoint(control *worker.Control) func() error {
 }
 
 // setUnreadableSourcePages records one request's unreadable source
-// pages into the worker fault memory before the domain machine runs
+// pages into the worker session state before the domain machine runs
 // (Rust worker.rs:316-333 set_unreadable_source_pages into the
-// UNREADABLE_SOURCE_PAGES thread-local; internal/worker
-// fault_memory.go owns the sorted, duplicate-free list). A duplicate
-// is refused with the verbatim Rust InvalidArgument class.
+// UNREADABLE_SOURCE_PAGES thread-local; the sorted, duplicate-free
+// list lives in the internal/mapping leaf, reached through the
+// internal/worker fault-memory seam, and this driver is the only
+// writer). A duplicate is refused with the verbatim Rust
+// InvalidArgument class.
 func setUnreadableSourcePages(pages []uint32) error {
 	return worker.SetSourceUnreadablePages(pages)
 }
@@ -249,8 +251,8 @@ func serveCleanup(control *worker.Control, guard *recovery.RecoverySourceCleanup
 // waitAcknowledgement spins until the parent acknowledges one streamed
 // callback by returning the control to Running (Rust proxy loops: the
 // callback state is left, then the response word decides). Parent death
-// maps to Cancelled exactly like the Rust proxy arms; the control
-// surface bounds the spin by its 30 s wait limit.
+// maps to Cancelled exactly like the Rust proxy arms; the spin has no
+// deadline (a parent sink may take arbitrarily long on one finding).
 func waitAcknowledgement(control *worker.Control) error {
 	// Rust worker.rs ValidationProxy:399-404 / RecoveryProxy:142-147
 	// spin on the callback state with only the parent-liveness bound
