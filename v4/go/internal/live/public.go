@@ -132,3 +132,11 @@ func IdentityAnyLink(f *os.File) (FileIdentity, error) {
 	}
 	return identity, nil
 }
+
+// RequireLiveSupported refuses the live coordination surface on
+// platforms without proven coordination before any path access (Rust
+// live_lock::require_live_supported; the recover_live api arm refuses
+// with the same class before the budget).
+func RequireLiveSupported() error {
+	return requireLiveSupported()
+}

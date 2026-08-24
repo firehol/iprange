@@ -104,6 +104,30 @@ func (a *PublishAttempt) FileIdentity() (device uint64, inode uint64) {
 	return live.IdentityDeviceInode(&identity)
 }
 
+// Facts reports the portable facts of the secured attempt (Rust
+// OutputAttempt::facts).
+func (a *PublishAttempt) Facts() PrivateOutputAttempt {
+	if a == nil {
+		return PrivateOutputAttempt{}
+	}
+	return a.attempt.facts()
+}
+
+// DiscardFacts removes the attempt like Discard and reports the exact
+// ledger facts of the removal (Rust cleanup::discard_attempt over the
+// EarlyDiscard output and artifact facts).
+func (a *PublishAttempt) DiscardFacts() (PrivateOutputAttempt, *CleanupArtifact) {
+	if a == nil || a.file == nil {
+		return PrivateOutputAttempt{}, nil
+	}
+	facts := a.attempt.facts()
+	discarded := discardAttempt(&a.attempt, a.file)
+	_ = a.file.Close()
+	closeDestinationDirectory(a.attempt.destinationOf())
+	a.file = nil
+	return facts, discarded.artifact
+}
+
 // Discard removes the not-yet-finished private attempt artifact
 // (Rust cleanup::discard_attempt: identity-guarded unlink and the
 // retained-directory sync) and releases the attempt file and the

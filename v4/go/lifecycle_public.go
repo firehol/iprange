@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
 // LocalBasename is one platform basename copied without allocation
@@ -35,21 +36,22 @@ func (b LocalBasename) Encoding() uint16 { return b.encoding }
 func (b LocalBasename) Bytes() []byte { return b.bytes[:b.length] }
 
 // Housekeeping is the fact class of one attempted cleanup (Rust
-// publication::Housekeeping).
-type Housekeeping uint8
+// publication::Housekeeping). The type is the publication machine enum
+// so the recovery terminal carries the same class.
+type Housekeeping = publication.Housekeeping
 
 const (
-	HousekeepingNone Housekeeping = iota
-	HousekeepingCrashReappearancePossible
-	HousekeepingVisible
+	HousekeepingNone                      = publication.HousekeepingNone
+	HousekeepingCrashReappearancePossible = publication.HousekeepingCrashReappearancePossible
+	HousekeepingVisible                   = publication.HousekeepingVisible
 )
 
-// HousekeepingArtifact is one ledger entry of the Windows retirement
-// machinery (Rust publication::HousekeepingArtifact). The POSIX live
-// lifecycle never produces entries, so the POSIX ledger shape stays
-// empty; the full field surface lives in the publication machine
-// (internal/publication, exported through the publication surfaces).
-type HousekeepingArtifact struct{}
+// HousekeepingArtifact is one ledger entry of the retirement machinery
+// (Rust publication::HousekeepingArtifact). The POSIX live lifecycle
+// never produces entries; the full field surface is the publication
+// machine type, aliased here so the recovery terminal carries the same
+// ledger shape.
+type HousekeepingArtifact = publication.HousekeepingArtifact
 
 // CreationState is the factual terminal state of one creation attempt
 // (Rust live_writer::CreationState).

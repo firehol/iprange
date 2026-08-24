@@ -37,6 +37,12 @@ func LocalFileIdentityFromDeviceInode(device, inode uint64) LocalFileIdentity {
 	return out
 }
 
+// DeviceInode decodes the portable identity to the internal
+// device+inode pair (Rust Identity::decode); ok is false otherwise.
+func (f LocalFileIdentity) DeviceInode() (device, inode uint64, ok bool) {
+	return f.deviceInode()
+}
+
 // deviceInode decodes the portable identity to the internal
 // device+inode pair (Rust namespace::identity_from_local +
 // Identity::decode): the kind must match, the payload must be nonzero,

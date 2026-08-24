@@ -60,8 +60,8 @@ func TestEqualCreationMetasExposeOneDeterministicNewestCandidate(t *testing.T) {
 	s0, h0 := classifyPage(page)
 	s1, h1 := classifyPage(page)
 	classified := classifyMetas([2]bootstrap.RecoveryMetaState{s0, s1}, [2]bool{h0, h1})
-	if !classified.order.proven || classified.order.current != 1 || classified.order.hasPrevious {
-		t.Fatalf("order %+v, want proven current 1", classified.order)
+	if !classified.pair.Proven() || classified.pair.Current() != 1 || classified.pair.HasPrevious() {
+		t.Fatalf("order %+v, want proven current 1", classified.pair)
 	}
 	candidates := classified.candidates(testIdentity())
 	if candidates[0] == nil || candidates[0].Label != CandidateNewest || candidates[0].MetaPage != 1 {
@@ -81,8 +81,8 @@ func TestAdjacentMetasExposeNewestThenPrevious(t *testing.T) {
 	s0, h0 := classifyPage(newPage)
 	s1, h1 := classifyPage(oldPage)
 	classified := classifyMetas([2]bootstrap.RecoveryMetaState{s0, s1}, [2]bool{h0, h1})
-	if !classified.order.proven || classified.order.current != 0 || !classified.order.hasPrevious || classified.order.previous != 1 {
-		t.Fatalf("order %+v, want proven current 0 previous 1", classified.order)
+	if !classified.pair.Proven() || classified.pair.Current() != 0 || !classified.pair.HasPrevious() || classified.pair.Previous() != 1 {
+		t.Fatalf("order %+v, want proven current 0 previous 1", classified.pair)
 	}
 	candidates := classified.candidates(testIdentity())
 	if candidates[0] == nil || candidates[0].Label != CandidateNewest ||
@@ -101,8 +101,8 @@ func TestSwappedAdjacentMetasAreUnorderedNotCurrent(t *testing.T) {
 	s0, h0 := classifyPage(oldPage)
 	s1, h1 := classifyPage(newPage)
 	classified := classifyMetas([2]bootstrap.RecoveryMetaState{s0, s1}, [2]bool{h0, h1})
-	if classified.order.proven {
-		t.Fatalf("order %+v, want unproven", classified.order)
+	if classified.pair.Proven() {
+		t.Fatalf("order %+v, want unproven", classified.pair)
 	}
 	candidates := classified.candidates(testIdentity())
 	if candidates[0] == nil || candidates[0].Label != CandidateUnorderedMeta0 ||
@@ -127,8 +127,8 @@ func TestUnreadableCurrentDoesNotPromoteThePreviousMeta(t *testing.T) {
 	s0, h0 := classifyPage(currentPage)
 	s1, h1 := classifyPage(oldPage)
 	classified := classifyMetas([2]bootstrap.RecoveryMetaState{s0, s1}, [2]bool{h0, h1})
-	if !classified.order.proven || classified.order.current != 0 || !classified.order.hasPrevious {
-		t.Fatalf("order %+v, want proven current 0 previous 1", classified.order)
+	if !classified.pair.Proven() || classified.pair.Current() != 0 || !classified.pair.HasPrevious() {
+		t.Fatalf("order %+v, want proven current 0 previous 1", classified.pair)
 	}
 	if _, ok := classified.currentRecoveryMeta(); ok {
 		t.Fatal("recovery-invalid current reported recoverable")

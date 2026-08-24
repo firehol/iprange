@@ -66,13 +66,18 @@ func (e *OpenFailure) Unwrap() error { return e.Cause }
 // goroutine; methods must not run concurrently with each other or with
 // the terminal release, exactly like the reader and the mapping owner.
 type LiveSource struct {
-	mapping      *mapping.Mapping
-	core         *reader.ImmutableReader
-	path         string
-	identity     FileIdentity
-	sidecar      *Sidecar
-	slot         uint32
-	meta         format.Meta
+	mapping  *mapping.Mapping
+	core     *reader.ImmutableReader
+	path     string
+	identity FileIdentity
+	sidecar  *Sidecar
+	slot     uint32
+	meta     format.Meta
+	// candidateTxn and hasCandidate retain the recovery-candidate
+	// binding of the candidate-open arm (Rust Option<RecoveryCandidate>);
+	// the current-generation arm leaves them unset.
+	candidateTxn uint64
+	hasCandidate bool
 	gateLocked   bool
 	registration liveRegistrationState
 	ownerPID     int
@@ -279,10 +284,25 @@ func (s *LiveSource) FileIdentity() (device uint64, inode uint64, err error) {
 // release failure folds to the residue terminal exactly like Rust
 // terminal().
 func (s *LiveSource) FinishCurrent(check func() error) LiveSourceEnd {
-	checked := s.finalCheck(check)
+	checked := s.finalCheck(s.meta, check)
 	released := s.release()
 	return s.terminal(checked, released)
 }
+
+// FinishCandidate proves the pinned recovery candidate survived the
+// build and releases the source (Rust Source::finish over the
+// candidate-bound live arm: finalCheck with the used meta, then the
+// slot-gate-lifetime release, folded to the terminal).
+func (s *LiveSource) FinishCandidate(used format.Meta, check func() error) LiveSourceEnd {
+	checked := s.finalCheck(used, check)
+	released := s.release()
+	return s.terminal(checked, released)
+}
+
+// Release runs the release steps without any final check (Rust
+// LiveSource::release; the recovery cleanup guard retries a failed
+// live release through this seam).
+func (s *LiveSource) Release() error { return s.release() }
 
 // ReleaseOnly releases the source without the final check (Rust
 // release_only; the snapshot fail_source path).
@@ -293,14 +313,18 @@ func (s *LiveSource) ReleaseOnly() LiveSourceEnd {
 
 // finalCheck re-proves the pinned generation before publication (Rust
 // LiveSource::final_check): owner, cancellation, exclusive gate,
-// unchanged claimed meta, main path, sidecar path and header, and the
-// claimed slot still naming the generation.
-func (s *LiveSource) finalCheck(check func() error) error {
+// unchanged claimed meta (and the retained recovery candidate
+// transaction), main path, sidecar path and header, and the claimed
+// slot still naming the generation.
+func (s *LiveSource) finalCheck(used format.Meta, check func() error) error {
 	if err := s.requireOwner(); err != nil {
 		return err
 	}
 	if err := checkpoint(check); err != nil {
 		return err
+	}
+	if s.meta != used || s.hasCandidate && s.candidateTxn != used.TxnID {
+		return candidateChangedError()
 	}
 	if !s.gateLocked {
 		if err := s.sidecar.lockGateCancellable(LockExclusive, check); err != nil {
@@ -373,8 +397,13 @@ func (s *LiveSource) release() error {
 	}
 	// release_lifetime: the mapping close unmaps, releases the shared
 	// lifetime lock, and closes the descriptor (Rust unlock_file then
-	// drops).
-	if err := s.core.Close(); err != nil {
+	// drops; the candidate-bound source retains no reader core, so the
+	// mapping close is the same lifetime release).
+	if s.core != nil {
+		if err := s.core.Close(); err != nil {
+			return err
+		}
+	} else if err := s.mapping.Close(); err != nil {
 		return err
 	}
 	s.sidecar.Close()
@@ -434,4 +463,18 @@ func CleanupForCause(release error) error {
 		return release
 	}
 	return &format.Error{Code: format.CodeCleanupConflict, Detail: "source recovery protection was not released"}
+}
+
+// candidateChangedError is the fixed recovery-candidate-changed class
+// (Rust candidate_changed; the live candidate bind uses the same
+// mapping as the basic source).
+func candidateChangedError() error {
+	return &format.Error{Code: format.CodeRecoveryCandidateChanged, Detail: "recovery candidate changed"}
+}
+
+// Abandon releases the source without the final check (Rust
+// Source::abandon; the claimed-open unwind and the failing recovery
+// terminal).
+func (s *LiveSource) Abandon(cause error) LiveSourceEnd {
+	return s.abandon(cause)
 }

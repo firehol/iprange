@@ -60,101 +60,30 @@ type RecoveryCandidate struct {
 	CommitNonce    [16]byte
 }
 
-// generationOrder is the proven or unproven order of one meta pair
-// (Rust GenerationOrder).
-type generationOrder struct {
-	proven      bool
-	current     uint8
-	hasPrevious bool
-	previous    uint8
-}
-
 // classifiedMetas is one classified meta pair (Rust ClassifiedMetas):
-// the two per-page states and the derived order.
+// the recovery label projection and progress over the bootstrap
+// order authority.
 type classifiedMetas struct {
-	states [2]bootstrap.RecoveryMetaState
-	order  generationOrder
-	has    [2]bool
+	pair bootstrap.RecoveryMetaPair
 }
 
 // classifyMetas derives the order from two raw meta states (Rust
-// ClassifiedMetas::new over classify_order: both states present with
-// valid order arms and equal static identity, then equal-transaction
-// or adjacent-transaction proof).
+// ClassifiedMetas::new over classify_order; the order proof is the
+// bootstrap authority).
 func classifyMetas(states [2]bootstrap.RecoveryMetaState, has [2]bool) classifiedMetas {
-	c := classifiedMetas{states: states, has: has}
-	if !has[0] || !has[1] {
-		return c
-	}
-	s0, s1 := states[0], states[1]
-	if !s0.OrderValid || !s1.OrderValid {
-		return c
-	}
-	m0, m1 := s0.Order, s1.Order
-	if !staticIdentityEqual(m0, m1) {
-		return c
-	}
-	switch {
-	case m0.TxnID == m1.TxnID:
-		if !metaEqual(m0, m1) {
-			return c
-		}
-		c.order = generationOrder{proven: true, current: uint8(m0.TxnID & 1)}
-	case m0.TxnID == m1.TxnID+1:
-		c.order = adjacentOrder(m1, m0, 0)
-	case m1.TxnID == m0.TxnID+1:
-		c.order = adjacentOrder(m0, m1, 1)
-	}
-	return c
-}
-
-// adjacentOrder proves the order of one adjacent pair where higher is
-// the newer meta on higherPage (Rust adjacent_order: the parity of
-// the higher page must match its transaction).
-func adjacentOrder(lower, higher format.Meta, higherPage uint8) generationOrder {
-	if lower.TxnID+1 != higher.TxnID {
-		return generationOrder{}
-	}
-	if uint8(higher.TxnID&1) != higherPage {
-		return generationOrder{}
-	}
-	return generationOrder{proven: true, current: higherPage, hasPrevious: true, previous: 1 - higherPage}
-}
-
-// staticIdentityEqual compares the five static identity fields (Rust
-// static_identity_eq).
-func staticIdentityEqual(a, b format.Meta) bool {
-	return a.AddressFamily == b.AddressFamily &&
-		a.ValueKind == b.ValueKind &&
-		a.StructureKind == b.StructureKind &&
-		a.ValueTag == b.ValueTag &&
-		a.DatabaseID == b.DatabaseID
-}
-
-// metaEqual compares the full decoded meta (Rust MetaV4 equality;
-// ParseIdentity guarantees identical raw identity bytes, so the
-// decoded scalars determine equality).
-func metaEqual(a, b format.Meta) bool { return a == b }
-
-// currentRecoveryMeta returns the recovery-valid meta of the proven
-// current page (Rust ClassifiedMetas::current_recovery_meta).
-func (c *classifiedMetas) currentRecoveryMeta() (format.Meta, bool) {
-	if !c.order.proven {
-		return format.Meta{}, false
-	}
-	state, ok := c.stateAt(c.order.current)
-	if !ok || !state.RecoveryValid {
-		return format.Meta{}, false
-	}
-	return state.Recovery, true
+	return classifiedMetas{pair: bootstrap.ClassifyRecoveryMetaPair(states, has)}
 }
 
 // stateAt returns the classified state of one meta page.
 func (c *classifiedMetas) stateAt(page uint8) (bootstrap.RecoveryMetaState, bool) {
-	if page > 1 {
-		return bootstrap.RecoveryMetaState{}, false
-	}
-	return c.states[page], c.has[page]
+	return c.pair.StateAt(page)
+}
+
+// currentRecoveryMeta returns the recovery-valid meta of the proven
+// current page (Rust ClassifiedMetas::current_recovery_meta).
+func (c *classifiedMetas) currentRecoveryMeta() (format.Meta, bool) {
+	_, meta, ok := c.pair.CurrentRecoveryMeta()
+	return meta, ok
 }
 
 // candidates projects the recoverable candidate tokens (Rust
@@ -163,18 +92,18 @@ func (c *classifiedMetas) stateAt(page uint8) (bootstrap.RecoveryMetaState, bool
 // recovery-valid pages become candidates).
 func (c *classifiedMetas) candidates(identity publication.LocalFileIdentity) [2]*RecoveryCandidate {
 	var out [2]*RecoveryCandidate
-	if c.order.proven {
-		if candidate := c.candidate(identity, c.order.current, CandidateNewest); candidate != nil {
+	if c.pair.Proven() {
+		if candidate := c.candidate(identity, c.pair.Current(), CandidateNewest); candidate != nil {
 			out[0] = candidate
 		}
-		if !c.order.hasPrevious {
+		if !c.pair.HasPrevious() {
 			return out
 		}
 		slot := 1
 		if out[0] == nil {
 			slot = 0
 		}
-		if candidate := c.candidate(identity, c.order.previous, CandidatePrevious); candidate != nil {
+		if candidate := c.candidate(identity, c.pair.Previous(), CandidatePrevious); candidate != nil {
 			out[slot] = candidate
 		}
 		return out
@@ -257,9 +186,13 @@ func (c *classifiedMetas) progress() (validation.ValidationProgress, error) {
 			}
 		}
 	}
-	if !c.order.proven && c.has[0] && c.has[1] && c.states[0].RecoveryValid && c.states[1].RecoveryValid {
-		if err := recordClassifiedProblem(&progress, false, true); err != nil {
-			return progress, err
+	if !c.pair.Proven() {
+		s0, ok0 := c.pair.StateAt(0)
+		s1, ok1 := c.pair.StateAt(1)
+		if ok0 && ok1 && s0.RecoveryValid && s1.RecoveryValid {
+			if err := recordClassifiedProblem(&progress, false, true); err != nil {
+				return progress, err
+			}
 		}
 	}
 	return progress, nil

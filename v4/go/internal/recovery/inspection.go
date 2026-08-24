@@ -296,7 +296,7 @@ func publicationIdentityOf(m *mapping.Mapping) publication.LocalFileIdentity {
 // unprovable class, a recovery-invalid proven current is the
 // unreadable class.
 func requireLiveCurrent(classified *classifiedMetas) (format.Meta, error) {
-	if !classified.order.proven {
+	if !classified.pair.Proven() {
 		return format.Meta{}, &format.Error{Code: format.CodeLiveRecoveryCurrentGenerationUnprovable, Detail: "live recovery current generation unprovable"}
 	}
 	meta, ok := classified.currentRecoveryMeta()

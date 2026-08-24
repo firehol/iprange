@@ -12,6 +12,7 @@ package iprangedb
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
 // LiveWriter is the exclusive writer of one live database (Rust
@@ -323,14 +324,15 @@ const (
 
 // CoordinationCleanup is the coordination residue class of one failed
 // live operation (Rust publication::CoordinationCleanup): which lock or
-// guard the caller must still release.
-type CoordinationCleanup uint8
+// guard the caller must still release. The type is the publication
+// machine enum so the recovery terminal carries the same class.
+type CoordinationCleanup = publication.CoordinationCleanup
 
 const (
-	CoordinationCleanupNone CoordinationCleanup = iota
-	CoordinationCleanupCleanupGuard
-	CoordinationCleanupRetainedReaderCloseRequired
-	CoordinationCleanupRetainedWriterCloseRequired
+	CoordinationCleanupNone                        = publication.CoordinationCleanupNone
+	CoordinationCleanupCleanupGuard                = publication.CoordinationCleanupCleanupGuard
+	CoordinationCleanupRetainedReaderCloseRequired = publication.CoordinationCleanupRetainedReaderCloseRequired
+	CoordinationCleanupRetainedWriterCloseRequired = publication.CoordinationCleanupRetainedWriterCloseRequired
 )
 
 // LiveCommitCleanupArtifact is one exact unresolved unpublished main

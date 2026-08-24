@@ -33,6 +33,14 @@ func (p *PublishAttempt) Finish(FinishedOutput, func() error) (PublicationResult
 	return PublicationResult{}, windowsCreateRefusal()
 }
 
+// Facts satisfies the common surface; unreachable on Windows.
+func (p *PublishAttempt) Facts() PrivateOutputAttempt { return PrivateOutputAttempt{} }
+
+// DiscardFacts satisfies the common surface; unreachable on Windows.
+func (p *PublishAttempt) DiscardFacts() (PrivateOutputAttempt, *CleanupArtifact) {
+	return PrivateOutputAttempt{}, nil
+}
+
 // CreatePublishAttempt refuses on Windows before any path access
 // exactly like the destination bind of the POSIX arms (Rust
 // namespace/windows.rs is a tracked M5 surface; Go keeps the

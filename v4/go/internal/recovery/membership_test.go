@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -476,27 +476,19 @@ func TestMembershipRecoveryConstructClean(t *testing.T) {
 
 	r := reopenMember(t, outputPath)
 	defer r.Close()
-	info, err := r.Info()
-	if err != nil {
-		t.Fatalf("Info: %v", err)
-	}
-	if info.ActiveFeedCount != 3 || info.RangeRecordCount != 3 {
-		t.Fatalf("info %+v, want 3 feeds 3 ranges", info)
+	reopened := r.Meta()
+	if reopened.ActiveFeedCount != 3 || reopened.RangeRecordCount != 3 {
+		t.Fatalf("meta %+v, want 3 feeds 3 ranges", reopened)
 	}
 	for name, wantIndex := range map[string]uint32{"alpha": 3, "middle": 31_999, "omega": 32_001} {
 		entry, found, err := r.LookupFeed(name)
-		if err != nil || !found || entry.Index != wantIndex {
+		if err != nil || !found || entry.FeedIndex != wantIndex {
 			t.Fatalf("LookupFeed(%s) = %+v/%v err=%v, want index %d", name, entry, found, err, wantIndex)
 		}
 	}
-	pin, err := r.Pin()
-	if err != nil {
-		t.Fatalf("Pin: %v", err)
-	}
-	defer pin.Close()
-	view, found, err := pin.LookupMembershipV4(5)
+	view, found, err := r.LookupMembership4(5)
 	if err != nil || !found {
-		t.Fatalf("LookupMembershipV4(5) found=%v err=%v", found, err)
+		t.Fatalf("LookupMembership4(5) found=%v err=%v", found, err)
 	}
 	for _, index := range []uint32{3, 31_999, 32_001} {
 		contained, err := view.ContainsIndex(index)
@@ -504,18 +496,20 @@ func TestMembershipRecoveryConstructClean(t *testing.T) {
 			t.Fatalf("contains(%d) = %v err=%v, want true", index, contained, err)
 		}
 	}
-	metadata, found, err := r.MetadataJSON()
+	metadata, found, err := r.ReadMetadataJSON()
 	if err != nil || !found || string(metadata) != `{"kind":"membership"}` {
-		t.Fatalf("MetadataJSON = %q/%v err=%v", metadata, found, err)
+		t.Fatalf("ReadMetadataJSON = %q/%v err=%v", metadata, found, err)
 	}
 	validateClean(t, outputPath)
 }
 
 // reopenMember opens one finished membership output (Rust
-// ImmutableReader::open).
-func reopenMember(t *testing.T, path string) *iprangedb.ImmutableReader {
+// ImmutableReader::open; the internal reader keeps the recovery
+// package free of the root import cycle once the root facade
+// composes the recovery machine).
+func reopenMember(t *testing.T, path string) *reader.ImmutableReader {
 	t.Helper()
-	r, err := iprangedb.OpenImmutable(path)
+	r, err := reader.OpenImmutable(path)
 	if err != nil {
 		t.Fatalf("OpenImmutable: %v", err)
 	}
@@ -572,12 +566,9 @@ func TestMembershipRecoveryConstructDamagedBlob(t *testing.T) {
 	}
 	r := reopenMember(t, outputPath)
 	defer r.Close()
-	info, err := r.Info()
-	if err != nil {
-		t.Fatalf("Info: %v", err)
-	}
-	if info.ActiveFeedCount != 3 || info.RangeRecordCount != 0 {
-		t.Fatalf("info %+v, want 3 feeds 0 ranges", info)
+	reopened := r.Meta()
+	if reopened.ActiveFeedCount != 3 || reopened.RangeRecordCount != 0 {
+		t.Fatalf("meta %+v, want 3 feeds 0 ranges", reopened)
 	}
 	validateClean(t, outputPath)
 }
@@ -636,7 +627,7 @@ func TestMembershipRecoveryConstructCatalogConflict(t *testing.T) {
 		t.Fatalf("LookupFeed(a) found=%v err=%v, want none", found, err)
 	}
 	entry, found, err := r.LookupFeed("b")
-	if err != nil || !found || entry.Index != 5 {
+	if err != nil || !found || entry.FeedIndex != 5 {
 		t.Fatalf("LookupFeed(b) = %+v/%v err=%v, want index 5", entry, found, err)
 	}
 	validateClean(t, outputPath)

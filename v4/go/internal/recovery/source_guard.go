@@ -41,10 +41,11 @@ const (
 )
 
 // recoverySource is one opened recovery source (Rust Source union:
-// the basic arm now, the registered live arm with recover_live).
+// the basic arm for the immutable and quiescent modes, the registered
+// live arm for recover_live).
 type recoverySource struct {
 	basic *basicSource
-	live  any
+	live  *live.LiveSource
 }
 
 // basicSource is the immutable or quiescent recovery source (Rust
@@ -105,7 +106,21 @@ func openRecoverySource(path string, candidate *RecoveryCandidate, mode sourceMo
 		}
 		return &recoverySource{basic: basic}, nil
 	case sourceModeLive:
-		return nil, openProblem(&format.Error{Code: format.CodePublicationUnsupported, Detail: "live recovery source arrives with the recover_live machine"})
+		// Rust LiveSource::open: only the newest candidate names the
+		// live current generation; every other label refuses before
+		// any path access.
+		if candidate == nil || candidate.Label != CandidateNewest {
+			return nil, openProblem(&format.Error{Code: format.CodeInvalidArgument, Detail: "live recovery requires the newest candidate"})
+		}
+		token, ok := candidateLiveToken(candidate)
+		if !ok {
+			return nil, openProblem(candidateChangedError())
+		}
+		source, err := live.OpenLiveSourceCandidate(path, token, check)
+		if err != nil {
+			return nil, openProblem(err)
+		}
+		return &recoverySource{live: source}, nil
 	default:
 		return nil, openProblem(&format.Error{Code: format.CodeInvalidEnum, Detail: "invalid recovery source mode"})
 	}
@@ -134,16 +149,26 @@ func openRecoverySourceCurrent(path string, mode currentSourceMode, check func()
 
 // mapping returns the mapped committed extent of the source.
 func (s *recoverySource) mapping() *mapping.Mapping {
+	if s.live != nil {
+		return s.live.Mapping()
+	}
 	return s.basic.mapping
 }
 
 // meta returns the retained generation of the source.
 func (s *recoverySource) meta() format.Meta {
+	if s.live != nil {
+		return s.live.Meta()
+	}
 	return s.basic.meta
 }
 
 // identity returns the portable identity of the source.
 func (s *recoverySource) identity() publication.LocalFileIdentity {
+	if s.live != nil {
+		device, inode, _ := s.live.FileIdentity()
+		return publication.LocalFileIdentityFromDeviceInode(device, inode)
+	}
 	device, inode := live.IdentityDeviceInode(&s.basic.identity)
 	return publication.LocalFileIdentityFromDeviceInode(device, inode)
 }
@@ -158,6 +183,9 @@ func (s *recoverySource) finishCurrent(check func() error) sourceEnd {
 // candidate proof, then the release; a failed release retains the
 // source in the cleanup guard.
 func (s *recoverySource) finish(used format.Meta, check func() error) sourceEnd {
+	if s.live != nil {
+		return liveEnd(s.live.FinishCandidate(used, check), s)
+	}
 	checked := s.finalCheck(used, check)
 	released := s.release()
 	return terminal(s, checked, released)
@@ -165,6 +193,9 @@ func (s *recoverySource) finish(used format.Meta, check func() error) sourceEnd 
 
 // abandon runs the failing terminal (Rust Source::abandon).
 func (s *recoverySource) abandon(cause error) sourceEnd {
+	if s.live != nil {
+		return liveEnd(s.live.Abandon(cause), s)
+	}
 	released := s.release()
 	return terminal(s, cause, released)
 }
@@ -172,8 +203,46 @@ func (s *recoverySource) abandon(cause error) sourceEnd {
 // releaseOnly runs the release terminal without any final proof (Rust
 // Source::release_only).
 func (s *recoverySource) releaseOnly() sourceEnd {
+	if s.live != nil {
+		return liveEnd(s.live.ReleaseOnly(), s)
+	}
 	released := s.release()
 	return terminal(s, nil, released)
+}
+
+// liveEnd folds one live source terminal into the recovery terminal
+// (Rust terminal over the LiveSource arm: the release failure lives
+// in the retained cleanup guard, never in the folded cause).
+func liveEnd(end live.LiveSourceEnd, s *recoverySource) sourceEnd {
+	if !end.Residue {
+		return sourceEnd{cause: end.Cause, guard: nil}
+	}
+	return sourceEnd{
+		cause: end.Cause,
+		guard: &RecoverySourceCleanupGuard{
+			source:      &guardSource{kind: guardSourceRecovery, recovery: s},
+			lastProblem: problem(end.Cause),
+		},
+	}
+}
+
+// candidateLiveToken converts one recovery candidate to the live
+// selection token (Rust LiveSource::open receives the recovery token
+// directly; the Go token crosses the live boundary without the label
+// and portable-identity limbs, which the recovery token keeps).
+func candidateLiveToken(candidate *RecoveryCandidate) (bootstrap.RecoveryCandidateToken, bool) {
+	device, inode, ok := candidate.SourceIdentity.DeviceInode()
+	if !ok {
+		return bootstrap.RecoveryCandidateToken{}, false
+	}
+	return bootstrap.RecoveryCandidateToken{
+		MetaPage:      candidate.MetaPage,
+		Device:        device,
+		Inode:         inode,
+		DatabaseID:    candidate.DatabaseID,
+		TransactionID: candidate.TransactionID,
+		CommitNonce:   candidate.CommitNonce,
+	}, true
 }
 
 // finalCheck re-proves the source generation after the operation (Rust
@@ -200,9 +269,12 @@ func (s *recoverySource) finalCheck(used format.Meta, check func() error) error 
 	return nil
 }
 
-// release releases the lifetime lock of the source (Rust
-// Source::release).
+// release releases the source registration and lifetime (Rust
+// Source::release; the cleanup-guard retry seam).
 func (s *recoverySource) release() error {
+	if s.live != nil {
+		return s.live.Release()
+	}
 	return s.basic.release()
 }
 
