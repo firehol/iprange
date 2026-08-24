@@ -409,3 +409,88 @@ func TestValidateMetadataCheckpointFailure(t *testing.T) {
 		t.Fatalf("checkpoint calls %d, want 1", calls)
 	}
 }
+
+func TestValidateMetadataCleanEndWalksTheChain(t *testing.T) {
+	// A clean zlib end before the declared chain end: the first page
+	// carrying bytes after the stream reports the trailing finding and
+	// the remaining chain pages are still validated (Rust feed_chunk
+	// keeps walking with the decoder disabled).
+	payload := randomBytes(1000)
+	stream := storedZlib(payload) // 1011 bytes
+	pad := bytes.Repeat([]byte{0xAA}, 4048-len(stream))
+	p2 := metadataChainPage(t, 2, 3, append(append([]byte{}, stream...), pad...), 0, nil)
+	// The final page passes its own parse but holds a nonzero reserved
+	// tail, pinning the post-decoder page validation.
+	p3 := metadataChainPage(t, 2, 0, randomBytes(2155), uint64(len(stream)+len(pad)), func(p []byte) {
+		p[format.MetadataDataOffset+2155] = 1
+	})
+	declared := uint64(len(stream) + len(pad) + 2155)
+	_, findings := metadataDB(t, 30_000, declared, p2, p3)
+	want := []ValidationReason{ReasonMetadataZlibInvalid, ReasonPageReservedNonzero}
+	if len(findings) != len(want) {
+		t.Fatalf("findings %+v", findings)
+	}
+	for i, reason := range want {
+		if findings[i].Reason != reason {
+			t.Fatalf("finding %d: %+v, want %v", i, findings[i], reason)
+		}
+	}
+	if *findings[0].PageNumber != 2 {
+		t.Fatalf("zlib finding page %d, want 2", *findings[0].PageNumber)
+	}
+	if *findings[1].PageNumber != 3 {
+		t.Fatalf("reserved finding page %d, want 3", *findings[1].PageNumber)
+	}
+}
+
+func TestValidateMetadataCleanEndAtChunkBoundary(t *testing.T) {
+	// The zlib stream ends exactly at a chunk boundary: the probe pulls
+	// the next chain page and the trailing finding lands on it after
+	// its own parse finding — the same page carries both, in the Rust
+	// consume_page order (parse first, feed finding second).
+	payload := randomBytes(4037)
+	stream := storedZlib(payload) // exactly 4048 bytes
+	p2 := metadataChainPage(t, 2, 3, stream, 0, nil)
+	p3 := metadataChainPage(t, 2, 0, randomBytes(2155), uint64(len(stream)), func(p []byte) {
+		p[format.MetadataDataOffset+2155] = 1
+	})
+	declared := uint64(len(stream) + 2155)
+	_, findings := metadataDB(t, 30_000, declared, p2, p3)
+	want := []ValidationReason{ReasonPageReservedNonzero, ReasonMetadataZlibInvalid}
+	if len(findings) != len(want) {
+		t.Fatalf("findings %+v", findings)
+	}
+	for i, reason := range want {
+		if findings[i].Reason != reason {
+			t.Fatalf("finding %d: %+v, want %v", i, findings[i], reason)
+		}
+		if findings[i].Object != ObjectMetadata || *findings[i].PageNumber != 3 {
+			t.Fatalf("finding %d object/page %+v, want metadata/3", i, findings[i])
+		}
+	}
+}
+
+func TestValidateMetadataOutputOverflowWalksTheChain(t *testing.T) {
+	// The stream produces more output than declared while chain pages
+	// remain: the overflow finding reports the page being fed and the
+	// remaining page is still validated (Rust feed excess arm).
+	payload := bytes.Repeat([]byte("a"), 30_000)
+	stream := zlibFixture(t, payload) // compressible: far short of 4048
+	pad := bytes.Repeat([]byte{0xBB}, 4048-len(stream))
+	p2 := metadataChainPage(t, 2, 3, append(append([]byte{}, stream...), pad...), 0, nil)
+	p3 := metadataChainPage(t, 3, 0, randomBytes(2155), uint64(len(stream)+len(pad)), nil)
+	declared := uint64(len(stream) + len(pad) + 2155)
+	_, findings := metadataDB(t, 25_000, declared, p2, p3)
+	want := []ValidationReason{ReasonMetadataZlibInvalid, ReasonPageBornTxnInvalid}
+	if len(findings) != len(want) {
+		t.Fatalf("findings %+v", findings)
+	}
+	for i, reason := range want {
+		if findings[i].Reason != reason {
+			t.Fatalf("finding %d: %+v, want %v", i, findings[i], reason)
+		}
+	}
+	if *findings[0].PageNumber != 2 {
+		t.Fatalf("zlib finding page %d, want 2", *findings[0].PageNumber)
+	}
+}
