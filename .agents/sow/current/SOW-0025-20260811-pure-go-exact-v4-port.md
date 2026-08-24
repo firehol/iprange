@@ -10673,6 +10673,9 @@ signed); milestone 1 (the pure-Go exact v4 port with the singular
 fixed-tree authority, the mmap-only ownership split, and the
 reviewer-enforced gates) is closed per the user decision.
 
-Next: milestone 2 - the next M3 surface (feed workflows,
-draft_store membership and structured applies, and the range-edit
-callers), following the same review process.
+Next: M4 chunk 4-9 (validation) per the recorded M4 chunk plan -
+explicit validation over the single-authority codecs, ImmutableCurrent
+first, then LiveCurrent/OfflineCandidate after the 4-4/4-6 machines;
+the milestone-close review process stays unchanged for the rest of
+M4 (chunks 4-9..4-12), then M5 (cross-language and performance
+acceptance).
