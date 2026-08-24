@@ -11499,5 +11499,74 @@ gate and the milestone push.
 Next: milestone 2 chunk 4-10 slice A - classify, inspection, the
 recovery candidate tokens, and the OfflineCandidate validation arm,
 per the recorded design gate.
+### Status (2026-08-24) - milestone 2 slice A delivered
 
+Slice A of chunk 4-10 (classify + inspection + candidate tokens + the
+OfflineCandidate validation arm) is committed at 52e5b95, after the
+design gate at ffb9a98. Delivered surface:
 
+- internal/bootstrap/recovery_meta.go: the two-stage per-page
+  classification (order state + recovery-valid state over
+  ValidateKindInvariants), Rust bootstrap/recovery_meta.rs parity.
+- internal/recovery/classify.go + classify_test.go: the
+  generation-order proof, the exact candidate tokens (label, meta
+  page, source identity, database id, txn, nonce), and four Rust
+  classify_tests ports.
+- internal/recovery/inspection.go: RecoveryInspectionMode, the
+  InspectionMode budget rule (live holds two files, the other modes
+  one), the immutable/offline arms over the shared sources, the live
+  arm over the Go live-reader authority and a new gate-held
+  reader-table owner (internal/live LiveRecoveryGate), the
+  read_classified/classify_mapped raw-pair classification, the
+  newest-only live projection, and the OfflineSource with the
+  exclusive lifetime lock.
+- internal/recovery/offline.go: the ValidateOfflineCandidate entry of
+  the Rust validate_offline arm (identity re-proof, selected_meta,
+  availability, the shared sweep, the re-verify terminal with the
+  candidate-changed mapping). The Go mode enum cannot carry the
+  candidate payload of the Rust ValidationMode::OfflineCandidate
+  variant, so this arm lives in the recovery package and composes the
+  shared sweep; validation.Validate refuses the bare enum with
+  CodeInvalidArgument and a redirect detail (recorded Go deviation,
+  documented at validation.go:44 and validation_public.go:14).
+- Exported validation authority for the composition (Rust pub(crate)
+  peers): ImmutableSource + OpenImmutableSource, SweepSelected,
+  Failure, Generation, ValidationBudget.Validate, CountFinding,
+  MarkUntraversable (the last two were already present from the
+  classify port).
+- live.CoordinationCause (the Rust recovery/source_guard mapping) and
+  live.LiveRecoveryGate (Sidecar::open + exclusive gate +
+  inspect_at_most), exported from the owner package.
+
+Recorded deviations (all consistent with the milestone-1 Go live
+authority, noted in code comments): the live inspection composes
+mapping.OpenLiveReader, whose SameFile identity checks stand for the
+Rust single-link namespace rule and whose two-page geometry refusal
+surfaces before classification; the Rust Io(NotFound) arm of
+candidate_identity_error has no Go counterpart because the Go
+namespace proofs surface missing paths as NameNotFound, which Rust
+also leaves unchanged.
+
+Slice A validation (all under nice; ~1 core-minute plus the three
+strace legs): gofmt clean; vet plain + v4work; plain and v4work full
+trees (19 test-bearing packages ok each, recovery added); race +
+checkptr=2 on recovery/validation/live/bootstrap and the root, both
+tag sets; seven cross-builds plain + v4work (linux/386, linux/arm,
+linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64,
+linux/amd64); the Rust recovery tests ported for slice A (the four
+classify cases, the two live inspection refusals, plus the healthy
+newest-only projection and the offline validation of a committed live
+generation) and the inspection/offline progress and terminal pins
+(absent-page IoError, unordered single-page projection, foreign
+identity, stale token, missing file); check-mmap-trace.sh gained the
+recovery leg (leg 3: create + commit + offline inspection + offline
+candidate validation) and all three strace legs PASS - the writable
+offline descriptor is never read or written through file I/O.
+
+Suite counts at 52e5b95: validation 94 plain / 98 v4work (unchanged),
+live 57/70 (unchanged), recovery 13/13 new; root 183/203 unchanged.
+
+Next: milestone 2 chunk 4-10 slice B - page_set/construction basics,
+the source guard, and the terminal/report shapes (Rust
+recovery/page_set.rs, source_guard.rs, report.rs, terminal.rs),
+per the recorded design gate.
