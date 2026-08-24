@@ -11731,3 +11731,59 @@ Next: milestone 2 chunk 4-10 slice D2 - the membership recovery
 writer internals, Rust recovery/membership_index.rs, membership_table.
 rs, membership_build.rs, membership_output.rs, membership_blob.rs,
 membership_words.rs parity).
+
+### Status (2026-08-24) - milestone 2 slice D2 delivered: membership recovery index and blob validation
+
+Slice D2 delivers the membership analysis half of the indirect recovery
+(Rust recovery/membership_index.rs, membership_table.rs,
+membership_blob.rs, membership_words.rs, id_table.rs parity):
+
+- internal/recovery/id_table.go: the shared fixed-record ID table (the
+  record and ID slot regions, the push/read/write/reject terminals, the
+  find-first-then-find-empty insert probe with the duplicate and
+  new-conflict facts, the get proof, the require-record proof).
+- internal/recovery/membership_table.go: the 56-byte membership locator
+  wire codec and the membership record class over the shared table.
+- internal/recovery/membership_blob.go: the complete CRC-checked blob
+  scan (root bounds, span proofs, branch offset and order, leaf
+  geometry, contiguous coverage, the page-accepted counts and the blob
+  damage envelopes).
+- internal/recovery/membership_words.go: the inline and blob word reads
+  (read_inline_bitmap, read_inline_words, read_blob_words,
+  find_blob_leaf and select_blob_branch over every tree level).
+- internal/recovery/membership_index.go: the ID-tree count, the
+  locator recovery with the record validity classes, the per-entry
+  validation (digest, feed-catalog contains proofs, the inactive-bit
+  rejection, the nonzero final word, the exact word count), the ID
+  registration conflicts, and the accepted/rejected finish proof.
+- internal/writer/membership_blob.go: fix the bottom-up blob builder to
+  reset a level after flushing it (Rust flush ends with
+  *level = EMPTY_LEVEL); without the reset the next push indexes out of
+  range after 225 children, so multi-level bitmaps could not build.
+- Tests: writer multi-level blob build (226 leaves, one full branch
+  level, proves the flush reset), recovery inline+blob validation
+  (examined 2 / accepted 2, IDs 1 and 2 with the writer ID-1 convention),
+  blob read-back across a branch-over-branch tree, the damaged-blob CRC
+  rejection arm (membership rejected 1, blob CRC and dictionary invalid
+  envelopes), and the either-catalog-tree-sufficiency arm (CRC of the
+  catalog name root, index tree alone reconciles 2/2 and both
+  memberships).
+
+Slice D2 validation (all under nice; ~2 core-minutes): gofmt clean; vet
+plain + v4work on linux/windows/freebsd; plain and v4work full trees;
+race + checkptr=2 on recovery/writer/validation/live/bootstrap/
+publication and the root, both tag sets; seven cross-builds plain +
+v4work (linux/386, linux/arm64, darwin/amd64, darwin/arm64,
+freebsd/amd64, netbsd/amd64, windows/amd64). Recovery suite: 50 Test
+functions.
+
+Next: milestone 2 chunk 4-10 slice D3 - the membership build and output
+over the writer internals and the indirect analyze composition (Rust
+membership_build.rs, membership_output.rs, structured_output.rs,
+structured_build.rs, structure_index.rs, structure_table.rs,
+membership.rs analyze/analyze_graphs parity): prepare_tables with the
+tables-retained heap, recover_tables over catalog, memberships,
+structures, ranges and metadata, and indirect_build.go with the Mode
+construct/build/retained_bytes/failure terminals; membership output
+ports the writer membershipState intern machinery and structure support
+ports the NetworkEnrichmentV1 codec.
