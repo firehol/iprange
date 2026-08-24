@@ -11774,8 +11774,8 @@ plain + v4work on linux/windows/freebsd; plain and v4work full trees;
 race + checkptr=2 on recovery/writer/validation/live/bootstrap/
 publication and the root, both tag sets; seven cross-builds plain +
 v4work (linux/386, linux/arm64, darwin/amd64, darwin/arm64,
-freebsd/amd64, netbsd/amd64, windows/amd64). Recovery suite: 50 Test
-functions.
+freebsd/amd64, netbsd/amd64, windows/amd64). Recovery suite: 49 Test
+functions (verified at c7aa643).
 
 Next: milestone 2 chunk 4-10 slice D3 - the membership build and output
 over the writer internals and the indirect analyze composition (Rust
@@ -11827,7 +11827,8 @@ structure_table.rs parity):
   inline bitmaps, metadata, high water), the damaged-blob arm, the
   catalog-conflict arm, and the structured arms (digest-damaged
   record, missing membership, out-of-bounds branch pointer with
-  49/2 best-effort recovery); recovery suite now 62 Test functions.
+  49/2 best-effort recovery); recovery suite now 55 Test functions
+(verified at fb4a24c).
 
 Slice D3 validation (all under nice; ~2 core-minutes): gofmt clean;
 vet plain + v4work on linux/windows/freebsd; plain and v4work full
@@ -11944,8 +11945,9 @@ design (Rust always reports the removed-attempt facts in the
 secure-failure arm).
 
 Slice E validation (all under nice; ~2 core-minutes): gofmt clean; vet
-plain + v4work; plain and v4work full trees (19 test-bearing packages
-ok each); race + checkptr=2 on recovery/writer/publication/live/
+plain + v4work; plain and v4work full trees (16 test-bearing packages
+ok each; 19 packages total, fault/snapshot/work carry no test files);
+race + checkptr=2 on recovery/writer/publication/live/
 bootstrap and the root, both tag sets; seven cross-builds plain +
 v4work (linux/386, linux/arm, linux/arm64, windows/amd64,
 darwin/arm64, freebsd/amd64, linux/amd64); the check-mmap-trace.sh
@@ -11955,8 +11957,101 @@ its dual meta through a writable mapping, and the pattern now also
 matches .v4 artifact names).
 
 Next: milestone 2 chunk 4-10 gate - the five-aspect adversarial review
-(Goddall Rust parity, Gauss Go idioms, Chandrasekhar performance,
+(Goodall Rust parity, Gauss Go idioms, Chandrasekhar performance,
 Herschel wire format, Noether APIs) over the full chunk (slices A-E),
 then the chunk battery record and the milestone push; the worker
 process boundary (4-11) and the authorized scratch/external sort stay
 the recorded follow-ups.
+
+### Status (2026-08-24) - milestone 2 review round 1: all five aspects reported; every finding fixed, battery green
+
+The five-aspect adversarial review over the full chunk (slices A-E)
+reported. Goodall (Rust parity) FAIL, Herschel (wire format) FAIL,
+Noether (APIs) FAIL, Gauss (Go idioms) PASS with one P3, Chandrasekhar
+(performance) PASS on the slice-E delta with the standing per-record
+escapes still open for the milestone gate (range_scan, tree_scan,
+membership_blob, membership_index, direct_output, structured_output
+hot-path decode/bound work). All round-1 fixes landed in ae3c41e;
+the recovery suite is now 69 Test functions.
+
+Herschel findings (wire):
+
+- P2-1 adjacency wrap: the pair order refused a lower transaction of
+  2^64-1 as the predecessor (Rust checked_add parity); fixed in
+  bootstrap/recovery_pair.go with the boundary regression test.
+- P2-2 blob leaf identity: the recovery leaf reads skipped the
+  common/born identity arms of the Rust parse_leaf_info; fixed in
+  membership_blob.go leaf() and membership_words.go findBlobLeaf, with
+  the born-corruption regression test (re-sealed page, blob-invalid
+  class, membership and range reject).
+- P2-3 structure id limit: StructureRootLevel now enforces the Rust
+  required_level range [1, 2^32] with the height cap; format unit
+  coverage plus the recovery refusal test (corrupt class, invalid
+  limit, no page work).
+
+Gauss finding: cleanupForCause compared with a literal errors.Is that
+could never match; fixed with errors.As plus the code compare.
+
+Noether findings: the D2 record's 50-Test count corrected to 49, the
+D3 record's 62 to 55 (both verified at their commits), the
+test-bearing statement corrected to 16 of 19 packages, and the
+reviewer-name typo fixed; the public recovery surface itself verified
+clean.
+
+Goodall findings (all fixed):
+
+- P1-E output-spec structure-kind gate: an unknown structured kind
+  code was passed raw into the builder and published a
+  self-inconsistent database after full analysis side effects. The
+  gate now runs at the Rust api.rs output_spec position, before the
+  builder exists: format.StructureKindFromWire (Rust
+  StructureKind::from_wire), UnsupportedStructure class, default
+  report, no sink traffic, no destination artifact. Regression test
+  drives a dual-meta kind-code-7 source through RecoverImmutable.
+- P2-A live claimed-unwind residue: the abandoned half-released live
+  source was dropped. live.OpenFailure now carries the retained source
+  and the raw release problem; recovery/source_guard.go openProblemLive
+  builds the retryable cleanup guard exactly like the Rust finish_open
+  Claimed arm (last problem = the release problem). Two regression
+  tests: the live-package OpenFailure shape and the recovery guard
+  fold with a completed retry.
+- P3-C live final-check order: the exclusive gate is taken before the
+  generation proof (Rust ensure_gate_cancellable precedes the meta
+  compare), so a gate failure wins over a simultaneous generation
+  change.
+- P1-1 metadata chain header gates: recovery metadata_read.go runs the
+  common/kind/born identity checks (Rust require_page_header) before
+  the chunk body proof; regression test corrupts the chain-root born
+  (re-sealed) and proves the metadata-invalid class with the omitted
+  output metadata.
+- P1-4 metadata compression window: the retained tables heap leaked
+  into the write budget; completeRanges now receives only
+  retained_metadata_bytes (Rust indirect_build), while the full
+  retained tables travel in the range-build context. The regression
+  test (incompressible payload crossing half the heap) fails with the
+  pre-fix code-24 spurious refusal and passes after the fix.
+- P2-1 structure record decode: format.DecodeStructureRecord is now
+  Rust-exact (envelope, nonzero id, payload), and the implied-slot id
+  compare is the caller's proof: recovery emits the StructureInvalid
+  envelope, validation reports the structure finding instead of the
+  payload class, and the duplicate-insert finding plus the balancing
+  membership owner count match Rust validate_record. The validation
+  TestValidateStructureWrongSlotIDFinding expectations were updated to
+  the Rust-exact five-finding sequence (record id proof, duplicate
+  insert, reverse index, slot refcount, totals).
+
+Review-fix battery (all under nice; ~2 core-minutes): gofmt clean; vet
+plain + v4work; plain and v4work full trees ok; race + checkptr=2 on
+recovery/writer/publication/live/bootstrap and the root, both tag sets;
+six cross-compiles (linux/386, linux/arm, linux/arm64, windows/amd64,
+darwin/arm64, freebsd/amd64) plain + v4work; check-mmap-trace.sh PASS
+on all four legs including the recovery-construction leg (no
+read/pread/readv/write/writev/pwrite/lseek on any v4 artifact
+descriptor).
+
+Next: milestone 2 chunk 4-10 gate - delta re-review round 2 to all five
+aspects over the ae3c41e review-fix delta; on five-aspect PASS, the
+chunk close-out (gate record, Status completed, move to
+.agents/sow/done/, single commit + push); the worker process boundary
+(4-11) and the authorized scratch/external sort stay the recorded
+follow-ups.
