@@ -49,12 +49,10 @@ func sweepLiveSelected(source *live.LiveSource, budget *ValidationBudget, check 
 		end := source.FinishCurrent(func() error { return err })
 		return nil, liveEndFailureOf(end, &progress)
 	}
-	scanErr := (func() error {
-		if err := ctx.reserveAllocatorPages(); err != nil {
-			return err
-		}
-		return validateSelected(ctx)
-	})()
+	scanErr := ctx.reserveAllocatorPages()
+	if scanErr == nil {
+		scanErr = validateSelected(ctx)
+	}
 	progress := ctx.finish()
 	end := source.FinishCurrent(func() error { return scanErr })
 	if end.Cause != nil {

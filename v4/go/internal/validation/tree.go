@@ -2,9 +2,11 @@ package validation
 
 // Tree walk validation (Rust validation/tree.rs): one codec-driven walk
 // over a committed tree root with root-shape, per-page order, and fence
-// checks, streaming findings through the context. The walk is
-// allocation-free: the first-key results and the ordered-key cursor are
-// values, and the cell iterator slices the inspected page.
+// checks, streaming findings through the context. The walk allocates
+// nothing per cell: the first-key results and the ordered-key cursor
+// are values, and the cell iterator slices the inspected page. The
+// per-page header decode and the layout inspection are the only
+// allocations, one small object each per visited page.
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"

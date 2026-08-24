@@ -157,8 +157,7 @@ type PhysicalByteInterval struct {
 
 // ValidationAddressFence is an independently trusted inclusive
 // logical address fence (Rust ValidationAddressFence; the Go peer
-// keeps raw keys until the address-range validators arrive in slice
-// C).
+// keeps raw keys and no validator populates a fence yet).
 type ValidationAddressFence struct {
 	IPv4   bool
 	From   uint64

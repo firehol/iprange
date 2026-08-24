@@ -236,3 +236,33 @@ func TestValidateRangeDegenerateRoot(t *testing.T) {
 		t.Fatalf("findings %+v", findings)
 	}
 }
+
+// TestValidateRangeRefusedSubtreeResetsNeighborState mirrors Rust
+// range.rs validate_node: every refused node (unreadable page, bad
+// header, bad layout) clears the ordered-neighbor state, so the first
+// record after a refused subtree is never compared against the last
+// record before it. A corrupted middle leaf must therefore report
+// only the CRC finding, never a spurious NotCoalesced against the
+// sibling across the gap.
+func TestValidateRangeRefusedSubtreeResetsNeighborState(t *testing.T) {
+	branch := rangeTreeBranch(t, [][2]uint32{{0, 3}, {1500, 4}, {2000, 5}})
+	leaf0 := rangeTreeLeaf(t, 2, []format.RangeRecordV4{
+		{From: 0, To: 999, Value: 1},
+		{From: 1000, To: 1999, Value: 2},
+	}, 4056)
+	refused := rangeTreeLeaf(t, 2, []format.RangeRecordV4{
+		{From: 2000, To: 2999, Value: 5},
+	}, 4056)
+	format.PutU32(refused[format.PageChecksumOffset:format.PageChecksumOffset+format.PageChecksumLength], 0) // broken CRC: the leaf cannot be read
+	leaf2 := rangeTreeLeaf(t, 2, []format.RangeRecordV4{
+		{From: 2000, To: 2999, Value: 2},
+		{From: 3000, To: 3999, Value: 6},
+	}, 4056)
+	path := writeRangeTreeDB(t, 4, branch, leaf0, refused, leaf2)
+	ctx := fixturePathContext(t, path, 1<<20)
+	findings := collectContextFindings(t, ctx, validateRange)
+	if len(findings) != 1 || findings[0].Reason != ReasonPageCrcMismatch ||
+		findings[0].Object != ObjectRangeTree || *findings[0].PageNumber != 4 {
+		t.Fatalf("findings %+v, want the single CRC finding on page 4", findings)
+	}
+}

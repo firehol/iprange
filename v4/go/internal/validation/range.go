@@ -50,10 +50,12 @@ func rangeCountMismatch(ctx *context) error {
 // rangeState carries the walk count and the previous record of the
 // neighbor checks across an ordered range walk (Rust RangeState).
 type rangeState struct {
-	count    uint64
-	previous *format.RangeRecordV4
-	prev6    *format.RangeRecordV6
-	family   uint8
+	count       uint64
+	previous    format.RangeRecordV4
+	hasPrevious bool
+	prev6       format.RangeRecordV6
+	hasPrev6    bool
+	family      uint8
 }
 
 // validateRangeFamily4 walks the IPv4 range tree and returns the record
@@ -98,16 +100,25 @@ func rangePageHeader(ctx *context, pageNumber uint32, page []byte, object Valida
 }
 
 func walkRangeNode4(ctx *context, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
+	// Every refused node drops the ordered-neighbor state exactly like
+	// the Rust validate_node else arms: a refused subtree must not
+	// compare the record after the gap against the record before it.
 	page, err := readTreeNodePage(ctx, pageNumber, ObjectRangeTree, path, depth)
 	if err != nil || page == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	header, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 4, expectedLevel, root)
 	if err != nil || header == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	cells, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen4(header.Level))
 	if err != nil || cells == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	if header.Level == 0 {
@@ -119,14 +130,20 @@ func walkRangeNode4(ctx *context, pageNumber uint32, expectedLevel *uint16, root
 func walkRangeNode6(ctx *context, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
 	page, err := readTreeNodePage(ctx, pageNumber, ObjectRangeTree, path, depth)
 	if err != nil || page == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	header, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 6, expectedLevel, root)
 	if err != nil || header == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	cells, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen6(header.Level))
 	if err != nil || cells == nil {
+		state.hasPrevious = false
+		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	if header.Level == 0 {
@@ -182,21 +199,21 @@ func walkRangeLeaf4(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 			if err := emitRangeFinding(ctx, pageNumber, ReasonRangeReversed); err != nil {
 				return tree.Key{}, false, err
 			}
-			state.previous = nil
+			state.hasPrevious = false
 			continue
 		}
 		if err := validateRangeValue(ctx, pageNumber, record.Value, state); err != nil {
 			return tree.Key{}, false, err
 		}
-		if state.previous != nil {
-			if reason := neighborProblem4(state.previous, record); reason != 0 {
+		if state.hasPrevious {
+			if reason := neighborProblem4(&state.previous, record); reason != 0 {
 				if err := emitRangeFinding(ctx, pageNumber, reason); err != nil {
 					return tree.Key{}, false, err
 				}
 			}
 		}
-		copyRecord := record
-		state.previous = &copyRecord
+		state.previous = record
+		state.hasPrevious = true
 	}
 	return order.first, order.hasFirst, nil
 }
@@ -227,23 +244,23 @@ func walkRangeLeaf6(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 			if err := emitRangeFinding(ctx, pageNumber, ReasonRangeReversed); err != nil {
 				return tree.Key{}, false, err
 			}
-			state.previous = nil
-			state.prev6 = nil
+			state.hasPrevious = false
+			state.hasPrev6 = false
 			continue
 		}
 		if err := validateRangeValue(ctx, pageNumber, record.Value, state); err != nil {
 			return tree.Key{}, false, err
 		}
-		if state.prev6 != nil {
-			if reason := neighborProblem6(state.prev6, record); reason != 0 {
+		if state.hasPrev6 {
+			if reason := neighborProblem6(&state.prev6, record); reason != 0 {
 				if err := emitRangeFinding(ctx, pageNumber, reason); err != nil {
 					return tree.Key{}, false, err
 				}
 			}
 		}
-		copyRecord := record
-		state.prev6 = &copyRecord
-		state.previous = nil
+		state.prev6 = record
+		state.hasPrev6 = true
+		state.hasPrevious = false
 	}
 	return order.first, order.hasFirst, nil
 }

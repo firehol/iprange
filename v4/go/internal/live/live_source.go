@@ -410,16 +410,10 @@ func (s *LiveSource) requireOwner() error {
 // terminal folds the final-check and release results exactly like Rust
 // terminal(): a clean release keeps only the check failure; a failed
 // release keeps the check failure (or the cleanup class when the check
-// was clean) and reports residue possible.
+// was clean) and reports residue possible. The fold is the shared
+// terminalResult used by the validation bootstrap source too.
 func (s *LiveSource) terminal(checked, released error) LiveSourceEnd {
-	if released == nil {
-		return LiveSourceEnd{Cause: checked}
-	}
-	cause := checked
-	if cause == nil {
-		cause = CleanupForCause(released)
-	}
-	return LiveSourceEnd{Cause: cause, Residue: true}
+	return terminalResult(checked, released)
 }
 
 // abandon releases the source without the final check (Rust

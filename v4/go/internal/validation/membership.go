@@ -9,7 +9,6 @@ package validation
 
 import (
 	"crypto/sha256"
-	stdhash "hash"
 
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -180,20 +179,46 @@ func validateMembershipRecord(ctx *context, pageNumber uint32, cell []byte, feed
 // span, blob records scan their blob tree) and reports the shape,
 // active-feed, and digest classes.
 func validateMembershipRecordBitmap(ctx *context, pageNumber uint32, cell []byte, record format.MembershipRecord, feeds *bitmapWordCache) error {
-	scan := newMembershipBitmapScan(feeds)
+	// The scan is a stack value and the hasher stays a local exactly
+	// like the Rust stack BitmapScan over a stack Sha256: the local
+	// hasher keeps the sha256 state stack-resident through inlining
+	// (the proven StructurePayloadDigest pattern), so no heap object
+	// exists per record on the healthy path.
+	var scan membershipBitmapScan
+	scan.feeds = feeds
+	hasher := sha256.New()
+	consume := func(ctx *context, bytes []byte) error {
+		if err := ctx.checkpoint(); err != nil {
+			return err
+		}
+		if len(bytes)%8 != 0 {
+			return &format.Error{Code: format.CodeFormatInvalid, Detail: "validated membership chunk is not word aligned"}
+		}
+		for offset := 0; offset < len(bytes); offset += 8 {
+			value := format.U64(bytes[offset : offset+8])
+			hasher.Write(bytes[offset : offset+8])
+			if !scan.feedReaderFailed {
+				scan.checkActive(ctx, value)
+			}
+			scan.lastWord = value
+			if scan.words == ^uint32(0) {
+				return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation membership word count"}
+			}
+			scan.words++
+		}
+		return nil
+	}
 	var complete bool
 	switch record.Storage {
 	case format.MembershipStorageInline:
 		bytes := cell[format.MembershipIDRecordMin : format.MembershipIDRecordMin+int(record.WordCount)*8]
-		if err := scan.consume(ctx, bytes); err != nil {
+		if err := consume(ctx, bytes); err != nil {
 			return err
 		}
 		complete = true
 	case format.MembershipStorageBlob:
 		var err error
-		complete, err = scanMembership(ctx, record.BlobRoot, uint64(record.WordCount)*8, func(ctx *context, bytes []byte) error {
-			return scan.consume(ctx, bytes)
-		})
+		complete, err = scanMembership(ctx, record.BlobRoot, uint64(record.WordCount)*8, consume)
 		if err != nil {
 			return err
 		}
@@ -209,53 +234,29 @@ func validateMembershipRecordBitmap(ctx *context, pageNumber uint32, cell []byte
 			return err
 		}
 	}
-	if complete && lengthMatches && scan.finishDigest() != record.Digest {
-		if err := membershipDigestFinding(ctx, &pageNumber); err != nil {
-			return err
+	if complete && lengthMatches {
+		var digest [32]byte
+		hasher.Sum(digest[:0])
+		if digest != record.Digest {
+			if err := membershipDigestFinding(ctx, &pageNumber); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 // membershipBitmapScan accumulates the word stream of one record bitmap
-// (Rust BitmapScan): the digest over the words, the word count, the
-// last word, and the active-feed window check through the feed cache.
+// (Rust BitmapScan minus the hasher, which stays a local in the walk
+// so the sha256 state never escapes): the word count, the last word,
+// and the active-feed window check through the feed cache. The word
+// loop and the digest fold live in validateMembershipRecordBitmap.
 type membershipBitmapScan struct {
 	feeds            *bitmapWordCache
-	hasher           stdhash.Hash
 	words            uint32
 	lastWord         uint64
 	activeInvalid    bool
 	feedReaderFailed bool
-}
-
-func newMembershipBitmapScan(feeds *bitmapWordCache) *membershipBitmapScan {
-	return &membershipBitmapScan{feeds: feeds, hasher: sha256.New()}
-}
-
-// consume feeds one byte slice of the bitmap stream (Rust
-// BitmapScan::consume: word aligned, checkpointed, and hashed in the
-// wire byte order).
-func (s *membershipBitmapScan) consume(ctx *context, bytes []byte) error {
-	if err := ctx.checkpoint(); err != nil {
-		return err
-	}
-	if len(bytes)%8 != 0 {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "validated membership chunk is not word aligned"}
-	}
-	for offset := 0; offset < len(bytes); offset += 8 {
-		value := format.U64(bytes[offset : offset+8])
-		s.hasher.Write(bytes[offset : offset+8])
-		if !s.feedReaderFailed {
-			s.checkActive(ctx, value)
-		}
-		s.lastWord = value
-		if s.words == ^uint32(0) {
-			return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation membership word count"}
-		}
-		s.words++
-	}
-	return nil
 }
 
 // checkActive folds one word against the feed used bitmap (Rust
@@ -269,14 +270,6 @@ func (s *membershipBitmapScan) checkActive(ctx *context, value uint64) {
 		return
 	}
 	s.activeInvalid = s.activeInvalid || value&^active != 0
-}
-
-// finishDigest returns the sha256 over the consumed words (Rust
-// BitmapScan::finish_digest).
-func (s *membershipBitmapScan) finishDigest() [32]byte {
-	var digest [32]byte
-	copy(digest[:], s.hasher.Sum(nil))
-	return digest
 }
 
 // validateMembershipHash checks one reverse-index leaf record (Rust
