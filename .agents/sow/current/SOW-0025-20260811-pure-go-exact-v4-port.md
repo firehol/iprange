@@ -10132,10 +10132,61 @@ pair entries classify like Rust Mapping::view maps nothing (new
 regression test) and the live record counts. All five aspects PASS
 at 9872815.
 
-Next: slice L residue (inspect/remove canonical residue with the
-retained handle and the final coordination-reuse proof); the plan
-after L stays M maintenance, N Publish retrofit + public surface, O
-validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice L implemented: residue inspection and removal
+
+Slice L ports the coordination residue machine (Rust residue.rs 145 +
+residue/linux.rs 457 + residue/main.rs 137 + residue/retirement.rs
+158) to Go at commit 22ffd1f: the canonical coordination inode is
+classified (absent, bound selectable reservation, live reader-table
+sidecar, unselectable residue), an unselectable coordination is
+removed only after the operation lock, the selectable refusals, and
+the retained-handle proofs, the destination main is hashed but never
+changed (zero-length mains carry the empty digest), and every
+descriptor owned by an inspection or removal terminal is released
+exactly when the Rust handle would drop. The residue helpers map
+reservation files read-only like Rust (reservationMappingResidue),
+the main guard owns its file and mapping with an explicit Close, and
+closeResidueAuthority releases coordination + destination on every
+error terminal; only the retained-handle incomplete results keep the
+authority open for the caller's retry.
+
+Go files:
+
+- internal/publication/residue.go (+582): the four coordination
+  classes, the inspection/removal results, inspectResidue (lifetime
+  checkpoint, bind, exact-name proof, classify, destination close on
+  every no-handle terminal), removeResidue (authority close on every
+  error terminal; main guard close on the post-inspect checkpoints),
+  finishRetiredResidue (retry proof, main proof, final
+  coordination-reuse class; closes the guard and the authority on
+  success), classifyCoordinationResidue, selectedBoundResidueHeader,
+  reservationMappingResidue (read-only), reconstructResidue,
+  reservationAccessResidue, verifyCoordinationResidue,
+  rejectSelectableResidue, finishRemovalResidue,
+  finalCoordinationResidue, incompleteResidue.
+- internal/publication/residue_main.go (+155): residueMainGuard
+  (inspectMainResidue with the lifetime lock, name proof, optional
+  read-only mapping + SHA-512 digest, v4 tuple via bootstrap.OpenMeta;
+  Close; verify).
+- internal/publication/residue_retirement.go (+64): unix retirement
+  (UnlinkExact + regular-link-count proof, retry arm).
+- internal/publication/residue_test.go (+504): 9 tests porting the
+  Rust residue suites, each pinned across the whole inspect/remove
+  cycle with process-fd counters (the pins are proven effective: a
+  temporarily injected authority leak fails the malformed-removal
+  test with +2 descriptors).
+- internal/live/header.go (+4/-3): export HasSelectableHeader for the
+  residue machine.
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok; 647 tests under v4work, 172 in
+publication of which 9 are the new residue tests), gofmt clean,
+-race + -gcflags=all=-d=checkptr=2 on internal/publication, and the
+freebsd/darwin cross-builds all PASS at 22ffd1f.
+
+Next: slice M maintenance (list/remove abandoned publication temps
+and reservation artifacts); after M stays N Publish retrofit +
+public surface, O validation + gate + push.
 
 
 
