@@ -374,6 +374,14 @@ func classifyMapped(m *mapping.Mapping, mappedBytes uint64, check func() error, 
 		if (index+1)*format.PageSize > mappedBytes {
 			continue
 		}
+		// Rust recovery/inspection.rs:260 classify_mapped skips a
+		// worker-session-declared unreadable page before the page
+		// probe: the classification slot stays unset (the same state
+		// a short file leaves), so the session never faults on the
+		// bootstrap pair.
+		if mapping.SessionPageUnreadable(uint32(index)) {
+			continue
+		}
 		page, err := m.Page(uint32(index))
 		if err != nil {
 			return err

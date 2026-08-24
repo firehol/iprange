@@ -157,6 +157,15 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
 	defer func() { _ = whole.Close() }()
+	// Rust validation.rs:310 validation_mapping applies the worker
+	// session unreadable-page list to the whole-source mapping: a
+	// declared page refuses deterministically with the io-unreadable
+	// class instead of faulting, so a restarted worker session never
+	// SIGBUSes on the same page.
+	if err := whole.SetUnreadablePages(mapping.SessionUnreadablePages()); err != nil {
+		progress := NewProgress()
+		return nil, failureOf(sourceCloseFold(source, err), &progress)
+	}
 
 	ctx, err := newContext(whole, res.Meta, budget, check, sink)
 	if err != nil {
@@ -236,6 +245,12 @@ func SweepSelected(file *os.File, meta format.Meta, budget *ValidationBudget, ch
 		return ValidationProgress{}, err
 	}
 	defer func() { _ = whole.Close() }()
+	// Rust validation.rs validation_mapping (validate_offline arm)
+	// applies the worker session unreadable-page list to the
+	// whole-source mapping before the sweep.
+	if err := whole.SetUnreadablePages(mapping.SessionUnreadablePages()); err != nil {
+		return ValidationProgress{}, err
+	}
 	ctx, err := newContext(whole, meta, budget, check, sink)
 	if err != nil {
 		return ValidationProgress{}, err

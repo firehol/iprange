@@ -27,7 +27,7 @@ func wantInvalidArgumentDetail(t *testing.T, err error, detail string) {
 }
 
 func TestSetSourceUnreadablePagesSortsAndRefusesDuplicates(t *testing.T) {
-	t.Cleanup(func() { sourceUnreadablePages = nil })
+	t.Cleanup(func() { _ = SetSourceUnreadablePages(nil) })
 
 	// Unsorted input is sorted before it is stored (Rust
 	// set_unreadable_source_pages sorts the request vec first).
@@ -58,7 +58,7 @@ func TestSetSourceUnreadablePagesSortsAndRefusesDuplicates(t *testing.T) {
 }
 
 func TestSourcePageUnreadableQuery(t *testing.T) {
-	t.Cleanup(func() { sourceUnreadablePages = nil })
+	t.Cleanup(func() { _ = SetSourceUnreadablePages(nil) })
 	if err := SetSourceUnreadablePages([]uint32{0, 4, 100}); err != nil {
 		t.Fatal("set:", err)
 	}
@@ -75,7 +75,7 @@ func TestSourcePageUnreadableQuery(t *testing.T) {
 }
 
 func TestSourceUnreadablePagesReturnsCopy(t *testing.T) {
-	t.Cleanup(func() { sourceUnreadablePages = nil })
+	t.Cleanup(func() { _ = SetSourceUnreadablePages(nil) })
 	if err := SetSourceUnreadablePages([]uint32{2, 6}); err != nil {
 		t.Fatal("set:", err)
 	}

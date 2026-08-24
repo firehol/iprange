@@ -120,6 +120,16 @@ func openRecoverySource(path string, candidate *RecoveryCandidate, mode sourceMo
 		if err != nil {
 			return nil, openProblemLive(err)
 		}
+		// Rust source_guard/live.rs:298 claim_prepared applies the
+		// worker session unreadable-page list to the claimed live
+		// mapping before the source returns; the Go live open lives in
+		// internal/live (which cannot import the worker session
+		// state), so recovery applies the list on the returned borrow
+		// before any recovery scan probes it.
+		if err := source.Mapping().SetUnreadablePages(mapping.SessionUnreadablePages()); err != nil {
+			end := source.Abandon(err)
+			return nil, openProblemLive(combineErrors(err, end.Cause))
+		}
 		return &recoverySource{live: source}, nil
 	default:
 		return nil, openProblem(&format.Error{Code: format.CodeInvalidEnum, Detail: "invalid recovery source mode"})
@@ -594,7 +604,18 @@ func mapAvailable(file *os.File, meta format.Meta) (*mapping.Mapping, error) {
 	if stat, err := file.Stat(); err == nil && uint64(stat.Size()) < available {
 		available = uint64(stat.Size())
 	}
-	return mapping.MapFile(file, available, false)
+	m, err := mapping.MapFile(file, available, false)
+	if err != nil {
+		return nil, err
+	}
+	// Rust source_guard/basic.rs:165 map_available applies the worker
+	// session unreadable-page list to the basic (immutable/offline)
+	// guard mapping before the recovery scan probes it.
+	if err := m.SetUnreadablePages(mapping.SessionUnreadablePages()); err != nil {
+		_ = m.Close()
+		return nil, err
+	}
+	return m, nil
 }
 
 // identityPublication is the portable identity of the retained source.

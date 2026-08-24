@@ -19,6 +19,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 	"github.com/firehol/iprange/v4/go/internal/validation"
+	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // recoveryRequest builds one immutable recovery request shape shared
@@ -170,5 +171,117 @@ func TestRecoverWithWorkerRealBinary(t *testing.T) {
 	// attempt; the destination path must be absent again.
 	if _, err := os.Stat(destination); !os.IsNotExist(err) {
 		t.Fatalf("destination %s exists after the failed recovery", destination)
+	}
+}
+
+// realRecoveryFixture builds one real direct recovery source with two
+// committed ranges (the Rust client_tests.rs fault_fixture source
+// shape; the Go writer coalesces the pair into one root leaf, so the
+// committed data page is the range root) and returns its path and the
+// range-root page number.
+func realRecoveryFixture(t *testing.T) (string, uint32) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "source.v4")
+	var tag [16]byte
+	copy(tag[:], "first-seen")
+	builder, err := writer.NewOutputBuilder(path, writer.OutputSpec{
+		AddressFamily:  format.AddressFamilyIPv4,
+		ValueKind:      format.ValueKindDirect,
+		StructureKind:  format.StructureKindNone,
+		ValueTag:       tag,
+		DatabaseID:     [16]byte{1},
+		TxnID:          7,
+		CommitNonce:    [16]byte{2},
+		FeedIndexLimit: 0,
+	}, writer.OutputBudget{MaxOutputPages: 20_000}, 0, nil)
+	if err != nil {
+		t.Fatalf("NewOutputBuilder: %v", err)
+	}
+	for _, record := range [][3]uint32{{10, 20, 1}, {100, 110, 2}} {
+		if err := builder.PushDirectV4(record[0], record[1], record[2]); err != nil {
+			t.Fatalf("PushDirectV4: %v", err)
+		}
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	meta := builder.Meta()
+	if err := builder.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if meta.RangeRoot == 0 {
+		t.Fatalf("fixture meta %+v: want a range root", meta)
+	}
+	return path, meta.RangeRoot
+}
+
+// realFixtureCandidate inspects a real source in-process and returns
+// its newest recovery candidate (the parent-side token of the real
+// worker session).
+func realFixtureCandidate(t *testing.T, path string) *recovery.RecoveryCandidate {
+	t.Helper()
+	inspection, err := recovery.InspectRecoveryCandidates(path, recovery.RecoveryInspectionImmutable, validation.HeapOnly(0, 1), nil)
+	if err != nil {
+		t.Fatalf("InspectRecoveryCandidates: %v", err)
+	}
+	candidate := inspection.Candidate(0)
+	if candidate == nil {
+		t.Fatal("no candidate projected")
+	}
+	return candidate
+}
+
+// TestRecoverWithWorkerRealBinaryDeclaredPageRefuses mirrors the Rust
+// client_tests.rs fault_fixture second run (after marking the exact
+// page unreadable the session completes with report.pages.io_unreadable
+// == 1): a declared real source page travels in the request, the real
+// worker applies the session list to its source-guard mapping
+// (source_guard.rs map_available parity), the checked-page authority
+// refuses the page deterministically - no second SIGBUS - and the
+// machine completes with exactly one I/O-unreadable page reported
+// through the wire outcome.
+//
+// The session-1 SIGBUS half of the Rust fixture (a real mapped fault
+// with exit 197 and a fault record) additionally requires the Rust
+// probe_source arm of the domain-machine mappings, which the Go worker
+// does not port yet: only tests arm probes, unarmed faults chain into
+// the Go runtime fatal and produce no record (sigbus_linux_amd64_test
+// chain proof). The client-side fault-retry loop over recorded pages
+// is covered by TestRecoverWithWorkerFaultRetryRecordsUnreadablePage;
+// this test pins the worker-side refusal that the retry lands on.
+func TestRecoverWithWorkerRealBinaryDeclaredPageRefuses(t *testing.T) {
+	binary := buildRealWorker(t)
+	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
+	t.Cleanup(func() { workerCandidatesHook = nil })
+
+	sourcePath, declared := realRecoveryFixture(t)
+	candidate := realFixtureCandidate(t, sourcePath)
+	budget := &recovery.RecoveryBudget{MaxHeapBytes: 1 << 30, MaxOutputPages: 1 << 16, MaxOpenFiles: 8}
+	destination := filepath.Join(t.TempDir(), "out.v4")
+	var envelopes []*recovery.RecoveryUnknownEnvelope
+	attempt := recoverOnceWorker(sourcePath, destination, candidate, WorkerModeImmutable, budget, nil, recovery.RecoverySinkFunc(func(envelope *recovery.RecoveryUnknownEnvelope) (recovery.RecoverySinkControl, error) {
+		envelopes = append(envelopes, envelope)
+		return recovery.RecoverySinkContinue, nil
+	}), []uint32{declared}, new(uint64))
+	if attempt.kind != attemptComplete {
+		t.Fatalf("attempt kind = %d (%+v), want the completed terminal", attempt.kind, attempt)
+	}
+	if attempt.outcome == nil || attempt.outcome.Result == nil || attempt.outcome.Failure != nil {
+		t.Fatalf("outcome = %+v, want the completed result arm", attempt.outcome)
+	}
+	if attempt.outcome.Result.Report.Pages.IOUnreadable != 1 {
+		t.Fatalf("io_unreadable = %d, want 1", attempt.outcome.Result.Report.Pages.IOUnreadable)
+	}
+	count := 0
+	for _, envelope := range envelopes {
+		if envelope.Reason == validation.ReasonIoError && envelope.PageNumber != nil && *envelope.PageNumber == declared {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("envelopes = %+v, want one IoError envelope at page %d", envelopes, declared)
+	}
+	if _, err := os.Stat(destination); err != nil {
+		t.Fatalf("published output missing after the refused page: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ package validation
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
@@ -43,6 +44,17 @@ func sweepLiveSelected(source *live.LiveSource, budget *ValidationBudget, check 
 		return nil, liveEndFailureOf(end, &progress)
 	}
 	identity := publicationIdentity(device, inode)
+	// Rust live.rs:298 claim_prepared applies the worker session
+	// unreadable-page list to the claimed live mapping before the
+	// sweep; the Go live open creates the mapping in internal/live
+	// (which cannot import the worker session state), so the
+	// application lands here on the exposed mapping borrow, before
+	// any sweep probe.
+	if err := source.Mapping().SetUnreadablePages(mapping.SessionUnreadablePages()); err != nil {
+		progress := NewProgress()
+		end := source.FinishCurrent(func() error { return err })
+		return nil, liveEndFailureOf(end, &progress)
+	}
 	ctx, err := newContext(source.Mapping(), meta, budget, check, sink)
 	if err != nil {
 		progress := NewProgress()
