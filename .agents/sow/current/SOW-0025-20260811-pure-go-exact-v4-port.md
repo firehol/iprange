@@ -12101,3 +12101,94 @@ separate Phase-2 signing item.
 
 Milestone 2 (chunk 4-10 recovery) is complete: five-aspect PASS at
 9f45143 with the working tree clean.
+
+### Status (2026-08-24) - milestone 3 (chunk 4-11 worker process boundary) design recorded and gated
+
+Scope (SOW plan lines 285-289): the worker binary (cmd/iprange-v4-worker),
+the full control page + wire codecs, the spawn/handshake/drive client,
+fault memory + unreadable-page retry, the worker modes
+(validate/inspect/recover/cleanup), and version/build-id matching.
+
+Problem / root-cause model: recovery and validation of large external
+databases must survive physically unreadable pages. The Rust authority
+isolates every mapped-fault in a separate worker process (worker.rs
+543 + client.rs 403 + client/{recovery,validation}.rs 887 + wire.rs
+639 + wire_{cleanup,publication,recovery,validation}.rs ~1,354 +
+control.rs + fault_memory.rs + posix.rs): the parent spawns the worker
+binary once per operation, shares the 1 MiB control mapping, writes the
+request into the payload area, the worker arms its owned SIGBUS handler
+on the pinned alt-stack, performs the operation over direct mapped
+views, records the fault (state, code, address) into the control page,
+unmaps the faulting range, re-opens via a safe owner, and either
+retries the unreadable page or reports the failure facts; the parent
+drives progress checkpoints through the control payload and reads the
+result facts back. The 4-2 spike already proved the SIGBUS isolation
+arm on linux/amd64.
+
+Affected contracts and surfaces: new cmd/iprange-v4-worker binary; the
+internal/worker control page grows from the fault subset (4-2) to the
+full wire-era surface (payload length fields, version word, mode word,
+state machine); the public SDK surfaces gain internal only worker
+drivers (no new public API in this chunk unless the client seams
+require it); no wire-format change to .iprdb artifacts; the recovery,
+validation, publication, and cleanup machines are consumed by the
+worker exactly as they exist after milestone 2.
+
+Existing patterns to reuse: internal/worker 4-2 fault subset
+(control.go, control_common.go, sigbus_linux_amd64.go/.s, the v4work
+signal matrix), internal/mapping (the only file owner; unmap/remap
+seams), internal/format codecs, the milestone-2 recovery/validation
+machines, internal/publication attempt machinery, and the
+test-only-work-counter and mmap-trace conventions.
+
+Design decisions (Rust is the mandatory baseline; Decision 2A applies -
+no cgo, no runtime linkname, no swallowed signal, no Rust-worker
+dependency):
+
+- Control page: the full Rust worker/control.rs surface is ported
+  (protocol, version/build-id word, mode word, state bits, payload
+  length + callback-payload length, fault record, alt-stack carve).
+- Wire: the Rust wire.rs Writer/Reader little-endian primitive codec
+  over the two payload buffers is ported as one Go wire package with
+  the exact same field order and capacities.
+- Worker process: cmd/iprange-v4-worker is one Go binary with the
+  exact Rust worker.rs main-flow (version handshake, mode dispatch,
+  owned-fault exit 197); the parent spawns it per operation against
+  the same executable as the SDK (os.Executable), so the build-id
+  handshake rejects foreign binaries.
+- Modes: validate (ImmutableCurrent/LiveCurrent/OfflineCandidate),
+  inspect, recover (immutable/offline/live), cleanup - each driven by
+  the wire codecs over the existing milestone-2 machines.
+- Fault handling: the 4-2 sigaction shim is reused; the worker never
+  unwinds through Go (the SIGBUS record + exit-197 contract); parent
+  side translates the fault facts into the recovery/validation classes.
+- Windows: cmd/iprange-v4-worker refuses to start with the honest
+  recorded stance (mapping_windows.go refuses opens).
+
+Implementation plan (slices, each with its own review round at the
+chunk gate):
+
+- 4-11A: full control page + wire codecs (port wire.rs and the
+  control surface beyond the fault subset) + wire unit parity tests.
+- 4-11B: cmd/iprange-v4-worker binary + version/build-id handshake +
+  mode dispatch skeleton (validate/inspect/recover/cleanup).
+- 4-11C: client spawn/handshake/drive + progress checkpoints +
+  process exit/result facts (client.rs parity).
+- 4-11D: fault memory + unreadable-page retry + the validation and
+  recovery wire arms (client/validation.rs, client/recovery.rs parity)
+  with the crash matrix on linux/amd64.
+- 4-11E: cleanup + publication wire arms and worker-build mismatch
+  tests (the 4-12 items stay recorded there).
+
+Validation plan: port the Rust client_tests and wire tests, the
+existing 4-2 signal matrix (extended for the wire-era control), the
+mmap-trace worker leg (parent and worker never read/write artifact
+descriptors), per-mode conformance cross-checks against the Rust
+fixtures, and the five-aspect adversarial gate at the chunk close.
+
+Sensitive data: none (control files carry only coordination bytes and
+public failure facts; temp control files are 0600 and unlinked).
+
+Open decisions: none - Decision 2A resolves the shim question; the
+chunk plan and the 4-2 record resolve the layout; implementation
+starts with slice 4-11A.
