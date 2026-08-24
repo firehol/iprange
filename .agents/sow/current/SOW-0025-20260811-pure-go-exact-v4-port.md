@@ -10597,3 +10597,40 @@ HEAD 7d95412. Slice N is complete.
 
 Next: slice O - full validation + gate + push (five-aspect final
 review on slice O, then git push per the user decision).
+
+### Status (2026-08-24) - chunk 4-8 slice O: full validation and the two pre-existing windows gaps closed
+
+Slice O closes the chunk with the full milestone battery under nice
+and removes the two pre-existing cross-build gaps recorded at slices
+4-6 and N:
+
+- internal/security/security_test.go now carries the !windows build
+  tag (matching the production split: security.go is !windows; the
+  Windows stub has no creator identity), fixing the pre-existing
+  unix.Geteuid vet failure of the windows test tree.
+- internal/live/link_machine.go and link_machine_test.go now carry
+  the (freebsd || v4work) && !windows guard: the machine needs the
+  POSIX Linkat and directory-identity primitives, which have no
+  Windows counterpart; it stays fully built on freebsd production and
+  on the linux/darwin v4work test hosts (the only hosts where the
+  v4work suite runs), and the windows v4work build/vet of the whole
+  tree is green for the first time.
+
+Validation (all under nice; full battery recorded per the resource
+budget rule, ~2-3 core-minutes): gofmt clean; vet clean plain +
+v4work on linux; GOOS=windows vet clean plain + v4work (whole tree);
+GOOS=freebsd v4work vet clean; plain and v4work full trees 14
+packages ok each (833 Test functions runnable under v4work, 194 in
+publication, unchanged); -race + -gcflags=all=-d=checkptr=2 on
+publication, writer, mapping, snapshot, live, and the root package
+(plain and v4work); six cross-builds (linux/386, linux/arm64,
+darwin/amd64, darwin/arm64, freebsd/amd64, netbsd/amd64,
+windows/amd64) plain and v4work; zero-alloc gates
+(TestNoPageSizedHeapAllocations, TestNoPageSizedHeapAllocations
+PublishSet, TestSnapshotOutputWarmLookupsZeroAllocation) PASS; the
+Go conformance corpus cross-open and invalid-mutation gates PASS; the
+Rust suite (411 tests plus the fixture suites) unchanged and green.
+
+Next: five-aspect review of the slice-O delta (same five reviewers;
+the review-round-2 verdicts on slice N are recorded above), then the
+milestone-1 close push per the user decision.
