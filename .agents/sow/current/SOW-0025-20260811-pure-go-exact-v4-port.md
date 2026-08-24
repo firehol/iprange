@@ -10227,6 +10227,28 @@ packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
 internal/publication, freebsd/darwin cross-builds, gofmt clean, all
 PASS at b0be0df.
 
+### Status (2026-08-24) - chunk 4-8 slice L round-3: all five aspects PASS
+
+Round-2 re-review: parity (Goodall) PASS, performance
+(Chandrasekhar) PASS, wire/integrity (Herschel) PASS, idioms (Gauss)
+PASS with two P3 residuals, records (Noether) FAIL (P2: the old 647
+statement survived in the implemented record). Fixes at f4b7bc3 and
+the in-place record correction above:
+
+- P3 (idioms): the handle-level retry wrapper is renamed
+  retryRetiredResidueHandle so the two retry names diverge in
+  content, and the retry-cancellation test asserts the main guard
+  exists before the cancelled retry, keeping its fd pin non-vacuous.
+- P2 (records): the implemented record now states the method-stated
+  count (857 under v4work at 22ffd1f) and is consistent with the
+  fix-round record (858 at b0be0df, 10 residue tests).
+
+Round-3 delta re-verified by verbose re-runs: plain and v4work trees
+(14 packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
+internal/publication, freebsd/darwin cross-builds, gofmt clean, all
+PASS at f4b7bc3. All five aspects PASS; slice L is complete.
+
+
 ### Status (2026-08-24) - chunk 4-8 slice M implemented: abandoned-publication maintenance
 
 Slice M ports the abandoned-artifact maintenance machine (Rust
@@ -10290,32 +10312,45 @@ gofmt clean, -race + -gcflags=all=-d=checkptr=2 on
 internal/publication, and the freebsd/darwin cross-builds all PASS
 at 2c7ed4d.
 
-### Status (2026-08-24) - chunk 4-8 slice L round-3: all five aspects PASS
+### Status (2026-08-24) - chunk 4-8 slice M fix round (round-1 review)
 
-Round-2 re-review: parity (Goodall) PASS, performance
-(Chandrasekhar) PASS, wire/integrity (Herschel) PASS, idioms (Gauss)
-PASS with two P3 residuals, records (Noether) FAIL (P2: the old 647
-statement survived in the implemented record). Fixes at f4b7bc3 and
-the in-place record correction above:
+Round-1 review: performance (Chandrasekhar) PASS, records (Noether)
+PASS, idioms (Gauss) PASS with two P3s, parity (Goodall) FAIL (two
+P2, three P3), wire/integrity (Herschel) FAIL (one P2, two P3).
+Fixes at d21c4d5:
 
-- P3 (idioms): the handle-level retry wrapper is renamed
-  retryRetiredResidueHandle so the two retry names diverge in
-  content, and the retry-cancellation test asserts the main guard
-  exists before the cancelled retry, keeping its fd pin non-vacuous.
-- P2 (records): the implemented record now states the method-stated
-  count (857 under v4work at 22ffd1f) and is consistent with the
-  fix-round record (858 at b0be0df, 10 residue tests).
+- P2 (parity): the Windows housekeeping refusals now carry the exact
+  Rust message ("Windows housekeeping is unavailable on this
+  platform", capital W), pinned by the test; the maintenance-specific
+  namespace mappers collapse the IoAt arm into the Io arm exactly
+  like Rust's NamespaceError::Io|IoAt -> Error::Io (the operation
+  label is discarded).
+- P2 (wire) + P3 (parity): both remove dispatchers run the leading
+  cancellation checkpoint before the evidence-pair argument check
+  and before any identity or namespace work, exactly like the Rust
+  remove arms; the new
+  TestMaintenanceRemoveHonorsLeadingCancellation pins the cancelled
+  class for an absent artifact and for an invalid evidence pair.
+- P3 (parity): the raw fstat failure of contentEvidence folds through
+  the sdk class; the written-record identity decodes panic with the
+  Rust-verbatim expect texts ("selected output identity is valid" /
+  "selected previous identity is valid").
+- P3 (idioms): the new identity conversions reuse residueLocalIdentity
+  instead of duplicating the device+inode fold; maintenanceTestName
+  follows the suite's t-based helper convention.
+- P3 (records): the slice-M implemented record moved after the slice-L
+  round-3 record so the stack is chronological, the superseded Next
+  line of the L round-3 record is deleted, and the M record carries
+  its own tail Next line.
 
-Round-3 delta re-verified by verbose re-runs: plain and v4work trees
-(14 packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
-internal/publication, freebsd/darwin cross-builds, gofmt clean, all
-PASS at f4b7bc3. All five aspects PASS; slice L is complete.
+Validation (all under nice): plain and v4work full trees (14
+packages ok each; 869 Test functions runnable under v4work at
+d21c4d5, 184 in publication of which 11 are the maintenance tests),
+vet, -race + -gcflags=all=-d=checkptr=2 on internal/publication,
+freebsd/darwin cross-builds, gofmt clean, all PASS at d21c4d5.
 
 Next: slice N Publish retrofit + public surface (publication.Publish
 over the reservation path; snapshot.To and PublishSet moved to it;
 the one-shot machine and the mapping path-based publish machines
 removed; public ResolvePublication/Residue/Abandoned surfaces in
 iprangedb); after N stays O validation + gate + push.
-
-
-
