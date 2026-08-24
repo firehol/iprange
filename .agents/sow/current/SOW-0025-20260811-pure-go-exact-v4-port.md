@@ -10912,5 +10912,55 @@ trailing/short/long declared lengths, chain geometry refusals,
 reserved tail, CRC refusal, cycle), 1 v4work counter pin (two cell
 probes and two slot reads per fixed cell, zero page parses).
 
-Next: chunk 4-9 slice B five-aspect review gate, then slice C (range
-+ catalog validators).
+### Status (2026-08-24) - chunk 4-9 slice B five-aspect gate PASS at ad43a43
+
+The slice-B validators (format inspection, tree/metadata/retirement
+page validation) passed the five-aspect review gate. Review rounds and
+fixes, all signed on master:
+
+- 72a195c (round-1 fixes): the zlib.NewReader failure branch passes
+  typed checkpoint/format errors through with errors.As; short/clean
+  pre-declared-end streams classify as the finish finding with no
+  page; the stale slice-A Next line and doc gaps were removed.
+- a4beee4 (round-2/3 fixes): after any decoder stop the metadata
+  chain keeps walking with the decoder disabled (Rust feed_chunk
+  continuation): corrupt feeds report the page being fed, a clean end
+  before the declared chain end reports the first page past the stream
+  (same-page leftovers or the pulled next page at a chunk boundary,
+  consume_page parse-first order), and the remaining pages keep
+  streaming their page-level findings. The reserved-tail and page-0
+  findings now emit with stable local page copies; the probe stops
+  without a zlib finding on a chain refusal.
+- f7d6940: all zlib-stop arms consolidated into metadataZlibStop
+  (finding always precedes the drain; the drain always follows a
+  stop).
+- ad43a43: the output-overflow finding is always page-attributed (the
+  Rust step excess arm fires while the page feed still has input; the
+  finish-class no-page finding is only for short or truncated
+  streams); the "output too small" case pins page 2.
+
+Gate verdicts at ad43a43 (all PASS):
+
+- Rust parity: PASS; one P2 (overflow page attribution) found and
+  fixed in ad43a43; the residual stored-block bulk-read page skew on
+  straddle corners is an accepted P3, same class as the Rust 256-byte
+  feed_source bound.
+- Go idioms: PASS; P2 (zlib error swallowing) and P3-1 (eight
+  duplicated stop arms) fixed; P3-2 (boundary pins depend on flate
+  consumption) accepted informational.
+- Absolute performance: PASS; warm path unchanged, drains run only on
+  defective chains; three prior P3s accepted.
+- Wire and integrity: PASS; the P2-1 chain-drain requirement verified
+  arm by arm, no double claims, consume_page ordering pinned.
+- Records: PASS; one current Next line, dated counts accurate,
+  commit hygiene verified.
+
+Suite counts at ad43a43: validation 36 tests plain / 37 with v4work
+(31/32 at 214a0ff, 33/34 at 72a195c; format 47, unchanged), metadata
+chain cases 13. Re-validated under nice after the final commit: plain
+and v4work full trees (15 test-bearing packages ok each), vet plain +
+v4work on linux/windows/freebsd, race + checkptr on validation/format/
+retire/bootstrap/reader/live/publication/mapping/tree and the root,
+seven cross-builds plain + v4work, gofmt clean.
+
+Next: chunk 4-9 slice C (range + catalog validators).
