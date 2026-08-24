@@ -71,7 +71,13 @@ func CreateParent() (*Control, error) {
 	clear(c.data)
 	copy(c.data[offMagic:offMagic+8], controlMagic[:])
 	format.PutU32(c.data[offProtocol:offProtocol+4], protocol)
-	format.PutU32(c.data[offState:offState+4], stateRequest)
+	copy(c.data[offBuildID:offBuildID+buildLen], buildID)
+	copy(c.data[offNonce:offNonce+nonceLen], nonce[:])
+	format.PutU32(c.data[offParentPID:offParentPID+4], uint32(os.Getpid()))
+	// The state store is the last write of the header, exactly like the
+	// Rust create_parent (set_state with Release ordering), so a worker
+	// that observes Request also observes the identity fields above.
+	c.SetState(stateRequest)
 	return c, nil
 }
 
