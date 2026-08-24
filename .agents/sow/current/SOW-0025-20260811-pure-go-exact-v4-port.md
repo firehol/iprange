@@ -12225,3 +12225,43 @@ Validation (all under nice; ~1 core-minute): gofmt clean; vet plain +
 v4work; internal/worker plain and v4work suites ok (73 new tests);
 module build ok; darwin/windows cross-builds ok (the wire era is
 linux/amd64-tagged like the fault subset).
+
+### Status (2026-08-25) - milestone 3 slices 4-11B and 4-11C delivered: worker binary and client drive seam
+
+Slice B ports worker.rs (543 lines) as cmd/iprange-v4-worker (main.go
+152, modes.go 351, main_other.go refusal stub, main_test.go 400):
+exact --control argv with usage exit 64 and protocol exit 65,
+build-id preflight with the IPRANGE_V4_BUILD_ID env seam, the
+WorkerReady-via-PID handshake and Running wait, the SIGBUS handler
+installed at the Rust position on a locked OS thread, opcode dispatch
+(inspect/validate/recover/cleanup) through the 4-11A wire codecs with
+the validation/recovery sink proxies (response 0/1/2 classes,
+parent-death cancel), guard-pending/Complete terminal with
+serveCleanup. Cleanup mode is an honest dispatch skeleton: the Go
+discard machine is package-private, so the real cleanup wiring is
+recorded for slice 4-11E with the required internal/publication seam.
+
+Slice C ports client.rs (403 lines) as internal/worker/client.go
+(627 lines + 800 lines of tests): worker candidates with the
+deps-parent rule, spawn with null stdio, the 30-second handshake with
+the exact conflict classes and the control unlink, the drive loop
+with the CancelPoll/Complete/Fault/Failed terminals, the callback
+acknowledge seam (continue/stop/fail), advance-sequence, worker
+failure and unreadable-page ledger, external-poll checkpoints, the
+retained cleanup guard exchange with its four error arms, and the
+targeted-pid process wrapper (wait4 WNOHANG reap). The per-mode
+validation/recovery arms are slice 4-11D, composed over this seam.
+
+Recorded seams: the progress callback payloads await the Go domain
+machines' check hook (func() error) carrying progress; the recovery
+resume divergence is the recorded Go stance (the machine creates its
+own secured output at the request destination).
+
+Validation (all under nice; ~2 core-minutes): the internal/worker and
+cmd suites green plain + v4work (37 new client/binary tests; 115+
+worker tests total); full module green on rerun (one
+TestSnapshotLivePinsItsGenerationWhileWriterAdvances flake under
+full-parallel v4work load, green 3/3 in isolation and in the rerun -
+timing-sensitive, unrelated to the worker slices, recorded);
+gofmt, vet, cross-builds (darwin/arm64, windows/amd64, freebsd/amd64,
+linux/386) green.
