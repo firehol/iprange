@@ -221,10 +221,7 @@ func validateMetadataChain(ctx *context, output []byte) error {
 			// incomplete stream without a page.
 			return metadataZlibFindingNone(ctx)
 		}
-		if err := metadataZlibFinding(ctx, source); err != nil {
-			return err
-		}
-		return drainMetadataChain(source)
+		return metadataZlibStop(ctx, source)
 	}
 	defer decoder.Close()
 	written, err := io.ReadFull(decoder, output)
@@ -245,19 +242,13 @@ func validateMetadataChain(ctx *context, output []byte) error {
 			return metadataZlibFindingNone(ctx)
 		}
 		if errors.Is(err, zlib.ErrChecksum) {
-			if err := metadataZlibFinding(ctx, source); err != nil {
-				return err
-			}
-			return drainMetadataChain(source)
+			return metadataZlibStop(ctx, source)
 		}
 		var formatErr *format.Error
 		if errors.As(err, &formatErr) {
 			return formatErr
 		}
-		if err := metadataZlibFinding(ctx, source); err != nil {
-			return err
-		}
-		return drainMetadataChain(source)
+		return metadataZlibStop(ctx, source)
 	}
 	if written != len(output) {
 		return metadataZlibFindingNone(ctx)
@@ -275,10 +266,7 @@ func validateMetadataChain(ctx *context, output []byte) error {
 			// The stream produces more output than declared while
 			// chain pages remain: the finding is on the page being
 			// fed and the chain keeps walking (Rust feed excess arm).
-			if err := metadataZlibFinding(ctx, source); err != nil {
-				return err
-			}
-			return drainMetadataChain(source)
+			return metadataZlibStop(ctx, source)
 		}
 		// The overflow surfaces in the finish with no page left (Rust
 		// finish: written exceeds output.len).
@@ -291,34 +279,22 @@ func validateMetadataChain(ctx *context, output []byte) error {
 			return metadataZlibFindingNone(ctx)
 		}
 		if errors.Is(probeErr, zlib.ErrChecksum) {
-			if err := metadataZlibFinding(ctx, source); err != nil {
-				return err
-			}
-			return drainMetadataChain(source)
+			return metadataZlibStop(ctx, source)
 		}
 		if errors.Is(probeErr, zlib.ErrHeader) || errors.Is(probeErr, zlib.ErrDictionary) {
-			if err := metadataZlibFinding(ctx, source); err != nil {
-				return err
-			}
-			return drainMetadataChain(source)
+			return metadataZlibStop(ctx, source)
 		}
 		var formatErr *format.Error
 		if errors.As(probeErr, &formatErr) {
 			return formatErr
 		}
-		if err := metadataZlibFinding(ctx, source); err != nil {
-			return err
-		}
-		return drainMetadataChain(source)
+		return metadataZlibStop(ctx, source)
 	}
 	// Clean stream end: prove every declared byte was consumed. A page
 	// refusal during the probe stops without the finish findings, like
 	// the Rust chain return before finish_chain.
 	if _, trailingErr := source.ReadByte(); trailingErr == nil {
-		if err := metadataZlibFinding(ctx, source); err != nil {
-			return err
-		}
-		return drainMetadataChain(source)
+		return metadataZlibStop(ctx, source)
 	}
 	if source.aborted {
 		return nil
@@ -329,6 +305,17 @@ func validateMetadataChain(ctx *context, output []byte) error {
 		return metadataLengthFinding(ctx, source.next)
 	}
 	return nil
+}
+
+// metadataZlibStop streams the zlib finding of the page that was fed
+// when the decoder failed and then keeps the chain walking with the
+// decoder disabled (Rust feed_chunk emits and continues): the finding
+// always precedes the drain, and the drain always follows a stop.
+func metadataZlibStop(ctx *context, source *metadataChainSource) error {
+	if err := metadataZlibFinding(ctx, source); err != nil {
+		return err
+	}
+	return drainMetadataChain(source)
 }
 
 // metadataZlibTrailingFinding probes one byte past a clean stream end
