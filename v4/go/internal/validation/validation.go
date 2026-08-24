@@ -167,10 +167,6 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 		progress := ctx.finish()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
-	if err := ctx.validatePartition(); err != nil {
-		progress := ctx.finish()
-		return nil, failureOf(sourceCloseFold(source, err), &progress)
-	}
 	verification := source.verify()
 	progress := ctx.finish()
 	if verification != nil {
@@ -187,12 +183,36 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 	}, nil
 }
 
-// validateSelected runs the structure validators over the context
-// (Rust validate_selected). Slice A ships the empty sweep: the
-// meta/geometry validators arrive with slice B and the structure
-// validators with slices C-E; the allocator partition and the final
-// partition sweep already exercise the claims authority.
-func validateSelected(_ *context) error { return nil }
+// validateSelected runs the structure validators over the context in the
+// Rust validate_selected order (validation.rs:460) and ends with the
+// allocation-partition sweep. Slice B ships the metadata and retirement
+// validators plus the tree/page authorities; the remaining validators
+// are the slice C-E stubs, and the allocator partition runs first in the
+// sweep exactly like Rust probe_source.
+func validateSelected(ctx *context) error {
+	if err := validateRange(ctx); err != nil {
+		return err
+	}
+	if err := validateCatalog(ctx); err != nil {
+		return err
+	}
+	if err := validateStructure(ctx); err != nil {
+		return err
+	}
+	if err := validateMembership(ctx); err != nil {
+		return err
+	}
+	if err := validateMetadata(ctx); err != nil {
+		return err
+	}
+	if err := validateFreeBitmap(ctx); err != nil {
+		return err
+	}
+	if err := validateRetirement(ctx); err != nil {
+		return err
+	}
+	return ctx.validatePartition()
+}
 
 // sourceBootstrapReportable reports whether one classified bootstrap
 // refusal produces the bootstrap-finding report (Rust

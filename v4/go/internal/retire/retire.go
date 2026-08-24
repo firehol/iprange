@@ -448,3 +448,45 @@ func checkedAddPages(a, b uint64) (uint64, bool) {
 	}
 	return a + b, true
 }
+
+// CellSize is the fixed retirement cell size (Rust retirement.rs
+// CELL_SIZE).
+const CellSize = cellSize
+
+// DecodeKey decodes one retirement key from a cell without field
+// validation (Rust retirement::decode_key; only the byte length is
+// required, so the explicit validation walk can classify the fields
+// itself).
+func DecodeKey(cell []byte) (Key, bool) {
+	if len(cell) < keySize {
+		return Key{}, false
+	}
+	return Key{
+		Txn:   format.U64(cell[txnOffset : txnOffset+8]),
+		First: format.U32(cell[firstOffset : firstOffset+4]),
+	}, true
+}
+
+// DecodeBranchChild decodes the child page of one retirement branch cell
+// (Rust retirement::decode_branch_child; the child occupies the count
+// slot of the 16-byte branch cell).
+func DecodeBranchChild(cell []byte) (uint32, bool) {
+	if len(cell) != cellSize {
+		return 0, false
+	}
+	return format.U32(cell[countOffset : countOffset+4]), true
+}
+
+// DecodeRaw decodes one raw 16-byte retirement cell without field
+// validation (Rust retirement::decode_raw); the validation extent checks
+// classify the fields.
+func DecodeRaw(cell []byte) (Extent, bool) {
+	if len(cell) != cellSize {
+		return Extent{}, false
+	}
+	key, ok := DecodeKey(cell)
+	if !ok {
+		return Extent{}, false
+	}
+	return Extent{Key: key, Count: format.U32(cell[countOffset : countOffset+4])}, true
+}
