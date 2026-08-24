@@ -45,11 +45,17 @@ func createOutputWith(path string, requireAbsent bool) (*createdOutput, error) {
 	}
 	if requireAbsent {
 		if err := d.requireFailIfExistsAvailable(); err != nil {
+			// The bound destination directory closes here exactly
+			// where the Rust bind would drop on the refusal.
+			d.directory().Close()
 			return nil, err
 		}
 	}
 	attemptID, name, file, err := createAttempt(d)
 	if err != nil {
+		// No private file exists yet; only the bound destination
+		// directory needs the close (Rust drops the Destination).
+		d.directory().Close()
 		return nil, err
 	}
 	return &createdOutput{destination: d, attemptID: attemptID, name: name, file: file}, nil
