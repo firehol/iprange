@@ -10384,7 +10384,7 @@ Go files:
   identity, creation security, cleanup artifact) from one early
   discard; closeCreatedOwner/closeFinishedOwner/closeDestination
   Directory mirror the Rust drops.
-- internal/publication/publish_test.go (+212): the five composition
+- internal/publication/publish_test.go (+245): the five composition
   ports (fail-if-exists success with the exact published facts and
   no residue, existing-main and existing-coordination create
   refusals with the fd pin, replacement over a previous main with
@@ -10425,7 +10425,7 @@ plus the retained-directory sync).
 
 Go changes:
 
-- internal/writer/output.go (+81): NewOutputBuilderOverFile and
+- internal/writer/output.go (+66/-1): NewOutputBuilderOverFile and
   NewStructuredOutputBuilderOverFile (Rust new_owned_with_extent over
   the workflow::create file): the file must be empty, extends to the
   budget extent, maps read-write through a duplicated descriptor, and
@@ -10498,7 +10498,7 @@ the Rust-parity shapes and folds the cancellation token.
 
 Go changes:
 
-- internal/publication/public.go (+473): PublicationResolutionMode
+- internal/publication/public.go (+474): PublicationResolutionMode
   and ResolvePublication (Complete/Remove over one supplied result or
   the retained reservation), PublicationTuple/PublicationDigest,
   PublicationResidueCoordination/MainContent/Main/Handle/Inspection/
@@ -10509,17 +10509,17 @@ Go changes:
   list and publication-temp entry/list shapes with the exact
   evidence mappings, the exported ErrMaintenanceSinkStop control, and
   the four list/remove entry points.
-- internal/publication/public_windows.go (+150): typed Windows stubs
+- internal/publication/public_windows.go (+147): typed Windows stubs
   for every new symbol (M5 honest refusal, same class as the POSIX
   destination bind); the type names exist only so the SDK facade
   compiles on Windows.
-- internal/publication/public_test.go (+230): boundary ports of the
+- internal/publication/public_test.go (+276): boundary ports of the
   malformed-residue removal (with the consumed-handle refusal and fd
   pin), the resolver Complete/Remove modes over real crash states,
   the abandoned-temp listing/removal with the exact tuple/digest
   facts and the sink-stop/sink-failure classes, and the reservation
   listing evidence mapping (policy/phase/output/previous).
-- v4/go/publication_public.go (+260): the iprangedb entry points
+- v4/go/publication_public.go (+244): the iprangedb entry points
   (ResolvePublication, InspectPublicationResidue,
   RemovePublicationResidue, ListAbandonedPublicationTemps,
   RemoveAbandonedPublicationTemp, ListAbandonedReservationArtifacts,
@@ -10528,7 +10528,7 @@ Go changes:
   cancelled state to the exact machine Cancelled problem so the class
   survives the machines that fold unknown check errors to the SDK IO
   class (the internal tests use the format surface directly).
-- v4/go/publication_public_test.go (+150): end-to-end residue and
+- v4/go/publication_public_test.go (+173): end-to-end residue and
   maintenance through the SDK boundary over hand-built namespace
   state, the unresolvable refusal, and the leading-cancellation
   refusals of every entry point.
@@ -10539,7 +10539,8 @@ Go changes:
 
 Validation (all under nice): plain and v4work full trees (14 packages
 ok each; 854 Test functions runnable under v4work at 7b0f1a0, 193 in
-publication of which 7 are the boundary tests), vet, -race +
+publication of which 4 are the boundary tests (plus 2 root-surface
+tests)), vet, -race +
 -gcflags=all=-d=checkptr=2 on internal/publication and the root
 package (v4work), linux/arm64 + freebsd/amd64 + darwin/arm64 +
 windows/amd64 cross-builds, gofmt clean, all PASS at 7b0f1a0. (The
