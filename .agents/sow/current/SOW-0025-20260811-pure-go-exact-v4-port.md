@@ -10465,6 +10465,14 @@ Go changes:
   the five composition tests own that coverage (including the
   fail-if-exists rename race: TestAttemptMainRaceAfterState2 and the
   replacement crash family in attempt_crash_v4work_test.go).
+- Removed (commit 355e894): the mapping path-based publish machines
+  and their tests (mapping_publish_{linux,darwin,freebsd,netbsd,
+  posix,windows}.go, publish_link_noreplace*.go, linkcount_*.go,
+  1,269 deletions incl. the 22 deleted mapping test functions);
+  internal/live owns the namespace mutations. Only ExchangeAvailable
+  and the retained StatIdentity authority probe survive
+  (mapping_identity_probe{,_bsd,_windows}.go), and the deleted tests
+  are owned by the publication machine and composition suites.
 
 Behavior notes:
 
@@ -10539,8 +10547,8 @@ Go changes:
 
 Validation (all under nice): plain and v4work full trees (14 packages
 ok each; 854 Test functions runnable under v4work at 7b0f1a0, 193 in
-publication of which 4 are the boundary tests (plus 2 root-surface
-tests)), vet, -race +
+publication of which 4 are the boundary tests plus 2 root-surface
+tests), vet, -race +
 -gcflags=all=-d=checkptr=2 on internal/publication and the root
 package (v4work), linux/arm64 + freebsd/amd64 + darwin/arm64 +
 windows/amd64 cross-builds, gofmt clean, all PASS at 7b0f1a0. (The
