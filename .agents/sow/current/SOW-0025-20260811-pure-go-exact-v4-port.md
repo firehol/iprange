@@ -10831,3 +10831,28 @@ errors.As unwraps land at 0949020.
 
 Next: chunk 4-9 slice A five-aspect review gate, then slice B
 (page/tree/metadata/retirement validators).
+
+### Status (2026-08-24) - chunk 4-9 slice A complete: five-aspect review rounds 1-2 PASS
+
+Review rounds on commits 4ba6a39..a4bc118: parity (Goodall) FAIL
+-> PASS, idioms (Gauss) PASS with five P3s, performance
+(Chandrasekhar) PASS with one accepted P3, wire/integrity
+(Herschel) PASS, records (Noether) FAIL -> PASS.
+
+Round-1 -> round-2 fixes (all recorded per commit): geometry is
+proved before any mapping so a short or unaligned main streams the
+FileGeometryInvalid finding (aae07c5); the per-page bootstrap
+findings carry their physical byte intervals; the source open
+verifies path and sidecar twice like the Rust open; the sweep error
+arms pass typed errors through and share one emitFinding tail; the
+context and source types stay unexported until the facade slice.
+Round-2 caught and fixed the bootstrap-Open report terminal leaking
+the source fd and shared lifetime lock (a4bc118, pinned by the
+process fd count across the call). Records fixes at 0949020, d2416d1,
+and the anchored suite counts. All five aspects PASS at HEAD a4bc118;
+the full battery (15 test-bearing packages ok each in both tag sets,
+vet plain + v4work on linux/windows/freebsd, race + checkptr, seven
+cross-builds, gofmt) is green.
+
+Next: chunk 4-9 slice B (page/tree/metadata/retirement validators
+over the single-authority codecs).
