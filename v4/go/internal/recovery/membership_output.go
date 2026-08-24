@@ -24,7 +24,18 @@ type membershipOutput struct {
 	builder     *writer.OutputBuilder
 	rep         *reporter
 	family      uint8
-	previous    *outputRange
+	// previous carries the pending coalesced range by value (Rust
+	// Option<OutputRange>): a pointer holds one heap allocation for
+	// every accepted record, the pointer variant also chases that
+	// heap cell on every coalesce.
+	previous    outputRange
+	hasPrevious bool
+	// words is one reusable membership word-source slot: pushOutput
+	// fills it before every push and passes its address, so the
+	// writer interface conversion never boxes a per-push value (the
+	// writer interns the words synchronously inside the push; Rust
+	// passes &impl MembershipWords).
+	words locatorWords
 }
 
 // outputRange is one pending membership range (Rust OutputRange).
@@ -82,37 +93,36 @@ func (o *membershipOutput) rejectOverlap(count uint64, from, to rangeKey) error 
 // finish pushes the pending range (Rust MembershipOutput::finish over
 // finish_output).
 func (o *membershipOutput) finish() error {
-	if o.previous == nil {
+	if !o.hasPrevious {
 		return nil
 	}
-	current := *o.previous
-	o.previous = nil
-	return o.pushOutput(current)
+	o.hasPrevious = false
+	return o.pushOutput(o.previous)
 }
 
 // coalesce merges one range with an adjacent equal-membership previous
 // range or pushes the previous (Rust MembershipOutput::coalesce: the
 // adjacency proof and the locator equality over the mapped words).
 func (o *membershipOutput) coalesce(current outputRange) error {
-	if o.previous == nil {
-		o.previous = &current
+	if !o.hasPrevious {
+		o.previous = current
+		o.hasPrevious = true
 		return nil
 	}
-	previous := *o.previous
+	previous := o.previous
 	next, ok := o.codec().nextKey(previous.to)
 	equal, err := locatorEqual(previous.membership, current.membership, o.mapping, o.meta)
 	if err != nil {
 		return err
 	}
 	if equal && ok && next == current.from {
-		previous.to = current.to
-		o.previous = &previous
+		o.previous.to = current.to
 		return nil
 	}
 	if err := o.pushOutput(previous); err != nil {
 		return err
 	}
-	o.previous = &current
+	o.previous = current
 	return nil
 }
 
@@ -120,12 +130,12 @@ func (o *membershipOutput) coalesce(current outputRange) error {
 // MembershipKey::push_membership): the verified source bitmap streams
 // into the writer intern through the word-source seam.
 func (o *membershipOutput) pushOutput(output outputRange) error {
-	words := locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: output.membership}}
+	o.words = locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: output.membership}}
 	switch o.family {
 	case format.AddressFamilyIPv4:
-		return o.builder.PushMembershipV4Words(uint32(output.from.hi), uint32(output.to.hi), words)
+		return o.builder.PushMembershipV4Words(uint32(output.from.hi), uint32(output.to.hi), &o.words)
 	case format.AddressFamilyIPv6:
-		return o.builder.PushMembershipV6Words(output.from.hi, output.from.lo, output.to.hi, output.to.lo, words)
+		return o.builder.PushMembershipV6Words(output.from.hi, output.from.lo, output.to.hi, output.to.lo, &o.words)
 	default:
 		return corruptError("recovery membership output family is invalid")
 	}

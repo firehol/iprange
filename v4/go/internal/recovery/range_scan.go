@@ -30,6 +30,23 @@ type rangeRecord struct {
 	value uint32
 }
 
+// rangeRecordOption is one optional decoded range record passed by
+// value (the Rust Option<Record<K>> events payload): the ok flag
+// carries the None separation, so the scan never forms a per-record
+// pointer.
+type rangeRecordOption struct {
+	value rangeRecord
+	ok    bool
+}
+
+// rangeKeyOption is one optional address key returned by value (the
+// Rust Option<K> scan result): the ok flag is the None marker of the
+// former *rangeKey cursors.
+type rangeKeyOption struct {
+	value rangeKey
+	ok    bool
+}
+
 // lessRecord orders records by from, to, then value (the Rust
 // sort_unstable comparator).
 func lessRecord(codec rangeCodec, left, right rangeRecord) bool {
@@ -193,7 +210,7 @@ type rangeEvents interface {
 	pageAccepted() error
 	pageRejected(ioUnreadable bool) error
 	unknown(reason validation.ValidationReason, page *uint32, unbounded bool) error
-	rangeEvent(page uint32, record *rangeRecord) error
+	rangeEvent(page uint32, record rangeRecordOption) error
 }
 
 // scanRanges walks the range tree of the selected generation (Rust
@@ -210,26 +227,26 @@ func scanRanges(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pages *p
 // scanRangeNode walks one node of the range tree (Rust scan_node: a
 // refused node is reported through the events and the walk returns
 // its first key, if any).
-func scanRangeNode(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (*rangeKey, error) {
+func scanRangeNode(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (rangeKeyOption, error) {
 	if err := live.Checkpoint(check); err != nil {
-		return nil, err
+		return rangeKeyOption{}, err
 	}
 	claimed, reason, err := claimRangePage(meta, pageNumber, path, depth, pages)
 	if err != nil {
-		return nil, err
+		return rangeKeyOption{}, err
 	}
 	if !claimed {
 		if err := events.unknown(reason, &pageNumber, true); err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
-		return nil, nil
+		return rangeKeyOption{}, nil
 	}
 	page, header, err := readRangePage(codec, m, meta, pageNumber, expectedLevel, events)
 	if err != nil {
-		return nil, err
+		return rangeKeyOption{}, err
 	}
 	if page == nil {
-		return nil, nil
+		return rangeKeyOption{}, nil
 	}
 	if header.Level == 0 {
 		return scanRangeLeaf(codec, pageNumber, page, header, events)
@@ -305,47 +322,48 @@ func rejectRangePage(events rangeEvents, pageNumber uint32, reason validation.Va
 // scanRangeLeaf streams the records of one leaf page (Rust scan_leaf:
 // the order and reversed-record defects stream their envelopes, the
 // readable records stream the range event).
-func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header *format.PageHeader, events rangeEvents) (*rangeKey, error) {
-	var first *rangeKey
-	var previous *rangeKey
+func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header *format.PageHeader, events rangeEvents) (rangeKeyOption, error) {
+	var first rangeKey
+	var firstOk bool
+	var previous rangeKey
+	var previousOk bool
 	slotted, err := format.OpenSlottedHeader(page, *header, format.PageTypeRangeLeaf, codec.aux(), format.SlotItemsPerPage)
 	if err != nil {
-		return nil, err
+		return rangeKeyOption{}, err
 	}
 	for index := 0; index < int(header.ItemCount); index++ {
 		cell, err := slotted.Record(index)
 		if err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
 		decoded, ok := codec.decodeRecord(cell)
 		if !ok {
-			return nil, pageDecodeError()
+			return rangeKeyOption{}, pageDecodeError()
 		}
-		if first == nil {
-			value := decoded.from
-			first = &value
+		if !firstOk {
+			first = decoded.from
+			firstOk = true
 		}
-		if previous != nil && !codec.lessKey(*previous, decoded.from) {
+		if previousOk && !codec.lessKey(previous, decoded.from) {
 			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumber, false); err != nil {
-				return nil, err
+				return rangeKeyOption{}, err
 			}
 		}
-		value := decoded.from
-		previous = &value
-		var record *rangeRecord
+		previous = decoded.from
+		previousOk = true
+		record := rangeRecordOption{}
 		if codec.lessKey(decoded.from, decoded.to) || decoded.from == decoded.to {
-			r := decoded
-			record = &r
+			record = rangeRecordOption{value: decoded, ok: true}
 		} else {
 			if err := events.unknown(validation.ReasonRangeReversed, &pageNumber, true); err != nil {
-				return nil, err
+				return rangeKeyOption{}, err
 			}
 		}
 		if err := events.rangeEvent(pageNumber, record); err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
 	}
-	return first, nil
+	return rangeKeyOption{value: first, ok: firstOk}, nil
 }
 
 // pageDecodeError is the fixed decode failure of one validated cell
@@ -358,46 +376,48 @@ func pageDecodeError() error {
 // scanRangeBranch walks one branch page (Rust scan_branch: the order
 // and fence defects stream their envelopes, and the walk descends into
 // every child).
-func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, page []byte, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (*rangeKey, error) {
-	var first *rangeKey
-	var previous *rangeKey
+func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, page []byte, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (rangeKeyOption, error) {
+	var first rangeKey
+	var firstOk bool
+	var previous rangeKey
+	var previousOk bool
 	slotted, err := format.OpenSlottedHeader(page, *header, format.PageTypeRangeBranch, codec.aux(), format.SlotItemsPerPage)
 	if err != nil {
-		return nil, err
+		return rangeKeyOption{}, err
 	}
 	for index := 0; index < int(header.ItemCount); index++ {
 		if err := live.Checkpoint(check); err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
 		cell, err := slotted.Record(index)
 		if err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
 		key, child, ok := codec.decodeBranch(cell)
 		if !ok {
-			return nil, pageDecodeError()
+			return rangeKeyOption{}, pageDecodeError()
 		}
-		if first == nil {
-			value := key
-			first = &value
+		if !firstOk {
+			first = key
+			firstOk = true
 		}
-		if previous != nil && !codec.lessKey(*previous, key) {
+		if previousOk && !codec.lessKey(previous, key) {
 			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumber, false); err != nil {
-				return nil, err
+				return rangeKeyOption{}, err
 			}
 		}
-		value := key
-		previous = &value
+		previous = key
+		previousOk = true
 		expected := header.Level - 1
 		actual, err := scanRangeNode(codec, m, meta, child, &expected, path, depth+1, pages, check, events)
 		if err != nil {
-			return nil, err
+			return rangeKeyOption{}, err
 		}
-		if actual != nil && *actual != key {
+		if actual.ok && actual.value != key {
 			if err := events.unknown(validation.ReasonTreeFenceInvalid, &pageNumber, false); err != nil {
-				return nil, err
+				return rangeKeyOption{}, err
 			}
 		}
 	}
-	return first, nil
+	return rangeKeyOption{value: first, ok: firstOk}, nil
 }

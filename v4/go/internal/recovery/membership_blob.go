@@ -116,6 +116,9 @@ func (s *blobScanner) branch(pageNumber uint32, page []byte, expectedLevel *uint
 		(expectedLevel != nil && header.Level != *expectedLevel) {
 		return nil, s.reject(pageNumber, validation.ReasonBlobInvalid, false)
 	}
+	// The single layout proof of the branch page (Rust branch(): parse
+	// and inspect_layout once); the record validation and the child
+	// walk reuse the same inspection instead of re-proving the page.
 	inspection := format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize))
 	if inspection == nil || inspection.ReservedNonzero {
 		return nil, s.reject(pageNumber, validation.ReasonBlobInvalid, false)
@@ -123,7 +126,7 @@ func (s *blobScanner) branch(pageNumber uint32, page []byte, expectedLevel *uint
 	if err := s.rep.pageAccepted(); err != nil {
 		return nil, err
 	}
-	valid, err := s.branchRecordsValid(page, &header, expectedStart, length)
+	valid, err := s.branchRecordsValid(inspection, &header, expectedStart, length)
 	if err != nil {
 		return nil, err
 	}
@@ -133,11 +136,11 @@ func (s *blobScanner) branch(pageNumber uint32, page []byte, expectedLevel *uint
 		}
 		return nil, nil
 	}
-	return s.branchChildren(pageNumber, page, header, length, path, depth)
+	return s.branchChildren(pageNumber, inspection, header, length, path, depth)
 }
 
-func (s *blobScanner) branchChildren(pageNumber uint32, page []byte, header format.PageHeader, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int) (*blobSpan, error) {
-	cells := format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize)).Cells()
+func (s *blobScanner) branchChildren(pageNumber uint32, inspection *format.LayoutInspection, header format.PageHeader, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int) (*blobSpan, error) {
+	cells := inspection.Cells()
 	var first *uint64
 	var previousEnd *uint64
 	complete := true
@@ -195,8 +198,8 @@ func (s *blobScanner) reject(pageNumber uint32, reason validation.ValidationReas
 	return emitBlobUnknown(s.rep, reason, &pageNumber)
 }
 
-func (s *blobScanner) branchRecordsValid(page []byte, header *format.PageHeader, expectedStart, length uint64) (bool, error) {
-	cells := format.InspectLayout(page, header, format.FixedLayout(format.BlobBranchSize)).Cells()
+func (s *blobScanner) branchRecordsValid(inspection *format.LayoutInspection, header *format.PageHeader, expectedStart, length uint64) (bool, error) {
+	cells := inspection.Cells()
 	var previous *uint64
 	for index := 0; index < int(header.ItemCount); index++ {
 		cell, ok := cells.Next()

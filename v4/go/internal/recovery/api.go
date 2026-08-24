@@ -77,7 +77,9 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 	structureKind, known := format.StructureKindFromWire(meta.StructureKind)
 	if !known {
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(&format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}, RecoveryReport{}, &facts, artifact)
+		// The refusal folds through problem() like every sibling arm
+		// (Rust fail_attempt: PublicationProblem over the cause).
+		return failSource(problem(&format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}), RecoveryReport{}, &facts, artifact)
 	}
 	spec, err := writer.FreshOutputSpec(meta.AddressFamily, meta.ValueKind, structureKind, meta.ValueTag, meta.FeedIndexLimit)
 	if err != nil {

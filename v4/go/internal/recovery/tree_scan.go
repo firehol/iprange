@@ -84,11 +84,11 @@ func scanTreeNode(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 		}
 		return nil, nil
 	}
-	page, header, err := readTreePage(codec, m, meta, pageNumber, expectedLevel, events)
+	inspection, header, err := readTreePage(codec, m, meta, pageNumber, expectedLevel, events)
 	if err != nil {
 		return nil, err
 	}
-	if page == nil {
+	if inspection == nil {
 		state.has = false
 		return nil, nil
 	}
@@ -98,9 +98,9 @@ func scanTreeNode(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 		}
 	}
 	if header.Level == 0 {
-		return scanTreeLeaf(codec, page, header, pageNumber, state, events)
+		return scanTreeLeaf(codec, inspection, header, pageNumber, state, events)
 	}
-	return scanTreeBranch(codec, m, meta, pageNumber, page, header, path, depth, state, pages, check, events)
+	return scanTreeBranch(codec, m, meta, pageNumber, inspection, header, path, depth, state, pages, check, events)
 }
 
 // claimTreePage claims one node through the page set (Rust
@@ -109,10 +109,13 @@ func claimTreePage(meta format.Meta, pageNumber uint32, path *[format.MaxTreeLev
 	return pages.claim(pageNumber, meta.PageCount, path[:], depth)
 }
 
-// readTreePage reads and parses one tree node (Rust read_page: the
-// checked page access and the parse refusal classes; an accepted page
-// counts the page event).
-func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) ([]byte, *format.PageHeader, error) {
+// readTreePage reads and parses one tree node and proves its layout
+// exactly once (Rust read_page: the checked page access, the parse
+// refusal classes, and the single inspect_layout; an accepted page
+// counts the page event). The proved inspection is returned so the
+// leaf and branch arms reuse it instead of re-proving the page, like
+// the Rust cell walks that follow the single proof.
+func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (*format.LayoutInspection, *format.PageHeader, error) {
 	page, problem := checkedPage(m, pageNumber, meta.PageCount)
 	if problem != nil {
 		if err := rejectTreePage(events, codec.object(), pageNumber, problem.reason, problem.ioUnreadable); err != nil {
@@ -138,7 +141,7 @@ func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 	if err := events.pageAccepted(); err != nil {
 		return nil, nil, err
 	}
-	return page, header, nil
+	return inspection, header, nil
 }
 
 // parseTreePage runs the tree page header inspection (Rust
@@ -178,12 +181,11 @@ func emitTreeUnknown(events treeEvents, reason validation.ValidationReason, obje
 // undecodable cell streams the leaf-invalid envelope and the no-cell
 // event; the order regression streams its envelope; readable cells
 // stream the leaf event).
-func scanTreeLeaf(codec treeCodec, page []byte, header *format.PageHeader, pageNumber uint32, state *treeScanState, events treeEvents) (treeKey, error) {
+func scanTreeLeaf(codec treeCodec, inspection *format.LayoutInspection, header *format.PageHeader, pageNumber uint32, state *treeScanState, events treeEvents) (treeKey, error) {
 	var first treeKey
-	inspection := format.InspectLayout(page, header, codec.leafLayout())
 	if inspection == nil {
-		// Unreachable: readTreePage proved the layout. Kept as the
-		// Rust cell() refusal arm of the inspect helper.
+		// Unreachable: readTreePage proved the layout before returning.
+		// Kept as the Rust cell() refusal arm of the inspect helper.
 		return nil, pageDecodeError()
 	}
 	cells := inspection.Cells()
@@ -224,12 +226,13 @@ func scanTreeLeaf(codec treeCodec, page []byte, header *format.PageHeader, pageN
 // undecodable branch cell streams the branch-invalid envelope and
 // resets the order state; the order and fence defects stream their
 // envelopes, and the walk descends into every decoded child).
-func scanTreeBranch(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, page []byte, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState, pages *pageSet, check func() error, events treeEvents) (treeKey, error) {
+func scanTreeBranch(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, inspection *format.LayoutInspection, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState, pages *pageSet, check func() error, events treeEvents) (treeKey, error) {
 	var first treeKey
 	var previous treeKey
 	var hasPrevious bool
-	inspection := format.InspectLayout(page, header, codec.branchLayout())
 	if inspection == nil {
+		// Unreachable: readTreePage proved the layout before returning.
+		// Kept as the Rust cell() refusal arm of the inspect helper.
 		return nil, pageDecodeError()
 	}
 	cells := inspection.Cells()

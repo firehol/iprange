@@ -214,7 +214,8 @@ func analyzeRanges(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pages
 type analysisEvents struct {
 	rep             *reporter
 	codec           rangeCodec
-	previousFrom    *rangeKey
+	previousFrom    rangeKey
+	previousFromOk  bool
 	readableRecords uint64
 	ordered         bool
 }
@@ -242,18 +243,18 @@ func (e *analysisEvents) unknown(reason validation.ValidationReason, page *uint3
 	})
 }
 
-func (e *analysisEvents) rangeEvent(page uint32, record *rangeRecord) error {
+func (e *analysisEvents) rangeEvent(page uint32, record rangeRecordOption) error {
 	if err := e.rep.rangeExamined(); err != nil {
 		return err
 	}
-	if record == nil {
+	if !record.ok {
 		return e.rep.rangeRejectedWithoutBounds()
 	}
-	if e.previousFrom != nil && !e.codec.lessKey(record.from, *e.previousFrom) {
+	if e.previousFromOk && !e.codec.lessKey(record.value.from, e.previousFrom) {
 		e.ordered = false
 	}
-	previous := record.from
-	e.previousFrom = &previous
+	e.previousFrom = record.value.from
+	e.previousFromOk = true
 	next := e.readableRecords + 1
 	if next == 0 {
 		return overflowError("recovery readable ranges")
@@ -269,7 +270,8 @@ func (e *analysisEvents) rangeEvent(page uint32, record *rangeRecord) error {
 type buildEvents struct {
 	codec           rangeCodec
 	ordered         bool
-	previousFrom    *rangeKey
+	previousFrom    rangeKey
+	previousFromOk  bool
 	readableRecords uint64
 	emit            func(rangeRecord) error
 }
@@ -290,21 +292,21 @@ func (e *buildEvents) unknown(reason validation.ValidationReason, page *uint32, 
 	return nil
 }
 
-func (e *buildEvents) rangeEvent(page uint32, record *rangeRecord) error {
-	if record == nil {
+func (e *buildEvents) rangeEvent(page uint32, record rangeRecordOption) error {
+	if !record.ok {
 		return nil
 	}
-	if e.ordered && e.previousFrom != nil && !e.codec.lessKey(record.from, *e.previousFrom) {
+	if e.ordered && e.previousFromOk && !e.codec.lessKey(record.value.from, e.previousFrom) {
 		return candidateChangedError()
 	}
-	previous := record.from
-	e.previousFrom = &previous
+	e.previousFrom = record.value.from
+	e.previousFromOk = true
 	next := e.readableRecords + 1
 	if next == 0 {
 		return overflowError("recovery readable ranges")
 	}
 	e.readableRecords = next
-	return e.emit(*record)
+	return e.emit(record.value)
 }
 
 // retainedMetadataBytes is the heap retained by the analyzed metadata

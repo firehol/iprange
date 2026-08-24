@@ -10,6 +10,7 @@ package recovery
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // readInlineBitmap re-reads and proves one inline locator (Rust
@@ -206,6 +207,7 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 		return blobLeafInfo{}, corruptError("membership blob request exceeds its length")
 	}
 	pageNumber := root
+	var expectedLevel uint16
 	var expected *uint16
 	expectedOffset := uint64(0)
 	for level := 0; level <= int(format.MaxTreeLevel); level++ {
@@ -216,11 +218,17 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 		levelValue := format.U16(page[18:20])
 		if levelValue == 0 {
 			// Rust parse_leaf_info: the common and born identity arms
-			// of require_leaf_identity precede the geometry proof.
+			// of require_leaf_identity precede the geometry proof. The
+			// expected-level arm folds into the local check (Rust
+			// passes the expected level by value, never as an
+			// escaping pointer), so the walk stays heap-free.
 			if !format.BlobCommonValid(page) || !format.BlobBornValid(page, meta.TxnID) {
 				return blobLeafInfo{}, corruptError("membership blob leaf identity is malformed")
 			}
-			geometry, err := format.DecodeBlobLeafGeometry(page, expected, expectedOffset, totalBytes)
+			if expected != nil && *expected != 0 {
+				return blobLeafInfo{}, corruptError("membership blob leaf identity is malformed")
+			}
+			geometry, err := format.DecodeBlobLeafGeometry(page, nil, expectedOffset, totalBytes)
 			if err != nil {
 				return blobLeafInfo{}, err
 			}
@@ -231,17 +239,18 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 			(expected != nil && header.Level != *expected) {
 			return blobLeafInfo{}, corruptError("membership blob branch is invalid")
 		}
-		cells := format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize)).Cells()
-		if cells == nil {
+		// One complete layout proof per branch page; every record
+		// select below is the direct fixed-cell read (the persistent
+		// slot values stay untrusted and are re-checked per probe,
+		// like slotted_page::cell).
+		if format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize)) == nil {
 			return blobLeafInfo{}, corruptError("membership blob branch layout is invalid")
 		}
-		firstCell, ok := cells.Next()
-		if !ok {
-			return blobLeafInfo{}, corruptError("membership blob branch is empty")
+		first, err := blobBranchRecordAt(m, page, &header, 0)
+		if err != nil {
+			return blobLeafInfo{}, err
 		}
-		firstOffset, _, err := format.DecodeBlobBranchFields(firstCell)
-		_ = firstOffset
-		if err != nil || firstOffset != expectedOffset {
+		if first.offset != expectedOffset {
 			return blobLeafInfo{}, corruptError("membership blob branch starts at a wrong offset")
 		}
 		selected, err := selectBlobBranch(m, page, &header, target)
@@ -250,8 +259,8 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 		}
 		pageNumber = selected.child
 		expectedOffset = selected.offset
-		lower := header.Level - 1
-		expected = &lower
+		expectedLevel = header.Level - 1
+		expected = &expectedLevel
 	}
 	return blobLeafInfo{}, corruptError("membership blob tree exceeds its maximum height")
 }
@@ -286,25 +295,32 @@ func selectBlobBranch(m *mapping.Mapping, page []byte, header *format.PageHeader
 	return blobBranchRecordAt(m, page, header, lower-1)
 }
 
-// blobBranchRecordAt reads one branch record with the child bound
-// proof (Rust branch_record).
+// blobBranchRecordAt reads one fixed 16-byte branch record in O(1)
+// with the child bound proof (Rust branch_record over
+// slotted_page::cell). The complete layout was proved once for the
+// page, so the select reads the index slot and bounds-checks the
+// persisted cell extent per probe instead of re-inspecting or
+// walking the cell list.
 func blobBranchRecordAt(m *mapping.Mapping, page []byte, header *format.PageHeader, index int) (blobBranchRecord, error) {
-	cells := format.InspectLayout(page, header, format.FixedLayout(format.BlobBranchSize)).Cells()
-	for cellIndex := 0; cellIndex <= index; cellIndex++ {
-		cell, ok := cells.Next()
-		if !ok {
-			return blobBranchRecord{}, corruptError("membership blob branch record is missing")
-		}
-		if cellIndex == index {
-			offset, child, err := format.DecodeBlobBranchFields(cell)
-			if err != nil {
-				return blobBranchRecord{}, err
-			}
-			if !format.PageNumberValid(child, m.Size()/format.PageSize) {
-				return blobBranchRecord{}, corruptError("membership blob child is out of range")
-			}
-			return blobBranchRecord{offset: offset, child: child}, nil
-		}
+	if index < 0 || index >= int(header.ItemCount) {
+		return blobBranchRecord{}, corruptError("membership blob branch record is missing")
 	}
-	return blobBranchRecord{}, corruptError("membership blob branch record is missing")
+	work.CellProbe(1)
+	work.SlotRead(1)
+	slot := format.SlottedHeaderSize + index*2
+	if slot+2 > int(header.Lower) {
+		return blobBranchRecord{}, corruptError("membership blob branch record is missing")
+	}
+	start := int(format.U16(page[slot : slot+2]))
+	if start < int(header.Upper) || start+format.BlobBranchSize > format.PageSize {
+		return blobBranchRecord{}, corruptError("membership blob branch record is missing")
+	}
+	offset, child, err := format.DecodeBlobBranchFields(page[start : start+format.BlobBranchSize])
+	if err != nil {
+		return blobBranchRecord{}, err
+	}
+	if !format.PageNumberValid(child, m.Size()/format.PageSize) {
+		return blobBranchRecord{}, corruptError("membership blob child is out of range")
+	}
+	return blobBranchRecord{offset: offset, child: child}, nil
 }

@@ -8,6 +8,8 @@ package recovery
 
 import (
 	"crypto/sha256"
+	"hash"
+	"math/bits"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
@@ -64,7 +66,7 @@ func recoverMemberships(m *mapping.Mapping, meta format.Meta, catalog *catalog, 
 	if err := scanTree(membershipIDCodec{}, m, meta, meta.MembershipIDRoot, pages, check, events); err != nil {
 		return nil, err
 	}
-	validation := &membershipValidation{m: m, meta: meta, catalog: catalog, pages: pages, tables: tables, check: check, rep: rep}
+	validation := &membershipValidation{m: m, meta: meta, catalog: catalog, pages: pages, tables: tables, check: check, rep: rep, hash: newBitmapHasher()}
 	if err := validation.entries(entries); err != nil {
 		return nil, err
 	}
@@ -101,11 +103,15 @@ func (membershipIDCodec) decodeBranch(cell []byte) (treeKey, uint32, bool) {
 	return record.FirstID, record.Child, true
 }
 func (membershipIDCodec) decodeLeafKey(cell []byte) (treeKey, bool) {
-	id, err := format.MembershipIDLeafKey(cell)
+	// Rust IdCodec::leaf_key decodes the complete record (codec::decode
+	// -> record.id), so a corrupt ID leaf with a valid id but a
+	// malformed tail is refused by the leaf-invalid envelope instead of
+	// being accepted on the shape-only key.
+	record, err := format.DecodeMembershipRecord(cell)
 	if err != nil {
 		return nil, false
 	}
-	return id, true
+	return record.ID, true
 }
 func (membershipIDCodec) less(a, b treeKey) bool  { return a.(uint32) < b.(uint32) }
 func (membershipIDCodec) equal(a, b treeKey) bool { return a.(uint32) == b.(uint32) }
@@ -172,6 +178,10 @@ type membershipValidation struct {
 	tables  *tableStore
 	check   func() error
 	rep     *reporter
+	// hash is the one reused bitmap digest state of the whole pass;
+	// every record proof resets it (Rust allocates a fresh Sha256 per
+	// record, Go reuses one so the scan stays heap-free).
+	hash *bitmapHasher
 }
 
 func (v *membershipValidation) entries(entries *membershipIndex) error {
@@ -230,7 +240,7 @@ func (v *membershipValidation) registerID(entries *membershipIndex, id uint32, i
 }
 
 func (v *membershipValidation) entry(entry membershipLocator) (bool, error) {
-	bitmap := newBitmapCheck(v.catalog, v.tables)
+	bitmap := newBitmapCheck(v.catalog, v.tables, v.hash)
 	var complete bool
 	var err error
 	switch entry.storage {
@@ -257,25 +267,63 @@ func (v *membershipValidation) entry(entry membershipLocator) (bool, error) {
 	return complete && bitmap.valid(entry.wordCount, entry.digest), nil
 }
 
+// bitmapHasher is the one reused SHA-256 state of the membership
+// bitmap proofs (Rust BitmapCheck::hasher). The digest is validated
+// once per record in the leaf, so the recovery pass feeds it exactly
+// once and reuses one state across every locator instead of boxing a
+// fresh hasher per record. The little-endian word scratch and the sum
+// buffer live in the hasher, keeping the per-word feeds and the final
+// digest heap-free.
+type bitmapHasher struct {
+	state   hash.Hash
+	word    [8]byte
+	scratch [64]byte
+}
+
+// newBitmapHasher builds the single reused membership digest state.
+func newBitmapHasher() *bitmapHasher {
+	return &bitmapHasher{state: sha256.New()}
+}
+
+// reset starts one record proof (Rust BitmapCheck::new).
+func (h *bitmapHasher) reset() {
+	h.state.Reset()
+}
+
+// writeWord feeds one little-endian word to the digest (Rust
+// hasher.update(value.to_le_bytes())); the word is copied by value
+// into the shared scratch so no per-word allocation escapes.
+func (h *bitmapHasher) writeWord(value uint64) error {
+	format.PutU64(h.word[:], value)
+	_, err := h.state.Write(h.word[:])
+	return err
+}
+
+// sum returns the digest of the fed words without disturbing the
+// state (Rust finalize; the next record resets).
+func (h *bitmapHasher) sum() [32]byte {
+	var digest [32]byte
+	copy(digest[:], h.state.Sum(h.scratch[:0]))
+	return digest
+}
+
 // bitmapCheck proves one recovered bitmap (Rust BitmapCheck: the
 // running SHA-256 over the little-endian words, the feed-bit catalog
-// proofs, the nonzero final word, and the exact word count).
+// proofs, the nonzero final word, and the exact word count). The
+// digest state is the shared validation hasher, reset per record.
 type bitmapCheck struct {
 	catalog  *catalog
 	tables   *tableStore
-	hasher   sha256Hasher
+	hash     *bitmapHasher
 	words    uint32
 	last     uint64
 	inactive bool
 }
 
-type sha256Hasher = interface {
-	Write([]byte) (int, error)
-	Sum([]byte) []byte
-}
-
-func newBitmapCheck(catalog *catalog, tables *tableStore) *bitmapCheck {
-	return &bitmapCheck{catalog: catalog, tables: tables, hasher: sha256.New()}
+// newBitmapCheck starts one record proof over the shared hasher.
+func newBitmapCheck(catalog *catalog, tables *tableStore, hash *bitmapHasher) bitmapCheck {
+	hash.reset()
+	return bitmapCheck{catalog: catalog, tables: tables, hash: hash}
 }
 
 func (b *bitmapCheck) consume(bytes []byte) error {
@@ -284,14 +332,12 @@ func (b *bitmapCheck) consume(bytes []byte) error {
 	}
 	for offset := 0; offset < len(bytes); offset += 8 {
 		value := format.U64(bytes[offset : offset+8])
-		var word [8]byte
-		format.PutU64(word[:], value)
-		if _, err := b.hasher.Write(word[:]); err != nil {
+		if err := b.hash.writeWord(value); err != nil {
 			return err
 		}
 		remaining := value
 		for remaining != 0 {
-			bit := trailingZeros(remaining)
+			bit := uint64(bits.TrailingZeros64(remaining))
 			index := uint64(b.words)*64 + bit
 			if index > uint64(^uint32(0)) {
 				return corruptError("recovery membership feed bit is invalid")
@@ -314,23 +360,11 @@ func (b *bitmapCheck) consume(bytes []byte) error {
 }
 
 func (b *bitmapCheck) valid(expectedWords uint32, expectedDigest [32]byte) bool {
-	var digest [32]byte
-	copy(digest[:], b.hasher.Sum(nil))
+	digest := b.hash.sum()
 	return b.words == expectedWords &&
 		b.last != 0 &&
 		!b.inactive &&
 		digest == expectedDigest
-}
-
-// trailingZeros counts the trailing zero bits of one word (Rust
-// trailing_zeros).
-func trailingZeros(value uint64) uint64 {
-	bit := uint64(0)
-	for value&1 == 0 {
-		value >>= 1
-		bit++
-	}
-	return bit
 }
 
 // finishMemberships folds the membership proof (Rust finish: the

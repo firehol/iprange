@@ -14,10 +14,12 @@ import (
 )
 
 // structuredResolved is one resolved structure record with its
-// optional membership (Rust Resolved).
+// optional membership (Rust Resolved: both locators travel by value,
+// never by an escaped address).
 type structuredResolved struct {
-	structure  structureLocator
-	membership *membershipLocator
+	structure     structureLocator
+	membership    membershipLocator
+	hasMembership bool
 }
 
 // structuredOutput is the structured-range policy of the
@@ -31,6 +33,12 @@ type structuredOutput struct {
 	builder     *writer.OutputBuilder
 	rep         *reporter
 	family      uint8
+	// words is one reusable membership word-source slot: push fills it
+	// before every membership-backed push and passes its address, so
+	// the writer interface conversion never boxes a per-push value
+	// (the writer interns the words synchronously inside the push;
+	// Rust passes &impl MembershipWords).
+	words locatorWords
 }
 
 // resolve proves one record's structure and membership (Rust
@@ -52,7 +60,8 @@ func (o *structuredOutput) resolve(record rangeRecord) (any, error) {
 		}
 		return nil, nil
 	}
-	var membership *membershipLocator
+	var membership membershipLocator
+	var hasMembership bool
 	if structure.membershipID != 0 {
 		locator, found, err := o.memberships.get(o.tables, structure.membershipID)
 		if err != nil {
@@ -71,9 +80,10 @@ func (o *structuredOutput) resolve(record rangeRecord) (any, error) {
 			}
 			return nil, nil
 		}
-		membership = &locator
+		membership = locator
+		hasMembership = true
 	}
-	return structuredResolved{structure: structure, membership: membership}, nil
+	return structuredResolved{structure: structure, membership: membership, hasMembership: hasMembership}, nil
 }
 
 // accept counts one accepted component and pushes it (Rust
@@ -92,7 +102,7 @@ func (o *structuredOutput) accept(record rangeRecord, resolved any) error {
 	if err != nil {
 		return err
 	}
-	if err := o.push(record, decoded, value.membership); err != nil {
+	if err := o.push(record, decoded, value.membership, value.hasMembership); err != nil {
 		return err
 	}
 	return o.codec().reportAccepted(o.rep, record)
@@ -110,18 +120,20 @@ func (o *structuredOutput) finish() error { return nil }
 
 // push streams one structured range to the destination builder (Rust
 // StructuredKey::push over the optional membership words).
-func (o *structuredOutput) push(record rangeRecord, value format.NetworkEnrichmentV1, membership *membershipLocator) error {
+func (o *structuredOutput) push(record rangeRecord, value format.NetworkEnrichmentV1, membership membershipLocator, hasMembership bool) error {
 	switch o.family {
 	case format.AddressFamilyIPv4:
-		if membership == nil {
+		if !hasMembership {
 			return o.builder.PushNetworkEnrichmentV1V4Words(uint32(record.from.hi), uint32(record.to.hi), value, nil)
 		}
-		return o.builder.PushNetworkEnrichmentV1V4Words(uint32(record.from.hi), uint32(record.to.hi), value, locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: *membership}})
+		o.words = locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: membership}}
+		return o.builder.PushNetworkEnrichmentV1V4Words(uint32(record.from.hi), uint32(record.to.hi), value, &o.words)
 	case format.AddressFamilyIPv6:
-		if membership == nil {
+		if !hasMembership {
 			return o.builder.PushNetworkEnrichmentV1V6Words(record.from.hi, record.from.lo, record.to.hi, record.to.lo, value, nil)
 		}
-		return o.builder.PushNetworkEnrichmentV1V6Words(record.from.hi, record.from.lo, record.to.hi, record.to.lo, value, locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: *membership}})
+		o.words = locatorWords{reader: membershipWordReader{m: o.mapping, meta: o.meta, locator: membership}}
+		return o.builder.PushNetworkEnrichmentV1V6Words(record.from.hi, record.from.lo, record.to.hi, record.to.lo, value, &o.words)
 	default:
 		return corruptError("recovery structured output family is invalid")
 	}

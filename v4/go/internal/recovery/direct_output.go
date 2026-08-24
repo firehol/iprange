@@ -14,10 +14,11 @@ import (
 // pass (Rust DirectOutput): the pending record coalesces adjacent
 // equal-value records before the push.
 type directOutput struct {
-	builder  *writer.OutputBuilder
-	rep      *reporter
-	codec    rangeCodec
-	previous *rangeRecord
+	builder    *writer.OutputBuilder
+	rep        *reporter
+	codec      rangeCodec
+	previous   rangeRecord
+	previousOk bool
 }
 
 // resolve proves nothing for the direct policy (Rust
@@ -44,32 +45,35 @@ func (o *directOutput) rejectOverlap(count uint64, from, to rangeKey) error {
 // finish pushes the pending record (Rust DirectOutput::finish over
 // finish_output).
 func (o *directOutput) finish() error {
-	if o.previous == nil {
+	if !o.previousOk {
 		return nil
 	}
-	record := *o.previous
-	o.previous = nil
+	record := o.previous
+	o.previousOk = false
 	return o.codec.pushRecord(o.builder, record)
 }
 
 // coalesce merges one record with an adjacent equal-value previous
-// record or pushes the previous (Rust DirectOutput::coalesce).
+// record or pushes the previous (Rust DirectOutput::coalesce; the
+// cursors travel by value, so one pending record never becomes a
+// per-record heap cell).
 func (o *directOutput) coalesce(record rangeRecord) error {
-	if o.previous == nil {
-		o.previous = &record
+	if !o.previousOk {
+		o.previous = record
+		o.previousOk = true
 		return nil
 	}
-	previous := *o.previous
+	previous := o.previous
 	next, ok := o.codec.nextKey(previous.to)
 	if previous.value == record.value && ok && next == record.from {
 		previous.to = record.to
-		o.previous = &previous
+		o.previous = previous
 		return nil
 	}
 	if err := o.codec.pushRecord(o.builder, previous); err != nil {
 		return err
 	}
-	o.previous = &record
+	o.previous = record
 	return nil
 }
 

@@ -27,12 +27,15 @@ type component struct {
 	count     uint64
 }
 
-// components is the ordered overlap-component pass (Rust Components).
+// components is the ordered overlap-component pass (Rust Components;
+// the open component travels by value like the Rust
+// Option<Component>, so the pass never forms a per-record pointer).
 type components struct {
-	check     func() error
-	codec     rangeCodec
-	policy    rangePolicy
-	component *component
+	check       func() error
+	codec       rangeCodec
+	policy      rangePolicy
+	component   component
+	componentOk bool
 }
 
 // push accepts one record into the pass (Rust Components::push: the
@@ -46,12 +49,13 @@ func (c *components) push(record rangeRecord) error {
 	if err != nil {
 		return err
 	}
-	if c.component == nil {
-		c.component = &component{first: record, resolved: resolved, maximumTo: record.to, count: 1}
+	if !c.componentOk {
+		c.component = component{first: record, resolved: resolved, maximumTo: record.to, count: 1}
+		c.componentOk = true
 		return nil
 	}
-	current := *c.component
-	c.component = nil
+	current := c.component
+	c.componentOk = false
 	if c.codec.lessKey(record.from, current.first.from) {
 		return candidateChangedError()
 	}
@@ -66,22 +70,24 @@ func (c *components) push(record rangeRecord) error {
 			return overflowError("recovery overlap component")
 		}
 		current.count = next
-		c.component = &current
+		c.component = current
+		c.componentOk = true
 		return nil
 	}
 	if err := c.finishComponent(current); err != nil {
 		return err
 	}
-	c.component = &component{first: record, resolved: resolved, maximumTo: record.to, count: 1}
+	c.component = component{first: record, resolved: resolved, maximumTo: record.to, count: 1}
+	c.componentOk = true
 	return nil
 }
 
 // finish closes the open component and the policy (Rust
 // Components::finish).
 func (c *components) finish() error {
-	if c.component != nil {
-		current := *c.component
-		c.component = nil
+	if c.componentOk {
+		current := c.component
+		c.componentOk = false
 		if err := c.finishComponent(current); err != nil {
 			return err
 		}

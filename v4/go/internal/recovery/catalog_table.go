@@ -34,7 +34,9 @@ type catalog struct {
 }
 
 // catalogFeed is one recovered catalog entry (Rust FeedEntry): the
-// name view and the feed index.
+// name view and the feed index. The name view aliases its source
+// (the scanned source cell or the table store arena), never a
+// per-record buffer, so decoding one record allocates nothing.
 type catalogFeed struct {
 	name  []byte
 	index uint32
@@ -362,16 +364,32 @@ func (c *catalog) acceptedNameSlot(tables *tableStore, slot *[catalogNameSlotSiz
 }
 
 // record reads and decodes one catalog record (Rust Catalog::record:
-// the record index bound is the Corrupt class).
+// the record index bound is the Corrupt class). The record bytes are
+// a view of the store arena, so the returned name aliases the tables
+// heap instead of a per-call buffer; the caller copies the name only
+// at the boundary that outlives the tables (Rust FeedName owns the
+// copy inside the accessor; the arena view is the Go equivalent).
 func (c *catalog) record(tables *tableStore, index uint64) (catalogFeed, error) {
 	if index >= c.recordsLen {
 		return catalogFeed{}, corruptError("recovery catalog record index is invalid")
 	}
-	var bytes [catalogRecordSize]byte
-	if err := tables.read(c.records, index, bytes[:]); err != nil {
+	bytes, err := tables.view(c.records, index)
+	if err != nil {
 		return catalogFeed{}, err
 	}
-	return decodeCatalogRecord(bytes[:])
+	return decodeCatalogRecord(bytes)
+}
+
+// view returns one region entry as a slice of the store arena (Rust
+// Tables::read over the entry slice): the same offset proof as read,
+// but the caller decodes the arena bytes directly, so a per-record
+// catalog read copies no record into a local buffer.
+func (t *tableStore) view(region tableRegion, index uint64) ([]byte, error) {
+	offset, err := t.offset(region, index, int(region.width))
+	if err != nil {
+		return nil, err
+	}
+	return t.bytes[offset : offset+region.width], nil
 }
 
 // encodeCatalogRecord encodes one record into the fixed table shape
