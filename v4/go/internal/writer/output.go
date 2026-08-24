@@ -394,13 +394,27 @@ func (b *OutputBuilder) PushDirectV6(fromHi, fromLo, toHi, toLo uint64, value ui
 }
 
 // PushMembershipV4 interns the bitmap and appends one IPv4 membership
-// range (Rust push_membership_v4).
+// range (Rust push_membership_v4 over the caller words).
 func (b *OutputBuilder) PushMembershipV4(from, to uint32, words OutputWords) error {
+	return pushMembershipWordsV4(b, from, to, words)
+}
+
+// PushMembershipV4Words interns one word source and appends one IPv4
+// membership range (Rust push_membership_v4 over a generic word
+// source): the recovery output streams the verified source bitmap
+// without materializing it.
+func (b *OutputBuilder) PushMembershipV4Words(from, to uint32, words MembershipWordSource) error {
+	return pushMembershipWordsV4(b, from, to, words)
+}
+
+// pushMembershipWordsV4 is the shared IPv4 membership push (Rust
+// push_membership_v4).
+func pushMembershipWordsV4[W membershipWords](b *OutputBuilder, from, to uint32, words W) error {
 	return b.mutate(func() error {
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv4); err != nil {
 			return err
 		}
-		value, err := b.internMembership(words)
+		value, err := internOutputMembership(b, words)
 		if err != nil {
 			return err
 		}
@@ -412,13 +426,26 @@ func (b *OutputBuilder) PushMembershipV4(from, to uint32, words OutputWords) err
 }
 
 // PushMembershipV6 interns the bitmap and appends one IPv6 membership
-// range (Rust push_membership_v6).
+// range (Rust push_membership_v6 over the caller words).
 func (b *OutputBuilder) PushMembershipV6(fromHi, fromLo, toHi, toLo uint64, words OutputWords) error {
+	return pushMembershipWordsV6(b, fromHi, fromLo, toHi, toLo, words)
+}
+
+// PushMembershipV6Words interns one word source and appends one IPv6
+// membership range (Rust push_membership_v6 over a generic word
+// source).
+func (b *OutputBuilder) PushMembershipV6Words(fromHi, fromLo, toHi, toLo uint64, words MembershipWordSource) error {
+	return pushMembershipWordsV6(b, fromHi, fromLo, toHi, toLo, words)
+}
+
+// pushMembershipWordsV6 is the shared IPv6 membership push (Rust
+// push_membership_v6).
+func pushMembershipWordsV6[W membershipWords](b *OutputBuilder, fromHi, fromLo, toHi, toLo uint64, words W) error {
 	return b.mutate(func() error {
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv6); err != nil {
 			return err
 		}
-		value, err := b.internMembership(words)
+		value, err := internOutputMembership(b, words)
 		if err != nil {
 			return err
 		}
@@ -463,16 +490,17 @@ func (b *OutputBuilder) InternMembership(words OutputWords) (uint32, error) {
 	var value uint32
 	err := b.mutate(func() error {
 		var err error
-		value, err = b.internMembership(words)
+		value, err = internOutputMembership(b, words)
 		return err
 	})
 	return value, err
 }
 
-// internMembership runs the shape check (word count vs the feed-index
-// limit, canonical final word), the feed-activity check over every word,
-// and the dictionary intern (Rust immutable_output/membership.rs intern).
-func (b *OutputBuilder) internMembership(source OutputWords) (uint32, error) {
+// internOutputMembership runs the shape check (word count vs the
+// feed-index limit, canonical final word), the feed-activity check over
+// every word, and the dictionary intern (Rust
+// immutable_output/membership.rs intern).
+func internOutputMembership[W membershipWords](b *OutputBuilder, source W) (uint32, error) {
 	if err := requireOutputShape(source, b.meta.FeedIndexLimit); err != nil {
 		return 0, err
 	}
@@ -495,25 +523,20 @@ func (b *OutputBuilder) internMembership(source OutputWords) (uint32, error) {
 // requireOutputFeeds verifies every set bit of source names an active
 // feed (Rust CheckedWords::read_words): chunked word reads from the
 // source and the feed used-bitmap are compared word by word.
-func requireOutputFeeds(store tree.Store, feedRoot uint32, feedLimit uint64, words OutputWords) error {
+func requireOutputFeeds[W membershipWords](store tree.Store, feedRoot uint32, feedLimit uint64, words W) error {
 	const checkWords = 64
-	var values [checkWords]uint64
 	var active [checkWords]uint64
 	for start := uint32(0); start < words.WordCount(); start += checkWords {
-		count := words.WordCount() - start
-		if count > checkWords {
-			count = checkWords
-		}
-		valuesSlice := values[:count]
-		activeSlice := active[:count]
-		if err := words.ReadWords(start, valuesSlice); err != nil {
+		values, count, err := words.ReadChunk(start)
+		if err != nil {
 			return err
 		}
+		activeSlice := active[:count]
 		if err := bitmap.ReadWords(store, feedRoot, feedLimit, bitmap.KindFeed, start, activeSlice); err != nil {
 			return err
 		}
-		for index := range valuesSlice {
-			if valuesSlice[index]&^activeSlice[index] != 0 {
+		for index := 0; index < int(count); index++ {
+			if values[index]&^activeSlice[index] != 0 {
 				return invalid("membership references an inactive feed")
 			}
 		}
@@ -610,7 +633,7 @@ func (b *OutputBuilder) flushMembershipReferences() error {
 
 // requireOutputShape validates the word count bound and the canonical
 // final word (Rust require_shape over the checked source).
-func requireOutputShape(words OutputWords, feedLimit uint64) error {
+func requireOutputShape[W membershipWords](words W, feedLimit uint64) error {
 	wordCount := words.WordCount()
 	if wordCount == 0 {
 		return invalid("membership word count exceeds the feed-index limit")
@@ -619,11 +642,12 @@ func requireOutputShape(words OutputWords, feedLimit uint64) error {
 	if uint64(wordCount) > maximum {
 		return invalid("membership word count exceeds the feed-index limit")
 	}
-	var finalWord [1]uint64
-	if err := words.ReadWords(wordCount-1, finalWord[:]); err != nil {
+	chunkStart := ((wordCount - 1) / 64) * 64
+	values, _, err := words.ReadChunk(chunkStart)
+	if err != nil {
 		return err
 	}
-	if finalWord[0] == 0 {
+	if values[wordCount-1-chunkStart] == 0 {
 		return invalid("membership bitmap is not canonical")
 	}
 	return nil

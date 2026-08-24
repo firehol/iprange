@@ -16,8 +16,19 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
-// membershipWords is one bounded membership bitmap source (Rust
-// Words<S>). Implementations return each up-to-64-word chunk by value: a
+// MembershipWordSource is one bounded membership bitmap source the
+// output builder can intern and push (Rust MembershipWords): each
+// chunk is returned by value, so a source never returns a mapped page
+// view and a dictionary read can never retain or alias page bytes.
+type MembershipWordSource interface {
+	WordCount() uint32
+	// ReadChunk returns the words starting at start as a copy of at
+	// most 64 words; count is the number of valid words.
+	ReadChunk(start uint32) (words [64]uint64, count uint32, err error)
+}
+
+// membershipWords is the typed internal chunk-read seam (Rust
+// Words<S>); every bounded writer source satisfies it. Implementations return each up-to-64-word chunk by value: a
 // source never returns a mapped page view, so a dictionary read can never
 // retain or alias page bytes, and the Go generic constraint method can
 // never retain a caller stack buffer (a slice argument through the

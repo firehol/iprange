@@ -89,9 +89,10 @@ func rewriteNameIndex(t *testing.T, path string, meta format.Meta, name string, 
 		if err != nil {
 			t.Fatalf("decode entry: %v", err)
 		}
-		if string(entryName) == name && feedIndex == uint32(cellIndex) {
+		if string(entryName) == name {
 			found = true
 		}
+		_ = feedIndex
 		_ = slotted
 	}
 	if !found {

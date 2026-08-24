@@ -44,6 +44,38 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V4(from, to uint32, value format.
 	})
 }
 
+// PushNetworkEnrichmentV1V4Words interns one word source with the
+// structure and appends one IPv4 structured range (Rust
+// push_network_enrichment_v1_v4 over a generic word source): the
+// recovery output streams the verified source bitmap without
+// materializing it. A nil membership adds the structure without a
+// membership.
+func (b *OutputBuilder) PushNetworkEnrichmentV1V4Words(from, to uint32, value format.NetworkEnrichmentV1, membership MembershipWordSource) error {
+	return pushNetworkEnrichmentV1WordsV4(b, from, to, value, membership)
+}
+
+// pushNetworkEnrichmentV1WordsV4 is the shared IPv4 structured push
+// (Rust push_network_enrichment_v1_v4).
+func pushNetworkEnrichmentV1WordsV4[W membershipWords](b *OutputBuilder, from, to uint32, value format.NetworkEnrichmentV1, membership W) error {
+	return b.mutate(func() error {
+		if err := b.requireStructureMode(format.StructureKindNetworkEnrichmentV1, format.AddressFamilyIPv4); err != nil {
+			return err
+		}
+		structure, err := internNetworkEnrichmentV1Words(b, value, membership)
+		if err != nil {
+			return err
+		}
+		if err := b.ranges.push(b, rangeRecord{
+			from:  tree.Key{Hi: uint64(from)},
+			to:    tree.Key{Hi: uint64(to)},
+			value: structure,
+		}); err != nil {
+			return err
+		}
+		return b.addStructureReference(structure)
+	})
+}
+
 // PushNetworkEnrichmentV1V6 interns one network_enrichment_v1 value and
 // appends one IPv6 structured range (Rust
 // push_network_enrichment_v1_v6).
@@ -67,6 +99,35 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V6(fromHi, fromLo, toHi, toLo uin
 	})
 }
 
+// PushNetworkEnrichmentV1V6Words interns one word source with the
+// structure and appends one IPv6 structured range (Rust
+// push_network_enrichment_v1_v6 over a generic word source).
+func (b *OutputBuilder) PushNetworkEnrichmentV1V6Words(fromHi, fromLo, toHi, toLo uint64, value format.NetworkEnrichmentV1, membership MembershipWordSource) error {
+	return pushNetworkEnrichmentV1WordsV6(b, fromHi, fromLo, toHi, toLo, value, membership)
+}
+
+// pushNetworkEnrichmentV1WordsV6 is the shared IPv6 structured push
+// (Rust push_network_enrichment_v1_v6).
+func pushNetworkEnrichmentV1WordsV6[W membershipWords](b *OutputBuilder, fromHi, fromLo, toHi, toLo uint64, value format.NetworkEnrichmentV1, membership W) error {
+	return b.mutate(func() error {
+		if err := b.requireStructureMode(format.StructureKindNetworkEnrichmentV1, format.AddressFamilyIPv6); err != nil {
+			return err
+		}
+		structure, err := internNetworkEnrichmentV1Words(b, value, membership)
+		if err != nil {
+			return err
+		}
+		if err := b.ranges.push(b, rangeRecord{
+			from:  tree.Key{Hi: fromHi, Lo: fromLo},
+			to:    tree.Key{Hi: toHi, Lo: toLo},
+			value: structure,
+		}); err != nil {
+			return err
+		}
+		return b.addStructureReference(structure)
+	})
+}
+
 // internNetworkEnrichmentV1 encodes the payload with the optional interned
 // membership id and interns it into the structure dictionary (Rust
 // intern_network_enrichment_v1): a newly created structure that references
@@ -76,11 +137,31 @@ func (b *OutputBuilder) internNetworkEnrichmentV1(value format.NetworkEnrichment
 	membershipID := uint32(0)
 	if membership != nil {
 		var err error
-		membershipID, err = b.internMembership(membership)
+		membershipID, err = internOutputMembership(b, membership)
 		if err != nil {
 			return 0, err
 		}
 	}
+	return b.internNetworkEnrichmentV1Payload(value, membershipID)
+}
+
+// internNetworkEnrichmentV1Words is the shared structure intern over
+// one membership word source (Rust intern_network_enrichment_v1).
+func internNetworkEnrichmentV1Words[W membershipWords](b *OutputBuilder, value format.NetworkEnrichmentV1, membership W) (uint32, error) {
+	membershipID := uint32(0)
+	if any(membership) != nil {
+		var err error
+		membershipID, err = internOutputMembership(b, membership)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return b.internNetworkEnrichmentV1Payload(value, membershipID)
+}
+
+// internNetworkEnrichmentV1Payload interns the encoded payload with one
+// membership ID (Rust intern_network_enrichment_v1 inner body).
+func (b *OutputBuilder) internNetworkEnrichmentV1Payload(value format.NetworkEnrichmentV1, membershipID uint32) (uint32, error) {
 	payload, err := encodeNetworkEnrichmentV1(value, membershipID)
 	if err != nil {
 		return 0, err

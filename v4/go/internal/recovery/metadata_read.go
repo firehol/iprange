@@ -30,10 +30,18 @@ const metadataInflateOverhead = 512 * 1024
 // class; an incomplete chain reports no metadata without failing the
 // analysis).
 func readMetadata(m *mapping.Mapping, meta format.Meta, pages *pageSet, maxHeapBytes uint64, check func() error, rep *reporter) ([]byte, error) {
+	return readMetadataRetained(m, meta, pages, 0, maxHeapBytes, check, rep)
+}
+
+// readMetadataRetained reads the metadata chain with one extra
+// retained-heap charge (Rust recovery metadata::read over the indirect
+// tables retention): the tables bytes are reserved before the payout
+// buffer and the inflater overhead.
+func readMetadataRetained(m *mapping.Mapping, meta format.Meta, pages *pageSet, retained uint64, maxHeapBytes uint64, check func() error, rep *reporter) ([]byte, error) {
 	if meta.MetadataRoot == 0 {
 		return nil, nil
 	}
-	output, err := metadataOutputBuffer(meta, pages, maxHeapBytes)
+	output, err := metadataOutputBuffer(meta, pages, retained, maxHeapBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -54,12 +62,16 @@ func readMetadata(m *mapping.Mapping, meta format.Meta, pages *pageSet, maxHeapB
 // the recovery heap (Rust output_buffer: the page-set retention and
 // the inflater overhead reserve the fixed part, and the declared
 // uncompressed length must fit the remainder).
-func metadataOutputBuffer(meta format.Meta, pages *pageSet, maxHeapBytes uint64) ([]byte, error) {
+func metadataOutputBuffer(meta format.Meta, pages *pageSet, retained uint64, maxHeapBytes uint64) ([]byte, error) {
 	outputLen := meta.MetadataUncompressed
 	if outputLen > uint64(maxInt) {
 		return nil, budgetError("recovery metadata output")
 	}
-	fixed, ok := checkedAdd(pages.retainedBytes(), metadataInflateOverhead)
+	fixed, ok := checkedAdd(pages.retainedBytes(), retained)
+	if !ok {
+		return nil, overflowError("recovery metadata heap")
+	}
+	fixed, ok = checkedAdd(fixed, metadataInflateOverhead)
 	if !ok {
 		return nil, overflowError("recovery metadata heap")
 	}

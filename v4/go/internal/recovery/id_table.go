@@ -36,6 +36,11 @@ type recordCodec[R any] struct {
 	reject        func(record *R)
 }
 
+// idRecordBufferSize is the fixed per-call record buffer of the shared
+// index (Rust RECORD_BUFFER_SIZE over the membership and structure
+// record widths).
+const idRecordBufferSize = 56
+
 // idIndex is the shared record and ID-slot index of one recovery table
 // (Rust IdIndex).
 type idIndex[R any] struct {
@@ -45,6 +50,9 @@ type idIndex[R any] struct {
 
 // newIDIndex builds one index over the store layout (Rust IdIndex::new).
 func newIDIndex[R any](tables *tableStore, codec recordCodec[R]) *idIndex[R] {
+	if codec.width > idRecordBufferSize {
+		panic("recovery id codec record exceeds the fixed buffer")
+	}
 	records, ids := codec.regions(tables.layout)
 	return &idIndex[R]{codec: codec, table: rawIDTable{records: records, ids: ids, invalidRecord: codec.invalidRecord, full: codec.full}}
 }
@@ -52,19 +60,19 @@ func newIDIndex[R any](tables *tableStore, codec recordCodec[R]) *idIndex[R] {
 // push appends one record (Rust IdIndex::push: the record bound is the
 // candidate-changed class).
 func (c *idIndex[R]) push(tables *tableStore, record R) error {
-	bytes := make([]byte, c.codec.width)
-	c.codec.encode(record, bytes)
-	return c.table.push(tables, bytes)
+	var bytes [idRecordBufferSize]byte
+	c.codec.encode(record, bytes[:c.codec.width])
+	return c.table.push(tables, bytes[:c.codec.width])
 }
 
 // record reads and decodes one record (Rust IdIndex::record).
 func (c *idIndex[R]) record(tables *tableStore, index uint64) (R, error) {
 	var out R
-	bytes := make([]byte, c.codec.width)
-	if err := c.table.read(tables, index, bytes); err != nil {
+	var bytes [idRecordBufferSize]byte
+	if err := c.table.read(tables, index, bytes[:c.codec.width]); err != nil {
 		return out, err
 	}
-	return c.codec.decode(bytes)
+	return c.codec.decode(bytes[:c.codec.width])
 }
 
 // reject marks one record rejected (Rust IdIndex::reject).
@@ -74,9 +82,9 @@ func (c *idIndex[R]) reject(tables *tableStore, index uint64) error {
 		return err
 	}
 	c.codec.reject(&record)
-	bytes := make([]byte, c.codec.width)
-	c.codec.encode(record, bytes)
-	return c.table.write(tables, index, bytes)
+	var bytes [idRecordBufferSize]byte
+	c.codec.encode(record, bytes[:c.codec.width])
+	return c.table.write(tables, index, bytes[:c.codec.width])
 }
 
 // insertID registers one record under its ID (Rust IdIndex::insert_id).
