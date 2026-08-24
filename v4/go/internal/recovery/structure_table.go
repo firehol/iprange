@@ -34,20 +34,23 @@ func (s structureLocator) payloadBytes() []byte {
 }
 
 // structureIndex is the recovery structure table of one source (Rust
-// StructureIndex): the kind guard and the shared id-index terminals.
+// StructureIndex): the kind guard and the shared id-index terminals
+// (the embedded table promotes the push/record/reject/insert/get
+// terminals, mirroring the Rust Deref).
 type structureIndex struct {
-	kind  uint8
-	table *idIndex[structureLocator]
+	kind uint8
+	*idIndex[structureLocator]
 }
 
 // newStructureIndex builds one structure index of the given kind (Rust
 // StructureIndex::new).
 func newStructureIndex(tables *tableStore, kind uint8) *structureIndex {
-	return &structureIndex{kind: kind, table: newIDIndex(tables, structureCodec())}
+	return &structureIndex{kind: kind, idIndex: newIDIndex(tables, structureCodec())}
 }
 
-// kindOf returns the structure kind of one index (Rust StructureIndex::kind).
-func kindOf(s *structureIndex) uint8 { return s.kind }
+// structureKindOf returns the structure kind of one index (Rust
+// StructureIndex::kind).
+func structureKindOf(s *structureIndex) uint8 { return s.kind }
 
 // structureCodec adapts the structure locator to the shared id table
 // (Rust StructureCodec).

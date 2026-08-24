@@ -149,10 +149,7 @@ func countStructures(m *mapping.Mapping, meta format.Meta, pages *pageSet, check
 	case meta.ValueKind == format.ValueKindMembership && meta.StructureKind == format.StructureKindNone:
 		return 0, nil
 	case meta.ValueKind == format.ValueKindStructured && meta.StructureKind == format.StructureKindNetworkEnrichmentV1:
-		// The structure dictionary recovery is delivered by the
-		// follow-up slice D3b (structure_index.rs port); until then the
-		// structured recovery refuses with the Rust unsupported class.
-		return 0, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure dictionary is not yet implemented"}
+		return countStructureRecords(m, meta, pages, check)
 	default:
 		return 0, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}
 	}
@@ -166,7 +163,7 @@ func recoverStructures(m *mapping.Mapping, meta format.Meta, memberships *member
 	case meta.ValueKind == format.ValueKindMembership && meta.StructureKind == format.StructureKindNone:
 		return nil, nil
 	case meta.ValueKind == format.ValueKindStructured && meta.StructureKind == format.StructureKindNetworkEnrichmentV1:
-		return nil, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure dictionary is not yet implemented"}
+		return recoverStructureRecords(m, meta, memberships, pages, tables, check, rep)
 	default:
 		return nil, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}
 	}
