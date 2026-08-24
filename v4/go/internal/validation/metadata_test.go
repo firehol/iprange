@@ -9,11 +9,15 @@ package validation
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"hash/adler32"
 	"math/rand"
+	"os"
 	"testing"
 
+	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
 // fixtureRand is the deterministic source of incompressible fixture
@@ -342,5 +346,66 @@ func TestValidateMetadataChainCycle(t *testing.T) {
 	if len(findings) != 2 || findings[0].Reason != ReasonTreeCycle ||
 		findings[0].Object != ObjectMetadata || *findings[0].PageNumber != 2 {
 		t.Fatalf("findings %+v", findings)
+	}
+}
+
+func TestValidateMetadataShortStream(t *testing.T) {
+	// A one-byte declared stream cannot complete the zlib header: the
+	// finish-class finding without a page (the Rust feed consumes the
+	// short page and finish reports the incomplete stream).
+	page := metadataChainPage(t, 2, 0, []byte{0x78}, 0, nil)
+	_, findings := metadataDB(t, 0, 1, page)
+	if len(findings) != 1 || findings[0].Reason != ReasonMetadataZlibInvalid || findings[0].PageNumber != nil {
+		t.Fatalf("findings %+v", findings)
+	}
+}
+
+func TestValidateMetadataCheckpointFailure(t *testing.T) {
+	// A cancellation during the first chain-page visit must surface as
+	// the typed operational failure, never as a zlib finding on page 0
+	// (Rust validate_chain propagates the checkpoint with ?).
+	payload := randomBytes(3000)
+	stream := storedZlib(payload)
+	path, _ := metadataDB(t, uint64(len(payload)), uint64(len(stream)), metadataSingle(t, stream))
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	m, err := mapping.MapFile(file, 3*format.PageSize, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	p0, err := m.Page(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, err := m.Page(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := bootstrap.Open(p0, p1, 3*format.PageSize, bootstrap.ModeImmutableReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	ctx, err := newContext(m, result.Meta, HeapOnly(1<<20, 1), func() error {
+		calls++
+		if calls == 1 {
+			return &format.Error{Code: format.CodeCancelled, Detail: "checkpoint during the metadata visit"}
+		}
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateMetadata(ctx)
+	var fe *format.Error
+	if !errors.As(err, &fe) || fe.Code != format.CodeCancelled {
+		t.Fatalf("cause %v, want the cancelled class", err)
+	}
+	if calls != 1 {
+		t.Fatalf("checkpoint calls %d, want 1", calls)
 	}
 }

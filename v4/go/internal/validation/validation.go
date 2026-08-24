@@ -187,8 +187,8 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 // Rust validate_selected order (validation.rs:460) and ends with the
 // allocation-partition sweep. Slice B ships the metadata and retirement
 // validators plus the tree/page authorities; the remaining validators
-// are the slice C-E stubs, and the allocator partition runs first in the
-// sweep exactly like Rust probe_source.
+// are the slice C-E stubs. The sweep itself runs reserveAllocatorPages
+// before validateSelected inside probe_source, exactly like Rust.
 func validateSelected(ctx *context) error {
 	if err := validateRange(ctx); err != nil {
 		return err

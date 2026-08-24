@@ -2,6 +2,8 @@ package format
 
 // Opaque compressed metadata chain (binary-format-v4.md section 11).
 
+// MaxMetadataChunkLen is the fixed payload capacity of one metadata
+// chunk page (Rust metadata.rs CHUNK_CAPACITY).
 const MaxMetadataChunkLen = 4048
 
 // MetadataDataOffset is the fixed chunk-payload offset inside one

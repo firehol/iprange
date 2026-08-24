@@ -10829,9 +10829,6 @@ tail, unexported context/source); the suite is 9 tests at HEAD. The
 test assertion conversions from direct *format.Error checks to
 errors.As unwraps land at 0949020.
 
-Next: chunk 4-9 slice A five-aspect review gate, then slice B
-(page/tree/metadata/retirement validators).
-
 ### Status (2026-08-24) - chunk 4-9 slice A complete: five-aspect review rounds 1-2 PASS
 
 Review rounds on commits 4ba6a39..a4bc118: parity (Goodall) FAIL

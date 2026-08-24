@@ -418,12 +418,3 @@ func TestValidateRetirementMetaPageChild(t *testing.T) {
 		t.Fatalf("findings %+v", findings)
 	}
 }
-
-func hasFinding(findings []ValidationFinding, reason ValidationReason) bool {
-	for _, f := range findings {
-		if f.Reason == reason {
-			return true
-		}
-	}
-	return false
-}

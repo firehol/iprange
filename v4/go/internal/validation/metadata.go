@@ -205,6 +205,16 @@ func validateMetadataChain(ctx *context, output []byte) error {
 		if source.aborted {
 			return nil
 		}
+		var formatErr *format.Error
+		if errors.As(err, &formatErr) {
+			return formatErr
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			// The chain ran out inside the zlib header: the Rust feed
+			// consumes the short page and the finish reports the
+			// incomplete stream without a page.
+			return metadataZlibFindingNone(ctx)
+		}
 		return metadataZlibFinding(ctx, source)
 	}
 	defer decoder.Close()
