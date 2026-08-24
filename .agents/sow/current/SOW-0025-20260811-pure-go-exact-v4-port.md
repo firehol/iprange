@@ -11496,9 +11496,6 @@ cross-builds, corpus ports of the Rust recovery tests (classify,
 page set, direct/indirect builds, source guard), work-counter pins,
 and the mmap-trace leg extension for recovery, then the five-aspect
 gate and the milestone push.
-Next: milestone 2 chunk 4-10 slice A - classify, inspection, the
-recovery candidate tokens, and the OfflineCandidate validation arm,
-per the recorded design gate.
 ### Status (2026-08-24) - milestone 2 slice A delivered
 
 Slice A of chunk 4-10 (classify + inspection + candidate tokens + the
@@ -11549,7 +11546,8 @@ also leaves unchanged.
 
 Slice A validation (all under nice; ~1 core-minute plus the three
 strace legs): gofmt clean; vet plain + v4work; plain and v4work full
-trees (19 test-bearing packages ok each, recovery added); race +
+trees (16 test-bearing packages ok each; 19 total, recovery added,
+fault/snapshot/work carry no test files); race +
 checkptr=2 on recovery/validation/live/bootstrap and the root, both
 tag sets; seven cross-builds plain + v4work (linux/386, linux/arm,
 linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64,
@@ -11566,10 +11564,6 @@ offline descriptor is never read or written through file I/O.
 Suite counts at 52e5b95: validation 94 plain / 98 v4work (unchanged),
 live 57/70 (unchanged), recovery 13/13 new; root 183/203 unchanged.
 
-Next: milestone 2 chunk 4-10 slice B - page_set/construction basics,
-the source guard, and the terminal/report shapes (Rust
-recovery/page_set.rs, source_guard.rs, report.rs, terminal.rs),
-per the recorded design gate.
 ### Status (2026-08-24) - milestone 2 slice B delivered
 
 Slice B of chunk 4-10 (page_set/construction basics + source guard +
@@ -11624,10 +11618,6 @@ classes, budget refusals, report counter/envelope/stop/cardinality
 pins, and the source-guard open/bind/final-check/geometry/guard-retry
 pins.
 
-Next: milestone 2 chunk 4-10 slice C - the direct (range) build and
-the recovery output (Rust recovery/range_build.rs, direct.rs,
-direct_build.rs, direct_output.rs, range_components.rs, range_scan.rs,
-plus the writer draft composition per the design gate).
 ### Status (2026-08-24) - milestone 2 slice C delivered: direct range build and recovery output
 
 Slice C delivers the direct recovery construction (Rust
@@ -11679,7 +11669,8 @@ range_components.rs, range_scan.rs, metadata.rs parity):
 
 Slice C validation (all under nice; ~1-2 core-minutes): gofmt clean;
 vet plain + v4work on linux/windows/freebsd; plain and v4work full
-trees (19 test-bearing packages ok each); race + checkptr=2 on
+trees (16 test-bearing packages ok each; 19 total, fault/snapshot/work
+carry no test files); race + checkptr=2 on
 recovery/validation/live/bootstrap/publication/writer and the root,
 both tag sets; seven cross-builds plain + v4work (linux/386,
 linux/arm64, darwin/amd64, darwin/arm64, freebsd/amd64, netbsd/amd64,
@@ -11689,9 +11680,6 @@ test-owned descriptors only, never the production read paths).
 Recovery suite: 42 Test functions (classify, inspection, offline,
 report, page set, source guard, direct construction).
 
-Next: milestone 2 chunk 4-10 slice D - the indirect (catalog,
-membership, structure) recovery builds and the recovery machine that
-composes inspection + construction + publication.
 ### Status (2026-08-24) - milestone 2 slice D1 delivered: recovery tree scan, table store, catalog reconciliation
 
 Slice D1 delivers the shared indirect-build foundation (Rust
@@ -11725,12 +11713,6 @@ vet plain + v4work; plain and v4work full trees; race + checkptr=2 on
 recovery; cross-builds of recovery on linux/386, windows/amd64,
 darwin/arm64, freebsd/amd64 both tag sets. Recovery suite: 45 Test
 functions.
-
-Next: milestone 2 chunk 4-10 slice D2 - the membership recovery
-(membership index count/recover, membership build and output over the
-writer internals, Rust recovery/membership_index.rs, membership_table.
-rs, membership_build.rs, membership_output.rs, membership_blob.rs,
-membership_words.rs parity).
 
 ### Status (2026-08-24) - milestone 2 slice D2 delivered: membership recovery index and blob validation
 
@@ -11776,17 +11758,6 @@ publication and the root, both tag sets; seven cross-builds plain +
 v4work (linux/386, linux/arm64, darwin/amd64, darwin/arm64,
 freebsd/amd64, netbsd/amd64, windows/amd64). Recovery suite: 49 Test
 functions (verified at c7aa643).
-
-Next: milestone 2 chunk 4-10 slice D3 - the membership build and output
-over the writer internals and the indirect analyze composition (Rust
-membership_build.rs, membership_output.rs, structured_output.rs,
-structured_build.rs, structure_index.rs, structure_table.rs,
-membership.rs analyze/analyze_graphs parity): prepare_tables with the
-tables-retained heap, recover_tables over catalog, memberships,
-structures, ranges and metadata, and indirect_build.go with the Mode
-construct/build/retained_bytes/failure terminals; membership output
-ports the writer membershipState intern machinery and structure support
-ports the NetworkEnrichmentV1 codec.
 
 ### Status (2026-08-24) - milestone 2 slice D3 delivered: indirect membership and structured recovery output
 
@@ -11837,13 +11808,6 @@ publication and the root, both tag sets; seven cross-builds plain +
 v4work (linux/386, linux/arm64, darwin/amd64, darwin/arm64,
 freebsd/amd64, netbsd/amd64, windows/amd64).
 
-Next: milestone 2 chunk 4-10 slice D4 - the recovery API assembly and
-the live recovery entry (Rust recovery/api.rs, construction.rs,
-source_guard.rs parity): the public recovery entry over the kind split
-(direct, membership, structured), the live writer recovery path, the
-report terminal, and the scratch cleanup authority; then slice E - the
-public API facade over the recovered live stores and the conformance
-cross-checks.
 ### Status (2026-08-24) - milestone 2 slice E delivered: recovery api wiring, public facade, recover_live
 
 Slice E of chunk 4-10 (the api wiring + public facade + recover_live
@@ -11955,13 +11919,6 @@ recovery-construction leg (leg 4) proves the source and the output are
 never streamed through file I/O (the insecure-source fixture writes
 its dual meta through a writable mapping, and the pattern now also
 matches .v4 artifact names).
-
-Next: milestone 2 chunk 4-10 gate - the five-aspect adversarial review
-(Goodall Rust parity, Gauss Go idioms, Chandrasekhar performance,
-Herschel wire format, Noether APIs) over the full chunk (slices A-E),
-then the chunk battery record and the milestone push; the worker
-process boundary (4-11) and the authorized scratch/external sort stay
-the recorded follow-ups.
 
 ### Status (2026-08-24) - milestone 2 review round 1: all five aspects reported; every finding fixed, battery green
 
