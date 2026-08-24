@@ -11692,3 +11692,42 @@ report, page set, source guard, direct construction).
 Next: milestone 2 chunk 4-10 slice D - the indirect (catalog,
 membership, structure) recovery builds and the recovery machine that
 composes inspection + construction + publication.
+### Status (2026-08-24) - milestone 2 slice D1 delivered: recovery tree scan, table store, catalog reconciliation
+
+Slice D1 delivers the shared indirect-build foundation (Rust
+recovery/tree_scan.rs, tables.rs, catalog.rs, catalog_table.rs parity):
+
+- internal/recovery/tree_scan.go: the generic CRC-checked salvage
+  traversal (claim/checksum/type/header/layout refusals with their
+  envelopes, the collapsed-root level envelope, the leaf and branch
+  cell invalid envelopes, the order and fence proofs, the
+  previous-key state reset rules, and the cell iterator over the
+  format layout inspection). The leaf counter ports the Rust
+  LeafCounter for the count passes.
+- internal/recovery/tables.go: the heap-only backing store (the fixed
+  region layout over the counted records at the hash load cap, the
+  checked region arithmetic, the exact-width read/write proofs, and
+  the tables budget refusal of the Rust non-posix arm; the scratch
+  migration stays the recorded follow-up).
+- internal/recovery/catalog.go + catalog_table.go: the feed-catalog
+  count (both trees, the index-below-limit acceptance) and the
+  reconciliation (the record table, the name and index slot tables
+  with the occurrence counts and the conflict envelopes, the accepted
+  records proof, for_each and contains).
+- internal/recovery/catalog_test.go: the count, the equal
+  conflict-free pair reconciliation (examined 6 / accepted 6), and the
+  name-index rewrite conflict (examined 4 / rejected 2, the conflict
+  envelope, the contains proofs) against writer-built membership
+  sources.
+
+Slice D1 validation (all under nice; ~1 core-minute): gofmt clean;
+vet plain + v4work; plain and v4work full trees; race + checkptr=2 on
+recovery; cross-builds of recovery on linux/386, windows/amd64,
+darwin/arm64, freebsd/amd64 both tag sets. Recovery suite: 45 Test
+functions.
+
+Next: milestone 2 chunk 4-10 slice D2 - the membership recovery
+(membership index count/recover, membership build and output over the
+writer internals, Rust recovery/membership_index.rs, membership_table.
+rs, membership_build.rs, membership_output.rs, membership_blob.rs,
+membership_words.rs parity).
