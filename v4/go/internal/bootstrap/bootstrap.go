@@ -221,34 +221,26 @@ func selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool) (form
 }
 
 // DatabaseIDFromPages returns the bound database identity of one raw
-// meta pair (Rust database_id_from_meta_pages): either page's
-// identity-readable meta must carry the same database id, and a pair
-// with no identity-readable page is the NoBootstrapMeta class. The
-// committed-generation rules do not run here: this is the "bound" id
-// used by the live validation registration when the committed
-// generation cannot be selected.
+// meta pair (Rust database_id_from_meta_pages): both identity-readable
+// pages must agree on the full static identity (Rust
+// require_same_identity over static_identity_eq: family, value kind,
+// structure kind, value tag, and database id), then either page's
+// database id binds. A pair with no identity-readable page is the
+// NoBootstrapMeta class. The committed-generation rules do not run
+// here: this is the "bound" id used by the live validation
+// registration when the committed generation cannot be selected.
 func DatabaseIDFromPages(p0, p1 []byte) ([16]byte, error) {
 	var zero [16]byte
-	valid0, id0 := metaDatabaseID(p0)
-	valid1, id1 := metaDatabaseID(p1)
-	if valid0 && valid1 && id0 != id1 {
-		return zero, formatErr("meta pages disagree on the database id")
+	m0, ok0 := format.ParseIdentity(p0)
+	m1, ok1 := format.ParseIdentity(p1)
+	if ok0 && ok1 && !sameIdentity(m0, m1) {
+		return zero, problemErr(ProblemStaticIdentityMismatch, "conflicting meta identity")
 	}
-	if valid0 {
-		return id0, nil
+	if ok0 {
+		return m0.DatabaseID, nil
 	}
-	if valid1 {
-		return id1, nil
+	if ok1 {
+		return m1.DatabaseID, nil
 	}
 	return zero, problemErr(ProblemNoBootstrapMeta, "no identity-readable meta page")
-}
-
-// metaDatabaseID returns the database id of one identity-readable meta
-// page (Rust identity_readable within database_id_from_meta_pages).
-func metaDatabaseID(page []byte) (bool, [16]byte) {
-	meta, ok := format.ParseIdentity(page)
-	if !ok {
-		return false, [16]byte{}
-	}
-	return true, meta.DatabaseID
 }

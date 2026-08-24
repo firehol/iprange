@@ -55,13 +55,12 @@ type rangeState struct {
 	hasPrevious bool
 	prev6       format.RangeRecordV6
 	hasPrev6    bool
-	family      uint8
 }
 
 // validateRangeFamily4 walks the IPv4 range tree and returns the record
 // count (Rust validate_family).
 func validateRangeFamily4(ctx *context) (uint64, error) {
-	state := rangeState{family: 4}
+	var state rangeState
 	var path [format.MaxTreeLevel + 1]uint32
 	if _, _, err := walkRangeNode4(ctx, ctx.meta.RangeRoot, nil, true, &path, 0, &state); err != nil {
 		return 0, err
@@ -72,7 +71,7 @@ func validateRangeFamily4(ctx *context) (uint64, error) {
 // validateRangeFamily6 walks the IPv6 range tree and returns the record
 // count.
 func validateRangeFamily6(ctx *context) (uint64, error) {
-	state := rangeState{family: 6}
+	var state rangeState
 	var path [format.MaxTreeLevel + 1]uint32
 	if _, _, err := walkRangeNode6(ctx, ctx.meta.RangeRoot, nil, true, &path, 0, &state); err != nil {
 		return 0, err

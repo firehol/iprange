@@ -78,7 +78,11 @@ type StructureIDRecord struct {
 }
 
 // DecodeStructureIDRecord parses one structure-ID record slot of exactly
-// StructureRecordSize bytes.
+// StructureRecordSize bytes (Rust codec::decode_record: the record
+// length, the reserved word, and the stored id are proved; the
+// refcount is carried raw and never checked here - a zero refcount is
+// a validator finding class, never a decode failure, so the reader
+// resolves the same files Rust resolves).
 func DecodeStructureIDRecord(b []byte) (StructureIDRecord, error) {
 	if len(b) < StructureRecordSize {
 		return StructureIDRecord{}, headerErr("short structure record %d", len(b))
@@ -96,9 +100,6 @@ func DecodeStructureIDRecord(b []byte) (StructureIDRecord, error) {
 	}
 	if r.StructureID == 0 {
 		return StructureIDRecord{}, headerErr("zero structure id")
-	}
-	if r.RangeRefcount == 0 {
-		return StructureIDRecord{}, headerErr("zero structure refcount")
 	}
 	copy(r.PayloadSHA256[:], b[16:48])
 	r.Payload = b[48:StructureRecordSize]

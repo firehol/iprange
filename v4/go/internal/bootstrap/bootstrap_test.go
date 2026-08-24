@@ -258,3 +258,45 @@ func TestOpenLiveReaderFinishRules(t *testing.T) {
 		t.Fatalf("selection %v, want ProvenCurrent", res.Selection)
 	}
 }
+
+func TestDatabaseIDFromPages(t *testing.T) {
+	p0 := metaPage(1, 4)
+	p1 := metaPage(1, 4)
+	// Both pages identity-readable and identical: the pair binds the
+	// database id (Rust database_id_from_meta_pages happy arm).
+	id, err := DatabaseIDFromPages(p0, p1)
+	if err != nil || id != testDBID {
+		t.Fatalf("identical pair: id %v err %v", id, err)
+	}
+	// A sole identity-readable page binds its id (the live bootstrap
+	// arm over one checksum-broken page).
+	broken := metaPage(1, 4)
+	format.PutU32(broken[252:256], 0) // identity no longer readable
+	id, err = DatabaseIDFromPages(broken, p1)
+	if err != nil || id != testDBID {
+		t.Fatalf("sole pair: id %v err %v", id, err)
+	}
+	// Both pages readable with the same database id but a different
+	// static identity: the StaticIdentityMismatch class, exactly like
+	// bootstrap.Open over the same pair (Rust require_same_identity).
+	other := metaPage(1, 4)
+	other[12] = format.ValueKindMembership // identity still readable
+	format.PutU32(other[252:256], format.MetaCRC32C(other))
+	if _, err := DatabaseIDFromPages(p0, other); err == nil {
+		t.Fatal("static identity disagreement accepted")
+	} else {
+		problem, ok := AsProblem(err)
+		if !ok || problem.Kind != ProblemStaticIdentityMismatch {
+			t.Fatalf("class %v (%T), want StaticIdentityMismatch", err, err)
+		}
+	}
+	// A pair with no identity-readable page is the NoBootstrapMeta class.
+	if _, err := DatabaseIDFromPages(broken, broken); err == nil {
+		t.Fatal("no identity-readable page accepted")
+	} else {
+		problem, ok := AsProblem(err)
+		if !ok || problem.Kind != ProblemNoBootstrapMeta {
+			t.Fatalf("class %v (%T), want NoBootstrapMeta", err, err)
+		}
+	}
+}
