@@ -135,11 +135,13 @@ func TestValidateBudgetRefusals(t *testing.T) {
 
 func TestValidateModeRefusals(t *testing.T) {
 	path := metaDB(t, 4)
-	// The offline-candidate mode stays refused until chunk 4-10; the
-	// trained LiveCurrent behaviors live in the linux/darwin live
-	// suite (the open refusal and the selection arms).
+	// The bare offline-candidate mode stays refused: the Go enum
+	// cannot carry the candidate payload of the Rust variant, so the
+	// arm is entered through the recovery package. The trained
+	// LiveCurrent behaviors live in the linux/darwin live suite (the
+	// open refusal and the selection arms).
 	if _, failure := Validate(path, ValidationModeOfflineCandidate, HeapOnly(1<<20, 1), nil, nil); failure == nil {
-		t.Fatal("offline mode accepted before chunk 4-10")
+		t.Fatal("bare offline mode accepted")
 	}
 }
 

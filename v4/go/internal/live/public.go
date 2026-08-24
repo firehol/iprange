@@ -112,6 +112,14 @@ func VerifyPathAnyLink(path string, expected FileIdentity) error {
 	return verifyPathInner(path, expected, false)
 }
 
+// CoordinationCause maps one live-coordination failure to the Rust
+// recovery coordination class (recovery/source_guard.rs): Cancelled,
+// ForkedHandle, and an already-coordination class keep their class;
+// every other cause surfaces as LiveRecoveryCoordinationUnavailable.
+// The recovery-candidate inspection wraps its sidecar and gate
+// failures with this entry.
+func CoordinationCause(cause error) error { return liveCoordination(cause) }
+
 // IdentityAnyLink captures the retained identity of one open regular
 // file, accepting any link count (Rust live_namespace::
 // identity_any_link over retained_regular_identity without the

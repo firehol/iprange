@@ -12,8 +12,10 @@ import (
 )
 
 // ValidationMode selects the source binding of one validation
-// operation (Rust ValidationMode). OfflineCandidate arrives with the
-// 4-10 recovery chunk; until then the dispatch refuses it honestly.
+// operation (Rust ValidationMode). The Go enum cannot carry the
+// candidate payload of the Rust OfflineCandidate variant; the
+// offline-candidate arm is entered through the recovery package
+// (ValidateOfflineCandidate), which composes the shared sweep.
 type ValidationMode uint8
 
 const (
@@ -45,9 +47,15 @@ func HeapOnly(maxHeapBytes uint64, maxOpenFiles uint32) *ValidationBudget {
 	}
 }
 
-// validate checks the budget invariants (Rust ValidationBudget::
+// Validate checks the budget invariants (Rust ValidationBudget::
 // validate): at least one open file, scratch limits supplied together
 // with the directory, and byte/file scratch limits both or neither.
+// The recovery inspection and worker surfaces call the exported
+// entry.
+func (b *ValidationBudget) Validate() error { return b.validate() }
+
+// validate checks the budget invariants (Rust ValidationBudget::
+// validate).
 func (b *ValidationBudget) validate() error {
 	if b.MaxOpenFiles == 0 {
 		return &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "validation requires at least one open file"}
@@ -285,6 +293,21 @@ func NewProgress() ValidationProgress {
 	return ValidationProgress{}
 }
 
+// Failure builds one operational validation failure with the partial
+// progress and the clean ledger (Rust validation::failure; the
+// recovery offline-candidate arm composes its terminal through this
+// exported entry).
+func Failure(cause error, progress *ValidationProgress) *ValidationFailure {
+	return failureOf(cause, progress)
+}
+
+// Generation builds the validated generation of one selected meta
+// (Rust validation::generation; the recovery offline-candidate arm
+// composes its result through this exported entry).
+func Generation(meta format.Meta) *ValidatedGeneration {
+	return generation(meta)
+}
+
 // FindingsFor reports the finding count of one reason class (Rust
 // ValidationProgress::findings_for).
 func (p *ValidationProgress) FindingsFor(reason ValidationReason) uint64 {
@@ -326,6 +349,20 @@ func (p *ValidationProgress) countPage(object ValidationObject) error {
 	}
 	p.objectCounts[object] = n
 	return nil
+}
+
+// CountFinding counts one finding into a validation progress (Rust
+// ValidationProgress::count_finding; the recovery inspection records
+// classification findings through this exported entry).
+func CountFinding(p *ValidationProgress, reason ValidationReason) error {
+	return p.countFinding(reason)
+}
+
+// MarkUntraversable counts one untraversable subgraph and records the
+// unbounded-unknown flag (Rust ValidationProgress::
+// mark_untraversable; the recovery inspection entry).
+func MarkUntraversable(p *ValidationProgress, unbounded bool) error {
+	return p.markUntraversable(unbounded)
 }
 
 // markUntraversable counts one untraversable subgraph and records the

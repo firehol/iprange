@@ -5,7 +5,9 @@
 // reports the completed factual result or the operational failure
 // with its partial progress. The shapes below alias the internal
 // validation types exactly like the Rust crate re-exports them; the
-// cancellation token folds into the internal checkpoint hook.
+// cancellation token folds into the internal checkpoint hook. The
+// offline-candidate mode is entered through the recovery package
+// (the Go enum cannot carry the Rust candidate payload).
 
 package iprangedb
 
@@ -14,8 +16,9 @@ import (
 )
 
 // ValidationMode selects the source binding of one validation
-// operation (Rust ValidationMode). OfflineCandidate arrives with the
-// 4-10 recovery chunk; until then the dispatch refuses it honestly.
+// operation (Rust ValidationMode). The Go enum cannot carry the
+// candidate payload of the Rust OfflineCandidate variant; that arm is
+// entered through the recovery package (ValidateOfflineCandidate).
 type ValidationMode = validation.ValidationMode
 
 const (
@@ -27,8 +30,10 @@ const (
 	// of one live database path (or the bootstrap registration when
 	// the committed generation cannot be selected).
 	ValidationModeLiveCurrent = validation.ValidationModeLiveCurrent
-	// ValidationModeOfflineCandidate validates one retained
-	// recovery-candidate state of a live database path (4-10 scope).
+	// ValidationModeOfflineCandidate marks the retained
+	// recovery-candidate validation arm; the bare Go enum carries no
+	// candidate token, so the arm is entered through the recovery
+	// package.
 	ValidationModeOfflineCandidate = validation.ValidationModeOfflineCandidate
 )
 

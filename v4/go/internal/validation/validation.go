@@ -5,11 +5,15 @@ package validation
 // platform, opens the locked source, bootstraps the meta pair, maps
 // the committed extent read-only, and sweeps every page through the
 // claims partition, streaming findings into the sink. Validation
-// never modifies the source. The worker routing and the
-// OfflineCandidate mode arrive with chunks 4-11 and 4-10; this file
-// carries the immutable path and the bootstrap-report mapping.
+// never modifies the source. The offline-candidate arm composes the
+// shared sweep through SweepSelected; the recovery package owns the
+// candidate selection and terminal (recovery/inspection.rs parity),
+// because the Go mode enum cannot carry the candidate payload of the
+// Rust ValidationMode::OfflineCandidate variant.
 
 import (
+	"os"
+
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
@@ -40,8 +44,12 @@ func Validate(path string, mode ValidationMode, budget *ValidationBudget, check 
 		}
 		return validateLive(path, budget, check, sink)
 	case ValidationModeOfflineCandidate:
+		// The Go mode enum cannot carry the candidate payload of the
+		// Rust variant; the offline-candidate arm lives in the
+		// recovery package (RecoveryCandidate token + source), which
+		// composes the shared sweep below.
 		progress := NewProgress()
-		return nil, failureOf(&format.Error{Code: format.CodeOSUnsupported, Detail: "offline-candidate validation arrives with chunk 4-10"}, &progress)
+		return nil, failureOf(&format.Error{Code: format.CodeInvalidArgument, Detail: "offline-candidate validation requires the candidate token (recovery.ValidateOfflineCandidate)"}, &progress)
 	default:
 		progress := NewProgress()
 		return nil, failureOf(&format.Error{Code: format.CodeInvalidEnum, Detail: "invalid validation mode"}, &progress)
@@ -70,7 +78,7 @@ func preflight(mode ValidationMode, budget *ValidationBudget, check func() error
 // pair, probe the allocator reserve, sweep the graph and partition,
 // then re-verify the source identity under the still-held lock.
 func validateImmutable(path string, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
-	source, err := openImmutableSource(path, check)
+	source, err := OpenImmutableSource(path, check)
 	if err != nil {
 		progress := NewProgress()
 		return nil, failureOf(err, &progress)
@@ -82,7 +90,7 @@ func validateImmutable(path string, budget *ValidationBudget, check func() error
 // sweepImmutable runs the mapped sweep over an opened immutable
 // source (Rust validate_immutable bootstrap + validation_mapping +
 // reserve_allocator_pages + validate_selected + source.verify).
-func sweepImmutable(source *immutableSource, path string, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
+func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
 	// The geometry is proved before any mapping exists (Rust
 	// require_geometry inside bootstrap_file_faultable): a short or
 	// unaligned main reports the FileGeometryInvalid finding instead
@@ -96,7 +104,7 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 		progress := NewProgress()
 		return bootstrapGeometryReport(source, sink, bootstrap.Problem(&format.Error{Code: format.CodeFormatInvalid, Detail: "file size not page-aligned"}, bootstrap.ProblemFileUnaligned), &progress)
 	}
-	m, err := mapping.MapFile(source.fileHandle(), 2*format.PageSize, false)
+	m, err := mapping.MapFile(source.FileHandle(), 2*format.PageSize, false)
 	if err != nil {
 		progress := NewProgress()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
@@ -126,13 +134,13 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 				if err2 := progress.markUntraversable(true); err2 != nil {
 					return nil, failureOf(sourceCloseFold(source, err2), &progress)
 				}
-				if err2 := source.verify(); err2 != nil {
+				if err2 := source.Verify(); err2 != nil {
 					return nil, failureOf(sourceCloseFold(source, err2), &progress)
 				}
-				if closeErr := source.close(); closeErr != nil {
+				if closeErr := source.Close(); closeErr != nil {
 					return nil, failureOf(closeErr, &progress)
 				}
-				return &ValidationResult{Valid: false, FileIdentity: source.publicIdentity(), Generation: nil, Progress: progress}, nil
+				return &ValidationResult{Valid: false, FileIdentity: source.PublicIdentity(), Generation: nil, Progress: progress}, nil
 			}
 		}
 		progress := NewProgress()
@@ -143,7 +151,7 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 	// live_cleanup::require_main_available); the Windows GC custody
 	// arrives with the M5 surface.
 
-	whole, err := mapping.MapFile(source.fileHandle(), res.Meta.PageCount*format.PageSize, false)
+	whole, err := mapping.MapFile(source.FileHandle(), res.Meta.PageCount*format.PageSize, false)
 	if err != nil {
 		progress := NewProgress()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
@@ -163,17 +171,17 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 		progress := ctx.finish()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
-	verification := source.verify()
+	verification := source.Verify()
 	progress := ctx.finish()
 	if verification != nil {
 		return nil, failureOf(sourceCloseFold(source, verification), &progress)
 	}
-	if closeErr := source.close(); closeErr != nil {
+	if closeErr := source.Close(); closeErr != nil {
 		return nil, failureOf(closeErr, &progress)
 	}
 	return &ValidationResult{
 		Valid:        progress.FindingCount == 0,
-		FileIdentity: source.publicIdentity(),
+		FileIdentity: source.PublicIdentity(),
 		Generation:   generation(res.Meta),
 		Progress:     progress,
 	}, nil
@@ -210,6 +218,37 @@ func validateSelected(ctx *context) error {
 	return ctx.validatePartition()
 }
 
+// SweepSelected runs the committed-extent sweep of one selected
+// generation over an opened source file (Rust validate_offline's
+// validation_mapping + reserve_allocator_pages + validate_selected +
+// finish): the generation is mapped read-only, the context is built,
+// the allocator reserve and the selected graph are swept, and the
+// partial progress is returned with the first failure. The caller
+// owns the file, the recovery identity checks, and the terminal
+// verification; a mapping or context failure returns the empty
+// progress exactly like the Rust failure arms.
+func SweepSelected(file *os.File, meta format.Meta, budget *ValidationBudget, check func() error, sink ValidationSink) (ValidationProgress, error) {
+	if meta.PageCount > ^uint64(0)/format.PageSize {
+		return ValidationProgress{}, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation mapping length"}
+	}
+	whole, err := mapping.MapFile(file, meta.PageCount*format.PageSize, false)
+	if err != nil {
+		return ValidationProgress{}, err
+	}
+	defer func() { _ = whole.Close() }()
+	ctx, err := newContext(whole, meta, budget, check, sink)
+	if err != nil {
+		return ValidationProgress{}, err
+	}
+	if err := ctx.reserveAllocatorPages(); err != nil {
+		return ctx.finish(), err
+	}
+	if err := validateSelected(ctx); err != nil {
+		return ctx.finish(), err
+	}
+	return ctx.finish(), nil
+}
+
 // sourceBootstrapReportable reports whether one classified bootstrap
 // refusal produces the bootstrap-finding report (Rust
 // validate_immutable's Error::Format arm: every Format-class
@@ -222,20 +261,20 @@ func sourceBootstrapReportable(problem *bootstrap.ProblemError) bool {
 // report (the short and unaligned arms of the Rust bootstrap report):
 // findings first, then the untraversable mark, then the source
 // verification, in the Rust bootstrap_report order.
-func bootstrapGeometryReport(source *immutableSource, sink ValidationSink, problem *bootstrap.ProblemError, progress *ValidationProgress) (*ValidationResult, *ValidationFailure) {
+func bootstrapGeometryReport(source *ImmutableSource, sink ValidationSink, problem *bootstrap.ProblemError, progress *ValidationProgress) (*ValidationResult, *ValidationFailure) {
 	if err := writeBootstrapFindings(problem, sink, progress); err != nil {
 		return nil, failureOf(sourceCloseFold(source, err), progress)
 	}
 	if err := progress.markUntraversable(true); err != nil {
 		return nil, failureOf(sourceCloseFold(source, err), progress)
 	}
-	if err := source.verify(); err != nil {
+	if err := source.Verify(); err != nil {
 		return nil, failureOf(sourceCloseFold(source, err), progress)
 	}
-	if closeErr := source.close(); closeErr != nil {
+	if closeErr := source.Close(); closeErr != nil {
 		return nil, failureOf(closeErr, progress)
 	}
-	return &ValidationResult{Valid: false, FileIdentity: source.publicIdentity(), Generation: nil, Progress: *progress}, nil
+	return &ValidationResult{Valid: false, FileIdentity: source.PublicIdentity(), Generation: nil, Progress: *progress}, nil
 }
 
 // writeBootstrapFindings streams the bootstrap-refusal findings (Rust
@@ -290,8 +329,8 @@ func reportBootstrapFinding(reason ValidationReason, object ValidationObject, pa
 // sourceFileSize is the physical extent of the opened source (Rust
 // open_read_only fstat; the bootstrap selection requires the exact
 // committed length for the immutable reader).
-func sourceFileSize(source *immutableSource) uint64 {
-	size, err := source.fileHandle().Stat()
+func sourceFileSize(source *ImmutableSource) uint64 {
+	size, err := source.FileHandle().Stat()
 	if err != nil {
 		return 0
 	}
@@ -301,8 +340,8 @@ func sourceFileSize(source *immutableSource) uint64 {
 // sourceCloseFold closes the source and returns the primary error
 // (the close error surfaces only when the primary is nil, like the
 // Rust combine_errors arms).
-func sourceCloseFold(source *immutableSource, primary error) error {
-	closeErr := source.close()
+func sourceCloseFold(source *ImmutableSource, primary error) error {
+	closeErr := source.Close()
 	if primary != nil {
 		return primary
 	}

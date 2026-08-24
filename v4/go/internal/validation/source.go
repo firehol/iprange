@@ -6,7 +6,7 @@ package validation
 // absence are proved under the lock, and the source is re-verified
 // after the sweep. The live sources live in live.go (the LiveCurrent
 // arm composes the internal/live registration machine);
-// require_main_available is the recorded POSIX no-op.
+// require_available is the recorded POSIX no-op.
 
 import (
 	"os"
@@ -18,8 +18,10 @@ import (
 )
 
 // ImmutableSource is the read-only locked database main of one
-// immutable validation (Rust validation::source ImmutableSource).
-type immutableSource struct {
+// immutable validation (Rust validation::source ImmutableSource). The
+// recovery inspection composes the same authority for its immutable
+// arm instead of reimplementing the open.
+type ImmutableSource struct {
 	file     *os.File
 	path     string
 	sidecar  string
@@ -27,13 +29,13 @@ type immutableSource struct {
 	locked   bool
 }
 
-// openImmutableSource opens the database main with the Rust
+// OpenImmutableSource opens the database main with the Rust
 // ImmutableSource::open ordering: canonical sidecar, pre-open sidecar
 // refusal, read-only no-follow open, identity capture, the shared
 // lifetime lock, and the post-lock path identity + sidecar presence
 // re-check. Every failure combines the unlock error exactly like the
 // Rust combine_errors arms.
-func openImmutableSource(path string, check func() error) (*immutableSource, error) {
+func OpenImmutableSource(path string, check func() error) (*ImmutableSource, error) {
 	clean := filepath.Clean(path)
 	sidecar, err := live.CanonicalSidecarPath(clean)
 	if err != nil {
@@ -55,7 +57,7 @@ func openImmutableSource(path string, check func() error) (*immutableSource, err
 		file.Close()
 		return nil, err
 	}
-	source := &immutableSource{file: file, path: clean, sidecar: sidecar, identity: identity, locked: true}
+	source := &ImmutableSource{file: file, path: clean, sidecar: sidecar, identity: identity, locked: true}
 	// The open verifies twice exactly like the Rust open: the inline
 	// path+sidecar check combined with the unlock error, then the
 	// source verify again before the open returns.
@@ -69,7 +71,7 @@ func openImmutableSource(path string, check func() error) (*immutableSource, err
 		file.Close()
 		return nil, combineErrors(err, unlockErr)
 	}
-	if err := source.verify(); err != nil {
+	if err := source.Verify(); err != nil {
 		unlockErr := source.unlock()
 		file.Close()
 		return nil, combineErrors(err, unlockErr)
@@ -77,31 +79,37 @@ func openImmutableSource(path string, check func() error) (*immutableSource, err
 	return source, nil
 }
 
-// verify re-proves the path identity and the sidecar absence (Rust
+// Verify re-proves the path identity and the sidecar absence (Rust
 // ImmutableSource::verify).
-func (s *immutableSource) verify() error {
+func (s *ImmutableSource) Verify() error {
 	if err := live.VerifyPathAnyLink(s.path, s.identity); err != nil {
 		return err
 	}
 	return live.RequireSidecarAbsent(s.sidecar)
 }
 
-// publicIdentity returns the portable local identity (Rust
-// immutableSource::public_identity over the publication namespace
+// PublicIdentity returns the portable local identity (Rust
+// ImmutableSource::public_identity over the publication namespace
 // encoding).
-func (s *immutableSource) publicIdentity() LocalFileIdentity {
+func (s *ImmutableSource) PublicIdentity() LocalFileIdentity {
 	device, inode := live.IdentityDeviceInode(&s.identity)
 	return publicationIdentity(device, inode)
 }
 
-// file returns the held descriptor for the validation mapping and the
-// bootstrap probe.
-func (s *immutableSource) fileHandle() *os.File { return s.file }
+// FileHandle returns the held descriptor for the validation mapping
+// and the recovery classification (Rust ImmutableSource::file).
+func (s *ImmutableSource) FileHandle() *os.File { return s.file }
 
-// close releases the lifetime lock and the descriptor (Rust drops the
-// immutableSource; the lock release runs before the fd close, and the
+// RequireAvailable verifies the retained source is still available for
+// the database identity (Rust live_cleanup::require_main_available;
+// the recorded POSIX no-op - the Windows GC custody arrives with the
+// M5 surface).
+func (s *ImmutableSource) RequireAvailable(databaseID [16]byte) error { return nil }
+
+// Close releases the lifetime lock and the descriptor (Rust drops the
+// ImmutableSource; the lock release runs before the fd close, and the
 // unlock error folds like the Rust combine_errors arms).
-func (s *immutableSource) close() error {
+func (s *ImmutableSource) Close() error {
 	unlockErr := s.unlock()
 	closeErr := s.file.Close()
 	if unlockErr != nil {
@@ -110,7 +118,7 @@ func (s *immutableSource) close() error {
 	return closeErr
 }
 
-func (s *immutableSource) unlock() error {
+func (s *ImmutableSource) unlock() error {
 	if s.locked {
 		s.locked = false
 		return live.UnlockFile(s.file, live.MainLifetimeOffset)
