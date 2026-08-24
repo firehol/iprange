@@ -1,5 +1,7 @@
 package format
 
+import "crypto/sha256"
+
 // Structured-value dictionary records (binary-format-v4.md section 9A).
 
 // NetworkEnrichmentV1 is the exact 32-byte canonical payload of structure
@@ -147,4 +149,147 @@ func StructureRootLevel(structureIDLimit uint64) (uint32, bool) {
 		level++
 	}
 	return level, true
+}
+
+// StructureHashKey is one reverse-index hash key (Rust HashKey: digest
+// then id; ordered lexicographically by those bytes).
+type StructureHashKey struct {
+	Digest [32]byte
+	ID     uint32
+}
+
+const (
+	// StructureHashKeySize is the fixed hash leaf record size (Rust
+	// HASH_KEY_SIZE = 36).
+	StructureHashKeySize = 36
+	// StructureHashBranchSize is the fixed hash branch entry size
+	// (Rust HASH_BRANCH_SIZE = HASH_KEY_SIZE + 4).
+	StructureHashBranchSize = StructureHashKeySize + 4
+)
+
+// DecodeStructureHashKey parses one fixed 36-byte reverse-index key
+// (Rust codec::decode_hash; the id is nonzero and the digest is the
+// first 32 bytes).
+func DecodeStructureHashKey(b []byte) (StructureHashKey, error) {
+	if len(b) != StructureHashKeySize {
+		return StructureHashKey{}, headerErr("structure hash record size %d", len(b))
+	}
+	key := StructureHashKey{
+		Digest: [32]byte(b[0:32]),
+		ID:     U32(b[32:36]),
+	}
+	if key.ID == 0 {
+		return StructureHashKey{}, headerErr("structure hash id is zero")
+	}
+	return key, nil
+}
+
+// DecodeStructureHashBranchFields parses one fixed 40-byte hash branch
+// entry without the child-page-number check (Rust codec::
+// decode_hash_branch: the key decodes in place and the child is raw).
+func DecodeStructureHashBranchFields(b []byte) (StructureHashKey, uint32, error) {
+	if len(b) != StructureHashBranchSize {
+		return StructureHashKey{}, 0, headerErr("structure hash branch size %d", len(b))
+	}
+	key, err := DecodeStructureHashKey(b[0:StructureHashKeySize])
+	if err != nil {
+		return StructureHashKey{}, 0, err
+	}
+	return key, U32(b[StructureHashKeySize:StructureHashBranchSize]), nil
+}
+
+// StructureRecord is one parsed structure-ID record (Rust codec::Record):
+// the fields of one fixed 80-byte dictionary slot. Payload aliases the
+// slot view and must not outlive the operation.
+type StructureRecord struct {
+	ID       uint32
+	Refcount uint64
+	Digest   [32]byte
+	Payload  []byte
+}
+
+// DecodeStructureRecord parses one structure-ID record slot at the
+// implied position for expectedID (Rust codec::decode_record for the
+// NetworkEnrichmentV1 payload codec): the record length proves the
+// 80-byte span, the reserved word is zero, the stored id is nonzero and
+// equals the slot's implied id, and the payload passes the kind semantic
+// validation. Refcount and digest are deliberately not checked: the
+// validation walk reports them as their own finding classes.
+func DecodeStructureRecord(b []byte, expectedID uint64) (StructureRecord, error) {
+	if len(b) != StructureRecordSize {
+		return StructureRecord{}, headerErr("structure record size %d", len(b))
+	}
+	if U16(b[0:2]) != StructureRecordSize || U16(b[2:4]) != 0 {
+		return StructureRecord{}, headerErr("structure record envelope is malformed")
+	}
+	id := U32(b[4:8])
+	if id == 0 {
+		return StructureRecord{}, headerErr("structure record id is zero")
+	}
+	if uint64(id) != expectedID {
+		return StructureRecord{}, headerErr("structure record id %d at slot implying %d", id, expectedID)
+	}
+	payload := b[48:StructureRecordSize]
+	if err := ValidateNetworkEnrichmentV1Payload(payload); err != nil {
+		return StructureRecord{}, err
+	}
+	return StructureRecord{
+		ID:       id,
+		Refcount: U64(b[8:16]),
+		Digest:   [32]byte(b[16:48]),
+		Payload:  payload,
+	}, nil
+}
+
+// ValidateNetworkEnrichmentV1Payload checks one exact 32-byte payload
+// with the Rust NetworkEnrichmentV1Codec semantic rules
+// (network_enrichment_v1.rs validate): only the location flag bit is
+// allowed, an absent location must carry zero coordinates, and a present
+// location must stay within the microdegree limits.
+func ValidateNetworkEnrichmentV1Payload(payload []byte) error {
+	if len(payload) != NetworkEnrichmentV1PayloadSize {
+		return headerErr("network enrichment payload size %d", len(payload))
+	}
+	flags := U32(payload[28:32])
+	if flags & ^NetworkEnrichmentV1HasLocation != 0 {
+		return headerErr("network enrichment payload flags are invalid")
+	}
+	latitude := int32(U32(payload[16:20]))
+	longitude := int32(U32(payload[20:24]))
+	if flags == 0 {
+		if latitude != 0 || longitude != 0 {
+			return headerErr("absent network location has nonzero coordinates")
+		}
+	} else if uint32Abs(latitude) > 90_000_000 || uint32Abs(longitude) > 180_000_000 {
+		return headerErr("network enrichment coordinates are outside their limits")
+	}
+	return nil
+}
+
+// uint32Abs is the magnitude of one signed value without the overflow
+// of negating MinInt32 (Rust i32::unsigned_abs).
+func uint32Abs(v int32) uint32 {
+	if v >= 0 {
+		return uint32(v)
+	}
+	return uint32(-(v + 1)) + 1
+}
+
+// StructurePayloadDigest is the SHA-256 structure identity (Rust
+// payload_digest): the "IPR4STRUCT" domain prefix, the structure kind
+// byte, the little-endian payload length, and the payload bytes.
+func StructurePayloadDigest(kind uint8, payload []byte) ([32]byte, error) {
+	if len(payload) > 0xFFFF {
+		return [32]byte{}, headerErr("structure payload is too large")
+	}
+	var digest [32]byte
+	hasher := sha256.New()
+	hasher.Write([]byte("IPR4STRUCT"))
+	hasher.Write([]byte{kind})
+	var lengthBytes [2]byte
+	PutU16(lengthBytes[:], uint16(len(payload)))
+	hasher.Write(lengthBytes[:])
+	hasher.Write(payload)
+	hasher.Sum(digest[:0])
+	return digest, nil
 }

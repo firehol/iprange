@@ -226,6 +226,44 @@ func (c *context) membershipSlot(index int) (Slot, bool, error) {
 	return slot, ok, nil
 }
 
+// defineStructure records one dictionary record's stored facts (Rust
+// Context::define_structure; the membership id reuses the shared
+// word-count field of the reverse table exactly like the Rust Table).
+func (c *context) defineStructure(id uint32, refcount uint64, membershipID uint32, digest [32]byte) (InsertResult, error) {
+	if c.structures == nil {
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "non-structured validation has no structure table"}
+	}
+	return c.structures.define(id, refcount, membershipID, digest, c.check)
+}
+
+// markStructureReverse records one reverse-index observation (Rust
+// Context::mark_structure_reverse).
+func (c *context) markStructureReverse(id uint32, digest [32]byte) (bool, error) {
+	if c.structures == nil {
+		return false, &format.Error{Code: format.CodeFormatInvalid, Detail: "non-structured validation has no structure table"}
+	}
+	return c.structures.markReverseDigest(id, digest, c.check)
+}
+
+// structureSlots returns the structure table capacity (Rust
+// Context::structure_slots).
+func (c *context) structureSlots() (int, error) {
+	if c.structures == nil {
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "non-structured validation has no structure table"}
+	}
+	return c.structures.len(), nil
+}
+
+// structureSlot returns one occupied structure table entry (Rust
+// Context::structure_slot).
+func (c *context) structureSlot(index int) (Slot, bool, error) {
+	if c.structures == nil {
+		return Slot{}, false, &format.Error{Code: format.CodeFormatInvalid, Detail: "non-structured validation has no structure table"}
+	}
+	slot, ok := c.structures.slot(index)
+	return slot, ok, nil
+}
+
 // markUntraversable counts one untraversable subgraph (Rust
 // Context::mark_untraversable).
 func (c *context) markUntraversable(unbounded bool) error {

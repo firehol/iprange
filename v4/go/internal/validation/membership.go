@@ -33,7 +33,9 @@ func validateMembership(ctx *context) error {
 		return err
 	}
 	if idResult.records != ctx.meta.MembershipEntryCount {
-		return membershipCountMismatch(ctx, ObjectMembershipDictionary)
+		if err := membershipCountMismatch(ctx, ObjectMembershipDictionary); err != nil {
+			return err
+		}
 	}
 	var previous format.MembershipHashKey
 	hasPrevious := false
@@ -45,7 +47,9 @@ func validateMembership(ctx *context) error {
 		return err
 	}
 	if hashResult.records != ctx.meta.MembershipEntryCount {
-		return membershipCountMismatch(ctx, ObjectMembershipReverseIndex)
+		if err := membershipCountMismatch(ctx, ObjectMembershipReverseIndex); err != nil {
+			return err
+		}
 	}
 	used, err := validateBitmap(ctx, ctx.meta.MembershipUsedRoot, ctx.meta.MembershipIDLimit, bitmap.KindMembership)
 	if err != nil {

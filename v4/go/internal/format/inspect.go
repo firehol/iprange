@@ -59,18 +59,7 @@ func InspectTreeHeader(page []byte, selectedTxn uint64, branchType, leafType byt
 	if !PageCommonValid(page) {
 		return header, TreeHeaderProblemHeader
 	}
-	header = PageHeader{
-		PageType:   PageType(page[HeaderType]),
-		PageFlags:  page[HeaderFlags],
-		HeaderSize: U16(page[HeaderSizePos : HeaderSizePos+2]),
-		BornTxn:    U64(page[HeaderBorn : HeaderBorn+8]),
-		ItemCount:  U16(page[HeaderCount : HeaderCount+2]),
-		Level:      U16(page[HeaderLevel : HeaderLevel+2]),
-		Lower:      U16(page[HeaderLower : HeaderLower+2]),
-		Upper:      U16(page[HeaderUpper : HeaderUpper+2]),
-		Aux:        U32(page[HeaderAux : HeaderAux+4]),
-		PageCRC32C: U32(page[HeaderCRC : HeaderCRC+4]),
-	}
+	header = decodeRawPageHeader(page)
 	if !PageBornValid(page, selectedTxn) {
 		return header, TreeHeaderProblemBorn
 	}
@@ -85,6 +74,68 @@ func InspectTreeHeader(page []byte, selectedTxn uint64, branchType, leafType byt
 		return header, TreeHeaderProblemLevel
 	}
 	if !SlottedShapeValid(&header) {
+		return header, TreeHeaderProblemShape
+	}
+	return header, TreeHeaderProblemNone
+}
+
+// decodeRawPageHeader reads one raw page header after the common-valid
+// proof (shared by the tree and structure-table inspections).
+func decodeRawPageHeader(page []byte) PageHeader {
+	return PageHeader{
+		PageType:   PageType(page[HeaderType]),
+		PageFlags:  page[HeaderFlags],
+		HeaderSize: U16(page[HeaderSizePos : HeaderSizePos+2]),
+		BornTxn:    U64(page[HeaderBorn : HeaderBorn+8]),
+		ItemCount:  U16(page[HeaderCount : HeaderCount+2]),
+		Level:      U16(page[HeaderLevel : HeaderLevel+2]),
+		Lower:      U16(page[HeaderLower : HeaderLower+2]),
+		Upper:      U16(page[HeaderUpper : HeaderUpper+2]),
+		Aux:        U32(page[HeaderAux : HeaderAux+4]),
+		PageCRC32C: U32(page[HeaderCRC : HeaderCRC+4]),
+	}
+}
+
+// StructureTableMaxLevel is the maximum height of the dense structure-ID
+// table (Rust structured_value/table.rs MAX_LEVEL): one record level plus
+// up to three directory levels cover the complete u32 ID space.
+const StructureTableMaxLevel = 3
+
+// InspectStructureTableHeader mirrors structured_value/table.rs
+// inspect_header: the dense-table page classification with the exact
+// problem order (common, born, level, kind, shape). The dense table has
+// fixed record/directory arrays instead of slotted cells, so its shape
+// rule is the fixed lower bound plus a full-page upper bound, and the
+// item count must fit the fixed array of the level.
+func InspectStructureTableHeader(page []byte, selectedTxn uint64, aux uint32, expectedLevel *uint16) (PageHeader, TreeHeaderProblem) {
+	var header PageHeader
+	if !PageCommonValid(page) {
+		return header, TreeHeaderProblemHeader
+	}
+	header = decodeRawPageHeader(page)
+	if !PageBornValid(page, selectedTxn) {
+		return header, TreeHeaderProblemBorn
+	}
+	if header.Level > StructureTableMaxLevel || (expectedLevel != nil && *expectedLevel != header.Level) {
+		return header, TreeHeaderProblemLevel
+	}
+	expectedType := byte(PageTypeStructureIDRecord)
+	if header.Level != 0 {
+		expectedType = byte(PageTypeStructureIDDirectory)
+	}
+	if !PageKindValid(page, expectedType, aux) {
+		return header, TreeHeaderProblemType
+	}
+	lower := uint16(StructureLeafEnd)
+	maximum := StructureRecordSlots
+	if header.Level != 0 {
+		lower = uint16(StructureBranchEnd)
+		maximum = StructureDirectoryChildCount
+	}
+	if header.Lower != lower || header.Upper != PageSize {
+		return header, TreeHeaderProblemShape
+	}
+	if header.ItemCount == 0 || int(header.ItemCount) > maximum {
 		return header, TreeHeaderProblemShape
 	}
 	return header, TreeHeaderProblemNone
@@ -130,7 +181,7 @@ func InspectLayout(page []byte, header *PageHeader, layout CellLayout) *LayoutIn
 	if !ok || minimum != int(header.Upper) {
 		return nil
 	}
-	reservedNonzero := !allZero(page[header.Lower:header.Upper])
+	reservedNonzero := !AllZero(page[header.Lower:header.Upper])
 	if !reservedNonzero {
 		reservedNonzero = unmarkedNonzero(page, &used, int(header.Upper))
 	}
@@ -267,7 +318,7 @@ func unmarkedNonzero(page []byte, used *[PageSize / 64]uint64, start int) bool {
 		for unmarked != 0 {
 			bit := bits.TrailingZeros64(unmarked)
 			length := bits.TrailingZeros64(^(unmarked >> bit))
-			if !allZero(page[base+bit : base+bit+length]) {
+			if !AllZero(page[base+bit : base+bit+length]) {
 				return true
 			}
 			mask := ^uint64(0)
@@ -280,9 +331,9 @@ func unmarkedNonzero(page []byte, used *[PageSize / 64]uint64, start int) bool {
 	return false
 }
 
-// allZero reports whether every byte of page is zero (Rust ByteSource
+// AllZero reports whether every byte of b is zero (Rust ByteSource
 // all_zero; the layout and metadata reserved-region scans).
-func allZero(page []byte) bool {
+func AllZero(page []byte) bool {
 	for _, b := range page {
 		if b != 0 {
 			return false

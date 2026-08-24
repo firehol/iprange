@@ -76,6 +76,15 @@ func (r *ImmutableReader) LookupNetworkEnrichmentV16(addrHi, addrLo uint64) (Net
 	return view, true, nil
 }
 
+// LookupStructureID resolves one structure ID through the dictionary
+// (Rust structured_value::find: a clean miss for an absent id, the
+// decoded payload view otherwise). Explicit validation composes this
+// path for the reverse-index equality compares; a stored range value
+// naming an absent structure ID is corruption instead (Rust by_id).
+func (r *ImmutableReader) LookupStructureID(id uint32) (NetworkEnrichmentV1View, bool, error) {
+	return r.lookupStructureID(id)
+}
+
 // lookupStructureID resolves one structure ID through the sparse radix
 // table, mirroring structured_value/table.rs: an id of zero or at/above the
 // limit, an empty root, an empty directory child, or a zero slot cell is a

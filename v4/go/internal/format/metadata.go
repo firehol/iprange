@@ -96,5 +96,5 @@ func metadataLinkValid(pageNumber, next uint32, pageCount uint64, final bool) bo
 // MetadataChunkTailZero reports whether the bytes after the chunk payload
 // are all zero (metadata.rs reserved_zero).
 func MetadataChunkTailZero(page []byte, length int) bool {
-	return allZero(page[MetadataDataOffset+length:])
+	return AllZero(page[MetadataDataOffset+length:])
 }

@@ -72,6 +72,8 @@ func descendToLeaf(t *testing.T, raw []byte, pages int, pageNumber int, branchLe
 			_, child, err = format.DecodeMembershipIDBranchFields(cell)
 		case format.PageTypeMembershipHashBranch:
 			_, child, err = format.DecodeMembershipHashBranchFields(cell)
+		case format.PageTypeStructureHashBranch:
+			_, child, err = format.DecodeStructureHashBranchFields(cell)
 		case format.PageTypeRangeBranch:
 			_, child, err = format.DecodeRangeEntryFieldsV4(cell)
 		default:
@@ -138,19 +140,13 @@ func TestValidateMembershipCorpusClean(t *testing.T) {
 	// The full sweep over the membership fixtures and the direct
 	// control: the dictionary walks, the used bitmaps, the feed
 	// windows, the slots, and the free bitmap arm stay clean. The
-	// structured fixture reaches a clean sweep with the slice-E
-	// structure walk (it counts the membership owners and claims the
-	// structure pages); only its dictionary walk is exercised here.
+	// structured fixtures reach a clean sweep once the slice-E
+	// structure walk counts the membership owners and claims the
+	// structure pages (tested in structure_test.go).
 	for _, name := range []string{"membership-ipv4.iprdb", "membership-ipv6.iprdb", "direct-ipv4.iprdb"} {
 		if findings := sweepFixture(t, name); len(findings) != 0 {
 			t.Fatalf("%s findings: %+v", name, findings)
 		}
-	}
-	ctx := fixturePathContext(t, fixturePath(t, "structured-ipv4.iprdb"), 2<<20)
-	if findings := collectContextFindings(t, ctx, validateMembership); len(findings) != 2 {
-		t.Fatalf("structured dictionary walk findings %+v (want the two pending-refcount classes)", findings)
-	} else if findings[0].Reason != ReasonMembershipRefcountInvalid || findings[1].Reason != ReasonMembershipRefcountInvalid {
-		t.Fatalf("structured dictionary walk findings %+v", findings)
 	}
 }
 
