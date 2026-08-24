@@ -71,19 +71,41 @@ if [ $TEST_RC -ne 0 ]; then
 	exit 1
 fi
 
+# leg 4: the recovery construction session (Rust recovery api_tests
+# proof over the incomplete direct source): recover_immutable opens
+# the source read-only, builds the fresh fail-if-exists destination
+# through the mapped writer, and publishes it. The leg proves both the
+# source and the destination (private output and published main) are
+# never read or written through file I/O.
+TRACE4="$(mktemp /tmp/iprange-mmap-trace4.XXXXXX)"
+TESTLOG4="$(mktemp /tmp/iprange-mmap-trace-test4.XXXXXX)"
+trap 'rm -f "$TRACE" "$TESTLOG" "$TRACE2" "$TESTLOG2" "$TRACE3" "$TESTLOG3" "$TRACE4" "$TESTLOG4"' EXIT
+echo "check-mmap-trace: tracing TestRecoverImmutableConstructsThePublishedRejectedRange (nice)"
+nice -n 10 strace -f -y -e trace=openat,read,pread64,readv,write,writev,pwrite64,lseek,mmap,munmap,close,fcntl \
+	-o "$TRACE4" \
+	"$(go env GOROOT)/bin/go" test -run '^TestRecoverImmutableConstructsThePublishedRejectedRange$' -count=1 ./internal/recovery/ >"$TESTLOG4" 2>&1
+TEST_RC=$?
+if [ $TEST_RC -ne 0 ]; then
+	echo "check-mmap-trace: recovery construction test failed (rc=$TEST_RC); see $TESTLOG4" >&2
+	exit 1
+fi
+
 # Match only the fd path inside the strace -y header (read(3<path>, ...));
 # the payload bytes after the header may legally contain ".iprdb" text.
 VIOLS="$TRACE.viol"
 VIOLS2="$TRACE2.viol"
 VIOLS3="$TRACE3.viol"
-grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.iprdb>' "$TRACE" > "$VIOLS" || true
-grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.iprdb>' "$TRACE2" > "$VIOLS2" || true
-grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.iprdb>' "$TRACE3" > "$VIOLS3" || true
-if [ -s "$VIOLS" ] || [ -s "$VIOLS2" ] || [ -s "$VIOLS3" ]; then
+VIOLS4="$TRACE4.viol"
+grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.(iprdb|v4)>' "$TRACE" > "$VIOLS" || true
+grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.(iprdb|v4)>' "$TRACE2" > "$VIOLS2" || true
+grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.(iprdb|v4)>' "$TRACE3" > "$VIOLS3" || true
+grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.(iprdb|v4)>' "$TRACE4" > "$VIOLS4" || true
+if [ -s "$VIOLS" ] || [ -s "$VIOLS2" ] || [ -s "$VIOLS3" ] || [ -s "$VIOLS4" ]; then
 	echo "check-mmap-trace: FAIL - file I/O on a database descriptor:"
 	head -5 "$VIOLS"
 	head -5 "$VIOLS2"
 	head -5 "$VIOLS3"
+	head -5 "$VIOLS4"
 	exit 1
 fi
 
@@ -93,8 +115,11 @@ OPEN_CNT2=$(grep -c 'openat' "$TRACE2" || true)
 MMAP_CNT2=$(grep -c 'mmap(' "$TRACE2" || true)
 OPEN_CNT3=$(grep -c 'openat' "$TRACE3" || true)
 MMAP_CNT3=$(grep -c 'mmap(' "$TRACE3" || true)
-echo "check-mmap-trace: PASS - no read/pread64/readv/write/writev/pwrite64/lseek on any .iprdb descriptor"
+OPEN_CNT4=$(grep -c 'openat' "$TRACE4" || true)
+MMAP_CNT4=$(grep -c 'mmap(' "$TRACE4" || true)
+echo "check-mmap-trace: PASS - no read/pread64/readv/write/writev/pwrite64/lseek on any v4 artifact descriptor"
 echo "check-mmap-trace: immutable: openat=$OPEN_CNT mmap=$MMAP_CNT (fixtures mapped, never streamed)"
 echo "check-mmap-trace: live validation: openat=$OPEN_CNT2 mmap=$MMAP_CNT2 (pair mapped, never streamed)"
 echo "check-mmap-trace: offline recovery: openat=$OPEN_CNT3 mmap=$MMAP_CNT3 (writable descriptor mapped, never streamed)"
+echo "check-mmap-trace: recovery construction: openat=$OPEN_CNT4 mmap=$MMAP_CNT4 (source and output mapped, never streamed)"
 exit 0

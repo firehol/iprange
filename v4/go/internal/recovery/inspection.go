@@ -80,8 +80,8 @@ func newRecoveryCandidateInspection(identity publication.LocalFileIdentity, prog
 // InspectRecoveryCandidates classifies the retained recovery
 // candidates of one database path under the selected mode (Rust
 // inspect_recovery_candidates): the platform, budget, and cancellation
-// preflights run before any path access, exactly like the Rust entry.
-// The public facade wiring arrives with the recovery api slice.
+// preflights run before any path access, exactly like the Rust entry;
+// the public facade composes this entry.
 func InspectRecoveryCandidates(path string, mode RecoveryInspectionMode, budget *validation.ValidationBudget, check func() error) (*RecoveryCandidateInspection, error) {
 	if mode == RecoveryInspectionLive {
 		if err := live.CheckSupported(); err != nil {

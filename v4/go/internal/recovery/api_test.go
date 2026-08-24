@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/validation"
@@ -56,22 +57,36 @@ func apiTestSource(t *testing.T, path string) {
 	if err := builder.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	// The dual meta rewrite goes through a writable mapping (the
+	// mmap-only fixture discipline): the recovery trace leg proves the
+	// machine never streams the source or the output through file I/O,
+	// so the fixture must not either.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer file.Close()
-	var page [format.PageSize]byte
-	if err := meta.EncodeMapped(page[:]); err != nil {
-		t.Fatalf("EncodeMapped: %v", err)
+	mapping, err := mapping.MapFile(file, 2*format.PageSize, true)
+	if err != nil {
+		t.Fatalf("MapFile: %v", err)
 	}
-	for _, offset := range []int64{0, format.PageSize} {
-		if _, err := file.WriteAt(page[:], offset); err != nil {
-			t.Fatalf("write meta at %d: %v", offset, err)
+	for _, pageNumber := range []uint32{0, 1} {
+		page, err := mapping.Page(pageNumber)
+		if err != nil {
+			t.Fatalf("Page(%d): %v", pageNumber, err)
+		}
+		if err := meta.EncodeMapped(page); err != nil {
+			t.Fatalf("EncodeMapped: %v", err)
 		}
 	}
-	if err := file.Sync(); err != nil {
-		t.Fatalf("sync: %v", err)
+	if err := mapping.FlushRange(0, 2*format.PageSize); err != nil {
+		t.Fatalf("FlushRange: %v", err)
+	}
+	if err := mapping.SyncFile(); err != nil {
+		t.Fatalf("SyncFile: %v", err)
+	}
+	if err := mapping.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

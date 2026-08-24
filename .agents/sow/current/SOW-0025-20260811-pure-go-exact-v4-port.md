@@ -11948,7 +11948,11 @@ plain + v4work; plain and v4work full trees (19 test-bearing packages
 ok each); race + checkptr=2 on recovery/writer/publication/live/
 bootstrap and the root, both tag sets; seven cross-builds plain +
 v4work (linux/386, linux/arm, linux/arm64, windows/amd64,
-darwin/arm64, freebsd/amd64, linux/amd64).
+darwin/arm64, freebsd/amd64, linux/amd64); the check-mmap-trace.sh
+recovery-construction leg (leg 4) proves the source and the output are
+never streamed through file I/O (the insecure-source fixture writes
+its dual meta through a writable mapping, and the pattern now also
+matches .v4 artifact names).
 
 Next: milestone 2 chunk 4-10 gate - the five-aspect adversarial review
 (Goddall Rust parity, Gauss Go idioms, Chandrasekhar performance,

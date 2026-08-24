@@ -4,9 +4,10 @@ package recovery
 // source-generation protection of one recovery operation. The
 // immutable and quiescent (offline) arms open the database main under
 // the lifetime lock, bind the exact recovery candidate or the proven
-// current generation, and release on the terminal; the live arm (the
-// registered reader-table machine) arrives with the recover_live api
-// slice. A failed release retains the source inside the
+// current generation, and release on the terminal; the live arm
+// (source_guard candidate open over the registered reader-table
+// machine) binds the newest recovery candidate through the sidecar. A
+// failed release retains the source inside the
 // RecoverySourceCleanupGuard for an exact retry.
 
 import (
@@ -86,8 +87,7 @@ type sourceOpenFailure struct {
 }
 
 // openRecoverySource opens one recovery source for an exact candidate
-// (Rust Source::open; the live arm arrives with the recover_live api
-// slice and refuses honestly before that).
+// (Rust Source::open).
 func openRecoverySource(path string, candidate *RecoveryCandidate, mode sourceMode, check func() error) (*recoverySource, *sourceOpenFailure) {
 	if err := live.Checkpoint(check); err != nil {
 		return nil, openProblem(err)
@@ -127,8 +127,8 @@ func openRecoverySource(path string, candidate *RecoveryCandidate, mode sourceMo
 }
 
 // openRecoverySourceCurrent opens one recovery source for the proven
-// current generation (Rust Source::open_current; the live arm arrives
-// with the recover_live api slice).
+// current generation (Rust Source::open_current; the live current arm
+// remains refused until its consumer appears).
 func openRecoverySourceCurrent(path string, mode currentSourceMode, check func() error) (*recoverySource, *sourceOpenFailure) {
 	if err := live.Checkpoint(check); err != nil {
 		return nil, openProblem(err)
@@ -141,7 +141,7 @@ func openRecoverySourceCurrent(path string, mode currentSourceMode, check func()
 		}
 		return &recoverySource{basic: basic}, nil
 	case currentSourceModeLive:
-		return nil, openProblem(&format.Error{Code: format.CodePublicationUnsupported, Detail: "live recovery source arrives with the recover_live machine"})
+		return nil, openProblem(&format.Error{Code: format.CodePublicationUnsupported, Detail: "live current recovery source is not composed yet"})
 	default:
 		return nil, openProblem(&format.Error{Code: format.CodeInvalidEnum, Detail: "invalid recovery source mode"})
 	}
