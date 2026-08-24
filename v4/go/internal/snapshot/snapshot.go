@@ -160,6 +160,19 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	if failure != nil {
 		return failSource(failure.Cause, failure.CleanupState())
 	}
+	// api.rs compares the source identity with the private output
+	// identity immediately after workflow::create and refuses before
+	// any construction starts (the attempt file is still empty when
+	// the refusal fires; there is no builder yet, so the discard is
+	// direct).
+	srcDevice, srcInode, err := src.FileIdentity()
+	if err != nil {
+		return failSource(err, attempt.Discard())
+	}
+	attemptDevice, attemptInode := attempt.FileIdentity()
+	if encodeIdentity(srcDevice, srcInode) == encodeIdentity(attemptDevice, attemptInode) {
+		return failSource(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and snapshot output identities match"}, attempt.Discard())
+	}
 	// The output identity is preserved from the source meta verbatim
 	// (GenerationReader::output_spec): database id, transaction id, and
 	// commit nonce survive the snapshot, unlike the fresh identity of
@@ -226,16 +239,6 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 			cleanup = publication.CleanupStateResiduePossible
 		}
 		return publication.PublicationResult{}, &Failure{Cause: cause, Cleanup: cleanup}
-	}
-	// api.rs compares the source identity with the private output
-	// identity and refuses before any copy starts.
-	srcDevice, srcInode, err := src.FileIdentity()
-	if err != nil {
-		return discarded(err)
-	}
-	attemptDevice, attemptInode := attempt.FileIdentity()
-	if encodeIdentity(srcDevice, srcInode) == encodeIdentity(attemptDevice, attemptInode) {
-		return discarded(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and snapshot output identities match"})
 	}
 	if err := copyInto(src.Core(), builder, available, check); err != nil {
 		return discarded(err)
@@ -404,6 +407,9 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 			return nil
 		}
 		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	if dst.Mode()&os.ModeSymlink != 0 {
+		return &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
 	}
 	if !dst.Mode().IsRegular() {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}

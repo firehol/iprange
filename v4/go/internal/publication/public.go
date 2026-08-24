@@ -30,11 +30,16 @@ const (
 // The returned result classifies the outcome exactly like the
 // machine results; the supplied result is never mutated.
 func ResolvePublication(path string, supplied *PublicationResult, mode PublicationResolutionMode, check func() error) (PublicationResult, error) {
-	internalMode := resolveModeComplete
-	if mode == PublicationResolutionRemove {
-		internalMode = resolveModeRemove
+	// Rust PublicationResolutionMode is a closed enum: an invalid mode
+	// is refused instead of silently completing.
+	switch mode {
+	case PublicationResolutionComplete:
+		return resolve(path, supplied, resolveModeComplete, check)
+	case PublicationResolutionRemove:
+		return resolve(path, supplied, resolveModeRemove, check)
+	default:
+		return PublicationResult{}, problem(format.CodeInvalidArgument, "publication resolution mode is invalid")
 	}
-	return resolve(path, supplied, internalMode, check)
 }
 
 // PublicationTuple is the readable meta identity of one v4 main
@@ -347,19 +352,6 @@ func mapResidueCoordination(value residueCoordination) PublicationResidueCoordin
 	}
 }
 
-func mapPublicationResidueCoordination(value PublicationResidueCoordination) residueCoordination {
-	switch value {
-	case PublicationResidueCoordinationAbsent:
-		return residueCoordinationAbsent
-	case PublicationResidueCoordinationPublicationReservation:
-		return residueCoordinationPublicationReservation
-	case PublicationResidueCoordinationLiveSidecar:
-		return residueCoordinationLiveSidecar
-	default:
-		return residueCoordinationUnselectable
-	}
-}
-
 func mapResidueMainContent(value residueMainContent) PublicationResidueMainContent {
 	if value == residueMainContentV4 {
 		return PublicationResidueMainContentV4
@@ -377,6 +369,29 @@ func mapPublicationTuple(value residueTuple) *PublicationTuple {
 
 // residueTupleToPublication converts one readable tuple value (the
 // output-evidence conversion).
+// mapAbandonedReservationPolicy converts the internal policy
+// discriminant (explicit switch keeps the independent enums in lock
+// step).
+func mapAbandonedReservationPolicy(value abandonedReservationPolicy) AbandonedReservationPolicy {
+	switch value {
+	case abandonedReservationPolicyFailIfExists:
+		return AbandonedReservationPolicyFailIfExists
+	case abandonedReservationPolicyReplaceExisting:
+		return AbandonedReservationPolicyReplaceExisting
+	default:
+		return AbandonedReservationPolicyReplaceExistingNoRollback
+	}
+}
+
+// mapAbandonedReservationPhase converts the internal phase
+// discriminant.
+func mapAbandonedReservationPhase(value abandonedReservationPhase) AbandonedReservationPhase {
+	if value == abandonedReservationPhasePrepared {
+		return AbandonedReservationPhasePrepared
+	}
+	return AbandonedReservationPhaseMainMayHaveBeenAttempted
+}
+
 func residueTupleToPublication(value residueTuple) PublicationTuple {
 	return PublicationTuple{
 		DatabaseID:    value.databaseID,
@@ -455,8 +470,8 @@ func mapAbandonedReservationEntry(entry *abandonedReservationEntry) *AbandonedRe
 	}
 	if entry.evidence != nil {
 		out.Evidence = &AbandonedReservationEvidence{
-			Policy: AbandonedReservationPolicy(entry.evidence.policy),
-			Phase:  AbandonedReservationPhase(entry.evidence.phase),
+			Policy: mapAbandonedReservationPolicy(entry.evidence.policy),
+			Phase:  mapAbandonedReservationPhase(entry.evidence.phase),
 			Output: PublicationOutputEvidence{
 				Identity: entry.evidence.output.identity,
 				Tuple:    residueTupleToPublication(entry.evidence.output.tuple),

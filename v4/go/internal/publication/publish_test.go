@@ -109,6 +109,15 @@ func TestPublishFailIfExistsSuccessReturnsExactPublishedFactsAndNoResidue(t *tes
 	if leftovers := scanPrefixed(t, dir, outputPrefix); len(leftovers) != 0 {
 		t.Fatalf("private outputs left: %v", leftovers)
 	}
+	// The attempt is consumed on the terminal (the residue-handle
+	// rule): the file exposure goes nil and a second Finish refuses
+	// with the invalid-argument class.
+	if attempt.File() != nil {
+		t.Fatal("attempt file still exposed after Finish")
+	}
+	if _, failure := attempt.Finish(finished, noopCheck); codeOf(failure.Cause) != format.CodeInvalidArgument {
+		t.Fatalf("consumed attempt problem = %v, want invalid argument", failure.Cause)
+	}
 }
 
 // TestPublishFailIfExistsRefusesAnExistingMainAndCoordination ports

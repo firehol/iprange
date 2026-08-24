@@ -10,6 +10,7 @@
 package iprangedb
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,7 +134,7 @@ func TestPublicationSurfaceResolutionRefusalAndCancellation(t *testing.T) {
 // scan decodes it back).
 func publicationTempName(attempt [16]byte) string {
 	const hexDigits = "0123456789abcdef"
-	name := make([]byte, 0, 33)
+	name := make([]byte, 0, 53)
 	name = append(name, ".iprange-publish-"...)
 	for _, b := range attempt {
 		name = append(name, hexDigits[b>>4], hexDigits[b&0xf])
@@ -143,31 +144,9 @@ func publicationTempName(attempt [16]byte) string {
 
 // codeOfPublic reports the public error code of one boundary error.
 func codeOfPublic(err error) ErrorCode {
-	if err == nil {
-		return 0
-	}
-	if public, ok := err.(*Error); ok {
-		return public.Code
-	}
 	var typed *Error
-	if asError(err, &typed) {
+	if errors.As(err, &typed) {
 		return typed.Code
 	}
 	return 0
-}
-
-// asError unwraps one public Error through the cause chain.
-func asError(err error, target **Error) bool {
-	for err != nil {
-		if typed, ok := err.(*Error); ok {
-			*target = typed
-			return true
-		}
-		unwrapped, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = unwrapped.Unwrap()
-	}
-	return false
 }

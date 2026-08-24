@@ -18,5 +18,5 @@ func StatIdentity(path string) (device uint64, inode uint64, err error) {
 	if err := unix.Stat(path, &st); err != nil {
 		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
-	return st.Dev, st.Ino, nil
+	return uint64(st.Dev), uint64(st.Ino), nil
 }

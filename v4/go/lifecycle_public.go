@@ -46,8 +46,9 @@ const (
 
 // HousekeepingArtifact is one ledger entry of the Windows retirement
 // machinery (Rust publication::HousekeepingArtifact). The POSIX live
-// lifecycle never produces entries; the full field surface lands with
-// the publication resolver slice.
+// lifecycle never produces entries, so the POSIX ledger shape stays
+// empty; the full field surface lives in the publication machine
+// (internal/publication, exported through the publication surfaces).
 type HousekeepingArtifact struct{}
 
 // CreationState is the factual terminal state of one creation attempt

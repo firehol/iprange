@@ -36,15 +36,26 @@ type PublishAttempt struct {
 }
 
 // File exposes the attempt file the caller builds the finished
-// content into.
-func (a *PublishAttempt) File() *os.File { return a.file }
+// content into. After a terminal (Close, Discard, or Finish) the
+// exposure is nil: the attempt is consumed exactly like the residue
+// handle of the same boundary.
+func (a *PublishAttempt) File() *os.File {
+	if a == nil {
+		return nil
+	}
+	return a.file
+}
 
 // Close releases the attempt file and the bound destination
 // directory without namespace work (Rust drop of OutputAttempt and
-// File before any prepare step).
+// File before any prepare step). The attempt is consumed.
 func (a *PublishAttempt) Close() {
+	if a == nil || a.file == nil {
+		return
+	}
 	_ = a.file.Close()
 	closeDestinationDirectory(a.attempt.destinationOf())
+	a.file = nil
 }
 
 // CreatePublishAttempt creates and secures one private output (Rust
@@ -100,9 +111,13 @@ func (a *PublishAttempt) FileIdentity() (device uint64, inode uint64) {
 // Close may follow. The returned state classifies the removal exactly
 // like the discard ledger of the Rust Failure::Early arms.
 func (a *PublishAttempt) Discard() CleanupState {
+	if a == nil || a.file == nil {
+		return CleanupStateClean
+	}
 	discarded := discardAttempt(&a.attempt, a.file)
 	_ = a.file.Close()
 	closeDestinationDirectory(a.attempt.destinationOf())
+	a.file = nil
 	if discarded.artifact != nil {
 		return CleanupStateResiduePossible
 	}
@@ -115,12 +130,17 @@ func (a *PublishAttempt) Discard() CleanupState {
 // machine failures pass through; the attempt is consumed on every
 // terminal).
 func (a *PublishAttempt) Finish(finished FinishedOutput, check func() error) (PublicationResult, *PublicationPreparationFailure) {
+	if a == nil || a.file == nil {
+		return PublicationResult{}, earlyPreparationFailure(
+			problem(format.CodeInvalidArgument, "publication attempt is already consumed"), nil)
+	}
 	prepared, prepareFailure := a.attempt.prepareCancellable(finished, check)
 	if prepareFailure != nil {
 		owner := prepareFailure.owner
 		discarded := discardAttempt(&owner.attempt, owner.finished.File)
 		closeFinishedOwner(owner.finished)
 		closeDestinationDirectory(owner.attempt.destinationOf())
+		a.file = nil
 		return PublicationResult{}, earlyPreparationFailure(outputProblem(prepareFailure.cause), &discarded)
 	}
 	var bound *preparedOutput
@@ -137,6 +157,7 @@ func (a *PublishAttempt) Finish(finished FinishedOutput, check func() error) (Pu
 		discarded := discardAttempt(&prepared.attempt, prepared.file)
 		_ = prepared.Close()
 		closeDestinationDirectory(prepared.attempt.destinationOf())
+		a.file = nil
 		return PublicationResult{}, earlyPreparationFailure(replacementProblem(bindFailure), &discarded)
 	}
 	var result PublicationResult
@@ -149,6 +170,7 @@ func (a *PublishAttempt) Finish(finished FinishedOutput, check func() error) (Pu
 	}
 	_ = bound.Close()
 	closeDestinationDirectory(bound.attempt.destinationOf())
+	a.file = nil
 	return result, failure
 }
 

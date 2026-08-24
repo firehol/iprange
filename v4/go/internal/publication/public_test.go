@@ -79,6 +79,16 @@ func TestPublicResidueInspectAndRemoveMalformedCanonicalResidue(t *testing.T) {
 // mapping: Complete resumes the interrupted publication, Remove
 // discards both artifacts, and both terminals carry the exact
 // machine facts.
+// TestPublicResolvePublicationInvalidModeRefused pins the closed
+// enum of the resolution mode (Rust exhaustive match): an out-of-range
+// mode refuses before any path access.
+func TestPublicResolvePublicationInvalidModeRefused(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ResolvePublication(filepath.Join(dir, "result.v4"), nil, PublicationResolutionMode(99), noopCheck); codeOf(err) != format.CodeInvalidArgument {
+		t.Fatalf("invalid mode problem = %v, want invalid argument", err)
+	}
+}
+
 func TestPublicResolvePublicationCompleteAndRemoveOverCrashStates(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "result.v4")
