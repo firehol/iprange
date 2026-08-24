@@ -87,6 +87,14 @@ func bindPath(path string) (*Directory, string, error) {
 // verifyPath re-checks that path still names the retained identity as
 // one regular single-link file (Rust live_namespace::verify_path).
 func verifyPath(path string, expected FileIdentity) error {
+	return verifyPathInner(path, expected, true)
+}
+
+// verifyPathInner re-checks that path still names the retained identity
+// as one regular file (Rust live_namespace::verify_path_inner); the
+// caller selects the single-link rule (verify_path) or the any-link
+// rule (verify_path_any_link, the validation source).
+func verifyPathInner(path string, expected FileIdentity, requireSingleLink bool) error {
 	clean := filepath.Clean(path)
 	dir, name, err := bindPath(clean)
 	if err != nil {
@@ -103,7 +111,7 @@ func verifyPath(path string, expected FileIdentity) error {
 	if !entry.Regular {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path no longer names a regular file"}
 	}
-	if entry.Links != 1 || entry.Identity != expected {
+	if (requireSingleLink && entry.Links != 1) || entry.Identity != expected {
 		return &format.Error{Code: format.CodeWrongState, Detail: "live path identity changed"}
 	}
 	return nil

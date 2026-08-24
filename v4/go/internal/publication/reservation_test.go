@@ -12,7 +12,7 @@ import (
 )
 
 func testIdentity(device, inode uint64) [32]byte {
-	return localIdentityFromDeviceInode(device, inode).Bytes
+	return LocalFileIdentityFromDeviceInode(device, inode).Bytes
 }
 
 func fill16(v byte) (out [16]byte) {

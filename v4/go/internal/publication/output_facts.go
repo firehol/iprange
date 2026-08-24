@@ -18,7 +18,7 @@ func outputFacts(d *destination, attemptID [16]byte, name string, identity *live
 	var local LocalFileIdentity
 	present := false
 	if identity != nil {
-		local = localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
+		local = LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
 		present = true
 	}
 	return PrivateOutputAttempt{
@@ -39,5 +39,5 @@ func outputFacts(d *destination, attemptID [16]byte, name string, identity *live
 // destination directory (Rust local(destination.directory().identity())).
 func directoryLocalIdentity(d *destination) LocalFileIdentity {
 	directoryIdentity := d.directory().Identity()
-	return localIdentityFromDeviceInode(live.IdentityDeviceInode(&directoryIdentity))
+	return LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(&directoryIdentity))
 }

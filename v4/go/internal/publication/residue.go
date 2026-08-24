@@ -584,5 +584,5 @@ type residueFinalCoordination struct {
 // residueLocalIdentity reports the portable identity of one retained
 // inode (Rust namespace::local).
 func residueLocalIdentity(identity *live.FileIdentity) LocalFileIdentity {
-	return localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
+	return LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
 }

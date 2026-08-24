@@ -7,6 +7,8 @@
 
 package live
 
+import "os"
+
 // CheckSupported reports whether the live coordination primitives are
 // proven on this platform (Rust require_live_supported). The snapshot
 // and recovery machines call it before budget validation, at the Rust
@@ -86,4 +88,39 @@ func Checkpoint(check func() error) error {
 		return nil
 	}
 	return check()
+}
+
+// CanonicalSidecarPath is the exact database pathname plus .readers
+// (Rust path::canonical_sidecar). The validation immutable source
+// derives the sidecar to refuse before opening the main file.
+func CanonicalSidecarPath(main string) (string, error) {
+	return canonicalSidecarPath(main)
+}
+
+// RequireSidecarAbsent refuses any canonical .readers sidecar entry
+// (Rust database_file::require_sidecar_absent; the WrongState class).
+func RequireSidecarAbsent(path string) error {
+	return requireSidecarAbsent(path)
+}
+
+// VerifyPathAnyLink re-checks that path still names the retained
+// identity as one regular file, accepting any link count (Rust
+// live_namespace::verify_path_any_link; the validation immutable
+// source re-verifies the database main under the shared lifetime
+// lock).
+func VerifyPathAnyLink(path string, expected FileIdentity) error {
+	return verifyPathInner(path, expected, false)
+}
+
+// IdentityAnyLink captures the retained identity of one open regular
+// file, accepting any link count (Rust live_namespace::
+// identity_any_link over retained_regular_identity without the
+// single-link rule; the wrong-mode classes fold through
+// namespace_error like every live identity capture).
+func IdentityAnyLink(f *os.File) (FileIdentity, error) {
+	identity, err := regularIdentityAnyLink(f)
+	if err != nil {
+		return FileIdentity{}, nsMap(err)
+	}
+	return identity, nil
 }

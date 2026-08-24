@@ -46,6 +46,21 @@ func RegularIdentity(f *os.File, directoryIdentity FileIdentity) (FileIdentity, 
 	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
 }
 
+// regularIdentityAnyLink captures the retained identity of one open
+// regular file without the single-link rule (Rust
+// retained_regular_identity(require_single_link = false); used by
+// identity_any_link).
+func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		return FileIdentity{}, nsPlainIoError("inspect retained file", err)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return FileIdentity{}, nsNotRegularError()
+	}
+	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
+}
+
 // RegularLinkCount reports the current link count of one open file
 // (Rust regular_link_count; the retention proofs use it to decide
 // canonical, private, or retired placement).

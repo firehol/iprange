@@ -499,7 +499,7 @@ func TestMaintenanceRemoveHonorsLeadingCancellation(t *testing.T) {
 	dir := t.TempDir()
 	cancelled := &resolverTestCancellation{}
 	cancelled.cancelled.Store(true)
-	number := localIdentityFromDeviceInode(1, 2)
+	number := LocalFileIdentityFromDeviceInode(1, 2)
 	attempt := [16]byte{1}
 
 	_, err := removeAbandonedPublicationTemp(dir, number, attempt, number, nil, nil, cancelled.check)

@@ -150,5 +150,5 @@ func selectedIdentity(bytes [32]byte, invariant string) LocalFileIdentity {
 	if !ok {
 		panic(invariant)
 	}
-	return localIdentityFromDeviceInode(device, inode)
+	return LocalFileIdentityFromDeviceInode(device, inode)
 }

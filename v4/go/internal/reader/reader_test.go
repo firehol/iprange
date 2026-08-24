@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,8 +70,8 @@ func mustCode(err error) format.ErrorCode {
 	if err == nil {
 		return 0
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) {
 		return 0
 	}
 	return ferr.Code

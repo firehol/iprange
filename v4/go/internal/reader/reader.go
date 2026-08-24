@@ -7,6 +7,7 @@
 package reader
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,8 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	}
 	m, err := mapping.OpenImmutable(path, sidecarAbsentUnderLock)
 	if err != nil {
-		if ferr, ok := err.(*format.Error); ok {
+		var ferr *format.Error
+		if errors.As(err, &ferr) {
 			return nil, ferr
 		}
 		return nil, &format.Error{Code: format.CodeIO, Detail: err.Error()}

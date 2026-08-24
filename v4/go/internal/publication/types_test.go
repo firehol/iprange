@@ -165,7 +165,7 @@ func TestResultCleanupState(t *testing.T) {
 // Rust namespace_identity.rs: nonzero device+inode pair, zero tail,
 // and the rejection rules.
 func TestLocalIdentityCodec(t *testing.T) {
-	id := localIdentityFromDeviceInode(0x123456789abcdef0, 0xfeedfacecafebeef)
+	id := LocalFileIdentityFromDeviceInode(0x123456789abcdef0, 0xfeedfacecafebeef)
 	if id.Kind != identityKind {
 		t.Errorf("kind = %d, want %d", id.Kind, identityKind)
 	}
@@ -202,9 +202,9 @@ func TestLocalIdentityCodec(t *testing.T) {
 // TestLocalFileIdentityComparable pins the value semantics of the
 // portable identity (Rust derives PartialEq, Eq, Hash, Copy).
 func TestLocalFileIdentityComparable(t *testing.T) {
-	a := localIdentityFromDeviceInode(1, 2)
-	b := localIdentityFromDeviceInode(1, 2)
-	c := localIdentityFromDeviceInode(1, 3)
+	a := LocalFileIdentityFromDeviceInode(1, 2)
+	b := LocalFileIdentityFromDeviceInode(1, 2)
+	c := LocalFileIdentityFromDeviceInode(1, 3)
 	if a != b {
 		t.Error("equal identities compare unequal")
 	}

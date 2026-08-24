@@ -584,7 +584,7 @@ func reservationHeaderFor(output *preparedOutput, identity live.FileIdentity) *r
 // little-endian at bytes 0..16, zero tail).
 func reservationIdentityBytes(identity live.FileIdentity) [32]byte {
 	device, inode := live.IdentityDeviceInode(&identity)
-	return localIdentityFromDeviceInode(device, inode).Bytes
+	return LocalFileIdentityFromDeviceInode(device, inode).Bytes
 }
 
 // Fixed reservation-machine failure classes (Rust reservation_file.rs

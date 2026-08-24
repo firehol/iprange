@@ -24,11 +24,12 @@ type LocalFileIdentity struct {
 	Bytes [32]byte
 }
 
-// localIdentityFromDeviceInode builds the portable identity of one
-// device+inode pair (Rust namespace::local_identity: kind 1, device
-// little-endian at bytes 0..8, inode little-endian at bytes 8..16,
-// zero tail).
-func localIdentityFromDeviceInode(device, inode uint64) LocalFileIdentity {
+// LocalFileIdentityFromDeviceInode builds the portable identity of
+// one device+inode pair (Rust namespace::local_identity: kind 1,
+// device little-endian at bytes 0..8, inode little-endian at bytes
+// 8..16, zero tail). The validation source uses it for its public
+// identity facts.
+func LocalFileIdentityFromDeviceInode(device, inode uint64) LocalFileIdentity {
 	var out LocalFileIdentity
 	out.Kind = identityKind
 	format.PutU64(out.Bytes[0:8], device)

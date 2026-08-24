@@ -23,6 +23,10 @@ func verifyPath(string, FileIdentity) error {
 	return liveRefusal()
 }
 
+func verifyPathInner(string, FileIdentity, bool) error {
+	return liveRefusal()
+}
+
 func openRw(string) (*os.File, FileIdentity, error) {
 	return nil, FileIdentity{}, liveRefusal()
 }

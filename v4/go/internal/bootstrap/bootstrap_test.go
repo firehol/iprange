@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -55,8 +56,8 @@ func mustFormatInvalid(t *testing.T, err error) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) {
 		t.Fatalf("expected *format.Error, got %T", err)
 	}
 	if ferr.Code != format.CodeFormatInvalid {
@@ -125,8 +126,8 @@ func TestOpenSoleMeta(t *testing.T) {
 	if err == nil {
 		t.Fatal("writer accepted a sole meta")
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("writer sole-meta error %v, want FormatInvalid", err)
 	}
 }
@@ -153,8 +154,8 @@ func TestOpenImmutableRequiresExactLength(t *testing.T) {
 	// A 6-page physical file with a 4-page committed generation: the
 	// immutable reader refuses, the writer accepts (tail to be trimmed).
 	_, err := Open(p0, p1, 6*format.PageSize, ModeImmutableReader)
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("immutable tail error %v, want FormatInvalid", err)
 	}
 	res, err := Open(p0, p1, 6*format.PageSize, ModeWriter)
@@ -176,8 +177,8 @@ func TestOpenStructuredUnknownKind(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown structure kind")
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeUnsupportedStructure {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeUnsupportedStructure {
 		t.Fatalf("error %v, want UnsupportedStructure", err)
 	}
 	// Zero structure kind on a structured file is a validation failure.

@@ -64,7 +64,7 @@ func captureSeed(output *preparedOutput) seed {
 	outputIdentity := output.attempt.identityOf()
 	var previous *PreviousDestination
 	if output.previous != nil {
-		previousIdentity := localIdentityFromDeviceInode(live.IdentityDeviceInode(&output.previous.identity))
+		previousIdentity := LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(&output.previous.identity))
 		previous = &PreviousDestination{
 			Identity:   previousIdentity,
 			ByteLength: output.previous.byteLength,
@@ -80,7 +80,7 @@ func captureSeed(output *preparedOutput) seed {
 		attemptID:             output.attempt.attemptIDOf(),
 		directoryIdentity:     directoryLocalIdentity(d),
 		destinationBasename:   []byte(mainName),
-		outputIdentity:        localIdentityFromDeviceInode(live.IdentityDeviceInode(&outputIdentity)),
+		outputIdentity:        LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(&outputIdentity)),
 		outputByteLength:      output.byteLength,
 		outputSHA512:          output.sha512,
 		publicationPolicy:     publicPolicy(output.policy),
@@ -105,7 +105,7 @@ func (s *seed) artifact(kind ArtifactKind, slot nameSlot, identity identityOptio
 	security := s.creationSecurity
 	var local *LocalFileIdentity
 	if identity.present {
-		converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(&identity.identity))
+		converted := LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(&identity.identity))
 		local = &converted
 	}
 	return CleanupArtifact{
@@ -191,7 +191,7 @@ func (s *seed) resultWithHousekeeping(state finalState, cleanup CleanupArtifacts
 			OutputSHA512:                s.outputSHA512,
 			PublicationPolicy:           s.publicationPolicy,
 			PreviousDestination:         s.previousDestination,
-			ReservationIdentity:         localIdentityFromDeviceInode(live.IdentityDeviceInode(&state.reservationIdentity)),
+			ReservationIdentity:         LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(&state.reservationIdentity)),
 			CreationSecurity:            s.creationSecurity,
 		},
 		MainNamespaceMayHaveBeenAttempted: state.mainNamespaceMayHaveBeenAttempted,

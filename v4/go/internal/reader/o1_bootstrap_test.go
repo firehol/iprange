@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,8 +47,8 @@ func TestHugeCorruptFileFailsBootstrap(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupt meta")
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) {
 		t.Fatalf("expected *format.Error, got %T", err)
 	}
 	if ferr.Code != format.CodeFormatInvalid {

@@ -135,7 +135,7 @@ func cleanupLocalIdentity(identity *live.FileIdentity) *LocalFileIdentity {
 	if identity == nil {
 		return nil
 	}
-	converted := localIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
+	converted := LocalFileIdentityFromDeviceInode(live.IdentityDeviceInode(identity))
 	return &converted
 }
 

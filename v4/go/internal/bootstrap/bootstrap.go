@@ -9,6 +9,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -83,37 +84,49 @@ func OpenMeta(p0, p1 []byte, physical uint64, mode Mode) (format.Meta, error) {
 // after pair selection, exactly like the reader's historical open).
 func openMetaPages(p0, p1 []byte, physical uint64, mode Mode) (Result, error) {
 	if len(p0) != format.PageSize || len(p1) != format.PageSize {
-		return Result{}, formatErr("meta page not a complete page")
+		return Result{}, problemErr(ProblemFileTooShort, "meta page not a complete page")
 	}
 	if physical < 2*format.PageSize {
-		return Result{}, formatErr("file smaller than two pages")
+		return Result{}, problemErr(ProblemFileTooShort, "file smaller than two pages")
 	}
 	if physical%format.PageSize != 0 {
-		return Result{}, formatErr("file size not page-aligned")
+		return Result{}, problemErr(ProblemFileUnaligned, "file size not page-aligned")
 	}
 	m0, ok0 := format.ParseIdentity(p0)
 	m1, ok1 := format.ParseIdentity(p1)
 	if ok0 && ok1 && !sameIdentity(m0, m1) {
-		return Result{}, formatErr("conflicting meta identity")
+		return Result{}, problemErr(ProblemStaticIdentityMismatch, "conflicting meta identity")
 	}
 	e0 := validateMeta(m0, ok0, physical)
 	e1 := validateMeta(m1, ok1, physical)
 	meta, selection, page, err := selectBetween(p0, p1, m0, m1, ok0 && e0 == nil, ok1 && e1 == nil)
 	if err != nil {
+		if err == errNoBootstrapMeta {
+			return Result{}, &ProblemError{
+				Format:            formatErr("no bootstrap-valid meta"),
+				Kind:              ProblemNoBootstrapMeta,
+				Meta0MagicInvalid: metaMagicInvalid(p0),
+				Meta1MagicInvalid: metaMagicInvalid(p1),
+			}
+		}
 		return Result{}, err
 	}
 	// An unknown structure kind on a structured file is reported only
 	// after the meta pair is selected (Rust finish_open), never as a
 	// validation failure (the count/root checks still ran).
 	if meta.ValueKind == format.ValueKindStructured && meta.StructureKind != format.StructureKindNetworkEnrichmentV1 {
-		return Result{}, &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"}
+		return Result{}, &ProblemError{
+			Format:            &format.Error{Code: format.CodeUnsupportedStructure, Detail: "unsupported structure kind"},
+			Kind:              ProblemUnsupportedStructure,
+			StructureKindCode: meta.StructureKind,
+		}
 	}
 	// A writer or live-reader open must prove the current generation from
 	// the meta pair; a sole meta cannot (Rust finish_open
 	// CurrentGenerationUnprovable applies to every mode except the
 	// immutable reader).
 	if mode != ModeImmutableReader && selection != SelectionProvenCurrent {
-		return Result{}, formatErr("current generation not provable")
+		return Result{}, problemErr(ProblemCurrentGenerationUnprovable, "current generation not provable")
 	}
 	committed := meta.PageCount * format.PageSize
 	// The immutable reader requires the exact committed physical extent
@@ -121,7 +134,7 @@ func openMetaPages(p0, p1 []byte, physical uint64, mode Mode) (Result, error) {
 	// reader may carry an unpublished tail (the live reader remaps to the
 	// committed bytes only).
 	if mode == ModeImmutableReader && committed != physical {
-		return Result{}, formatErr("file size does not match meta page count")
+		return Result{}, problemErr(ProblemImmutableLengthMismatch, "file size does not match meta page count")
 	}
 	return Result{
 		Meta:             meta,
@@ -132,7 +145,7 @@ func openMetaPages(p0, p1 []byte, physical uint64, mode Mode) (Result, error) {
 	}, nil
 }
 
-func formatErr(detail string) error {
+func formatErr(detail string) *format.Error {
 	return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
 }
 
@@ -168,29 +181,34 @@ func validateMeta(m format.Meta, ok bool, physical uint64) error {
 // byte-identical images and pick the parity page; adjacent transactions
 // require correct physical parity; otherwise the pair cannot prove the
 // current generation.
+// errNoBootstrapMeta is the sentinel of the both-invalid selection
+// arm; openMetaPages upgrades it to the classified ProblemError with
+// the per-page magic split.
+var errNoBootstrapMeta = errors.New("no bootstrap-valid meta")
+
 func selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool) (format.Meta, Selection, uint8, error) {
-	fail := func(detail string) (format.Meta, Selection, uint8, error) {
-		return format.Meta{}, 0, 0, formatErr(detail)
+	fail := func(kind ProblemKind, detail string) (format.Meta, Selection, uint8, error) {
+		return format.Meta{}, 0, 0, problemErr(kind, detail)
 	}
 	if valid0 && valid1 {
 		switch {
 		case m0.TxnID == m1.TxnID:
 			if !bytes.Equal(p0[:256], p1[:256]) {
-				return fail("equal transactions with different meta images")
+				return fail(ProblemEqualTransactionDisagreement, "equal transactions with different meta images")
 			}
 			return m0, SelectionProvenCurrent, uint8(m0.TxnID & 1), nil
 		case m0.TxnID == m1.TxnID+1:
 			if m0.TxnID&1 != 0 {
-				return fail("swapped meta parity")
+				return fail(ProblemPhysicalParity, "swapped meta parity")
 			}
 			return m0, SelectionProvenCurrent, 0, nil
 		case m1.TxnID == m0.TxnID+1:
 			if m1.TxnID&1 != 1 {
-				return fail("swapped meta parity")
+				return fail(ProblemPhysicalParity, "swapped meta parity")
 			}
 			return m1, SelectionProvenCurrent, 1, nil
 		default:
-			return fail("transaction gap between metas")
+			return fail(ProblemTransactionGap, "transaction gap between metas")
 		}
 	}
 	if valid0 != valid1 {
@@ -199,5 +217,5 @@ func selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool) (form
 		}
 		return m1, SelectionSoleMeta1, 1, nil
 	}
-	return fail("no bootstrap-valid meta")
+	return format.Meta{}, 0, 0, errNoBootstrapMeta
 }
