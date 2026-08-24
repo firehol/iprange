@@ -10631,9 +10631,6 @@ Go conformance corpus cross-open and invalid-mutation gates PASS; the
 Rust suite (411 tests plus the fixture suites) unchanged and green.
 All validation PASS at 6d9ab2f.
 
-Next: five-aspect review of the slice-O delta (same five reviewers;
-the review-round-2 verdicts on slice N are recorded above), then the
-milestone-1 close push per the user decision.
 
 ### Status (2026-08-24) - milestone 1 close: all five aspects PASS on the chunk 4-8 delta
 
@@ -10673,12 +10670,6 @@ signed); milestone 1 (the pure-Go exact v4 port with the singular
 fixed-tree authority, the mmap-only ownership split, and the
 reviewer-enforced gates) is closed per the user decision.
 
-Next: M4 chunk 4-9 (validation) per the recorded M4 chunk plan -
-explicit validation over the single-authority codecs, ImmutableCurrent
-first, then LiveCurrent/OfflineCandidate after the 4-4/4-6 machines;
-the milestone-close review process stays unchanged for the rest of
-M4 (chunks 4-9..4-12), then M5 (cross-language and performance
-acceptance).
 
 ### Status (2026-08-24) - chunk 4-9 design recorded: explicit validation over the single-authority codecs
 
@@ -10768,7 +10759,6 @@ six cross-builds, work-counter pins on the validators, fixture
 corpus ports of the Rust validation tests, then the five-aspect gate
 and the milestone push.
 
-Next: chunk 4-9 slice A implementation.
 
 ### Status (2026-08-24) - chunk 4-9 slice A implemented: validation core and immutable sweep entry at 4ba6a39
 
@@ -10824,12 +10814,16 @@ membership_table.rs):
   allocator reserve plus the partition paths, so a clean PASS
   requires the slice-B validators (recorded, not silent).
 
-Validation (all under nice): plain and v4work full trees 14 packages
-ok each, vet plain + v4work (linux, windows, freebsd), race +
-checkptr on validation/bootstrap/reader/live/publication and the
-root, seven cross-builds both tag sets, gofmt clean, all PASS at
-4ba6a39 (5 new validation tests: budget/mode refusals, both
-bootstrap-report arms, sink stop, claims and table units).
+Validation (all under nice): plain and v4work full trees 15
+test-bearing packages ok each (18 packages total; fault/snapshot/
+work have no test files), vet plain + v4work (linux, windows,
+freebsd), race + checkptr on validation/bootstrap/reader/live/
+publication and the root, seven cross-builds both tag sets, gofmt
+clean, all PASS at 4ba6a39. The slice-A boundary suite has 8 test
+functions (budget/mode refusals, both bootstrap-report arms, sink
+stop, the identity capture, claims and table units); the test
+assertion conversions from direct *format.Error checks to
+errors.As unwraps land at 0949020.
 
 Next: chunk 4-9 slice A five-aspect review gate, then slice B
 (page/tree/metadata/retirement validators).
