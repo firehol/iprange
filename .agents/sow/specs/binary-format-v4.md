@@ -3084,11 +3084,6 @@ MEMBERSHIP_HASH_INVALID
 MEMBERSHIP_REVERSE_INDEX_INVALID
 MEMBERSHIP_REFCOUNT_INVALID
 MEMBERSHIP_ACTIVE_FEED_INVALID
-STRUCTURE_PAYLOAD_INVALID
-STRUCTURE_HASH_INVALID
-STRUCTURE_REVERSE_INDEX_INVALID
-STRUCTURE_REFCOUNT_INVALID
-STRUCTURE_MEMBERSHIP_INVALID
 BLOB_INVALID
 METADATA_ZLIB_INVALID
 METADATA_LENGTH_INVALID
@@ -3096,14 +3091,25 @@ BITMAP_SUMMARY_INVALID
 ALLOCATION_PARTITION_INVALID
 RETIREMENT_ORDER_INVALID
 RETIREMENT_LIST_INVALID
+CATALOG_INVALID
+MEMBERSHIP_MISSING
+MEMBERSHIP_INVALID
+METADATA_INVALID
+STRUCTURE_PAYLOAD_INVALID
+STRUCTURE_HASH_INVALID
+STRUCTURE_REVERSE_INDEX_INVALID
+STRUCTURE_REFCOUNT_INVALID
+STRUCTURE_MEMBERSHIP_INVALID
+STRUCTURE_MISSING
+STRUCTURE_INVALID
 ```
 
 The stable graph/object kinds, shared with recovery unknown envelopes, are
 `FileGeometry`, `Meta`, `RangeTree`, `CatalogNameTree`, `CatalogIndexTree`,
 `MembershipDictionary`, `MembershipReverseIndex`, `MembershipBlob`, `Metadata`,
-`StructureDictionary`, `StructureReverseIndex`, `FreeBitmap`, `FeedUsedBitmap`,
-`MembershipUsedBitmap`, `StructureUsedBitmap`, `RetirementTree`, and
-`RetirementBlob`. A finding uses the narrowest independently known owner; it
+`FreeBitmap`, `FeedUsedBitmap`, `MembershipUsedBitmap`, `RetirementTree`,
+`RetirementBlob`, `StructureDictionary`, `StructureReverseIndex`, and
+`StructureUsedBitmap`. A finding uses the narrowest independently known owner; it
 never invents a logical owner from corrupt bytes.
 
 An invalid header, checksum, pointer, fence, or length is never trusted to

@@ -10754,9 +10754,10 @@ Validation plan (all under nice; budget: each slice ~1-2 core-minutes,
 the full chunk battery ~3-5 core-minutes - recorded per the resource
 budget rule): gofmt, vet plain + v4work, plain/v4work full trees,
 race + checkptr on internal/validation and the root package,
-six cross-builds, work-counter pins on the validators, fixture
-corpus ports of the Rust validation tests, then the five-aspect gate
-and the milestone push.
+seven cross-builds (linux/386, linux/arm64, darwin/amd64,
+darwin/arm64, freebsd/amd64, netbsd/amd64, windows/amd64),
+work-counter pins on the validators, fixture corpus ports of the Rust
+validation tests, then the five-aspect gate and the milestone push.
 
 
 ### Status (2026-08-24) - chunk 4-9 slice A implemented: validation core and immutable sweep entry at 4ba6a39
@@ -11194,8 +11195,6 @@ sets; seven cross-builds plain + v4work; all pass.
 The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21) once all chunk 4-9 slices land.
 
-Next: chunk 4-9 slice F (LiveCurrent mode + failure/cleanup shapes + the iprangedb facade Validate + the crash/resource matrix ports and the full validation battery).
-
 ### Status (2026-08-24) - chunk 4-9 slice F implemented at a8f5bca
 
 Slice F ships the LiveCurrent validation mode, the public validation
@@ -11235,12 +11234,16 @@ facade, and the runtime mmap evidence leg:
   check and the release fail (release folded only when no check
   failure exists); the Rust validation source (validation/source.rs)
   combines both into CleanupInProgress. The Go fold follows the Go
-  source machine exactly as reviewed in chunks 4-4..4-7; the residue
-  flag and guard surface match Rust in every arm. The bootstrap
-  terminalResult fold is the same shape and is pinned by a live
-  package unit test, because release steps act on already-mapped
-  state and do not re-verify paths (a moved sidecar fails the final
-  check, not the release).
+  source machine exactly as reviewed in chunks 4-4..4-7. One
+  payload difference is known and accepted: when the final check
+  fails, Go still runs the full release (its release steps act on
+  already-mapped state and do not re-verify paths), so a clean
+  release reports Residue false; the Rust validation machine stops
+  its release at the first step failure and reports the guard. Same
+  cause class, strictly cleaner Go end state, different failure
+  payload. The bootstrap terminalResult fold is the same shape and is
+  pinned by a live package unit test, because a moved sidecar fails
+  the final check, not the release.
 
 Tests (all under nice): the clean sweep over a committed direct
 generation with the writer still open plus a re-claimed reader slot
@@ -11257,7 +11260,7 @@ the live validation session.
 
 Suite counts at a8f5bca: validation 92 tests plain / 96 with v4work
 (85/89 at 064c7a2), live 57 plain / 70 with v4work (one new
-validation-source unit), root 182 plain / 202 with v4work, format 47.
+validation-source unit), root 183 plain / 203 with v4work (verified at a8f5bca by -list), format 47.
 Battery re-validated under nice: gofmt clean; vet plain + v4work on
 linux/windows/freebsd; plain and v4work full trees (15 test-bearing
 packages ok each); race + checkptr on
@@ -11268,9 +11271,72 @@ The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21): all chunk 4-9 slices (A..F) have
 landed.
 
-Next: milestone 1 close gate - run the five adversarial aspect
-reviews (Goodall Rust parity, Gauss Go idioms, Chandrasekhar
-performance, Herschel wire format and integrity, Noether APIs and
-records) against the complete chunk-4-9 tree, fix every P0-P2
-finding, then close the milestone and proceed to the next milestone.
+### Status (2026-08-24) - milestone 1 gate round 1: five-aspect review FAILs fixed on the working tree
+
+The five milestone reviewers (Goodall Rust parity, Gauss Go idioms,
+Chandrasekhar performance, Herschel wire/integrity, Noether
+APIs/docs/records) reviewed HEAD 7c14361 adversarially with the
+final-review skill. Verdicts and fixes:
+
+- Gauss P2: the range family walks allocated one heap object per
+  record (the pointer-cursor previous-record copies escaped;
+  walkRangeLeaf4/6). Fixed by the package's established value + flag
+  cursor (neighborProblem4/6 take the address of the value member;
+  no per-record heap). Regression pin added:
+  TestValidateLiveSweepAllocationPin sweeps a 2000-record live
+  generation and bounds allocations at 1024 (measured 255 with the
+  fix; the pre-fix form measured ~2255).
+- Chandrasekhar F1: same range finding, fixed as above. F2: the
+  membership bitmap scan held the sha256 hasher behind an interface
+  field, so both the scan and the sha256 state escaped per
+  membership record. Fixed by the proven StructurePayloadDigest
+  pattern: the scan keeps its counters and the hasher stays a local
+  in validateMembershipRecordBitmap with a non-escaping consume
+  closure; escape analysis now reports "new(sha256.Digest) does not
+  escape" and "devirtualizing hasher.Write to *sha256.Digest" at
+  membership.go:189/199, matching the structure.go digest proof.
+  The reviewer's P3 classes (per-blob-page spans, per-bitmap-node
+  results) are the accepted per-page/per-node object class, same as
+  the pre-existing slice-B page-header class.
+- Goodall P2: the range node walk did not clear the ordered-neighbor
+  state on refused nodes; the Rust validate_node else arms set
+  previous = None on every refusal. Fixed in walkRangeNode4/6 (all
+  three refusal arms clear hasPrevious/hasPrev6, like the shared
+  walkTreeNode), with a regression test
+  TestValidateRangeRefusedSubtreeResetsNeighborState proving a
+  corrupted middle leaf yields only the CRC finding and never a
+  spurious RangeNotCoalesced across the gap (the test fails without
+  the reset arms).
+- Noether P2-1: the slice-F record's root suite count was off by one
+  (182/202 vs the measured 183/203 at a8f5bca - the retained-capacity
+  test landed with the commit). Corrected in the slice-F record.
+  P2-2: the superseded Next line inside the slice-E record is
+  deleted; exactly one current Next remains at the tail. P3s fixed:
+  the spec section-18 reason-code list now carries all 47 wire-stable
+  codes in enum order and the object-kind list matches the enum
+  order (binary-format-v4.md); the 4-9 design plan now records seven
+  cross-builds; the stale "until slice C" causal clause in types.go
+  is reworded.
+- Gauss P3s fixed: the tree-walk allocation comment now states the
+  per-page allocations precisely; the live sweep's immediately-
+  invoked closure reads as a plain error sequence; LiveSource.terminal
+  and the bootstrap terminalResult share one fold (terminalResult).
+- Goodall P3-1 (SourceCleanup stays unpopulated): recorded deferral
+  with chunk 4-10 (the recovery guard surface), unchanged and
+  flagged in the slice-F design record. P3-2 (terminal fold payload
+  precision) is now recorded verbatim in the slice-F record above.
+- Herschel: no findings in round 1.
+
+Suite counts at the fixed tree: validation 94 plain / 98 with v4work
+(two new tests: the refused-subtree reset and the allocation pin),
+live 57/70, root 183/203, format 47. Battery re-validated under nice:
+gofmt clean; vet plain + v4work; plain and v4work validation/live/root
+trees; race + checkptr on validation/live/root both tag sets; the
+mmap-trace legs (conformance and live validation) pass.
+
+Next: milestone 1 gate round 2 - delta re-review of the fixed tree
+by all five reviewers; fix any remaining P0-P2 findings; then close
+the milestone with the five-aspect PASS and proceed to the next
+milestone.
+
 
