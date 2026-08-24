@@ -86,11 +86,24 @@ func validateImmutable(path string, budget *ValidationBudget, check func() error
 // sweepImmutable runs the mapped sweep over an opened immutable
 // source (Rust validate_immutable bootstrap + validation_mapping +
 // reserve_allocator_pages + validate_selected + source.verify).
-func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
+func sweepImmutable(source *immutableSource, path string, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
+	// The geometry is proved before any mapping exists (Rust
+	// require_geometry inside bootstrap_file_faultable): a short or
+	// unaligned main reports the FileGeometryInvalid finding instead
+	// of failing the bootstrap mapping.
+	physical := sourceFileSize(source)
+	if physical < 2*format.PageSize {
+		progress := NewProgress()
+		return bootstrapGeometryReport(source, sink, bootstrap.Problem(&format.Error{Code: format.CodeFormatInvalid, Detail: "file smaller than two pages"}, bootstrap.ProblemFileTooShort), &progress)
+	}
+	if physical%format.PageSize != 0 {
+		progress := NewProgress()
+		return bootstrapGeometryReport(source, sink, bootstrap.Problem(&format.Error{Code: format.CodeFormatInvalid, Detail: "file size not page-aligned"}, bootstrap.ProblemFileUnaligned), &progress)
+	}
 	m, err := mapping.MapFile(source.fileHandle(), 2*format.PageSize, false)
 	if err != nil {
 		progress := NewProgress()
-		return nil, failureOf(sourceCloseFold(source, &format.Error{Code: format.CodeIO, Detail: err.Error()}), &progress)
+		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
 	defer func() {
 		_ = m.Close()
@@ -99,14 +112,14 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 	p0, err := m.Page(0)
 	if err != nil {
 		progress := NewProgress()
-		return nil, failureOf(sourceCloseFold(source, &format.Error{Code: format.CodeIO, Detail: err.Error()}), &progress)
+		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
 	p1, err := m.Page(1)
 	if err != nil {
 		progress := NewProgress()
-		return nil, failureOf(sourceCloseFold(source, &format.Error{Code: format.CodeIO, Detail: err.Error()}), &progress)
+		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
-	res, err := bootstrap.Open(p0, p1, sourceFileSize(source), bootstrap.ModeImmutableReader)
+	res, err := bootstrap.Open(p0, p1, physical, bootstrap.ModeImmutableReader)
 	if err != nil {
 		if problem, ok := bootstrap.AsProblem(err); ok {
 			if problem.Kind == bootstrap.ProblemNoBootstrapMeta || sourceBootstrapReportable(problem) {
@@ -138,7 +151,7 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 	}
 	defer func() { _ = whole.Close() }()
 
-	ctx, err := NewContext(whole, res.Meta, budget, check, sink)
+	ctx, err := newContext(whole, res.Meta, budget, check, sink)
 	if err != nil {
 		progress := NewProgress()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
@@ -176,7 +189,7 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 // meta/geometry validators arrive with slice B and the structure
 // validators with slices C-E; the allocator partition and the final
 // partition sweep already exercise the claims authority.
-func validateSelected(_ *Context) error { return nil }
+func validateSelected(_ *context) error { return nil }
 
 // sourceBootstrapReportable reports whether one classified bootstrap
 // refusal produces the bootstrap-finding report (Rust
@@ -184,6 +197,26 @@ func validateSelected(_ *Context) error { return nil }
 // problem).
 func sourceBootstrapReportable(problem *bootstrap.ProblemError) bool {
 	return problem.Format.Code == format.CodeFormatInvalid
+}
+
+// bootstrapGeometryReport streams the pre-mapping geometry finding
+// report (the short and unaligned arms of the Rust bootstrap report):
+// findings first, then the untraversable mark, then the source
+// verification, in the Rust bootstrap_report order.
+func bootstrapGeometryReport(source *immutableSource, sink ValidationSink, problem *bootstrap.ProblemError, progress *ValidationProgress) (*ValidationResult, *ValidationFailure) {
+	if err := writeBootstrapFindings(problem, sink, progress); err != nil {
+		return nil, failureOf(sourceCloseFold(source, err), progress)
+	}
+	if err := progress.markUntraversable(true); err != nil {
+		return nil, failureOf(sourceCloseFold(source, err), progress)
+	}
+	if err := source.verify(); err != nil {
+		return nil, failureOf(sourceCloseFold(source, err), progress)
+	}
+	if closeErr := source.close(); closeErr != nil {
+		return nil, failureOf(closeErr, progress)
+	}
+	return &ValidationResult{Valid: false, FileIdentity: source.publicIdentity(), Generation: nil, Progress: *progress}, nil
 }
 
 // writeBootstrapFindings streams the bootstrap-refusal findings (Rust
@@ -210,7 +243,7 @@ func writeBootstrapFindings(problem *bootstrap.ProblemError, sink ValidationSink
 // reportMetaPage reports one per-page meta problem (Rust
 // report_meta_problem): the magic class selects the MetaUnavailable
 // reason, everything else is MetaInvalid, both on the Meta object
-// with the page number.
+// with the page number and its physical byte interval.
 func reportMetaPage(magicInvalid bool, pageNumber uint32, sink ValidationSink, progress *ValidationProgress) error {
 	reason := ReasonMetaInvalid
 	if magicInvalid {
@@ -221,34 +254,24 @@ func reportMetaPage(magicInvalid bool, pageNumber uint32, sink ValidationSink, p
 
 // reportBootstrapFinding counts and streams one bootstrap finding
 // (Rust report_bootstrap_finding: the sequence is the post-count
-// finding count, exactly like the context emit).
+// finding count, and a page-carrying finding always includes its
+// physical byte interval).
 func reportBootstrapFinding(reason ValidationReason, object ValidationObject, pageNumber *uint32, sink ValidationSink, progress *ValidationProgress) error {
-	if err := progress.countFinding(reason); err != nil {
-		return err
+	var interval *PhysicalByteInterval
+	if pageNumber != nil {
+		value, err := partitionBytes(uint64(*pageNumber), uint64(*pageNumber)+1)
+		if err != nil {
+			return err
+		}
+		interval = &value
 	}
-	finding := ValidationFinding{
-		Sequence:   progress.FindingCount,
-		Reason:     reason,
-		Object:     object,
-		PageNumber: pageNumber,
-	}
-	if sink == nil {
-		return nil
-	}
-	control, err := sink.Finding(&finding)
-	if err != nil {
-		return &format.Error{Code: format.CodeSinkFailed, Detail: err.Error()}
-	}
-	if control == SinkStop {
-		return &format.Error{Code: format.CodeStoppedBySink, Detail: "validation stopped by sink"}
-	}
-	return nil
+	return emitFinding(progress, sink, reason, object, pageNumber, interval, nil)
 }
 
 // sourceFileSize is the physical extent of the opened source (Rust
 // open_read_only fstat; the bootstrap selection requires the exact
 // committed length for the immutable reader).
-func sourceFileSize(source *ImmutableSource) uint64 {
+func sourceFileSize(source *immutableSource) uint64 {
 	size, err := source.fileHandle().Stat()
 	if err != nil {
 		return 0
@@ -259,7 +282,7 @@ func sourceFileSize(source *ImmutableSource) uint64 {
 // sourceCloseFold closes the source and returns the primary error
 // (the close error surfaces only when the primary is nil, like the
 // Rust combine_errors arms).
-func sourceCloseFold(source *ImmutableSource, primary error) error {
+func sourceCloseFold(source *immutableSource, primary error) error {
 	closeErr := source.close()
 	if primary != nil {
 		return primary

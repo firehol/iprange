@@ -74,7 +74,7 @@ func (c *Claims) retainedBytes() uint64 { return uint64(len(c.bytes)) }
 // Context). mapping is the read-only page source, meta the selected
 // generation, check the cancellation checkpoint (nil never cancels),
 // and sink the finding consumer.
-type Context struct {
+type context struct {
 	mapping     *mapping.Mapping
 	meta        format.Meta
 	claims      *Claims
@@ -87,16 +87,16 @@ type Context struct {
 	sink        ValidationSink
 }
 
-// NewContext builds the validation context, charging the claim bitmap
+// newContext builds the validation context, charging the claim bitmap
 // and the value-kind reverse tables against the budget (Rust
 // Context::new).
-func NewContext(m *mapping.Mapping, meta format.Meta, budget *ValidationBudget, check func() error, sink ValidationSink) (*Context, error) {
+func newContext(m *mapping.Mapping, meta format.Meta, budget *ValidationBudget, check func() error, sink ValidationSink) (*context, error) {
 	claims, err := newClaims(meta.PageCount, budget.MaxHeapBytes)
 	if err != nil {
 		return nil, err
 	}
 	heapUsed := claims.retainedBytes()
-	ctx := &Context{
+	ctx := &context{
 		mapping:   m,
 		meta:      meta,
 		claims:    claims,
@@ -133,11 +133,11 @@ func NewContext(m *mapping.Mapping, meta format.Meta, budget *ValidationBudget, 
 }
 
 // finish returns the accumulated progress (Rust Context::finish).
-func (c *Context) finish() ValidationProgress { return c.progress }
+func (c *context) finish() ValidationProgress { return c.progress }
 
 // checkpoint runs one cancellation checkpoint (Rust
 // Context::checkpoint).
-func (c *Context) checkpoint() error {
+func (c *context) checkpoint() error {
 	if c.check == nil {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (c *Context) checkpoint() error {
 
 // reserveHeap charges bytes against the heap budget (Rust
 // Context::reserve_heap).
-func (c *Context) reserveHeap(bytes uint64, purpose string) error {
+func (c *context) reserveHeap(bytes uint64, purpose string) error {
 	retained := c.heapUsed + bytes
 	if retained < c.heapUsed {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation retained heap"}
@@ -160,7 +160,7 @@ func (c *Context) reserveHeap(bytes uint64, purpose string) error {
 
 // releaseHeap returns bytes to the heap accounting (Rust
 // Context::release_heap).
-func (c *Context) releaseHeap(bytes uint64) {
+func (c *context) releaseHeap(bytes uint64) {
 	if bytes > c.heapUsed {
 		c.heapUsed = 0
 		return
@@ -170,14 +170,14 @@ func (c *Context) releaseHeap(bytes uint64) {
 
 // markUntraversable counts one untraversable subgraph (Rust
 // Context::mark_untraversable).
-func (c *Context) markUntraversable(unbounded bool) error {
+func (c *context) markUntraversable(unbounded bool) error {
 	return c.progress.markUntraversable(unbounded)
 }
 
 // reserveAllocatorPages records the meta allocator-reserve pages in
 // the allocation partition (Rust Context::reserve_allocator_pages:
 // out-of-bounds or double-claimed reserve pages are findings).
-func (c *Context) reserveAllocatorPages() error {
+func (c *context) reserveAllocatorPages() error {
 	for _, page := range c.meta.AllocatorReserve {
 		if page == 0 {
 			continue
@@ -203,7 +203,7 @@ func (c *Context) reserveAllocatorPages() error {
 
 // markAllocated records one allocated page in the allocation partition
 // (Rust Context::mark_allocated).
-func (c *Context) markAllocated(pageNumber uint32, object ValidationObject) error {
+func (c *context) markAllocated(pageNumber uint32, object ValidationObject) error {
 	if err := c.checkpoint(); err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (c *Context) markAllocated(pageNumber uint32, object ValidationObject) erro
 // and the per-object page counters. A nil page with a nil error means
 // the page was refused as a finding and its subgraph is
 // untraversable.
-func (c *Context) readGraphPage(pageNumber uint32, object ValidationObject, path []uint32) ([]byte, error) {
+func (c *context) readGraphPage(pageNumber uint32, object ValidationObject, path []uint32) ([]byte, error) {
 	if err := c.checkpoint(); err != nil {
 		return nil, err
 	}
@@ -240,7 +240,7 @@ func (c *Context) readGraphPage(pageNumber uint32, object ValidationObject, path
 	return c.loadGraphPage(pageNumber, object)
 }
 
-func (c *Context) requireGraphBounds(pageNumber uint32, object ValidationObject) (bool, error) {
+func (c *context) requireGraphBounds(pageNumber uint32, object ValidationObject) (bool, error) {
 	if pageNumber >= 2 && uint64(pageNumber) < c.meta.PageCount {
 		return true, nil
 	}
@@ -254,7 +254,7 @@ func (c *Context) requireGraphBounds(pageNumber uint32, object ValidationObject)
 	return false, nil
 }
 
-func (c *Context) claimGraphPage(pageNumber uint32, object ValidationObject, path []uint32) (bool, error) {
+func (c *context) claimGraphPage(pageNumber uint32, object ValidationObject, path []uint32) (bool, error) {
 	previous, err := c.claims.get(pageNumber)
 	if err != nil {
 		return false, err
@@ -287,7 +287,7 @@ func (c *Context) claimGraphPage(pageNumber uint32, object ValidationObject, pat
 	return true, nil
 }
 
-func (c *Context) loadGraphPage(pageNumber uint32, object ValidationObject) ([]byte, error) {
+func (c *context) loadGraphPage(pageNumber uint32, object ValidationObject) ([]byte, error) {
 	if err := c.progress.countPage(object); err != nil {
 		return nil, err
 	}
@@ -319,7 +319,7 @@ func (c *Context) loadGraphPage(pageNumber uint32, object ValidationObject) ([]b
 // the allocation partitions claimed (Rust Context::validate_partition;
 // the unclaimed runs are one finding each with their physical byte
 // interval).
-func (c *Context) validatePartition() error {
+func (c *context) validatePartition() error {
 	page := uint64(2)
 	for page < c.meta.PageCount {
 		if err := c.checkpoint(); err != nil {
@@ -345,7 +345,7 @@ func (c *Context) validatePartition() error {
 	return nil
 }
 
-func (c *Context) nextUnclaimed(page uint64) (uint64, uint64, bool, error) {
+func (c *context) nextUnclaimed(page uint64) (uint64, uint64, bool, error) {
 	page, err := c.skipClaimed(page)
 	if err != nil {
 		return 0, 0, false, err
@@ -360,7 +360,7 @@ func (c *Context) nextUnclaimed(page uint64) (uint64, uint64, bool, error) {
 	return page, end, true, nil
 }
 
-func (c *Context) skipClaimed(page uint64) (uint64, error) {
+func (c *context) skipClaimed(page uint64) (uint64, error) {
 	for page < c.meta.PageCount {
 		value, err := c.claims.get(uint32(page))
 		if err != nil {
@@ -380,7 +380,7 @@ func (c *Context) skipClaimed(page uint64) (uint64, error) {
 	return page, nil
 }
 
-func (c *Context) skipUnclaimed(page uint64) (uint64, error) {
+func (c *context) skipUnclaimed(page uint64) (uint64, error) {
 	for page < c.meta.PageCount {
 		value, err := c.claims.get(uint32(page))
 		if err != nil {
@@ -403,22 +403,30 @@ func (c *Context) skipUnclaimed(page uint64) (uint64, error) {
 // emit streams one finding through the sink (Rust Context::emit:
 // counting first, Stop and sink failures surface as their exact
 // classes).
-func (c *Context) emit(reason ValidationReason, object ValidationObject, pageNumber *uint32, physicalBytes *PhysicalByteInterval, addressFence *ValidationAddressFence) error {
-	if err := c.progress.countFinding(reason); err != nil {
+func (c *context) emit(reason ValidationReason, object ValidationObject, pageNumber *uint32, physicalBytes *PhysicalByteInterval, addressFence *ValidationAddressFence) error {
+	return emitFinding(&c.progress, c.sink, reason, object, pageNumber, physicalBytes, addressFence)
+}
+
+// emitFinding counts and streams one finding through the sink (the
+// shared tail of Context::emit and the bootstrap report: the
+// sequence is the post-count count; a nil sink continues; Stop and
+// sink failures surface as their exact classes).
+func emitFinding(progress *ValidationProgress, sink ValidationSink, reason ValidationReason, object ValidationObject, pageNumber *uint32, physicalBytes *PhysicalByteInterval, addressFence *ValidationAddressFence) error {
+	if err := progress.countFinding(reason); err != nil {
 		return err
 	}
 	finding := ValidationFinding{
-		Sequence:      c.progress.FindingCount,
+		Sequence:      progress.FindingCount,
 		Reason:        reason,
 		Object:        object,
 		PageNumber:    pageNumber,
 		PhysicalBytes: physicalBytes,
 		AddressFence:  addressFence,
 	}
-	if c.sink == nil {
+	if sink == nil {
 		return nil
 	}
-	control, err := c.sink.Finding(&finding)
+	control, err := sink.Finding(&finding)
 	if err != nil {
 		return &format.Error{Code: format.CodeSinkFailed, Detail: err.Error()}
 	}

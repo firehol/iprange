@@ -18,7 +18,7 @@ import (
 
 // ImmutableSource is the read-only locked database main of one
 // immutable validation (Rust validation::source ImmutableSource).
-type ImmutableSource struct {
+type immutableSource struct {
 	file     *os.File
 	path     string
 	sidecar  string
@@ -32,7 +32,7 @@ type ImmutableSource struct {
 // lifetime lock, and the post-lock path identity + sidecar presence
 // re-check. Every failure combines the unlock error exactly like the
 // Rust combine_errors arms.
-func openImmutableSource(path string, check func() error) (*ImmutableSource, error) {
+func openImmutableSource(path string, check func() error) (*immutableSource, error) {
 	clean := filepath.Clean(path)
 	sidecar, err := live.CanonicalSidecarPath(clean)
 	if err != nil {
@@ -54,7 +54,20 @@ func openImmutableSource(path string, check func() error) (*ImmutableSource, err
 		file.Close()
 		return nil, err
 	}
-	source := &ImmutableSource{file: file, path: clean, sidecar: sidecar, identity: identity, locked: true}
+	source := &immutableSource{file: file, path: clean, sidecar: sidecar, identity: identity, locked: true}
+	// The open verifies twice exactly like the Rust open: the inline
+	// path+sidecar check combined with the unlock error, then the
+	// source verify again before the open returns.
+	if err := live.VerifyPathAnyLink(source.path, source.identity); err != nil {
+		unlockErr := source.unlock()
+		file.Close()
+		return nil, combineErrors(err, unlockErr)
+	}
+	if err := live.RequireSidecarAbsent(source.sidecar); err != nil {
+		unlockErr := source.unlock()
+		file.Close()
+		return nil, combineErrors(err, unlockErr)
+	}
 	if err := source.verify(); err != nil {
 		unlockErr := source.unlock()
 		file.Close()
@@ -65,7 +78,7 @@ func openImmutableSource(path string, check func() error) (*ImmutableSource, err
 
 // verify re-proves the path identity and the sidecar absence (Rust
 // ImmutableSource::verify).
-func (s *ImmutableSource) verify() error {
+func (s *immutableSource) verify() error {
 	if err := live.VerifyPathAnyLink(s.path, s.identity); err != nil {
 		return err
 	}
@@ -73,21 +86,21 @@ func (s *ImmutableSource) verify() error {
 }
 
 // publicIdentity returns the portable local identity (Rust
-// ImmutableSource::public_identity over the publication namespace
+// immutableSource::public_identity over the publication namespace
 // encoding).
-func (s *ImmutableSource) publicIdentity() LocalFileIdentity {
+func (s *immutableSource) publicIdentity() LocalFileIdentity {
 	device, inode := live.IdentityDeviceInode(&s.identity)
 	return publicationIdentity(device, inode)
 }
 
 // file returns the held descriptor for the validation mapping and the
 // bootstrap probe.
-func (s *ImmutableSource) fileHandle() *os.File { return s.file }
+func (s *immutableSource) fileHandle() *os.File { return s.file }
 
 // close releases the lifetime lock and the descriptor (Rust drops the
-// ImmutableSource; the lock release runs before the fd close, and the
+// immutableSource; the lock release runs before the fd close, and the
 // unlock error folds like the Rust combine_errors arms).
-func (s *ImmutableSource) close() error {
+func (s *immutableSource) close() error {
 	unlockErr := s.unlock()
 	closeErr := s.file.Close()
 	if unlockErr != nil {
@@ -96,7 +109,7 @@ func (s *ImmutableSource) close() error {
 	return closeErr
 }
 
-func (s *ImmutableSource) unlock() error {
+func (s *immutableSource) unlock() error {
 	if s.locked {
 		s.locked = false
 		return live.UnlockFile(s.file, live.MainLifetimeOffset)

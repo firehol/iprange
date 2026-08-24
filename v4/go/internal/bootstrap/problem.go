@@ -56,6 +56,13 @@ func AsProblem(err error) (*ProblemError, bool) {
 	return problem, true
 }
 
+// Problem builds one classified refusal from an already-shaped SDK
+// error; the validation sweep uses it to report the geometry refusals
+// before any mapping exists (Rust require_geometry order).
+func Problem(formatErr *format.Error, kind ProblemKind) *ProblemError {
+	return &ProblemError{Format: formatErr, Kind: kind}
+}
+
 // problemErr builds one classified refusal (Rust
 // BootstrapError::FileTooShort / FileUnaligned / ... as mapped by the
 // caller).

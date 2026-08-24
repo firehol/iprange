@@ -6,6 +6,7 @@ package validation
 // path lands with the slice-B validators.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -155,6 +156,9 @@ func TestValidateImmutableBootstrapReport(t *testing.T) {
 		if f.Reason != ReasonMetaUnavailable || f.Object != ObjectMeta || f.PageNumber == nil || *f.PageNumber != uint32(i) {
 			t.Fatalf("finding %d %+v", i, f)
 		}
+		if f.PhysicalBytes == nil || f.PhysicalBytes.Start != uint64(i)*format.PageSize || f.PhysicalBytes.EndExclusive != uint64(i+1)*format.PageSize {
+			t.Fatalf("finding %d bytes %+v", i, f.PhysicalBytes)
+		}
 	}
 	if result.Progress.FindingCount != 2 || result.Progress.FindingsFor(ReasonMetaUnavailable) != 2 {
 		t.Fatalf("progress %+v", result.Progress)
@@ -200,6 +204,35 @@ func TestValidateImmutableMixedMetaProblems(t *testing.T) {
 	}
 }
 
+func TestValidateImmutableShortFileGeometryReport(t *testing.T) {
+	// A one-page main proves geometry before any mapping: the sweep
+	// reports the FileGeometryInvalid finding instead of an IO
+	// failure (Rust require_geometry before the bootstrap mapping).
+	path := writeFile(t, format.PageSize, func(page []byte) {
+		for i := range page {
+			page[i] = 0xA5
+		}
+	})
+	var findings []ValidationFinding
+	result, failure := Validate(path, ValidationModeImmutableCurrent, HeapOnly(1<<20, 1), nil, SinkFunc(func(f *ValidationFinding) (ValidationSinkControl, error) {
+		findings = append(findings, *f)
+		return SinkContinue, nil
+	}))
+	if failure != nil {
+		t.Fatalf("geometry report failed: %v", failure.Cause)
+	}
+	if result.Valid || len(findings) != 1 {
+		t.Fatalf("result %+v findings %d", result, len(findings))
+	}
+	f := findings[0]
+	if f.Reason != ReasonFileGeometryInvalid || f.Object != ObjectFileGeometry || f.PageNumber != nil {
+		t.Fatalf("finding %+v", f)
+	}
+	if result.Generation != nil {
+		t.Fatal("generation on a short file")
+	}
+}
+
 func TestValidateSinkStop(t *testing.T) {
 	path := writeFile(t, 2*format.PageSize, func(page []byte) {
 		for i := range page {
@@ -212,7 +245,8 @@ func TestValidateSinkStop(t *testing.T) {
 	if failure == nil {
 		t.Fatal("sink stop accepted")
 	}
-	if failure.Cause.(*format.Error).Code != format.CodeStoppedBySink {
+	var fe *format.Error
+	if !errors.As(failure.Cause, &fe) || fe.Code != format.CodeStoppedBySink {
 		t.Fatalf("cause %v, want StoppedBySink", failure.Cause)
 	}
 }
