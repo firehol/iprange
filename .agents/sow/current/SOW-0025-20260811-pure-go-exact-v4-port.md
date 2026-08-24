@@ -12058,13 +12058,6 @@ recovery/writer/publication/live/bootstrap and the root, both tag sets;
 six cross-compiles plain + v4work; check-mmap-trace.sh PASS on all
 four legs, including the recovery-construction leg.
 
-Next: milestone 2 chunk 4-10 gate - delta re-review round 3 to the
-three open aspects (Chandrasekhar performance, Gauss Go idioms, Goodall
-Rust parity) over the 93eb8cf hot-path batch; on three-aspect PASS,
-the chunk close-out record; then milestone 3 (chunk 4-11 worker
-process boundary) per the recorded plan.
-
-
 ### Status (2026-08-24) - milestone 2 (chunk 4-10 recovery) CLOSED: five-aspect PASS at 9f45143
 
 Round-3 delta re-review after the 93eb8cf hot-path batch: Chandrasekhar
