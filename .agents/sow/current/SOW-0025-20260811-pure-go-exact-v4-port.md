@@ -10819,10 +10819,14 @@ test-bearing packages ok each (18 packages total; fault/snapshot/
 work have no test files), vet plain + v4work (linux, windows,
 freebsd), race + checkptr on validation/bootstrap/reader/live/
 publication and the root, seven cross-builds both tag sets, gofmt
-clean, all PASS at 4ba6a39. The slice-A boundary suite has 8 test
-functions (budget/mode refusals, both bootstrap-report arms, sink
-stop, the identity capture, claims and table units); the test
-assertion conversions from direct *format.Error checks to
+clean, all PASS at 4ba6a39 (8 test functions: budget/mode
+refusals, both bootstrap-report arms, sink stop, the identity
+capture, claims and table units). The five-aspect review fixes land
+at aae07c5 (geometry-before-mapping report with the short-file pin
+and the physical-byte intervals on the per-page findings, the
+double source verify, typed-error pass-through, the shared emit
+tail, unexported context/source); the suite is 9 tests at HEAD. The
+test assertion conversions from direct *format.Error checks to
 errors.As unwraps land at 0949020.
 
 Next: chunk 4-9 slice A five-aspect review gate, then slice B
