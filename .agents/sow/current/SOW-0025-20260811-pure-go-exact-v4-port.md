@@ -10184,6 +10184,46 @@ publication of which 9 are the new residue tests), gofmt clean,
 -race + -gcflags=all=-d=checkptr=2 on internal/publication, and the
 freebsd/darwin cross-builds all PASS at 22ffd1f.
 
+### Status (2026-08-24) - chunk 4-8 slice L fix round (round-1 review)
+
+Round-1 review: parity (Goodall) PASS, performance (Chandrasekhar)
+PASS, wire/integrity (Herschel) PASS, idioms (Gauss) FAIL (one P1,
+four P3), records (Noether) FAIL (one P2, two P3). Fixes at b0be0df:
+
+- P1 (idioms): a cancelled removal retry consumed the coordination
+  descriptor and the destination directory but leaked the retired
+  main guard (fd + mapping); the first-checkpoint arm of removeResidue
+  now closes handle.retired.main exactly when the Rust handle would
+  drop it, and the new TestResidueRetryCancellationReleasesRetainedMain
+  pins the whole cycle with a process-fd counter (empirically proven:
+  an injected leak fails with +2 descriptors).
+- P3 (idioms): the unix-dead retirementPending field and the
+  destination/identity/flag parameters of the retirement retry arm
+  are removed (retryResidueRetirement takes only the file, mirroring
+  the unix arm of Rust retirement::retry); the one-use
+  liveLockOperationResidue wrapper is replaced by lockOperationFile;
+  the retry arm and its handle-level wrapper no longer collide in
+  name; residueHandle documents its consume/move contract.
+- P3 (parity): readResidueTuple propagates mapped page faults as sdk
+  problems like Rust read_tuple (the K-port desiredReplacementMeta
+  convention), keeping only the unreadable-meta-pair arm silent.
+- P2 (records): the slice-L tree total is restated with its method:
+  858 Test functions runnable under v4work at b0be0df (go test -tags
+  v4work -list '^Test' ./...; 725 plain) - the earlier 647 number
+  omitted the root package (198) and internal/bitmap (12).
+- P3 (records): the slice-I deferral cross-reference closes here -
+  "reservation retirement crash points belong to slice L" is realized
+  by the residue tests driving the runAttemptCrashChild fixtures
+  (residue_test.go via resolverPreMainPoints) inside the v4work
+  matrix; the Rust residue test authority is residue_tests.rs (8
+  tests) + residue/linux_tests.rs (1 test), and the Go residue suite
+  now has 10 tests (the retry-cancellation test added in this round).
+
+Validation (all under nice): plain and v4work full trees (14
+packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
+internal/publication, freebsd/darwin cross-builds, gofmt clean, all
+PASS at b0be0df.
+
 Next: slice M maintenance (list/remove abandoned publication temps
 and reservation artifacts); after M stays N Publish retrofit +
 public surface, O validation + gate + push.
