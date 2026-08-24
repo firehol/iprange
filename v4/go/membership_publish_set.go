@@ -253,7 +253,7 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 		return zero, &AlgebraPreparationFailure{Cause: publicError(cause), Cleanup: cleanup}
 	}
 	if metadataJSON != nil {
-		if err := builder.WriteMetadata(metadataJSON, prepared.HeapRemaining()); err != nil {
+		if err := builder.WriteMetadataWithBudget(metadataJSON, prepared.HeapRemaining()); err != nil {
 			return discarded(err)
 		}
 	}

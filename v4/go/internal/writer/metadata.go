@@ -308,12 +308,12 @@ func metadataCollectPages(s tree.Store, meta format.Meta) ([]uint32, error) {
 	return pages, nil
 }
 
-// WriteMetadata stages one exact metadata payload on a one-shot output
-// (Rust immutable_output::Builder::write_metadata_with_budget): the
-// caller heap budget bounds the compression workspace, the compressed
-// bytes land through the forward chunk chain, and one metadata stage is
-// allowed per output.
-func (b *OutputBuilder) WriteMetadata(input []byte, maxHeapBytes uint64) error {
+// WriteMetadataWithBudget stages one exact metadata payload on a
+// one-shot output (Rust immutable_output::Builder::
+// write_metadata_with_budget): the caller heap budget bounds the
+// compression workspace, the compressed bytes land through the forward
+// chunk chain, and one metadata stage is allowed per output.
+func (b *OutputBuilder) WriteMetadataWithBudget(input []byte, maxHeapBytes uint64) error {
 	return b.mutate(func() error {
 		if b.metadataStaged {
 			return wrongState("immutable output metadata is already set")

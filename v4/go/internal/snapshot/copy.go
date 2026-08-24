@@ -370,5 +370,5 @@ func copyMetadata(source *reader.ImmutableReader, builder *writer.OutputBuilder,
 	if err := checkCancellation(check); err != nil {
 		return err
 	}
-	return builder.WriteMetadata(input, budget.MaxHeapBytes-length-1)
+	return builder.WriteMetadataWithBudget(input, budget.MaxHeapBytes-length-1)
 }
