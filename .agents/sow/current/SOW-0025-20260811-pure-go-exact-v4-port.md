@@ -10854,5 +10854,66 @@ the full battery (15 test-bearing packages ok each in both tag sets,
 vet plain + v4work on linux/windows/freebsd, race + checkptr, seven
 cross-builds, gofmt) is green.
 
-Next: chunk 4-9 slice B (page/tree/metadata/retirement validators
-over the single-authority codecs).
+### Status (2026-08-24) - chunk 4-9 slice B implemented: page/tree/metadata/retirement validators at 214a0ff
+
+Slice B ships the slice-B validators over the single-authority codecs:
+- internal/format/inspect.go: the explicit-validation inspection
+  authorities (slotted_page.rs + page_header.rs mirror):
+  PageCommonValid/PageBornValid/PageKindValid, InspectTreeHeader with
+  the exact problem order (common, born, kind-at-level, level, shape),
+  CellLayout/FixedLayout/VariableLayout, and InspectLayout with the
+  per-cell extent proof, the minimum-start-equals-upper rule, and the
+  reserved-region + unmarked-region nonzero scans (all_zero runs).
+- internal/format/metadata.go: MetadataChunkFields (Rust chunk_fields:
+  length/offset/geometry/item/level/link checks) and
+  MetadataChunkTailZero (reserved_zero).
+- internal/retire: DecodeKey/DecodeBranchChild/DecodeRaw (the lenient
+  wire decodes the validation walk classifies) and the exported
+  CellSize.
+- internal/validation/page.go: treePageSpec + treePageHeader with the
+  Rust reason mapping (Header/Shape -> PageHeaderInvalid, Born ->
+  PageBornTxnInvalid, Type -> PageTypeMismatch, Level ->
+  TreeLevelInvalid) and validateFixedCells/validateVariableCells with
+  the PageReservedNonzero finding.
+- internal/validation/tree.go: the allocation-free codec-driven walk
+  (walkTree/walkTreeNode) with root-shape, per-page branch/leaf key
+  order, child-level, fence, level/deep-path, and cycle/alias findings,
+  and the checked record count.
+- internal/validation/metadata.go: validateMetadata with the Rust heap
+  reservation (output + 64 KiB inflater overhead) and the validating
+  chain source: every page is visited, validated, and fed to the zlib
+  decoder on the same visit, the declared lengths are proved exactly,
+  and feed failures report the page being fed while the finish-class
+  failures report none (Inflater parity over the Go zlib reader; the
+  compressed stream is never accumulated).
+- internal/validation/retirement.go: the retirement extent walk with
+  the exact extent validity (txn above creation and inside the
+  generation, data-page first, nonzero count, endpoint inside the
+  page count), the same-transaction overlap rule, the root-count
+  mismatch, and the allocation-partition marking of every retired
+  page.
+- validateSelected now runs the Rust validate_selected composition
+  order (validation.rs:460) with the slice C-E stubs (range/catalog/
+  structure/membership/free bitmap) and ends with validatePartition
+  inside the sweep like Rust probe_source; the duplicate partition
+  call is gone.
+
+Validation (all under nice; ~6s plain and ~6s v4work for the full
+trees): plain and v4work full trees 15 test-bearing packages ok each
+(18 total; fault/snapshot/work have no test files; suite counts at
+214a0ff: validation 31 tests plain / 32 with v4work, format 47 tests),
+vet plain + v4work on linux, windows, and freebsd v4work, race +
+checkptr on validation/format/retire/bootstrap/reader/live/
+publication/mapping/tree and the root, seven cross-builds plain +
+v4work, gofmt clean. New tests: 6 format inspection units (header
+problem classes, fixed/variable layout proofs, chunk fields), 14
+retirement/tree walk cases (clean, count mismatch, overlap, invalid
+extents, fence, root shape, cycle, child level, born, layout, reserved
+both arms, duplicate keys, meta-page child), 8 metadata chain cases
+(clean single/chained, zlib header/check/adler failures, truncated/
+trailing/short/long declared lengths, chain geometry refusals,
+reserved tail, CRC refusal, cycle), 1 v4work counter pin (two cell
+probes and two slot reads per fixed cell, zero page parses).
+
+Next: chunk 4-9 slice B five-aspect review gate, then slice C (range
++ catalog validators).
