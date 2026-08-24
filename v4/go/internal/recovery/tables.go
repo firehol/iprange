@@ -16,7 +16,6 @@ const (
 	catalogIndexSlotSize = uint64(16)
 	membershipRecordSize = uint64(56)
 	structureRecordSize  = uint64(48)
-	idSlotSize           = uint64(16)
 )
 
 // tableCounts is the counted record bound of one recovery table layout

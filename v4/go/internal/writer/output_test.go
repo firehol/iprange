@@ -705,3 +705,37 @@ func containsDetail(err error, detail string) bool {
 	}
 	return bytes.Contains([]byte(fe.Detail), []byte(detail))
 }
+
+// TestOutputMembershipMultiLevelBlob builds one membership whose bitmap
+// overflows a full branch page (226 leaves) and finishes, proving the
+// bottom-up blob builder flushes full levels instead of overflowing its
+// fixed node arrays (Rust blob::flush resets the level after writing).
+func TestOutputMembershipMultiLevelBlob(t *testing.T) {
+	const (
+		wordCount = 114_356 // 226 leaves: 225 fill one branch level
+		feedLimit = 8_000_000
+	)
+	b, _ := newOutput(t, membershipSpec(feedLimit), generousBudget())
+	if err := b.PushFeed("alpha", 3); err != nil {
+		t.Fatalf("push feed alpha: %v", err)
+	}
+	if err := b.PushFeed("middle", 3_583_999); err != nil {
+		t.Fatalf("push feed middle: %v", err)
+	}
+	if err := b.PushFeed("omega", 7_318_783); err != nil {
+		t.Fatalf("push feed omega: %v", err)
+	}
+	words := make(writer.OutputWords, wordCount)
+	words[0] = 1 << 3
+	words[55_999] = 1 << 63
+	words[wordCount-1] = 1 << 63
+	if err := b.PushMembershipV4(0, 9, words); err != nil {
+		t.Fatalf("push wide membership: %v", err)
+	}
+	path := finishOutput(t, b)
+
+	meta := outputMeta(t, path)
+	if meta.MembershipEntryCount != 1 || meta.MembershipIDLimit != 2 {
+		t.Fatalf("membership meta %+v", meta)
+	}
+}

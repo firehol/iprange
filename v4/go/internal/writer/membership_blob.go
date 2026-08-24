@@ -216,6 +216,7 @@ func flushMembershipBlobLevel(store tree.Store, level *membershipBlobLevel) (mem
 	if err := store.RestoreDirty(pageNumber, tag); err != nil {
 		return membershipBlobNode{}, err
 	}
+	level.len = 0 // Rust flush ends with *level = EMPTY_LEVEL
 	return membershipBlobNode{offset: level.nodes[0].offset, page: pageNumber, level: childLevel + 1}, nil
 }
 
