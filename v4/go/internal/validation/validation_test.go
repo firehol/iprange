@@ -16,6 +16,18 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
+// countProcessFds counts the open descriptors of this process (Linux
+// /proc/self/fd; the validation tests run sequentially, so the count
+// is stable across one measurement point).
+func countProcessFds(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read /proc/self/fd: %v", err)
+	}
+	return len(entries)
+}
+
 // writeFile writes one raw artifact of the given byte length.
 func writeFile(t *testing.T, length int, mutate func(page []byte)) string {
 	t.Helper()
@@ -138,11 +150,17 @@ func TestValidateImmutableBootstrapReport(t *testing.T) {
 			page[i] = 0xA5
 		}
 	})
+	before := countProcessFds(t)
 	var findings []ValidationFinding
 	result, failure := Validate(path, ValidationModeImmutableCurrent, HeapOnly(1<<20, 1), nil, SinkFunc(func(f *ValidationFinding) (ValidationSinkControl, error) {
 		findings = append(findings, *f)
 		return SinkContinue, nil
 	}))
+	// Every terminal of the report releases the source (the Rust drop
+	// releases the shared lifetime lock and closes the fd).
+	if after := countProcessFds(t); after != before {
+		t.Fatalf("fd count %d -> %d, want unchanged", before, after)
+	}
 	if failure != nil {
 		t.Fatalf("bootstrap report failed: %v", failure.Cause)
 	}

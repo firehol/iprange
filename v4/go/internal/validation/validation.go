@@ -133,6 +133,9 @@ func sweepImmutable(source *immutableSource, path string, budget *ValidationBudg
 				if err2 := source.verify(); err2 != nil {
 					return nil, failureOf(sourceCloseFold(source, err2), &progress)
 				}
+				if closeErr := source.close(); closeErr != nil {
+					return nil, failureOf(closeErr, &progress)
+				}
 				return &ValidationResult{Valid: false, FileIdentity: source.publicIdentity(), Generation: nil, Progress: progress}, nil
 			}
 		}
