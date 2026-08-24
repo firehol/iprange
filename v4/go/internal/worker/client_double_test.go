@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/publication"
+	"github.com/firehol/iprange/v4/go/internal/recovery"
+	"github.com/firehol/iprange/v4/go/internal/validation"
 )
 
 // workerDoubleEnv selects the double mode of the re-executed test
@@ -202,6 +205,79 @@ running:
 			return 123
 		}
 		return 0
+	case "inspection_complete":
+		inspection := &InspectionWire{SourceIdentity: publication.LocalFileIdentity{}, Progress: ProgressWire{}}
+		if err := WriteInspectionResult(control, inspection, nil); err != nil {
+			return 123
+		}
+		control.SetState(stateComplete)
+		return 0
+	case "validation_complete":
+		if err := doubleWriteValidationResult(control); err != nil {
+			return 123
+		}
+		control.SetState(stateComplete)
+		return 0
+	case "validation_finding_then_complete":
+		if !doubleStreamFinding(control) {
+			return 122
+		}
+		if err := doubleWriteValidationResult(control); err != nil {
+			return 123
+		}
+		control.SetState(stateComplete)
+		return 0
+	case "validation_finding_then_exit3":
+		if !doubleStreamFinding(control) {
+			return 122
+		}
+		return 3
+	case "validation_guard_pending":
+		if err := doubleWriteValidationFailureGuard(control); err != nil {
+			return 123
+		}
+		control.SetGuardPending(true)
+		control.SetState(stateComplete)
+		if err := control.WaitFor(stateCleanupRequest); err != nil {
+			return 124
+		}
+		if err := doubleWriteCleanupResult(control, true, nil); err != nil {
+			return 123
+		}
+		return 0
+	case "recovery_complete":
+		if err := doubleWriteRecoveryResult(control); err != nil {
+			return 123
+		}
+		control.SetState(stateComplete)
+		return 0
+	case "recovery_unknown_then_complete":
+		if !doubleStreamUnknown(control) {
+			return 122
+		}
+		if err := doubleWriteRecoveryResult(control); err != nil {
+			return 123
+		}
+		control.SetState(stateComplete)
+		return 0
+	case "recovery_unknown_then_exit3":
+		if !doubleStreamUnknown(control) {
+			return 122
+		}
+		return 3
+	case "recovery_guard_pending":
+		if err := doubleWriteRecoveryFailureGuard(control); err != nil {
+			return 123
+		}
+		control.SetGuardPending(true)
+		control.SetState(stateComplete)
+		if err := control.WaitFor(stateCleanupRequest); err != nil {
+			return 124
+		}
+		if err := doubleWriteCleanupResult(control, true, nil); err != nil {
+			return 123
+		}
+		return 0
 	}
 	return 121
 }
@@ -249,4 +325,89 @@ func doubleWaitFor(condition func() bool, limit time.Duration) bool {
 		time.Sleep(time.Millisecond)
 	}
 	return false
+}
+
+// doubleWriteValidationResult writes one completed validation result
+// envelope with zero facts (the arm reads the mailbox; the fixture
+// values only need to round-trip).
+func doubleWriteValidationResult(control *Control) error {
+	progress := validation.NewProgress()
+	result := &validation.ValidationResult{
+		Valid:        false,
+		FileIdentity: publication.LocalFileIdentity{},
+		Progress:     progress,
+	}
+	return WriteValidationResult(control, result, nil, nil)
+}
+
+// doubleWriteValidationFailureGuard writes one operational validation
+// failure envelope with a retained publication problem (the
+// guard-pending arm cross-check pair).
+func doubleWriteValidationFailureGuard(control *Control) error {
+	progress := validation.NewProgress()
+	failure := &validation.ValidationFailure{
+		Cause:    &format.Error{Code: format.CodeConflict, Detail: "double validation failure"},
+		Progress: &progress,
+	}
+	retained := &WireProblem{Code: format.CodeCleanupConflict, Detail: "double retained problem"}
+	return WriteValidationResult(control, nil, failure, retained)
+}
+
+// doubleWriteRecoveryResult writes one completed recovery outcome
+// envelope with zero facts.
+func doubleWriteRecoveryResult(control *Control) error {
+	outcome := &RecoveryOutcome{
+		Result: &recovery.RecoveryResult{Report: recovery.RecoveryReport{}, Publication: publication.PublicationResult{}},
+	}
+	return WriteRecoveryOutcome(control, outcome, nil)
+}
+
+// doubleWriteRecoveryFailureGuard writes one recovery preparation
+// failure envelope with a retained publication problem.
+func doubleWriteRecoveryFailureGuard(control *Control) error {
+	outcome := &RecoveryOutcome{
+		Failure: &recovery.RecoveryPreparationFailure{
+			Report: recovery.RecoveryReport{},
+			Cause:  &format.Error{Code: format.CodeConflict, Detail: "double recovery failure"},
+		},
+	}
+	retained := &WireProblem{Code: format.CodeCleanupConflict, Detail: "double retained problem"}
+	return WriteRecoveryOutcome(control, outcome, retained)
+}
+
+// doubleStreamFinding writes one finding envelope, publishes the
+// Finding state, and waits for the parent acknowledgement (the parent
+// callback acknowledge seam returns the control to Running).
+func doubleStreamFinding(control *Control) bool {
+	page := uint32(4)
+	finding := &validation.ValidationFinding{
+		Sequence:   1,
+		Reason:     validation.ReasonIoError,
+		Object:     validation.ObjectMeta,
+		PageNumber: &page,
+	}
+	if err := WriteValidationFinding(control, finding); err != nil {
+		return false
+	}
+	control.SetResponse(0)
+	control.SetState(stateFinding)
+	return doubleWaitFor(func() bool { return control.state() == stateRunning }, 10*time.Second)
+}
+
+// doubleStreamUnknown writes one unknown-damage envelope, publishes the
+// Unknown state, and waits for the parent acknowledgement.
+func doubleStreamUnknown(control *Control) bool {
+	page := uint32(4)
+	envelope := &recovery.RecoveryUnknownEnvelope{
+		Sequence:   1,
+		Reason:     validation.ReasonIoError,
+		Object:     validation.ObjectMeta,
+		PageNumber: &page,
+	}
+	if err := WriteRecoveryUnknown(control, envelope); err != nil {
+		return false
+	}
+	control.SetResponse(0)
+	control.SetState(stateUnknown)
+	return doubleWaitFor(func() bool { return control.state() == stateRunning }, 10*time.Second)
 }

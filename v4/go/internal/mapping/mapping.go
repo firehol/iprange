@@ -29,6 +29,7 @@ package mapping
 import (
 	"os"
 	"path/filepath"
+	"sort"
 
 	"golang.org/x/sys/unix"
 
@@ -45,6 +46,11 @@ type Mapping struct {
 	physical uint64 // file size at open (locked extent)
 	prot     int    // mmap protection of the current mapping
 	locked   bool   // whether the main-file lifetime lock is held
+	// unreadablePages is the sorted, duplicate-free page list the
+	// Page read path refuses with the io-unreadable class before any
+	// range check (Rust mapping.rs unreadable_pages; nil when no page
+	// is declared unreadable).
+	unreadablePages []uint32
 }
 
 // openMapping implements the shared open path for read-only and read-write
@@ -494,7 +500,41 @@ func (m *Mapping) VisitPage(pgno uint32, fn func(page []byte) error) error {
 	return fn(page)
 }
 
+// SetUnreadablePages declares the mapped pages the Page read path must
+// refuse with the io-unreadable class (Rust mapping.rs
+// set_unreadable_pages). pages must be sorted and strictly increasing;
+// the refusal is the exact Rust InvalidArgument detail. An empty list
+// clears the declaration. Only the full-page read path refuses: View
+// and the writer views are unaffected, exactly like the Rust page()
+// before bytes().
+func (m *Mapping) SetUnreadablePages(pages []uint32) error {
+	for index := 1; index < len(pages); index++ {
+		if pages[index-1] >= pages[index] {
+			return &format.Error{Code: format.CodeInvalidArgument, Detail: "unreadable mapped pages must be sorted and unique"}
+		}
+	}
+	m.unreadablePages = nil
+	if len(pages) > 0 {
+		m.unreadablePages = append([]uint32(nil), pages...)
+	}
+	return nil
+}
+
+// Page returns the checked full page at pgno. A page declared
+// unreadable by SetUnreadablePages is refused with the io-unreadable
+// class (CodeIO, the Rust EIO semantics) before any range check, so a
+// declared page is refused even when its number lies outside the mapped
+// extent, exactly like Rust page(): the unreadable binary search runs
+// before page_offset. Non-declared pages keep the plain range check.
 func (m *Mapping) Page(pgno uint32) ([]byte, error) {
+	if len(m.unreadablePages) > 0 {
+		found := sort.Search(len(m.unreadablePages), func(i int) bool {
+			return m.unreadablePages[i] >= pgno
+		})
+		if found < len(m.unreadablePages) && m.unreadablePages[found] == pgno {
+			return nil, &format.Error{Code: format.CodeIO, Detail: "unreadable mapped page"}
+		}
+	}
 	off := uint64(pgno) << format.PageShift
 	return m.View(off, format.PageSize)
 }

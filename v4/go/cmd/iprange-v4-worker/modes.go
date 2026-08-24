@@ -16,7 +16,6 @@ package main
 
 import (
 	"errors"
-	"sort"
 	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -61,26 +60,14 @@ func newWorkerCheckpoint(control *worker.Control) func() error {
 	}
 }
 
-// unreadableSourcePages is the sorted, duplicate-free source-page list
-// of one session (Rust worker.rs thread-local UNREADABLE_SOURCE_PAGES).
-// The 4-11D fault-memory slice consumes the list for mapped-page
-// retries; every request path already validates the facts exactly like
-// Rust set_unreadable_source_pages.
-var unreadableSourcePages []uint32
-
 // setUnreadableSourcePages records one request's unreadable source
-// pages after sorting and duplicate rejection (Rust
-// set_unreadable_source_pages: duplicates are InvalidArgument).
+// pages into the worker fault memory before the domain machine runs
+// (Rust worker.rs:316-333 set_unreadable_source_pages into the
+// UNREADABLE_SOURCE_PAGES thread-local; internal/worker
+// fault_memory.go owns the sorted, duplicate-free list). A duplicate
+// is refused with the verbatim Rust InvalidArgument class.
 func setUnreadableSourcePages(pages []uint32) error {
-	sorted := append([]uint32(nil), pages...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	for index := 1; index < len(sorted); index++ {
-		if sorted[index] == sorted[index-1] {
-			return &format.Error{Code: format.CodeInvalidArgument, Detail: "unreadable source pages contain duplicates"}
-		}
-	}
-	unreadableSourcePages = sorted
-	return nil
+	return worker.SetSourceUnreadablePages(pages)
 }
 
 // runInspect serves one InspectRecoveryCandidates session (Rust
