@@ -453,7 +453,7 @@ func finishRemoval(s *seed, r removal, syncProblem error, artifacts *CleanupArti
 		}
 	}
 	if problem != nil {
-		artifacts.push(s.artifact(r.kind, r.name, r.identity, problem))
+		artifacts.Push(s.artifact(r.kind, r.name, r.identity, problem))
 	}
 }
 

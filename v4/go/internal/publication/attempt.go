@@ -225,8 +225,8 @@ func observePreparation(s *seed, output *preparedOutput, reservationIdentity ide
 	checkpointSeed := *s
 	cleanup := newCleanupArtifacts()
 	outputIdentity := output.attempt.identityOf()
-	cleanup.push(checkpointSeed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: outputIdentity}, problem))
-	cleanup.push(checkpointSeed.artifact(ArtifactPrivateReservation, reservationSlot, reservationIdentity, problem))
+	cleanup.Push(checkpointSeed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: outputIdentity}, problem))
+	cleanup.Push(checkpointSeed.artifact(ArtifactPrivateReservation, reservationSlot, reservationIdentity, problem))
 	failure := checkpointSeed.preparationWithHousekeeping(cleanup, HousekeepingNone, nil, problem)
 	return observer(&publicationCheckpoint{preparation: &failure})
 }
@@ -238,8 +238,8 @@ func observeNotPublished(s *seed, outputIdentity live.FileIdentity, reservationI
 	problem := interruptedProblem()
 	checkpointSeed := *s
 	cleanup := newCleanupArtifacts()
-	cleanup.push(checkpointSeed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: outputIdentity}, problem))
-	cleanup.push(checkpointSeed.artifact(ArtifactPrivateReservation, reservationSlot, identityOptional{present: true, identity: reservationIdentity}, problem))
+	cleanup.Push(checkpointSeed.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: outputIdentity}, problem))
+	cleanup.Push(checkpointSeed.artifact(ArtifactPrivateReservation, reservationSlot, identityOptional{present: true, identity: reservationIdentity}, problem))
 	result := checkpointSeed.result(finalState{
 		reservationIdentity:               reservationIdentity,
 		mainNamespaceMayHaveBeenAttempted: false,
@@ -266,7 +266,7 @@ func observePublished(s *seed, reservationIdentity live.FileIdentity, enabled bo
 	problem := interruptedProblem()
 	checkpointSeed := *s
 	cleanup := newCleanupArtifacts()
-	cleanup.push(checkpointSeed.artifact(ArtifactPrivateReservation, nameSlotCoordination, identityOptional{present: true, identity: reservationIdentity}, problem))
+	cleanup.Push(checkpointSeed.artifact(ArtifactPrivateReservation, nameSlotCoordination, identityOptional{present: true, identity: reservationIdentity}, problem))
 	result := checkpointSeed.result(finalState{
 		reservationIdentity:               reservationIdentity,
 		mainNamespaceMayHaveBeenAttempted: true,
@@ -362,11 +362,11 @@ func finishPublished(s seed, published publishedMain, cause error) PublicationRe
 	cleanup := newCleanupArtifacts()
 	if !owner.previousRetiredProven {
 		if previous := owner.published.output.previous; previous != nil {
-			cleanup.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: previous.identity}, retirementProblem))
+			cleanup.Push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: previous.identity}, retirementProblem))
 		}
 	}
 	if !owner.reservationRetiredProven {
-		cleanup.push(s.artifact(ArtifactPrivateReservation, nameSlotCoordination, identityOptional{present: true, identity: reservationIdentity}, retirementProblem))
+		cleanup.Push(s.artifact(ArtifactPrivateReservation, nameSlotCoordination, identityOptional{present: true, identity: reservationIdentity}, retirementProblem))
 	}
 	finalCause := cause
 	if finalCause == nil {

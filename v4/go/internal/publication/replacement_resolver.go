@@ -222,7 +222,7 @@ func resolveDesiredReplacement(base baseResolution, pair replacementPair, mode r
 	s := &base.seed
 	summary := discardRecovered(s, base.destination, output, reservationOwnerOf(base.exact))
 	if foreign != nil {
-		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: foreign.identity}, conflictProblem("private replacement artifact does not match recorded ownership")))
+		summary.artifacts.Push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, identityOptional{present: true, identity: foreign.identity}, conflictProblem("private replacement artifact does not match recorded ownership")))
 	}
 	verified := resolverProblem(pair.main.verify(base.destination, noopCheck))
 	if verified == nil {

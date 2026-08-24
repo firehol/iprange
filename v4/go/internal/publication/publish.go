@@ -181,7 +181,7 @@ func earlyPreparationFailure(cause error, discarded *earlyDiscard) *PublicationP
 	failure := &PublicationPreparationFailure{Cause: cause}
 	if discarded != nil && discarded.artifact != nil {
 		ledger := newCleanupArtifacts()
-		ledger.push(*discarded.artifact)
+		ledger.Push(*discarded.artifact)
 		failure.Cleanup = ledger
 		failure.PublicationAttemptID = discarded.output.PublicationAttemptID
 		failure.DirectoryIdentity = discarded.output.DirectoryIdentity

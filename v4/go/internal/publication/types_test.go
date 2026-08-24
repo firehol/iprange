@@ -106,8 +106,8 @@ func TestCleanupLedger(t *testing.T) {
 	artifact := func(kind ArtifactKind) CleanupArtifact {
 		return CleanupArtifact{Kind: kind, Basename: []byte("residue")}
 	}
-	ledger.push(artifact(ArtifactPrivateOutput))
-	ledger.push(artifact(ArtifactPrivateReservation))
+	ledger.Push(artifact(ArtifactPrivateOutput))
+	ledger.Push(artifact(ArtifactPrivateReservation))
 	if ledger.Empty() || ledger.Len() != 2 || ledger.State() != CleanupStateResiduePossible {
 		t.Fatalf("ledger after two pushes = len %d, state %v", ledger.Len(), ledger.State())
 	}
@@ -128,9 +128,9 @@ func TestCleanupLedger(t *testing.T) {
 				t.Fatal("overflow push did not panic")
 			}
 		}()
-		ledger.push(artifact(ArtifactOwnedCoordination))
-		ledger.push(artifact(ArtifactOwnedMain))
-		ledger.push(artifact(ArtifactUnpublishedMainTail))
+		ledger.Push(artifact(ArtifactOwnedCoordination))
+		ledger.Push(artifact(ArtifactOwnedMain))
+		ledger.Push(artifact(ArtifactUnpublishedMainTail))
 	}()
 }
 
@@ -141,7 +141,7 @@ func TestResultCleanupState(t *testing.T) {
 	if got := result.CleanupState(); got != CleanupStateClean {
 		t.Errorf("empty result cleanup = %v, want clean", got)
 	}
-	result.Cleanup.push(CleanupArtifact{Kind: ArtifactPrivateOutput})
+	result.Cleanup.Push(CleanupArtifact{Kind: ArtifactPrivateOutput})
 	if got := result.CleanupState(); got != CleanupStateResiduePossible {
 		t.Errorf("artifact result cleanup = %v, want residue", got)
 	}

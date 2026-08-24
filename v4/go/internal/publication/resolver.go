@@ -302,7 +302,7 @@ func resolveDesired(destination *destination, header reservationHeader, s *seed,
 		}
 		cleanupCause := resolverProblem(err)
 		summary := discardRecovered(s, destination, nil, reservationOwnerOf(reservation))
-		summary.artifacts.push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, optionalEncodedIdentity(header.outputIdentity), cleanupCause))
+		summary.artifacts.Push(s.artifact(ArtifactPrivateOutput, nameSlotPrivateOutput, optionalEncodedIdentity(header.outputIdentity), cleanupCause))
 		computed, finalErr := finalLater(destination, header, reservation, later, summary)
 		if finalErr != nil {
 			return recordCancellation(desiredProblem(*s, header, summary, finalErr), check), nil

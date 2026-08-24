@@ -144,6 +144,11 @@ const (
 
 // merge folds two housekeeping classes (Rust Housekeeping::merge:
 // Visible dominates, then CrashReappearancePossible).
+// Merge folds two housekeeping classes (Rust Housekeeping::merge; the
+// recovery terminal composes the same operator through this exported
+// entry).
+func (h Housekeeping) Merge(other Housekeeping) Housekeeping { return h.merge(other) }
+
 func (h Housekeeping) merge(other Housekeeping) Housekeeping {
 	if h == HousekeepingVisible || other == HousekeepingVisible {
 		return HousekeepingVisible
@@ -226,9 +231,16 @@ type CleanupArtifacts struct {
 // CleanupArtifacts::new).
 func newCleanupArtifacts() CleanupArtifacts { return CleanupArtifacts{} }
 
-// push appends one artifact; the fixed capacity is an invariant of the
-// ported machine, so an overflow panics exactly like the Rust assert.
-func (c *CleanupArtifacts) push(artifact CleanupArtifact) {
+// NewCleanupArtifacts returns the empty ledger for the composing
+// owners (Rust CleanupArtifacts::new; the recovery terminal builds its
+// ledger through this exported entry).
+func NewCleanupArtifacts() CleanupArtifacts { return CleanupArtifacts{} }
+
+// Push appends one artifact (Rust CleanupArtifacts::push); the fixed
+// capacity is an invariant of the ported machine, so an overflow
+// panics exactly like the Rust assert. The recovery terminal composes
+// the ledger through this exported entry.
+func (c *CleanupArtifacts) Push(artifact CleanupArtifact) {
 	if c.len >= cleanupCapacity {
 		panic("fixed cleanup ledger overflow")
 	}
