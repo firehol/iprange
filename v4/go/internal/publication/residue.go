@@ -280,7 +280,7 @@ func removeResidue(handle residueHandle, check func() error) (residueRemoval, er
 // removeResidue; the retained-handle incomplete results keep it open
 // for the caller's retry.
 func finishRetiredResidue(handle residueHandle) residueRemoval {
-	if cause := retryRetirementResidue(&handle); cause != nil {
+	if cause := retryRetiredResidueHandle(&handle); cause != nil {
 		return incompleteResidue(handle, cause)
 	}
 	main := handle.retired.main
@@ -327,10 +327,11 @@ func closeResidueAuthority(handle *residueHandle) {
 	handle.destination.directory().Close()
 }
 
-// retryRetirementResidue re-proves the unlink after the directory
-// synchronization (Rust retry_retirement; the unix arm checks the
-// retained coordination link count).
-func retryRetirementResidue(handle *residueHandle) error {
+// retryRetiredResidueHandle re-proves the unlink of one retired
+// handle after the directory synchronization (Rust retry_retirement:
+// the platform arm checks the retained coordination link count, and
+// the housekeeping evidence merges into the retained state).
+func retryRetiredResidueHandle(handle *residueHandle) error {
 	retired := handle.retired
 	retried := retryResidueRetirement(handle.coordination)
 	retired.housekeeping = retired.housekeeping.merge(retried.housekeeping)

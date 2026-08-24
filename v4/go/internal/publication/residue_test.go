@@ -534,6 +534,9 @@ func TestResidueRetryCancellationReleasesRetainedMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect main: %v", err)
 	}
+	if mainGuard == nil {
+		t.Fatal("main guard missing")
+	}
 	retired, err := retireResidueCoordination(handle.destination, handle.coordination, handle.coordinationIdentity)
 	if err != nil {
 		t.Fatalf("retire: %v", err)
