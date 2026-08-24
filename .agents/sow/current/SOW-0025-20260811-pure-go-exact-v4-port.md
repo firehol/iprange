@@ -10465,14 +10465,17 @@ Go changes:
   the five composition tests own that coverage (including the
   fail-if-exists rename race: TestAttemptMainRaceAfterState2 and the
   replacement crash family in attempt_crash_v4work_test.go).
-- Removed (commit 355e894): the mapping path-based publish machines
-  and their tests (mapping_publish_{linux,darwin,freebsd,netbsd,
-  posix,windows}.go, publish_link_noreplace*.go, linkcount_*.go,
-  1,269 deletions incl. the 22 deleted mapping test functions);
-  internal/live owns the namespace mutations. Only ExchangeAvailable
-  and the retained StatIdentity authority probe survive
-  (mapping_identity_probe{,_bsd,_windows}.go), and the deleted tests
-  are owned by the publication machine and composition suites.
+- Removed (commit 355e894): the mapping path-based publish machine
+  bodies and their tests (1,269 deletions incl. the 22 deleted
+  mapping test functions); internal/live owns the namespace
+  mutations. Only the ExchangeAvailable capability stubs survive
+  (mapping_publish_linux.go, mapping_publish_darwin.go,
+  mapping_publish_posix.go, mapping_publish_windows.go);
+  mapping_publish_freebsd.go, mapping_publish_netbsd.go,
+  publish_link_noreplace*.go and linkcount_*.go were fully deleted.
+  StatIdentity lives in mapping_identity_probe{,_bsd,_windows}.go.
+  The deleted tests are owned by the publication machine and
+  composition suites.
 
 Behavior notes:
 
@@ -10557,8 +10560,6 @@ pre-existing unix.Geteuid use in security_test.go, added at slice
 4-3; it is outside this slice's blast radius and tracked for the
 slice-O sweep.)
 
-Next: slice-N review (five level-1 reviewers, one level,
-adversarial), then slice O: full validation + gate + push.
 
 ### Status (2026-08-24) - chunk 4-8 slice N complete: review rounds 1-2 PASS
 
@@ -10595,14 +10596,12 @@ rejectLiveSelf parity re-verified arm by arm) and Goodall confirmed
 the placement and withdrew the round-1 P3-1. All five aspects PASS at
 HEAD 7d95412. Slice N is complete.
 
-Next: slice O - full validation + gate + push (five-aspect final
-review on slice O, then git push per the user decision).
 
 ### Status (2026-08-24) - chunk 4-8 slice O: full validation and the two pre-existing windows gaps closed
 
-Slice O closes the chunk with the full milestone battery under nice
-and removes the two pre-existing cross-build gaps recorded at slices
-4-6 and N:
+Slice O at commit 6d9ab2f closes the chunk with the full milestone
+battery under nice and removes the two pre-existing cross-build gaps
+recorded at chunk 4-6, chunk-4-8 slice C, and slice N:
 
 - internal/security/security_test.go now carries the !windows build
   tag (matching the production split: security.go is !windows; the
@@ -10630,6 +10629,7 @@ windows/amd64) plain and v4work; zero-alloc gates
 PublishSet, TestSnapshotOutputWarmLookupsZeroAllocation) PASS; the
 Go conformance corpus cross-open and invalid-mutation gates PASS; the
 Rust suite (411 tests plus the fixture suites) unchanged and green.
+All validation PASS at 6d9ab2f.
 
 Next: five-aspect review of the slice-O delta (same five reviewers;
 the review-round-2 verdicts on slice N are recorded above), then the
