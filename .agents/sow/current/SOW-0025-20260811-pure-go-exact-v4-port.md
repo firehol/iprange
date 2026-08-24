@@ -11437,13 +11437,67 @@ packages ok each); race + checkptr on validation/bootstrap/reader/
 live and the root, both tag sets; seven cross-builds plain + v4work;
 both mmap-trace legs pass.
 
-Next: start milestone 2 (M4 chunk 4-10 recovery): internal/recovery
-with classify and candidate tokens, the recovery-readable meta and
-generation-order proofs, page set and tables, overlap components,
-direct and indirect builds, outputs, source guard, terminal
-result/report, the public RecoverImmutable/RecoverOffline and
-InspectRecoveryCandidates surfaces, and the OfflineCandidate
-validation arm (heap-only first; authorized scratch and external
-sort tracked separately), then the five-aspect gate.
+### Status (2026-08-24) - milestone 2 (chunk 4-10 recovery) design recorded
+
+Chunk 4-10 design, recorded before coding per the pre-implementation
+gate. Rust authorities read: recovery.rs (module map, the exact
+RecoveryCandidate token: label/meta_page/source_identity/database_id/
+txn/nonce with the label enum Newest/Previous/UnorderedMeta0/1),
+api.rs (recover_immutable/recover_offline/recover_live over
+worker::recover; OfflineQuiescenceCertification; recover_precreated
+flow: validate_budget, open_source, construction, terminal),
+classify.rs (ClassifiedMetas: generation-order proof,
+current_recovery_meta, candidate projection), inspection.rs
+(inspect_recovery_candidates and RecoveryInspectionMode), budget.rs
+(heap_only shape), source_guard.rs (Source modes and the
+RecoverySourceCleanupGuard), report.rs (RecoveryReport, counters,
+unknown envelopes, sink), terminal.rs (RecoveryPreparationFailure/
+RecoveryResult), and the existing Go authorities to compose:
+internal/validation (bootstrap report arms, OfflineCandidate mode),
+internal/live (sidecar/gate), internal/publication (reservation and
+cleanup), internal/writer (draft/commit machinery for the destination
+build), internal/mapping.
+
+Scope decisions (Rust is the baseline; consistent with the recorded
+M4 plan, no new user decision required):
+
+- The 4-10 deferred surface lands here: the OfflineCandidate
+  validation mode (validation/source.rs OfflineSource + validate_offline:
+  classify, selected_meta over the candidate, source verification),
+  the RecoverySourceCleanupGuard surface (the record where the
+  milestone-1 gate's SourceCleanup deferral resolves), the
+  inspect/recovery candidate tokens, and the public
+  RecoverImmutable/RecoverOffline/InspectRecoveryCandidates facade.
+  recover_live is the same machine with the live source guard
+  (live-gated: refused on platforms without proven live
+  coordination).
+- Heap-only first with the exact budget accounting; authorized
+  scratch and external sort stay the recorded follow-up (the
+  scratch_maintenance and external_sort Rust modules are read for
+  their shapes and recorded as deferred, not ported).
+- The destination is a fresh published output: the recovery build
+  composes the existing writer/draft machinery (the Rust
+  immutable_output Builder), and the terminal folds the source
+  guard, the output attempt, and the cleanup ledger exactly like the
+  Rust terminal module.
+- Slices: A classify + inspection + candidate tokens + the
+  OfflineCandidate validation arm; B page_set/construction basics +
+  source guard + terminal/report shapes; C direct (range) build +
+  output; D indirect (catalog/membership/structure) builds; E api
+  wiring + public facade + recover_live; then the battery and the
+  five-aspect gate. Scratch/external-sort deferred with their
+  references.
+
+Validation plan (all under nice; budget: each slice ~1-2 core-minutes,
+the full chunk battery ~3-5 core-minutes - recorded per the resource
+budget rule): gofmt, vet plain + v4work, plain/v4work full trees,
+race + checkptr on the touched packages and the root, seven
+cross-builds, corpus ports of the Rust recovery tests (classify,
+page set, direct/indirect builds, source guard), work-counter pins,
+and the mmap-trace leg extension for recovery, then the five-aspect
+gate and the milestone push.
+Next: milestone 2 chunk 4-10 slice A - classify, inspection, the
+recovery candidate tokens, and the OfflineCandidate validation arm,
+per the recorded design gate.
 
 
