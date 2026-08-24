@@ -10340,8 +10340,8 @@ Fixes at d21c4d5:
   follows the suite's t-based helper convention.
 - P3 (records): the slice-M implemented record moved after the slice-L
   round-3 record so the stack is chronological, the superseded Next
-  line of the L round-3 record is deleted, and the M record carries
-  its own tail Next line.
+  line of the L round-3 record is deleted, and the Next line lives
+  only at the tail of the newest M record like the L convention.
 
 Validation (all under nice): plain and v4work full trees (14
 packages ok each; 869 Test functions runnable under v4work at
