@@ -11325,7 +11325,12 @@ final-review skill. Verdicts and fixes:
   with chunk 4-10 (the recovery guard surface), unchanged and
   flagged in the slice-F design record. P3-2 (terminal fold payload
   precision) is now recorded verbatim in the slice-F record above.
-- Herschel: no findings in round 1.
+- Herschel: two P2 findings identified in round 1 but returned late
+  (after the round-2 dispatch, against the 7c14361 tree): the
+  bound-identity helper dropped the static-identity disagreement
+  check, and the reader structure codec rejected refcount-0 records
+  the Rust decoder resolves. Reported in full with the round-2
+  verdict; fixed in the round 2/3 record below.
 
 Suite counts at the fixed tree: validation 94 plain / 98 with v4work
 (two new tests: the refused-subtree reset and the allocation pin),
@@ -11334,9 +11339,52 @@ gofmt clean; vet plain + v4work; plain and v4work validation/live/root
 trees; race + checkptr on validation/live/root both tag sets; the
 mmap-trace legs (conformance and live validation) pass.
 
-Next: milestone 1 gate round 2 - delta re-review of the fixed tree
-by all five reviewers; fix any remaining P0-P2 findings; then close
-the milestone with the five-aspect PASS and proceed to the next
-milestone.
+### Status (2026-08-24) - milestone 1 gate rounds 2-3: Herschel P2s fixed, re-review dispatched
+
+Round-2 delta re-review at 134c8bf: Noether, Gauss, Chandrasekhar,
+and Goodall PASS (Gauss added one optional P3 - the write-only
+rangeState.family field - fixed in this round). Herschel FAIL: its
+two round-1 P2 findings persisted at 134c8bf:
+
+- Herschel P2-1: bootstrap.DatabaseIDFromPages compared only the
+  16-byte database id between identity-readable meta pages; the Rust
+  database_id_from_meta_pages runs require_same_identity over the
+  full static identity (family, value kind, structure kind, value
+  tag, database id - contract.rs static_identity_eq). Fixed:
+  DatabaseIDFromPages now decodes both metas through ParseIdentity,
+  runs the shared sameIdentity compare (the exact bootstrap.Open
+  rule), and returns the ProblemStaticIdentityMismatch class; a
+  differing-id pair keeps the same class as bootstrap.Open. The live
+  bootstrap arm now refuses the mismatched pair before any sidecar
+  access, matching the Rust register_live failure position. Pinned by
+  TestDatabaseIDFromPages (identical pair, sole readable page,
+  static-identity disagreement, no-identity pair; all four arms).
+- Herschel P2-2: the reader structure codec (DecodeStructureIDRecord,
+  used only by reader.structureRecordAt) rejected refcount-0 records
+  with FormatInvalid; the Rust codec::decode_record reads the
+  refcount raw and the zero value is a validator finding class, never
+  a decode failure - so the Go reader failed files Rust resolves.
+  Fixed by removing the refcount check from the reader codec (the
+  validator codec DecodeStructureRecord already had no check, slice-E
+  parity). Pinned by TestLookupStructureIDRefcountZero: a hand-built
+  structured database with a zero-refcount slot resolves through
+  LookupStructureID with the payload view, matching Rust read_record.
+
+Herschel's remaining delta verdict is pending at this record; the
+five-aspect milestone gate re-review (round 3) is dispatched at the
+round-3 HEAD.
+
+Suite counts at the round-3 tree: validation 94 plain / 98 with
+v4work, bootstrap 13/13 (the DatabaseIDFromPages arms), reader 56/65
+(the zero-refcount lookup), live 57/70, root 183/203, format 47/51.
+Battery re-validated under nice: gofmt clean; vet plain + v4work on
+linux/windows/freebsd; plain and v4work full trees (15 test-bearing
+packages ok each); race + checkptr on validation/bootstrap/reader/
+live and the root, both tag sets; seven cross-builds plain + v4work;
+the mmap-trace legs (conformance and live validation) pass.
+
+Next: milestone 1 gate round 3 - five-aspect re-review of the round-3
+HEAD; fix any remaining P0-P2 findings; then close the milestone with
+the five-aspect PASS and proceed to the next milestone.
 
 
