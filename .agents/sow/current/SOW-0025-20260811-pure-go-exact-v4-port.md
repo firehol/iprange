@@ -12339,3 +12339,68 @@ failedAttempt and resumeSecuredOutputForCleanup must become worker
 reachable; serveCleanup on the worker side; the retained cleanup guard
 exchange already on the client seam) and worker-build mismatch tests;
 then the chunk 4-11 five-aspect gate.
+
+### Status (2026-08-25) - milestone 3 slice 4-11E delivered: real cleanup and publication wire arms, worker-build mismatch tests
+
+Slice E completes the chunk 4-11 cleanup surface (commit e1a2113):
+
+- Publication seam: internal/publication exports exactly one worker
+  entry (DiscardSecuredAttempt -> EarlyDiscardFacts) that runs the
+  Rust worker/cleanup.rs run_worker three arms (present ->
+  discard_attempt, proven absent -> confirmed_absent, resume failure ->
+  failed_attempt with the Problem::output fold). The machine is total
+  in Rust, so the seam is total; the thin facts-to-wire conversion
+  lives in the worker boundary (WireEarlyDiscardOf), publication never
+  imports worker.
+- Worker side: runCleanup now decodes the request and runs the seam,
+  then the scratch cleanup, then writes the result (no guard, Rust
+  Ok(None)). Rust cleanup does not arm the fault memory, so the mode
+  does not call setUnreadableSourcePages.
+- Parent side: DiscardRecoveryAttempt composes control/opcode/
+  request/spawn/handshake/drive with the exact classes: guard-pending
+  completion is the verbatim Conflict "isolated recovery cleanup
+  retained unexpected authority" (cleanup.rs:73-76), and a mapped fault
+  folds through fault_problem with the role detail (cleanup.rs:78-79
+  over recovery.rs:525-534), which differs from the validation arm's
+  mapped_worker_fault by design. The production recovery arms still do
+  not call this arm: the Go recovery machine creates its own secured
+  output at the request destination (recorded stance), so the
+  from_worker constructor stays reserved. The Go shape is fallible
+  where Rust discard() is infallible; the recorded nuance is that the
+  Rust infallible wrapper exists to serve the recovery arm's
+  failure-folding, which the Go stance replaces.
+- Scratch deferral: the authorized-scratch removal machine
+  (scratch_maintenance.rs) is the recorded 4-10 deferral; a present
+  scratch checkpoint is admitted honestly as one Conflict residue per
+  entry ("worker scratch cleanup machine is not ported") in the Rust
+  failed-removal residue shape, so the wire contract stays meaningful
+  and the parent sees every entry. Nil checkpoint (the only reachable
+  arm today) is the clean nil cleanup.
+- Build mismatch: tests patch the control build-id bytes directly (no
+  production seam); the worker refuses before WorkerReady with the
+  verbatim Conflict "worker protocol does not match the SDK" and exit
+  65, and the parent Handshake surfaces "SDK worker version or protocol
+  does not match"; a sanity test proves the unpatched binary still
+  handshakes.
+
+Validation (all under nice; ~4 core-minutes): gofmt clean; vet plain +
+v4work clean; full module plain + v4work green; race + checkptr (plain
++ v4work) green on the same 9-package set; six cross-builds plain +
+v4work green; check-mmap-trace.sh four legs PASS. New tests: seam
+three-arm unit (present/absent/resume-failure), real-binary cleanup
+opcode and DiscardRecoveryAttempt (incl. deferral residues over the
+wire), guard-pending and fault double classes, cleanup-checkpoint
+deferral unit, handshake build-id mismatch + sanity.
+
+This completes the chunk 4-11 slice plan (A-E). The chunk gate opens
+next: the five-aspect adversarial review (same-model reviewers,
+restarted between milestones) over slices A-E, then the milestone-3
+close-out.
+
+Next: milestone 3 chunk gate - restart the five same-model reviewers
+(Goodall parity, Gauss idioms, Chandrasekhar performance, Herschel wire
+format and integrity, Noether APIs/docs) and run the adversarial
+five-aspect rounds over slices 4-11A-E, fix every P0-P2, then close
+milestone 3 and proceed to milestone 4 (chunk 4-12 platform
+completion: native darwin/freebsd proofs, crash-matrix extension with
+the probe_source arm, build-mismatch matrix, code-size audit).
