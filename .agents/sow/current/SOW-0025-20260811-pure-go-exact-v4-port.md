@@ -10359,8 +10359,58 @@ consolidate into one parameterized selectedIdentity with the
 Rust-verbatim expect texts preserved, and the record wording matches
 the Next-line structure; all five aspects PASS. Slice M is complete.
 
-Next: slice N Publish retrofit + public surface (publication.Publish
-over the reservation path; snapshot.To and PublishSet moved to it;
-the one-shot machine and the mapping path-based publish machines
-removed; public ResolvePublication/Residue/Abandoned surfaces in
-iprangedb); after N stays O validation + gate + push.
+### Status (2026-08-24) - chunk 4-8 slice N implemented: reservation-path publish composition
+
+Slice N step-1 replaces the one-shot staging facade with the Rust
+workflow::create + publish composition at commit ab130c7:
+CreatePublishAttempt creates and secures the private output (the
+exchange-availability probe precedes the rollback-safe creation, and
+the fail-if-exists policy proves the main and the coordination twin
+absent), the caller builds the finished content into the attempt
+file, and Finish prepares it (custody, lifetime lock, finished
+proof, digest, finish sync), binds it to the replaced main under the
+replacement policies, and publishes it through the attempt machine.
+Every pre-machine failure carries the folded problem class and the
+discard-evidence ledger exactly like the Rust Failure::Early arms;
+every terminal closes the descriptors it opened, including the bound
+destination directory the machine keeps open for its caller (Rust
+drops the consumed owners). finished is consumed on every terminal.
+
+Go files:
+
+- internal/publication/publish.go (+166): the PublishAttempt owner
+  and the composition; earlyPreparationFailure folds the full
+  cleanup ledger (attempt id, directory identity, basename, output
+  identity, creation security, cleanup artifact) from one early
+  discard; closeCreatedOwner/closeFinishedOwner/closeDestination
+  Directory mirror the Rust drops.
+- internal/publication/publish_test.go (+212): the five composition
+  ports (fail-if-exists success with the exact published facts and
+  no residue, existing-main and existing-coordination create
+  refusals with the fd pin, replacement over a previous main with
+  the PreviousDestination evidence, cancelled preparation discard
+  with the cleanup-state pin, missing-previous bind refusal), each
+  cycle pinned with the process-fd counter.
+- internal/publication/output_created.go: the bound destination
+  directory closes on the requireFailIfExistsAvailable error and on
+  the createAttempt error, exactly where the Rust bind would drop on
+  the refusal.
+
+One real defect surfaced by the new tests before commit: bindPrevious
+returns a concrete *replacementFailure, and the composition stored it
+in an error interface, so a successful bind became a typed-nil
+interface and replacementProblem panicked on the replacement success
+path. The composition keeps the concrete pointer type, and
+TestPublishReplacementOverPreviousMain pins the path.
+
+Validation (all under nice): plain and v4work full trees (14 packages
+ok each; 874 Test functions runnable under v4work at ab130c7, 189 in
+publication of which 5 are the publish composition tests), vet,
+-race + -gcflags=all=-d=checkptr=2 on internal/publication,
+freebsd/darwin cross-builds, gofmt clean, all PASS at ab130c7.
+
+Next: retrofit snapshot.To and PublishSet onto the composition,
+remove the one-shot publication_staging machine, add the public
+ResolvePublication/Residue/Abandoned root surfaces, then slice-N
+review (five level-1 reviewers, one level, adversarial), then O
+validation + gate + push.
