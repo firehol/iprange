@@ -12012,3 +12012,63 @@ chunk close-out (gate record, Status completed, move to
 .agents/sow/done/, single commit + push); the worker process boundary
 (4-11) and the authorized scratch/external sort stay the recorded
 follow-ups.
+
+### Status (2026-08-24) - milestone 2 review round 2: parity and hot-path findings cleared, battery green, delta re-review dispatched
+
+Round 2 verdicts at 3e83c00: Herschel PASS (wire), Noether FAIL
+(records only — fixed in c92e741: the two remaining stale
+"19 test-bearing" claims corrected in place and the eight superseded
+slice Next pointers deleted, leaving the single current Next),
+Chandrasekhar PASS on the delta with the standing per-record heap
+findings FAIL for the gate, Gauss PASS on the delta with the standing
+C/D findings FAIL for the gate, Goodall FAIL on the carried P1-2
+(membership ID leaf decode parity).
+
+All standing findings cleared in 93eb8cf (16 files; ~5 core-minutes of
+parallel worker implementation on the shared tree; the recovery suite
+grows to 81 Test functions):
+
+- Goodall P1-2: membership_id_codec.decodeLeafKey now decodes the full
+  ID record (format.DecodeMembershipRecord, the Rust codec::decode
+  peer) and the scan emits the membership-invalid envelope on a
+  malformed tail instead of accepting the shape-only key.
+- Chandrasekhar F1/F2/F3/F4 (range path): scan cursors, event
+  payloads, coalesce state, and components stream by value with ok
+  flags (Rust Option<K>/Option<Record<K>>/Option<Component>);
+  range_scan_alloc_test pins 4 allocs/run constant from 100 to 200
+  records (the 4 are per-page/per-node fixed state).
+- F5 (catalog record): the accessor views the table arena (new
+  tableStore.view with the shared offset proof) instead of copying a
+  264-byte name per call; the contains chain pins 0 allocs/run.
+- F6 (bitmap digest): one concrete bitmapHasher reused per pass, word
+  feeds by value, no Sum(nil) allocation; membership index scan
+  pinned 849->43 allocs/run.
+- F7 (blob branch select): direct fixed-cell O(1) select mirroring
+  Rust slotted_page::cell with one layout proof per branch page;
+  blob word walk pinned 144->18 allocs/run; the latent nil-deref on a
+  corrupt blob branch layout folds to a clean corrupt refusal and the
+  expected-level arm no longer escapes a pointer.
+- F8: bits.TrailingZeros64 replaces the hand-rolled loop.
+- F9/F10 (output policies): pending ranges and resolved memberships by
+  value, reusable word slots; membership push pinned 19->8, structured
+  push 24->16.
+- Gauss standing items: tree scan and blob scan prove the page layout
+  once per page and pass the inspection into the leaf/branch arms
+  (tree_scan_alloc_test -1/page, membership_blob_alloc_test -2/page);
+  the two duplicate-proof findings are closed.
+- Goodall P3-F: the unknown-structure-kind refusal folds through
+  problem() like its sibling arms.
+
+Battery at 93eb8cf (all under nice; ~3 core-minutes): gofmt clean; vet
+plain + v4work; plain and v4work full trees ok; race + checkptr=2 on
+recovery/writer/publication/live/bootstrap and the root, both tag sets;
+six cross-compiles plain + v4work; check-mmap-trace.sh PASS on all
+four legs, including the recovery-construction leg.
+
+Next: milestone 2 chunk 4-10 gate - delta re-review round 3 to the
+three open aspects (Chandrasekhar performance, Gauss Go idioms, Goodall
+Rust parity) over the 93eb8cf hot-path batch; on three-aspect PASS,
+the chunk close-out (gate record, Status completed, move to
+.agents/sow/done/, single commit + push); the worker process boundary
+(4-11) and the authorized scratch/external sort stay the recorded
+follow-ups.
