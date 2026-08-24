@@ -248,12 +248,15 @@ func TestValidateMetadataLengthFailures(t *testing.T) {
 			pageNil:      false,
 		},
 		{
-			// The stream produces more output than declared.
+			// The stream produces more output than declared: the
+			// overflow surfaces while the page feed still has input
+			// (Rust step excess arm), so the finding carries the page
+			// being fed.
 			name:         "output too small",
 			data:         compressibleStream,
 			uncompressed: 500,
 			compressed:   uint64(len(compressibleStream)),
-			pageNil:      true,
+			pageNil:      false,
 		},
 		{
 			// The stream ends before the declared output is produced.

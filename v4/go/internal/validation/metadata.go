@@ -262,15 +262,12 @@ func validateMetadataChain(ctx *context, output []byte) error {
 		return nil
 	}
 	if probeErr == nil || n != 0 {
-		if source.remaining != 0 {
-			// The stream produces more output than declared while
-			// chain pages remain: the finding is on the page being
-			// fed and the chain keeps walking (Rust feed excess arm).
-			return metadataZlibStop(ctx, source)
-		}
-		// The overflow surfaces in the finish with no page left (Rust
-		// finish: written exceeds output.len).
-		return metadataZlibFindingNone(ctx)
+		// The stream produces more output than declared: the overflow
+		// always surfaces while a page feed still has input (Rust step
+		// excess arm; the finish-class no-page finding is only for
+		// short or truncated streams), so the finding is on the page
+		// being fed and the chain keeps walking.
+		return metadataZlibStop(ctx, source)
 	}
 	if !errors.Is(probeErr, io.EOF) {
 		if errors.Is(probeErr, io.ErrUnexpectedEOF) {
