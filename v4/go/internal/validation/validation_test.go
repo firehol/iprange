@@ -135,9 +135,9 @@ func TestValidateBudgetRefusals(t *testing.T) {
 
 func TestValidateModeRefusals(t *testing.T) {
 	path := metaDB(t, 4)
-	if _, failure := Validate(path, ValidationModeLiveCurrent, HeapOnly(1<<20, 2), nil, nil); failure == nil {
-		t.Fatal("live mode accepted before the LiveCurrent slice")
-	}
+	// The offline-candidate mode stays refused until chunk 4-10; the
+	// trained LiveCurrent behaviors live in the linux/darwin live
+	// suite (the open refusal and the selection arms).
 	if _, failure := Validate(path, ValidationModeOfflineCandidate, HeapOnly(1<<20, 1), nil, nil); failure == nil {
 		t.Fatal("offline mode accepted before chunk 4-10")
 	}

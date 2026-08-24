@@ -1,11 +1,13 @@
 #!/bin/sh
 # check-mmap-trace.sh - runtime half of the mmap-only evidence.
 #
-# Traces a real open+lookup session (the Rust conformance cross-open test)
-# and asserts that the database descriptors are never read through file
-# I/O: after openat + OFD lock, every byte of the fixtures must arrive
-# through mmap. Any read/pread64/readv/write/lseek on an fd whose path is
-# a v4 artifact fails the check.
+# Traces real open+lookup and live-validation sessions (the Rust
+# conformance cross-open test and the public LiveCurrent validation
+# proof) and asserts that the database descriptors are never read
+# through file I/O: after openat + OFD lock, every byte of the
+# fixtures must arrive through mmap. Any
+# read/pread64/readv/write/lseek on an fd whose path is a v4 artifact
+# fails the check.
 #
 # Usage: ./check-mmap-trace.sh   (run from the v4/go directory)
 # The trace set and the violation pattern must stay in sync: every
@@ -24,6 +26,7 @@ if ! command -v strace >/dev/null 2>&1; then
 	exit 0
 fi
 
+# leg 1: the immutable conformance cross-open (Rust-written fixtures).
 echo "check-mmap-trace: tracing TestConformanceRustFixtures (nice)"
 nice -n 10 strace -f -y -e trace=openat,read,pread64,readv,write,writev,pwrite64,lseek,mmap,munmap,close,fcntl \
 	-o "$TRACE" \
@@ -34,18 +37,41 @@ if [ $TEST_RC -ne 0 ]; then
 	exit 1
 fi
 
-VIOLS="$TRACE.viol"
+# leg 2: the live-current validation session over the public live
+# writer (Rust mmap_runtime_tests live validation proof): the trace
+# covers create + commit + validate + reader open, so the sidecar
+# coordination and the validation sweep must stay mmap-only too.
+TRACE2="$(mktemp /tmp/iprange-mmap-trace2.XXXXXX)"
+TESTLOG2="$(mktemp /tmp/iprange-mmap-trace-test2.XXXXXX)"
+trap 'rm -f "$TRACE" "$TESTLOG" "$TRACE2" "$TESTLOG2"' EXIT
+echo "check-mmap-trace: tracing TestPublicValidateLiveCleanSweep (nice)"
+nice -n 10 strace -f -y -e trace=openat,read,pread64,readv,write,writev,pwrite64,lseek,mmap,munmap,close,fcntl \
+	-o "$TRACE2" \
+	"$(go env GOROOT)/bin/go" test -run '^TestPublicValidateLiveCleanSweep$' -count=1 . >"$TESTLOG2" 2>&1
+TEST_RC=$?
+if [ $TEST_RC -ne 0 ]; then
+	echo "check-mmap-trace: live validation test failed (rc=$TEST_RC); see $TESTLOG2" >&2
+	exit 1
+fi
+
 # Match only the fd path inside the strace -y header (read(3<path>, ...));
 # the payload bytes after the header may legally contain ".iprdb" text.
+VIOLS="$TRACE.viol"
+VIOLS2="$TRACE2.viol"
 grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.iprdb>' "$TRACE" > "$VIOLS" || true
-if [ -s "$VIOLS" ]; then
+grep -E '(read|pread64|readv|write|writev|pwrite64|lseek)\([0-9]+<[^>]*\.iprdb>' "$TRACE2" > "$VIOLS2" || true
+if [ -s "$VIOLS" ] || [ -s "$VIOLS2" ]; then
 	echo "check-mmap-trace: FAIL - file I/O on a database descriptor:"
 	head -5 "$VIOLS"
+	head -5 "$VIOLS2"
 	exit 1
 fi
 
 OPEN_CNT=$(grep -c 'openat' "$TRACE" || true)
 MMAP_CNT=$(grep -c 'mmap(' "$TRACE" || true)
+OPEN_CNT2=$(grep -c 'openat' "$TRACE2" || true)
+MMAP_CNT2=$(grep -c 'mmap(' "$TRACE2" || true)
 echo "check-mmap-trace: PASS - no read/pread64/readv/write/writev/pwrite64/lseek on any .iprdb descriptor"
-echo "check-mmap-trace: openat=$OPEN_CNT mmap=$MMAP_CNT (fixtures mapped, never streamed)"
+echo "check-mmap-trace: immutable: openat=$OPEN_CNT mmap=$MMAP_CNT (fixtures mapped, never streamed)"
+echo "check-mmap-trace: live validation: openat=$OPEN_CNT2 mmap=$MMAP_CNT2 (pair mapped, never streamed)"
 exit 0

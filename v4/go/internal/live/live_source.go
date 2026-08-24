@@ -249,6 +249,12 @@ func (s *LiveSource) releaseUnclaimed(cause error) (*LiveSource, error) {
 	return nil, &OpenFailure{Cause: end.Cause, Residue: end.Residue}
 }
 
+// Mapping returns the raw page mapping of the pinned generation for
+// the validation sweep (the validation context reads pages through the
+// mapping owner). The mapping is borrowed: it lives until the source
+// release and must never be closed by the caller.
+func (s *LiveSource) Mapping() *mapping.Mapping { return s.mapping }
+
 // Core returns the logical reader core of the pinned generation (Rust
 // source::reader over source.mapping + source.meta). The snapshot copy
 // consumes the same cursor surface as the immutable source.

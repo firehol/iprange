@@ -219,3 +219,36 @@ func selectBetween(p0, p1 []byte, m0, m1 format.Meta, valid0, valid1 bool) (form
 	}
 	return format.Meta{}, 0, 0, errNoBootstrapMeta
 }
+
+// DatabaseIDFromPages returns the bound database identity of one raw
+// meta pair (Rust database_id_from_meta_pages): either page's
+// identity-readable meta must carry the same database id, and a pair
+// with no identity-readable page is the NoBootstrapMeta class. The
+// committed-generation rules do not run here: this is the "bound" id
+// used by the live validation registration when the committed
+// generation cannot be selected.
+func DatabaseIDFromPages(p0, p1 []byte) ([16]byte, error) {
+	var zero [16]byte
+	valid0, id0 := metaDatabaseID(p0)
+	valid1, id1 := metaDatabaseID(p1)
+	if valid0 && valid1 && id0 != id1 {
+		return zero, formatErr("meta pages disagree on the database id")
+	}
+	if valid0 {
+		return id0, nil
+	}
+	if valid1 {
+		return id1, nil
+	}
+	return zero, problemErr(ProblemNoBootstrapMeta, "no identity-readable meta page")
+}
+
+// metaDatabaseID returns the database id of one identity-readable meta
+// page (Rust identity_readable within database_id_from_meta_pages).
+func metaDatabaseID(page []byte) (bool, [16]byte) {
+	meta, ok := format.ParseIdentity(page)
+	if !ok {
+		return false, [16]byte{}
+	}
+	return true, meta.DatabaseID
+}

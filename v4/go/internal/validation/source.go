@@ -4,8 +4,9 @@ package validation
 // database main is opened read-only without following symlinks, the
 // shared lifetime lock is taken, the path identity and sidecar
 // absence are proved under the lock, and the source is re-verified
-// after the sweep. The live sources land with the LiveCurrent slice
-// (F); require_main_available is the recorded POSIX no-op.
+// after the sweep. The live sources live in live.go (the LiveCurrent
+// arm composes the internal/live registration machine);
+// require_main_available is the recorded POSIX no-op.
 
 import (
 	"os"

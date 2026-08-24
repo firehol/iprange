@@ -38,11 +38,7 @@ func Validate(path string, mode ValidationMode, budget *ValidationBudget, check 
 			progress := NewProgress()
 			return nil, failureOf(&format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "live validation open files"}, &progress)
 		}
-		// The live source registration arrives with the LiveCurrent
-		// slice (F); the honest interim refuses at the same position
-		// where the Rust live open would begin.
-		progress := NewProgress()
-		return nil, failureOf(&format.Error{Code: format.CodeOSUnsupported, Detail: "live validation opens arrive with the chunk-4-9 LiveCurrent slice"}, &progress)
+		return validateLive(path, budget, check, sink)
 	case ValidationModeOfflineCandidate:
 		progress := NewProgress()
 		return nil, failureOf(&format.Error{Code: format.CodeOSUnsupported, Detail: "offline-candidate validation arrives with chunk 4-10"}, &progress)
