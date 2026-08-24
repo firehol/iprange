@@ -70,7 +70,14 @@ func inspectMainResidue(destination *destination, check func() error) (*residueM
 			return nil, outputProblem(err)
 		}
 	}
-	tuple := readResidueTuple(mapped, byteLength)
+	tuple, err := readResidueTuple(mapped, byteLength)
+	if err != nil {
+		if mapped != nil {
+			_ = mapped.Close()
+		}
+		_ = regular.File.Close()
+		return nil, err
+	}
 	accessPolicy := AccessPolicyChangedOrUnproven
 	if _, err := security.CreatorOnlyCommitment(regular.File); err == nil {
 		accessPolicy = AccessPolicyCreatorOnly
@@ -130,26 +137,27 @@ func (g *residueMainGuard) verify(destination *destination) error {
 
 // readResidueTuple reads the portable meta identity when the main has
 // valid v4 geometry and a readable meta pair (Rust
-// residue::main::read_tuple; everything else stays absent).
-func readResidueTuple(mapped *mapping.Mapping, byteLength uint64) *residueTuple {
+// residue::main::read_tuple: page faults propagate as sdk problems,
+// an unreadable meta pair stays absent).
+func readResidueTuple(mapped *mapping.Mapping, byteLength uint64) (*residueTuple, error) {
 	if mapped == nil || !reservationGeometryValid(byteLength) {
-		return nil
+		return nil, nil
 	}
 	page0, err := mapped.Page(0)
 	if err != nil {
-		return nil
+		return nil, sdkProblem(err)
 	}
 	page1, err := mapped.Page(1)
 	if err != nil {
-		return nil
+		return nil, sdkProblem(err)
 	}
 	meta, err := bootstrap.OpenMeta(page0, page1, byteLength, bootstrap.ModeImmutableReader)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	return &residueTuple{
 		databaseID:    meta.DatabaseID,
 		transactionID: meta.TxnID,
 		commitNonce:   meta.CommitNonce,
-	}
+	}, nil
 }

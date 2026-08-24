@@ -40,9 +40,11 @@ func retireResidueCoordination(destination *destination, file *os.File, identity
 	}, nil
 }
 
-// retryRetiredResidue re-proves the coordination unlink (Rust
-// retirement::retry, unix arm: only the retained link count).
-func retryRetiredResidue(destination *destination, file *os.File, identity live.FileIdentity, retirementPending bool) retirementOutcome {
+// retryResidueRetirement re-proves the coordination unlink (Rust
+// retirement::retry, unix arm: only the retained link count; the
+// retirement-pending flag feeds only the Windows arm and is absent
+// here like every other Go publication surface).
+func retryResidueRetirement(file *os.File) retirementOutcome {
 	return retirementOutcome{
 		cause:        linkCountProofResidue(file),
 		housekeeping: HousekeepingNone,

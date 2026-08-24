@@ -441,7 +441,7 @@ func TestResidueIncompleteRemovalRetainsExactAuthorityForRetry(t *testing.T) {
 	if err := verifyCoordinationResidue(handle); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if err := liveLockOperationResidue(handle.coordination, noopCheck); err != nil {
+	if err := lockOperationFile(handle.coordination, noopCheck); err != nil {
 		t.Fatalf("lock: %v", err)
 	}
 	if err := rejectSelectableResidue(handle.coordination); err != nil {
@@ -459,10 +459,9 @@ func TestResidueIncompleteRemovalRetainsExactAuthorityForRetry(t *testing.T) {
 		t.Fatalf("retire cause: %v", retired.cause)
 	}
 	handle.retired = &retiredResidue{
-		main:              mainGuard,
-		housekeeping:      retired.housekeeping,
-		visible:           retired.visible,
-		retirementPending: false,
+		main:         mainGuard,
+		housekeeping: retired.housekeeping,
+		visible:      retired.visible,
 	}
 
 	incomplete := incompleteResidue(*handle, cleanupConflictProblem("injected directory synchronization failure"))
@@ -497,8 +496,67 @@ func TestResidueIncompleteRemovalRetainsExactAuthorityForRetry(t *testing.T) {
 	}
 }
 
-// liveLockOperationResidue takes the coordination operation lock for
-// the retained-handle test (Rust live_lock::lock_cancellable).
-func liveLockOperationResidue(file *os.File, check func() error) error {
-	return lockOperationFile(file, check)
+// TestResidueRetryCancellationReleasesRetainedMain ports the
+// cancellation drop of a retired handle: a cancelled retry terminal
+// consumes the retained authority exactly like the Rust handle drop,
+// closing the retired main guard, the coordination descriptor, and
+// the destination directory.
+func TestResidueRetryCancellationReleasesRetainedMain(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "result.v4")
+	coordination := residueCoordinationPath(main)
+	if err := os.WriteFile(coordination, []byte("malformed"), 0o600); err != nil {
+		t.Fatalf("write coordination: %v", err)
+	}
+	if err := os.WriteFile(main, []byte("arbitrary previous bytes"), 0o600); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	before := countProcessFds(t)
+
+	inspected, err := inspectResidue(main, noopCheck)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	handle := inspected.handle
+	if handle == nil {
+		t.Fatal("handle missing")
+	}
+	if err := verifyCoordinationResidue(handle); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if err := lockOperationFile(handle.coordination, noopCheck); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := rejectSelectableResidue(handle.coordination); err != nil {
+		t.Fatalf("reject selectable: %v", err)
+	}
+	mainGuard, err := inspectMainResidue(handle.destination, noopCheck)
+	if err != nil {
+		t.Fatalf("inspect main: %v", err)
+	}
+	retired, err := retireResidueCoordination(handle.destination, handle.coordination, handle.coordinationIdentity)
+	if err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if retired.cause != nil {
+		t.Fatalf("retire cause: %v", retired.cause)
+	}
+	handle.retired = &retiredResidue{
+		main:         mainGuard,
+		housekeeping: retired.housekeeping,
+		visible:      retired.visible,
+	}
+
+	cancellation := &resolverTestCancellation{}
+	cancellation.cancelled.Store(true)
+	_, err = removeResidue(*handle, cancellation.check)
+	if codeOf(err) != format.CodeCancelled {
+		t.Fatalf("retry problem = %v, want cancelled", err)
+	}
+	if _, err := os.Lstat(coordination); err == nil {
+		t.Fatal("coordination still exists")
+	}
+	if after := countProcessFds(t); after > before {
+		t.Fatalf("cancelled retry left %d descriptors open", after-before)
+	}
 }

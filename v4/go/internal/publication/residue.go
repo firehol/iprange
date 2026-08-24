@@ -70,7 +70,12 @@ type residueMain struct {
 
 // residueHandle is the same-process authority for one exact
 // canonical coordination inode (Rust PublicationResidueHandle +
-// residue::linux::Handle).
+// residue::linux::Handle). removeResidue consumes the handle: the
+// removal either closes the retained descriptors or transfers the
+// residual authority into the returned removal result's handle; the
+// caller's inspected copy must not be reused after the call (Rust
+// move semantics; Go has no move, so the consumed copy stays
+// aliased to closed descriptors).
 type residueHandle struct {
 	destination          *destination
 	coordination         *os.File
@@ -81,10 +86,9 @@ type residueHandle struct {
 // retiredResidue is the retained state after the coordination
 // unlink succeeded (Rust Retired).
 type retiredResidue struct {
-	main              *residueMainGuard
-	housekeeping      Housekeeping
-	visible           []HousekeepingArtifact
-	retirementPending bool
+	main         *residueMainGuard
+	housekeeping Housekeeping
+	visible      []HousekeepingArtifact
 }
 
 // residueInspection is one read-only residue inspection (Rust
@@ -212,6 +216,9 @@ func inspectAbsentResidue(destination *destination, check func() error) (*Public
 // after certified quiescence (Rust remove_publication_residue).
 func removeResidue(handle residueHandle, check func() error) (residueRemoval, error) {
 	if err := live.Checkpoint(check); err != nil {
+		if handle.retired != nil && handle.retired.main != nil {
+			handle.retired.main.Close()
+		}
 		closeResidueAuthority(&handle)
 		return residueRemoval{}, sdkProblem(err)
 	}
@@ -255,10 +262,9 @@ func removeResidue(handle residueHandle, check func() error) (residueRemoval, er
 		return residueRemoval{}, err
 	}
 	handle.retired = &retiredResidue{
-		main:              main,
-		housekeeping:      retired.housekeeping,
-		visible:           retired.visible,
-		retirementPending: retired.cause != nil,
+		main:         main,
+		housekeeping: retired.housekeeping,
+		visible:      retired.visible,
 	}
 	if retired.cause != nil {
 		return incompleteResidue(handle, retired.cause), nil
@@ -326,10 +332,9 @@ func closeResidueAuthority(handle *residueHandle) {
 // retained coordination link count).
 func retryRetirementResidue(handle *residueHandle) error {
 	retired := handle.retired
-	retried := retryRetiredResidue(handle.destination, handle.coordination, handle.coordinationIdentity, retired.retirementPending)
+	retried := retryResidueRetirement(handle.coordination)
 	retired.housekeeping = retired.housekeeping.merge(retried.housekeeping)
 	retired.visible = append(retired.visible, retried.visible...)
-	retired.retirementPending = retried.cause != nil
 	return retried.cause
 }
 
