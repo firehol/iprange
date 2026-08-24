@@ -148,6 +148,17 @@ func TestStructureGeometry(t *testing.T) {
 	if l, _ := StructureRootLevel(25601); l != 2 {
 		t.Fatalf("root level 25601 = %d", l)
 	}
+	// The Rust required_level bound: limits outside [1, 2^32] are
+	// refused, and the exact maximum reaches the capped height.
+	if _, ok := StructureRootLevel(0); ok {
+		t.Fatalf("root level 0 accepted")
+	}
+	if l, ok := StructureRootLevel(1 << 32); !ok || l != 3 {
+		t.Fatalf("root level 2^32 = %d/%v, want 3/true", l, ok)
+	}
+	if _, ok := StructureRootLevel(1<<32 + 1); ok {
+		t.Fatalf("root level 2^32+1 accepted")
+	}
 }
 
 func TestMetadataCompressedBound(t *testing.T) {

@@ -215,6 +215,11 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 		}
 		levelValue := format.U16(page[18:20])
 		if levelValue == 0 {
+			// Rust parse_leaf_info: the common and born identity arms
+			// of require_leaf_identity precede the geometry proof.
+			if !format.BlobCommonValid(page) || !format.BlobBornValid(page, meta.TxnID) {
+				return blobLeafInfo{}, corruptError("membership blob leaf identity is malformed")
+			}
 			geometry, err := format.DecodeBlobLeafGeometry(page, expected, expectedOffset, totalBytes)
 			if err != nil {
 				return blobLeafInfo{}, err

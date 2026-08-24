@@ -72,6 +72,17 @@ const (
 	StructureKindNetworkEnrichmentV1 uint8 = 1
 )
 
+// StructureKindFromWire decodes one wire structure-kind code (Rust
+// contract.rs StructureKind::from_wire: 0 and 1 are known, every
+// other code is unknown).
+func StructureKindFromWire(value uint8) (uint8, bool) {
+	switch value {
+	case StructureKindNone, StructureKindNetworkEnrichmentV1:
+		return value, true
+	}
+	return 0, false
+}
+
 // Blob kinds (binary-format-v4.md section 10).
 const (
 	BlobKindMembership uint32 = 1

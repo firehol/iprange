@@ -118,7 +118,7 @@ func openRecoverySource(path string, candidate *RecoveryCandidate, mode sourceMo
 		}
 		source, err := live.OpenLiveSourceCandidate(path, token, check)
 		if err != nil {
-			return nil, openProblem(err)
+			return nil, openProblemLive(err)
 		}
 		return &recoverySource{live: source}, nil
 	default:
@@ -303,11 +303,30 @@ func openProblem(cause error) *sourceOpenFailure {
 	return &sourceOpenFailure{cause: cause, guard: nil}
 }
 
+// openProblemLive folds one failed live open exactly like the Rust
+// finish_open Claimed arm: a claimed-open unwind with coordination
+// residue retains the half-released source in a retryable cleanup
+// guard; every other failure is the plain open problem.
+func openProblemLive(cause error) *sourceOpenFailure {
+	var open *live.OpenFailure
+	if errors.As(cause, &open) && open.Residue {
+		return &sourceOpenFailure{
+			cause: open.Cause,
+			guard: &RecoverySourceCleanupGuard{
+				source:      &guardSource{kind: guardSourceRecovery, recovery: &recoverySource{live: open.Retained}},
+				lastProblem: problem(open.Released),
+			},
+		}
+	}
+	return openProblem(cause)
+}
+
 // cleanupForCause maps one failed release to the terminal cause (Rust
 // cleanup_for_cause: ForkedHandle keeps its class, every other cause
 // is the cleanup-conflict class).
 func cleanupForCause(cause error) error {
-	if errors.Is(cause, &format.Error{Code: format.CodeForkedHandle}) {
+	var fe *format.Error
+	if errors.As(cause, &fe) && fe.Code == format.CodeForkedHandle {
 		return cause
 	}
 	return &format.Error{Code: format.CodeCleanupConflict, Detail: "source recovery protection was not released"}

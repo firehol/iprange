@@ -70,7 +70,16 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 		return failSource(problem(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and recovery output identities match"}), RecoveryReport{}, &facts, artifact)
 	}
 	meta := source.meta()
-	spec, err := writer.FreshOutputSpec(meta.AddressFamily, meta.ValueKind, meta.StructureKind, meta.ValueTag, meta.FeedIndexLimit)
+	// The output-spec structure-kind gate runs before the builder
+	// exists (Rust api.rs output_spec: from_wire on the raw code with
+	// the UnsupportedStructure refusal and the default report, so an
+	// unknown code never touches the destination file or the sink).
+	structureKind, known := format.StructureKindFromWire(meta.StructureKind)
+	if !known {
+		facts, artifact := attempt.DiscardFacts()
+		return failSource(&format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}, RecoveryReport{}, &facts, artifact)
+	}
+	spec, err := writer.FreshOutputSpec(meta.AddressFamily, meta.ValueKind, structureKind, meta.ValueTag, meta.FeedIndexLimit)
 	if err != nil {
 		facts, artifact := attempt.DiscardFacts()
 		return failSource(problem(err), RecoveryReport{}, &facts, artifact)

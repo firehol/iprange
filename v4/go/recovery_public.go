@@ -188,9 +188,10 @@ func RecoverOffline(sourcePath string, candidate *RecoveryCandidate, destination
 // RecoverLive runs one bounded recovery of the newest candidate of a
 // live database into a fresh published output (Rust recover_live): the
 // source claims one reader slot through the sidecar coordination, and
-// only the newest candidate is accepted. On platforms without proven
-// live coordination the refusal class is ErrorLiveCoordinationUnsupported
-// before the budget, exactly like the Rust api arm.
+// only the newest candidate is accepted. With a valid budget the
+// platform support refusal runs before any path access with
+// ErrorLiveCoordinationUnsupported, exactly like the Rust api arm; a
+// nil budget is refused first at the Go boundary.
 func RecoverLive(sourcePath string, candidate *RecoveryCandidate, destinationPath string, budget *RecoveryBudget, sink RecoverySink, cancellation *CancellationToken) (*RecoveryResult, *RecoveryPreparationFailure) {
 	if budget == nil {
 		return nil, recoveryBudgetFailure()

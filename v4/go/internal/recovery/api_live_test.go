@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
@@ -23,6 +24,56 @@ import (
 // reserves one coordination file on top of the source and output).
 func apiLiveTestBudget() *RecoveryBudget {
 	return HeapOnly(1024*1024, 100, 3)
+}
+
+// TestOpenProblemLiveRetainsClaimedUnwindGuard proves the
+// claimed-open unwind fold (Rust finish_open Claimed ->
+// SourceOpenFailure.guard): a live open error with residue builds the
+// retryable cleanup guard over the retained half-released source, and
+// the retried cleanup completes the release.
+func TestOpenProblemLiveRetainsClaimedUnwindGuard(t *testing.T) {
+	main := createLiveRecoveryPair(t)
+	inspection, err := inspect(t, main, RecoveryInspectionLive)
+	if err != nil {
+		t.Fatalf("inspect live: %v", err)
+	}
+	candidate := inspection.Candidate(0)
+	if candidate == nil || candidate.Label != CandidateNewest {
+		t.Fatalf("candidate %+v, want newest", candidate)
+	}
+	token, ok := candidateLiveToken(candidate)
+	if !ok {
+		t.Fatal("candidate token")
+	}
+	source, err := live.OpenLiveSourceCandidate(main, token, nil)
+	if err != nil {
+		t.Fatalf("OpenLiveSourceCandidate: %v", err)
+	}
+	defer func() {
+		_ = source.Release()
+	}()
+	failure := openProblemLive(&live.OpenFailure{
+		Cause:    &format.Error{Code: format.CodeLiveRecoveryCoordinationUnavailable, Detail: "synthetic live open failure"},
+		Residue:  true,
+		Retained: source,
+		Released: &format.Error{Code: format.CodeCleanupConflict, Detail: "synthetic release failure"},
+	})
+	if failure.cause == nil || failure.guard == nil {
+		t.Fatalf("failure %+v, want the primary cause with a cleanup guard", failure)
+	}
+	if !failure.guard.CleanupPending() {
+		t.Fatal("guard must retain the source")
+	}
+	if problemCode(failure.guard.LastProblem()) != format.CodeCleanupConflict {
+		t.Fatalf("last problem %v, want the release problem", failure.guard.LastProblem())
+	}
+	done, retryErr := failure.guard.RetryCleanup()
+	if retryErr != nil || !done {
+		t.Fatalf("retry cleanup = %v/%v, want done", done, retryErr)
+	}
+	if failure.guard.CleanupPending() {
+		t.Fatal("guard must empty after the completed retry")
+	}
 }
 
 // TestRecoverLivePublishesTheNewestCandidate constructs one committed

@@ -134,20 +134,23 @@ func StructureSpanOfLevel(level uint32) (uint64, bool) {
 	return span, true
 }
 
-// StructureRootLevel returns the smallest level whose coverage is at least
-// structure_id_limit (section 9A.1).
+// StructureRootLevel returns the smallest level whose coverage is at
+// least structure_id_limit (Rust structured_value/table.rs
+// required_level: the limit must lie in [1, 2^32] and the height is
+// capped at the table maximum; the coverage loop cannot overflow
+// within that bound, so the checked multiply is defensive).
 func StructureRootLevel(structureIDLimit uint64) (uint32, bool) {
-	if structureIDLimit < 1 {
+	if structureIDLimit < 1 || structureIDLimit > 1<<32 {
 		return 0, false
 	}
 	coverage := uint64(StructureRecordSlots)
 	level := uint32(0)
 	for coverage < structureIDLimit {
-		if coverage > (1<<64-1)/StructureDirectoryChildCount {
-			return 0, false
-		}
 		coverage *= StructureDirectoryChildCount
 		level++
+		if level > StructureTableMaxLevel {
+			return 0, false
+		}
 	}
 	return level, true
 }
@@ -209,14 +212,17 @@ type StructureRecord struct {
 	Payload  []byte
 }
 
-// DecodeStructureRecord parses one structure-ID record slot at the
-// implied position for expectedID (Rust codec::decode_record for the
+// DecodeStructureRecord parses one structure-ID record cell (Rust
+// structured_value/codec.rs decode_record for the
 // NetworkEnrichmentV1 payload codec): the record length proves the
-// 80-byte span, the reserved word is zero, the stored id is nonzero and
-// equals the slot's implied id, and the payload passes the kind semantic
-// validation. Refcount and digest are deliberately not checked: the
-// validation walk reports them as their own finding classes.
-func DecodeStructureRecord(b []byte, expectedID uint64) (StructureRecord, error) {
+// 80-byte span, the reserved word is zero, the stored id is nonzero,
+// and the payload passes the kind semantic validation. The
+// implied-slot record id is the caller's check, so recovery and
+// validation classify the mismatch with their exact envelopes instead
+// of folding it into the decode. Refcount and digest are deliberately
+// not checked: the validation walk reports them as their own finding
+// classes.
+func DecodeStructureRecord(b []byte) (StructureRecord, error) {
 	if len(b) != StructureRecordSize {
 		return StructureRecord{}, headerErr("structure record size %d", len(b))
 	}
@@ -226,9 +232,6 @@ func DecodeStructureRecord(b []byte, expectedID uint64) (StructureRecord, error)
 	id := U32(b[4:8])
 	if id == 0 {
 		return StructureRecord{}, headerErr("structure record id is zero")
-	}
-	if uint64(id) != expectedID {
-		return StructureRecord{}, headerErr("structure record id %d at slot implying %d", id, expectedID)
 	}
 	payload := b[48:StructureRecordSize]
 	if err := ValidateNetworkEnrichmentV1Payload(payload); err != nil {

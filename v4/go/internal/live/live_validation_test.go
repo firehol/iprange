@@ -39,3 +39,33 @@ func TestLiveTerminalResultResidue(t *testing.T) {
 		t.Fatalf("both terminal %+v", both)
 	}
 }
+
+// TestOpenFailureCarriesClaimedUnwindResidue pins the claimed-open
+// unwind terminal (Rust LiveOpenFailure::Claimed -> SourceOpenFailure
+// with the abandon guard): when the abandon release fails, the typed
+// open failure retains the half-released source and the raw release
+// problem so the recovery machine can build its retryable cleanup
+// guard.
+func TestOpenFailureCarriesClaimedUnwindResidue(t *testing.T) {
+	source := &LiveSource{ownerPID: currentPID}
+	saved := currentPID
+	currentPID = saved + 1
+	defer func() { currentPID = saved }()
+	primary := errors.New("primary open failure")
+	_, err := source.releaseUnclaimed(primary)
+	currentPID = saved
+	failure, ok := err.(*OpenFailure)
+	if !ok {
+		t.Fatalf("error %v, want *OpenFailure", err)
+	}
+	if failure.Cause != primary || !failure.Residue {
+		t.Fatalf("failure %+v, want the primary cause with residue", failure)
+	}
+	if failure.Retained != source {
+		t.Fatal("residue must retain the half-released source")
+	}
+	var fe *format.Error
+	if !errors.As(failure.Released, &fe) || fe.Code != format.CodeForkedHandle {
+		t.Fatalf("released %v, want the require-owner release failure", failure.Released)
+	}
+}

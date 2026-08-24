@@ -5,6 +5,9 @@ package recovery
 // against the digest and the feed catalog, and the accepted proof.
 
 import (
+	"fmt"
+	"math/rand"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -571,6 +574,146 @@ func TestMembershipRecoveryConstructDamagedBlob(t *testing.T) {
 		t.Fatalf("meta %+v, want 3 feeds 0 ranges", reopened)
 	}
 	validateClean(t, outputPath)
+}
+
+// TestMembershipRecoveryMetadataChargesOnlyTheMetadataBytes proves
+// the metadata write budget charges only the retained metadata bytes
+// (Rust indirect_build: complete_ranges over retained_metadata_bytes,
+// never the retained tables heap): an incompressible payload inside
+// the compression window must survive the construction even when it
+// crosses half the total heap, where the tables bytes used to leak
+// into the charge and trip a spurious budget refusal.
+func TestMembershipRecoveryMetadataChargesOnlyTheMetadataBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.iprdb")
+	var feeds [][2]any
+	for index := 1; index <= 2000; index++ {
+		feeds = append(feeds, [2]any{fmt.Sprintf("feed%05d", index), uint32(index)})
+	}
+	builder, err := writer.NewOutputBuilder(path, membershipSourceSpec(membershipFeedLimit), writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit, nil)
+	if err != nil {
+		t.Fatalf("NewOutputBuilder: %v", err)
+	}
+	for _, pair := range feeds {
+		if err := builder.PushFeed(pair[0].(string), pair[1].(uint32)); err != nil {
+			t.Fatalf("PushFeed(%s): %v", pair[0], err)
+		}
+	}
+	// Incompressible payload: the compressed chain equals the payload,
+	// so the write-budget boundary is exact.
+	random := rand.New(rand.NewSource(1))
+	payload := make([]byte, 2*1024*1024-8*1024)
+	if _, err := random.Read(payload); err != nil {
+		t.Fatalf("random payload: %v", err)
+	}
+	if err := builder.WriteMetadataWithBudget(payload, 4*1024*1024); err != nil {
+		t.Fatalf("WriteMetadataWithBudget: %v", err)
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	meta := builder.Meta()
+	if err := builder.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	source := mapSource(t, path)
+	defer source.Close()
+	sink := RecoverySinkFunc(func(envelope *RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.iprdb")
+	construction, failure := constructMembership(t, source, meta, outputPath, recoveryBudget(4*1024*1024), sink)
+	if failure != nil {
+		t.Fatalf("construct: %v", failure.cause)
+	}
+	if construction.report.MetadataChunks.Accepted == 0 || construction.report.MetadataChunks.Rejected != 0 {
+		t.Fatalf("metadata chunks %+v, want accepted", construction.report.MetadataChunks)
+	}
+}
+
+// TestMembershipRecoveryConstructBlobLeafIdentityDamaged corrupts
+// the born transaction of one blob leaf (re-sealing the page so the
+// checksum still passes) and proves the membership and its range
+// reject with the blob-invalid class, exactly like the Rust
+// require_leaf_identity arm of parse_leaf_info: the identity proof
+// runs before the geometry proof.
+func TestMembershipRecoveryConstructBlobLeafIdentityDamaged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.iprdb")
+	meta := membershipSource(t, path, [][2]any{{"alpha", uint32(3)}, {"middle", uint32(31_999)}, {"omega", uint32(51_137)}}, []membershipRange{
+		{from: 0, to: 9, words: wideBitmap()},
+	})
+	source := mapSource(t, path)
+	defer source.Close()
+	budget := recoveryBudget(1 << 22)
+	finderPages, err := forRecovery(budget.MaxHeapBytes/2, meta.PageCount, meta, budget)
+	if err != nil {
+		t.Fatalf("page set: %v", err)
+	}
+	finder := &blobRootFinder{}
+	if err := scanTree(membershipIDCodec{}, source, meta, meta.MembershipIDRoot, finderPages, nil, finder); err != nil {
+		t.Fatalf("blob root scan: %v", err)
+	}
+	if finder.root == 0 {
+		t.Fatal("no blob membership found")
+	}
+	corruptPageBorn(t, path, finder.root, meta.TxnID)
+
+	var unknown []RecoveryUnknownEnvelope
+	sink := RecoverySinkFunc(func(envelope *RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		unknown = append(unknown, *envelope)
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.iprdb")
+	construction, failure := constructMembership(t, source, meta, outputPath, budget, sink)
+	if failure != nil {
+		t.Fatalf("construct failure: %v", failure.cause)
+	}
+	report := construction.report
+	if report.MembershipEntries.Rejected != 1 || report.Ranges.Accepted != 0 || report.Ranges.Rejected != 1 {
+		t.Fatalf("recovery counts %+v, want membership 1 rejected, 1 range rejected", report)
+	}
+	blobInvalid := false
+	for _, envelope := range unknown {
+		if envelope.Reason == validation.ReasonBlobInvalid && envelope.Object == validation.ObjectMembershipBlob {
+			blobInvalid = true
+		}
+	}
+	if !blobInvalid {
+		t.Fatalf("envelopes %+v, want blob invalid identity", unknown)
+	}
+	r := reopenMember(t, outputPath)
+	defer r.Close()
+	reopened := r.Meta()
+	if reopened.ActiveFeedCount != 3 || reopened.RangeRecordCount != 0 {
+		t.Fatalf("meta %+v, want 3 feeds 0 ranges", reopened)
+	}
+	validateClean(t, outputPath)
+}
+
+// corruptPageBorn rewrites the born transaction of one page to txn+1
+// and re-seals the page checksum (the Rust rewrite_leaf_born peer):
+// every other header field stays intact, so only the identity arm can
+// reject the page — a checksum mismatch would mask the class under
+// test.
+func corruptPageBorn(t *testing.T, path string, pageNumber uint32, txn uint64) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer file.Close()
+	page := make([]byte, format.PageSize)
+	if _, err := file.ReadAt(page, int64(pageNumber)*format.PageSize); err != nil {
+		t.Fatalf("read page: %v", err)
+	}
+	format.PutU64(page[8:16], txn+1)
+	if err := format.SealPageChecksum(page); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if _, err := file.WriteAt(page, int64(pageNumber)*format.PageSize); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
 }
 
 // TestMembershipRecoveryConstructCatalogConflict rewrites one feed

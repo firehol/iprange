@@ -86,6 +86,12 @@ func (s *blobScanner) node(pageNumber uint32, expectedLevel *uint16, expectedSta
 }
 
 func (s *blobScanner) leaf(pageNumber uint32, page []byte, expectedLevel *uint16, expectedStart, length uint64) (*blobSpan, error) {
+	// The common and born identity arms of the Rust parse_leaf_info
+	// (require_leaf_identity) run before the geometry proof; the Go
+	// reader path performs the same split over DecodePageHeader.
+	if !format.BlobCommonValid(page) || !format.BlobBornValid(page, s.meta.TxnID) {
+		return nil, s.reject(pageNumber, validation.ReasonBlobInvalid, false)
+	}
 	geometry, err := format.DecodeBlobLeafGeometry(page, expectedLevel, expectedStart, length)
 	if err != nil {
 		return nil, s.reject(pageNumber, validation.ReasonBlobInvalid, false)

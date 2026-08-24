@@ -295,6 +295,14 @@ func (s *metadataChainSource) visitNext() error {
 	if problem != nil {
 		return s.rejectPage(pageNumber, problem.reason, problem.ioUnreadable)
 	}
+	// The Rust parse_page header gates (require_page_header: common
+	// identity, metadata kind, and born transaction) run before the
+	// chunk body proof; every refusal folds to the
+	// metadata-invalid class exactly like the Rust parse_page Err arm.
+	if !format.PageCommonValid(page) || !format.PageBornValid(page, s.meta.TxnID) ||
+		!format.PageKindValid(page, byte(format.PageTypeMetadataChunk), 0) {
+		return s.rejectPage(pageNumber, validation.ReasonMetadataInvalid, false)
+	}
 	chunk, ok := format.MetadataChunkFields(page, pageNumber, s.meta.PageCount, s.offset, s.remaining)
 	if !ok || !format.MetadataChunkTailZero(page, int(chunk.ChunkLen)) {
 		return s.rejectPage(pageNumber, validation.ReasonMetadataInvalid, false)

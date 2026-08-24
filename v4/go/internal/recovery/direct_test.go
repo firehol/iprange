@@ -588,3 +588,70 @@ func TestCompleteMetadataIsPreservedAndDamagedMetadataIsOmitted(t *testing.T) {
 	}
 	validateClean(t, outputPath)
 }
+
+// TestDamagedMetadataHeaderIsOmitted corrupts the born transaction of
+// the metadata chain root (re-sealing the page so the checksum still
+// passes) and proves the chain rejects with the metadata-invalid class
+// exactly like the Rust require_page_header arm: the common, kind, and
+// born identity gates run before the chunk body proof.
+func TestDamagedMetadataHeaderIsOmitted(t *testing.T) {
+	payload := []byte(`{"source":"recovery"}`)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.iprdb")
+	builder := directSourceBuilder(t, path)
+	if err := builder.PushDirectV4(10, 19, 7); err != nil {
+		t.Fatalf("PushDirectV4: %v", err)
+	}
+	if err := builder.WriteMetadataWithBudget(payload, 2*1024*1024); err != nil {
+		t.Fatalf("WriteMetadataWithBudget: %v", err)
+	}
+	if err := builder.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	meta := builder.Meta()
+	if err := builder.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	corruptPageBorn(t, path, meta.MetadataRoot, meta.TxnID)
+	source := mapSource(t, path)
+	defer source.Close()
+	var unknown []RecoveryUnknownEnvelope
+	sink := RecoverySinkFunc(func(envelope *RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		unknown = append(unknown, *envelope)
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.iprdb")
+	outBuilder := directOutputBuilder(t, outputPath)
+	construction, failure := directConstruct(source, meta, outBuilder, recoveryBudget(2*1024*1024), nil, sink)
+	if failure != nil {
+		t.Fatalf("construct: %v", failure.cause)
+	}
+	if err := construction.finished.Close(); err != nil {
+		t.Fatalf("Close finished output: %v", err)
+	}
+	if construction.report.MetadataChunks.Rejected != 1 {
+		t.Fatalf("rejected metadata chunks %d, want 1", construction.report.MetadataChunks.Rejected)
+	}
+	if construction.report.HasUnboundedUnknown {
+		t.Fatal("metadata damage must not be unbounded")
+	}
+	found := false
+	for _, envelope := range unknown {
+		if envelope.Object == validation.ObjectMetadata && envelope.Reason == validation.ReasonMetadataInvalid {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("envelopes %+v, want metadata invalid", unknown)
+	}
+	r, err := reader.OpenImmutable(outputPath)
+	if err != nil {
+		t.Fatalf("OpenImmutable: %v", err)
+	}
+	_, ok := r.MetadataJSONLen()
+	r.Close()
+	if ok {
+		t.Fatal("damaged output must carry no metadata")
+	}
+	validateClean(t, outputPath)
+}

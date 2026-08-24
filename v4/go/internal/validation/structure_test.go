@@ -178,9 +178,14 @@ func TestValidateStructurePayloadInvalidFinding(t *testing.T) {
 
 func TestValidateStructureWrongSlotIDFinding(t *testing.T) {
 	// The second record carries the first record's id: the dense slot
-	// envelope is refused on the record page, the renamed id then misses
-	// its hash mark, the range-counted id reports the refcount class in
-	// the slots, and the totals prove the disagreement.
+	// record refuses twice on the record page (Rust validate_record:
+	// decode_record, then the implied-slot id proof and the duplicate
+	// insert proof, both the structure-invalid class), the renamed id
+	// then misses its hash mark, the range-counted id reports the
+	// refcount class in the slots, and the totals prove the
+	// disagreement. The duplicated record still counts its membership
+	// owner (Rust validate_record counts regardless of the insert
+	// result), so the membership totals balance and emit no finding.
 	var pageNumber int
 	path := corpusCopy(t, "structured-ipv4.iprdb", func(raw []byte, pages int) []int {
 		cell, page := structureRecordCell(t, raw, pages, 2)
@@ -190,11 +195,11 @@ func TestValidateStructureWrongSlotIDFinding(t *testing.T) {
 	})
 	findings := collectFindingsHeap(t, path, 2<<20)
 	want := []ValidationReason{
-		ReasonStructurePayloadInvalid,      // id 1 at the slot implying id 2
+		ReasonStructureInvalid,             // id 1 at the slot implying id 2
+		ReasonStructureInvalid,             // id 1 defined twice
 		ReasonStructureReverseIndexInvalid, // id 2 misses its reverse mark
 		ReasonStructureRefcountInvalid,     // slot 2 counted but undefined
 		ReasonStructureInvalid,             // one defined slot vs two records
-		ReasonMembershipRefcountInvalid,    // membership 2 lost its counted owner
 	}
 	if len(findings) != len(want) {
 		t.Fatalf("findings %+v", findings)
@@ -205,8 +210,9 @@ func TestValidateStructureWrongSlotIDFinding(t *testing.T) {
 		}
 	}
 	if *findings[0].PageNumber != uint32(pageNumber) ||
-		findings[1].PageNumber == nil || *findings[1].PageNumber != 10 ||
-		findings[2].PageNumber != nil || findings[3].PageNumber != nil {
+		*findings[1].PageNumber != uint32(pageNumber) ||
+		findings[2].PageNumber == nil || *findings[2].PageNumber != 10 ||
+		findings[3].PageNumber != nil || findings[4].PageNumber != nil {
 		t.Fatalf("page attribution %+v", findings)
 	}
 }

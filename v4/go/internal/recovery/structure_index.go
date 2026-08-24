@@ -47,8 +47,8 @@ func (e *structureCountEvents) unknown(reason validation.ValidationReason, page 
 	return nil
 }
 func (e *structureCountEvents) leaf(page uint32, expectedID uint64, cell []byte) error {
-	record, err := format.DecodeStructureRecord(cell, expectedID)
-	if err != nil || expectedID >= e.meta.StructureIDLimit {
+	record, err := format.DecodeStructureRecord(cell)
+	if err != nil || uint64(record.ID) != expectedID || expectedID >= e.meta.StructureIDLimit {
 		return nil
 	}
 	digest, err := format.StructurePayloadDigest(format.StructureKindNetworkEnrichmentV1, record.Payload)
@@ -120,11 +120,14 @@ func (e *structureRecoverEvents) leaf(page uint32, expectedID uint64, cell []byt
 	if err := e.rep.structureExamined(); err != nil {
 		return err
 	}
-	record, err := format.DecodeStructureRecord(cell, expectedID)
+	record, err := format.DecodeStructureRecord(cell)
 	if err != nil {
 		return e.rep.structureRejected(1)
 	}
-	if expectedID >= e.meta.StructureIDLimit {
+	// The implied-slot id compare is its own refusal with the
+	// StructureInvalid envelope (Rust structure_index.rs Events::leaf:
+	// decode_record, then the id and limit proof).
+	if uint64(record.ID) != expectedID || expectedID >= e.meta.StructureIDLimit {
 		if err := e.rep.structureRejected(1); err != nil {
 			return err
 		}

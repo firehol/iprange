@@ -47,12 +47,16 @@ type LiveSourceEnd struct {
 // OpenFailure is the failing terminal of one live source open (Rust
 // SourceOpenFailure): the primary cause and whether the claimed-open
 // unwind left coordination residue (Rust RecoverySourceCleanupGuard
-// present, folded from the abandon release). The residue travels on the
-// open error so the snapshot machine classifies the cleanup state
-// exactly like the Rust api.rs guard field.
+// present, folded from the abandon release). The residue travels on
+// the open error so the snapshot and validation machines classify the
+// cleanup state exactly like the Rust api.rs guard field; the recovery
+// machine retains the half-released source and the raw release problem
+// for its retryable cleanup guard (Rust LiveOpenFailure::Claimed).
 type OpenFailure struct {
-	Cause   error
-	Residue bool
+	Cause    error
+	Residue  bool
+	Retained *LiveSource
+	Released error
 }
 
 func (e *OpenFailure) Error() string { return e.Cause.Error() }
@@ -250,8 +254,14 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 // gate is still held on every call, and the unlock failure nests
 // through combineErrors.
 func (s *LiveSource) releaseUnclaimed(cause error) (*LiveSource, error) {
-	end := s.abandon(cause)
-	return nil, &OpenFailure{Cause: end.Cause, Residue: end.Residue}
+	released := s.release()
+	end := s.terminal(cause, released)
+	failure := &OpenFailure{Cause: end.Cause, Residue: end.Residue}
+	if end.Residue {
+		failure.Retained = s
+		failure.Released = released
+	}
+	return nil, failure
 }
 
 // Mapping returns the raw page mapping of the pinned generation for
@@ -323,14 +333,17 @@ func (s *LiveSource) finalCheck(used format.Meta, check func() error) error {
 	if err := checkpoint(check); err != nil {
 		return err
 	}
-	if s.meta != used || s.hasCandidate && s.candidateTxn != used.TxnID {
-		return candidateChangedError()
-	}
+	// The exclusive gate is taken before the generation proof (Rust
+	// final_check: ensure_gate_cancellable precedes the meta compare),
+	// so a gate failure wins over a simultaneous generation change.
 	if !s.gateLocked {
 		if err := s.sidecar.lockGateCancellable(LockExclusive, check); err != nil {
 			return liveCoordination(err)
 		}
 		s.gateLocked = true
+	}
+	if s.meta != used || s.hasCandidate && s.candidateTxn != used.TxnID {
+		return candidateChangedError()
 	}
 	// The snapshot passes the claimed meta, so the structural equality
 	// is exact (Rust final_check: self.meta != used). The pair proofs

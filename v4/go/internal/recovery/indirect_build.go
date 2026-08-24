@@ -73,7 +73,11 @@ func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sour
 	if err != nil {
 		return nil, constructionFailureOf(builder, err, analysis.report, nil)
 	}
-	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retained, analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (any, *rangeBuildFailure) {
+	// The metadata compression window charges only the retained
+	// metadata bytes (Rust indirect_build::build: complete_ranges over
+	// retained_metadata_bytes); the full retained tables heap travels
+	// only in the range-build context below.
+	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retainedMetadataBytes(analysis.metadata), analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (any, *rangeBuildFailure) {
 		context := indirectOutputContext{
 			request: rangeBuild{
 				mapping:           m,

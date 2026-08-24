@@ -5,6 +5,7 @@ package recovery
 // rejection, and the out-of-bounds branch pointer best-effort recovery.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,6 +99,34 @@ func constructStructured(t *testing.T, source *mapping.Mapping, meta format.Meta
 	return construction, failure
 }
 
+// TestStructuredRecoveryConstructRefusesInvalidIDLimit proves the
+// structure table refuses a source generation whose ID limit lies
+// outside the Rust required_level range before any page work (Rust
+// table::required_level: Corrupt "structure table ID limit is
+// invalid").
+func TestStructuredRecoveryConstructRefusesInvalidIDLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.iprdb")
+	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
+		{from: 0, to: 9, value: enrichment(64512)},
+	})
+	meta.StructureIDLimit = 1<<32 + 1
+	source := mapSource(t, path)
+	defer source.Close()
+	sink := RecoverySinkFunc(func(envelope *RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.iprdb")
+	_, failure := constructStructured(t, source, meta, outputPath, recoveryBudget(1<<23), sink)
+	if failure == nil {
+		t.Fatal("invalid structure id limit accepted")
+	}
+	var fe *format.Error
+	if !errors.As(failure.cause, &fe) || fe.Code != format.CodeFormatInvalid {
+		t.Fatalf("cause %v, want the corrupt id-limit class", failure.cause)
+	}
+}
+
 // rewriteStructureRecord edits one structure record of the root leaf in
 // place and re-seals its checksum (Rust rewrite_structure_record: the
 // dense table stores record id at slot id, so the record offset is
@@ -119,7 +148,7 @@ func rewriteStructureRecord(t *testing.T, path string, meta format.Meta, id uint
 	}
 	at := 32 + int(id)*format.StructureRecordSize
 	record := page[at : at+format.StructureRecordSize]
-	decoded, err := format.DecodeStructureRecord(record, uint64(id))
+	decoded, err := format.DecodeStructureRecord(record)
 	if err != nil || decoded.ID != id {
 		t.Fatalf("slot record id mismatch: %v", err)
 	}
@@ -206,6 +235,49 @@ func TestStructuredRecoveryConstructDamagedRecord(t *testing.T) {
 		t.Fatalf("envelopes %+v, want structure hash invalid", unknown)
 	}
 	validateClean(t, outputPath)
+}
+
+// TestStructuredRecoveryConstructSlotIDMismatch rewrites the stored
+// id of one structure record so it no longer matches its implied
+// slot and proves the record rejects with the structure-invalid
+// envelope (Rust structure_index Events::leaf: decode_record, then the
+// id and limit proof; the mismatch is not a decode failure).
+func TestStructuredRecoveryConstructSlotIDMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.iprdb")
+	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
+		{from: 0, to: 9, value: enrichment(64512)},
+		{from: 20, to: 29, value: enrichment(64513)},
+	})
+	source := mapSource(t, path)
+	defer source.Close()
+	rewriteStructureRecord(t, path, meta, 1, func(record []byte) {
+		format.PutU32(record[4:8], 2)
+	})
+
+	var unknown []RecoveryUnknownEnvelope
+	sink := RecoverySinkFunc(func(envelope *RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		unknown = append(unknown, *envelope)
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.iprdb")
+	construction, failure := constructStructured(t, source, meta, outputPath, recoveryBudget(1<<23), sink)
+	if failure != nil {
+		t.Fatalf("construct failure: %v", failure.cause)
+	}
+	report := construction.report
+	if report.StructureEntries.Examined != 2 || report.StructureEntries.Accepted != 1 || report.StructureEntries.Rejected != 1 {
+		t.Fatalf("structure counts %+v, want 2/1/1", report.StructureEntries)
+	}
+	structureInvalid := false
+	for _, envelope := range unknown {
+		if envelope.Reason == validation.ReasonStructureInvalid && envelope.Object == validation.ObjectStructureDictionary {
+			structureInvalid = true
+		}
+	}
+	if !structureInvalid {
+		t.Fatalf("envelopes %+v, want structure invalid", unknown)
+	}
 }
 
 // TestStructuredRecoveryConstructMissingMembership corrupts the

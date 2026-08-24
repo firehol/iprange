@@ -120,6 +120,86 @@ func assertNoPrivateNames(t *testing.T, directory string) {
 	}
 }
 
+// rewriteDualMeta rewrites both meta pages of one test file through a
+// writable mapping (the mmap-only fixture discipline: the recovery
+// trace leg proves the machine never streams the source through file
+// I/O, so the fixture must not either).
+func rewriteDualMeta(t *testing.T, path string, change func(*format.Meta)) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer file.Close()
+	mapping, err := mapping.MapFile(file, 2*format.PageSize, true)
+	if err != nil {
+		t.Fatalf("MapFile: %v", err)
+	}
+	defer mapping.Close()
+	for _, pageNumber := range []uint32{0, 1} {
+		page, err := mapping.Page(pageNumber)
+		if err != nil {
+			t.Fatalf("Page(%d): %v", pageNumber, err)
+		}
+		meta, ok := format.ParseIdentity(page)
+		if !ok {
+			t.Fatalf("page %d not identity-readable", pageNumber)
+		}
+		change(&meta)
+		if err := meta.EncodeMapped(page); err != nil {
+			t.Fatalf("EncodeMapped: %v", err)
+		}
+	}
+	if err := mapping.FlushRange(0, 2*format.PageSize); err != nil {
+		t.Fatalf("FlushRange: %v", err)
+	}
+	if err := mapping.SyncFile(); err != nil {
+		t.Fatalf("SyncFile: %v", err)
+	}
+}
+
+// TestRecoverImmutableRefusesUnknownStructureKind proves the
+// output-spec structure-kind gate (Rust api.rs output_spec): a
+// structured source whose meta pair declares an unknown structure
+// kind refuses with the UnsupportedStructure class, the default
+// report, and no destination artifact — the builder never exists, so
+// no sink traffic or analysis facts are produced.
+func TestRecoverImmutableRefusesUnknownStructureKind(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.v4")
+	structuredSourceLimit(t, sourcePath, 64, nil, []structuredPush{
+		{from: 0, to: 9, value: enrichment(64512)},
+	})
+	rewriteDualMeta(t, sourcePath, func(meta *format.Meta) {
+		meta.StructureKind = 7
+	})
+	candidate := apiTestCandidate(t, sourcePath)
+	sinkTraffic := 0
+	sink := RecoverySinkFunc(func(*RecoveryUnknownEnvelope) (RecoverySinkControl, error) {
+		sinkTraffic++
+		return RecoverySinkContinue, nil
+	})
+	outputPath := filepath.Join(dir, "output.v4")
+	_, failure := RecoverImmutable(sourcePath, candidate, outputPath, apiTestBudget(), nil, sink)
+	if failure == nil {
+		t.Fatal("unknown structure kind accepted")
+	}
+	var fe *format.Error
+	if !errors.As(failure.Cause, &fe) || fe.Code != format.CodeUnsupportedStructure {
+		t.Fatalf("cause %v, want UnsupportedStructure", failure.Cause)
+	}
+	if failure.Report.UnknownEnvelopes != 0 {
+		t.Fatalf("unknown envelopes %d, want the default report", failure.Report.UnknownEnvelopes)
+	}
+	if sinkTraffic != 0 {
+		t.Fatalf("sink traffic %d, want none before the builder", sinkTraffic)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("output still present: %v", err)
+	}
+	assertNoPrivateNames(t, dir)
+}
+
 // TestRecoverImmutableSinkFailureReturnsPartialFactsAndRemovesThe
 // PrivateOutput ports the Rust sink_failure arm: the failing sink
 // stops the build with the partial report and the private output is

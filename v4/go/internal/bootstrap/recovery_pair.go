@@ -68,10 +68,11 @@ func ClassifyRecoveryMetaPair(states [2]RecoveryMetaState, has [2]bool) Recovery
 }
 
 // applyAdjacent proves the order of one adjacent pair where higher is
-// the newer meta on higherPage (Rust adjacent_order: the parity of
-// the higher page must match its transaction).
+// the newer meta on higherPage (Rust adjacent_order over
+// checked_add: the lower transaction must advance without wrapping,
+// and the parity of the higher page must match its transaction).
 func (p *RecoveryMetaPair) applyAdjacent(lower, higher format.Meta, higherPage uint8) {
-	if lower.TxnID+1 != higher.TxnID {
+	if lower.TxnID == ^uint64(0) || lower.TxnID+1 != higher.TxnID {
 		return
 	}
 	if uint8(higher.TxnID&1) != higherPage {

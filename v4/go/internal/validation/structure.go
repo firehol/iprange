@@ -116,13 +116,16 @@ func structureHashTreeKey(key format.StructureHashKey) tree.Key {
 // slot windows, the nonzero refcount, the payload digest, the single
 // define, and the membership ownership count.
 func validateStructureRecord(ctx *context, pageNumber uint32, expectedID uint64, cell []byte, maximumID *uint32, catalog *reader.ImmutableReader) error {
-	record, err := format.DecodeStructureRecord(cell, expectedID)
+	record, err := format.DecodeStructureRecord(cell)
 	if err != nil {
 		return structurePayloadFinding(ctx, &pageNumber)
 	}
 	if record.ID > *maximumID {
 		*maximumID = record.ID
 	}
+	// The implied-slot id compare is its own finding (Rust
+	// validation/structure.rs validate_record: decode_record, then the
+	// id and limit proof with the structure finding).
 	if uint64(record.ID) != expectedID || expectedID >= ctx.meta.StructureIDLimit {
 		if err := structureFinding(ctx, &pageNumber); err != nil {
 			return err
