@@ -10679,3 +10679,93 @@ first, then LiveCurrent/OfflineCandidate after the 4-4/4-6 machines;
 the milestone-close review process stays unchanged for the rest of
 M4 (chunks 4-9..4-12), then M5 (cross-language and performance
 acceptance).
+
+### Status (2026-08-24) - chunk 4-9 design recorded: explicit validation over the single-authority codecs
+
+Chunk 4-9 design, recorded before coding per the pre-implementation
+gate. Rust authorities read: validation.rs (76: public entry routing
+through the worker when present), validation/types.rs (430: mode,
+budget, reason/object enums, finding, sink trait + control, local
+identity, generation, progress, result, failure), validation/context.rs
+(claims bitmap GRAPH/ALLOCATION/UNCLAIMED partition, memberships +
+structures tables, heap accounting, progress), validation/source.rs
+(ImmutableSource/LiveBootstrapSource/LiveSource open/verify/
+require_available/release), validation/page.rs (slotted header, fixed
+and variable cells, layout), validation/tree.rs (walk + root shape +
+fence + layout), validation/range.rs (family/node/range_page/leaf/
+cells/cell/branch), validation/catalog.rs (trees + used bitmap +
+record), validation/bitmap.rs (node/leaf/leaf_word/branch/
+branch_child), validation/membership.rs (record/record_bitmap/hash/
+slots/slot/refcount/reverse/used) + membership_table.rs (Table with
+count_range/define/mark_reverse), validation/structure.rs (kind/
+record/hash/slot) + structure_table.rs (walk), validation/blob.rs
+(scan_membership), validation/metadata.rs (chain), validation/
+retirement.rs (extent), validation/mmap_runtime_tests.rs (live
+validation proof), worker/wire_validation.rs (the worker wire for the
+later worker chunk).
+
+Go current state that composes: internal/reader (the single-authority
+codecs: range/catalog/membership/structure/blob/bitmap/metadata/
+retirement readers), internal/mapping (mmap owner, PageView
+equivalent), internal/format (page headers, slotted layout, meta
+chain), internal/bitmap + internal/tree (used-bitmap and fixed-tree
+machinery), internal/live (4-1..4-7 machines: live lock, sidecar,
+create/initialize, live reader, transitions, live snapshot source +
+recovery source guard), internal/publication (4-8 CleanupArtifacts/
+CleanupState/CoordinationCleanup shapes for the failure surface),
+internal/work (v4work counters), internal/fault (v4work fault
+points), v4/go/types.go (Cardinality129), the subprocess crash-test
+pattern.
+
+Scope decisions (Rust is the baseline; consistent with the recorded
+M4 plan, no new user decision required):
+
+- Package internal/validation with the Rust-parity public surface:
+  ValidationMode (ImmutableCurrent, LiveCurrent, OfflineCandidate),
+  ValidationBudget (heap-only form; scratch stays with the recorded
+  4-10 follow-up), ValidationReason/ValidationObject closed enums,
+  PhysicalByteInterval, ValidationAddressFence, ValidationFinding,
+  ValidationSink (callback) + ValidationSinkControl,
+  LocalFileIdentity, ValidatedGeneration, ValidationProgress
+  (Cardinality129 bounded span), ValidationResult, ValidationFailure
+  (cause + progress + cleanup + coordination_cleanup +
+  source_cleanup, CleanupState projection).
+- ImmutableCurrent first (slice B), then LiveCurrent (slice F; the
+  4-4/4-6 dependencies are already implemented), reusing the
+  snapshot/live source guards. OfflineCandidate waits for chunk
+  4-10 (its opening arm is recovery::inspection::OfflineSource -
+  recorded deferral with its chunk, not claimed early).
+- Validation runs in-process for 4-9 (the Rust validate() worker
+  routing arrives with the 4-11 worker chunk; validate_local parity
+  is the 4-9 target and stays the local-composition authority).
+- Budget enforcement: max_open_files checked per mode
+  (immutable 1, live 2), heap accounting against max_heap_bytes in
+  the tables (membership/structure), cancellation checked at every
+  walk step, findings streamed through the sink in deterministic
+  order with the exact Rust reason/object texts.
+
+Slice plan (each slice closes with the five-aspect gate, committed
+signed and pushed):
+
+- A: public types + entry + context: validation.go (validate entry,
+  preflight, mode dispatch), types.go, context.go (claims partition,
+  heap), sink.go, source.go (immutable open/verify/identity/release)
+  with boundary tests.
+- B: page/tree/metadata/retirement validators over the single
+  authority codecs + the workspace/session counters.
+- C: range + catalog validators (including the used-bitmap arm).
+- D: bitmap + membership + membership_table + blob validators.
+- E: structure + structure_table validators.
+- F: LiveCurrent mode + failure/cleanup shapes + the iprangedb
+  facade Validate + the crash/resource matrix ports and the full
+  validation battery.
+
+Validation plan (all under nice; budget: each slice ~1-2 core-minutes,
+the full chunk battery ~3-5 core-minutes - recorded per the resource
+budget rule): gofmt, vet plain + v4work, plain/v4work full trees,
+race + checkptr on internal/validation and the root package,
+six cross-builds, work-counter pins on the validators, fixture
+corpus ports of the Rust validation tests, then the five-aspect gate
+and the milestone push.
+
+Next: chunk 4-9 slice A implementation.
