@@ -12214,7 +12214,7 @@ Slice A ports the Rust wire era 1:1 with the 4-2 fault subset intact:
   validation result/failure mailboxes use the exported recovery types
   with worker-owned wire shapes where the domain packages keep fields
   private.
-- 73 new tests: Rust vectors ported (callback checkpoints, problem
+- 69 new tests: Rust vectors ported (callback checkpoints, problem
   detail preservation, scratch-entry cap) plus parity vectors for the
   encodings Rust does not unit-test (u128 fence hi/lo, optional enums,
   checkpoint basename grammar, cardinality limb rejection,
@@ -12222,7 +12222,7 @@ Slice A ports the Rust wire era 1:1 with the 4-2 fault subset intact:
   rejections, both outcome arms, all three validation modes).
 
 Validation (all under nice; ~1 core-minute): gofmt clean; vet plain +
-v4work; internal/worker plain and v4work suites ok (73 new tests);
+v4work; internal/worker plain and v4work suites ok (69 new tests);
 module build ok; darwin/windows cross-builds ok (the wire era is
 linux/amd64-tagged like the fault subset).
 
@@ -12258,9 +12258,10 @@ resume divergence is the recorded Go stance (the machine creates its
 own secured output at the request destination).
 
 Validation (all under nice; ~2 core-minutes): the internal/worker and
-cmd suites green plain + v4work (37 new client/binary tests; 115+
-worker tests total); full module green on rerun (one
-TestSnapshotLivePinsItsGenerationWhileWriterAdvances flake under
+cmd suites green plain + v4work (38 new test functions plus the
+in-process double TestMain; 115+ worker tests total); full module
+green on rerun (one TestSnapshotLivePinsItsGenerationWhileWriterAdvances
+flake under
 full-parallel v4work load, green 3/3 in isolation and in the rerun -
 timing-sensitive, unrelated to the worker slices, recorded);
 gofmt, vet, cross-builds (darwin/arm64, windows/amd64, freebsd/amd64,
@@ -12323,8 +12324,8 @@ finding - the exact Rust validation/context.rs load_graph_page
 behavior, not a failure with a CodeIO cause.
 
 Validation (all under nice; ~4 core-minutes): gofmt clean; vet plain +
-v4work clean; full module plain + v4work green (10 new mapping/session
-tests, 3 validation refusal tests, 2 recovery io-unreadable tests, the
+v4work clean; full module plain + v4work green (9 new mapping/session
+tests, 2 validation refusal tests, 2 recovery io-unreadable tests, the
 real-binary declared-page refusal test); race + checkptr (plain +
 v4work) green on recovery/writer/publication/live/bootstrap/validation/
 mapping/worker/root; six cross-builds (linux/386, linux/arm,
@@ -12332,13 +12333,6 @@ linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64) plain +
 v4work green; check-mmap-trace.sh four legs PASS (immutable, live
 validation, offline recovery, recovery construction; no artifact
 descriptor file I/O).
-
-Next: milestone 3 slice 4-11E - real cleanup + publication wire arms
-(the internal/publication seam: discardAttempt/confirmedAbsent/
-failedAttempt and resumeSecuredOutputForCleanup must become worker
-reachable; serveCleanup on the worker side; the retained cleanup guard
-exchange already on the client seam) and worker-build mismatch tests;
-then the chunk 4-11 five-aspect gate.
 
 ### Status (2026-08-25) - milestone 3 slice 4-11E delivered: real cleanup and publication wire arms, worker-build mismatch tests
 
@@ -12404,3 +12398,77 @@ five-aspect rounds over slices 4-11A-E, fix every P0-P2, then close
 milestone 3 and proceed to milestone 4 (chunk 4-12 platform
 completion: native darwin/freebsd proofs, crash-matrix extension with
 the probe_source arm, build-mismatch matrix, code-size audit).
+
+### Status (2026-08-25) - milestone 3 chunk gate round 1: five-aspect review FAILs (parity, idioms, wire, APIs) fixed; performance PASS; re-review dispatched
+
+The chunk 4-11 gate opened with five fresh same-model reviewers over
+slices A-E (HEAD 9a6558f). Verdicts: parity FAIL (two P1), idioms FAIL
+(one P2), wire FAIL (one P2 proof gap), APIs/docs FAIL (two P2),
+performance PASS (three P3). The fix round landed on the working tree
+(not yet committed at this record; the record commit carries it):
+
+- P1 (parity): worker-side spins converted to the Rust parent-liveness
+  shape — serveCleanup and the callback acknowledgement loops no longer
+  carry the control 30 s deadline (worker.rs serve_cleanup:361-367 and
+  the ValidationProxy/RecoveryProxy spins:142,399). A guard held longer
+  than 30 s or a sink slower than 30 s now behaves exactly like Rust.
+- P2 (idioms): the session unreadable-page state is now guarded by a
+  sync.RWMutex with the one-session-per-process invariant documented at
+  the setter, the worker fault memory, and the mode drivers; the
+  SessionPageUnreadable query gained the empty-list fast path.
+- P2 (wire): the cross-language byte-vector proof is being added — hex
+  fixtures produced by the actual Rust codecs for the progress,
+  recovery-outcome, publication-result, and cleanup-result envelopes,
+  asserted byte-identical by the Go reader and writer (in flight at
+  this record).
+- P2 (APIs/docs): the six test-only exports with zero production callers
+  are unexported or deleted (ReadPublicationResult,
+  ReadRecoveryCallbackReport, WireValidationResultOf, SourcePageUnreadable,
+  SourceUnreadablePages, DiscardRecoveryAttempt); WriteValidationResult
+  now composes the single authoritative conversion; the stale
+  "discard arms are slice 4-11E" references were rewritten to present
+  state.
+- P3 round: dead WireReader fields removed; nil-slice special case
+  dropped; readU32List preallocation capped by the sealed message
+  length (the Rust try_reserve BudgetExceeded arm has no Go analog;
+  the byte-budget charge is the equivalent guard, recorded);
+  inspection-result foreign-tag grammar aligned to the Rust reader (no
+  tag check); scratch-checkpoint entry refusal detail aligned to the
+  Rust duplicate-authority wording; the recovery Fault and
+  callback-failure arms now surface a corrupt scratch checkpoint as a
+  Failed terminal with nil scratch (Rust client/recovery.rs:114-117,
+  347-352); client_cleanup.go dropped the unused directory parameter;
+  the duplicated problemWireOf folding now composes the one exported
+  worker.WireProblemOf; the cmd state-word and build-id constants come
+  from the worker package instead of hand-repeated tables; the
+  IPRANGE_V4_BUILD_ID env seam is now real (worker.SetBuildID pins the
+  resolved identity before VerifyRequest; documented in the cmd package
+  doc); RecordUnreadablePage documents why the allocator-failure arm is
+  not expressible in Go.
+- Accepted P3 (performance, recorded): three small heap allocations per
+  streamed finding message (~100 ns on a 1-2 ms callback round trip;
+  ~1,500 tiny allocs/s worst case at the ~500 findings/s protocol
+  ceiling). Wire codec objects escape on the finding path; the empty
+  unreadable-list search stays inlined and allocation-free.
+
+EXPLICIT DEFERRAL (recorded for this gate): the production SDK routing
+through the worker boundary (the public Validate/Recover/Inspect entry
+points spawning the worker binary, as the Rust SDK always does) is NOT
+delivered by this chunk. The 4-9 slice-F record's forward statement
+"routing arrives with 4-11" is superseded by the recorded 4-11A-E slice
+plan (50f52c8), which contains no routing slice; the worker client arms
+(validateWithWorker, inspectRecoveryCandidatesWithWorker,
+recoverWithWorker, discardRecoveryAttempt) are delivered and proven
+against the real binary but have no production callers yet. Reason for
+the deferral: the worker-side probe arm (probe_source/enter_region,
+which gives a real session-1 source fault its fault record) is not
+ported — without it, routing the SDK through the worker would turn an
+unreadable source page into a process death without a record, which is
+the exact failure the boundary exists to isolate. Production routing
+lands with the 4-12 crash-matrix extension (the probe arm), and the
+in-process machines keep serving the SDK until then (Rust
+fault-isolation parity becomes complete at that point).
+
+Next: re-review round of the fixed tree by the same five reviewers
+(each re-checks its own aspect over the fix delta), then the milestone
+3 close-out record on five-aspect PASS, then milestone 4 (chunk 4-12).

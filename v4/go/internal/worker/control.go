@@ -234,6 +234,25 @@ func (c *Control) altStack() (uintptr, uintptr) {
 }
 
 // state reads the control state word.
+// SetBuildID pins the worker build identity of this process before
+// any control access (the runtime analog of Rust env! at build time:
+// the cmd binary resolves IPRANGE_V4_BUILD_ID or the fixed default and
+// calls this once at startup; VerifyRequest compares the control header
+// against the pinned value). A value outside the fixed 64-byte width is
+// refused with the verbatim Rust invalid-argument class.
+func SetBuildID(value string) error {
+	if len(value) != buildLen {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "worker build id must be 64 bytes"}
+	}
+	buildID = value
+	return nil
+}
+
+// State returns the current session state word (Rust control.rs
+// state(): the mapped state slot; the cmd binary reads it for the
+// parent-liveness spins Rust runs inside the crate).
+func (c *Control) State() uint32 { return c.state() }
+
 func (c *Control) state() uint32 {
 	return mapAtomicLoad32(baseOf(c.data), offState)
 }

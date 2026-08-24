@@ -15,9 +15,8 @@
 // validation.rs:310 / source_guard / inspection.rs:260 parity points,
 // and the classification arms consult SourcePageUnreadable at the Rust
 // inspection.rs:260 parity point. The worker-facing API surface is
-// SetSourceUnreadablePages / SourcePageUnreadable /
-// SourceUnreadablePages; duplicates are refused verbatim before any
-// machine runs.
+// SetSourceUnreadablePages; duplicates are refused verbatim before
+// any machine runs.
 package worker
 
 import (
@@ -34,17 +33,18 @@ func SetSourceUnreadablePages(pages []uint32) error {
 	return mapping.SetSessionUnreadablePages(pages)
 }
 
-// SourcePageUnreadable reports whether one source page is declared
+// sourcePageUnreadable reports whether one source page is declared
 // unreadable in this session (Rust worker.rs source_page_unreadable:
-// a binary search over the sorted list delegated to the mapping
-// session state).
-func SourcePageUnreadable(page uint32) bool {
+// the classification arms consult the mapping leaf session state
+// directly, and this worker-package reader exists for the fault-memory
+// tests and the future domain application seam).
+func sourcePageUnreadable(page uint32) bool {
 	return mapping.SessionPageUnreadable(page)
 }
 
-// SourceUnreadablePages returns a copy of the session's unreadable
+// sourceUnreadablePages returns a copy of the session's unreadable
 // source pages (Rust worker.rs unreadable_source_pages; the copy
 // keeps callers from mutating the session state).
-func SourceUnreadablePages() []uint32 {
+func sourceUnreadablePages() []uint32 {
 	return mapping.SessionUnreadablePages()
 }

@@ -18,8 +18,10 @@
 // RecoverySourceCleanupGuard::from_worker constructor yet (its
 // guardSourceWorker slot is reserved), so a guard-pending terminal
 // retains the child through WorkerCleanup and the arm returns that
-// retained cleanup alongside the outcome; the publication discard arms
-// are slice 4-11E.
+// retained cleanup alongside the outcome. The parent-side
+// DiscardRecoveryAttempt cleanup arm exists (client_cleanup.go) but
+// the production recovery arms do not compose it: the parent owns no
+// attempt facts (the Go machine creates its own output).
 package worker
 
 import (
@@ -79,11 +81,10 @@ func recoverWithWorker(sourcePath, destinationPath string, candidate *recovery.R
 				applyFaultToCheckpoint(attempt.checkpoint, attempt.fault)
 				return attempt.checkpoint, nil
 			}
-			// The parent owns no output attempt (recorded Go stance)
-			// and this slice's worker records no scratch checkpoint
-			// (the scratch machine is tracked), so the Rust discard
-			// arm is trivially clean; the publication discard arms are
-			// slice 4-11E.
+			// The parent owns no output attempt (recorded Go stance),
+			// so the Rust discard arm is trivially clean; the
+			// publication discard arms compose DiscardRecoveryAttempt
+			// once a parent-owned attempt exists.
 			if attempt.fault.Role != RoleSource {
 				return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(faultProblem(attempt.fault.Role), recovery.RecoveryReport{}, attempt.scratch)}, nil
 			}
@@ -170,9 +171,16 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 	case driven.Fault.Role == RoleSource && callback == nil:
 		checkpoint, checkpointErr := recoveryCheckpointOf(control)
 		if checkpointErr != nil {
-			return recoveryAttempt{kind: attemptFailed, cause: checkpointErr, scratch: scratchCheckpointOf(control)}
+			return recoveryAttempt{kind: attemptFailed, cause: checkpointErr, scratch: nil}
 		}
-		return recoveryAttempt{kind: attemptInterrupted, fault: driven.Fault, checkpoint: checkpoint, scratch: scratchCheckpointOf(control)}
+		// Rust recover_once Fault arm: a scratch-checkpoint decode
+		// error is a Failed terminal with a nil scratch, never a
+		// retried interruption (client/recovery.rs:114-117).
+		scratch, scratchErr := scratchCheckpointStrict(control)
+		if scratchErr != nil {
+			return recoveryAttempt{kind: attemptFailed, cause: scratchErr, scratch: nil}
+		}
+		return recoveryAttempt{kind: attemptInterrupted, fault: driven.Fault, checkpoint: checkpoint, scratch: scratch}
 	default:
 		if callback != nil {
 			return recoveryCallbackFailureWorker(control, callback)
@@ -228,7 +236,14 @@ func recoveryCallbackFailureWorker(control *Control, callback *CallbackDecision)
 	if err != nil {
 		return recoveryAttempt{kind: attemptFailed, cause: err, scratch: scratchCheckpointOf(control)}
 	}
-	return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(callback.IntoError()), report, scratchCheckpointOf(control))}}
+	// Rust recovery_callback_failure: a scratch-checkpoint decode
+	// error is a Failed terminal with a nil scratch
+	// (client/recovery.rs:347-352).
+	scratch, scratchErr := scratchCheckpointStrict(control)
+	if scratchErr != nil {
+		return recoveryAttempt{kind: attemptFailed, cause: scratchErr, scratch: nil}
+	}
+	return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(callback.IntoError()), report, scratch)}}
 }
 
 // recoveryCheckpointOf reads the sealed recovery publication checkpoint
@@ -285,6 +300,25 @@ func scratchCheckpointOf(control *Control) *recovery.RecoveryScratchAttempt {
 	}
 }
 
+// scratchCheckpointStrict reads the control scratch checkpoint with
+// the decode error surfaced (Rust control.scratch_checkpoint(): the
+// recovery Fault and callback-failure arms turn a corrupt checkpoint
+// into a Failed terminal instead of tolerating it).
+func scratchCheckpointStrict(control *Control) (*recovery.RecoveryScratchAttempt, error) {
+	checkpoint, err := control.ScratchCheckpoint()
+	if err != nil {
+		return nil, err
+	}
+	if checkpoint == nil {
+		return nil, nil
+	}
+	return &recovery.RecoveryScratchAttempt{
+		AttemptID:         checkpoint.AttemptID,
+		DirectoryIdentity: checkpoint.DirectoryIdentity,
+		CreationSecurity:  checkpoint.CreationSecurity,
+	}, nil
+}
+
 // applyFaultToCheckpoint folds the fault problem into a publication
 // checkpoint outcome (Rust apply_fault_to_checkpoint).
 func applyFaultToCheckpoint(outcome *RecoveryOutcome, fault FaultRecord) {
@@ -313,7 +347,7 @@ func faultProblem(role MappingRole) error {
 // source_guard::problem; the worker boundary form keeps the code and
 // detail and drops the errno like every Go arm).
 func problemOf(cause error) error {
-	return wireProblemOf(cause).Err()
+	return WireProblemOf(cause).Err()
 }
 
 // earlyRecoveryFailureOf builds the fixed early recovery failure (Rust

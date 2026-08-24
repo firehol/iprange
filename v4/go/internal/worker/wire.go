@@ -112,7 +112,7 @@ func (w *WireWriter) Bytes(value []byte) error {
 			return err
 		}
 	}
-	if value != nil && len(value) > math.MaxInt-w.at {
+	if len(value) > math.MaxInt-w.at {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "worker payload offset"}
 	}
 	w.at += len(value)
@@ -160,11 +160,9 @@ func (w *WireWriter) SizedBytes(value []byte) error {
 // payload buffer (Rust worker/wire.rs Reader). The constructor
 // snapshots the sealed length; every read stays inside it.
 type WireReader struct {
-	control *Control
-	buffer  wireBuffer
-	region  []byte
-	at      int
-	length  int
+	region []byte
+	at     int
+	length int
 }
 
 // NewWireReader starts a session-payload reader (Rust Reader::new).
@@ -174,10 +172,8 @@ func NewWireReader(control *Control) (*WireReader, error) {
 		return nil, err
 	}
 	return &WireReader{
-		control: control,
-		buffer:  bufferPayload,
-		region:  control.data[offPayload : offPayload+payloadCapacity],
-		length:  length,
+		region: control.data[offPayload : offPayload+payloadCapacity],
+		length: length,
 	}, nil
 }
 
@@ -189,10 +185,8 @@ func NewWireCallbackReader(control *Control) (*WireReader, error) {
 		return nil, err
 	}
 	return &WireReader{
-		control: control,
-		buffer:  bufferCallbackCheckpoint,
-		region:  control.data[offCallbackPayload : offCallbackPayload+callbackPayCapacity],
-		length:  length,
+		region: control.data[offCallbackPayload : offCallbackPayload+callbackPayCapacity],
+		length: length,
 	}, nil
 }
 
@@ -439,7 +433,21 @@ func readU32List(r *WireReader, heapBytes *uint64) ([]uint32, error) {
 		return nil, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "unreadable source-page list"}
 	}
 	*heapBytes -= bytes
-	values := make([]uint32, 0, int(count))
+	// The preallocation is capped by the sealed message length: the
+	// count field alone must never force a ~16 GiB allocation for a
+	// corrupt control (Rust try_reserve_exact folds the allocator
+	// failure into BudgetExceeded; Go cannot fail make(), so the cap
+	// is the reader's own byte bound and an over-count fails on
+	// truncation inside the loop with the same corrupt class).
+	remaining := r.length - r.at
+	capacity := int(count)
+	if capacity < 0 || uint64(capacity)*4 > uint64(remaining) {
+		capacity = remaining / 4
+	}
+	if capacity < 0 {
+		capacity = 0
+	}
+	values := make([]uint32, 0, capacity)
 	for i := uint32(0); i < count; i++ {
 		value, err := r.U32()
 		if err != nil {
@@ -1194,9 +1202,9 @@ func ReadInspectionResult(control *Control) (*InspectionWire, error) {
 		}
 		return nil, failure
 	}
-	if tag != 0 {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "worker inspection result tag is invalid"}
-	}
+	// Rust wire.rs read_inspection_result:332-361 has no tag check;
+	// any tag other than the failure tag decodes as facts. The Go
+	// grammar must not reject a foreign tag the Rust grammar accepts.
 	inspection := &InspectionWire{}
 	if inspection.SourceIdentity, err = readIdentity(r); err != nil {
 		return nil, err

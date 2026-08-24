@@ -463,7 +463,7 @@ func TestValidatedGenerationRejectsContractEnums(t *testing.T) {
 	wantCode(t, err, format.CodeFormatInvalid)
 }
 
-// WireValidationResultOf converts a domain result including its
+// wireValidationResultOf converts a domain result including its
 // progress arrays through the exported accessors.
 func TestWireValidationResultOf(t *testing.T) {
 	result := &validation.ValidationResult{
@@ -475,7 +475,7 @@ func TestWireValidationResultOf(t *testing.T) {
 	if err := validation.CountFinding(&result.Progress, validation.ReasonIoError); err != nil {
 		t.Fatal(err)
 	}
-	wireResult := WireValidationResultOf(result)
+	wireResult := wireValidationResultOf(result)
 	if wireResult.Valid || wireResult.FileIdentity != result.FileIdentity ||
 		wireResult.Progress.CheckedUniquePages != 3 ||
 		wireResult.Progress.ReasonCounts[validation.ReasonIoError] != 1 {

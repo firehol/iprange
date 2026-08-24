@@ -247,8 +247,12 @@ func readScratchCheckpoint(r *WireReader) (*ScratchCheckpoint, error) {
 		if entry.Identity, err = readIdentity(r); err != nil {
 			return nil, err
 		}
+		// Rust wire_cleanup.rs:136-139 folds the invalid-identity and
+		// duplicate-authority refusals into one corrupt class with the
+		// duplicate-authority detail; the Go grammar keeps the same
+		// observable detail for both arms.
 		if !scratchIdentityValid(entry.Identity) {
-			return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "worker scratch checkpoint is invalid"}
+			return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "worker scratch checkpoint contains duplicate authority"}
 		}
 		for _, prior := range checkpoint.Entries {
 			if prior.Ordinal == entry.Ordinal || prior.Identity == entry.Identity {
@@ -478,7 +482,7 @@ func WireEarlyDiscardOf(facts publication.EarlyDiscardFacts) EarlyDiscard {
 // (recovery.rs:502-524), so the wire contract stays meaningful and the
 // parent sees every entry it must handle. No scratch-removal
 // implementation is invented here.
-func CleanupCheckpoint(directory *string, checkpoint *ScratchCheckpoint) *ScratchCleanup {
+func CleanupCheckpoint(checkpoint *ScratchCheckpoint) *ScratchCleanup {
 	if checkpoint == nil {
 		return nil
 	}

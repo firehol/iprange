@@ -23,7 +23,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
-// DiscardRecoveryAttempt runs one isolated cleanup session and returns
+// discardRecoveryAttempt runs one isolated cleanup session and returns
 // the discarded-attempt facts and the scratch cleanup (Rust
 // worker/cleanup.rs discard): the fallible surface composes the two
 // Rust-explicit classes — a guard-pending completion is the verbatim
@@ -32,7 +32,7 @@ import (
 // with the role detail (cleanup.rs:78-79 over recovery.rs:525-534).
 // Every earlier failure returns its raw cause; the child is aborted
 // whenever a session fails before the complete terminal.
-func DiscardRecoveryAttempt(destinationPath string, output *publication.PrivateOutputAttempt, scratchDirectory *string, scratch *ScratchCheckpoint) (*EarlyDiscard, *ScratchCleanup, error) {
+func discardRecoveryAttempt(destinationPath string, output *publication.PrivateOutputAttempt, scratchDirectory *string, scratch *ScratchCheckpoint) (*EarlyDiscard, *ScratchCleanup, error) {
 	control, err := CreateParent()
 	if err != nil {
 		return nil, nil, err

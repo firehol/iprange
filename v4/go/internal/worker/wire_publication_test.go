@@ -157,13 +157,13 @@ func TestWireOptionalProblemRoundTrip(t *testing.T) {
 
 func TestWireProblemOfError(t *testing.T) {
 	// A format.Error keeps its class and detail.
-	problem := wireProblemOf(&format.Error{Code: format.CodeNameNotFound, Detail: "missing"})
+	problem := WireProblemOf(&format.Error{Code: format.CodeNameNotFound, Detail: "missing"})
 	if problem.Code != format.CodeNameNotFound || problem.Detail != "missing" || problem.OSCode != nil {
 		t.Fatalf("problem = %+v", problem)
 	}
 	// An errno chain reports the Io class with the raw errno.
 	pathErr := &osPathError{Err: errnoFixture}
-	problem = wireProblemOf(pathErr)
+	problem = WireProblemOf(pathErr)
 	if problem.Code != format.CodeIO || problem.OSCode == nil || *problem.OSCode != int32(errnoFixture) {
 		t.Fatalf("errno problem = %+v", problem)
 	}
@@ -465,7 +465,7 @@ func TestWirePublicationResultRoundTrip(t *testing.T) {
 	if err := w3.Finish(); err != nil {
 		t.Fatal(err)
 	}
-	whole, err := ReadPublicationResult(c3)
+	whole, err := readPublicationResultFromControl(c3)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -127,7 +127,7 @@ func ReadValidationRequest(control *Control) (*ValidationRequest, error) {
 // result (Rust wire_validation.rs write_result ok-arm over
 // validation::ValidationResult; the progress uses the worker wire
 // form because the Go validation package keeps its counter arrays
-// private). WireValidationResultOf converts a domain result.
+// private). A domain result converts through wireValidationResultOf.
 type ValidationResultWire struct {
 	Valid        bool
 	FileIdentity publication.LocalFileIdentity
@@ -135,9 +135,10 @@ type ValidationResultWire struct {
 	Progress     ProgressWire
 }
 
-// WireValidationResultOf converts one domain validation result to its
-// wire form.
-func WireValidationResultOf(value *validation.ValidationResult) ValidationResultWire {
+// wireValidationResultOf converts one domain validation result to its
+// wire form (WriteValidationResult and the wire tests share the
+// conversion).
+func wireValidationResultOf(value *validation.ValidationResult) ValidationResultWire {
 	return ValidationResultWire{
 		Valid:        value.Valid,
 		FileIdentity: value.FileIdentity,
@@ -183,25 +184,28 @@ func failureWireOf(value *validation.ValidationFailure) ValidationFailureWire {
 func WriteValidationResult(control *Control, result *validation.ValidationResult, failure *validation.ValidationFailure, retained *WireProblem) error {
 	w := NewWireWriter(control)
 	if result != nil {
+		// The completion arm composes the one authoritative
+		// domain-to-wire conversion (wireValidationResultOf) so the
+		// writer and the wire tests share the same field mapping.
+		wire := wireValidationResultOf(result)
 		if err := w.Byte(0); err != nil {
 			return err
 		}
-		if err := w.Bool(result.Valid); err != nil {
+		if err := w.Bool(wire.Valid); err != nil {
 			return err
 		}
-		if err := writeIdentity(w, result.FileIdentity); err != nil {
+		if err := writeIdentity(w, wire.FileIdentity); err != nil {
 			return err
 		}
-		if err := w.Bool(result.Generation != nil); err != nil {
+		if err := w.Bool(wire.Generation != nil); err != nil {
 			return err
 		}
-		if result.Generation != nil {
-			if err := writeValidatedGeneration(w, result.Generation); err != nil {
+		if wire.Generation != nil {
+			if err := writeValidatedGeneration(w, wire.Generation); err != nil {
 				return err
 			}
 		}
-		progress := ProgressWireOf(&result.Progress)
-		if err := writeProgress(w, &progress); err != nil {
+		if err := writeProgress(w, &wire.Progress); err != nil {
 			return err
 		}
 		return w.Finish()

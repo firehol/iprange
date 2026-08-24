@@ -116,8 +116,8 @@ func newFakeParent(t *testing.T) *fakeParent {
 	clear(data)
 	copy(data[0:8], fixtureMagic[:])
 	format.PutU32(data[8:12], fixtureProtocol)
-	format.PutU32(data[12:16], stateRequest)
-	copy(data[fixtureBuildOffset:fixtureBuildOffset+buildIDLen], defaultBuildID)
+	format.PutU32(data[12:16], worker.StateRequest)
+	copy(data[fixtureBuildOffset:fixtureBuildOffset+buildIDLen], worker.BuildIDDefault)
 	format.PutU32(data[fixtureParentPIDOff:fixtureParentPIDOff+4], uint32(os.Getpid()))
 	if err := m.Close(); err != nil {
 		t.Fatal("fixture control close:", err)
@@ -207,11 +207,11 @@ func runWorkerMain(t *testing.T, args ...string) int {
 // release Running (Rust client.rs handshake + start).
 func (p *fakeParent) handshake(t *testing.T, child *exec.Cmd) {
 	t.Helper()
-	p.waitState(t, stateWorkerReady)
+	p.waitState(t, worker.StateWorkerReady)
 	if pid := p.control.WorkerPID(); pid != uint32(child.Process.Pid) {
 		t.Fatalf("worker pid = %d, want %d", pid, child.Process.Pid)
 	}
-	p.control.SetState(stateRunning)
+	p.control.SetState(worker.StateRunning)
 }
 
 // driveDispatch runs one complete worker session to the given terminal
@@ -284,22 +284,30 @@ func TestProtocolRefusalBadControlPath(t *testing.T) {
 	}
 }
 
+// buildIDLen is the fixed control build-identity width (Rust
+// control.rs BUILD_LEN 64); the worker package keeps its buildLen
+// private, so the test repeats the value.
+const buildIDLen = 64
+
 func TestBuildIDSeam(t *testing.T) {
-	if got := len(defaultBuildID); got != buildIDLen {
-		t.Fatalf("defaultBuildID length = %d, want %d", got, buildIDLen)
+	if got := len(worker.BuildIDDefault); got != buildIDLen {
+		t.Fatalf("BuildIDDefault length = %d, want %d", got, buildIDLen)
 	}
 	t.Setenv("IPRANGE_V4_BUILD_ID", "")
-	if id, err := workerBuildID(); err != nil || id != defaultBuildID {
-		t.Fatalf("workerBuildID() = %q, %v; want the default", id, err)
+	if id := workerBuildID(); id != worker.BuildIDDefault {
+		t.Fatalf("workerBuildID() = %q; want the default", id)
 	}
 	custom := strings.Repeat("a", buildIDLen)
 	t.Setenv("IPRANGE_V4_BUILD_ID", custom)
-	if id, err := workerBuildID(); err != nil || id != custom {
-		t.Fatalf("env build id = %q, %v; want %q", id, err, custom)
+	if id := workerBuildID(); id != custom {
+		t.Fatalf("env build id = %q; want %q", id, custom)
 	}
 	t.Setenv("IPRANGE_V4_BUILD_ID", "short")
-	if _, err := workerBuildID(); err == nil {
+	if err := worker.SetBuildID(workerBuildID()); err == nil {
 		t.Fatal("short env build id accepted")
+	}
+	if err := worker.SetBuildID(worker.BuildIDDefault); err != nil {
+		t.Fatalf("default build id rejected: %v", err)
 	}
 }
 
@@ -312,7 +320,7 @@ func TestWorkerValidateDispatch(t *testing.T) {
 	if err := worker.WriteValidationRequest(parent.control, missing, validation.ValidationModeImmutableCurrent, nil, budget, nil, 0); err != nil {
 		t.Fatal("write request:", err)
 	}
-	if code := parent.driveDispatch(t, stateComplete); code != 0 {
+	if code := parent.driveDispatch(t, worker.StateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
 	if parent.control.GuardPending() {
@@ -334,7 +342,7 @@ func TestWorkerInspectDispatch(t *testing.T) {
 	if err := worker.WriteInspectionRequest(parent.control, missing, recovery.RecoveryInspectionImmutable, budget, nil); err != nil {
 		t.Fatal("write request:", err)
 	}
-	if code := parent.driveDispatch(t, stateComplete); code != 0 {
+	if code := parent.driveDispatch(t, worker.StateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
 	if parent.control.GuardPending() {
@@ -364,7 +372,7 @@ func TestWorkerRecoverDispatch(t *testing.T) {
 	if err := worker.WriteRecoveryRequest(parent.control, source, destination, candidate, worker.WorkerModeImmutable, budget, output, nil, 0); err != nil {
 		t.Fatal("write request:", err)
 	}
-	if code := parent.driveDispatch(t, stateComplete); code != 0 {
+	if code := parent.driveDispatch(t, worker.StateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
 	if parent.control.GuardPending() {
@@ -388,7 +396,7 @@ func TestWorkerCleanupDispatch(t *testing.T) {
 	if err := worker.WriteCleanupRequest(parent.control, filepath.Join(t.TempDir(), "out.v4"), output, nil, nil); err != nil {
 		t.Fatal("write request:", err)
 	}
-	if code := parent.driveDispatch(t, stateComplete); code != 0 {
+	if code := parent.driveDispatch(t, worker.StateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
 	if parent.control.GuardPending() {

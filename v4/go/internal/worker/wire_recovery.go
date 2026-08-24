@@ -329,7 +329,7 @@ func writeRecoveryFailure(w *WireWriter, value *recovery.RecoveryPreparationFail
 	if err := writeHousekeepingList(w, value.VisibleHousekeeping); err != nil {
 		return err
 	}
-	problem := wireProblemOf(value.Cause)
+	problem := WireProblemOf(value.Cause)
 	return writeProblem(w, &problem)
 }
 
@@ -685,26 +685,4 @@ func readRecoveryCandidateValue(r *WireReader) (recovery.RecoveryCandidate, erro
 		return recovery.RecoveryCandidate{}, err
 	}
 	return *candidate, nil
-}
-
-// ReadRecoveryCallbackReport reads the sealed recovery-report callback
-// payload (Rust client recovery::read_recovery_callback_report): the
-// callback checkpoint must be sealed as RecoveryReport, otherwise the
-// Conflict class reports the missing checkpoint.
-func ReadRecoveryCallbackReport(control *Control) (*recovery.RecoveryReport, error) {
-	if kind, ok := control.CallbackCheckpoint(); !ok || kind != CallbackRecoveryReport {
-		return nil, &format.Error{Code: format.CodeConflict, Detail: "worker recovery callback checkpoint is missing"}
-	}
-	r, err := NewWireCallbackReader(control)
-	if err != nil {
-		return nil, err
-	}
-	report, err := readRecoveryReport(r)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.Finish(); err != nil {
-		return nil, err
-	}
-	return &report, nil
 }

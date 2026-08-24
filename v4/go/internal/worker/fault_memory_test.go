@@ -34,7 +34,7 @@ func TestSetSourceUnreadablePagesSortsAndRefusesDuplicates(t *testing.T) {
 	if err := SetSourceUnreadablePages([]uint32{7, 1, 4, 9}); err != nil {
 		t.Fatal("set:", err)
 	}
-	if got := SourceUnreadablePages(); len(got) != 4 || got[0] != 1 || got[1] != 4 || got[2] != 7 || got[3] != 9 {
+	if got := sourceUnreadablePages(); len(got) != 4 || got[0] != 1 || got[1] != 4 || got[2] != 7 || got[3] != 9 {
 		t.Fatalf("pages = %v, want [1 4 7 9]", got)
 	}
 
@@ -44,7 +44,7 @@ func TestSetSourceUnreadablePagesSortsAndRefusesDuplicates(t *testing.T) {
 	wantInvalidArgumentDetail(t, err, "unreadable source pages contain duplicates")
 	err = SetSourceUnreadablePages([]uint32{3, 3, 5})
 	wantInvalidArgumentDetail(t, err, "unreadable source pages contain duplicates")
-	if got := SourceUnreadablePages(); len(got) != 4 || got[0] != 1 {
+	if got := sourceUnreadablePages(); len(got) != 4 || got[0] != 1 {
 		t.Fatalf("pages after refusal = %v, want the previous [1 4 7 9]", got)
 	}
 
@@ -52,8 +52,8 @@ func TestSetSourceUnreadablePagesSortsAndRefusesDuplicates(t *testing.T) {
 	if err := SetSourceUnreadablePages(nil); err != nil {
 		t.Fatal("clear:", err)
 	}
-	if SourceUnreadablePages() != nil {
-		t.Fatalf("pages after clear = %v, want nil", SourceUnreadablePages())
+	if sourceUnreadablePages() != nil {
+		t.Fatalf("pages after clear = %v, want nil", sourceUnreadablePages())
 	}
 }
 
@@ -63,12 +63,12 @@ func TestSourcePageUnreadableQuery(t *testing.T) {
 		t.Fatal("set:", err)
 	}
 	for _, page := range []uint32{0, 4, 100} {
-		if !SourcePageUnreadable(page) {
+		if !sourcePageUnreadable(page) {
 			t.Fatalf("page %d must be unreadable", page)
 		}
 	}
 	for _, page := range []uint32{1, 3, 5, 99, 101, ^uint32(0)} {
-		if SourcePageUnreadable(page) {
+		if sourcePageUnreadable(page) {
 			t.Fatalf("page %d must be readable", page)
 		}
 	}
@@ -79,9 +79,9 @@ func TestSourceUnreadablePagesReturnsCopy(t *testing.T) {
 	if err := SetSourceUnreadablePages([]uint32{2, 6}); err != nil {
 		t.Fatal("set:", err)
 	}
-	got := SourceUnreadablePages()
+	got := sourceUnreadablePages()
 	got[0] = 99
-	if SourcePageUnreadable(2) != true || SourcePageUnreadable(99) {
+	if sourcePageUnreadable(2) != true || sourcePageUnreadable(99) {
 		t.Fatal("mutating the enumerated copy changed the session state")
 	}
 }

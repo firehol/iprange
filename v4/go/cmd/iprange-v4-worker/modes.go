@@ -15,8 +15,7 @@
 package main
 
 import (
-	"errors"
-	"syscall"
+	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
@@ -24,6 +23,12 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/validation"
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
+
+// pollInterval is the worker spin step of the Rust 1 ms sleep
+// (worker.rs serve_cleanup:361-367 and the proxy loops worker.rs:142,
+// worker.rs:399): the cmd binary repeats the value because the
+// control surface exposes no sleep step.
+const pollInterval = time.Millisecond
 
 // runMode dispatches one session opcode to its mode driver (Rust
 // worker.rs opcode match). Every driver returns the retained source
@@ -128,7 +133,7 @@ func runValidation(control *worker.Control) (*recovery.RecoverySourceCleanupGuar
 	}
 	var retained *worker.WireProblem
 	if guard != nil {
-		problem := problemWireOf(guard.LastProblem())
+		problem := worker.WireProblemOf(guard.LastProblem())
 		retained = &problem
 	}
 	if err := worker.WriteValidationResult(control, result, failure, retained); err != nil {
@@ -175,7 +180,7 @@ func runRecovery(control *worker.Control) (*recovery.RecoverySourceCleanupGuard,
 	}
 	var retained *worker.WireProblem
 	if guard != nil {
-		problem := problemWireOf(guard.LastProblem())
+		problem := worker.WireProblemOf(guard.LastProblem())
 		retained = &problem
 	}
 	outcome := &worker.RecoveryOutcome{Result: result, Failure: failure}
@@ -203,7 +208,7 @@ func runCleanup(control *worker.Control) error {
 	}
 	discarded := publication.DiscardSecuredAttempt(request.DestinationPath, &request.Output)
 	facts := worker.WireEarlyDiscardOf(discarded)
-	scratch := worker.CleanupCheckpoint(request.ScratchDirectory, request.Scratch)
+	scratch := worker.CleanupCheckpoint(request.Scratch)
 	return worker.WriteCleanupResult(control, &facts, scratch)
 }
 
@@ -214,11 +219,15 @@ func runCleanup(control *worker.Control) error {
 // ends the loop gracefully (Rust parity).
 func serveCleanup(control *worker.Control, guard *recovery.RecoverySourceCleanupGuard) error {
 	for {
-		if err := control.WaitFor(stateCleanupRequest); err != nil {
+		// Rust worker.rs serve_cleanup:361-367 spins with only the
+		// parent-liveness bound (no deadline): a retained guard may be
+		// released at any later time and the worker must still serve
+		// it. The control WaitFor 30 s limit is NOT used here.
+		for control.State() != worker.StateCleanupRequest {
 			if !control.ParentAlive() {
 				return nil
 			}
-			return err
+			time.Sleep(pollInterval)
 		}
 		complete, problem := guard.RetryCleanup()
 		if complete {
@@ -226,14 +235,14 @@ func serveCleanup(control *worker.Control, guard *recovery.RecoverySourceCleanup
 				return err
 			}
 			control.SetGuardPending(false)
-			control.SetState(stateCleanupResult)
+			control.SetState(worker.StateCleanupResult)
 			return nil
 		}
-		wire := problemWireOf(problem)
+		wire := worker.WireProblemOf(problem)
 		if err := worker.WriteValidationCleanupResult(control, false, &wire); err != nil {
 			return err
 		}
-		control.SetState(stateCleanupResult)
+		control.SetState(worker.StateCleanupResult)
 	}
 }
 
@@ -243,11 +252,17 @@ func serveCleanup(control *worker.Control, guard *recovery.RecoverySourceCleanup
 // maps to Cancelled exactly like the Rust proxy arms; the control
 // surface bounds the spin by its 30 s wait limit.
 func waitAcknowledgement(control *worker.Control) error {
-	if err := control.WaitFor(stateRunning); err != nil {
+	// Rust worker.rs ValidationProxy:399-404 / RecoveryProxy:142-147
+	// spin on the callback state with only the parent-liveness bound
+	// (no deadline): a parent sink may take arbitrarily long on one
+	// finding and the worker must wait. The control WaitFor 30 s limit
+	// is NOT used here; a dead parent maps to Cancelled exactly like
+	// the Rust proxy arms.
+	for control.State() != worker.StateRunning {
 		if !control.ParentAlive() {
 			return &format.Error{Code: format.CodeCancelled, Detail: "SDK worker parent exited"}
 		}
-		return err
+		time.Sleep(pollInterval)
 	}
 	return nil
 }
@@ -269,7 +284,7 @@ func (p *validationProxy) Finding(finding *validation.ValidationFinding) (valida
 		return 0, err
 	}
 	p.control.SetResponse(0)
-	p.control.SetState(stateFinding)
+	p.control.SetState(worker.StateFinding)
 	if err := waitAcknowledgement(p.control); err != nil {
 		return 0, err
 	}
@@ -306,7 +321,7 @@ func (p *recoveryProxy) Unknown(envelope *recovery.RecoveryUnknownEnvelope) (rec
 		return 0, err
 	}
 	p.control.SetResponse(0)
-	p.control.SetState(stateUnknown)
+	p.control.SetState(worker.StateUnknown)
 	if err := waitAcknowledgement(p.control); err != nil {
 		return 0, err
 	}
@@ -324,22 +339,4 @@ func (p *recoveryProxy) Unknown(envelope *recovery.RecoveryUnknownEnvelope) (rec
 	default:
 		return 0, &format.Error{Code: format.CodeConflict, Detail: "worker recovery callback response is invalid"}
 	}
-}
-
-// problemWireOf folds one boundary error into the wire problem shape;
-// the worker package keeps its wireProblemOf helper private, so the
-// boundary repeats the stable mapping: a format.Error keeps its class
-// and detail, an errno chain reports the IO class with the raw errno,
-// and any other error is the Conflict class of an unknown failure.
-func problemWireOf(err error) worker.WireProblem {
-	var formatted *format.Error
-	if errors.As(err, &formatted) {
-		return worker.WireProblem{Code: formatted.Code, Detail: formatted.Detail}
-	}
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		code := int32(errno)
-		return worker.WireProblem{Code: format.CodeIO, OSCode: &code, Detail: err.Error()}
-	}
-	return worker.WireProblem{Code: format.CodeConflict, Detail: err.Error()}
 }

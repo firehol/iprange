@@ -11,7 +11,10 @@
 // 4-11A wire codecs. Exit codes are the exact Rust values: 64 usage,
 // 65 protocol, 0 clean completion; an owned mapped fault exits 197 from
 // the naked SIGBUS handler (internal/worker sigbus_linux_amd64.s)
-// without unwinding through Go.
+// without unwinding through Go. The worker build identity is pinned by
+// SetBuildID before the header verify: IPRANGE_V4_BUILD_ID when set
+// (64 bytes), otherwise the fixed BuildIDDefault; a mismatched worker
+// exits 65 before WorkerReady.
 
 package main
 
@@ -19,7 +22,6 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
 
@@ -31,55 +33,18 @@ const (
 	exitProtocol = 65
 )
 
-// Control-state wire constants (Rust worker/control.rs State). The
-// internal/worker package keeps its State words private and publishes
-// only the uint32 surface (SetState / WaitFor), so the worker boundary
-// repeats the wire values exactly like the package repeats the
-// identity and security kinds.
-const (
-	stateRequest        = 1
-	stateWorkerReady    = 2
-	stateRunning        = 3
-	stateCancelPoll     = 4
-	stateFinding        = 5
-	stateUnknown        = 6
-	stateComplete       = 7
-	stateFault          = 8
-	stateFailed         = 9
-	stateCleanupRequest = 10
-	stateCleanupResult  = 11
-)
-
-// buildIDLen is the fixed control build-identity width (Rust control.rs
-// BUILD_LEN 64; verify_request rejects any other length).
-const buildIDLen = 64
-
-// defaultBuildID is the fixed build identity of this tree: the exact
-// 64-byte constant of internal/worker buildIDDefault, repeated here
-// because the package keeps its var private (the same repetition rule
-// as the state words). VerifyRequest compares the control header
-// against the package constant, so both must stay identical until a
-// build pins a unique identity through the ldflags seam.
-const defaultBuildID = "iprange-v4-go-worker-0000000000000000000000000000000000000000000"
-
 // workerBuildID resolves the worker build identity (Rust
 // env!("IPRANGE_V4_BUILD_ID"), a build-time environment variable): the
-// runtime environment value when set, otherwise the fixed constant.
-// The Go ldflags analog pins internal/worker.buildID via -X; while the
-// package has no exported setter the header comparison always uses the
-// package constant, so the env value only becomes authoritative once a
-// build pins the identical value into the package var. A value that
-// could never match the 64-byte header identity is refused here before
-// any path access.
-func workerBuildID() (string, error) {
-	value := defaultBuildID
+// runtime environment value when set, otherwise the fixed
+// BuildIDDefault. run() then pins the resolved value with
+// worker.SetBuildID before any control access, so the env seam is
+// authoritative for the header verify.
+func workerBuildID() string {
+	value := worker.BuildIDDefault
 	if env := os.Getenv("IPRANGE_V4_BUILD_ID"); env != "" {
 		value = env
 	}
-	if len(value) != buildIDLen {
-		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "worker build id must be 64 bytes"}
-	}
-	return value, nil
+	return value
 }
 
 func main() {
@@ -98,7 +63,7 @@ func run(args []string) int {
 	if len(args) != 2 || args[0] != "--control" {
 		return exitUsage
 	}
-	if _, err := workerBuildID(); err != nil {
+	if err := worker.SetBuildID(workerBuildID()); err != nil {
 		return exitProtocol
 	}
 	control, err := worker.OpenWorker(args[1])
@@ -110,8 +75,8 @@ func run(args []string) int {
 		return exitProtocol
 	}
 	control.SetWorkerPID(uint32(os.Getpid()))
-	control.SetState(stateWorkerReady)
-	if err := control.WaitFor(stateRunning); err != nil {
+	control.SetState(worker.StateWorkerReady)
+	if err := control.WaitFor(worker.StateRunning); err != nil {
 		return exitProtocol
 	}
 	// The alternate signal stack is per-thread and Go migrates
@@ -137,11 +102,11 @@ func run(args []string) int {
 		if writeErr := worker.WriteWorkerError(control, err); writeErr != nil {
 			return exitProtocol
 		}
-		control.SetState(stateFailed)
+		control.SetState(worker.StateFailed)
 		return 0
 	}
 	control.SetGuardPending(guard != nil)
-	control.SetState(stateComplete)
+	control.SetState(worker.StateComplete)
 	if guard != nil {
 		if err := serveCleanup(control, guard); err != nil {
 			return exitProtocol

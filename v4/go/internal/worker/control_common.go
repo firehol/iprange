@@ -45,9 +45,28 @@ const (
 	stateFailed         = 9
 	stateCleanupRequest = 10
 	stateCleanupResult  = 11
-	// faultMarker seals a complete fault record (Rust FAULT_MARKER).
-	faultMarker = 0x42555346
 )
+
+// StateRequest..StateCleanupResult are the exported session state
+// words of the worker control (Rust control.rs State). The cmd worker
+// binary drives the session states through SetState and State; the
+// worker-internal code keeps using the short private names.
+const (
+	StateRequest        = stateRequest
+	StateWorkerReady    = stateWorkerReady
+	StateRunning        = stateRunning
+	StateCancelPoll     = stateCancelPoll
+	StateFinding        = stateFinding
+	StateUnknown        = stateUnknown
+	StateComplete       = stateComplete
+	StateFault          = stateFault
+	StateFailed         = stateFailed
+	StateCleanupRequest = stateCleanupRequest
+	StateCleanupResult  = stateCleanupResult
+)
+
+// faultMarker seals a complete fault record (Rust FAULT_MARKER).
+const faultMarker = 0x42555346
 
 // Opcode selects the operation of one worker session (Rust
 // worker/control.rs Opcode).
@@ -140,14 +159,23 @@ const (
 // controlMagic is the control-page magic (Rust MAGIC "IPR4WRK\x00").
 var controlMagic = [8]byte{'I', 'P', 'R', '4', 'W', 'R', 'K', 0}
 
-// buildID is the worker build identity written at offBuildID (Rust
-// env!("IPRANGE_V4_BUILD_ID"), constant per build). The cmd binary slice
-// adds ldflags/env wiring later; until then the fixed buildIDDefault
-// keeps every control handshake constant. A test pins its exact 64-byte
-// length (Rust verify_request rejects any other).
+// buildID is the worker build identity written at offBuildID and
+// compared by VerifyRequest (Rust env!("IPRANGE_V4_BUILD_ID"), constant
+// per build). The worker binary resolves its identity through
+// SetBuildID before its first control access: the environment value
+// when IPRANGE_V4_BUILD_ID is set, otherwise the fixed buildIDDefault;
+// a pinned Go build can replace buildIDDefault with -ldflags -X. A
+// test pins the exact 64-byte length (Rust verify_request rejects any
+// other).
 var buildID = buildIDDefault
 
 const buildIDDefault = "iprange-v4-go-worker-0000000000000000000000000000000000000000000"
+
+// BuildIDDefault is the fixed 64-byte build identity of this tree
+// (Rust build.rs digest analog): the value used when
+// IPRANGE_V4_BUILD_ID is unset. The cmd binary resolves its identity
+// from BuildIDDefault or the environment and pins it with SetBuildID.
+const BuildIDDefault = buildIDDefault
 
 // identityKind and creationSecurityKind are the unix namespace kinds of
 // the retained-identity and creator-only commitment checks (Rust

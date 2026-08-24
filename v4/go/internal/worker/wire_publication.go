@@ -43,7 +43,13 @@ func (p WireProblem) Err() error {
 // format.Error keeps its class and detail, an errno chain reports the
 // Io class with the raw errno, and any other error is the fixed
 // Conflict class of an unknown failure.
-func wireProblemOf(err error) WireProblem {
+// WireProblemOf folds one Go error into the wire problem shape (Rust
+// publication problem folding): a format.Error keeps its class and
+// detail, an errno chain reports the Io class with the raw errno, and
+// any other error is the fixed Conflict class of an unknown failure.
+// The worker binary boundary composes this one authoritative mapping
+// instead of repeating it.
+func WireProblemOf(err error) WireProblem {
 	var formatted *format.Error
 	if errors.As(err, &formatted) {
 		return WireProblem{Code: formatted.Code, Detail: formatted.Detail}
@@ -576,7 +582,7 @@ func writeCleanupArtifact(w *WireWriter, value *publication.CleanupArtifact) err
 			return err
 		}
 	}
-	problem := wireProblemOf(value.Error)
+	problem := WireProblemOf(value.Error)
 	return writeProblem(w, &problem)
 }
 
@@ -926,7 +932,7 @@ func writePublicationResult(w *WireWriter, value *publication.PublicationResult)
 	if value.Cause == nil {
 		return writeOptionalProblem(w, nil)
 	}
-	problem := wireProblemOf(value.Cause)
+	problem := WireProblemOf(value.Cause)
 	return writeOptionalProblem(w, &problem)
 }
 
@@ -1050,12 +1056,10 @@ func readPublicationResult(r *WireReader) (publication.PublicationResult, error)
 	return value, nil
 }
 
-// ReadPublicationResult reads one publication result from a fresh
-// session payload at the wire layer (Rust wire_publication.rs has the
-// raw codec; the reader wrapper is the recovery/validation compose
-// point, so this helper composes the envelope opener for the tests and
-// the worker process).
-func ReadPublicationResult(control *Control) (publication.PublicationResult, error) {
+// readPublicationResultFromControl decodes a sealed publication result
+// through the raw codec after Finish (the recovery/validation compose
+// point of the session payload).
+func readPublicationResultFromControl(control *Control) (publication.PublicationResult, error) {
 	r, err := NewWireReader(control)
 	if err != nil {
 		return publication.PublicationResult{}, err

@@ -281,11 +281,11 @@ func TestCallbackCheckpointsRoundTripCompleteProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	control.SealCallbackCheckpoint(CallbackRecoveryReport)
-	gotReport, err := ReadRecoveryCallbackReport(control)
+	gotReport, err := recoveryCallbackReportOf(control)
 	if err != nil {
 		t.Fatal("read report:", err)
 	}
-	if *gotReport != *report {
+	if gotReport != *report {
 		t.Fatalf("report = %+v, want %+v", gotReport, report)
 	}
 
@@ -321,7 +321,7 @@ func TestCallbackCheckpointsRoundTripCompleteProgress(t *testing.T) {
 	}
 	// The recovery report reader rejects a missing seal.
 	control.BeginCallbackCheckpoint()
-	_, err = ReadRecoveryCallbackReport(control)
+	_, err = recoveryCallbackReportOf(control)
 	wantCode(t, err, format.CodeConflict)
 }
 

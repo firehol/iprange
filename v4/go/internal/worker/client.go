@@ -509,6 +509,10 @@ func (p *Process) Close() { p.Abort() }
 // worker/client.rs record_unreadable_page): a duplicate is the
 // repeated Conflict, and the list footprint is charged against the
 // operation's heap budget with the exact overflow and budget classes.
+// Go append cannot surface allocator failure the way Rust
+// try_reserve_exact can (an OOM is fatal), so the byte-budget charge
+// is the equivalent guard; the list stays bounded by the session
+// budget in every reachable flow.
 func RecordUnreadablePage(pages *[]uint32, page uint32, maxHeapBytes uint64, repeated string) error {
 	insertion := sort.Search(len(*pages), func(i int) bool { return (*pages)[i] >= page })
 	if insertion < len(*pages) && (*pages)[insertion] == page {

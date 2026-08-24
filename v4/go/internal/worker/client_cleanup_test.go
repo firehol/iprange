@@ -100,7 +100,7 @@ func equalPrivateOutput(a, b *publication.PrivateOutputAttempt) bool {
 // cleanup, and a present checkpoint reports the deferral as one
 // Conflict residue per entry with the exact checkpoint basenames.
 func TestCleanupCheckpointDeferral(t *testing.T) {
-	if cleanup := CleanupCheckpoint(nil, nil); cleanup != nil {
+	if cleanup := CleanupCheckpoint(nil); cleanup != nil {
 		t.Fatalf("nil checkpoint cleanup = %+v, want nil", cleanup)
 	}
 	checkpoint := &ScratchCheckpoint{
@@ -112,8 +112,7 @@ func TestCleanupCheckpointDeferral(t *testing.T) {
 			{Ordinal: 1, Identity: publication.LocalFileIdentityFromDeviceInode(5, 6)},
 		},
 	}
-	directory := "authorized-scratch"
-	cleanup := CleanupCheckpoint(&directory, checkpoint)
+	cleanup := CleanupCheckpoint(checkpoint)
 	if cleanup == nil {
 		t.Fatal("present checkpoint cleanup is nil")
 	}
@@ -209,7 +208,7 @@ func TestDiscardRecoveryAttemptRealBinary(t *testing.T) {
 
 	directory := t.TempDir()
 	destination, facts, privatePath := cleanupAttemptFixture(t, directory)
-	discarded, scratch, err := DiscardRecoveryAttempt(destination, facts, nil, nil)
+	discarded, scratch, err := discardRecoveryAttempt(destination, facts, nil, nil)
 	if err != nil {
 		t.Fatal("discard recovery attempt:", err)
 	}
@@ -248,7 +247,7 @@ func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 		},
 	}
 	scratchDirectory := filepath.Join(directory, "scratch")
-	discarded, scratch, err := DiscardRecoveryAttempt(destination, facts, &scratchDirectory, checkpoint)
+	discarded, scratch, err := discardRecoveryAttempt(destination, facts, &scratchDirectory, checkpoint)
 	if err != nil {
 		t.Fatal("discard recovery attempt:", err)
 	}
@@ -275,7 +274,7 @@ func TestDiscardRecoveryAttemptGuardPending(t *testing.T) {
 	armDouble(t, "complete_guard")
 	directory := t.TempDir()
 	destination, facts, _ := cleanupAttemptFixture(t, directory)
-	_, _, err := DiscardRecoveryAttempt(destination, facts, nil, nil)
+	_, _, err := discardRecoveryAttempt(destination, facts, nil, nil)
 	wantConflictDetail(t, err, "isolated recovery cleanup retained unexpected authority")
 }
 
@@ -286,7 +285,7 @@ func TestDiscardRecoveryAttemptFault(t *testing.T) {
 	armDouble(t, "fault")
 	directory := t.TempDir()
 	destination, facts, _ := cleanupAttemptFixture(t, directory)
-	_, _, err := DiscardRecoveryAttempt(destination, facts, nil, nil)
+	_, _, err := discardRecoveryAttempt(destination, facts, nil, nil)
 	var e *format.Error
 	if !errors.As(err, &e) || e.Code != format.CodeIO {
 		t.Fatalf("fault class = %v, want the fixed Io publication problem", err)
