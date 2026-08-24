@@ -11067,4 +11067,64 @@ sets; seven cross-builds plain + v4work; all pass.
 The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21) once all chunk 4-9 slices land.
 
-Next: chunk 4-9 slice E (structure + structure_table validators).
+### Status (2026-08-24) - chunk 4-9 slice E implemented at 064c7a2
+
+Slice E ships the structure and structure-table validators (the Rust
+structure.rs and structure_table.rs authorities over the
+structured_value/table.rs and codec.rs geometries):
+
+- internal/validation/structure.go: the dense ID-table walk over the
+  structure dictionary with the per-record envelope, payload semantic,
+  id-window, refcount, payload-digest, single-define, and membership
+  ownership proofs, the reverse-index hash tree walk with the adjacent
+  same-digest collision compare over the reader payload view, the
+  structure used-bitmap count, and the bounded slot finish (refcount,
+  reverse, and used arms; every arm runs like Rust). An absent or
+  unknown structure kind is its own invalid class (unit-level proof:
+  the open path refuses those files as UnsupportedStructure first).
+- internal/validation/structure_table.go: the dense radix table walk
+  with the classified directory/record header inspection, the fixed
+  slot discovery with the implied-id callback, the found/item-count
+  proof, and the reserved-tail scan; the dense arrays never count cell
+  probes (Rust parity).
+- format structure codecs: DecodeStructureRecord (raw envelope plus
+  the NetworkEnrichmentV1 payload rules, no refcount check),
+  DecodeStructureHashKey / DecodeStructureHashBranchFields,
+  StructurePayloadDigest (the IPR4STRUCT domain identity),
+  ValidateNetworkEnrichmentV1Payload, InspectStructureTableHeader
+  (structure-table max level, level-before-type problem order), and the
+  exported AllZero.
+- reader LookupStructureID: the exported by-id path for the equality
+  compares (Rust structured_value::find); context defineStructure /
+  markStructureReverse / structureSlots / structureSlot wrappers over
+  the shared bounded reverse table (the membership id reuses the
+  word-count slot field exactly like the Rust Table).
+- Parity fix exposed by the slice: the root count-mismatch findings
+  emit and CONTINUE the remaining walks (Rust emit-and-continue), in
+  both the structure and membership validators; the range and catalog
+  validators were already final-step checks.
+
+Tests: clean sweeps over both structured corpus fixtures (the slice-D
+pending-refcount state is gone: the structure walk counts the
+membership owners and claims the structure pages), sixteen mutation and
+synthetic cases (payload rules, wrong slot id, zero refcount, digest
+flip, record at the id limit, equal-payload hash collision, range
+value drift, absent membership, used-bitmap bit loss, missing reverse,
+unknown kind, and a synthetic two-level generation covering the dense
+directory walk: clean, reserved tail, shape, and level arms with the
+exact page attribution and partition intervals), and a v4work pin at
+28 cell probes, 28 slot reads, 1508 bitmap probes, and 6 reader page
+parses on the structured-ipv4 sweep.
+
+Suite counts at 064c7a2: validation 85 tests plain / 89 with v4work
+(69/72 at 127b4e6), format 47, unchanged. Battery re-validated under
+nice before the commit: gofmt clean; vet plain + v4work on
+linux/windows/freebsd; plain and v4work full trees (15 test-bearing
+packages ok each); race + checkptr on validation/format/retire/
+bootstrap/reader/live/publication/mapping/tree and the root, both tag
+sets; seven cross-builds plain + v4work; all pass.
+
+The five-aspect adversarial gate runs at the milestone close per the
+standing review rules (2026-08-21) once all chunk 4-9 slices land.
+
+Next: chunk 4-9 slice F (LiveCurrent mode + failure/cleanup shapes + the iprangedb facade Validate + the crash/resource matrix ports and the full validation battery).
