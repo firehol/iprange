@@ -5,6 +5,7 @@
 package writer
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -47,8 +48,11 @@ func TestHeapBudgetExceededPinsTheClass(t *testing.T) {
 		t.Fatal("overcharge accepted")
 	} else if code := errCode(err); code != format.CodeInsufficientResourceBudget {
 		t.Fatalf("code = %d, want InsufficientResourceBudget", code)
-	} else if detail := err.(*format.Error).Detail; detail != "history projection heap" {
-		t.Fatalf("detail = %q, want the operation label", detail)
+	} else {
+		var fe *format.Error
+		if !errors.As(err, &fe) || fe.Detail != "history projection heap" {
+			t.Fatalf("detail = %q, want the operation label", fe.Detail)
+		}
 	}
 	if heap.remainingBytes() != 16 {
 		t.Fatalf("failed charge moved the budget: remaining %d", heap.remainingBytes())

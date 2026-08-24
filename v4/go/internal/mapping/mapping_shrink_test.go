@@ -3,6 +3,7 @@
 package mapping
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -159,8 +160,8 @@ func TestShrinkRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = m.Shrink(6 * format.PageSize)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeFormatInvalid {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
 	})
@@ -172,8 +173,8 @@ func TestShrinkRefusals(t *testing.T) {
 		}
 		defer m.Close()
 		err = m.Shrink(4*format.PageSize + 100)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeFormatInvalid {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
 	})
@@ -185,8 +186,8 @@ func TestShrinkRefusals(t *testing.T) {
 		}
 		defer m.Close()
 		err = m.Shrink(2 * format.PageSize)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeWrongState {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeWrongState {
 			t.Fatalf("error %v, want WrongState", err)
 		}
 	})
@@ -198,8 +199,8 @@ func TestShrinkRefusals(t *testing.T) {
 		}
 		m.Close()
 		err = m.Shrink(2 * format.PageSize)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeWrongState {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeWrongState {
 			t.Fatalf("error %v, want WrongState", err)
 		}
 	})

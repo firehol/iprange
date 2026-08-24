@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -105,8 +106,8 @@ func TestMembershipZeroIDRejectedAtAggregation(t *testing.T) {
 	if err == nil {
 		t.Fatal("aggregation over a membership ID 0 range: want Corrupt, got nil")
 	}
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("aggregation error = %v, want CodeFormatInvalid", err)
 	}
 	if !strings.Contains(ferr.Detail, "range names the empty membership ID") {

@@ -6,6 +6,7 @@ package writer
 // real opened mapping; no owned page exists anywhere.
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -111,11 +112,10 @@ func TestNewDraftAdvancesTransactionID(t *testing.T) {
 }
 
 func errCode(err error) format.ErrorCode {
-	f := &format.Error{}
-	if e, ok := err.(*format.Error); ok {
-		return e.Code
+	var fe *format.Error
+	if errors.As(err, &fe) {
+		return fe.Code
 	}
-	_ = f
 	return 0
 }
 

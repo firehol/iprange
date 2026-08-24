@@ -4,6 +4,7 @@ package retire
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -244,7 +245,10 @@ func TestReclamationSelectsOnlyCompleteOldestSafeTransactions(t *testing.T) {
 
 	if _, err := SelectReclamation(m, root, 4, nil, 10, 1, checkpoint); err == nil {
 		t.Fatal("too-small reclamation limit was accepted")
-	} else if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeWorkLimitTooSmall {
-		t.Fatalf("too-small limit error = %v", err)
+	} else {
+		var fe *format.Error
+		if !errors.As(err, &fe) || fe.Code != format.CodeWorkLimitTooSmall {
+			t.Fatalf("too-small limit error = %v", err)
+		}
 	}
 }

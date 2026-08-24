@@ -1,6 +1,7 @@
 package writer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -233,8 +234,8 @@ func TestOpenRefusesSoleMeta(t *testing.T) {
 	}
 	f.Close()
 	_, err = Open(path, testBudget(), nil)
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
 	assertReopen(t, path)
@@ -251,8 +252,8 @@ func TestOpenRefusesNoValidMeta(t *testing.T) {
 	f.WriteAt([]byte{'X'}, format.PageSize)
 	f.Close()
 	_, err = Open(path, testBudget(), nil)
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
 	assertReopen(t, path)
@@ -274,8 +275,8 @@ func TestOpenRefusesChecksumInvalidMeta(t *testing.T) {
 		}
 		f.Close()
 		_, err = Open(path, testBudget(), nil)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeFormatInvalid {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
 		assertReopen(t, path)
@@ -293,8 +294,8 @@ func TestOpenRefusesChecksumInvalidMeta(t *testing.T) {
 		}
 		f.Close()
 		_, err = Open(path, testBudget(), nil)
-		ferr, ok := err.(*format.Error)
-		if !ok || ferr.Code != format.CodeFormatInvalid {
+		var ferr *format.Error
+		if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 			t.Fatalf("error %v, want FormatInvalid", err)
 		}
 		assertReopen(t, path)
@@ -314,8 +315,8 @@ func TestOpenRefusesCommittedBeyondPhysical(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := Open(path, testBudget(), nil)
-	ferr, ok := err.(*format.Error)
-	if !ok || ferr.Code != format.CodeFormatInvalid {
+	var ferr *format.Error
+	if !errors.As(err, &ferr) || ferr.Code != format.CodeFormatInvalid {
 		t.Fatalf("error %v, want FormatInvalid", err)
 	}
 	assertReopen(t, path)
@@ -384,8 +385,8 @@ func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
 		c.Close()
 		t.Fatal("open accepted a path replaced while the open was in flight")
 	}
-	fe, ok := err.(*format.Error)
-	if !ok || fe.Code != format.CodeWrongState {
+	var fe *format.Error
+	if !errors.As(err, &fe) || fe.Code != format.CodeWrongState {
 		t.Fatalf("replaced-during-open error %v, want WrongState (11)", err)
 	}
 	// Lock release after this refusal is not probe-observable here: the
@@ -430,8 +431,8 @@ func TestRefusedOpenPathMovedReleasesLock(t *testing.T) {
 		c.Close()
 		t.Fatal("open accepted a path moved while the open was in flight")
 	}
-	fe, ok := err.(*format.Error)
-	if !ok || fe.Code != format.CodeNameNotFound {
+	var fe *format.Error
+	if !errors.As(err, &fe) || fe.Code != format.CodeNameNotFound {
 		t.Fatalf("moved-during-open error %v, want NameNotFound (18)", err)
 	}
 	result := make(chan error, 1)

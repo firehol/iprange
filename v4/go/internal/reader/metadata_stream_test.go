@@ -250,7 +250,8 @@ func TestMetadataChainPageCap(t *testing.T) {
 // its message chain.
 func containsDetail(err error, detail string) bool {
 	for err != nil {
-		if fe, ok := err.(*format.Error); ok && fe.Detail == detail {
+		var fe *format.Error
+		if errors.As(err, &fe) && fe.Detail == detail {
 			return true
 		}
 		if u := errorsUnwrap(err); u != nil {

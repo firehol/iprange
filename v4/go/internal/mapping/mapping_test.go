@@ -3,6 +3,7 @@
 package mapping
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,8 +138,11 @@ func TestViewAfterClose(t *testing.T) {
 	}
 	if _, err := m.View(0, format.PageSize); err == nil {
 		t.Fatal("view after close accepted")
-	} else if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeWrongState {
-		t.Fatalf("view after close code %v want WrongState", err)
+	} else {
+		var fe *format.Error
+		if !errors.As(err, &fe) || fe.Code != format.CodeWrongState {
+			t.Fatalf("view after close code %v want WrongState", err)
+		}
 	}
 	if _, err := m.Page(2); err == nil {
 		t.Fatal("page after close accepted")
@@ -265,8 +269,8 @@ func TestOpenImmutableRefusesPathReplacedDuringOpen(t *testing.T) {
 		if err == nil {
 			t.Fatal("open accepted a path replaced while the open was in flight")
 		}
-		fe, ok := err.(*format.Error)
-		if !ok || fe.Code != format.CodeWrongState {
+		var fe *format.Error
+		if !errors.As(err, &fe) || fe.Code != format.CodeWrongState {
 			t.Fatalf("replaced-during-open error %v, want WrongState (11)", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -321,8 +325,8 @@ func TestOpenImmutableRefusesPathUnlinkedDuringOpen(t *testing.T) {
 		if err == nil {
 			t.Fatal("open accepted a path removed while the open was in flight")
 		}
-		fe, ok := err.(*format.Error)
-		if !ok || fe.Code != format.CodeNameNotFound {
+		var fe *format.Error
+		if !errors.As(err, &fe) || fe.Code != format.CodeNameNotFound {
 			t.Fatalf("unlinked-during-open error %v, want NameNotFound (18)", err)
 		}
 	case <-time.After(5 * time.Second):

@@ -40,7 +40,8 @@ func openFixture(t *testing.T, name string) *ImmutableReader {
 // isFormatError reports whether err carries the given format error code.
 func isFormatError(err error, code format.ErrorCode) bool {
 	for err != nil {
-		if fe, ok := err.(*format.Error); ok {
+		var fe *format.Error
+		if errors.As(err, &fe) {
 			return fe.Code == code
 		}
 		u, ok := err.(interface{ Unwrap() error })

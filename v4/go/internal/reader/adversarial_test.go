@@ -7,6 +7,7 @@ package reader
 // page-level CRCs at ordinary access time, mirroring the Rust reader.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -374,7 +375,8 @@ func TestNulBasenameRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("open accepted a NUL basename")
 	}
-	if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeInvalidArgument {
+	var fe *format.Error
+	if !errors.As(err, &fe) || fe.Code != format.CodeInvalidArgument {
 		t.Fatalf("NUL basename class = %T %v, want CodeInvalidArgument", err, err)
 	}
 }
