@@ -10227,6 +10227,69 @@ packages ok each), vet, -race + -gcflags=all=-d=checkptr=2 on
 internal/publication, freebsd/darwin cross-builds, gofmt clean, all
 PASS at b0be0df.
 
+### Status (2026-08-24) - chunk 4-8 slice M implemented: abandoned-publication maintenance
+
+Slice M ports the abandoned-artifact maintenance machine (Rust
+maintenance.rs 396 + maintenance/common.rs 456 + maintenance/output.rs
+181 + maintenance/reservation.rs 183 + maintenance_tests.rs 488) to
+Go at commit 2c7ed4d: constant-memory listing of stable exact-pattern
+private publication temps and reservation artifacts with exact
+evidence, and exact removal of one retained artifact after the caller
+certified its quiescence (directory identity proof, single-link owned
+open under the artifact lock, content verification, unlink-exact with
+the retained link-count proof, and the durable absence proof).
+Windows housekeeping is the typed OS-unsupported refusal of the Rust
+non-windows arm.
+
+Go files:
+
+- internal/publication/maintenance.go (+230): the abandoned temp/
+  reservation entry and list types, the evidence types (reusing
+  residueTuple/residueDigest for the portable facts), the sink
+  control surface (errMaintenanceSinkStop -> StoppedBySink, sink
+  errors -> SinkFailed), the four list/remove dispatchers with the
+  exact evidence both-or-none argument class, and the two refused
+  Windows housekeeping arms.
+- internal/publication/maintenance_common.go (+349): maintenanceArtifact
+  (prefix + family problem details), the constant-memory scan over
+  live.Directory.Scan with the checked-add overflow class, the
+  stable single-link entry proof before and after inspection,
+  encode/decode via the private-name codec, the portable identity
+  conversions, the owned open with the artifact lock and the
+  post-lock verify, the durable absence proof, the unix retirement
+  (unlink exact + retained link-count cause + sdk-folded absence
+  failure), and the artifact-specific namespace/cleanup problem
+  mappers (invalid-name InvalidArgument, IO raw, unsupported and
+  cross-filesystem OS-unsupported, ownership-changed
+  CleanupConflict).
+- internal/publication/maintenance_output.go (+125): publication-temp
+  listing with the optional tuple+digest content evidence of a
+  readable v4 main (geometry gate, read-only mapping, OpenMeta with
+  the Format class as the no-evidence marker, single-pass digest),
+  and exact removal under the main lifetime lock with the
+  changed-evidence refusal.
+- internal/publication/maintenance_reservation.go (+147): reservation
+  listing with the authenticated policy/phase/output/previous
+  evidence of selectable bound records, and exact removal under the
+  operation lock with the readable-binding refusal.
+- internal/publication/maintenance_test.go (+486): the nine Rust
+  maintenance tests (stable listing, complete/partial/absent
+  removal, changed identity/content/directory refusals, reservation
+  policy/phase/previous evidence, malformed names, bound/malformed/
+  absent reservation removal, wrong directory identity and copied
+  header binding, cancellation/stop/sink for both families) plus the
+  Windows refusal test, each removal cycle pinned with process-fd
+  counters (empirically proven: an injected directory leak fails +1
+  descriptor).
+
+Validation (all under nice): go build ./..., go vet ./..., plain and
+v4work full trees (14 packages ok each; 868 Test functions runnable
+under v4work at 2c7ed4d via go test -tags v4work -list '^Test'
+./..., 183 in publication of which 10 are the maintenance tests),
+gofmt clean, -race + -gcflags=all=-d=checkptr=2 on
+internal/publication, and the freebsd/darwin cross-builds all PASS
+at 2c7ed4d.
+
 ### Status (2026-08-24) - chunk 4-8 slice L round-3: all five aspects PASS
 
 Round-2 re-review: parity (Goodall) PASS, performance
@@ -10248,9 +10311,11 @@ Round-3 delta re-verified by verbose re-runs: plain and v4work trees
 internal/publication, freebsd/darwin cross-builds, gofmt clean, all
 PASS at f4b7bc3. All five aspects PASS; slice L is complete.
 
-Next: slice M maintenance (list/remove abandoned publication temps
-and reservation artifacts); after M stays N Publish retrofit +
-public surface, O validation + gate + push.
+Next: slice N Publish retrofit + public surface (publication.Publish
+over the reservation path; snapshot.To and PublishSet moved to it;
+the one-shot machine and the mapping path-based publish machines
+removed; public ResolvePublication/Residue/Abandoned surfaces in
+iprangedb); after N stays O validation + gate + push.
 
 
 
