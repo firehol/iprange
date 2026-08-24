@@ -10623,7 +10623,7 @@ GOOS=freebsd v4work vet clean; plain and v4work full trees 14
 packages ok each (833 Test functions runnable under v4work, 194 in
 publication, unchanged); -race + -gcflags=all=-d=checkptr=2 on
 publication, writer, mapping, snapshot, live, and the root package
-(plain and v4work); six cross-builds (linux/386, linux/arm64,
+(plain and v4work); seven cross-builds (linux/386, linux/arm64,
 darwin/amd64, darwin/arm64, freebsd/amd64, netbsd/amd64,
 windows/amd64) plain and v4work; zero-alloc gates
 (TestNoPageSizedHeapAllocations, TestNoPageSizedHeapAllocations
