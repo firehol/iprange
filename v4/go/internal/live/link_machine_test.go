@@ -1,4 +1,4 @@
-//go:build freebsd || v4work
+//go:build (freebsd || v4work) && !windows
 
 // FreeBSD no-replace transition machine facts (Rust
 // namespace_tests.rs freebsd arms). The machine compiles under the

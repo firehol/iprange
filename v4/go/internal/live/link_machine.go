@@ -1,4 +1,4 @@
-//go:build freebsd || v4work
+//go:build (freebsd || v4work) && !windows
 
 // FreeBSD no-replace transition machine (Rust namespace_mutation.rs
 // freebsd + `test` arms). Rust compiles this machine for freebsd and
@@ -6,7 +6,11 @@
 // same crash-safe transition is exercised on the linux/darwin test
 // hosts exactly like the Rust suite does. Production freebsd reaches
 // it through RenameNoReplace; the live sidecar still refuses freebsd,
-// so the machine is publication-path-only there.
+// so the machine is publication-path-only there. The !windows guard
+// keeps the v4work test tree cross-buildable on windows: the machine
+// needs the POSIX Linkat and directory-identity primitives, which
+// have no Windows counterpart (the Windows live surface is a tracked
+// M5 stub).
 
 package live
 

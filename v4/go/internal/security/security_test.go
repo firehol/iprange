@@ -1,3 +1,8 @@
+//go:build !windows
+
+// The creator-only proof tests cover the POSIX ownership commitment
+// (security.go is the !windows surface); the Windows stub has no
+// creator identity and is covered by the cross-compile builds.
 package security
 
 import (
