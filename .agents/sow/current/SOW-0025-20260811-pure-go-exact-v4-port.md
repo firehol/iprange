@@ -12061,7 +12061,50 @@ four legs, including the recovery-construction leg.
 Next: milestone 2 chunk 4-10 gate - delta re-review round 3 to the
 three open aspects (Chandrasekhar performance, Gauss Go idioms, Goodall
 Rust parity) over the 93eb8cf hot-path batch; on three-aspect PASS,
-the chunk close-out (gate record, Status completed, move to
-.agents/sow/done/, single commit + push); the worker process boundary
-(4-11) and the authorized scratch/external sort stay the recorded
-follow-ups.
+the chunk close-out record; then milestone 3 (chunk 4-11 worker
+process boundary) per the recorded plan.
+
+
+### Status (2026-08-24) - milestone 2 (chunk 4-10 recovery) CLOSED: five-aspect PASS at 9f45143
+
+Round-3 delta re-review after the 93eb8cf hot-path batch: Chandrasekhar
+(performance) PASS - findings F1-F10 cleared with pins re-run under
+nice (range scan 4 allocs/run constant in record count, catalog
+contains 0, membership scan 43/run, blob word walk 18/run, output
+push 8 and 16 per 4-record pass); Gauss (Go idioms) PASS - all P2s and
+P3s resolved with the prescribed value+flag shapes and honest pins;
+Goodall (Rust parity) PASS - P1-2 fixed field-for-field against
+codec.rs decode with the exact leaf_key/scan_leaf envelope and the
+P3-F detail fold verified. Noether (APIs/docs/records) PASS after
+c92e741 and 9f45143 (stale Next pointers and test-bearing counts
+corrected; single current Next; suite count chain verified
+42->45->49->55->62->69->81 at their commits). Herschel (wire) PASS
+since round 2.
+
+Authoritative milestone battery (applies to milestone 2 as of
+9f45143; the "six" phrasing in the fix-round record means the six
+explicit cross targets, and the native linux/amd64 build is the
+seventh - this statement settles the cross-build list variance):
+gofmt clean; vet plain + v4work; plain and v4work full trees (16
+test-bearing packages of 19; fault/snapshot/work carry no test
+files); race + checkptr=2 on recovery/writer/publication/live/
+bootstrap and the root, both tag sets; seven cross-builds plain +
+v4work (linux/386, linux/arm, linux/arm64, linux/amd64,
+windows/amd64, darwin/arm64, freebsd/amd64); check-mmap-trace.sh
+PASS on all four legs (immutable conformance, live validation,
+offline recovery, recovery construction - no
+read/pread/readv/write/writev/pwrite/lseek on any v4 artifact
+descriptor); work-counter pins and the new allocation pins green
+under plain builds (the !race tag convention follows the package
+precedent).
+
+Follow-up mapping for milestone 2: the worker process boundary
+(chunk 4-11) is the next milestone of this SOW; the authorized
+scratch/external sort stays recorded there; the remaining
+allocation residuals documented in the pins (per-page
+InspectLayout floor, the rangePolicy resolve seam, writer-intern
+hashing) are accepted Rust-parity floors; SOW-0017 remains the
+separate Phase-2 signing item.
+
+Milestone 2 (chunk 4-10 recovery) is complete: five-aspect PASS at
+9f45143 with the working tree clean.
