@@ -10409,8 +10409,85 @@ publication of which 5 are the publish composition tests), vet,
 -race + -gcflags=all=-d=checkptr=2 on internal/publication,
 freebsd/darwin cross-builds, gofmt clean, all PASS at ab130c7.
 
-Next: retrofit snapshot.To and PublishSet onto the composition,
-remove the one-shot publication_staging machine, add the public
-ResolvePublication/Residue/Abandoned root surfaces, then slice-N
+### Status (2026-08-24) - chunk 4-8 slice N implemented: snapshot and publish_set on the composition
+
+Slice N step-2 at commit a78eced moves both publishing callers onto
+the reservation-path composition and removes the one-shot writer
+staging machine. The public result shapes become the exact
+Rust-parity publication facts (publication.PublicationResult: the
+Publication status field, the destination content with the
+Previous/Other classes, the artifact ledger, and CleanupState
+projections), the snapshot and publish_set preparation failures keep
+the collapsed Cause + CleanupState terminal, and every build failure
+before Finish discards the created attempt through the composition
+(Rust fail_attempt / discard_attempt parity, identity-guarded unlink
+plus the retained-directory sync).
+
+Go changes:
+
+- internal/writer/output.go (+81): NewOutputBuilderOverFile and
+  NewStructuredOutputBuilderOverFile (Rust new_owned_with_extent over
+  the workflow::create file): the file must be empty, extends to the
+  budget extent, maps read-write through a duplicated descriptor, and
+  takes no lifetime lock (the composition prepare step takes it, Rust
+  prepare_cancellable). The shared assemble helper keeps both
+  constructors byte-identical.
+- internal/publication/publish.go: CreatePublishAttempt now takes the
+  exported PublicationPolicy (reservationPolicyOf maps the wire peer;
+  an invalid policy is refused with the verbatim class), and the
+  attempt exposes FileIdentity (the identity probe) and Discard (the
+  identity-guarded cleanup of an unfinished attempt, consumed).
+- internal/publication/name.go: ValidDestinationName (moved from the
+  writer staging) available on all platforms (pure string rules).
+- internal/publication/publication_parent_{unix,windows}.go: moved
+  from the writer package (CheckPublicationParent is a publication
+  concern).
+- internal/publication/publish_windows.go + finished_windows.go
+  (new): typed Windows stubs for the new surface (M5 honest
+  refusal at create, same class as the POSIX destination bind).
+- internal/snapshot/snapshot.go: To() creates the attempt through the
+  composition, builds into its file, compares the secured attempt
+  identity, and publishes through Finish; the builder-construction and
+  build failures discard the attempt, the source release order is
+  unchanged, and the machine refusals stay results with their Cause.
+- v4/go/membership_publish_set.go: PublishSet uses the same
+  composition; the public aliases retarget to publication.Publication
+  Policy/Result/Status/DestinationContent/CleanupState (the rich Rust
+  shapes), and the preparation failure collapses to Cause + Cleanup
+  state.
+- v4/go/snapshot_public.go + root snapshot/publish-set tests: the
+  result field rename (Publication.status -> Publication.Publication)
+  and the CleanupState projection.
+- Removed: internal/writer/publication_staging.go (730) and its
+  superseded tests (publication_staging_test.go 817, publish_race_
+  v4work_test.go 48, retire_branches_test.go, and the staging arms of
+  crash_v4work_test.go) - the internal/publication machine tests and
+  the five composition tests own that coverage (including the
+  fail-if-exists rename race: TestAttemptMainRaceAfterState2 and the
+  replacement crash family in attempt_crash_v4work_test.go).
+
+Behavior notes:
+
+- FreeBSD immutable snapshots and publish_set now progress to the
+  reservation machine instead of refusing at the builder creation
+  gate; the machine's operation-lock refusal keeps the exact
+  LiveCoordinationUnsupported class and detail ("live coordination is
+  not implemented on this platform") at the SOW-recorded platform
+  limitation position (4-12/M5), and the cross-compiles stay green.
+- The composition closes every descriptor on every terminal (Rust
+  drop parity), so the previous builder-Close-after-Publish pattern is
+  gone: the finished output (attempt file + builder mapping) is
+  consumed by Finish.
+
+Validation (all under nice): plain and v4work full trees (14 packages
+ok each; 848 Test functions runnable under v4work at a78eced, 189 in
+publication of which 5 are the publish composition tests), vet,
+-race + -gcflags=all=-d=checkptr=2 on internal/publication,
+internal/writer, and the root package (plain and v4work),
+linux/arm64 + freebsd/amd64 + darwin/arm64 + windows/amd64
+cross-builds, gofmt clean, all PASS at a78eced.
+
+Next: add the public root surfaces (ResolvePublication, residue
+inspect/remove, abandoned maintenance list/remove), then slice-N
 review (five level-1 reviewers, one level, adversarial), then O
 validation + gate + push.
