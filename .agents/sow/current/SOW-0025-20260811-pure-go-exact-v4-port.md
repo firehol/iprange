@@ -11628,3 +11628,67 @@ Next: milestone 2 chunk 4-10 slice C - the direct (range) build and
 the recovery output (Rust recovery/range_build.rs, direct.rs,
 direct_build.rs, direct_output.rs, range_components.rs, range_scan.rs,
 plus the writer draft composition per the design gate).
+### Status (2026-08-24) - milestone 2 slice C delivered: direct range build and recovery output
+
+Slice C delivers the direct recovery construction (Rust
+recovery/range_build.rs, direct.rs, direct_build.rs, direct_output.rs,
+range_components.rs, range_scan.rs, metadata.rs parity):
+
+- internal/recovery/range_scan.go: the full range-tree scan (leaf and
+  branch walks over the family codecs, the claim/checksum/type/header/
+  layout page refusals with their envelopes, the order and fence and
+  reversed-record defects, the exact cell views). The family codec
+  carries the aux (address family) of the page header, the Rust record
+  sizes (12 for IPv4, 40 for the padded IPv6 Record), the push/report
+  adapters, and the key arithmetic.
+- internal/recovery/range_build.go: RangeBuild + BuildFailure, the
+  ordered direct build (reset, scan, readable-count proof, output
+  finish), the unordered in-memory sort with the exact buffer sizing
+  and reserve refusals (the multi-pass scratch sort stays the recorded
+  chunk-4-10 follow-up; the heap-exceeded build refuses with the Rust
+  heap-only unordered-ranges class), analyze_ranges + AnalysisEvents,
+  Events, retained_metadata_bytes, write_metadata, and the shared
+  checked arithmetic helpers.
+- internal/recovery/metadata_read.go: the recovery metadata read (Rust
+  recovery/metadata.rs): the budgeted output buffer (page-set retention
+  + the 512 KiB inflater overhead), the chain walk with the exact
+  examined/claim/bounds/parse/page-accepted order through a byte-exact
+  lazy source (flate.Reader, no decoder buffering), the
+  feed/finish page attribution of every decoder failure, and the
+  none-when-damaged outcome without failing the analysis.
+- internal/recovery/direct.go: directAnalyze (budget + cancellation
+  preflight, direct-kind proof, page set, range analysis, metadata
+  read) and directConstruct/directBuild (prepare, family split, the
+  shared complete_ranges finish).
+- internal/recovery/direct_output.go + range_components.go: the
+  overlap-component pass (order proof, whole-component rejection with
+  the fence envelope) and the coalescing direct-output policy.
+- internal/recovery/page_read.go: the checked page access (IoError vs
+  PageCrcMismatch classes).
+- internal/writer: OutputBuilder.WriteMetadataWithBudget is the single
+  metadata-stage authority (Rust write_metadata_with_budget); the
+  duplicate WriteMetadata method was consolidated into it and the two
+  existing callers (snapshot copy, membership publish set) renamed.
+- internal/recovery/direct_test.go: the direct_tests.rs ports - the
+  canonical ordered output, the crc-damaged leaf skip (unbounded +
+  io_unreadable counters), the whole overlap-component rejection, the
+  bounded in-memory sort of disordered records, the insufficient-heap
+  refusal before any output mutation, and the metadata preservation and
+  damage omission, each with a validate-clean proof of the finished
+  output.
+
+Slice C validation (all under nice; ~1-2 core-minutes): gofmt clean;
+vet plain + v4work on linux/windows/freebsd; plain and v4work full
+trees (19 test-bearing packages ok each); race + checkptr=2 on
+recovery/validation/live/bootstrap/publication/writer and the root,
+both tag sets; seven cross-builds plain + v4work (linux/386,
+linux/arm64, darwin/amd64, darwin/arm64, freebsd/amd64, netbsd/amd64,
+windows/amd64); the three check-mmap-trace legs PASS (offline recovery
+leg included; the direct tests exercise their damage helpers over
+test-owned descriptors only, never the production read paths).
+Recovery suite: 42 Test functions (classify, inspection, offline,
+report, page set, source guard, direct construction).
+
+Next: milestone 2 chunk 4-10 slice D - the indirect (catalog,
+membership, structure) recovery builds and the recovery machine that
+composes inspection + construction + publication.
