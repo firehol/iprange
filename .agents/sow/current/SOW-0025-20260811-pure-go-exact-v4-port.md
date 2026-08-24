@@ -11383,8 +11383,67 @@ packages ok each); race + checkptr on validation/bootstrap/reader/
 live and the root, both tag sets; seven cross-builds plain + v4work;
 the mmap-trace legs (conformance and live validation) pass.
 
-Next: milestone 1 gate round 3 - five-aspect re-review of the round-3
-HEAD; fix any remaining P0-P2 findings; then close the milestone with
-the five-aspect PASS and proceed to the next milestone.
+### Status (2026-08-24) - milestone 1 (chunk 4-9 explicit validation) CLOSED: five-aspect PASS at c494da6
+
+The milestone gate under the standing review rules (2026-08-21, the
+first milestone of this review regime) returned all five aspect
+reviewers PASS at HEAD c494da6 with no P0-P2 findings:
+
+- Goodall (Rust parity): PASS - the range walk refusal resets, the
+  value+flag neighbor cursor, the membership local-hasher, the live
+  sweep composition, and the DatabaseIDFromPages static-identity
+  compare are arm-for-arm with the Rust authorities.
+- Gauss (Go idioms): PASS - the value+flag cursor, the refusal
+  resets, the local-hasher closure, the shared terminalResult fold,
+  and the facade read as natural Go; no new P3s.
+- Chandrasekhar (performance): PASS - escape analysis confirms the
+  sha256 state stack-resident with devirtualized writes, the range
+  walk allocates nothing per record (pinned at 255 allocs per
+  2000-record sweep), and no hot-path branch, copy, or syscall was
+  added by any gate fix.
+- Herschel (wire format and integrity): PASS - the two late round-1
+  P2s (DatabaseIDFromPages static identity; reader codec zero
+  refcount) are fixed with Rust-exact semantics and end-to-end pins;
+  the reason/object enumerations in the spec match the Go and Rust
+  enums byte-for-byte.
+- Noether (APIs, docs, records): PASS - the public validation
+  surface matches the Rust crate re-exports, the record corrections
+  are honest and current-state, the suite counts reproduce, and
+  exactly one current Next remains at the tail.
+
+Gate history: round 1 (7c14361) found the range per-record escape
+(Gauss/Chandrasekhar), the refused-node neighbor-state divergence
+(Goodall), two records defects (Noether), and two late-returned wire
+findings (Herschel); round 2 (134c8bf) fixed all of them and passed
+four aspects; round 3 (c494da6) fixed Herschel's two P2s and passed
+all five. Every fix is pinned by a regression test (allocation pin,
+refused-subtree reset, static-identity arms, zero-refcount lookup).
+
+Chunk 4-9 delivered: explicit bounded full-file validation over the
+single-authority codecs - immutable and live-current modes, the
+bootstrap-report arms, the public iprangedb facade, the
+database_id_from_meta_pages bound-identity rule, the mmap-trace live
+leg, and 94/98 validation tests. Deferred items carried to chunk
+4-10 with their references: the offline-candidate validation mode,
+the recovery source-cleanup guard surface (ValidationFailure
+.SourceCleanup), recovery scratch/external sort, and the frozen
+four-armed review rules stay authoritative for the next milestone.
+
+Suite counts at c494da6: validation 94 plain / 98 with v4work,
+bootstrap 13/13, reader 56/65, live 57/70, root 183/203, format
+47/51. Battery at the close HEAD: gofmt clean; vet plain + v4work on
+linux/windows/freebsd; plain and v4work full trees (15 test-bearing
+packages ok each); race + checkptr on validation/bootstrap/reader/
+live and the root, both tag sets; seven cross-builds plain + v4work;
+both mmap-trace legs pass.
+
+Next: start milestone 2 (M4 chunk 4-10 recovery): internal/recovery
+with classify and candidate tokens, the recovery-readable meta and
+generation-order proofs, page set and tables, overlap components,
+direct and indirect builds, outputs, source guard, terminal
+result/report, the public RecoverImmutable/RecoverOffline and
+InspectRecoveryCandidates surfaces, and the OfflineCandidate
+validation arm (heap-only first; authorized scratch and external
+sort tracked separately), then the five-aspect gate.
 
 
