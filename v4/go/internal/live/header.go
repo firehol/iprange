@@ -99,11 +99,12 @@ func readHeaderMapping(page []byte) (sidecarState, header, error) {
 	return state, h, nil
 }
 
-// hasSelectableHeader reports whether the file's first page carries a
+// HasSelectableHeader reports whether the file's first page carries a
 // shape- and checksum-valid header regardless of state (Rust
 // has_selectable_header); used by the offline transition resolvers to
-// find a coordination artifact without opening it.
-func hasSelectableHeader(f *os.File) (bool, error) {
+// find a coordination artifact without opening it. The exported form
+// is for the publication residue machine.
+func HasSelectableHeader(f *os.File) (bool, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return false, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
