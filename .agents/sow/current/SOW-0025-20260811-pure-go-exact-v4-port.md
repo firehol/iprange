@@ -12461,6 +12461,50 @@ lands with the 4-12 crash-matrix extension (the probe arm), and the
 in-process machines keep serving the SDK until then (Rust
 fault-isolation parity becomes complete at that point).
 
-Next: re-review round of the fixed tree by the same five reviewers
-(each re-checks its own aspect over the fix delta), then the milestone
-3 close-out record on five-aspect PASS, then milestone 4 (chunk 4-12).
+### Status (2026-08-25) - milestone 3 CLOSED: chunk 4-11 five-aspect PASS on the fixed tree
+
+The re-review rounds closed all round-1 blockers: parity PASS (round 2,
+all P1s fixed: worker-side spins are parent-liveness shaped, the
+production-routing deferral is recorded, corrupt-scratch terminals and
+the readU32List preallocation are Rust-shaped), idioms PASS (round 2,
+the session-state race is mutex-guarded and race-proven), wire PASS
+(round 2, the Rust-produced byte vectors for the progress,
+recovery-outcome, publication-result, and cleanup-result envelopes are
+asserted by the Go reader and writer in both directions with
+independent decode confirmation), APIs/docs PASS (round 3, the
+waitAcknowledgement 30 s doc contradiction and the remaining hygiene
+items fixed in bb253e5). Performance PASS stood since round 1 (fix
+delta measured allocation-neutral; the accepted P3 of three small
+allocations per streamed finding is recorded with its bound).
+
+Committed close state: 304d99a (round-1 fixes), 3aad0a0 (Rust wire
+vectors), bb253e5 (round-2/3 doc hygiene). Full battery on the closed
+tree (all under nice): gofmt clean; vet plain + v4work clean; full
+module plain + v4work 17/17 packages ok; race + checkptr plain + v4work
+on the 9-package set ok; six cross-builds plain + v4work ok;
+check-mmap-trace.sh four legs PASS.
+
+Accepted P3 residuals (recorded, none blocking): three small heap
+allocations per streamed finding wire message (~100 ns on the 1-2 ms
+callback round trip; bounded by the ~500 findings/s protocol ceiling);
+the recovery drive-error arm keeps the drive cause where Rust
+substitutes a corrupt scratch-checkpoint error (same corrupt-control
+edge, no practical reach — the control scratch region is written only
+by the trusted worker machine); the byte-vector corpus covers four
+envelope families (the remaining envelopes rest on the round-1 static
+parity sweep plus in-language round trips); the previously recorded
+seams stand unchanged (progress callback payloads, authorized scratch
+removal deferral, recovery-output resume stance).
+
+Explicit deferral (recorded at the round-1 gate record): production
+SDK routing through the worker boundary lands with chunk 4-12, together
+with the worker-side probe arm it depends on; the SDK keeps the
+in-process machines until then. Follow-up mapping for milestone 4
+(chunk 4-12 platform completion): native darwin/freebsd platform
+proofs, the probe_source/enter_region crash-matrix extension with
+session-1 fault records, the production-routing slice, the
+build-mismatch matrix, and the code-size audit.
+
+Next: milestone 4 (chunk 4-12 platform completion) - design record,
+slices, then the same five-aspect gate; the five reviewers restart
+between milestones per the standing rules.
