@@ -12192,3 +12192,36 @@ public failure facts; temp control files are 0600 and unlinked).
 Open decisions: none - Decision 2A resolves the shim question; the
 chunk plan and the 4-2 record resolve the layout; implementation
 starts with slice 4-11A.
+
+### Status (2026-08-25) - milestone 3 slice 4-11A delivered: full worker control surface and wire codecs
+
+Slice A ports the Rust wire era 1:1 with the 4-2 fault subset intact:
+- internal/worker/control.go + control_common.go extended to the full
+  control.rs surface (859 lines): build id (fixed 64-byte constant
+  until the cmd binary wires the ldflags/env seam), nonce, parent and
+  worker pids with parent liveness, mapping generation and role,
+  probe-armed and handling words, the fault record, opcode, response,
+  cancelled, external-poll, guard-pending, scratch checkpoints with
+  the identity/security/duplicate cross-checks, recovery checkpoints,
+  callback checkpoints, payload and callback-payload buffers, and the
+  30-second wait limit; atomic fields stay on the mapped asm
+  primitives, plain fields on format.U32/PutU32 (the 4-2 convention).
+- New wire.go + wire_cleanup.go + wire_publication.go +
+  wire_publication_enums.go + wire_recovery.go + wire_validation.go:
+  the wire.rs Writer/Reader little-endian codecs and the four per-mode
+  message codecs with the exact field order, capacities, heap
+  accounting, error classes, and verbatim details; recovery and
+  validation result/failure mailboxes use the exported recovery types
+  with worker-owned wire shapes where the domain packages keep fields
+  private.
+- 73 new tests: Rust vectors ported (callback checkpoints, problem
+  detail preservation, scratch-entry cap) plus parity vectors for the
+  encodings Rust does not unit-test (u128 fence hi/lo, optional enums,
+  checkpoint basename grammar, cardinality limb rejection,
+  truncation/trailing/budget/duplicate classes, contract-enum
+  rejections, both outcome arms, all three validation modes).
+
+Validation (all under nice; ~1 core-minute): gofmt clean; vet plain +
+v4work; internal/worker plain and v4work suites ok (73 new tests);
+module build ok; darwin/windows cross-builds ok (the wire era is
+linux/amd64-tagged like the fault subset).
