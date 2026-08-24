@@ -11570,3 +11570,61 @@ Next: milestone 2 chunk 4-10 slice B - page_set/construction basics,
 the source guard, and the terminal/report shapes (Rust
 recovery/page_set.rs, source_guard.rs, report.rs, terminal.rs),
 per the recorded design gate.
+### Status (2026-08-24) - milestone 2 slice B delivered
+
+Slice B of chunk 4-10 (page_set/construction basics + source guard +
+terminal/report shapes) is committed after the slice-A record. The
+tracked tree is clean at the slice-B implementation commit.
+
+Delivered surface:
+
+- internal/recovery/budget.go: RecoveryBudget + heap_only + validate
+  (Rust recovery/budget.rs parity, scratch limits validated and
+  recorded as the deferred machinery).
+- internal/recovery/page_set.go: the heap-only page-ownership table
+  (sparse power-of-two open hash table, the 3/4 load cap, the
+  BudgetExceeded refusal at the cap exactly like the Rust non-posix
+  arm), insert/claim/retained_bytes/reset/finish, the claim reason
+  classes (depth, bounds, cycle vs alias from the walk path), and the
+  tables::hash_u32 port. The scratch migration stays the recorded
+  follow-up; the sizing helpers use the Go math/bits peers of the Rust
+  usize operators, with the unrepresentable top-bit usize clamp
+  recorded at the clamp site.
+- internal/recovery/report.go: RecoveryPageCounts/LogicalCounts/
+  RecoveryReport/RecoveryUnknownEnvelope/RecoverySink(+SinkControl)
+  and the Reporter (new/resume/finish, all counter classes with the
+  checked overflow folds, the v4/v6 address cardinality, the
+  possible-span fence accounting, stop and sink-failed classes).
+- internal/recovery/source_guard.go + source_cleanup.go: the basic
+  source-guard arms (immutable read-only shared-locked, quiescent
+  read-write exclusive-locked, current-generation immutable bind with
+  the Rust require_geometry-before-mapping guard), the exact
+  candidate/current binds with the candidate-changed mapping, the
+  map_available committed extent, the finish/abandon/release_only
+  terminals, and the public retryable RecoverySourceCleanupGuard.
+  The live source arms refuse honestly (CodePublicationUnsupported)
+  until the recover_live machine, recorded per the design gate.
+- internal/recovery/terminal.go: RecoveryScratchAttempt,
+  RecoveryResult, RecoveryPreparationFailure (+ early/new/
+  from_publication/completed; the discarded arm needs the private
+  publication EarlyDiscard and is recorded with the recover_live
+  api slice; the scratch absorb is the heap-only none arm).
+- internal/recovery/construction.go: prepare/require_builder over the
+  writer draft (the Rust immutable_output Builder peer) and the
+  failure/analysis failure shapes with the page-set terminal fold.
+- internal/publication exports for the composition (Rust pub peers):
+  CleanupArtifacts.Push + NewCleanupArtifacts + Housekeeping.Merge.
+
+Slice B validation (all under nice; ~1 core-minute): gofmt clean; vet
+plain + v4work; plain and v4work full trees; race + checkptr=2 on
+recovery/publication/validation/live/bootstrap and the root, both tag
+sets; seven cross-builds plain + v4work; page-set tests ported from
+the Rust heap arms (sparse sizing, load cap) plus the claim reason
+classes, budget refusals, report counter/envelope/stop/cardinality
+pins, and the source-guard open/bind/final-check/geometry/guard-retry
+pins.
+
+Next: milestone 2 chunk 4-10 slice C - the direct (range) build and
+the recovery output (Rust recovery/range_build.rs, direct.rs,
+direct_build.rs, direct_output.rs, range_components.rs, range_scan.rs,
+plus the writer draft composition per the design gate).
