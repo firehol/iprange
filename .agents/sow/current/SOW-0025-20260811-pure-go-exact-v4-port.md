@@ -39,7 +39,6 @@ Recorded as Review Process below.
 
 
 ## Status
-## Status
 
 ### Status (2026-08-23) - chunk 4-2 design recorded: worker SIGBUS spike, Linux amd64
 
@@ -11067,6 +11066,74 @@ sets; seven cross-builds plain + v4work; all pass.
 The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21) once all chunk 4-9 slices land.
 
+### Status (2026-08-24) - chunk 4-9 slice F design recorded (LiveCurrent + facade + crash matrix)
+
+Slice F design, recorded before coding per the pre-implementation gate.
+Rust authorities read: validation.rs (validate_local dispatch,
+validate_live/validate_live_selected/validate_live_bootstrap,
+failure_with_guard), validation/source.rs (LiveSource::open over
+bind_live_main + sidecar + gate + register_live; LiveOpened
+Selected/Bootstrap; LiveBootstrapSource finish verify+release with the
+cleanup-guard fold; source_tests.rs), worker.rs (probe_source arms only
+when a worker control is registered: the in-process validate_local path
+is probe-free, so the Go sweep needs no arming), mmap_runtime_tests.rs
+(the live validation proof over a real writer-built database), and the
+existing Go live 4-4..4-7 machine as the composition base.
+
+Scope decisions (Rust is the baseline; consistent with the recorded M4
+plan, no new user decision required):
+
+- LiveCurrent composes the snapshot/live source guards exactly as
+  recorded: internal/live OpenLiveSourceCurrent (the bound-current
+  committed-generation registration) is the Selected arm. The
+  validation sweep needs the raw page mapping, so LiveSource gains a
+  Mapping() borrow accessor (the mapping lives until the source
+  release; the caller never closes it). The terminal is
+  FinishCurrent(check) with the scan result folded through the check
+  callback: end.Cause carries the scan or proof failure and end.Residue
+  the coordination residue, matching the Rust finish(scan) fold.
+- The Rust LiveOpened::Bootstrap arm (a live pair whose committed
+  generation cannot be selected but whose raw meta pair binds a
+  database identity) is ported as a new narrow internal/live entry
+  sharing the existing sidecar/gate/registration helpers:
+  OpenLiveValidationSource returns the Selected or Bootstrap union;
+  the bootstrap source holds the gate like the Rust bootstrap_source,
+  its Finish verifies the bound identity against the sidecar and
+  releases gate + lifetime, and the validation sweep reports the
+  bootstrap problem findings exactly like the immutable report arm.
+  The problem detection reuses bootstrap.AsProblem on the
+  committed-generation selection error; the bound identity read is a
+  new bootstrap.DatabaseIDFromPages helper (Rust
+  database_id_from_meta_pages parity).
+- Failure shaping: a failed live release folds to
+  ValidationFailure{CoordinationCleanup: CleanupGuard, SourceCleanup:
+  the retryable source handle} only when end.Residue is true; a clean
+  release keeps the plain failure. The Go live release machine differs
+  from Rust in one proven way (its release steps act on the already
+  mapped sidecar and do not re-verify paths, so a moved sidecar fails
+  the final check instead of the release); the failure surface follows
+  the Go machine: finalCheck failures are plain failures, release
+  failures carry the guard. The 4-10 recovery guard surface remains a
+  recorded deferral with chunk 4-10.
+- The iprangedb facade aliases the validation surface and folds the
+  cancellation token into the check hook (Rust validation::validate
+  parity), in the established root facade pattern.
+- Crash/resource matrix: the in-process live validation proof ports as
+  a root test over the public live writer (create, commit twice,
+  reclaim, close, validate LiveCurrent clean); the SIGBUS worker matrix
+  already exists (worker control + lifecycle crash matrix) and the
+  in-process validate_local never arms a probe (Rust probe_source
+  no-op without a registered worker control); the mmap-only runtime leg
+  is the existing check-mmap-trace.sh, extended with a live-validation
+  trace leg in this slice.
+
+Validation plan (all under nice; budget recorded per the resource
+rule): plain + v4work full trees, vet on linux/windows/freebsd both
+tag sets, race + checkptr on validation/live/bootstrap/publication and
+the root, seven cross-builds both tag sets, the live selected and
+bootstrap sweeps, the failure/cleanup shapes, the facade tests, and
+the mmap trace leg.
+
 ### Status (2026-08-24) - chunk 4-9 slice E implemented at 064c7a2
 
 Slice E ships the structure and structure-table validators (the Rust
@@ -11128,3 +11195,82 @@ The five-aspect adversarial gate runs at the milestone close per the
 standing review rules (2026-08-21) once all chunk 4-9 slices land.
 
 Next: chunk 4-9 slice F (LiveCurrent mode + failure/cleanup shapes + the iprangedb facade Validate + the crash/resource matrix ports and the full validation battery).
+
+### Status (2026-08-24) - chunk 4-9 slice F implemented at a8f5bca
+
+Slice F ships the LiveCurrent validation mode, the public validation
+facade, and the runtime mmap evidence leg:
+
+- internal/validation/live.go: the validateLive dispatch (Rust
+  validate_live) over the OpenLiveValidationSource union. The
+  selected sweep reuses the shared reserve + validateSelected
+  composition over the borrowed source mapping (LiveSource gains the
+  Mapping borrow accessor; the mapping lives until the source
+  release) and folds the scan into FinishCurrent; the bootstrap sweep
+  reports the refused committed-generation findings and the
+  untraversable mark, then releases the gate-held registration. The
+  open and terminal failures map residue exactly like the Rust
+  failure_with_guard arms (CoordinationCleanup CleanupGuard only when
+  residue is real).
+- internal/live/live_validation.go: OpenLiveValidationSource returns
+  the Selected or Bootstrap union. The committed-generation selection
+  problem (bootstrap.AsProblem on the OpenLiveSourceCurrent error) is
+  exactly the one the bootstrap sweep reports; the bootstrap
+  registration re-proves the bound identity against the sidecar and
+  releases gate + lifetime on Finish. bootstrap.DatabaseIDFromPages
+  is the raw-pair bound identity (Rust database_id_from_meta_pages),
+  reusing ParseIdentity so a checksum-broken page keeps binding the
+  identity while its generation cannot be selected.
+- The iprangedb facade (validation_public.go) aliases the whole
+  validation surface (Rust validation::types re-exports) and folds
+  the cancellation token into the checkpoint hook; the failure Cause
+  converts through publicError like the other facades.
+- check-mmap-trace.sh gains a live-validation trace leg
+  (TestPublicValidateLiveCleanSweep): the pair and the sidecar
+  coordination stay mmap-only across create, commit, validate, and
+  reader open.
+- Terminal fold note for the milestone reviewers: the Go live source
+  machine is the snapshot registration machine (recovery/source_guard
+  /live.rs), whose terminal keeps the check failure when both the
+  check and the release fail (release folded only when no check
+  failure exists); the Rust validation source (validation/source.rs)
+  combines both into CleanupInProgress. The Go fold follows the Go
+  source machine exactly as reviewed in chunks 4-4..4-7; the residue
+  flag and guard surface match Rust in every arm. The bootstrap
+  terminalResult fold is the same shape and is pinned by a live
+  package unit test, because release steps act on already-mapped
+  state and do not re-verify paths (a moved sidecar fails the final
+  check, not the release).
+
+Tests (all under nice): the clean sweep over a committed direct
+generation with the writer still open plus a re-claimed reader slot
+(Rust live_current_validation_pins_and_releases_its_reader_slot),
+the empty sweep, the bootstrap report over one checksum-broken meta
+page (1 MetaInvalid finding, untraversable, generation nil), the
+bootstrap verify failure over a moved sidecar, the final-check
+failure shape, the open refusal without a reader table, the
+capacity-64 checkpoint polling, the terminal residue fold unit, and
+the public retained-capacity lifecycle (validate between commits,
+trim after the pin release, final physical length == committed page
+count). mmap-trace legs pass for both the conformance fixtures and
+the live validation session.
+
+Suite counts at a8f5bca: validation 92 tests plain / 96 with v4work
+(85/89 at 064c7a2), live 57 plain / 70 with v4work (one new
+validation-source unit), root 182 plain / 202 with v4work, format 47.
+Battery re-validated under nice: gofmt clean; vet plain + v4work on
+linux/windows/freebsd; plain and v4work full trees (15 test-bearing
+packages ok each); race + checkptr on
+validation/live/bootstrap/publication/reader and the root, both tag
+sets; seven cross-builds plain + v4work; all pass.
+
+The five-aspect adversarial gate runs at the milestone close per the
+standing review rules (2026-08-21): all chunk 4-9 slices (A..F) have
+landed.
+
+Next: milestone 1 close gate - run the five adversarial aspect
+reviews (Goodall Rust parity, Gauss Go idioms, Chandrasekhar
+performance, Herschel wire format and integrity, Noether APIs and
+records) against the complete chunk-4-9 tree, fix every P0-P2
+finding, then close the milestone and proceed to the next milestone.
+
