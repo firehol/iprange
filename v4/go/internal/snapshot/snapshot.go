@@ -408,9 +408,9 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 		}
 		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
-	if dst.Mode()&os.ModeSymlink != 0 {
-		return &format.Error{Code: format.CodeConflict, Detail: "publication name is a symlink"}
-	}
+	// Rust open_regular with O_NOFOLLOW folds a symlinked destination
+	// (ELOOP) into NotRegular, so both cases share the same Conflict
+	// detail; there is no separate symlink class on this probe path.
 	if !dst.Mode().IsRegular() {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 	}
