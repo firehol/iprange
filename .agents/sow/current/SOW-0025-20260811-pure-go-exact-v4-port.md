@@ -10559,3 +10559,41 @@ slice-O sweep.)
 
 Next: slice-N review (five level-1 reviewers, one level,
 adversarial), then slice O: full validation + gate + push.
+
+### Status (2026-08-24) - chunk 4-8 slice N complete: review rounds 1-2 PASS
+
+Round-1 review (five level-1 reviewers, adversarial): performance
+(Chandrasekhar) and wire/integrity (Herschel) PASS; parity (Goodall)
+one P3 (symlink detail); idioms (Gauss) six P3s; records (Noether)
+P2 line-count drift plus wording. Round-1 fixes at d5d4459 (record
+line counts) and 3b68ff3 (snapshot identity compare moved before
+builder construction so a refusal discards the empty attempt file
+directly, resolution mode closed enum, PublishAttempt consume guards
+on File/Close/Discard/Finish with the file nil-ed on every terminal
+and a second Finish refused, dead mapPublicationResidueCoordination
+removed, policy/phase evidence mapped via explicit switches, root
+test errors.As plus capacity 53).
+
+Round-2 re-review: parity (Goodall) PASS, idioms (Gauss) PASS,
+performance (Chandrasekhar) PASS, records (Noether) PASS with two P3
+notes fixed at 4ac17b7 (the mapping-machine removal now recorded in
+the step-2 Removed bullet, doubled parenthesis fixed). Wire/integrity
+(Herschel) round-2 found P2-1: the round-1 symlink detail in
+rejectLiveSelf diverged from the Rust fold - Rust open_regular with
+O_NOFOLLOW folds a symlinked destination ELOOP into NotRegular, so
+the probe reports Conflict "publication name is not a regular file"
+(namespace/unix.rs:192-195, problem.rs:35-37), while the Go branch
+reported "publication name is a symlink", a string Rust keeps only on
+the IoAt arm (problem.rs:72-73) this probe never reaches. Fixed at
+7d95412 by deleting the symlink branch so both cases share the single
+not-a-regular-file arm; the IoAt mirror in internal/publication/
+problem.go:96 is untouched. Re-validated under nice: plain and v4work
+full trees (14 packages ok each; 833 Test functions runnable under
+v4work, 194 in publication), TestSnapshotLive, GOOS darwin/freebsd/
+windows/linux amd64 builds, gofmt clean. Herschel re-check PASS (full
+rejectLiveSelf parity re-verified arm by arm) and Goodall confirmed
+the placement and withdrew the round-1 P3-1. All five aspects PASS at
+HEAD 7d95412. Slice N is complete.
+
+Next: slice O - full validation + gate + push (five-aspect final
+review on slice O, then git push per the user decision).
