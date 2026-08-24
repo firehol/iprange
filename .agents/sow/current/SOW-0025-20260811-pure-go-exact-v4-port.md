@@ -12265,3 +12265,77 @@ full-parallel v4work load, green 3/3 in isolation and in the rerun -
 timing-sensitive, unrelated to the worker slices, recorded);
 gofmt, vet, cross-builds (darwin/arm64, windows/amd64, freebsd/amd64,
 linux/386) green.
+
+### Status (2026-08-25) - milestone 3 slice 4-11D delivered: unreadable-page machine, fault memory, validation and recovery client arms
+
+Slice D ports worker.rs fault memory + client/validation.rs +
+client/recovery.rs in two parts (commits d08aa55 and cab3bf9):
+
+- Mapping refusal machine: Mapping.SetUnreadablePages declares pages
+  the Page read path refuses with the io-unreadable class (format
+  CodeIO, the Rust EIO) before any range check, mirroring Rust
+  mapping.rs set_unreadable_pages/page; View and writer views are
+  unaffected exactly like the Rust page()/bytes() split. Deterministic
+  refusal - no second SIGBUS (the whole point of the retry design).
+- Worker fault memory: the session unreadable source-page list is
+  sorted and refuses duplicates with the verbatim Rust detail
+  (worker.rs set_unreadable_source_pages); storage lives in the
+  internal/mapping leaf (mapping.SetSessionUnreadablePages /
+  SessionUnreadablePages / SessionPageUnreadable) so validation and
+  recovery can apply it without importing worker (the documented
+  import-direction constraint); the worker-facing API keeps its Rust
+  names (SetSourceUnreadablePages / SourcePageUnreadable /
+  SourceUnreadablePages).
+- Client arms: validateWithWorker, inspectRecoveryCandidatesWithWorker,
+  recoverWithWorker compose spawn/handshake/drive with the exact Rust
+  operation order (validation request before spawn, recovery request
+  after handshake), finding/unknown streaming through the callback
+  acknowledge seam, guard-pending retention with WorkerCleanup, the
+  source-fault retry loop (faultPageOf -> RecordUnreadablePage under
+  the heap budget -> restart; a repeated page is the exact Conflict),
+  and the non-source mappedIo fault class. In-process fault doubles
+  pin the record read-back cross-checks and the retry loop; real-binary
+  tests prove full sessions (validate/inspect/recover) and the
+  deterministic refusal of a declared page (no second SIGBUS,
+  io_unreadable reported, output published - Rust client_tests.rs
+  106-199 parity).
+- Worker-side application at the domain mapping creation points (the
+  Rust parity list): validation whole-source mappings (immutable and
+  offline sweeps; validation.rs:310), the live sweep mapping
+  (live.rs:298), the recovery basic and live source guards
+  (source_guard/basic.rs:165 map_available and the live claim), and
+  the bootstrap-page classification skip (inspection.rs:260). Local
+  (non-worker) SDK paths observe zero change: the session list is
+  empty outside a worker session.
+- Windows: the mapping stub gains the SetUnreadablePages surface (no-op;
+  the worker refuses to start there and every mapping open refuses).
+
+Recorded seams (all consistent with the approved slice plan): the
+worker-side probe arm (Rust probe_source/enter_region that gives a real
+session-1 source fault its fault record) remains a 4-12 item with the
+crash-matrix extension, matching the 4-9 slice-F record (the Go sweep
+never arms a probe without a registered worker control); the live-open
+meta-page probes stay outside the allowed scope (internal/live does not
+consult the session list; unowned faults never produce a record, so the
+client surfaces WorkerFailure, not a fault); a declared data page during
+validation surfaces as the completed invalid result with an IoError
+finding - the exact Rust validation/context.rs load_graph_page
+behavior, not a failure with a CodeIO cause.
+
+Validation (all under nice; ~4 core-minutes): gofmt clean; vet plain +
+v4work clean; full module plain + v4work green (10 new mapping/session
+tests, 3 validation refusal tests, 2 recovery io-unreadable tests, the
+real-binary declared-page refusal test); race + checkptr (plain +
+v4work) green on recovery/writer/publication/live/bootstrap/validation/
+mapping/worker/root; six cross-builds (linux/386, linux/arm,
+linux/arm64, windows/amd64, darwin/arm64, freebsd/amd64) plain +
+v4work green; check-mmap-trace.sh four legs PASS (immutable, live
+validation, offline recovery, recovery construction; no artifact
+descriptor file I/O).
+
+Next: milestone 3 slice 4-11E - real cleanup + publication wire arms
+(the internal/publication seam: discardAttempt/confirmedAbsent/
+failedAttempt and resumeSecuredOutputForCleanup must become worker
+reachable; serveCleanup on the worker side; the retained cleanup guard
+exchange already on the client seam) and worker-build mismatch tests;
+then the chunk 4-11 five-aspect gate.
