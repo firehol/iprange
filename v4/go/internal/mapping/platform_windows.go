@@ -145,11 +145,39 @@ func msyncShared(data []byte) error {
 	return nil
 }
 
+// ftruncateError reports the ftruncate IO class while keeping the raw
+// OS error reachable: format.Error carries no cause chain, and the
+// shrink retention decision compares the raw system error exactly
+// like the Rust raw_os_error check (Rust shrink_file_or_retain
+// mapped_view_prevents_shrink). The As method keeps every existing
+// errors.As(*format.Error) call sighted on the class, mirroring the
+// live package classedError pattern.
+type ftruncateError struct {
+	class *format.Error
+	cause error
+}
+
+func (e *ftruncateError) Error() string { return e.class.Error() }
+
+func (e *ftruncateError) Unwrap() error { return e.cause }
+
+func (e *ftruncateError) As(target any) bool {
+	fe, ok := target.(**format.Error)
+	if !ok {
+		return false
+	}
+	*fe = e.class
+	return true
+}
+
 // truncateFile sets the exact file extent (Rust set_len through the
 // OS: SetFileInformationByHandle(FileEndOfFileInfo)).
 func truncateFile(f *os.File, size int64) error {
 	if err := f.Truncate(size); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
+		return &ftruncateError{
+			class: &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()},
+			cause: err,
+		}
 	}
 	return nil
 }
@@ -158,7 +186,8 @@ func truncateFile(f *os.File, size int64) error {
 // mapped-view retention class (Rust shrink_file_or_retain
 // mapped_view_prevents_shrink): another process holds a view of the
 // section, so the file keeps its physical extent and the mapping is
-// re-established at the committed length anyway.
+// re-established at the committed length anyway. The raw system error
+// is compared through the ftruncateError cause chain.
 func isMappedViewRetained(err error) bool {
 	return errors.Is(err, windows.ERROR_USER_MAPPED_FILE)
 }

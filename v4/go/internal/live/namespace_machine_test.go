@@ -9,6 +9,7 @@ package live
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -39,9 +40,13 @@ func TestCreatePrivateRefusesOverlongBasename(t *testing.T) {
 }
 
 // TestCreatePrivateRefusesSymlinkedParent pins the no-symlink parent
-// rule: Directory::open uses O_NOFOLLOW, so a parent reached through a
-// symlink reports the Io class (Rust maps the ELOOP open failure to
-// Io, not to a wrong-mode class).
+// rule on both platform arms of the Rust authority: on unix the
+// no-follow parent open fails ELOOP and maps to the Io class (Rust
+// publication/namespace/unix.rs, is_nofollow_symlink -> Io); on
+// Windows the reparse-point parent opens as the link itself, the
+// attribute check refuses it with NotDirectory, and the live mapping
+// folds the wrong-mode classes to WrongState (Rust namespace/windows.rs
+// Directory::open + live_namespace::namespace_error).
 func TestCreatePrivateRefusesSymlinkedParent(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
@@ -56,7 +61,11 @@ func TestCreatePrivateRefusesSymlinkedParent(t *testing.T) {
 	if created.file != nil {
 		t.Fatal("symlinked parent created an artifact")
 	}
-	expectCode(t, failure.cause, format.CodeIO)
+	want := format.CodeIO
+	if runtime.GOOS == "windows" {
+		want = format.CodeWrongState
+	}
+	expectCode(t, failure.cause, want)
 }
 
 // TestCreateLiveRelativeSingleComponentRefuses pins the Rust

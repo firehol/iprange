@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -220,6 +221,17 @@ func (s *recoverySource) releaseOnly() sourceEnd {
 	return terminal(s, nil, released)
 }
 
+// close releases the retained source exactly where the Rust machine
+// drops it (RAII): the cleanup guard retry and the success terminal
+// both call it after the release. The baseline call sites are
+// terminal() and RetryCleanup; a discarded guard closes through its
+// finalizer (the Go analog of the Rust guard drop).
+func (s *recoverySource) close() {
+	if s.basic != nil {
+		s.basic.close()
+	}
+}
+
 // liveEnd folds one live source terminal into the recovery terminal
 // (Rust terminal over the LiveSource arm: the release failure lives
 // in the retained cleanup guard, never in the folded cause).
@@ -293,18 +305,28 @@ func (s *recoverySource) release() error {
 // fixed recovery problem.
 func terminal(source *recoverySource, checked error, released error) sourceEnd {
 	if released == nil {
+		// Rust drops the source at the terminal; the Go peer closes
+		// the mapping and the descriptor here (the Windows deletion
+		// rule makes a retained mapped view observable).
+		source.close()
 		return sourceEnd{cause: checked, guard: nil}
 	}
 	cause := checked
 	if cause == nil {
 		cause = cleanupForCause(released)
 	}
+	guard := &RecoverySourceCleanupGuard{
+		source:      &guardSource{kind: guardSourceRecovery, recovery: source},
+		lastProblem: problem(released),
+	}
+	// The guard is the sole owner of the retained source: a discarded
+	// guard must close the source like the Rust guard drop, so the
+	// finalizer is the Drop analog (cleared by RetryCleanup when the
+	// retry completes).
+	runtime.SetFinalizer(guard, (*RecoverySourceCleanupGuard).closeRetained)
 	return sourceEnd{
 		cause: cause,
-		guard: &RecoverySourceCleanupGuard{
-			source:      &guardSource{kind: guardSourceRecovery, recovery: source},
-			lastProblem: problem(released),
-		},
+		guard: guard,
 	}
 }
 
@@ -646,4 +668,19 @@ func (s *basicSource) release() error {
 		return live.UnlockFile(s.file, live.MainLifetimeOffset)
 	}
 	return nil
+}
+
+// close releases the mapped extent and the descriptor in the Rust
+// drop order (BasicSource field order: mapping before file; the
+// lifetime lock is already released by the terminal). Close errors
+// are dropped exactly like the Rust drop, which cannot report them.
+func (s *basicSource) close() {
+	if s.mapping != nil {
+		_ = s.mapping.Close()
+		s.mapping = nil
+	}
+	if s.file != nil {
+		_ = s.file.Close()
+		s.file = nil
+	}
 }

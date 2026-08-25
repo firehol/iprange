@@ -88,6 +88,11 @@ func constructStructured(t *testing.T, source *mapping.Mapping, meta format.Meta
 		if err := construction.finished.Close(); err != nil {
 			t.Fatalf("Close finished output: %v", err)
 		}
+	} else {
+		// Rust drops the builder with the failure; the mapping must
+		// close here so the destination file stays deletable on
+		// Windows.
+		_ = builder.Close()
 	}
 	return construction, failure
 }

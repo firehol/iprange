@@ -496,10 +496,11 @@ func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T
 // freebsd_boundary.rs every_constructible_live_entry_rejects_before_
 // mutation): the refusal class is ErrorLiveCoordinationUnsupported
 // before any path access, before budget validation, and no output is
-// produced. On linux/darwin the live mode is real and this boundary is
-// covered by the ported live snapshot tests below.
+// produced. On linux/darwin/windows the live mode is real (sidecar
+// byte-range coordination + the pure-Go creator-only machine) and
+// this boundary is covered by the ported live snapshot tests below.
 func TestSnapshotLiveRefusedOnUnsupportedPlatforms(t *testing.T) {
-	if exchangeAvailable() {
+	if mapping.CoordinationSupported() {
 		t.Skip("live coordination is implemented on this platform")
 	}
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
@@ -995,7 +996,7 @@ func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
 // immutable source.
 func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testing.T) {
 	requireLiveCreation(t)
-	if !exchangeAvailable() {
+	if !mapping.CoordinationSupported() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
 	source := createLiveMembershipPair(t, 2)
@@ -1073,7 +1074,7 @@ func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testin
 // no output and no private artifacts.
 func TestSnapshotLiveRequiresSidecarDescriptorBudget(t *testing.T) {
 	requireLiveCreation(t)
-	if !exchangeAvailable() {
+	if !mapping.CoordinationSupported() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
 	source, _ := createLivePublicPair(t, 2)
@@ -1096,7 +1097,7 @@ func TestSnapshotLiveRequiresSidecarDescriptorBudget(t *testing.T) {
 // artifact appears.
 func TestSnapshotLiveCannotReplaceItsOwnSourcePath(t *testing.T) {
 	requireLiveCreation(t)
-	if !exchangeAvailable() {
+	if !mapping.CoordinationSupported() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
 	source, _ := createLivePublicPair(t, 2)
@@ -1125,7 +1126,7 @@ func TestSnapshotLiveCannotReplaceItsOwnSourcePath(t *testing.T) {
 // returns None for these, mapping to InvalidName).
 func TestSnapshotLiveRejectsInvalidDestinationNames(t *testing.T) {
 	requireLiveCreation(t)
-	if !exchangeAvailable() {
+	if !mapping.CoordinationSupported() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
 	source, _ := createLivePublicPair(t, 2)
@@ -1144,7 +1145,7 @@ func TestSnapshotLiveRejectsInvalidDestinationNames(t *testing.T) {
 // LinkCount "publication inode link count changed").
 func TestSnapshotLiveRejectsHardLinkedDestination(t *testing.T) {
 	requireLiveCreation(t)
-	if !exchangeAvailable() {
+	if !mapping.CoordinationSupported() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
 	source, _ := createLivePublicPair(t, 2)

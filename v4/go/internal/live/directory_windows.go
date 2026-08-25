@@ -72,16 +72,22 @@ func OpenDirectory(path string) (*Directory, error) {
 		}
 		return nil, nsPlainIoError("open directory", err)
 	}
-	info, err := handleInfo(os.NewFile(uintptr(handle), path))
+	// One os.File owns the raw handle from here on: a second wrapper
+	// around the same value would let the Go finalizer close the
+	// handle while this Directory still uses it (files are
+	// finalizer-closed when their wrapper is collected), so every
+	// proof and refusal path operates on the single retained
+	// wrapper and closes through it.
+	f := os.NewFile(uintptr(handle), path)
+	info, err := handleInfo(f)
 	if err != nil {
-		windows.CloseHandle(handle)
+		f.Close()
 		return nil, err
 	}
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		windows.CloseHandle(handle)
+		f.Close()
 		return nil, nsNotDirectoryError()
 	}
-	f := os.NewFile(uintptr(handle), path)
 	if err := requireLocalFilesystem(f); err != nil {
 		f.Close()
 		return nil, err

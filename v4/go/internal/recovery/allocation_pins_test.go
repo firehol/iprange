@@ -163,6 +163,12 @@ func measureMembershipPush(t *testing.T) float64 {
 		}
 	})
 	t.Logf("membership output-push path allocs per run: %v", allocs)
+	// The measured destination builder owns its mapping; close it
+	// after the runs (Rust drops the builder). On Windows an open
+	// mapping of out.iprdb blocks the TempDir removal.
+	if err := out.Close(); err != nil {
+		t.Fatalf("close membership output: %v", err)
+	}
 	return allocs
 }
 
@@ -247,6 +253,12 @@ func measureStructuredPush(t *testing.T) float64 {
 		}
 	})
 	t.Logf("structured output-push path allocs per run: %v", allocs)
+	// The measured destination builder owns its mapping; close it
+	// after the runs (Rust drops the builder). On Windows an open
+	// mapping of out.iprdb blocks the TempDir removal.
+	if err := out.Close(); err != nil {
+		t.Fatalf("close structured output: %v", err)
+	}
 	return allocs
 }
 

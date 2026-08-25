@@ -181,6 +181,10 @@ func TestBasicSourceSequentialLockModes(t *testing.T) {
 	if err := first.release(); err != nil {
 		t.Fatal(err)
 	}
+	// The release only unlocks; the retained source closes exactly
+	// where the machine terminal would (Rust drop), so the mapped
+	// source file stays deletable on Windows.
+	first.close()
 	second, failure := openRecoverySource(path, inspection.Candidate(0), sourceModeImmutable, nil)
 	if failure != nil {
 		t.Fatalf("second open: %v", failure.cause)
@@ -188,4 +192,5 @@ func TestBasicSourceSequentialLockModes(t *testing.T) {
 	if err := second.release(); err != nil {
 		t.Fatal(err)
 	}
+	second.close()
 }

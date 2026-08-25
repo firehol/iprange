@@ -64,6 +64,13 @@ func testReservationHeader(policy reservationPolicy) reservationHeader {
 	}
 }
 
+// reservationKnownAnswerCRC is one platform wire vector of the
+// known-answer encode pin.
+type reservationKnownAnswerCRC struct {
+	policy reservationPolicy
+	crc    uint32
+}
+
 // testReservationFile builds one complete 8192-byte reservation view
 // with the tested block(s) encoded.
 func testReservationFile(t *testing.T, block0, block1 *reservationHeader) []byte {
@@ -84,17 +91,14 @@ func testReservationFile(t *testing.T, block0, block1 *reservationHeader) []byte
 
 // TestReservationKnownAnswerCRC pins the encode byte-exactness with
 // CRC-32C values computed by an independent implementation (reflected
-// Castagnoli, whole page, CRC field treated as zero).
+// Castagnoli, whole page, CRC field treated as zero). The wire kinds
+// (basename encoding, creation security, local identity) are part of
+// the CRC-covered page and differ between the unix and windows
+// layouts, so the expected vectors are the platform peers of the kind
+// tables (reservation_crc_posix_test.go /
+// reservation_crc_windows_test.go).
 func TestReservationKnownAnswerCRC(t *testing.T) {
-	tests := []struct {
-		policy reservationPolicy
-		crc    uint32
-	}{
-		{reservationPolicyFailIfExists, 0x7bf19b18},
-		{reservationPolicyReplaceExisting, 0xa3026650},
-		{reservationPolicyReplaceExistingNoRollback, 0xad1e394f},
-	}
-	for _, tt := range tests {
+	for _, tt := range reservationKnownAnswerCRCs() {
 		page := make([]byte, format.PageSize)
 		if err := testReservationHeader(tt.policy).encodeReservationHeader(page); err != nil {
 			t.Fatalf("encode: %v", err)
@@ -113,8 +117,8 @@ func TestReservationKnownAnswerCRC(t *testing.T) {
 	if err := second.encodeReservationHeader(page); err != nil {
 		t.Fatalf("encode state2: %v", err)
 	}
-	if got := format.U32(page[reservationCRCOffset:]); got != 0x955492de {
-		t.Errorf("state2 crc = %08x, want 955492de", got)
+	if got := format.U32(page[reservationCRCOffset:]); got != reservationState2KnownAnswerCRC() {
+		t.Errorf("state2 crc = %08x, want %08x", got, reservationState2KnownAnswerCRC())
 	}
 	// state2 rejection rules (Rust Header::state2 None).
 	notPrepared := first

@@ -100,6 +100,11 @@ func mapSource(t *testing.T, path string) *mapping.Mapping {
 	if err != nil {
 		t.Fatalf("MapFile: %v", err)
 	}
+	// The mapping owns a duplicated descriptor; the probe handle must
+	// close here (Rust memmap2 owns the file). On Windows an
+	// os.Open handle lacks FILE_SHARE_DELETE, so leaving it open
+	// blocks the removal of the source file at TempDir cleanup.
+	_ = file.Close()
 	return m
 }
 

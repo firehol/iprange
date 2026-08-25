@@ -9,6 +9,7 @@ package recovery
 
 import (
 	"errors"
+	"runtime"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -55,6 +56,15 @@ func (g *guardSource) release() error {
 		}
 	}
 	return nil
+}
+
+// closeRetained releases the retained source resources of a guard
+// that will never be retried (Rust guard drop: the recovery source
+// mapping and descriptor close even when the release is abandoned).
+func (g *guardSource) closeRetained() {
+	if g.recovery != nil {
+		g.recovery.close()
+	}
 }
 
 // problem reports the fixed problem class of one failed cleanup; the
@@ -106,7 +116,8 @@ func (g *RecoverySourceCleanupGuard) CleanupPending() bool {
 // RetryCleanup retries the retained source release (Rust
 // RecoverySourceCleanupGuard::retry_cleanup): true when the cleanup
 // completed, false with the last problem when the source is retained
-// for another retry.
+// for another retry. A completed retry closes the retained source
+// exactly where the Rust retry drops it.
 func (g *RecoverySourceCleanupGuard) RetryCleanup() (bool, error) {
 	if g.source == nil {
 		return false, nil
@@ -115,8 +126,21 @@ func (g *RecoverySourceCleanupGuard) RetryCleanup() (bool, error) {
 		g.lastProblem = g.source.problem(err)
 		return false, g.lastProblem
 	}
+	runtime.SetFinalizer(g, nil)
+	g.source.closeRetained()
 	g.source = nil
 	return true, nil
+}
+
+// closeRetained is the finalizer entry of a discarded guard (the Go
+// analog of the Rust guard drop; the guard owns the source
+// exclusively, so the close runs exactly once when the guard becomes
+// unreachable without a completed retry).
+func (g *RecoverySourceCleanupGuard) closeRetained() {
+	if g == nil || g.source == nil {
+		return
+	}
+	g.source.closeRetained()
 }
 
 // problemCode extracts the typed code of one internal failure.

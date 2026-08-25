@@ -234,7 +234,15 @@ func (c *Core) TrimCommittedTail() error {
 	if err := c.m.Shrink(c.base.CommittedBytes); err != nil {
 		return err
 	}
-	c.base.PhysicalBytes = c.base.CommittedBytes
+	// Rust trim_committed_tail assigns the shrink_or_retain result: a
+	// still-mapped view may retain the tail, and the tracked physical
+	// extent must observe the retained length, not the committed
+	// request.
+	length, err := c.m.FileSize()
+	if err != nil {
+		return err
+	}
+	c.base.PhysicalBytes = length
 	return c.m.SyncFile()
 }
 

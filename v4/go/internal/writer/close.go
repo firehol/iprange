@@ -117,7 +117,15 @@ func (c *Core) trimTo(committedBytes uint64) (uint64, error) {
 		if err := c.m.SyncFile(); err != nil {
 			return 0, err
 		}
-		return committedBytes, nil
+		// Rust shrink_or_retain returns the retained physical extent:
+		// a mapped view may keep the file longer than the committed
+		// generation, and the close geometry and the base length must
+		// observe the retained length, not the committed request.
+		length, err = c.m.FileSize()
+		if err != nil {
+			return 0, err
+		}
+		return length, nil
 	}
 	if c.m.Size() != committedBytes {
 		if err := c.m.Remap(committedBytes); err != nil {
