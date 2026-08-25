@@ -61,10 +61,12 @@ func TestFreeBSDACLMachineLiveProveOrStrip(t *testing.T) {
 		t.Fatalf("commitment = %x, want %x", got, profile.Commitment())
 	}
 
-	acl, brand, err := freebsdGetACL(f)
+	var liveACL freebsdACL
+	brand, err := freebsdGetACL(f, &liveACL)
 	if err != nil {
 		t.Fatalf("get ACL: %v", err)
 	}
+	acl := &liveACL
 	switch brand {
 	case fbsdBrandNFS4:
 		// One named-user deny entry makes the NFSv4 ACL nontrivial; the
@@ -132,7 +134,8 @@ func TestFreeBSDACLGetReportsUnsupportedOnDevfs(t *testing.T) {
 		t.Skipf("open /dev/null: %v", err)
 	}
 	defer f.Close()
-	_, _, err = freebsdGetACL(f)
+	var devACL freebsdACL
+	_, err = freebsdGetACL(f, &devACL)
 	if err == nil {
 		t.Skip("devfs unexpectedly supports access ACLs on this host")
 	}

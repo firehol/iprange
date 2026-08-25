@@ -189,6 +189,7 @@ func algebraPropertyAssertPreserved(t *testing.T, path string, global *[algebraP
 // address.
 func TestRandomizedGlobalAlgebraMatchesAScalarAddressModel(t *testing.T) {
 	requirePublicationSecurity(t)
+	requireLiveCreation(t)
 	state := uint64(0xa183f9de36b47021)
 	var sourceModel [algebraPropertySources][algebraPropertyFeeds][algebraPropertyDomain]bool
 	for source := 0; source < algebraPropertySources; source++ {

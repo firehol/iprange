@@ -277,6 +277,7 @@ func TestPublishSetMetadataRoundTrip(t *testing.T) {
 // replacement, then verifies the second content is the one on disk.
 func TestPublishSetReplacementPoliciesV4(t *testing.T) {
 	requirePublicationSecurity(t)
+	requireAtomicExchange(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "replaced.iprdb")

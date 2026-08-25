@@ -895,10 +895,16 @@ func buildLargeDirectSource(t *testing.T, path string, ranges int) {
 	if err != nil {
 		t.Fatal("spec:", err)
 	}
-	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, 0, nil)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		t.Fatal("create fixture:", err)
+	}
+	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, 0)
+	if err != nil {
+		f.Close()
 		t.Fatal("builder:", err)
 	}
+	f.Close()
 	for index := 0; index < ranges; index++ {
 		address := uint32(index * 2)
 		if err := builder.PushDirectV4(address, address, uint32(index%251+1)); err != nil {

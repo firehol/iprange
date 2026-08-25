@@ -23,7 +23,16 @@ import (
 // either.
 func publicRecoverySource(t *testing.T, path string) {
 	t.Helper()
-	builder, err := writer.NewOutputBuilder(path, writer.OutputSpec{
+	// The fixture creates its file directly and builds through the
+	// over-file constructor (Rust new_owned_with_extent over the
+	// caller-created file); the path-based Go constructor takes the
+	// exclusive lifetime lock, which is absent on freebsd, while the
+	// production recovery surface builds over-file everywhere.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("create fixture: %v", err)
+	}
+	builder, err := writer.NewOutputBuilderOverFile(f, writer.OutputSpec{
 		AddressFamily:  format.AddressFamilyIPv4,
 		ValueKind:      format.ValueKindDirect,
 		StructureKind:  format.StructureKindNone,
@@ -32,10 +41,12 @@ func publicRecoverySource(t *testing.T, path string) {
 		TxnID:          1,
 		CommitNonce:    [16]byte{0x22},
 		FeedIndexLimit: 0,
-	}, writer.OutputBudget{MaxOutputPages: 100}, 0, nil)
+	}, writer.OutputBudget{MaxOutputPages: 100}, 0)
 	if err != nil {
-		t.Fatalf("NewOutputBuilder: %v", err)
+		f.Close()
+		t.Fatalf("NewOutputBuilderOverFile: %v", err)
 	}
+	f.Close()
 	if err := builder.Finish(); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}

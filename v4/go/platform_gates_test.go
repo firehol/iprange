@@ -45,6 +45,18 @@ func requirePublicationSecurity(t *testing.T) {
 	}
 }
 
+// requireAtomicExchange skips one test whose policy needs the
+// rollback-safe atomic name exchange (Rust require_exchange_available:
+// renameat2 RENAME_EXCHANGE on linux, renamedata on apple; every other
+// platform refuses honestly, so the policy alternatives are gated
+// per-platform).
+func requireAtomicExchange(t *testing.T) {
+	t.Helper()
+	if !mapping.ExchangeAvailable() {
+		t.Skip("rollback-safe replacement requires atomic name exchange, unavailable on this platform")
+	}
+}
+
 // requireFileCreation skips one test that creates a database file
 // through the non-live writer path: every file creation takes the
 // exclusive lifetime-lock machine (mapping.CoordinationSupported is

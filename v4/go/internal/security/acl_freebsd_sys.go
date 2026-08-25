@@ -34,12 +34,14 @@ const (
 	fbsdPCACLNFS4     = 64                  // _PC_ACL_NFS4 pathconf name
 )
 
-// freebsdGetACL reads one fd's access ACL with the brand chosen by the
-// libc pathconf probe (libc acl_get_fd + acl_get_fd_np). The kernel
-// struct is sized to the kernel maximum before the call because the
-// kernel refuses undersized acl_maxcnt, exactly like libc acl_init.
-func freebsdGetACL(f *os.File) (*freebsdACL, freebsdACLBrand, error) {
-	var acl freebsdACL
+// freebsdGetACL reads one fd's access ACL into the caller-provided
+// buffer (libc acl_get_fd + acl_get_fd_np). The caller's stack keeps
+// the 4088-byte kernel struct: the buffer never escapes, so no owned
+// page-sized heap object exists on the hot proof paths (the
+// complete-page ownership pin measures it). The kernel struct is
+// sized to the kernel maximum before the call because the kernel
+// refuses undersized acl_maxcnt, exactly like libc acl_init.
+func freebsdGetACL(f *os.File, acl *freebsdACL) (freebsdACLBrand, error) {
 	acl.MaxCnt = fbsdMaxEntries
 	brand := fbsdBrandPOSIX
 	typ := fbsdACLTypeAccess
@@ -47,14 +49,14 @@ func freebsdGetACL(f *os.File) (*freebsdACL, freebsdACLBrand, error) {
 		brand = fbsdBrandNFS4
 		typ = fbsdACLTypeNFS4
 	}
-	_, _, errno := unix.Syscall(unix.SYS___ACL_GET_FD, uintptr(f.Fd()), typ, uintptr(unsafe.Pointer(&acl)))
+	_, _, errno := unix.Syscall(unix.SYS___ACL_GET_FD, uintptr(f.Fd()), typ, uintptr(unsafe.Pointer(acl)))
 	if errno != 0 {
 		if errno == unix.EOPNOTSUPP {
-			return nil, brand, &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "read access ACL: " + errno.Error()}
+			return brand, &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "read access ACL: " + errno.Error()}
 		}
-		return nil, brand, &format.Error{Code: format.CodeIO, Detail: "read access ACL: " + errno.Error()}
+		return brand, &format.Error{Code: format.CodeIO, Detail: "read access ACL: " + errno.Error()}
 	}
-	return &acl, brand, nil
+	return brand, nil
 }
 
 // freebsdSetACL writes one access ACL with its brand (libc acl_set_fd:
@@ -81,14 +83,15 @@ func freebsdSetACL(f *os.File, acl *freebsdACL, brand freebsdACLBrand) error {
 // recalculate flag) rebuilds the trivial form of the brand and the
 // result is applied.
 func removeInheritedACL(f *os.File) error {
-	acl, brand, err := freebsdGetACL(f)
+	var acl freebsdACL
+	brand, err := freebsdGetACL(f, &acl)
 	if err != nil {
 		return err
 	}
-	if fbsdTrivial(acl, brand) {
+	if fbsdTrivial(&acl, brand) {
 		return nil
 	}
-	stripped := fbsdStrip(acl, brand)
+	stripped := fbsdStrip(&acl, brand)
 	return freebsdSetACL(f, &stripped, brand)
 }
 
@@ -96,11 +99,12 @@ func removeInheritedACL(f *os.File) error {
 // ACL (Rust security/freebsd.rs require_trivial): a nontrivial ACL
 // fails the creator-only proof with the access-policy class.
 func requireTrivialACL(f *os.File) error {
-	acl, brand, err := freebsdGetACL(f)
+	var acl freebsdACL
+	brand, err := freebsdGetACL(f, &acl)
 	if err != nil {
 		return err
 	}
-	if !fbsdTrivial(acl, brand) {
+	if !fbsdTrivial(&acl, brand) {
 		return accessPolicy()
 	}
 	return nil

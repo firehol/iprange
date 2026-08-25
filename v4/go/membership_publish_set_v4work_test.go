@@ -14,6 +14,7 @@
 package iprangedb
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -32,10 +33,16 @@ func publishSetCorpus(t *testing.T, blocks uint32) string {
 	if err != nil {
 		t.Fatal("spec:", err)
 	}
-	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, writer.ReferenceBatchEntryLimit, nil)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		t.Fatal("create fixture:", err)
+	}
+	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 1 << 16}, writer.ReferenceBatchEntryLimit)
+	if err != nil {
+		f.Close()
 		t.Fatal("builder:", err)
 	}
+	f.Close()
 	if err := builder.PushFeed("left", 0); err != nil {
 		t.Fatal("left feed:", err)
 	}
