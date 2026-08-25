@@ -41,7 +41,10 @@ type gcAuthority struct {
 // gcRetirement is the factual outcome of one GC retirement (Rust
 // gc::Retirement).
 type gcRetirement struct {
-	problem      *format.Error
+	// problem is the error interface, never a typed pointer: the
+	// clean path must be a true nil when it crosses into error
+	// fields (cleanupOutcome.cause) and interface checks.
+	problem      error
 	housekeeping Housekeeping
 	visible      *HousekeepingArtifact
 }

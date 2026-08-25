@@ -11,8 +11,6 @@ package live
 
 import (
 	"os"
-
-	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // GCAuthority identifies one retired artifact for the GC machine
@@ -42,7 +40,7 @@ type GCPayload struct {
 // GCRetirement is the factual outcome of one GC retirement (Rust
 // gc::Retirement).
 type GCRetirement struct {
-	Problem      *format.Error
+	Problem      error
 	Housekeeping Housekeeping
 	Visible      *HousekeepingArtifact
 }

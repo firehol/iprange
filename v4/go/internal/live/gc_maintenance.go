@@ -225,7 +225,7 @@ func gcRemoveHousekeeping(path string, expectedDirectory LocalFileIdentity, atte
 	return gcHousekeepingRemoval{
 		Housekeeping: retired.housekeeping,
 		Visible:      gcSliceOf(retired.visible),
-		Cause:        retired.problem,
+		Cause:        gcProblemOrNil(retired.problem),
 	}, nil
 }
 

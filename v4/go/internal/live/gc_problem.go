@@ -89,6 +89,16 @@ func gcProblemOf(err error) *format.Error {
 	return gcSdkProblem(err)
 }
 
+// gcProblemOrNil converts one complete error to the fixed problem
+// value, keeping a complete nil as the typed nil the *format.Error
+// field consumers compare (the conversion sites guard the nil first).
+func gcProblemOrNil(err error) *format.Error {
+	if err == nil {
+		return nil
+	}
+	return gcProblemOf(err)
+}
+
 // gcSdkProblem wraps one non-namespace failure in the io class (Rust
 // Problem::sdk; the Go sdk class carries the cause detail).
 func gcSdkProblem(err error) *format.Error {
