@@ -12508,3 +12508,171 @@ build-mismatch matrix, and the code-size audit.
 Next: milestone 4 (chunk 4-12 platform completion) - design record,
 slices, then the same five-aspect gate; the five reviewers restart
 between milestones per the standing rules.
+
+### Status (2026-08-25) - milestone 4 (chunk 4-12 platform completion) design recorded and gated
+
+Design, recorded before coding per the pre-implementation gate. Rust
+authorities read: worker.rs (probe_source/enter_region/probe_region/
+enter_region 180-300, NEXT_MAPPING_GENERATION, Context::enter),
+control.rs (registration/arm/disarm 152+, 636+), validation.rs
+(probe_source wraps at 130/218/283 over validation_mapping),
+recovery/api.rs (enter_source at 234/318), recovery/inspection.rs
+(probe_source at 243), recovery/direct.rs + source_guard (the
+immutable/live guard source mappings), immutable_output.rs:711 and
+publication/reservation_file.rs:222-333 (enter_output/probe output
+regions), live_sidecar.rs:475-491 (enter_coordination),
+live_crash_tests.rs + publication/crash_tests.rs (crash matrix
+authority), recovery/budget.rs + validation budget (resource and
+fault-injection test authority); the M3 deferred items
+(worker-side probe arm, production routing) recorded in the
+milestone-3 close-out and the 4-12 chunk plan at SOW:289-293.
+
+Problem / root-cause model: the fault-isolation contract is
+half-delivered. The worker binary installs the SIGBUS handler and
+writes owned fault records ONLY when the control is armed
+(sigbus_linux_amd64.s claims when armed==1 and the faulting address
+falls inside [base, base+len)); nothing arms the domain mappings
+today, so a real session-1 source fault chains into the Go runtime
+and kills the worker without a record. Consequences: (1) the
+unreadable-page retry loop has no natural first trigger in
+production, (2) the SDK public entry points cannot be routed through
+the worker (the M3 recorded deferral) because an unreadable page
+would be an unrecorded death, (3) the Rust produced-fault evidence
+(client_tests.rs fault_fixture) has no Go counterpart.
+
+Affected contracts and surfaces:
+- The worker control page arm words (generation/role/base/len/armed),
+  the 4-11A Arm/Disarm surface, and the asm owned/chain gates.
+- The domain machine entry points that Rust wraps with probe_source /
+  enter_source / enter_output / enter_coordination: validation sweep
+  mappings (validation.rs:130/218/283 parity), recovery source guards
+  (api.rs:234/318), inspection classification (inspection.rs:243),
+  recovery output regions (immutable_output.rs:711,
+  reservation_file.rs:222-333), live sidecar coordination
+  (live_sidecar.rs:475-491). The Go peers: internal/validation
+  (validation.go sweepImmutable / SweepSelected, live.go
+  sweepLiveSelected), internal/recovery (source_guard.go openBasic/
+  openLive + inspection.go classifyMapped, direct output machinery),
+  internal/live (sidecar.go) and internal/publication
+  (reservation_file.go equivalents).
+- The public SDK entry points (root facade Validate / Recover /
+  InspectRecoveryCandidates) once routing lands: linux/amd64 spawns
+  the worker (Rust authority: recovery/api.rs always routes through
+  the worker); every other platform stays in-process (the worker
+  refuses there; recorded stance).
+- The mmap-trace script gains the worker legs; the crash matrix gains
+  the session-1 fault-fixture leg; the close-out records gain the
+  code-size audit.
+
+Existing patterns to reuse:
+- The mapping-leaf session state pattern from 4-11D (session state in
+  the leaf both domains import; the 4-11D unreadable-page application
+  points are exactly the source-role arm points).
+- The 4-11A control Arm/Disarm primitives, the 4-2 sigaction shim and
+  its matrix harness, the 4-11C/D client arms and the real-binary
+  test seam (workerCandidatesHook), the fault-fixture pattern of
+  sigbus_linux_amd64_test.go signalMapping (truncated file + faulting
+  page) and Rust client_tests.rs fault_fixture, the writer crash
+  harness (crash_v4work_test.go env-stripped subprocess pattern), the
+  conformance corpus cross-open harness.
+
+Risk and blast radius:
+- The arm must never leak across a nested switch (Rust Probe restores
+  the previous registration on drop; a Go probe must save/restore the
+  four arm words + armed bit, never bare-Disarm inside a nesting).
+- The generation counter must start nonzero and monotonic per session
+  (the fault-record cross-checks require generation match).
+- Routing changes process semantics of the SDK on linux/amd64: the
+  library spawns the worker binary (discovery = exe dir + deps-parent,
+  Rust order); a missing binary must surface the Rust error class, not
+  a silent in-process fallback (Rust never falls back; the Go stance
+  must be recorded if it differs). All tests that exercise the public
+  entries must locate the worker binary (test-harness seam).
+- Live-mode routing hands the live reader slot to the child process
+  (the worker opens the live source itself; the parent's live
+  registration semantics must be checked against Rust: the parent
+  registers, the child claims — the 4-11 recovery/live arms already
+  prove the child-side open; the parent-side registration handoff is
+  the new surface).
+- The output/coordination arm surface touches writer/publication/live
+  internals; faults there are rarer but the parity list is fixed by
+  the Rust authority.
+- Cross-compiles must stay green: the probe hook is platform-neutral
+  (the arm words are control-page writes); the asm stays
+  linux/amd64-tagged; non-linux builds keep the typed refusal.
+
+Sensitive data handling: none (control bytes and fault facts only; no
+secrets, no customer data; control files stay 0600 and unlinked).
+
+Implementation plan (slices, each reviewed at the chunk gate):
+- 4-12A: worker-side probe arm. mapping leaf gains the session probe
+  hook + Mapping.Region() + Mapping.Probe(role, fn) (the 4-11D
+  session-state pattern); internal/worker gains Control.ProbeRegion
+  (save previous registration, Arm, restore on release, monotonic
+  generation counter, Rust Probe drop parity); the domain machines
+  wrap the Rust parity points: validation sweeps (source role),
+  recovery source guards + inspection (source), recovery output
+  regions (output role), live sidecar (coordination role); the Go
+  machines that already consult the unreadable session list are the
+  same files. Crash-matrix extension: the real-binary session-1
+  fault fixture (truncated source, fault record read-back, exit 197,
+  parent retry with the page recorded unreadable, deterministic
+  second run) — the Rust client_tests.rs fault_fixture parity that
+  the 4-11D record deferred.
+- 4-12B: production routing. The public facade entry points
+  (Validate/LiveCurrent/OfflineCandidate, RecoverImmutable/Offline/
+  Live, InspectRecoveryCandidates) route through the worker client
+  arms on linux/amd64, with the Rust error classes (binary
+  unavailable = the Rust Unsupported/unavailable class; handshake
+  conflicts; WorkerCleanup retention on guard-pending terminals);
+  in-process machines stay as the worker-side engines and as the
+  non-linux path; the test harness builds/locates the worker binary
+  for facade tests; the mmap-trace script gains the worker + recovery
+  trace legs (parent and worker never read/write artifact
+  descriptors; the control file stays a mapped coordination
+  artifact).
+- 4-12C: resource + crash matrix completion. Budget/fault-injection
+  resource tests (validation/recovery budget edges, unreadable-page
+  ledger bounds, worker heap limits — Rust budget.rs + fault-injection
+  authorities); the worker-build mismatch matrix extension beyond the
+  4-11E single case (protocol/magic/parent-pid/build-id patch
+  variants, handshake classes); the create/init/reset/metadata crash
+  matrix for the live writer lifecycle (kill-during-operation
+  subprocess pattern of the existing crash_v4work tests, over the
+  Rust live_crash_tests.rs authority).
+- 4-12D: native proofs. Run the offline/immutable validation,
+  recovery, writer, and reader suites natively on darwin and freebsd
+  (the recorded "offline validation/recovery not live-gated" scope),
+  plus the cross-compile matrix; the SIGBUS worker isolation stays
+  linux/amd64 with the typed refusal elsewhere (recorded stance).
+  REQUIRES the user-authorized remote hosts (plakam4mini macOS M4,
+  freebsd) — the lead asks before first use per the standing remote
+  policy; the slice records host + date + suite results.
+- 4-12E: code-size/duplication audit. Per-package production-line
+  counts of the Go tree against the Rust authority (baseline at the
+  record: Go module ~86.3k production lines incl. root facade,
+  internal ~76.9k + cmd 0.5k, 18 internal packages; Rust crate
+  ~82.6k), the 5k directional goal versus the justified size, the
+  duplication findings (per-OS variants, repeated wire tables) with
+  dispositions, and the record updates.
+
+Validation plan (all under nice; ~5-8 core-min battery): gofmt, vet
+plain + v4work, full module plain + v4work, race + checkptr on the
+routed packages, six cross-builds plain + v4work, the extended
+crash matrix (subprocess children are cheap), the extended
+check-mmap-trace.sh legs, the native host suites (4-12D), and the
+five-aspect adversarial gate at the chunk close with the reviewers
+restarted at this milestone boundary.
+
+Artifact impact plan: the milestone records, the chunk close record
+(with the routing + probe arm delivered), the code-size audit record,
+and the mmap-trace script; no AGENTS.md or spec change is foreseen
+(the v4 contract is unchanged; the worker binary stays internal).
+
+Open decisions: none blocking. The remote-host authorization for
+4-12D and the routing fallback stance (Rust-parity: no silent
+in-process fallback when the binary is missing) are recorded items
+the lead surfaces at the relevant slice.
+
+Next: milestone 4 slice 4-12A - the worker-side probe arm and the
+session-1 crash-matrix extension.
