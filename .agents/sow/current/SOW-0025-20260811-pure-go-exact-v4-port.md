@@ -12826,13 +12826,73 @@ module plain + v4work; race + checkptr on the routed packages both tag
 sets; six cross-builds plain + v4work; check-mmap-trace.sh 6 legs ->
 all green.
 
-Next: milestone 4 slice 4-12C - resource + crash matrix completion:
-budget/fault-injection resource tests (validation/recovery budget
-edges, unreadable-page ledger bounds, worker heap limits), the
-worker-build mismatch matrix extension beyond the single 4-11E case
-(protocol/magic/parent-pid/build-id patch variants, handshake
-classes), and the create/init/reset/metadata crash matrix for the
-live writer lifecycle (kill-during-operation subprocess pattern over
-the Rust live_crash_tests.rs authority). Review the recorded 4-12A
-follow-ups (unwrapped enter_output sites; the Go Store split-window
-probe) for the 4-12C scope decision.
+### Status (2026-08-25) - milestone 4 slice 4-12C delivered: resource + crash matrix completion
+
+Delivered at f8afb72 (battery green, pushed):
+
+- Live metadata crash matrix (Rust
+  live_crash_tests::metadata_crashes_select_absence_or_the_complete_value):
+  the crash child gained the metadata action (SetMetadata payload
+  "metadata crash value" + Commit); the new
+  TestLiveWriterMetadataCrashPointsSelectAbsenceOrCompleteValue arms
+  commit.before_private_sync and commit.after_private_sync (metadata
+  absent, txn 1) and commit.after_meta_write and
+  commit.after_meta_sync (exact payload present, txn 2), read through
+  the immutable reader on the post-crash copy (Rust
+  reader.metadata_json parity).
+- Worker header mismatch matrix beyond the 4-11E build-id case:
+  magic (offMagic), protocol (offProtocol != 1), state (offState !=
+  Request), and parent-pid zero (offParentPID) patch variants, each
+  pinned on both sides - the real worker exits 65 with the protocol
+  refusal (TestProtocolRefusalHeaderMismatches) and the parent
+  handshake returns the VerifyRequest Conflict with the shared detail
+  (TestHandshakeHeaderMismatches; Rust control.rs:214-223
+  verify_request parity). patchBuildID generalized to an
+  offset/value patchControl helper.
+- Resource/budget edges: recovery budget validate parity for
+  open-files < 2 and output-pages < 2 with the Rust detail texts and
+  CodeInsufficientResourceBudget, the machine-level refusal before
+  any path access with the folded Rust problem detail,
+  live-validation one-open-file refusal ("live validation open
+  files", CleanupStateClean), zero-open-file validation preflight
+  detail parity, and the unreadable-page ledger accepting an
+  exactly-equal heap budget (Rust bytes > max_heap_bytes).
+- Remaining Output-role probe arms (the 4-12A-recorded follow-up):
+  acquireReservation (reservation_file.rs:347), resumeArmed (:222),
+  armWith (:380), preparedOutput.verify (output.rs:405), and
+  prepareMachine (:449) now enter the session probe. The arm uses a
+  closure-free RAII guard - Mapping.EnterProbe/ProbeGuard - because
+  Go escape analysis promotes caller stack values captured by an
+  escaping probe closure and that broke the pinned publish-path
+  allocation test (57 allocs); the guard is inert without a worker
+  session and Mapping.Probe keeps its signature and semantics,
+  reimplemented over the guard (the 4-12A callers are untouched).
+  This is more Rust-faithful than a closure wrap: Rust enter_output
+  returns a guard and the machine runs directly.
+- Go Store split-window disposition (recorded, not implemented):
+  Rust update_page holds the armed probe across the caller's page
+  mutation; Go Update returns the page slice and the caller mutates
+  before RestoreDirty, so a fault during the mutation window chains
+  instead of recording. Closing it requires changing the shared
+  tree.Store/builder interface; the proposed seam is an
+  InspectPage-style hook or a store-side region arm. Recorded as a
+  known limitation with the seam, per the 4-12C scope decision.
+
+Recorded notes: main_test.go grows to 524 lines (fixture-heavy test
+file, flagged not split); the worker heap floor and validation budget
+edges match the Rust authorities (worker client_test.go,
+validation_test.go).
+
+Battery (all under nice): gofmt clean; vet plain + v4work; full
+module plain + v4work; race + checkptr on the seven touched packages
+both tag sets; six cross-builds plain + v4work; check-mmap-trace.sh 6
+legs -> all green.
+
+Next: milestone 4 slice 4-12D - native proofs: run the
+offline/immutable validation, recovery, writer, and reader suites
+natively on darwin (plakam4mini macOS M4) and freebsd, plus the
+cross-compile matrix; the SIGBUS worker isolation stays linux/amd64
+with the typed refusal elsewhere (recorded stance). REQUIRES
+user-authorized remote hosts - the lead asks for authorization
+before first use per the standing remote policy; the slice records
+host + date + suite results.
