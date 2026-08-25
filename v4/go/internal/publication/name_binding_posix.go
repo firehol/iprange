@@ -2,26 +2,14 @@
 
 package publication
 
+import "github.com/firehol/iprange/v4/go/internal/live"
+
 // basenameEncodingPosixBytes is the unix raw-bytes encoding (Rust
 // BasenameEncoding::PosixBytes = 1).
-const basenameEncodingPosixBytes basenameEncoding = 1
+const basenameEncodingPosixBytes basenameEncoding = live.BasenameEncoding(1)
 
-// validateEncoding proves one PosixBytes component is valid (Rust
-// validate_posix): not "." or "..", no NUL, no separator.
+// validateEncoding proves one PosixBytes component binds (Rust
+// validate_posix); the authority lives in live.
 func validateEncoding(encoding basenameEncoding, bytes []byte) error {
-	if encoding != basenameEncodingPosixBytes {
-		return &nameBindingError{}
-	}
-	if len(bytes) == 2 && bytes[0] == '.' && bytes[1] == '.' {
-		return &nameBindingError{}
-	}
-	if len(bytes) == 1 && bytes[0] == '.' {
-		return &nameBindingError{}
-	}
-	for _, b := range bytes {
-		if b == 0 || b == '/' {
-			return &nameBindingError{}
-		}
-	}
-	return nil
+	return live.ValidateEncodingBinding(encoding, bytes)
 }

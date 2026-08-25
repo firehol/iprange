@@ -193,7 +193,7 @@ func TestCreateLiveCreatesCompletePair(t *testing.T) {
 	if result.MainIdentity == nil || result.SidecarIdentity == nil {
 		t.Fatal("main or sidecar identity missing on a completed create")
 	}
-	if result.Housekeeping != housekeepingNone {
+	if result.Housekeeping != HousekeepingNone {
 		t.Fatalf("housekeeping = %v, want none", result.Housekeeping)
 	}
 	if len(result.VisibleHousekeeping) != 0 {
@@ -272,7 +272,7 @@ func TestCreateLiveHardErrors(t *testing.T) {
 func TestCreateLiveRefusesExistingArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	created, failure := createPrivate(main, cleanupAuthority{attemptID: [16]byte{1}, ordinal: 0, kind: cleanupKindOwnedMain, directoryRole: cleanupRoleMainFile})
+	created, failure := createPrivate(main, cleanupAuthority{attemptID: [16]byte{1}, ordinal: 0, kind: ArtifactOwnedMain, directoryRole: DirectoryRoleMainFile})
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}
@@ -282,7 +282,7 @@ func TestCreateLiveRefusesExistingArtifacts(t *testing.T) {
 	expectCode(t, err, format.CodeInvalidArgument)
 
 	main2 := filepath.Join(dir, "db2.iprdb")
-	created, failure = createPrivate(main2+".readers", cleanupAuthority{attemptID: [16]byte{2}, ordinal: 1, kind: cleanupKindOwnedCoordination, directoryRole: cleanupRoleMainFile})
+	created, failure = createPrivate(main2+".readers", cleanupAuthority{attemptID: [16]byte{2}, ordinal: 1, kind: ArtifactOwnedCoordination, directoryRole: DirectoryRoleMainFile})
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}

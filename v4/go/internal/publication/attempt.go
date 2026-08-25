@@ -326,8 +326,8 @@ func outcomeUnknown(s seed, reservationIdentity live.FileIdentity, cause error) 
 }
 
 // finishPublished closes one published attempt into its final result
-// (Rust finish_published; the housekeeping-observed variant of the
-// Rust surface is the #[cfg(windows)] gc retire, absent here per SOW-0026).
+// (Rust finish_published; the housekeeping-observed variant runs the
+// windows GC retire through the platform arms).
 // The armed reservation is released at the end of both arms, exactly
 // where Rust drops the moved PublishedMain or RetiringMain owner.
 func finishPublished(s seed, published publishedMain, cause error) PublicationResult {

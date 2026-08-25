@@ -48,7 +48,7 @@ type CreateResult struct {
 	ReaderCapacity      uint32
 	State               CreationState
 	ResiduePossible     bool
-	Housekeeping        housekeeping
+	Housekeeping        Housekeeping
 	VisibleHousekeeping []HousekeepingArtifact
 	Cause               error
 }
@@ -114,20 +114,20 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 	// it after the path-level cleanup.
 	defer sidecar.Close()
 	if err := checkpoint(check); err != nil {
-		return attempt.failed(path, sidecar, nil, err), nil
+		return attempt.failed(path, sidecar, nil, nil, err), nil
 	}
 	if err := sidecar.initializeCreating(); err != nil {
-		return attempt.failed(path, sidecar, nil, err), nil
+		return attempt.failed(path, sidecar, nil, nil, err), nil
 	}
 	if err := prepareSidecar(path, sidecar, check); err != nil {
-		return attempt.failed(path, sidecar, nil, err), nil
+		return attempt.failed(path, sidecar, nil, nil, err), nil
 	}
 
 	created, failure := createPrivate(path, cleanupAuthority{
 		attemptID:     attempt.databaseID,
 		ordinal:       0,
-		kind:          cleanupKindOwnedMain,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
 	})
 	if failure != nil {
 		return attempt.privateFailure(sidecar, *failure), nil
@@ -147,7 +147,7 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 		commitNonce:   attempt.commitNonce,
 	}
 	if err := initializePair(path, main, sidecar, spec, check); err != nil {
-		return attempt.failed(path, sidecar, &mainIdentity, err), nil
+		return attempt.failed(path, sidecar, main, &mainIdentity, err), nil
 	}
 	return attempt.created(mainIdentity, sidecar.localIdentity()), nil
 }
@@ -226,24 +226,40 @@ func (a createAttempt) reservationFailure(failure privateCreationFailure) *Creat
 func (a createAttempt) privateFailure(sidecar *Sidecar, failure privateCreationFailure) *CreateResult {
 	cleanup := failure.cleanup
 	if cleanup.isClean() {
-		cleanup.absorb(removeExact(sidecar.path, sidecar.localIdentity()))
+		cleanup.absorb(removeCoordinated(sidecar.path, sidecar.file, sidecar.localIdentity(), cleanupAuthority{
+			attemptID:     a.sidecarID,
+			ordinal:       1,
+			kind:          ArtifactOwnedCoordination,
+			directoryRole: DirectoryRoleMainFile,
+		}))
 	}
 	return a.failureResult(failure.identity, &sidecar.identity, failure.cause, cleanup)
 }
 
 // failed cleans up both created artifacts, main first, then the
 // sidecar (Rust Attempt::failed + creation::cleanup: removal stops at
-// the first failed cleanup, ordered by ordinal).
-func (a createAttempt) failed(path string, sidecar *Sidecar, main *FileIdentity, cause error) *CreateResult {
+// the first failed cleanup, ordered by ordinal; the main descriptor
+// feeds the Windows GC transition like Option<(&File, Identity)>).
+func (a createAttempt) failed(path string, sidecar *Sidecar, main *os.File, mainIdentity *FileIdentity, cause error) *CreateResult {
 	var cleanup cleanupOutcome
-	if main != nil {
-		cleanup.absorb(removeExact(path, *main))
+	if mainIdentity != nil {
+		cleanup.absorb(removeCoordinated(path, main, *mainIdentity, cleanupAuthority{
+			attemptID:     a.databaseID,
+			ordinal:       0,
+			kind:          ArtifactOwnedMain,
+			directoryRole: DirectoryRoleMainFile,
+		}))
 		if !cleanup.isClean() {
-			return a.failureResult(main, &sidecar.identity, cause, cleanup)
+			return a.failureResult(mainIdentity, &sidecar.identity, cause, cleanup)
 		}
 	}
-	cleanup.absorb(removeExact(sidecar.path, sidecar.localIdentity()))
-	return a.failureResult(main, &sidecar.identity, cause, cleanup)
+	cleanup.absorb(removeCoordinated(sidecar.path, sidecar.file, sidecar.localIdentity(), cleanupAuthority{
+		attemptID:     a.sidecarID,
+		ordinal:       1,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
+	}))
+	return a.failureResult(mainIdentity, &sidecar.identity, cause, cleanup)
 }
 
 func (a createAttempt) failureResult(main *FileIdentity, sidecar *FileIdentity, cause error, cleanup cleanupOutcome) *CreateResult {

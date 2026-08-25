@@ -5,7 +5,7 @@
 // the remaining entries), and each entry is finished with the meta
 // pair, digest, classification, access proof, and double stability
 // verification. The Rust gc_barrier availability calls are
-// #[cfg(windows)] and absent here like every other Go publication
+// #[cfg(windows)] and wired through the shared requireSourceAvailable
 // surface.
 
 package publication
@@ -152,6 +152,12 @@ func openReplacementEntry(destination *destination, name string, location output
 	}
 	if regular == nil {
 		return nil, nil
+	}
+	if location == outputLocationPrivate {
+		if err := requireSourceAvailable(destination.directory(), attemptID, 0, ArtifactPrivateOutput, DirectoryRoleDestination, name, regular.Identity); err != nil {
+			regular.File.Close()
+			return nil, err
+		}
 	}
 	return &inspectedReplacement{
 		name:      name,

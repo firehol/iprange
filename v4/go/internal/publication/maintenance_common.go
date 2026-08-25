@@ -135,7 +135,7 @@ func (a *maintenanceArtifact) identity(value LocalFileIdentity) (live.FileIdenti
 	if value.Kind != identityKind {
 		return live.FileIdentity{}, problem(format.CodeInvalidArgument, a.unsupportedIdentity)
 	}
-	device, inode, ok := value.deviceInode()
+	device, inode, ok := value.DeviceInode()
 	if !ok {
 		return live.FileIdentity{}, problem(format.CodeInvalidArgument, a.invalidIdentity)
 	}

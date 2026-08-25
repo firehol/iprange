@@ -217,10 +217,8 @@ func inspectExact(attempt *outputAttempt, file *os.File, mapping *mapping.Mappin
 
 // verifyCustody proves the file still is the attempt's single-linked
 // retained inode at the requested position and carries the creator
-// commitment (Rust output.rs verify_custody). The Rust gc-barrier
-// availability call is #[cfg(windows)] and compiles to nothing on
-// POSIX; Go publication refuses Windows opens before this point, so
-// the barrier is intentionally absent (Phase-2 GC surface).
+// commitment (Rust output.rs verify_custody, including the gc-barrier
+// availability call at the private position).
 func verifyCustody(attempt *outputAttempt, file *os.File, location outputLocation) error {
 	directory := attempt.destination.directory()
 	identity, err := live.RegularIdentity(file, directory.Identity())
@@ -232,6 +230,9 @@ func verifyCustody(attempt *outputAttempt, file *os.File, location outputLocatio
 	}
 	switch location {
 	case outputLocationPrivate:
+		if err := requireSourceAvailable(directory, attempt.attemptID, 0, ArtifactPrivateOutput, DirectoryRoleDestination, attempt.name, identity); err != nil {
+			return err
+		}
 		if err := directory.VerifyName(attempt.name, identity); err != nil {
 			return err
 		}

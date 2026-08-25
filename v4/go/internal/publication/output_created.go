@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
-	"github.com/firehol/iprange/v4/go/internal/random"
 )
 
 // createdOutput is one freshly created private publication output
@@ -57,27 +56,6 @@ func createOutputWith(path string, requireAbsent bool) (*createdOutput, error) {
 		return nil, err
 	}
 	return &createdOutput{destination: d, attemptID: attemptID, name: name, file: file}, nil
-}
-
-// createAttempt allocates one random nonzero attempt id and creates its
-// private output file (Rust output.rs create_attempt non-windows arm).
-// The Rust windows arm retries on namespace collisions; Go publication
-// refuses Windows opens at destination bind (SOW-0026), so that retry loop
-// is unreachable and intentionally absent.
-func createAttempt(d *destination) ([16]byte, string, *os.File, error) {
-	attemptID, err := random.Nonzero128()
-	if err != nil {
-		return [16]byte{}, "", nil, err
-	}
-	name, err := d.outputName(attemptID)
-	if err != nil {
-		return [16]byte{}, "", nil, err
-	}
-	file, err := d.create(name)
-	if err != nil {
-		return [16]byte{}, "", nil, err
-	}
-	return attemptID, name, file, nil
 }
 
 // facts reports the portable private-output facts of one created

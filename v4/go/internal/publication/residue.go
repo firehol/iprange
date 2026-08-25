@@ -4,11 +4,9 @@
 // reservation, a live reader-table sidecar, or unselectable residue),
 // an unselectable coordination is removed only after the operation
 // lock, the selectable refusals, and the retained-handle proofs, and
-// the destination main is hashed but never changed. The Rust
-// gc_barrier availability calls are #[cfg(windows)] and absent here
-// like every other Go publication surface (SOW-0026 refuses Windows opens
-// at destination bind); the sidecar header read that only feeds the
-// barrier is omitted for the same reason.
+// the destination main is hashed but never changed. The windows arm
+// retires through the authenticated GC transition
+// (residue_retirement_windows.go).
 
 package publication
 
@@ -82,11 +80,14 @@ type residueHandle struct {
 }
 
 // retiredResidue is the retained state after the coordination
-// unlink succeeded (Rust Retired).
+// unlink succeeded (Rust Retired; retirementPending records that the
+// Windows GC transition could not prove clean and the retry must
+// re-run it).
 type retiredResidue struct {
-	main         *residueMainGuard
-	housekeeping Housekeeping
-	visible      []HousekeepingArtifact
+	main              *residueMainGuard
+	housekeeping      Housekeeping
+	visible           []HousekeepingArtifact
+	retirementPending bool
 }
 
 // residueInspection is one read-only residue inspection (Rust
@@ -260,9 +261,10 @@ func removeResidue(handle residueHandle, check func() error) (residueRemoval, er
 		return residueRemoval{}, err
 	}
 	handle.retired = &retiredResidue{
-		main:         main,
-		housekeeping: retired.housekeeping,
-		visible:      retired.visible,
+		main:              main,
+		housekeeping:      retired.housekeeping,
+		visible:           retired.visible,
+		retirementPending: retired.cause != nil,
 	}
 	if retired.cause != nil {
 		return incompleteResidue(handle, retired.cause), nil
@@ -331,9 +333,10 @@ func closeResidueAuthority(handle *residueHandle) {
 // the housekeeping evidence merges into the retained state).
 func retryRetiredResidueHandle(handle *residueHandle) error {
 	retired := handle.retired
-	retried := retryResidueRetirement(handle.coordination)
-	retired.housekeeping = retired.housekeeping.merge(retried.housekeeping)
+	retried := retryResidueRetirement(handle.destination, handle.coordination, handle.coordinationIdentity, retired.retirementPending)
+	retired.housekeeping = retired.housekeeping.Merge(retried.housekeeping)
 	retired.visible = append(retired.visible, retried.visible...)
+	retired.retirementPending = retried.cause != nil
 	return retried.cause
 }
 

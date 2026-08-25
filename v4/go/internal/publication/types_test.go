@@ -89,7 +89,7 @@ func TestHousekeepingMerge(t *testing.T) {
 		{HousekeepingCrashReappearancePossible, HousekeepingCrashReappearancePossible, HousekeepingCrashReappearancePossible},
 	}
 	for _, tt := range tests {
-		if got := tt.a.merge(tt.b); got != tt.want {
+		if got := tt.a.Merge(tt.b); got != tt.want {
 			t.Errorf("merge(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 		}
 	}
@@ -176,7 +176,7 @@ func TestLocalIdentityCodec(t *testing.T) {
 	if id.Bytes != wantBytes {
 		t.Errorf("bytes = %x, want %x", id.Bytes, wantBytes)
 	}
-	device, inode, ok := id.deviceInode()
+	device, inode, ok := id.DeviceInode()
 	if !ok || device != 0x123456789abcdef0 || inode != 0xfeedfacecafebeef {
 		t.Errorf("decode = %x/%x/%v, want pair with ok", device, inode, ok)
 	}
@@ -184,17 +184,17 @@ func TestLocalIdentityCodec(t *testing.T) {
 	// Rejections (Rust Identity::decode): all-zero payload, nonzero
 	// tail beyond the pair, foreign kind.
 	zero := LocalFileIdentity{Kind: identityKind}
-	if _, _, ok := zero.deviceInode(); ok {
+	if _, _, ok := zero.DeviceInode(); ok {
 		t.Error("all-zero payload decoded")
 	}
 	tail := id
 	tail.Bytes[16] = 1
-	if _, _, ok := tail.deviceInode(); ok {
+	if _, _, ok := tail.DeviceInode(); ok {
 		t.Error("nonzero tail decoded")
 	}
 	foreign := id
 	foreign.Kind = identityKind + 1
-	if _, _, ok := foreign.deviceInode(); ok {
+	if _, _, ok := foreign.DeviceInode(); ok {
 		t.Error("foreign kind decoded")
 	}
 }

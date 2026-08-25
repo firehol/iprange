@@ -1,6 +1,6 @@
 //go:build windows
 
-package publication
+package live
 
 import "github.com/firehol/iprange/v4/go/internal/format"
 

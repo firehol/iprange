@@ -81,7 +81,7 @@ type LiveTransitionResult struct {
 	NewSidecarIdentity      *FileIdentity
 	NewSidecarLocation      LiveCoordinationLocation
 	ResiduePossible         bool
-	Housekeeping            housekeeping
+	Housekeeping            Housekeeping
 	VisibleHousekeeping     []HousekeepingArtifact
 	Cause                   error
 }
@@ -213,8 +213,8 @@ func openLockedMain(path string, check func() error) (*lockedMain, error) {
 	if err := requireAvailable(filepath.Clean(path), identity, cleanupAuthority{
 		attemptID:     result.Meta.DatabaseID,
 		ordinal:       0,
-		kind:          cleanupKindOwnedMain,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
 	}); err != nil {
 		file.Close()
 		return nil, err
@@ -326,7 +326,12 @@ func (a liveTransitionAttempt) initialized(identity *FileIdentity) *LiveTransiti
 // Unchanged at Absent, a failed one OutcomeUnknown at the caller
 // location).
 func (a liveTransitionAttempt) cleanupCreated(sidecar *Sidecar, cause error, location LiveCoordinationLocation) *LiveTransitionResult {
-	cleanup := removeExact(sidecar.path, sidecar.localIdentity())
+	cleanup := removeCoordinated(sidecar.path, sidecar.file, sidecar.localIdentity(), cleanupAuthority{
+		attemptID:     a.sidecarID,
+		ordinal:       1,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
+	})
 	facts := failedFacts(cause, cleanup)
 	if facts.residuePossible {
 		return a.result(LiveTransitionStatusOutcomeUnknown, &sidecar.identity, location, facts)

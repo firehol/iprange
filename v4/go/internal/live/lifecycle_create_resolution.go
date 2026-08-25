@@ -208,8 +208,8 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		created, failure := createPrivate(path, cleanupAuthority{
 			attemptID:     supplied.DatabaseID,
 			ordinal:       0,
-			kind:          cleanupKindOwnedMain,
-			directoryRole: cleanupRoleMainFile,
+			kind:          ArtifactOwnedMain,
+			directoryRole: DirectoryRoleMainFile,
 		})
 		if failure != nil {
 			return unknownAfterPrivateFailure(supplied, failure.identity, &sidecarIdentity, *failure), nil
@@ -252,18 +252,28 @@ func rollbackCreate(path string, supplied *CreateResult, main *mainObserved, coo
 	mainFacts := mainIdentity(main)
 	sidecarFacts := coordinationIdentity(coordination)
 	cleanup := cleanupOutcome{}
-	if _, identity, ok := rawMain(main); ok {
-		cleanup.absorb(removeExact(path, identity))
+	if file, identity, ok := rawMain(main); ok {
+		cleanup.absorb(removeCoordinated(path, file, identity, cleanupAuthority{
+			attemptID:     supplied.DatabaseID,
+			ordinal:       0,
+			kind:          ArtifactOwnedMain,
+			directoryRole: DirectoryRoleMainFile,
+		}))
 		if !cleanup.isClean() {
 			return cleanupResult(supplied, mainFacts, sidecarFacts, cleanup), nil
 		}
 	}
-	if _, identity, ok := rawCoordination(coordination); ok {
+	if file, identity, ok := rawCoordination(coordination); ok {
 		sidecarPath, err := canonicalSidecarPath(path)
 		if err != nil {
 			return nil, err
 		}
-		cleanup.absorb(removeExact(sidecarPath, identity))
+		cleanup.absorb(removeCoordinated(sidecarPath, file, identity, cleanupAuthority{
+			attemptID:     supplied.SidecarID,
+			ordinal:       1,
+			kind:          ArtifactOwnedCoordination,
+			directoryRole: DirectoryRoleMainFile,
+		}))
 	}
 	return cleanupResult(supplied, mainFacts, sidecarFacts, cleanup), nil
 }
@@ -291,8 +301,8 @@ func observeMain(path string, supplied *CreateResult, check func() error) (mainO
 	if err := requireAvailable(path, id, cleanupAuthority{
 		attemptID:     supplied.DatabaseID,
 		ordinal:       0,
-		kind:          cleanupKindOwnedMain,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
 	}); err != nil {
 		file.Close()
 		return mainObserved{}, err
@@ -342,8 +352,8 @@ func observeCoordination(path string, supplied *CreateResult) (coordinationObser
 	if err := requireAvailable(path, *identity, cleanupAuthority{
 		attemptID:     supplied.SidecarID,
 		ordinal:       1,
-		kind:          cleanupKindOwnedCoordination,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
 	}); err != nil {
 		return coordinationObserved{}, err
 	}

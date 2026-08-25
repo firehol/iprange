@@ -50,7 +50,7 @@ type LiveResidueResult struct {
 	MainIdentity        *FileIdentity
 	SidecarIdentity     *FileIdentity
 	ResiduePossible     bool
-	Housekeeping        housekeeping
+	Housekeeping        Housekeeping
 	VisibleHousekeeping []HousekeepingArtifact
 	Cause               error
 }
@@ -504,20 +504,30 @@ func observeResidue(path string) (observedResidue, error) {
 // retireObserved removes one observed coordination artifact
 // identity-guarded (Rust residue::retire_observed: the valid sidecar
 // uses its header sidecar id, the malformed artifact draws a fresh
-// cleanup attempt id).
+// cleanup attempt id and runs the authenticated GC transition on
+// windows).
 func retireObserved(path string, residue *observedResidue) cleanupOutcome {
 	switch residue.kind {
 	case residueAbsent:
 		return cleanupOutcome{}
 	case residueValid:
-		return removeExact(path, residue.sidecar.localIdentity())
+		return removeCoordinated(path, residue.sidecar.file, residue.sidecar.localIdentity(), cleanupAuthority{
+			attemptID:     residue.sidecar.header.sidecarID,
+			ordinal:       1,
+			kind:          ArtifactOwnedCoordination,
+			directoryRole: DirectoryRoleMainFile,
+		})
 	default:
-		attemptID, err := uniqueAttemptID(path, 1)
+		attemptID, err := freshCleanupAttempt(path, residue.identity, 1, ArtifactOwnedCoordination, DirectoryRoleMainFile)
 		if err != nil {
 			return cleanupOutcomeFailed(err)
 		}
-		_ = attemptID // Windows retirement machinery only; POSIX remove is identity-guarded
-		return removeExact(path, residue.identity)
+		return removeCoordinated(path, residue.file, residue.identity, cleanupAuthority{
+			attemptID:     attemptID,
+			ordinal:       1,
+			kind:          ArtifactOwnedCoordination,
+			directoryRole: DirectoryRoleMainFile,
+		})
 	}
 }
 

@@ -109,7 +109,7 @@ func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*de
 			Detail: "worker output identity is invalid",
 		}
 	}
-	device, inode, ok := facts.Identity.deviceInode()
+	device, inode, ok := facts.Identity.DeviceInode()
 	if !ok {
 		return nil, "", live.FileIdentity{}, &format.Error{
 			Code:   format.CodeInvalidArgument,

@@ -187,7 +187,7 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 		f.Close()
 		return createdPrivate{}, &privateCreationFailure{
 			cause:    liveSecurityError(err),
-			cleanup:  removeExact(clean, identity),
+			cleanup:  removeCoordinated(clean, f, identity, authority),
 			identity: &identity,
 		}
 	}

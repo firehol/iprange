@@ -478,7 +478,7 @@ func optionalEncodedIdentity(bytes [32]byte) identityOptional {
 // Identity::decode: device and inode little-endian at bytes 0..16,
 // zero tail) via the portable local identity kind check.
 func identityFromEncodedBytes(bytes [32]byte) (device, inode uint64, ok bool) {
-	return LocalFileIdentity{Kind: identityKind, Bytes: bytes}.deviceInode()
+	return LocalFileIdentity{Kind: identityKind, Bytes: bytes}.DeviceInode()
 }
 
 // requireNoLater refuses a later canonical owner (Rust

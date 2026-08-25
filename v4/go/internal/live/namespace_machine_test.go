@@ -19,8 +19,8 @@ func testAuthority() cleanupAuthority {
 	return cleanupAuthority{
 		attemptID:     [16]byte{1},
 		ordinal:       0,
-		kind:          cleanupKindOwnedMain,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
 	}
 }
 

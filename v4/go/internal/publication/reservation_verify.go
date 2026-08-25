@@ -79,15 +79,19 @@ func verifyReservationInode(file *os.File, output *preparedOutput, expected rese
 
 // verifyReservationLocation proves the reservation name placement and
 // the private-name absence at the canonical position (Rust
-// verify_location). The Rust gc_barrier availability call is
-// #[cfg(windows)] and compiles to nothing on POSIX; Go publication
-// refuses Windows before this point (Phase-2 GC surface).
+// verify_location, including the gc-barrier availability call with
+// the reservation artifact kind).
 func verifyReservationLocation(output *preparedOutput, expected reservationExpected) error {
 	destination := output.attempt.destinationOf()
 	directory := destination.directory()
 	name := expected.privateName
+	kind := ArtifactPrivateReservation
 	if expected.reservationLocation == reservationLocationCanonical {
 		name = destination.coordinationName()
+		kind = ArtifactOwnedCoordination
+	}
+	if err := requireSourceAvailable(directory, expected.header.attemptID, 1, kind, DirectoryRoleDestination, name, expected.identity); err != nil {
+		return err
 	}
 	if err := directory.VerifyName(name, expected.identity); err != nil {
 		return err

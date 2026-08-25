@@ -4,9 +4,9 @@
 // the private reservation names, proves the bound evidence, takes the
 // operation lock, and returns the inspected owner; the resolver and
 // cleanup slices compose it. All record reads run over mapped views.
-// The Rust gc_barrier availability calls are #[cfg(windows)] and
-// compile to nothing on POSIX (Phase-2 GC surface), so they are
-// absent here like every earlier slice.
+// The Rust gc_barrier availability calls run through the shared
+// requireSourceAvailable seam (windows arm implements the custody
+// check).
 
 package publication
 
@@ -46,12 +46,17 @@ func (r *inspectedReservation) Close() error {
 // verify re-proves the inspected reservation at its inspected
 // position (Rust Inspected::verify).
 func (r *inspectedReservation) verify(destination *destination) error {
-	if err := destination.directory().Verify(); err != nil {
-		return err
-	}
 	name := r.name
+	kind := ArtifactPrivateReservation
 	if r.location == reservationLocationCanonical {
 		name = destination.coordinationName()
+		kind = ArtifactOwnedCoordination
+	}
+	if err := requireSourceAvailable(destination.directory(), r.header.attemptID, 1, kind, DirectoryRoleDestination, name, r.identity); err != nil {
+		return err
+	}
+	if err := destination.directory().Verify(); err != nil {
+		return err
 	}
 	if err := destination.directory().VerifyName(name, r.identity); err != nil {
 		return err
@@ -192,6 +197,11 @@ func inspectCanonicalReservation(destination *destination, regular *live.Regular
 	if err != nil {
 		return nil, strictRecord(err)
 	}
+	// The gc-barrier custody check runs with the selected record's
+	// attempt identity exactly like Rust inspect_canonical.
+	if err := requireSourceAvailable(destination.directory(), selected.header.attemptID, 1, ArtifactOwnedCoordination, DirectoryRoleDestination, destination.coordinationName(), regular.Identity); err != nil {
+		return nil, err
+	}
 	if err := lockOperation(regular, check); err != nil {
 		return nil, err
 	}
@@ -284,6 +294,11 @@ func inspectPrivateReservation(destination *destination, name string, attemptID 
 		return nil, err
 	case regular == nil:
 		return nil, nil
+	}
+	// The gc-barrier custody check runs before the mapping exactly
+	// like Rust (reservation_inspection.rs private arm).
+	if err := requireSourceAvailable(destination.directory(), attemptID, 1, ArtifactPrivateReservation, DirectoryRoleDestination, name, regular.Identity); err != nil {
+		return nil, err
 	}
 	// ownership: same rule as inspectCanonicalReservation - the skip
 	// returns are Ok(None) and must close the opened regular and the

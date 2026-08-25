@@ -6,10 +6,7 @@
 package live
 
 import (
-	"path/filepath"
-
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/random"
 )
 
 // cleanupOutcome is the fact record of one cleanup attempt (Rust
@@ -18,7 +15,7 @@ import (
 // ledger (Windows-only in the Rust authority; POSIX keeps both empty).
 type cleanupOutcome struct {
 	cause        error
-	housekeeping housekeeping
+	housekeeping Housekeeping
 	visible      []HousekeepingArtifact
 }
 
@@ -35,7 +32,7 @@ func (o *cleanupOutcome) absorb(other cleanupOutcome) {
 	if o.cause == nil {
 		o.cause = other.cause
 	}
-	o.housekeeping = o.housekeeping.merge(other.housekeeping)
+	o.housekeeping = o.housekeeping.Merge(other.housekeeping)
 	o.visible = append(o.visible, other.visible...)
 }
 
@@ -46,23 +43,9 @@ func (o *cleanupOutcome) absorb(other cleanupOutcome) {
 type cleanupAuthority struct {
 	attemptID     [16]byte
 	ordinal       uint32
-	kind          cleanupKind
-	directoryRole cleanupDirectoryRole
+	kind          ArtifactKind
+	directoryRole DirectoryRole
 }
-
-type cleanupKind uint8
-
-const (
-	cleanupKindOwnedCoordination cleanupKind = iota
-	cleanupKindOwnedMain
-)
-
-type cleanupDirectoryRole uint8
-
-const (
-	cleanupRoleMainFile cleanupDirectoryRole = iota
-	cleanupRoleScratchDirectory
-)
 
 // combineErrors mirrors Rust sdk_error::combine_errors: when the
 // operation failed and its cleanup (unlock or exact removal) also
@@ -78,32 +61,16 @@ func combineErrors(cause error, cleanup error) error {
 	}
 }
 
-// requireAvailable is a POSIX no-op: Windows GC custody verification
-// only (Rust live_cleanup::require_available).
-func requireAvailable(path string, expected FileIdentity, authority cleanupAuthority) error {
-	_ = filepath.Clean(path)
-	_ = expected
-	_ = authority
-	return nil
-}
-
 // terminalFacts are the exact facts retained for the caller of one
 // lifecycle attempt (Rust live_cleanup::TerminalFacts): whether residue
 // is possible, the housekeeping class, and the failure cause with any
 // cleanup failure absorbed.
 type terminalFacts struct {
 	residuePossible  bool
-	housekeeping     housekeeping
+	housekeeping     Housekeeping
 	visibleHousekeep []HousekeepingArtifact
 	cause            error
 }
-
-// HousekeepingArtifact is one ledger entry of the Windows retirement
-// machinery (Rust publication::HousekeepingArtifact). POSIX cleanup
-// never produces entries; the ledger and its full field surface land
-// with the publication resolver slice (4-8). The empty slice type keeps
-// the terminal facts shape exact.
-type HousekeepingArtifact struct{}
 
 func cleanFacts() terminalFacts {
 	return terminalFacts{}
@@ -134,13 +101,6 @@ func failedFacts(cause error, cleanup cleanupOutcome) terminalFacts {
 		facts.cause = combineErrors(cause, cleanup.cause)
 	}
 	return facts
-}
-
-// uniqueAttemptID draws one nonzero 128-bit cleanup attempt identity
-// (Rust live_cleanup::unique_attempt_id POSIX arm: a plain nonzero
-// draw; the Windows envelope-collision loop is out of this surface).
-func uniqueAttemptID(_ string, _ uint32) ([16]byte, error) {
-	return random.Nonzero128()
 }
 
 // finishWithCleanup mirrors Rust sdk_error::finish_with_cleanup: the

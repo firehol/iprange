@@ -31,8 +31,8 @@ func createTestMain(t *testing.T, path string) {
 	created, failure := createPrivate(path, cleanupAuthority{
 		attemptID:     [16]byte{9},
 		ordinal:       0,
-		kind:          cleanupKindOwnedMain,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
 	})
 	if failure != nil {
 		t.Fatalf("create main: %v", failure.cause)

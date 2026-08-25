@@ -19,6 +19,7 @@ package publication
 
 import (
 	"errors"
+	"github.com/firehol/iprange/v4/go/internal/live"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -97,27 +98,27 @@ const (
 	CleanupStateResiduePossible
 )
 
-// ArtifactKind classifies one retained namespace artifact (Rust
-// ArtifactKind).
-type ArtifactKind uint8
+// ArtifactKind is the live cleanup authority (Rust ArtifactKind);
+// the type authority lives in internal/live where the GC machine runs.
+type ArtifactKind = live.ArtifactKind
 
 const (
-	ArtifactPrivateOutput ArtifactKind = iota
-	ArtifactPrivateReservation
-	ArtifactOwnedCoordination
-	ArtifactAuthorizedScratch
-	ArtifactOwnedMain
-	ArtifactUnpublishedMainTail
+	ArtifactPrivateOutput       = live.ArtifactPrivateOutput
+	ArtifactPrivateReservation  = live.ArtifactPrivateReservation
+	ArtifactOwnedCoordination   = live.ArtifactOwnedCoordination
+	ArtifactAuthorizedScratch   = live.ArtifactAuthorizedScratch
+	ArtifactOwnedMain           = live.ArtifactOwnedMain
+	ArtifactUnpublishedMainTail = live.ArtifactUnpublishedMainTail
 )
 
-// DirectoryRole classifies the directory a retained artifact lives in
-// (Rust DirectoryRole).
-type DirectoryRole uint8
+// DirectoryRole is the live cleanup directory role (Rust
+// DirectoryRole); the type authority lives in internal/live.
+type DirectoryRole = live.DirectoryRole
 
 const (
-	DirectoryRoleDestination DirectoryRole = iota
-	DirectoryRoleScratchDirectory
-	DirectoryRoleMainFile
+	DirectoryRoleDestination      = live.DirectoryRoleDestination
+	DirectoryRoleScratchDirectory = live.DirectoryRoleScratchDirectory
+	DirectoryRoleMainFile         = live.DirectoryRoleMainFile
 )
 
 // CoordinationCleanup is the coordination residue class of one failed
@@ -132,61 +133,41 @@ const (
 	CoordinationCleanupRetainedWriterCloseRequired
 )
 
-// Housekeeping classifies the abandoned live-sidecar housekeeping
-// evidence of one failed publication (Rust Housekeeping).
-type Housekeeping uint8
+// Housekeeping is the live cleanup evidence class (Rust
+// Housekeeping); the type authority lives in internal/live with the
+// Merge operator.
+type Housekeeping = live.Housekeeping
 
 const (
-	HousekeepingNone Housekeeping = iota
-	HousekeepingCrashReappearancePossible
-	HousekeepingVisible
+	HousekeepingNone                      = live.HousekeepingNone
+	HousekeepingCrashReappearancePossible = live.HousekeepingCrashReappearancePossible
+	HousekeepingVisible                   = live.HousekeepingVisible
 )
 
-// merge folds two housekeeping classes (Rust Housekeeping::merge:
-// Visible dominates, then CrashReappearancePossible).
-// Merge folds two housekeeping classes (Rust Housekeeping::merge; the
-// recovery terminal composes the same operator through this exported
-// entry).
-func (h Housekeeping) Merge(other Housekeeping) Housekeeping { return h.merge(other) }
-
-func (h Housekeeping) merge(other Housekeeping) Housekeeping {
-	if h == HousekeepingVisible || other == HousekeepingVisible {
-		return HousekeepingVisible
-	}
-	if h == HousekeepingCrashReappearancePossible || other == HousekeepingCrashReappearancePossible {
-		return HousekeepingCrashReappearancePossible
-	}
-	return HousekeepingNone
-}
-
-// HousekeepingState classifies one visible housekeeping artifact (Rust
-// HousekeepingState).
-type HousekeepingState uint8
+// HousekeepingState is the live housekeeping classifier (Rust
+// HousekeepingState); the type authority lives in internal/live.
+type HousekeepingState = live.HousekeepingState
 
 const (
-	HousekeepingMovePending HousekeepingState = iota
-	HousekeepingMoveAmbiguous
-	HousekeepingInert
-	HousekeepingConflict
+	HousekeepingMovePending   = live.HousekeepingMovePending
+	HousekeepingMoveAmbiguous = live.HousekeepingMoveAmbiguous
+	HousekeepingInert         = live.HousekeepingInert
+	HousekeepingConflict      = live.HousekeepingConflict
 )
 
-// ArtifactPresence classifies one housekeeping artifact slot (Rust
-// ArtifactPresence).
-type ArtifactPresence uint8
+// ArtifactPresence is the live housekeeping presence classifier (Rust
+// ArtifactPresence); the type authority lives in internal/live.
+type ArtifactPresence = live.ArtifactPresence
 
 const (
-	ArtifactAbsent ArtifactPresence = iota
-	ArtifactPresent
-	ArtifactUnclassified
+	ArtifactAbsent       = live.ArtifactAbsent
+	ArtifactPresent      = live.ArtifactPresent
+	ArtifactUnclassified = live.ArtifactUnclassified
 )
 
-// CreationSecurity is the creator-only security evidence of one
-// created artifact (Rust CreationSecurity: the commitment kind and the
-// 32-byte creator-only commitment).
-type CreationSecurity struct {
-	Kind       uint16
-	Commitment [32]byte
-}
+// CreationSecurity is the live creator-only security evidence (Rust
+// CreationSecurity); the type authority lives in internal/live.
+type CreationSecurity = live.CreationSecurity
 
 // UnpublishedTailFacts is the exact unpublished main tail evidence of
 // one abandoned artifact (Rust UnpublishedTailFacts).
@@ -320,27 +301,10 @@ type PrivateOutputAttempt struct {
 	CreationSecurity     CreationSecurity
 }
 
-// HousekeepingArtifact is one visible housekeeping artifact of an
-// abandoned live sidecar (Rust HousekeepingArtifact).
-type HousekeepingArtifact struct {
-	State                    HousekeepingState
-	DirectoryRole            DirectoryRole
-	DirectoryIdentity        LocalFileIdentity
-	BasenameEncoding         uint16
-	AttemptID                [16]byte
-	Ordinal                  uint32
-	EnvelopeBasename         []byte
-	EnvelopeIdentity         LocalFileIdentity
-	SourceBasename           []byte
-	InertBasename            []byte
-	SourcePresence           ArtifactPresence
-	SourceIdentity           *LocalFileIdentity
-	InertPresence            ArtifactPresence
-	InertIdentity            *LocalFileIdentity
-	Kind                     ArtifactKind
-	CreationSecurity         CreationSecurity
-	SelectedEnvelopeSequence uint64
-}
+// HousekeepingArtifact is the live housekeeping ledger entry (Rust
+// HousekeepingArtifact); the type authority lives in internal/live
+// where the GC resolver builds the entries.
+type HousekeepingArtifact = live.HousekeepingArtifact
 
 // AbandonedArtifactRemoval is the factual outcome of one exact
 // abandoned-artifact removal (Rust AbandonedArtifactRemoval).

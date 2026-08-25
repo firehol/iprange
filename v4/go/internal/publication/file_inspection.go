@@ -3,9 +3,8 @@
 // private outputs without validating the whole file: the meta pair,
 // byte length, and SHA-512 are compared with the reservation record,
 // the output lifetime lock is held for the inspection, and custody is
-// re-proved at the exact names. The Rust gc_barrier availability
-// calls are #[cfg(windows)] and absent here like every other Go
-// publication surface (SOW-0026 refuses Windows opens at destination bind).
+// re-proved at the exact names. The gc-barrier availability call runs
+// at the private position (windows arm in gc_barrier_windows.go).
 
 package publication
 
@@ -177,10 +176,17 @@ func requireExactPrivate(inspected *inspectedOutput, header reservationHeader) e
 }
 
 // inspectOutput runs the exact inspection machine over one open
-// output (Rust file_inspection::inspect).
+// output (Rust file_inspection::inspect; the gc-barrier availability
+// call runs at the private position before the output lock, exactly
+// like the Rust require_available).
 func inspectOutput(destination *destination, name string, regular *live.RegularFile, header reservationHeader, location outputLocation, exclusive bool, check func() error) (*inspectedOutput, error) {
 	if err := checkCancellation(check); err != nil {
 		return nil, err
+	}
+	if location == outputLocationPrivate {
+		if err := requireSourceAvailable(destination.directory(), header.attemptID, 0, ArtifactPrivateOutput, DirectoryRoleDestination, name, regular.Identity); err != nil {
+			return nil, err
+		}
 	}
 	if err := lockOutputFile(regular.File, exclusive, check); err != nil {
 		return nil, err

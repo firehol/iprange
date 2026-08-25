@@ -490,7 +490,12 @@ func resolved(supplied *LiveTransitionResult, status LiveTransitionStatus, newSi
 // (Rust resolution::cleanup_attempt with the supplied sidecar id as
 // the cleanup authority).
 func cleanupAttempt(sidecar *Sidecar, supplied *LiveTransitionResult) cleanupOutcome {
-	return removeExact(sidecar.path, sidecar.localIdentity())
+	return removeCoordinated(sidecar.path, sidecar.file, sidecar.localIdentity(), cleanupAuthority{
+		attemptID:     supplied.SidecarID,
+		ordinal:       1,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
+	})
 }
 
 // resolvedAfterCleanup folds one cleanup outcome into the resolved

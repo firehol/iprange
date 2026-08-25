@@ -3,8 +3,8 @@
 // reservation}.rs): constant-memory listing of abandoned private
 // publication temps and reservation artifacts with exact evidence,
 // and exact removal of one retained artifact after the caller
-// certified its quiescence. The Windows housekeeping machines are
-// SOW-0026 refusals here like every other Go publication surface.
+// certified its quiescence. The Windows housekeeping machines live in
+// maintenance_gc_windows.go (posix refuses).
 
 package publication
 
@@ -198,20 +198,6 @@ func removeAbandonedReservationArtifact(path string, expectedDirectory LocalFile
 	return maintenanceReservationArtifact.remove(path, expectedDirectory, attempt, expectedArtifact, reservationOperationLock, check, func(file *os.File, identity live.FileIdentity) error {
 		return requireReadableReservationBinding(file, attempt, identity)
 	})
-}
-
-// listWindowsHousekeeping is the refused Windows-only housekeeping
-// listing (Rust list_windows_housekeeping non-windows arm; the
-// candidate types live only in Rust because Go publication refuses
-// Windows opens at destination bind like every other surface).
-func listWindowsHousekeeping(path string, check func() error) error {
-	return problem(format.CodeOSUnsupported, "Windows housekeeping is unavailable on this platform")
-}
-
-// removeWindowsHousekeeping is the refused Windows-only housekeeping
-// removal (Rust remove_windows_housekeeping non-windows arm; SOW-0026).
-func removeWindowsHousekeeping(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, ordinal uint32, expectedEnvelope LocalFileIdentity, expectedPayloadIdentity *residuePayloadIdentity, check func() error) error {
-	return problem(format.CodeOSUnsupported, "Windows housekeeping is unavailable on this platform")
 }
 
 // residuePayloadIdentity is the optional exact content evidence of

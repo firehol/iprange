@@ -66,8 +66,8 @@ func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*S
 	created, failure := createPrivate(path, cleanupAuthority{
 		attemptID:     sidecarID,
 		ordinal:       1,
-		kind:          cleanupKindOwnedCoordination,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
 	})
 	if failure != nil {
 		return nil, failure
@@ -205,8 +205,8 @@ func openAny(path string) (*Sidecar, sidecarState, error) {
 	if err := requireAvailable(path, identity, cleanupAuthority{
 		attemptID:     h.sidecarID,
 		ordinal:       1,
-		kind:          cleanupKindOwnedCoordination,
-		directoryRole: cleanupRoleMainFile,
+		kind:          ArtifactOwnedCoordination,
+		directoryRole: DirectoryRoleMainFile,
 	}); err != nil {
 		file.Close()
 		return nil, 0, err

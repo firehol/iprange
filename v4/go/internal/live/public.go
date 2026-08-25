@@ -56,7 +56,7 @@ func BasenameParts(b LocalBasename) (encoding uint16, bytes []byte) {
 
 // HousekeepingValue exposes the numeric housekeeping fact class (Rust
 // publication::Housekeeping discriminant).
-func HousekeepingValue(h housekeeping) uint8 {
+func HousekeepingValue(h Housekeeping) uint8 {
 	return uint8(h)
 }
 
@@ -85,8 +85,8 @@ func BasenameFromParts(encoding uint16, bytes []byte) LocalBasename {
 // from its numeric discriminant (the inverse of HousekeepingValue; the
 // public resolver entry points supply their facts back to the internal
 // owners).
-func HousekeepingFromValue(value uint8) housekeeping {
-	return housekeeping(value)
+func HousekeepingFromValue(value uint8) Housekeeping {
+	return Housekeeping(value)
 }
 
 // IsNofollowSymlink reports whether a syscall failure is the no-follow

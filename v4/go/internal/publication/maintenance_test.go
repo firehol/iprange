@@ -475,7 +475,7 @@ func TestMaintenanceReservationListingHonorsCancellationStopAndSinkFailure(t *te
 // remove_windows_housekeeping.
 func TestMaintenanceWindowsHousekeepingIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	if err := listWindowsHousekeeping(dir, noopCheck); codeOf(err) != format.CodeOSUnsupported {
+	if _, err := listWindowsHousekeeping(dir, noopCheck, func(*windowsHousekeepingEntry) error { return nil }); codeOf(err) != format.CodeOSUnsupported {
 		t.Fatalf("list housekeeping problem = %v, want os unsupported", err)
 	} else if detailOf(err) != "Windows housekeeping is unavailable on this platform" {
 		t.Fatalf("list housekeeping detail %q, want the Rust message", detailOf(err))
@@ -484,7 +484,7 @@ func TestMaintenanceWindowsHousekeepingIsRefused(t *testing.T) {
 	identity.Kind = identityKind
 	var attempt [16]byte
 	attempt[0] = 1
-	if err := removeWindowsHousekeeping(dir, identity, attempt, 0, identity, nil, noopCheck); codeOf(err) != format.CodeOSUnsupported {
+	if _, err := removeWindowsHousekeeping(dir, identity, attempt, 0, identity, nil, noopCheck); codeOf(err) != format.CodeOSUnsupported {
 		t.Fatalf("remove housekeeping problem = %v, want os unsupported", err)
 	} else if detailOf(err) != "Windows housekeeping is unavailable on this platform" {
 		t.Fatalf("remove housekeeping detail %q, want the Rust message", detailOf(err))
