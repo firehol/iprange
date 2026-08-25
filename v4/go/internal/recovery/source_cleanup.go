@@ -14,13 +14,15 @@ import (
 )
 
 // guardSourceKind selects the cleanup source class of one guard (Rust
-// GuardSource). The validation and worker arms arrive with their
-// cleanup surfaces.
+// GuardSource). The Go machine reaches two of the three Rust arms:
+// validation release failures surface their error directly without a
+// retained cleanup source (Rust validation/source.rs retains the
+// cleanup and builds a GuardSource::Validation), so that arm is
+// unreachable here.
 type guardSourceKind uint8
 
 const (
 	guardSourceRecovery guardSourceKind = iota
-	guardSourceValidation
 	guardSourceWorker
 )
 
@@ -35,10 +37,9 @@ type workerCleanup interface {
 
 // guardSource is the cleanup payload of one guard (Rust GuardSource).
 type guardSource struct {
-	kind       guardSourceKind
-	recovery   *recoverySource
-	validation any
-	worker     workerCleanup
+	kind     guardSourceKind
+	recovery *recoverySource
+	worker   workerCleanup
 }
 
 // release retries the cleanup of the retained source.

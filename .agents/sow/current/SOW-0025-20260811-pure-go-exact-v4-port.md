@@ -2796,7 +2796,12 @@ Unknowns:
 - Linux, macOS, and Windows implement the supported live contract. FreeBSD 14
   implements immutable reading, offline validation/recovery, and durable
   immutable publication while every live entry rejects before path access or
-  mutation.
+  mutation. Scope amendment (user decision, 2026-08-25, option A): the Go
+  port delivers FreeBSD as a reader/recovery platform in milestone 4 and
+  tracks FreeBSD durable immutable publication for the platform-completion
+  milestone (pending SOW-0026), because pure Go has no libc ACL surface
+  (Decision 2A); the Rust authority already ships it
+  (publication/security/freebsd.rs).
 - The Go distribution supplies its own exact version-matched
   `iprange-v4-worker`. It claims only SDK-owned in-region physical mapping faults,
   chains every unrelated POSIX `SIGBUS` disposition exactly, uses the equivalent
@@ -12254,8 +12259,9 @@ validation/recovery arms are slice 4-11D, composed over this seam.
 
 Recorded seams: the progress callback payloads await the Go domain
 machines' check hook (func() error) carrying progress; the recovery
-resume divergence is the recorded Go stance (the machine creates its
-own secured output at the request destination).
+client creates and secures the private output attempt before the
+request and the worker machine resumes it (Rust recover_once create +
+secure arms), folded at the M4 close fix round.
 
 Validation (all under nice; ~2 core-minutes): the internal/worker and
 cmd suites green plain + v4work (38 new test functions plus the
@@ -12356,13 +12362,14 @@ Slice E completes the chunk 4-11 cleanup surface (commit e1a2113):
   retained unexpected authority" (cleanup.rs:73-76), and a mapped fault
   folds through fault_problem with the role detail (cleanup.rs:78-79
   over recovery.rs:525-534), which differs from the validation arm's
-  mapped_worker_fault by design. The production recovery arms still do
-  not call this arm: the Go recovery machine creates its own secured
-  output at the request destination (recorded stance), so the
-  from_worker constructor stays reserved. The Go shape is fallible
-  where Rust discard() is infallible; the recorded nuance is that the
-  Rust infallible wrapper exists to serve the recovery arm's
-  failure-folding, which the Go stance replaces.
+  mapped_worker_fault by design. The production recovery arms compose the arm through
+  discardRecoveryAttemptComposed (added at the M4 close fix round): the
+  parent-created attempt and the wire scratch checkpoint are discarded
+  through an isolated cleanup session on every interrupted or failed
+  terminal, and every session failure folds into the failed-attempt
+  facts and the checkpoint residue ledger instead of surfacing an error
+  (Rust cleanup.rs discard total arms). The raw discardRecoveryAttempt
+  keeps its fallible error surface as the discard-inner peer.
 - Scratch deferral: the authorized-scratch removal machine
   (scratch_maintenance.rs) is the recorded 4-10 deferral; a present
   scratch checkpoint is admitted honestly as one Conflict residue per
@@ -12764,11 +12771,12 @@ Delivered at 9b55814 (battery green, pushed):
   RecoverImmutable/Offline/Live) run the Rust preflight first and then
   route through the worker client arms on linux/amd64; every other
   platform keeps the in-process machines. No silent in-process
-  fallback: a missing worker binary surfaces the verbatim
-  CodeOSUnsupported "SDK validation/recovery worker is unavailable"
-  class (Rust Error::Unsupported parity), pinned end-to-end through
-  Validate, InspectRecoveryCandidates, and RecoverImmutable with zero
-  progress and clean state.
+  fallback: an exhausted candidate list after NotFound surfaces the
+  CodeIO "worker spawn: ..." class and an empty candidate list surfaces
+  the verbatim CodeOSUnsupported "SDK validation/recovery worker is
+  unavailable" class (Rust Error::Io / Error::Unsupported parity),
+  pinned end-to-end through Validate, InspectRecoveryCandidates, and
+  RecoverImmutable with zero progress and clean state.
 - The worker client arms were exported (ValidateWithWorker,
   InspectRecoveryCandidatesWithWorker, RecoverWithWorker) and their
   wire shapes convert back to the exact domain types the in-process
@@ -12901,22 +12909,28 @@ shallow clone at the verified HEAD, full module suites plain AND
 freebsd 0 failures / 0 failures.
 
 - macOS msync portability defect (found, fixed): XNU msync rejects
-  every range that does not start at the mapping base with EINVAL,
-  even page-aligned ones (verified on-host: [0:7] ok, [1:2]/[2:7]/[2:2]
-  EINVAL, shared and private, sync and async). FlushRange/FlushPage
-  sync [0, offset+length) now, the single shape that works on linux,
+  subranges that are not aligned to the hardware page boundary with
+  EINVAL. Corrected record (verified on-host, Apple Silicon
+  pagesize=16384): [16K:16K] and [32K:16K] succeed; [4K:4K] EINVAL;
+  subranges strictly below one hardware page also EINVAL (shared and
+  private, sync and async). FlushRange/FlushPage sync
+  [0, offset+length) now, the single shape that works on linux,
   darwin, and freebsd; pages before the requested range are already
   clean in the durability flows, so the wider msync is a no-op scan
   there. This was the root cause of ~50 offline writer/recovery/
   snapshot failures on the first native run.
 - Rust-side durability finding (recorded, not changed): memmap2
-  0.9.11 flush_range returns Ok(()) on darwin for the rejected
-  subrange shape (probe on-host), i.e. the Rust engine silently skips
-  synchronizing on darwin; its crash matrix still passes because all
-  readers see the page cache. The full Rust cargo suite on macOS ran
-  clean (46 binaries, 0 failures). Rust follow-up: pin flush semantics
-  on darwin (base-prefix or whole-mapping flush; the Go port is
-  strictly more correct).
+  0.9.11 flush_range returned Ok(()) on darwin for every tested
+  subrange, including 4K-aligned ones on 16K hardware pages (probe
+  on-host). Follow-up inspection shows memmap2 floor-aligns the range
+  to the page size and extends it, so the result is re-alignment, not
+  silent error swallowing; the Rust engine therefore always
+  synchronizes at whole-page granularity but is still weaker than the
+  Go base-prefix shape for 4K-aligned call sites on 16K hardware
+  pages. The full Rust cargo suite on macOS ran clean (46 binaries, 0
+  failures). Rust follow-up: choose a native flush shape for XNU-16K
+  machines (whole-mapping or hardware-page-aligned flush) and pin it
+  with an on-host test; the Go port is strictly more correct today.
 - Suite platform gates (three classes, three predicates): the recorded
   pure-Go creator-only limitation (no libc filesec/ACL; Decision 2A)
   refuses live creation and every publication-producing offline op on
@@ -12930,9 +12944,12 @@ freebsd 0 failures / 0 failures.
   linux/darwin file tag for the unreadable-session fixtures (every
   test builds file fixtures); security creator-only skips; the fd-leak
   proof counter is portable (/proc/self/fd + /dev/fd raw readdir,
-  macOS devfs needs it). On linux and darwin no gate skips; the
-  offline reader/immutable-validation/conformance/zeroalloc pins run
-  genuinely on both hosts.
+  macOS devfs needs it). Platform gate behavior at a19d99c: linux runs every suite; darwin
+  skips the live package wholesale (creator-only machine is linux-only)
+  and runs the writer, reader, validation, conformance, and zeroalloc
+  suites; freebsd skips the live and writer packages wholesale
+  (creator-only and lifetime-lock machines absent) and runs the offline
+  reader/immutable-validation/conformance/zeroalloc pins genuinely.
 - FreeBSD disk blocker + authorized cleanup: the VM was 100% full on
   all datasets. The user authorized removing the /tmp updater scratch
   and the 2024 snapshots. 1,743 /tmp/netdata-updater-* scratch dirs
@@ -12994,3 +13011,100 @@ reviewers (Rust parity / Go idioms / performance / wire format +
 integrity / APIs + docs), one level, disjoint scopes, the
 project-final-review skill, adversarial mode; fix rounds until PASS;
 then the M4 close record and the milestone-5 transition.
+
+### Status (2026-08-25) - milestone 4 close fix round: reviewer findings P1/P2/P3 resolved
+
+Delivered on top of ed4b3e6 (single fix round; battery green; host proofs
+re-run on the new commit; five-reviewer re-gate on the same commit):
+
+- P2-1 (performance) resolved: the session probe arm is now a closure-free
+  value (mapping.ProbeRelease + ProbeOwner, Rust Probe stack-value shape);
+  arming, running, and releasing a probe allocate nothing in library mode
+  and inside a worker session (mapping/session_probe.go,
+  worker/session_probe.go, writer/output.go EnterProbe guard; new
+  session-active push-path allocation pin
+  recovery/session_push_alloc_test.go, bounds 8/16 like the library pin).
+  The mapping-generation counter is a lock-free atomic
+  (worker/session_probe.go) instead of a per-probe mutex; Region() resolves
+  before the session check exactly like Rust probe_mapping order. The Go
+  Store split-window seam (Update+RestoreDirty arms once per op vs Rust
+  update_page armed across the mutation) stays the recorded 4-12A
+  disposition; restructuring the shared tree.Store interface was rejected
+  as out of minimal-complete scope.
+- P1 (Rust parity) resolved: the recovery client now mirrors Rust
+  recover_once end-to-end - the parent creates and secures the private
+  output attempt before the request is written (CreatePublishAttempt +
+  PolicyFailIfExists), the request carries the exact attempt facts
+  (WriteRecoveryRequest), the worker machine resumes the owned artifact
+  (ResumePublishAttempt + Recover*WithAttempt entries in
+  recovery/api.go), the parent drops its descriptors after the sealed
+  request (Rust drop(file); drop(attempt)), and every Interrupted/Failed
+  terminal discards the attempt through an isolated cleanup session
+  (discardRecoveryAttemptComposed in worker/client_cleanup.go, the Rust
+  cleanup.rs total discard: session failure folds into failed-attempt
+  facts plus the checkpoint residue ledger; scratch absorbs into the
+  failure ledger). The crash fixture now asserts zero .iprange-publish-*
+  residue after session 1 and after the completed session 2
+  (client_crash_test.go publishResiduePaths helper), and the cmd dispatch
+  test proves the open-source failure discards the resumed attempt
+  (cmd main_test.go). The old "parent owns no attempt" stances in the
+  4-11C/4-11E records are corrected (see below).
+- P3 sweep (unit-scoped, no behavior change):
+  - dead guardSourceValidation arm and the validation any payload removed
+    (recovery/source_cleanup.go): the Go validation machine never retains
+    a cleanup source on release failure, so the Rust GuardSource::Validation
+    arm is unreachable here (divergence recorded in the file comment).
+  - faultProblem map-per-call replaced with a switch
+    (worker/client_recovery.go) - hot path stays allocation-free.
+  - Preflight/preflight twin merged into one exported authority
+    (validation/validation.go).
+  - recoverRouted guards the nil-Failure wire invariant with the typed
+    Conflict instead of a nil dereference
+    (routing/routing_linux_amd64.go).
+  - stale lifecycle labels fixed: reader_public.go (milestone-1 /
+    milestone-0 row), types.go (milestone-0 tree), logical_types.go
+    (milestone-3 chunk 4), publication/problem.go (Phase-2 x3),
+    validation/types.go (4-10 follow-up), live_source.go (chunk 4-10),
+    routing_other.go (pre-4-12), sigbus_matrix comment (chunk 4-2).
+  - exit-code literals: production already names the code constants
+    (exitUsage/exitProtocol/ownedFaultExit); the matrix test literals
+    mirror the Rust authority's own matrix and stay literal.
+  - asm role-gate tripwire added (worker/asm_role_gate_test.go): a fifth
+    MappingRole fails the test until sigbus_linux_amd64.s, roleFromWire,
+    and the test are extended together (4-12E audit D2 disposition).
+  - macOS record corrected to the verified XNU rule: msync rejects
+    subranges not aligned to the hardware page boundary (16K on Apple
+    Silicon); memmap2 floor-aligns and extends ranges, so the Rust side
+    re-aligns rather than silently skipping; Rust follow-up pin recorded
+    (mapping.go comment updated to match).
+  - SOW record corrections: 4-12B spawn-class wording (CodeIO for
+    NotFound-exhausted candidates vs CodeOSUnsupported for the empty
+    candidate list, Rust Io/Unsupported parity); 4-12D gate wording
+    (linux runs every suite; darwin skips the live package; freebsd skips
+    live + writer packages); 4-11C/4-11E recovery-resume stances
+    replaced by the parent-owned-attempt shape.
+- FreeBSD durable publication scope decision (user decision 2026-08-25,
+  option A): milestone 4 delivers FreeBSD as a reader/recovery platform;
+  FreeBSD durable immutable publication moves to the platform-completion
+  milestone (pending SOW-0026). The acceptance criteria in this SOW are
+  amended accordingly (see Requirements). Rust keeps its shipped machine
+  (publication/security/freebsd.rs).
+- Follow-up map (carried by real pending/current SOW files):
+  - SOW-0026 (pending): FreeBSD durable immutable publication (pure-Go
+    ACL machine), Windows live/publication surface, authorized recovery
+    scratch + external sort, Rust XNU-16K native flush-shape pin.
+  - SOW-0017 (pending): authenticated snapshot signing (Phase 2),
+    unchanged.
+  - 4-12E audit D2 asm role gate: now tripwire-pinned in-tree; no SOW
+    item needed unless a fifth role actually lands.
+  - Store split-window seam: recorded disposition in the 4-12A record;
+    implementation tracked together with SOW-0026 when the writer
+    surface changes (no standalone item).
+
+Battery on the fix round (all under nice): gofmt clean; vet plain +
+v4work; full module plain + v4work (0 failures); race + checkptr=2 on
+mapping/worker/recovery/validation/root both tag sets; twelve
+cross-builds plain + v4work; check-mmap-trace.sh 6 legs -> all green.
+Native host proofs: re-run on the fix-round commit after push (darwin
+plakam4mini, freebsd VM; both tag sets); results land in the M4 close
+record.

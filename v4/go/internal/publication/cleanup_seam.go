@@ -54,3 +54,13 @@ func earlyDiscardFactsOf(discarded earlyDiscard) EarlyDiscardFacts {
 		VisibleHousekeeping: discarded.visibleHousekeeping,
 	}
 }
+
+// FailedAttemptFacts records one attempt whose discard session failed
+// before any namespace work (Rust publication/cleanup.rs
+// failed_attempt: the problem becomes the exact artifact with no
+// further removal). The worker client folds its composed discard
+// through this exported entry; the worker boundary then converts the
+// facts to its wire EarlyDiscard.
+func FailedAttemptFacts(facts *PrivateOutputAttempt, problem error) EarlyDiscardFacts {
+	return earlyDiscardFactsOf(failedAttempt(*facts, problem))
+}

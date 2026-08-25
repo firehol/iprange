@@ -200,3 +200,18 @@ func resumePreparedOutputReplacement(destination *destination, header reservatio
 		previous:   previous,
 	}, nil
 }
+
+// ResumePublishAttempt opens the secured private output named by one
+// facts record and wraps it as the buildable attempt of a resumed
+// session (Rust output.rs resume_secured_output; the worker recovery
+// machine consumes the parent-created attempt the request carried).
+// The resumed attempt keeps the fail-if-exists policy of the parent
+// creation, so the finish selects the same publication machine the
+// in-process caller would have used.
+func ResumePublishAttempt(destinationPath string, facts *PrivateOutputAttempt) (*PublishAttempt, error) {
+	attempt, file, err := resumeSecuredOutput(destinationPath, facts)
+	if err != nil {
+		return nil, err
+	}
+	return &PublishAttempt{attempt: attempt, file: file, policy: reservationPolicyFailIfExists}, nil
+}

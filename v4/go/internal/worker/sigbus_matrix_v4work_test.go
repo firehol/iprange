@@ -19,7 +19,7 @@ import (
 // installPrevious installs the case's previous SIGBUS disposition with
 // the project rt_sigreturn stub wherever a handler may return through the
 // kernel frame (Rust install_previous; libc always sets SA_RESTORER, and
-// the chunk 4-2 probe proved a raw install without it dies 139 before the
+// the probe matrix proves a raw install without it dies 139 before the
 // handler runs).
 func installPrevious(caseName string) {
 	action := kernelSigaction{}

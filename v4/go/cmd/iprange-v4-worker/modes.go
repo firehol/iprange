@@ -145,13 +145,12 @@ func runValidation(control *worker.Control) (*recovery.RecoverySourceCleanupGuar
 }
 
 // runRecovery serves one Recover session (Rust worker.rs run_recovery):
-// the worker mode selects the built machine, the streamed
-// unknown-damage envelopes run through the callback proxy, and a
-// retained source release failure becomes the cleanup guard of the
-// terminal. The Go recovery machine creates its own secured output at
-// the request destination (recovery api.go "worker client create
-// position"); the resume of a parent-created attempt stays recorded
-// with the 4-11 completion.
+// the parent-created output attempt is resumed from the request facts
+// (resume_secured_output; a resume failure is the verbatim Conflict
+// "worker recovery output ownership changed"), the worker mode selects
+// the built machine over that attempt, the streamed unknown-damage
+// envelopes run through the callback proxy, and a retained source
+// release failure becomes the cleanup guard of the terminal.
 func runRecovery(control *worker.Control) (*recovery.RecoverySourceCleanupGuard, error) {
 	request, err := worker.ReadRecoveryRequest(control)
 	if err != nil {
@@ -160,19 +159,24 @@ func runRecovery(control *worker.Control) (*recovery.RecoverySourceCleanupGuard,
 	if err := setUnreadableSourcePages(request.UnreadablePages); err != nil {
 		return nil, err
 	}
+	attempt, err := publication.ResumePublishAttempt(request.DestinationPath, &request.Output)
+	if err != nil {
+		return nil, &format.Error{Code: format.CodeConflict, Detail: "worker recovery output ownership changed"}
+	}
 	sink := &recoveryProxy{control: control, suppressThrough: request.DeliveredUnknowns}
 	var result *recovery.RecoveryResult
 	var failure *recovery.RecoveryPreparationFailure
 	switch request.Mode {
 	case worker.WorkerModeImmutable:
-		result, failure = recovery.RecoverImmutable(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink)
+		result, failure = recovery.RecoverImmutableWithAttempt(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink, attempt)
 	case worker.WorkerModeOffline:
-		result, failure = recovery.RecoverOffline(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink)
+		result, failure = recovery.RecoverOfflineWithAttempt(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink, attempt)
 	case worker.WorkerModeLive:
-		result, failure = recovery.RecoverLive(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink)
+		result, failure = recovery.RecoverLiveWithAttempt(request.SourcePath, &request.Candidate, request.DestinationPath, &request.Budget, newWorkerCheckpoint(control), sink, attempt)
 	default:
 		// The request codec bounds the mode tag; the arm keeps the
 		// closed-set invariant explicit.
+		attempt.Close()
 		return nil, &format.Error{Code: format.CodeInvalidEnum, Detail: "worker recovery mode is invalid"}
 	}
 	var guard *recovery.RecoverySourceCleanupGuard

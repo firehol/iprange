@@ -11,17 +11,19 @@
 // guard_pending=false into the decoded result, refuse a guard-pending
 // completion with the verbatim Conflict, and fold a mapped fault
 // through fault_problem exactly like Rust
-// client/recovery.rs fault_problem:525). The Go recovery machine
-// creates its own secured output at the request destination, so the
-// production recovery arms do not call this arm yet; a guard-pending
-// terminal retains the child through WorkerCleanup and the routing
-// package builds the recovery source-cleanup guard from it
-// (source_cleanup.go FromWorkerCleanup). The arm is delivered for
-// the Rust surface and the wire tests.
+// client/recovery.rs fault_problem:525). The production recovery arms
+// compose the parent-owned attempt facts through
+// discardRecoveryAttemptComposed (Rust cleanup.rs discard: the
+// isolated session is total - every session failure folds into the
+// failed-attempt facts and the checkpoint residue ledger). A
+// guard-pending recovery terminal retains the child through
+// WorkerCleanup and the routing package builds the recovery
+// source-cleanup guard from it (source_cleanup.go FromWorkerCleanup).
 
 package worker
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
@@ -74,4 +76,62 @@ func discardRecoveryAttempt(destinationPath string, output *publication.PrivateO
 		// Io problem with the role detail is the Rust class.
 		return nil, nil, faultProblem(driven.Fault.Role)
 	}
+}
+
+// discardRecoveryAttemptComposed runs the composed recovery-attempt
+// discard of the client loop arms (Rust worker/cleanup.rs discard: the
+// isolated cleanup session is total - every session failure folds into
+// the failed-attempt facts and the checkpoint residue ledger instead
+// of surfacing an error, exactly like Rust failed:117-129). The
+// scratch checkpoint of an interrupted session is carried through, so
+// the cleanup session reports its removal evidence (the Go machine
+// never creates authorized scratch, so in practice the checkpoint and
+// the cleanup stay nil; the fold keeps the Rust shape for the wire).
+func discardRecoveryAttemptComposed(destinationPath string, output *publication.PrivateOutputAttempt, scratchDirectory *string, scratch *ScratchCheckpoint) (*EarlyDiscard, *ScratchCleanup) {
+	discarded, cleanup, err := discardRecoveryAttempt(destinationPath, output, scratchDirectory, scratch)
+	if err == nil {
+		return discarded, cleanup
+	}
+	problem := problemOf(err)
+	facts := WireEarlyDiscardOf(publication.FailedAttemptFacts(output, problem))
+	// problemOf always returns a *format.Error (WireProblem.Err), so the
+	// assertion is total on this fold.
+	return &facts, failedScratchCleanup(scratch, problem.(*format.Error))
+}
+
+// failedScratchCleanup builds the scratch-cleanup evidence of a failed
+// discard session (Rust worker/cleanup.rs failed: one residue per
+// checkpoint entry, each carrying the exact checkpoint basename and
+// the fixed problem of the failed session; a nil checkpoint stays
+// nil).
+func failedScratchCleanup(checkpoint *ScratchCheckpoint, problem error) *ScratchCleanup {
+	if checkpoint == nil {
+		return nil
+	}
+	cleanup := &ScratchCleanup{
+		AttemptID:                  checkpoint.AttemptID,
+		DirectoryIdentity:          checkpoint.DirectoryIdentity,
+		CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
+		CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
+	}
+	wire := WireProblemOf(problem)
+	for _, entry := range checkpoint.Entries {
+		cleanup.Residues = append(cleanup.Residues, ScratchResidue{
+			Ordinal:                    entry.Ordinal,
+			DirectoryIdentity:          checkpoint.DirectoryIdentity,
+			Basename:                   checkpointBasename(checkpoint.AttemptID, entry.Ordinal),
+			Identity:                   entry.Identity,
+			CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
+			CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
+			Problem:                    ScratchProblem{Code: wire.Code, Detail: wire.Detail},
+		})
+	}
+	return cleanup
+}
+
+// scratchClean reports whether a discard-session scratch cleanup left
+// no residue at all (Rust client scratch_clean: a nil cleanup is
+// clean, a present cleanup must prove every artifact absent).
+func scratchClean(cleanup *ScratchCleanup) bool {
+	return cleanup == nil || cleanup.Clean()
 }

@@ -265,6 +265,31 @@ running:
 			return 122
 		}
 		return 3
+	case "recovery_fault":
+		// The recovery fault-retry client arm discards the
+		// parent-owned attempt through an isolated cleanup session
+		// after the interrupted fault; the double serves that cleanup
+		// session with the real discard machine (like the real worker)
+		// and reserves this mode's fault script for the Recover
+		// opcode.
+		if doubleOpcodeIs(control, OpcodeCleanupRecoveryAttempt) {
+			return doubleRunCleanupMachine(control)
+		}
+		doubleWriteFaultRecord(control)
+		return ownedFaultExit
+	case "recovery_callback_fail":
+		// The callback-failure client arm discards the parent-owned
+		// attempt after the missing report refusal; the double serves
+		// the cleanup session with the real discard machine (like the
+		// real worker) and reserves the stream-then-exit script for
+		// the Recover opcode.
+		if doubleOpcodeIs(control, OpcodeCleanupRecoveryAttempt) {
+			return doubleRunCleanupMachine(control)
+		}
+		if !doubleStreamUnknown(control) {
+			return 122
+		}
+		return 3
 	case "recovery_guard_pending":
 		if err := doubleWriteRecoveryFailureGuard(control); err != nil {
 			return 123
@@ -410,4 +435,35 @@ func doubleStreamUnknown(control *Control) bool {
 	control.SetResponse(0)
 	control.SetState(stateUnknown)
 	return doubleWaitFor(func() bool { return control.state() == stateRunning }, 10*time.Second)
+}
+
+// doubleOpcodeIs reports whether the current session opcode matches
+// one value (the double reads the opcode the parent recorded before
+// spawning, exactly like the real worker dispatch).
+func doubleOpcodeIs(control *Control, want Opcode) bool {
+	got, ok := control.Opcode()
+	return ok && got == want
+}
+
+// doubleRunCleanupMachine serves one cleanup session with the real
+// discard machine (cmd modes.go runCleanup parity): the request is
+// decoded through the 4-11A codec, the secured attempt is discarded
+// through the exported publication seam, the result is written, and
+// the session completes. The recovery double modes need this arm so
+// the client-side discard composition in the retry and callback
+// failure loops observes a genuine clean removal, exactly like a real
+// worker binary would provide.
+func doubleRunCleanupMachine(control *Control) int {
+	request, err := ReadCleanupRequest(control)
+	if err != nil {
+		return 123
+	}
+	discarded := publication.DiscardSecuredAttempt(request.DestinationPath, &request.Output)
+	facts := WireEarlyDiscardOf(discarded)
+	scratch := CleanupCheckpoint(request.Scratch)
+	if err := WriteCleanupResult(control, &facts, scratch); err != nil {
+		return 123
+	}
+	control.SetState(stateComplete)
+	return 0
 }

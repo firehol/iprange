@@ -2,8 +2,8 @@
 // publication/problem.rs). Every code and detail string is verbatim
 // Rust; Go does not carry os_code (design decision 6). The Checkpoint
 // arm is implemented here (checkpointProblem, the Error::Checkpoint
-// clone-through class); the Windows-only gc arm stays recorded with
-// Phase 2 and is never stubbed.
+// clone-through class); the Windows-only gc arm is tracked as a future
+// surface and is never stubbed.
 
 package publication
 
@@ -102,8 +102,8 @@ func namespaceProblem(err error) *format.Error {
 
 // outputProblem maps one output-machine failure (Rust Problem::output:
 // Namespace, Sdk, Bootstrap, Gc, FinishedMetaChanged,
-// FinishedLengthChanged). The Gc arm is Windows-only and recorded with
-// Phase-2, never stubbed here.
+// FinishedLengthChanged). The Gc arm is Windows-only and tracked as a
+// future surface, never stubbed here.
 func outputProblem(err error) *format.Error {
 	if _, ok := live.AsNamespaceError(err); ok {
 		return namespaceProblem(err)
@@ -198,7 +198,7 @@ func replacementProblem(err error) *format.Error {
 
 // mainProblem maps one main-file failure (Rust Problem::main:
 // Namespace, Sdk, Output, Reservation, Checkpoint, PreviousLinkCount,
-// ReservationLinkCount). The Gc arm is Windows-only Phase 2 and the
+// ReservationLinkCount). The Gc arm is Windows-only future surface and the
 // Injected arm is test-only (the Go crash harness maps it at the
 // fault boundary); neither is stubbed here.
 func mainProblem(err error) *format.Error {

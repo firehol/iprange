@@ -165,6 +165,22 @@ func TestProbeRegionGenerationCounterMonotonicNonzero(t *testing.T) {
 	}
 }
 
+// TestNextMappingGenerationWrapsToNonzero pins the overflow contract
+// of the lock-free generation counter (Rust NEXT_MAPPING_GENERATION
+// checked add: the maximum generation is consumable and the next call
+// wraps to 1, preserving the never-0 invariant).
+func TestNextMappingGenerationWrapsToNonzero(t *testing.T) {
+	previous := mappingGeneration.Load()
+	t.Cleanup(func() { mappingGeneration.Store(previous) })
+	mappingGeneration.Store(^uint64(0))
+	if generation := nextMappingGeneration(); generation != ^uint64(0) {
+		t.Fatalf("next generation after storing the maximum = %d, want the maximum to be consumed", generation)
+	}
+	if generation := nextMappingGeneration(); generation != 1 {
+		t.Fatalf("next generation after the overflow = %d, want 1 (never-0 wrap)", generation)
+	}
+}
+
 func TestRegistrationRejectsInvalidArmedState(t *testing.T) {
 	c, err := CreateParent()
 	if err != nil {
@@ -229,5 +245,30 @@ func TestProbeRegionOwnershipMismatchRefuses(t *testing.T) {
 	}
 	if mapAtomicLoad32(baseOf(c.data), offArmed) != 0 {
 		t.Fatal("mismatched probe armed the control")
+	}
+}
+
+// TestArmProbeAndReleaseAllocsZero pins the session-mode arm cost:
+// Control.ArmProbe and the release restore must be allocation-free
+// (Rust enter_region + Probe::drop are stack values; the previous
+// registration and the release are plain values and the control is
+// already heap). The session installation and the generation counter
+// are covered by the other tests; this pin measures the per-arm cost.
+func TestArmProbeAndReleaseAllocsZero(t *testing.T) {
+	c, err := CreateParent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	withOwnedControl(t, c)
+	allocs := testing.AllocsPerRun(200, func() {
+		release, err := c.ArmProbe(mapping.RoleOutput, 0x1000, 0x1000)
+		if err != nil {
+			t.Fatalf("ArmProbe: %v", err)
+		}
+		release.Release()
+	})
+	if allocs != 0 {
+		t.Fatalf("ArmProbe+Release allocates %v objects per arm, want 0", allocs)
 	}
 }

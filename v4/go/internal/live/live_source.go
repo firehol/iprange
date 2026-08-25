@@ -9,7 +9,8 @@
 // slot, and releases in the Rust order (slot, gate, lifetime); any
 // release failure folds to the retryable residue state. The snapshot
 // builder consumes this source; the recovery-candidate variant is
-// chunk 4-10 scope.
+// implemented in live_source_candidate.go and binds the same slot-
+// release and candidate-changed invariants.
 
 package live
 

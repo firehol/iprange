@@ -17,6 +17,7 @@ package worker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -183,6 +184,27 @@ func TestRecoverWithWorkerRealBinarySourceFaultRestartable(t *testing.T) {
 	// the fault record; the validated record above is the second proof
 	// of the owned-fault exit path.
 
+	// The interrupted session carries the parent-owned attempt facts
+	// (Rust recover_once facts), and the parent discards the owned
+	// attempt with the exact identity before any retry (Rust
+	// client_tests.rs discard + discard_clean / scratch_clean arms):
+	// the worker died before its own failing-terminal arms could run,
+	// so this discard is the only thing that removes the private
+	// attempt.
+	if attempt.output == nil || attempt.output.PublicationAttemptID == [16]byte{} {
+		t.Fatalf("interrupted attempt output = %+v, want the parent-created facts", attempt.output)
+	}
+	discarded, scratch := discardRecoveryAttemptComposed(destination, attempt.output, scratchDirectoryOf(budget), attempt.scratch)
+	if discarded == nil || !discarded.Clean() {
+		t.Fatalf("discarded = %+v, want the clean discard of the interrupted attempt", discarded)
+	}
+	if !scratchClean(scratch) {
+		t.Fatalf("scratch cleanup = %+v, want clean", scratch)
+	}
+	if residue := publishResiduePaths(t, filepath.Dir(destination)); len(residue) != 0 {
+		t.Fatalf("destination residue after session 1: %v", residue)
+	}
+
 	// Restore the source to its full extent (Rust client_tests.rs
 	// lines 186-192: set_len, rewrite the last page, sync).
 	f, err := os.OpenFile(sourcePath, os.O_RDWR, 0)
@@ -238,4 +260,40 @@ func TestRecoverWithWorkerRealBinarySourceFaultRestartable(t *testing.T) {
 	if got := r.Meta().RangeRecordCount; got != 0 {
 		t.Fatalf("output range_record_count = %d, want 0", got)
 	}
+	// The published terminal leaves exactly the coordinated main in
+	// the destination directory: the parent-created attempt of session
+	// 2 was consumed by the machine's own publication terminal, and no
+	// private attempt survives either session (Rust
+	// client_tests.rs source_sigbus_is_classified_cleaned_and_restartable
+	// asserts the same cleanup evidence).
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(destination) {
+		t.Fatalf("destination directory = %v, want exactly the published output %s", entries, filepath.Base(destination))
+	}
+	if residue := publishResiduePaths(t, filepath.Dir(destination)); len(residue) != 0 {
+		t.Fatalf("destination residue after session 2: %v", residue)
+	}
+}
+
+// publishResiduePaths lists the private publish-attempt artifacts of
+// one destination directory (the `.iprange-publish-*` names; the
+// coordinated main never matches). The crash fixture asserts the list
+// is empty after the session-1 discard and after the session-2
+// publication.
+func publishResiduePaths(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var residue []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".iprange-publish-") {
+			residue = append(residue, entry.Name())
+		}
+	}
+	return residue
 }

@@ -34,24 +34,26 @@ var (
 // 1,2,3,... and never 0; a checked add wraps to 1 on overflow so the
 // invariant survives u64 exhaustion). The fault record cross-check
 // requires the armed generation to equal the fault generation, so the
-// counter is shared by every probe of one session.
-var (
-	mappingGenerationMu sync.Mutex
-	mappingGeneration   uint64 = 1
-)
+// counter is shared by every probe of one session. Rust keeps the
+// counter in a thread-local Cell; Go worker sessions run one session
+// per process on one logical flow, so the observable contract is the
+// same monotonic sequence, and a lock-free atomic matches it without
+// a per-probe mutex.
+var mappingGeneration atomic.Uint64
+
+func init() { mappingGeneration.Store(1) }
 
 // nextMappingGeneration returns the next nonzero generation (Rust
 // NEXT_MAPPING_GENERATION get-then-checked-add: the returned value is
 // the current counter and the counter advances to value+1, wrapping
 // to 1 on overflow).
 func nextMappingGeneration() uint64 {
-	mappingGenerationMu.Lock()
-	defer mappingGenerationMu.Unlock()
-	generation := mappingGeneration
-	if mappingGeneration == ^uint64(0) {
-		mappingGeneration = 1
-	} else {
-		mappingGeneration++
+	generation := mappingGeneration.Add(1) - 1
+	if generation == ^uint64(0) {
+		// Add wrapped through ^uint64(0): the consumed value was the
+		// maximum, so the next call must return 1 (the never-0
+		// invariant survives the wrap).
+		mappingGeneration.Store(1)
 	}
 	return generation
 }
@@ -87,28 +89,46 @@ func (c *Control) registration() (MappingRegistration, bool, error) {
 // (or disarms the probe) exactly like Rust Probe::drop: restore
 // failures are swallowed like the Rust `let _ = control.arm(...)`
 // arm, and the release still runs after a failed operation.
-func (c *Control) ArmProbe(role mapping.ProbeRole, base uintptr, length uint64) (func(), error) {
+func (c *Control) ArmProbe(role mapping.ProbeRole, base uintptr, length uint64) (mapping.ProbeRelease, error) {
 	// Rust posix.rs verify_owned gate: only an owned handler may arm a
 	// probe; the Go seam is the process-global the naked handler
 	// reads (sigbus_linux_amd64.go activeControl).
 	if atomic.LoadUintptr(&activeControl) != c.base() {
-		return nil, &format.Error{Code: format.CodeConflict, Detail: "SIGBUS worker handler ownership was lost"}
+		return mapping.ProbeRelease{}, &format.Error{Code: format.CodeConflict, Detail: "SIGBUS worker handler ownership was lost"}
 	}
 	previous, armed, err := c.registration()
 	if err != nil {
-		return nil, err
+		return mapping.ProbeRelease{}, err
 	}
 	generation := nextMappingGeneration()
 	if err := c.Arm(generation, MappingRole(role), base, length); err != nil {
-		return nil, err
+		return mapping.ProbeRelease{}, err
 	}
-	return func() {
-		if armed {
-			_ = c.Arm(previous.Generation, previous.Role, previous.Base, previous.Len)
-		} else {
-			c.Disarm()
-		}
+	return mapping.ProbeRelease{
+		// The owner interface word holds the already-heap control, so
+		// building the release never allocates (Rust Probe is a stack
+		// value).
+		Owner: c,
+		Previous: mapping.ProbeRegistration{
+			Generation: previous.Generation,
+			Role:       uint32(previous.Role),
+			Base:       previous.Base,
+			Length:     previous.Len,
+		},
+		Armed: armed,
 	}, nil
+}
+
+// RestoreProbe restores the armed registration captured before one
+// probe (Rust Probe::drop): a previous registration is re-armed with
+// restore failures swallowed like the Rust `let _ = control.arm(...)`
+// arm, and without a previous registration the probe is disarmed.
+func (c *Control) RestoreProbe(previous mapping.ProbeRegistration, armed bool) {
+	if armed {
+		_ = c.Arm(previous.Generation, MappingRole(previous.Role), previous.Base, previous.Length)
+	} else {
+		c.Disarm()
+	}
 }
 
 // ProbeRegion runs one operation with the region armed on this control
@@ -120,7 +140,7 @@ func (c *Control) ProbeRegion(role mapping.ProbeRole, base uintptr, length uint6
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer release.Release()
 	return operation()
 }
 
@@ -137,7 +157,7 @@ func EnterSession(control *Control) error {
 		return &format.Error{Code: format.CodeConflict, Detail: "worker context is already active"}
 	}
 	sessionControl = control
-	mapping.SetSessionProbe(func(role mapping.ProbeRole, base uintptr, length uint64) (func(), error) {
+	mapping.SetSessionProbe(func(role mapping.ProbeRole, base uintptr, length uint64) (mapping.ProbeRelease, error) {
 		return control.ArmProbe(role, base, length)
 	})
 	return nil

@@ -4,8 +4,10 @@
 // client_tests.rs): the completed and streaming sessions against the
 // in-process double, the fault-record read-back arm, the unreadable
 // fault retry, the guard-pending retained cleanup, the callback
-// failure class, and the real-worker session (the machine creates the
-// destination attempt and discards it on the source failure).
+// failure class, and the real-worker sessions (the parent creates the
+// destination attempt before the request; the worker machine consumes
+// the resumed attempt, and the client discards the owned attempt on
+// every interrupted or failed terminal).
 
 package worker
 
@@ -88,7 +90,7 @@ func TestRecoverOnceFaultRecordReadBack(t *testing.T) {
 }
 
 func TestRecoverWithWorkerFaultRetryRecordsUnreadablePage(t *testing.T) {
-	armDouble(t, "fault")
+	armDouble(t, "recovery_fault")
 	source, candidate, budget := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
 	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
 	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
@@ -130,7 +132,7 @@ func TestRecoverWithWorkerGuardPending(t *testing.T) {
 }
 
 func TestRecoverWithWorkerCallbackFailure(t *testing.T) {
-	armDouble(t, "recovery_unknown_then_exit3")
+	armDouble(t, "recovery_callback_fail")
 	source, candidate, budget := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
 	sink := recovery.RecoverySinkFunc(func(*recovery.RecoveryUnknownEnvelope) (recovery.RecoverySinkControl, error) {
 		return 0, errors.New("sink exploded")

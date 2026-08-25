@@ -2,9 +2,10 @@
 
 // Facade routing on every platform without the worker binary (the
 // worker is built only for linux/amd64, the recorded stance): each
-// public entry runs the in-process machine directly, exactly as the
-// pre-4-12 facade did. The six signatures are the same shapes the
-// in-process machines return on every platform.
+// public entry runs the in-process machine directly, the same
+// machines the worker facade routes to on linux/amd64. The six
+// signatures are the same shapes the in-process machines return on
+// every platform.
 
 package routing
 

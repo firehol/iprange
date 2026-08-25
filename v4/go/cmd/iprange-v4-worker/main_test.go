@@ -370,10 +370,19 @@ func TestWorkerRecoverDispatch(t *testing.T) {
 		DatabaseID:     [16]byte{1},
 		CommitNonce:    [16]byte{2},
 	}
-	output := &publication.PrivateOutputAttempt{}
-	if err := worker.WriteRecoveryRequest(parent.control, source, destination, candidate, worker.WorkerModeImmutable, budget, output, nil, 0); err != nil {
+	// The request carries the real parent-created attempt facts (Rust
+	// recover_once: the parent creates and secures the attempt before
+	// the request; the worker machine resumes it, and the open-source
+	// failure discards it in-session).
+	created, createFailure := publication.CreatePublishAttempt(destination, publication.PolicyFailIfExists)
+	if createFailure != nil {
+		t.Fatalf("create attempt: %v", createFailure.Cause)
+	}
+	facts := created.Facts()
+	if err := worker.WriteRecoveryRequest(parent.control, source, destination, candidate, worker.WorkerModeImmutable, budget, &facts, nil, 0); err != nil {
 		t.Fatal("write request:", err)
 	}
+	created.Close()
 	if code := parent.driveDispatch(t, worker.StateComplete); code != 0 {
 		t.Fatalf("worker exit = %d, want 0", code)
 	}
@@ -388,6 +397,17 @@ func TestWorkerRecoverDispatch(t *testing.T) {
 		t.Fatalf("outcome = %+v, retained = %v", outcome, retained)
 	}
 	wantCode(t, outcome.Failure.Cause, format.CodeIO)
+	// The machine discarded the resumed attempt on the source-open
+	// failure; the destination directory holds no private attempt.
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		t.Fatal("read destination directory:", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".iprange-publish-") {
+			t.Fatalf("private attempt %s survived the source-open failure", entry.Name())
+		}
+	}
 }
 
 func TestWorkerCleanupDispatch(t *testing.T) {

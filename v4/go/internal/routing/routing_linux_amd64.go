@@ -102,6 +102,14 @@ func recoverRouted(sourcePath string, candidate *recovery.RecoveryCandidate, des
 	if outcome.Result != nil {
 		return outcome.Result, nil
 	}
+	// Exactly one of Result and Failure is set by the wire contract;
+	// the guard makes the invariant explicit so a future codec drift
+	// fails with the typed Conflict instead of a nil dereference.
+	if outcome.Failure == nil {
+		// The zero-valued ledger is the clean empty-facts shape (the
+		// none classes are the zero values).
+		return nil, &recovery.RecoveryPreparationFailure{Cause: &format.Error{Code: format.CodeConflict, Detail: "SDK worker recovery returned neither result nor failure"}}
+	}
 	if cleanup != nil {
 		outcome.Failure.SourceCleanup = recovery.FromWorkerCleanup(cleanup, cleanup.LastProblem().Err())
 	}

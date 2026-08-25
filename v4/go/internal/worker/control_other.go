@@ -7,8 +7,9 @@ import (
 )
 
 // Control is the platform stub: the SIGBUS isolation machinery is proven
-// for linux/amd64 only (Rust worker/posix.rs is cfg(unix) and the Go port
-// targets the same host proof; Darwin/FreeBSD land in milestone 4-12).
+// for linux/amd64 only (Rust worker/posix.rs is cfg(unix) and the Go
+// port targets the same host proof; darwin and freebsd keep the typed
+// refusal stance recorded in the 4-12D native proof).
 // Every constructor refuses before path access, exactly like the mapping
 // owner's platform refusals, so the package cross-compiles while the
 // worker surface stays typed and honest.

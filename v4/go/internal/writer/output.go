@@ -766,21 +766,26 @@ func (b *OutputBuilder) TargetTxn() uint64 { return b.meta.TxnID }
 // outputPage returns one output data page view (Rust with_output_protection
 // inside inspect_page/update_page/copy_page: the fetch runs under the
 // armed Output probe when a worker session is active, and directly
-// otherwise). The gate keeps the library writer path allocation-free:
-// the probe closure is only built when a session hook is installed.
+// otherwise). The library arm keeps the one-load SessionProbeActive
+// gate: the writer is the per-page probe site of the Store hot path,
+// and the direct EnterProbe value return would otherwise cost the
+// library writer a non-inlined 72-byte guard round trip per page
+// (EnterProbe resolves the region before the inert short-circuit,
+// which puts it past the compiler inline budget). The session-active
+// arm builds no probe closure: the EnterProbe guard is a value (Rust
+// Probe is a stack value), so the session path is allocation-free and
+// arming failures surface before the page fetch (Rust enter_region
+// error propagation).
 func (b *OutputBuilder) outputPage(pageNumber uint32) ([]byte, error) {
 	if !mapping.SessionProbeActive() {
 		return b.mapping.Page(pageNumber)
 	}
-	var page []byte
-	if err := b.mapping.Probe(mapping.RoleOutput, func() error {
-		var err error
-		page, err = b.mapping.Page(pageNumber)
-		return err
-	}); err != nil {
+	guard, err := b.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
 		return nil, err
 	}
-	return page, nil
+	defer guard.Exit()
+	return b.mapping.Page(pageNumber)
 }
 
 // PageLimit returns the current page count.

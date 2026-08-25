@@ -26,7 +26,7 @@ const (
 
 // ValidationBudget bounds one validation operation (Rust
 // ValidationBudget). Scratch limits are accepted and recorded; the
-// 4-10 recovery follow-up adds the scratch machinery, so the current
+// recovery scratch machinery is a tracked follow-up, so the current
 // sweep is heap-only by construction.
 type ValidationBudget struct {
 	MaxHeapBytes     uint64

@@ -11,17 +11,18 @@
 // the sink with the callback acknowledge seam, and the outcome mailbox
 // folds the exact classes and the retained publication problem.
 //
-// Recorded Go stances: the client does not create the destination
-// output attempt (the Go recovery machine creates its own secured
-// output at the request destination; the request carries the zero
-// attempt facts), so a guard-pending terminal retains the child
-// through WorkerCleanup and the arm returns that retained cleanup
-// alongside the outcome; the routing package builds the
-// recovery.RecoverySourceCleanupGuard from it (source_cleanup.go
-// FromWorkerCleanup). The parent-side discardRecoveryAttempt cleanup
-// arm exists (client_cleanup.go) but the production recovery arms do
-// not compose it: the parent owns no attempt facts (the Go machine
-// creates its own output).
+// Rust-parity stance (worker/client/recovery.rs recover_once): the
+// parent creates and secures the private output attempt at the
+// destination before the request is written, the request carries the
+// exact attempt facts, the worker session resumes the owned artifact
+// and builds into it, and every interrupted or failed terminal
+// discards the attempt through an isolated cleanup session with the
+// exact facts (worker/cleanup.rs discard). A guard-pending terminal
+// retains the child through WorkerCleanup and the arm returns that
+// retained cleanup alongside the outcome; the routing package builds
+// the recovery.RecoverySourceCleanupGuard from it (source_cleanup.go
+// FromWorkerCleanup). The in-process (non-worker) recovery machines
+// keep their own create position and never use this arm.
 package worker
 
 import (
@@ -39,7 +40,15 @@ type recoveryAttempt struct {
 	cause      error
 	fault      FaultRecord
 	checkpoint *RecoveryOutcome
-	scratch    *recovery.RecoveryScratchAttempt
+	// output is the parent-owned attempt facts of the session (Rust
+	// recover_once facts; nil only on the early arms that never
+	// created the attempt).
+	output *publication.PrivateOutputAttempt
+	// scratch is the session scratch checkpoint in its wire shape,
+	// exactly like the Rust RecoveryAttempt arms (the checkpoint
+	// travels into the cleanup request; the domain scratch of the
+	// failure folds from the discard result).
+	scratch *ScratchCheckpoint
 }
 
 // recoveryAttemptKind selects the terminal of one recovery session
@@ -83,12 +92,16 @@ func RecoverWithWorker(sourcePath, destinationPath string, candidate *recovery.R
 				applyFaultToCheckpoint(attempt.checkpoint, attempt.fault)
 				return attempt.checkpoint, nil
 			}
-			// The parent owns no output attempt (recorded Go stance),
-			// so the Rust discard arm is trivially clean; the
-			// publication discard arms compose discardRecoveryAttempt
-			// once a parent-owned attempt exists.
-			if attempt.fault.Role != RoleSource {
-				return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(faultProblem(attempt.fault.Role), recovery.RecoveryReport{}, attempt.scratch)}, nil
+			// Rust recover() Interrupted arm: the publication
+			// checkpoint already owned the attempt (the machine ran
+			// its failing terminal inside the session), so every
+			// other interruption discards the parent-owned attempt and
+			// the scratch checkpoint through an isolated cleanup
+			// session; a dirty discard is the terminal even for source
+			// faults.
+			discarded, scratch := discardRecoveryAttemptComposed(destinationPath, attempt.output, scratchDirectoryOf(budget), attempt.scratch)
+			if attempt.fault.Role != RoleSource || !discarded.Clean() || !scratchClean(scratch) {
+				return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(faultProblem(attempt.fault.Role), recovery.RecoveryReport{}, discarded, scratch)}, nil
 			}
 			page, pageErr := faultPageOf(&attempt.fault)
 			if pageErr != nil {
@@ -98,7 +111,10 @@ func RecoverWithWorker(sourcePath, destinationPath string, candidate *recovery.R
 				return &RecoveryOutcome{Failure: earlyRecoveryFailureOf(err)}, nil
 			}
 		case attemptFailed:
-			return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(attempt.cause), recovery.RecoveryReport{}, attempt.scratch)}, nil
+			// Rust recover() Failed arm: the attempt and the scratch
+			// checkpoint are discarded before the terminal fold.
+			discarded, scratch := discardRecoveryAttemptComposed(destinationPath, attempt.output, scratchDirectoryOf(budget), attempt.scratch)
+			return &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(attempt.cause), recovery.RecoveryReport{}, discarded, scratch)}, nil
 		}
 	}
 }
@@ -129,13 +145,33 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 		child.Abort()
 		return recoveryAttempt{kind: attemptEarly, cause: err}
 	}
-	// The request carries the zero attempt facts; the worker machine
-	// creates its own secured output at the destination (recorded Go
-	// stance, Rust recover_once create + secure arms).
-	if err := WriteRecoveryRequest(control, sourcePath, destinationPath, candidate, mode, budget, &publication.PrivateOutputAttempt{}, unreadablePages, *deliveredUnknowns); err != nil {
+	// Rust recover_once create + secure arms: the parent creates and
+	// secures the private output attempt at the destination before the
+	// request is written, so the worker machine resumes the owned
+	// artifact and every interrupted or failed terminal discards it
+	// with the exact facts.
+	created, createFailure := publication.CreatePublishAttempt(destinationPath, publication.PolicyFailIfExists)
+	if createFailure != nil {
 		child.Abort()
-		return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(err), recovery.RecoveryReport{}, nil)}}
+		// Rust recover_once create/secure arms: the folded publication
+		// failure carries the exact ledger (no cleanup session exists
+		// yet; the source never opened, so no source guard).
+		return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: recovery.FromAttemptFailure(createFailure)}}
 	}
+	facts := created.Facts()
+	if err := WriteRecoveryRequest(control, sourcePath, destinationPath, candidate, mode, budget, &facts, unreadablePages, *deliveredUnknowns); err != nil {
+		child.Abort()
+		// Rust recover_once write_request arm: the created attempt is
+		// discarded in-process (no cleanup session exists yet) and its
+		// exact facts fold into the discarded failure.
+		discardFacts, artifact := created.DiscardFacts()
+		discarded := &EarlyDiscard{Output: discardFacts, Artifact: artifact}
+		return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(err), recovery.RecoveryReport{}, discarded, nil)}}
+	}
+	// The parent's descriptors are released once the request is sealed
+	// (Rust drop(file); drop(attempt)); the worker resumes the
+	// artifact from the facts.
+	created.Close()
 	control.SetState(stateRunning)
 	var callback *CallbackDecision
 	driven, driveErr := driveRecoveryWorker(child, control, check, sink, deliveredUnknowns, &callback)
@@ -143,23 +179,23 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 	case driveErr != nil:
 		child.Abort()
 		if callback != nil {
-			return recoveryCallbackFailureWorker(control, callback)
+			return recoveryCallbackFailureWorker(control, callback, destinationPath, &facts, budget)
 		}
-		return recoveryAttempt{kind: attemptFailed, cause: driveErr, scratch: scratchCheckpointOf(control)}
+		return recoveryAttempt{kind: attemptFailed, cause: driveErr, output: &facts, scratch: scratchCheckpointOf(control)}
 	case driven.Complete:
 		outcome, retainedProblem, readErr := ReadRecoveryOutcome(control)
 		if readErr != nil {
 			child.Abort()
-			return recoveryAttempt{kind: attemptFailed, cause: readErr, scratch: scratchCheckpointOf(control)}
+			return recoveryAttempt{kind: attemptFailed, cause: readErr, output: &facts, scratch: scratchCheckpointOf(control)}
 		}
 		if driven.GuardPending {
 			if retainedProblem == nil {
 				child.Abort()
-				return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker omitted its retained cleanup problem"), scratch: scratchCheckpointOf(control)}
+				return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker omitted its retained cleanup problem"), output: &facts, scratch: scratchCheckpointOf(control)}
 			}
 			if outcome.Failure == nil {
 				child.Abort()
-				return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker retained cleanup after success"), scratch: scratchCheckpointOf(control)}
+				return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker retained cleanup after success"), output: &facts, scratch: scratchCheckpointOf(control)}
 			}
 			outcome.Failure.CoordinationCleanup = publication.CoordinationCleanupCleanupGuard
 			retained = true
@@ -167,27 +203,27 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 		}
 		if retainedProblem != nil {
 			child.Abort()
-			return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker reported cleanup without retaining authority"), scratch: scratchCheckpointOf(control)}
+			return recoveryAttempt{kind: attemptFailed, cause: conflict("SDK recovery worker reported cleanup without retaining authority"), output: &facts, scratch: scratchCheckpointOf(control)}
 		}
 		return recoveryAttempt{kind: attemptComplete, outcome: outcome}
 	case driven.Fault.Role == RoleSource && callback == nil:
 		checkpoint, checkpointErr := recoveryCheckpointOf(control)
 		if checkpointErr != nil {
-			return recoveryAttempt{kind: attemptFailed, cause: checkpointErr, scratch: nil}
+			return recoveryAttempt{kind: attemptFailed, cause: checkpointErr, output: &facts, scratch: nil}
 		}
 		// Rust recover_once Fault arm: a scratch-checkpoint decode
 		// error is a Failed terminal with a nil scratch, never a
 		// retried interruption (client/recovery.rs:114-117).
 		scratch, scratchErr := scratchCheckpointStrict(control)
 		if scratchErr != nil {
-			return recoveryAttempt{kind: attemptFailed, cause: scratchErr, scratch: nil}
+			return recoveryAttempt{kind: attemptFailed, cause: scratchErr, output: &facts, scratch: nil}
 		}
-		return recoveryAttempt{kind: attemptInterrupted, fault: driven.Fault, checkpoint: checkpoint, scratch: scratch}
+		return recoveryAttempt{kind: attemptInterrupted, fault: driven.Fault, output: &facts, checkpoint: checkpoint, scratch: scratch}
 	default:
 		if callback != nil {
-			return recoveryCallbackFailureWorker(control, callback)
+			return recoveryCallbackFailureWorker(control, callback, destinationPath, &facts, budget)
 		}
-		return recoveryAttempt{kind: attemptFailed, cause: mappedWorkerFault(), scratch: scratchCheckpointOf(control)}
+		return recoveryAttempt{kind: attemptFailed, cause: mappedWorkerFault(), output: &facts, scratch: scratchCheckpointOf(control)}
 	}
 }
 
@@ -233,19 +269,22 @@ func driveRecoveryWorker(child *Process, control *Control, check Checkpoint, sin
 // into the recovery failure of an interrupted session (Rust
 // recovery_callback_failure): the sealed recovery-report checkpoint is
 // required, and the cause is the decision's error surface.
-func recoveryCallbackFailureWorker(control *Control, callback *CallbackDecision) recoveryAttempt {
+func recoveryCallbackFailureWorker(control *Control, callback *CallbackDecision, destinationPath string, output *publication.PrivateOutputAttempt, budget *recovery.RecoveryBudget) recoveryAttempt {
 	report, err := recoveryCallbackReportOf(control)
 	if err != nil {
-		return recoveryAttempt{kind: attemptFailed, cause: err, scratch: scratchCheckpointOf(control)}
+		return recoveryAttempt{kind: attemptFailed, cause: err, output: output, scratch: scratchCheckpointOf(control)}
 	}
 	// Rust recovery_callback_failure: a scratch-checkpoint decode
 	// error is a Failed terminal with a nil scratch
 	// (client/recovery.rs:347-352).
 	scratch, scratchErr := scratchCheckpointStrict(control)
 	if scratchErr != nil {
-		return recoveryAttempt{kind: attemptFailed, cause: scratchErr, scratch: nil}
+		return recoveryAttempt{kind: attemptFailed, cause: scratchErr, output: output, scratch: nil}
 	}
-	return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(callback.IntoError()), report, scratch)}}
+	// Rust recovery_callback_failure: the parent-owned attempt is
+	// discarded before the terminal fold, exactly like the loop arms.
+	discarded, cleanup := discardRecoveryAttemptComposed(destinationPath, output, scratchDirectoryOf(budget), scratch)
+	return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(callback.IntoError()), report, discarded, cleanup)}}
 }
 
 // recoveryCheckpointOf reads the sealed recovery publication checkpoint
@@ -287,38 +326,35 @@ func recoveryCallbackReportOf(control *Control) (recovery.RecoveryReport, error)
 	return report, nil
 }
 
-// scratchCheckpointOf reads the control scratch checkpoint, tolerating
-// an absent checkpoint (Rust control.scratch_checkpoint().ok().flatten
-// on the recovery arm).
-func scratchCheckpointOf(control *Control) *recovery.RecoveryScratchAttempt {
+// scratchCheckpointOf reads the control scratch checkpoint in its
+// wire shape, tolerating an absent or corrupt checkpoint (Rust
+// control.scratch_checkpoint().ok().flatten on the recovery arms).
+func scratchCheckpointOf(control *Control) *ScratchCheckpoint {
 	checkpoint, err := control.ScratchCheckpoint()
 	if err != nil || checkpoint == nil {
 		return nil
 	}
-	return &recovery.RecoveryScratchAttempt{
-		AttemptID:         checkpoint.AttemptID,
-		DirectoryIdentity: checkpoint.DirectoryIdentity,
-		CreationSecurity:  checkpoint.CreationSecurity,
-	}
+	return checkpoint
 }
 
 // scratchCheckpointStrict reads the control scratch checkpoint with
 // the decode error surfaced (Rust control.scratch_checkpoint(): the
 // recovery Fault and callback-failure arms turn a corrupt checkpoint
 // into a Failed terminal instead of tolerating it).
-func scratchCheckpointStrict(control *Control) (*recovery.RecoveryScratchAttempt, error) {
-	checkpoint, err := control.ScratchCheckpoint()
-	if err != nil {
-		return nil, err
+func scratchCheckpointStrict(control *Control) (*ScratchCheckpoint, error) {
+	return control.ScratchCheckpoint()
+}
+
+// scratchDirectoryOf folds the recovery budget's scratch directory
+// into the optional-path shape of the cleanup request (Rust
+// budget.scratch_directory.as_deref(); the Go budget stores the empty
+// string for the absent directory).
+func scratchDirectoryOf(budget *recovery.RecoveryBudget) *string {
+	if budget == nil || budget.ScratchDirectory == "" {
+		return nil
 	}
-	if checkpoint == nil {
-		return nil, nil
-	}
-	return &recovery.RecoveryScratchAttempt{
-		AttemptID:         checkpoint.AttemptID,
-		DirectoryIdentity: checkpoint.DirectoryIdentity,
-		CreationSecurity:  checkpoint.CreationSecurity,
-	}, nil
+	value := budget.ScratchDirectory
+	return &value
 }
 
 // applyFaultToCheckpoint folds the fault problem into a publication
@@ -336,12 +372,19 @@ func applyFaultToCheckpoint(outcome *RecoveryOutcome, fault FaultRecord) {
 // role (Rust client/recovery.rs fault_problem with the verbatim role
 // details).
 func faultProblem(role MappingRole) error {
-	detail := map[MappingRole]string{
-		RoleSource:       "recovery source mapping faulted",
-		RoleScratch:      "recovery scratch mapping faulted",
-		RoleOutput:       "recovery output mapping faulted",
-		RoleCoordination: "recovery coordination mapping faulted",
-	}[role]
+	// The role set is closed (Rust fault_problem exhaustive match);
+	// the switch keeps the map-free detail selection on the hot path.
+	var detail string
+	switch role {
+	case RoleSource:
+		detail = "recovery source mapping faulted"
+	case RoleScratch:
+		detail = "recovery scratch mapping faulted"
+	case RoleOutput:
+		detail = "recovery output mapping faulted"
+	case RoleCoordination:
+		detail = "recovery coordination mapping faulted"
+	}
 	return &format.Error{Code: format.CodeIO, Detail: detail}
 }
 
@@ -356,22 +399,63 @@ func problemOf(cause error) error {
 // RecoveryPreparationFailure::early: the fixed problem and the empty
 // facts).
 func earlyRecoveryFailureOf(cause error) *recovery.RecoveryPreparationFailure {
-	return discardedRecoveryFailureOf(problemOf(cause), recovery.RecoveryReport{}, nil)
+	return discardedRecoveryFailureOf(problemOf(cause), recovery.RecoveryReport{}, nil, nil)
 }
 
 // discardedRecoveryFailureOf builds one recovery preparation failure
-// with the given report and scratch and the clean discard ledger (Rust
-// RecoveryPreparationFailure::discarded over the worker discard arms).
-func discardedRecoveryFailureOf(cause error, report recovery.RecoveryReport, scratch *recovery.RecoveryScratchAttempt) *recovery.RecoveryPreparationFailure {
-	return &recovery.RecoveryPreparationFailure{
+// over the exact discard ledger of an interrupted or failed session
+// (Rust RecoveryPreparationFailure::discarded: the early-discard
+// facts ride the Output and Cleanup/Housekeeping slots, the
+// discard-session scratch cleanup absorbs into the ledger, and no
+// source guard exists at these arms).
+func discardedRecoveryFailureOf(cause error, report recovery.RecoveryReport, discarded *EarlyDiscard, scratch *ScratchCleanup) *recovery.RecoveryPreparationFailure {
+	failure := &recovery.RecoveryPreparationFailure{
 		Cause:               cause,
 		Report:              report,
-		Scratch:             scratch,
 		Cleanup:             publication.NewCleanupArtifacts(),
 		CoordinationCleanup: publication.CoordinationCleanupNone,
 		Housekeeping:        publication.HousekeepingNone,
-		VisibleHousekeeping: nil,
-		Output:              nil,
 		SourceCleanup:       nil,
 	}
+	if discarded != nil {
+		failure.Output = &discarded.Output
+		if discarded.Artifact != nil {
+			failure.Cleanup.Push(*discarded.Artifact)
+		}
+		failure.Housekeeping = discarded.Housekeeping
+		failure.VisibleHousekeeping = discarded.VisibleHousekeeping
+	}
+	// Rust terminal.rs absorb_scratch over the discard-session scratch
+	// cleanup: each residue becomes an AuthorizedScratch artifact, the
+	// cleanup's attempt facts ride the failure Scratch slot, and the
+	// housekeeping merges into the discarded facts.
+	if scratch != nil {
+		failure.Scratch = &recovery.RecoveryScratchAttempt{
+			AttemptID:         scratch.AttemptID,
+			DirectoryIdentity: scratch.DirectoryIdentity,
+			CreationSecurity: publication.CreationSecurity{
+				Kind:       scratch.CreationSecurityKind,
+				Commitment: scratch.CreationSecurityCommitment,
+			},
+		}
+		failure.Housekeeping = failure.Housekeeping.Merge(scratch.Housekeeping)
+		failure.VisibleHousekeeping = append(failure.VisibleHousekeeping, scratch.VisibleHousekeeping...)
+		for _, residue := range scratch.Residues {
+			identity := residue.Identity
+			failure.Cleanup.Push(publication.CleanupArtifact{
+				Kind:              publication.ArtifactAuthorizedScratch,
+				DirectoryRole:     publication.DirectoryRoleScratchDirectory,
+				DirectoryIdentity: residue.DirectoryIdentity,
+				BasenameEncoding:  1,
+				Basename:          append([]byte(nil), residue.Basename...),
+				Identity:          &identity,
+				CreationSecurity: &publication.CreationSecurity{
+					Kind:       residue.CreationSecurityKind,
+					Commitment: residue.CreationSecurityCommitment,
+				},
+				Error: &format.Error{Code: residue.Problem.Code, Detail: residue.Problem.Detail},
+			})
+		}
+	}
+	return failure
 }

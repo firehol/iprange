@@ -1,6 +1,6 @@
 // The scalar types in this file are the relocated, verified public
-// foundation (previously aliased from the obsolete milestone-0 tree):
-// numeric addresses, the value-tag, and the exact 129-bit cardinality.
+// foundation: numeric addresses, the value-tag, and the exact
+// 129-bit cardinality.
 
 package iprangedb
 

@@ -42,10 +42,10 @@ type validationAttempt struct {
 // after every source mapped fault with the page recorded unreadable
 // (Rust client/validation.rs validate + validate_all). The facade
 // routing package composes this arm after the public preflight; the
-// returned
-// pair mirrors Result<ValidationResult, ValidationFailure> in the
-// 4-11A wire shapes: exactly one of result and failure is non-nil,
-// and a drive-level error folds into the zero-progress failure exactly
+// returned pair mirrors Result<ValidationResult, ValidationFailure>
+// in the 4-11A wire shapes: exactly one of result and failure is
+// non-nil, and a drive-level error folds into the zero-progress
+// failure exactly
 // like the Rust wrapper.
 func ValidateWithWorker(path string, mode validation.ValidationMode, candidate *recovery.RecoveryCandidate, budget *validation.ValidationBudget, check Checkpoint, sink validation.ValidationSink) (*ValidationResultWire, *ValidationFailureWire) {
 	attempt, err := validateAllWorker(path, mode, candidate, budget, check, sink)

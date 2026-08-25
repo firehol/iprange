@@ -8,7 +8,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
-// This file is the milestone-1 public immutable reader facade: a pinned
+// This file is the public immutable reader facade: a pinned
 // reader surface whose lookups, scans, and view operations are zero-
 // allocation and zero-atomic inside the hot loop (SOW-0025:175;
 // design-iprange-engine.md: warm lookups allocate nothing and run without a
@@ -46,7 +46,7 @@ const (
 )
 
 // DatabaseInfo is the public logical identity of the selected generation
-// (approved parity-matrix name, milestone-0 report row 6). ValueTag
+// (Rust ValueTag parity name). ValueTag
 // carries the canonical tag: the engine-defined first_seen and last_seen
 // tags or any caller-created tag (binary-format-v4.md section 4: at most 15
 // non-NUL bytes, then a mandatory NUL).

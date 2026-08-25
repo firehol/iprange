@@ -22,7 +22,10 @@ import (
 // fail-if-exists destination (Rust recovery/api.rs platform::
 // recover_precreated; the attempt is created here at the position of
 // the Rust worker client, before the source opens, so the source-open
-// failure discards the attempt exactly like the worker arm).
+// failure discards the attempt exactly like the worker arm). The
+// in-process (non-worker) entries keep this client create position;
+// the worker session consumes a parent-created attempt through the
+// Recover*WithAttempt entries instead.
 func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink) (*RecoveryResult, *RecoveryPreparationFailure) {
 	// A nil check is the uncancellable convention everywhere in the
 	// machine; the publication engine always calls its checkpoint, so
@@ -45,8 +48,45 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 		// Rust recover_once create and secure arms: they run before
 		// the source opens, so no source guard exists and the attempt
 		// facts fold from the publication ledger.
-		return nil, fromAttemptFailure(attemptFailure)
+		return nil, FromAttemptFailure(attemptFailure)
 	}
+	return recoverMachine(sourcePath, candidate, destinationPath, mode, effective, check, sink, attempt)
+}
+
+// recoverPrecreatedWithAttempt runs the recovery machine over a
+// parent-created and secured output attempt (Rust worker.rs
+// run_recovery over recovery/api.rs recover_precreated_local: the
+// worker session consumes the attempt facts the request carried, so
+// the machine never creates its own output). The worker client
+// already ran the pre-cancel check and the preflight before the
+// attempt existed, so this entry only re-proves the budget (the Rust
+// machine step) and then runs the machine; every machine terminal
+// consumes the provided attempt exactly like the created one.
+func recoverPrecreatedWithAttempt(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
+	// A nil check is the uncancellable convention everywhere in the
+	// machine; the publication engine always calls its checkpoint, so
+	// the seam is normalized once here.
+	if check == nil {
+		check = func() error { return nil }
+	}
+	effective, failure := validateRecoveryBudget(budget, mode)
+	if failure != nil {
+		// The parent-created attempt is released without namespace
+		// work (Rust drop of the consumed owners on the machine
+		// refusal arm; the worker client pre-validates the same
+		// budget, so this arm cannot fire inside a worker session).
+		attempt.Close()
+		return nil, failure
+	}
+	return recoverMachine(sourcePath, candidate, destinationPath, mode, effective, check, sink, attempt)
+}
+
+// recoverMachine runs the recovery construction over one existing
+// secured attempt (Rust recovery/api.rs recover_precreated after the
+// attempt parameter is in hand: open source, identity proof,
+// kind-split build, source finish, publication terminal). Every
+// terminal consumes the attempt exactly once.
+func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, effective *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
 	source, openFailure := openRecoverySource(sourcePath, candidate, mode, check)
 	if openFailure != nil {
 		// Rust recover_precreated open_source arm: the created attempt
@@ -170,6 +210,35 @@ func RecoverLive(sourcePath string, candidate *RecoveryCandidate, destinationPat
 	return recoverPrecreated(sourcePath, candidate, destinationPath, sourceModeLive, budget, check, sink)
 }
 
+// RecoverImmutableWithAttempt runs the immutable recovery machine
+// over a parent-created and secured output attempt (Rust worker.rs
+// run_recovery over recovery/api.rs recover_precreated_local). Only
+// the worker binary calls this entry; in-process callers keep
+// RecoverImmutable and its client create position.
+func RecoverImmutableWithAttempt(sourcePath string, candidate *RecoveryCandidate, destinationPath string, budget *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
+	return recoverPrecreatedWithAttempt(sourcePath, candidate, destinationPath, sourceModeImmutable, budget, check, sink, attempt)
+}
+
+// RecoverOfflineWithAttempt runs the quiescent recovery machine over
+// a parent-created and secured output attempt (Rust worker.rs
+// run_recovery over recover_precreated_local; the certification is
+// consumed by the caller boundary exactly like the Rust `let _ =
+// certification` arm).
+func RecoverOfflineWithAttempt(sourcePath string, candidate *RecoveryCandidate, destinationPath string, budget *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
+	return recoverPrecreatedWithAttempt(sourcePath, candidate, destinationPath, sourceModeOffline, budget, check, sink, attempt)
+}
+
+// RecoverLiveWithAttempt runs the live recovery machine over a
+// parent-created and secured output attempt (Rust worker.rs
+// run_recovery over recover_precreated_local). The platform support
+// refusal runs before the machine, exactly like the in-process arm.
+func RecoverLiveWithAttempt(sourcePath string, candidate *RecoveryCandidate, destinationPath string, budget *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
+	if err := live.RequireLiveSupported(); err != nil {
+		return nil, earlyRecoveryFailure(err)
+	}
+	return recoverPrecreatedWithAttempt(sourcePath, candidate, destinationPath, sourceModeLive, budget, check, sink, attempt)
+}
+
 // buildRecoveryKind constructs one recovery output by the source kind
 // (Rust api.rs build: the direct, membership, and structured arms).
 func buildRecoveryKind(m *mapping.Mapping, meta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
@@ -215,11 +284,13 @@ func validateRecoveryBudget(budget *RecoveryBudget, mode sourceMode) (*RecoveryB
 	return &effective, nil
 }
 
-// fromAttemptFailure folds one publication attempt-creation failure
+// FromAttemptFailure folds one publication attempt-creation failure
 // into the recovery failure (Rust recover_once create and secure
 // arms: the source never opened, so the source guard stays nil; the
 // output facts appear only when the discard ledger retained them).
-func fromAttemptFailure(failure *publication.PublicationPreparationFailure) *RecoveryPreparationFailure {
+// The worker client arm builds its parent-side create/secure failure
+// through this exported entry.
+func FromAttemptFailure(failure *publication.PublicationPreparationFailure) *RecoveryPreparationFailure {
 	out := fromPublicationFailure(failure, RecoveryReport{})
 	if failure.Cleanup.Empty() {
 		out.Output = nil

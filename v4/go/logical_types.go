@@ -1,7 +1,7 @@
 // Shared semantic input and terminal workflow types (Rust workflow.rs and
 // history.rs parity). These are value-free report/data types: they carry
 // no mapped state and are produced by the typed writer workflows
-// (milestone-3 chunk 4) and the logical read SDK.
+// (the typed writer workflows) and the logical read SDK.
 
 package iprangedb
 

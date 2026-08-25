@@ -26,7 +26,7 @@ import (
 // result and the failure is non-nil; the failure carries the partial
 // progress and the cleanup ledger.
 func Validate(path string, mode ValidationMode, budget *ValidationBudget, check func() error, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
-	if err := preflight(mode, budget, check); err != nil {
+	if err := Preflight(mode, budget, check); err != nil {
 		progress := NewProgress()
 		return nil, failureOf(err, &progress)
 	}
@@ -57,16 +57,11 @@ func Validate(path string, mode ValidationMode, budget *ValidationBudget, check 
 }
 
 // Preflight checks the platform, the budget, and the cancellation
-// state before any path access (Rust validation::preflight; the
-// facade routing reproduces the public entry's preflight before it
-// routes to the worker client).
+// state before any path access (Rust validation::preflight). The
+// validate entry runs the same check first, and the facade routing
+// reproduces the public entry's preflight before it routes to the
+// worker client.
 func Preflight(mode ValidationMode, budget *ValidationBudget, check func() error) error {
-	return preflight(mode, budget, check)
-}
-
-// preflight checks the platform, the budget, and the cancellation
-// state before any path access (Rust validation::preflight).
-func preflight(mode ValidationMode, budget *ValidationBudget, check func() error) error {
 	if mode == ValidationModeLiveCurrent {
 		if err := live.CheckSupported(); err != nil {
 			return err

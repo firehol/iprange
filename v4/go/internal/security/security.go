@@ -54,13 +54,6 @@ func (p *Profile) Commitment() [32]byte {
 	return p.commitment
 }
 
-// SecureCreatorOnly applies the creator-only policy to one open
-// artifact: mode exactly 0600, no inherited access ACL, and the
-// single-link regular-file ownership proof against the profile (Rust
-// security::secure_creator_only). Failures report the Rust problem
-// classes: CodeAccessPolicyUnsupported when the policy cannot be
-// proved, CodeDurabilityUnsupported when the filesystem lacks the
-// required ACL operations, CodeIO for operation failures.
 // CreatorOnlySupported reports whether the secure creator-only
 // artifact policy is implemented on this platform. Only the linux
 // xattr machine is reachable from pure Go: the darwin filesec and
@@ -69,6 +62,13 @@ func (p *Profile) Commitment() [32]byte {
 // platform gates of the live and publication test suites.
 func CreatorOnlySupported() bool { return aclSupported }
 
+// SecureCreatorOnly applies the creator-only policy to one open
+// artifact: mode exactly 0600, no inherited access ACL, and the
+// single-link regular-file ownership proof against the profile (Rust
+// security::secure_creator_only). Failures report the Rust problem
+// classes: CodeAccessPolicyUnsupported when the policy cannot be
+// proved, CodeDurabilityUnsupported when the filesystem lacks the
+// required ACL operations, CodeIO for operation failures.
 func SecureCreatorOnly(f *os.File, profile Profile) error {
 	if err := f.Chmod(CreatorMode); err != nil {
 		return ioError("apply creator-only mode", err)

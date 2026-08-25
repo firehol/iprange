@@ -427,14 +427,15 @@ func (m *Mapping) Flush() error {
 // flush of the committed extent, meta-page flush).
 //
 // The synced range is [0, offset+length), not the literal subrange:
-// macOS/XNU msync rejects any range that does not start at the mapping
-// base with EINVAL (verified natively on darwin 25.5: aligned subranges
-// [1:2], [2:7] fail, [0:n] succeeds), so the base-prefix shape is the
-// only single implementation that is portable across linux, darwin, and
-// freebsd. Pages before offset are already clean in the durability flows
-// (their own flush or the create write), so the wider msync is a no-op
-// scan there; the Rust subrange shape is affected by the same macOS
-// limitation (Rust follow-up recorded in SOW-0025).
+// XNU msync rejects any subrange that is not aligned to the hardware
+// page boundary with EINVAL (verified natively on darwin 25.5 with
+// 16 KiB hardware pages: [4K:4K] fails while [16K:16K] and [32K:16K]
+// succeed), so the base-prefix shape is the one implementation that is
+// portable across linux, darwin, and freebsd. Pages before offset are
+// already clean in the durability flows (their own flush or the create
+// write), so the wider msync is a no-op scan there; the Rust subrange
+// shape is affected by the same XNU limitation (Rust follow-up
+// recorded in SOW-0025).
 func (m *Mapping) FlushRange(offset, length uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
