@@ -68,6 +68,7 @@ func findLiveValidationFindings(t *testing.T, path string) (*ValidationResult, *
 // still open, and the released slot is immediately claimable by a
 // fresh live reader.
 func TestValidateLiveCurrentCleanSweep(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 1)
 	w := openLiveValidationWriter(t, main)
 	if err := w.BeginDirect(); err != nil {
@@ -132,6 +133,7 @@ func TestValidateLiveCurrentCleanSweep(t *testing.T) {
 // empty allocation partition through every validator, so the report
 // is valid with no findings.
 func TestValidateLiveCurrentEmptySweep(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 2)
 	w := openLiveValidationWriter(t, main)
 	if _, err := w.Close(); err != nil {
@@ -160,6 +162,7 @@ func TestValidateLiveCurrentEmptySweep(t *testing.T) {
 // registration and the sweep reports the MetaInvalid finding with the
 // untraversable mark, then releases the gate-held registration.
 func TestValidateLiveBootstrapReport(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 1)
 	w := openLiveValidationWriter(t, main)
 	if err := w.BeginDirect(); err != nil {
@@ -223,6 +226,7 @@ func TestValidateLiveBootstrapReport(t *testing.T) {
 // an uncancelled counter observes at least one poll per slot and the
 // sweep still validates cleanly.
 func TestValidateLiveCurrentCancellationPolls(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 64)
 	var polls int
 	result, failure := Validate(main, ValidationModeLiveCurrent, HeapOnly(1<<20, 2), func() error {
@@ -246,6 +250,7 @@ func TestValidateLiveCurrentCancellationPolls(t *testing.T) {
 // check fail with the coordination class; the release stays clean, so
 // the failure carries no cleanup guard.
 func TestValidateLiveFinalCheckFailure(t *testing.T) {
+	liveGate(t)
 	// A realistic final-check failure needs the source open to stay
 	// alive across the mutation, which the Validate entry cannot
 	// express: the open and the terminal are one call. The unit below
@@ -309,6 +314,7 @@ func TestValidateLiveOpenFailureNoSidecar(t *testing.T) {
 // registration (the verify runs before the gate unlock, so the
 // failure surfaces from Finish).
 func TestValidateLiveBootstrapVerifyFailure(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 1)
 	w := openLiveValidationWriter(t, main)
 	if err := w.BeginDirect(); err != nil {

@@ -188,6 +188,7 @@ func algebraPropertyAssertPreserved(t *testing.T, path string, global *[algebraP
 // intersection, exclusion, flat) are each reopened and verified per
 // address.
 func TestRandomizedGlobalAlgebraMatchesAScalarAddressModel(t *testing.T) {
+	requirePublicationSecurity(t)
 	state := uint64(0xa183f9de36b47021)
 	var sourceModel [algebraPropertySources][algebraPropertyFeeds][algebraPropertyDomain]bool
 	for source := 0; source < algebraPropertySources; source++ {

@@ -102,6 +102,7 @@ func failureCode(t *testing.T, err error) ErrorCode {
 // policy and verifies the published output byte-for-byte in identity,
 // ranges, and metadata (Rust immutable_direct_snapshot_preserves_...).
 func TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata(t *testing.T) {
+	requirePublicationSecurity(t)
 	source := openPublic(t, "direct-ipv4.iprdb")
 	defer source.Close()
 	sourceInfo, err := source.Info()
@@ -189,6 +190,7 @@ func TestSnapshotImmutableDirectPreservesIdentityGenerationRangesAndMetadata(t *
 // live_membership_snapshot_preserves_..., adapted to the immutable
 // source that the Go boundary accepts).
 func TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testing.T) {
+	requirePublicationSecurity(t)
 	source := openPublic(t, "membership-ipv4.iprdb")
 	defer source.Close()
 	sourceInfo, err := source.Info()
@@ -289,6 +291,7 @@ func TestSnapshotImmutableMembershipPreservesNamesIndexesBitmapsAndMetadata(t *t
 // verifies payloads, locations, and the linked bitmaps (Rust structured
 // snapshot coverage via copy_structured_v4/v6).
 func TestSnapshotImmutableStructuredPreservesRangesAndMetadata(t *testing.T) {
+	requirePublicationSecurity(t)
 	for _, fixtureName := range []string{"structured-ipv4.iprdb", "structured-ipv4-nothreat.iprdb"} {
 		t.Run(fixtureName, func(t *testing.T) {
 			source := openPublic(t, fixtureName)
@@ -433,6 +436,7 @@ func TestSnapshotCancellationExistingDestinationAndBudgetFailurePublishNothing(t
 // smaller than the metadata input fails before publication, page
 // budget-1 fails before publication, and the exact page count publishes.
 func TestSnapshotHeapAndExactOutputPageBudgetsFailBeforePublication(t *testing.T) {
+	requirePublicationSecurity(t)
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 
 	// The direct fixture carries a 46-byte metadata payload; a 4-byte
@@ -513,6 +517,7 @@ func TestSnapshotLiveRefusedOnUnsupportedPlatforms(t *testing.T) {
 // pins the replace policy over a pre-existing destination (Rust
 // replacement_accepts_arbitrary_previous_bytes_...).
 func TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent(t *testing.T) {
+	requirePublicationSecurity(t)
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "replace.iprdb")
 	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
@@ -539,6 +544,7 @@ func TestSnapshotReplacementAcceptsArbitraryPreviousBytesAndExactContent(t *test
 // no_rollback_replacement_is_explicit_...): the destination provably holds
 // the published content and the operation reports Clean.
 func TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublication(t *testing.T) {
+	requirePublicationSecurity(t)
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "no-rollback.iprdb")
 	if err := os.WriteFile(destination, []byte("previous"), 0o644); err != nil {
@@ -571,6 +577,7 @@ func TestSnapshotNoRollbackReplacementIsExplicitAndCannotBeRemovedAfterPublicati
 // immutable_snapshot_can_compact_its_own_path_by_replacement): the
 // identity survives, the ranges survive, and no sidecar artifact remains.
 func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
+	requirePublicationSecurity(t)
 	sourcePath := snapshotDest(t, "self.iprdb")
 	if err := copyFixture(t, "direct-ipv4.iprdb", sourcePath); err != nil {
 		t.Fatal("copy fixture:", err)
@@ -616,6 +623,7 @@ func TestSnapshotImmutableCanCompactItsOwnPathByReplacement(t *testing.T) {
 // classification of a replace policy over a missing destination (Rust
 // replacement_requires_an_existing_destination...).
 func TestSnapshotReplacementRequiresExistingDestination(t *testing.T) {
+	requirePublicationSecurity(t)
 	sourceFile := fixture(t, "direct-ipv4.iprdb")
 	destination := snapshotDest(t, "missing.iprdb")
 	_, err := SnapshotTo(sourceFile, SnapshotSourceImmutable, destination, supportedSnapshotReplacement(), snapshotBudget(3), nil)
@@ -661,6 +669,7 @@ func TestSnapshotStrictReplacementFailsBeforeChangingDestination(t *testing.T) {
 // copies without any implicit validation pass, exactly like the normal
 // hot path.
 func TestSnapshotMalformedTraversalFailsCleanlyButCRCDamageIsNotImplicitlyValidated(t *testing.T) {
+	requirePublicationSecurity(t)
 	// Corrupted range root: traversal fails with FormatInvalid.
 	malformed := snapshotDest(t, "malformed.iprdb")
 	if err := copyFixture(t, "direct-ipv4.iprdb", malformed); err != nil {
@@ -779,6 +788,7 @@ func TestSnapshotBoundaryGuards(t *testing.T) {
 // private residue. The source is a 20k-range direct database so the copy
 // outlasts the controller's first poll.
 func TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication(t *testing.T) {
+	requirePublicationSecurity(t)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.iprdb")
 	moved := filepath.Join(dir, "moved-source.iprdb")
@@ -845,6 +855,7 @@ func TestSnapshotImmutableSourceReplacementDuringCopyBlocksPublication(t *testin
 // the checkpoint, so the test drives the machine directly, like the
 // live-race suite.
 func TestSnapshotImmutableSidecarAppearingDuringBuildBlocksPublication(t *testing.T) {
+	requirePublicationSecurity(t)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.iprdb")
 	destination := filepath.Join(dir, "output.iprdb")
@@ -910,6 +921,7 @@ func buildLargeDirectSource(t *testing.T, path string, ranges int) {
 // InsufficientResourceBudget. Before the zero guard the charge wrapped
 // the heap arithmetic and bypassed the metadata bound (review P1).
 func TestSnapshotTinyHeapMembershipPublishesWithBatchDisabled(t *testing.T) {
+	requirePublicationSecurity(t)
 	destination := snapshotDest(t, "tiny-membership.iprdb")
 	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
 	if err != nil {
@@ -941,6 +953,7 @@ func TestSnapshotTinyHeapMembershipPublishesWithBatchDisabled(t *testing.T) {
 // cannot fit a 16-byte heap after the (disabled) batches, so the copy
 // refuses before publication, while the metadata-free sibling publishes.
 func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
+	requirePublicationSecurity(t)
 	destination := snapshotDest(t, "tiny-structured.iprdb")
 	_, err := SnapshotTo(fixture(t, "structured-ipv4.iprdb"), SnapshotSourceImmutable, destination, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
 	if code := failureCode(t, err); code != ErrorInsufficientResourceBudget {
@@ -984,6 +997,7 @@ func TestSnapshotTinyHeapStructuredMetadataRefused(t *testing.T) {
 // bitmap, and the metadata of the pinned generation, exactly like the
 // immutable source.
 func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
@@ -1061,6 +1075,7 @@ func TestSnapshotLiveMembershipPreservesNamesIndexesBitmapsAndMetadata(t *testin
 // two-file budget refuses before any source or destination work, with
 // no output and no private artifacts.
 func TestSnapshotLiveRequiresSidecarDescriptorBudget(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
@@ -1083,6 +1098,7 @@ func TestSnapshotLiveRequiresSidecarDescriptorBudget(t *testing.T) {
 // destination create, the source bytes stay untouched, and no private
 // artifact appears.
 func TestSnapshotLiveCannotReplaceItsOwnSourcePath(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
@@ -1111,6 +1127,7 @@ func TestSnapshotLiveCannotReplaceItsOwnSourcePath(t *testing.T) {
 // with NameInvalid before any filesystem access (Rust path.file_name()
 // returns None for these, mapping to InvalidName).
 func TestSnapshotLiveRejectsInvalidDestinationNames(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("live coordination is not implemented on this platform")
 	}
@@ -1129,6 +1146,7 @@ func TestSnapshotLiveRejectsInvalidDestinationNames(t *testing.T) {
 // any attempt is created (Rust open_regular require_single_link ->
 // LinkCount "publication inode link count changed").
 func TestSnapshotLiveRejectsHardLinkedDestination(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("live coordination is not implemented on this platform")
 	}

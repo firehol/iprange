@@ -79,6 +79,7 @@ func publicRecoverySource(t *testing.T, path string) {
 // proves the facade converts the internal failure cause onto the
 // public error type with the exact class.
 func TestRecoverImmutablePublicSinkFailureReportsThePublicErrorClass(t *testing.T) {
+	requirePublicationSecurity(t)
 	installWorkerForTest(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")

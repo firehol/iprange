@@ -30,6 +30,7 @@ func createLivePublicPair(t *testing.T, capacity uint32) (string, CreateResult) 
 }
 
 func TestPublicOpenLiveWriterRoundTrip(t *testing.T) {
+	requireLiveCreation(t)
 	main, created := createLivePublicPair(t, 2)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
@@ -113,6 +114,7 @@ func TestPublicOpenLiveWriterRoundTrip(t *testing.T) {
 }
 
 func TestPublicLiveWriterNoopAndAbort(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 1)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
@@ -165,6 +167,7 @@ func TestPublicLiveWriterNoopAndAbort(t *testing.T) {
 }
 
 func TestPublicLiveWriterSecondOpenIsWriterBusy(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
@@ -191,6 +194,7 @@ func TestPublicOpenLiveWriterRefusesNonLiveMain(t *testing.T) {
 }
 
 func TestPublicLiveWriterCancelledOpenLeavesNoResidue(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	cancelled := NewCancellationToken()
 	cancelled.Cancel()
@@ -215,6 +219,7 @@ func TestPublicLiveWriterCancelledOpenLeavesNoResidue(t *testing.T) {
 // open-files bound below two is refused with the budget class before
 // any path access (Rust "a live writer requires two open files").
 func TestPublicLiveWriterBudgetValidation(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	small := DefaultBudget()
 	small.MaxOpenFiles = 1
@@ -240,6 +245,7 @@ func TestPublicLiveWriterBudgetValidation(t *testing.T) {
 // and see a draft-less core), never WrongState. The writer stays healthy
 // and a fresh transaction commits normally.
 func TestPublicLiveDirectCommitAbortAfterOpFailure(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	// Zero heap budget: the range assign works (the IPv4 pending
 	// locator is not heap-bounded), and the metadata compression heap
@@ -331,6 +337,7 @@ func TestPublicLiveDirectCommitAbortAfterOpFailure(t *testing.T) {
 // require_transaction operation_is) and its terminal Commit with
 // NoPendingTransaction, and it must never touch the newer draft.
 func TestPublicLiveStaleHandleAfterOpFailure(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	budget := PageBudget{MaxHeapBytes: 0, MaxPrivatePages: 100, MaxGrowthPages: 100, MaxOpenFiles: 2}
 	w, err := OpenLiveWriter(main, budget, nil)

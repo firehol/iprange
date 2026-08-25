@@ -34,6 +34,7 @@ func sessionRecoverySource(t *testing.T) (string, format.Meta) {
 }
 
 func TestRecoverImmutableDeclaredPageRecordsIOUnreadable(t *testing.T) {
+	publicationGate(t)
 	sourcePath, meta := sessionRecoverySource(t)
 	t.Cleanup(func() { _ = mapping.SetSessionUnreadablePages(nil) })
 	candidate := apiTestCandidate(t, sourcePath)

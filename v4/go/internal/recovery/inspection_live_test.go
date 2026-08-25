@@ -39,6 +39,7 @@ func createLiveRecoveryPair(t *testing.T) string {
 }
 
 func TestLiveInspectionReportsUnprovableCurrentOrder(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	rewriteMeta(t, main, 0, func(meta *format.Meta) {
 		meta.CommitNonce = [16]byte{0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55}
@@ -54,6 +55,7 @@ func TestLiveInspectionReportsUnprovableCurrentOrder(t *testing.T) {
 }
 
 func TestLiveInspectionReportsUnreadableProvenCurrent(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	w, err := live.OpenLiveWriter(main, liveRecoveryTestBudget(), nil, nil)
 	if err != nil {
@@ -92,6 +94,7 @@ func TestLiveInspectionReportsUnreadableProvenCurrent(t *testing.T) {
 }
 
 func TestLiveInspectionReportsOnlyTheNewestCandidate(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	result, err := inspect(t, main, RecoveryInspectionLive)
 	if err != nil {
@@ -110,6 +113,7 @@ func TestLiveInspectionReportsOnlyTheNewestCandidate(t *testing.T) {
 }
 
 func TestValidateOfflineCandidateCommittedLiveGeneration(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	w, err := live.OpenLiveWriter(main, liveRecoveryTestBudget(), nil, nil)
 	if err != nil {

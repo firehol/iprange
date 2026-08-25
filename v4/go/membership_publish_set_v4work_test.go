@@ -72,6 +72,7 @@ func publishSetCorpus(t *testing.T, blocks uint32) string {
 // 1024-segment publish: two dictionary interns, 1022 sequence-cache
 // hits, one refcount batch, and exactly 1024 output ranges.
 func TestPublishSetWorkCounters(t *testing.T) {
+	requirePublicationSecurity(t)
 	corpus := publishSetCorpus(t, 512)
 	db, err := OpenImmutable(corpus)
 	if err != nil {

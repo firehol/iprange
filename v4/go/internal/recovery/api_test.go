@@ -165,6 +165,7 @@ func rewriteDualMeta(t *testing.T, path string, change func(*format.Meta)) {
 // report, and no destination artifact — the builder never exists, so
 // no sink traffic or analysis facts are produced.
 func TestRecoverImmutableRefusesUnknownStructureKind(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	structuredSourceLimit(t, sourcePath, 64, nil, []structuredPush{
@@ -205,6 +206,7 @@ func TestRecoverImmutableRefusesUnknownStructureKind(t *testing.T) {
 // stops the build with the partial report and the private output is
 // removed with a clean ledger.
 func TestRecoverImmutableSinkFailureReturnsPartialFactsAndRemovesThePrivateOutput(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")
@@ -239,6 +241,7 @@ func TestRecoverImmutableSinkFailureReturnsPartialFactsAndRemovesThePrivateOutpu
 // source path is replaced during the build, so the final check refuses
 // with the candidate-changed class and the private output is removed.
 func TestRecoverImmutableFinalSourceIdentityRecheckBlocksPublicationAndCleansOutput(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	displacedPath := filepath.Join(dir, "displaced.v4")
@@ -285,6 +288,7 @@ func TestRecoverImmutableFinalSourceIdentityRecheckBlocksPublicationAndCleansOut
 // the sink cancels during the first envelope and the next checkpoint
 // refuses with the cancelled class before any publication.
 func TestRecoverImmutableCancellationAfterDamageDeliveryAbortsBeforePublication(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")
@@ -321,6 +325,7 @@ func TestRecoverImmutableCancellationAfterDamageDeliveryAbortsBeforePublication(
 // appearing during the build yields a completed non-publication result
 // with the foreign content preserved.
 func TestRecoverImmutableDestinationRaceReturnsATerminalNonpublicationResult(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")
@@ -358,6 +363,7 @@ func TestRecoverImmutableDestinationRaceReturnsATerminalNonpublicationResult(t *
 // range is rejected, the output is a published two-page direct
 // database with no ranges.
 func TestRecoverImmutableConstructsThePublishedRejectedRange(t *testing.T) {
+	publicationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")

@@ -72,6 +72,9 @@ func TestCommitmentKnownAnswer(t *testing.T) {
 // artifact proves, a chmod-0644 artifact fails the policy, and the
 // proof re-applies mode 0600.
 func TestSecureCreatorOnlyProvesTheArtifact(t *testing.T) {
+	if !CreatorOnlySupported() {
+		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+	}
 	profile, err := Capture()
 	if err != nil {
 		t.Fatalf("capture: %v", err)
@@ -109,6 +112,9 @@ func TestSecureCreatorOnlyProvesTheArtifact(t *testing.T) {
 // TestSecureCreatorOnlyRejectsANonRegularArtifact pins the single-link
 // regular-file rule: a directory cannot prove the policy.
 func TestSecureCreatorOnlyRejectsANonRegularArtifact(t *testing.T) {
+	if !CreatorOnlySupported() {
+		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+	}
 	profile, err := Capture()
 	if err != nil {
 		t.Fatalf("capture: %v", err)
@@ -127,6 +133,9 @@ func TestSecureCreatorOnlyRejectsANonRegularArtifact(t *testing.T) {
 // TestMultiLinkArtifactFailsThePolicy mirrors the Rust single-link
 // rule: a second hard link fails the ownership proof.
 func TestMultiLinkArtifactFailsThePolicy(t *testing.T) {
+	if !CreatorOnlySupported() {
+		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+	}
 	profile, err := Capture()
 	if err != nil {
 		t.Fatalf("capture: %v", err)

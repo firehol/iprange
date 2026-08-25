@@ -113,6 +113,7 @@ func outputBudget() AlgebraOutputBudget {
 // output through the public reader: identity, catalog, per-feed ranges,
 // and the algebra count over the published file.
 func TestPublishSetUnionPreserveFeedsV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "union-preserve.iprdb")
@@ -150,6 +151,7 @@ func TestPublishSetUnionPreserveFeedsV4(t *testing.T) {
 // TestPublishSetFlatV4 publishes the whole catalog into one named feed
 // and verifies the single-feed catalog and the flat membership.
 func TestPublishSetFlatV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "union-flat.iprdb")
@@ -176,6 +178,7 @@ func TestPublishSetFlatV4(t *testing.T) {
 // qualifying fixture rows are adjacent with the same membership, so the
 // output sink coalesces them into one range.
 func TestPublishSetNamedUnionCoalescesV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "named-union.iprdb")
@@ -197,6 +200,7 @@ func TestPublishSetNamedUnionCoalescesV4(t *testing.T) {
 // TestPublishSetIntersectionV4 publishes the intersection of two named
 // feeds: only the middle fixture row carries both.
 func TestPublishSetIntersectionV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "intersection.iprdb")
@@ -219,6 +223,7 @@ func TestPublishSetIntersectionV4(t *testing.T) {
 // TestPublishSetExclusionV4 publishes the catalog minus one feed: the
 // first fixture row qualifies, the other two carry the excluded feed.
 func TestPublishSetExclusionV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "exclusion.iprdb")
@@ -247,6 +252,7 @@ func TestPublishSetExclusionV4(t *testing.T) {
 // TestPublishSetMetadataRoundTrip stages one exact metadata payload and
 // re-reads it through the public metadata reader.
 func TestPublishSetMetadataRoundTrip(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "metadata.iprdb")
@@ -270,6 +276,7 @@ func TestPublishSetMetadataRoundTrip(t *testing.T) {
 // destination with the rollback-safe exchange and the plain no-rollback
 // replacement, then verifies the second content is the one on disk.
 func TestPublishSetReplacementPoliciesV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	destination := publishDest(t, "replaced.iprdb")
@@ -295,6 +302,7 @@ func TestPublishSetReplacementPoliciesV4(t *testing.T) {
 // the algebra API and compares with the source count: publishing must
 // not change the selected address union.
 func TestPublishSetSemanticParityV4(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	before, err := helpers.alg.Count(AlgebraFeedSelectionAll(), nil)
@@ -331,6 +339,7 @@ func TestPublishSetSemanticParityV4(t *testing.T) {
 // TestPublishSetV6 publishes an IPv6 union and verifies the reopened
 // per-feed ranges.
 func TestPublishSetV6(t *testing.T) {
+	requirePublicationSecurity(t)
 	db := mustOpen(t, "rust/membership-ipv6.iprdb")
 	defer mustClose(t, db)
 	q, err := db.MembershipQuery()
@@ -470,6 +479,7 @@ func verifyPublishedV4(t *testing.T, destination, tag string, metadata []byte, f
 // TestPublishSetValidatesDestinationAndBudget pins the Rust-verbatim
 // early failures.
 func TestPublishSetValidatesDestinationAndBudget(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	operation := AlgebraSetUnion(AlgebraFeedSelectionAll())
@@ -579,6 +589,7 @@ func operationAllUnion() AlgebraSetOperation {
 
 // TestPublishSetTooLargeMetadata pins the 20 MiB metadata cap.
 func TestPublishSetTooLargeMetadata(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	_, err := helpers.alg.PublishSet(publishDest(t, "big.iprdb"), mustTag(t, "set-out"), operationAllUnion(), AlgebraOutputModePreserveFeeds(), make([]byte, format.MaxMetadataUncompressed+1), PolicyFailIfExists, outputBudget(), nil)
@@ -588,6 +599,7 @@ func TestPublishSetTooLargeMetadata(t *testing.T) {
 // TestPublishSetEmptyIntersection pins the empty-intersection refusal on
 // an algebra over a feedless membership database.
 func TestPublishSetEmptyIntersection(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	// The fixture always carries feeds; the intersection of two feeds

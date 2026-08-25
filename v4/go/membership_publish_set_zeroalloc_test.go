@@ -16,6 +16,7 @@ import (
 )
 
 func TestNoPageSizedHeapAllocationsPublishSet(t *testing.T) {
+	requirePublicationSecurity(t)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 	dir := t.TempDir()

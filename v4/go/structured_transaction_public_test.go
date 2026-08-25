@@ -249,6 +249,7 @@ func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.
 // reader surface, the snapshot copy, and the feed deletion that
 // re-interns every stored payload without the removed feed.
 func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
+	requirePublicationSecurity(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())

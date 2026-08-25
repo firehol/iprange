@@ -18,6 +18,7 @@ import (
 
 // TestSnapshotCopyVisitsEachRangeExactlyOnce pins the direct copy pass.
 func TestSnapshotCopyVisitsEachRangeExactlyOnce(t *testing.T) {
+	requirePublicationSecurity(t)
 	source := openPublic(t, "direct-ipv4.iprdb")
 	defer source.Close()
 	info, err := source.Info()
@@ -60,6 +61,7 @@ func TestSnapshotCopyVisitsEachRangeExactlyOnce(t *testing.T) {
 // necessary work, so any added or skipped copy step shows up as a
 // counter drift.
 func TestSnapshotCopyWorkIsDeterministic(t *testing.T) {
+	requirePublicationSecurity(t)
 	first := snapshotDest(t, "first.iprdb")
 	result, err := SnapshotTo(fixture(t, "membership-ipv4.iprdb"), SnapshotSourceImmutable, first, PolicyFailIfExists, &SnapshotBudget{MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 2}, nil)
 	if err != nil {

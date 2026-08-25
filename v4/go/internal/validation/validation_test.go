@@ -16,16 +16,34 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
-// countProcessFds counts the open descriptors of this process (Linux
-// /proc/self/fd; the validation tests run sequentially, so the count
-// is stable across one measurement point).
+// countProcessFds counts the open descriptors of this process
+// (/proc/self/fd on Linux, /dev/fd on the BSDs and macOS; the
+// validation tests run sequentially, so the count is stable across
+// one measurement point). The immutable bootstrap report test uses
+// the count as the fd-leak proof, so it must work on every platform
+// where the immutable tests run; where neither fd directory exists
+// the leak proof is unavailable and the calling test skips with the
+// reason. The names are read raw: on macOS the devfs fd directory
+// fails os.ReadDir's stat probe (fstatat EBADF) while a plain
+// readdir enumeration works. The absolute count (including the dot
+// entries) is irrelevant because the assertion compares two
+// measurement points.
 func countProcessFds(t *testing.T) int {
 	t.Helper()
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		t.Fatalf("read /proc/self/fd: %v", err)
+	path := "/proc/self/fd"
+	if _, err := os.Stat(path); err != nil {
+		path = "/dev/fd"
 	}
-	return len(entries)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Skipf("open-fd leak proof unavailable on this platform (no /proc/self/fd or /dev/fd): %v", err)
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(0)
+	if err != nil {
+		t.Skipf("open-fd leak proof unavailable on this platform: %v", err)
+	}
+	return len(names)
 }
 
 // writeFile writes one raw artifact of the given byte length.

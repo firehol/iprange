@@ -40,6 +40,7 @@ func TestPublicValidateCancellation(t *testing.T) {
 // cleanly (through the isolated worker on linux/amd64), and the
 // released reader slot is claimable again.
 func TestPublicValidateLiveCleanSweep(t *testing.T) {
+	requireLiveCreation(t)
 	installWorkerForTest(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
 	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, nil)
@@ -118,6 +119,7 @@ func TestPublicValidateLiveCleanSweep(t *testing.T) {
 // (page_count * page size equals the current reader's committed
 // length) and leaves no findings.
 func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
+	requireLiveCreation(t)
 	installWorkerForTest(t)
 	type pair struct {
 		main string

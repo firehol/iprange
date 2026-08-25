@@ -116,6 +116,7 @@ func TestValidateImmutableDeclaredPageRefusesCodeIO(t *testing.T) {
 }
 
 func TestValidateLiveDeclaredPageRefusesCodeIO(t *testing.T) {
+	liveGate(t)
 	main := createLiveValidationPair(t, 1)
 	t.Cleanup(func() { _ = mapping.SetSessionUnreadablePages(nil) })
 	w := openLiveValidationWriter(t, main)

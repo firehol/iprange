@@ -15,6 +15,7 @@ import (
 // membership, and structured fixtures, then runs the standard warm
 // zero-allocation probes over each published output.
 func TestSnapshotOutputWarmLookupsZeroAllocation(t *testing.T) {
+	requirePublicationSecurity(t)
 	for _, fixtureName := range []string{"direct-ipv4.iprdb", "membership-ipv4.iprdb", "structured-ipv4.iprdb"} {
 		t.Run(fixtureName, func(t *testing.T) {
 			destination := snapshotDest(t, fixtureName+".zeroalloc")

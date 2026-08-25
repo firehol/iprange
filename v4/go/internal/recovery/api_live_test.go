@@ -32,6 +32,7 @@ func apiLiveTestBudget() *RecoveryBudget {
 // retryable cleanup guard over the retained half-released source, and
 // the retried cleanup completes the release.
 func TestOpenProblemLiveRetainsClaimedUnwindGuard(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	inspection, err := inspect(t, main, RecoveryInspectionLive)
 	if err != nil {
@@ -80,6 +81,7 @@ func TestOpenProblemLiveRetainsClaimedUnwindGuard(t *testing.T) {
 // live pair and recovers the newest candidate into a fresh published
 // output with the empty direct ranges preserved.
 func TestRecoverLivePublishesTheNewestCandidate(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	output := filepath.Join(filepath.Dir(main), "output.v4")
 	inspection, err := inspect(t, main, RecoveryInspectionLive)
@@ -112,6 +114,7 @@ func TestRecoverLivePublishesTheNewestCandidate(t *testing.T) {
 // refuses every candidate that is not the proven newest before any
 // path access, with the attempt removed and no private residue.
 func TestRecoverLiveRefusesANonNewestCandidate(t *testing.T) {
+	liveGate(t)
 	main := createLiveRecoveryPair(t)
 	output := filepath.Join(filepath.Dir(main), "output.v4")
 	inspection, err := inspect(t, main, RecoveryInspectionLive)

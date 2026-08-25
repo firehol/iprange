@@ -36,6 +36,7 @@ func lifecycleCode(err error) ErrorCode {
 func exchangeAvailable() bool { return mapping.ExchangeAvailable() }
 
 func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	tag, err := NewValueTag([]byte("asn"))
@@ -139,6 +140,7 @@ func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
 }
 
 func TestPublicLifecycleCancellation(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	cancelled := NewCancellationToken()
@@ -182,6 +184,7 @@ func TestPublicLifecycleCancellation(t *testing.T) {
 // immutable reader then refuses the live pair, and the live reader
 // serves the unchanged generation.
 func TestPublicImmutableMainIsInitializedExplicitly(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	tag, err := NewValueTag([]byte("asn"))
@@ -262,6 +265,7 @@ func TestPublicImmutableMainIsInitializedExplicitly(t *testing.T) {
 // initialize refusal on a ready pair leaves it untouched (Rust
 // tests/live_transitions.rs::initialization_never_repairs_existing_coordination).
 func TestPublicInitializationNeverRepairsExistingCoordination(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	tag, err := NewValueTag([]byte("asn"))
@@ -291,6 +295,7 @@ func TestPublicInitializationNeverRepairsExistingCoordination(t *testing.T) {
 // tests/live_transitions.rs::reset_replaces_corrupt_coordination_without_changing_the_main).
 // The rollback-safe exchange is linux/apple only.
 func TestPublicResetReplacesCorruptCoordinationWithoutChangingTheMain(t *testing.T) {
+	requireLiveCreation(t)
 	if !exchangeAvailable() {
 		t.Skip("rollback-safe exchange is linux/apple only")
 	}
@@ -375,6 +380,7 @@ func TestPublicResetReplacesCorruptCoordinationWithoutChangingTheMain(t *testing
 // previous sidecar under rollback, and leaves a readable live pair
 // (Rust tests/live_transitions.rs::discarding_reset_reports_policy_and_cannot_roll_back_after_installation).
 func TestPublicDiscardingResetReportsPolicyAndCannotRollBackAfterInstallation(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	tag, err := NewValueTag([]byte("asn"))
@@ -439,6 +445,7 @@ func TestPublicDiscardingResetReportsPolicyAndCannotRollBackAfterInstallation(t 
 // still serves generation 1 (Rust
 // tests/live_transitions.rs::cancelled_transition_leaves_an_immutable_main_unchanged).
 func TestPublicCancelledTransitionLeavesAnImmutableMainUnchanged(t *testing.T) {
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	tag, err := NewValueTag([]byte("asn"))

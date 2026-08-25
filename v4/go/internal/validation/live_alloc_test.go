@@ -22,6 +22,7 @@ import (
 )
 
 func TestValidateLiveSweepAllocationPin(t *testing.T) {
+	liveGate(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
 	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil); err != nil {
 		t.Fatal(err)

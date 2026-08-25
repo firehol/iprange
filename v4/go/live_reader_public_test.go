@@ -67,6 +67,7 @@ func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 }
 
 func TestPublicOpenLiveReaderRoundTrip(t *testing.T) {
+	requireLiveCreation(t)
 	main, created := createLivePublicPair(t, 2)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
@@ -203,6 +204,7 @@ func TestPublicOpenLiveReaderRoundTrip(t *testing.T) {
 }
 
 func TestPublicLiveReaderPinsBlockCloseAndReadPinnedMembership(t *testing.T) {
+	requireLiveCreation(t)
 	main := createLiveMembershipPair(t, 2)
 	r, err := OpenLiveReader(main, nil)
 	if err != nil {
@@ -250,6 +252,7 @@ func TestPublicLiveReaderPinsBlockCloseAndReadPinnedMembership(t *testing.T) {
 }
 
 func TestPublicLiveReaderRetryClose(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	r, err := OpenLiveReader(main, nil)
 	if err != nil {
@@ -293,6 +296,7 @@ func TestPublicLiveReaderRetryClose(t *testing.T) {
 }
 
 func TestPublicLiveReaderCancelledOpenLeavesNoResidue(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	cancellation := NewCancellationToken()
 	cancellation.Cancel()
@@ -313,6 +317,7 @@ func TestPublicLiveReaderCancelledOpenLeavesNoResidue(t *testing.T) {
 // the live facade (Rust LiveReader::direct_cursor_v4/v6) plus the
 // wrong-kind refusals of the membership and enrichment surfaces.
 func TestPublicLiveReaderCursorSurfaceDirect(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
@@ -410,6 +415,7 @@ func TestPublicLiveReaderCursorSurfaceDirect(t *testing.T) {
 // named-feed cursors plus the membership query on the live facade (Rust
 // LiveReader::feed_cursor, feed_range_cursor_v4/v6, membership_query).
 func TestPublicLiveReaderCursorSurfaceMembership(t *testing.T) {
+	requireLiveCreation(t)
 	main := createLiveMembershipPair(t, 2)
 	r, err := OpenLiveReader(main, nil)
 	if err != nil {
@@ -512,6 +518,7 @@ func TestPublicLiveReaderCursorSurfaceMembership(t *testing.T) {
 // (Close reports HandleBusy while it is open), and releases the pin at
 // cursor Close.
 func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
+	requireLiveCreation(t)
 	// A structured live pair arrives through conversion: the live
 	// writer is direct-only, so the enrichment content is written by
 	// the immutable writer and converted by InitializeLive.
@@ -604,6 +611,7 @@ func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
 // HandleBusy while pins exist or completes the close exactly once, and
 // the internal reader is never touched concurrently by Pin and Close.
 func TestPublicLiveReaderPinCloseRace(t *testing.T) {
+	requireLiveCreation(t)
 	main, _ := createLivePublicPair(t, 2)
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
