@@ -352,7 +352,11 @@ var (
 	procRtlNtStatusToDosError = syscall.NewLazyDLL("ntdll.dll").NewProc("RtlNtStatusToDosError")
 )
 
-const fileRenameInformationEx = 22
+// fileRenameInformationEx is the NT FILE_INFORMATION_CLASS of the
+// extended rename (windows-sys Wdk::Storage::FileSystem
+// FileRenameInformationEx = 65; 22 would be FileStreamInformation and
+// NtSetInformationFile refuses it with STATUS_INVALID_INFO_CLASS).
+const fileRenameInformationEx = 65
 
 // UnlinkExact removes one name only when it still names the expected
 // identity, using the POSIX-semantics disposition so an open handle
