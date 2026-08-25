@@ -40,13 +40,7 @@ func scanMembershipBlob(m *mapping.Mapping, meta format.Meta, root uint32, wordC
 		}
 		return false, nil
 	}
-	var scanner blobScanner
-	scanner.m = m
-	scanner.meta = meta
-	scanner.pages = pages
-	scanner.check = check
-	scanner.rep = rep
-	scanner.consume = consume
+	scanner := &blobScanner{m: m, meta: meta, pages: pages, check: check, rep: rep, consume: consume}
 	var path [format.MaxTreeLevel + 1]uint32
 	result, err := scanner.node(root, nil, 0, length, &path, 0)
 	if err != nil || !result.ok {

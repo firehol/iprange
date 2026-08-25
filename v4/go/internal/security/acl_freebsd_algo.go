@@ -144,7 +144,8 @@ func fbsdStrip(acl *fbsdACL, brand fbsdACLBrand, out *fbsdACL) {
 // libc acl_strip_np: acl_calc_mask runs over the already-stripped ACL,
 // so only the surviving group-class entries (the GROUP_OBJ entry)
 // contribute, and the mask is appended as the last entry like the libc
-// append.
+// append. out must not alias acl (the base entries are copied before
+// the mask recalc reads them).
 func fbsdPOSIXStrip(acl *fbsdACL, out *fbsdACL) {
 	out.MaxCnt = fbsdMaxEntries
 	out.Cnt = 0

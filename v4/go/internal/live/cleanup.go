@@ -1,6 +1,6 @@
 // Exact cleanup facts for live-lifecycle artifacts (Rust
 // live_cleanup.rs POSIX subset). Windows retires artifacts through the
-// publication gc machinery, which is out of the M4 sidecar scope; the
+// publication gc machinery, which is out of the Go sidecar scope; the
 // Go POSIX path removes the exact inode and reports residue facts.
 
 package live

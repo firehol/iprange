@@ -290,10 +290,10 @@ func TestRecoverWithWorkerRealBinaryDeclaredPageRefuses(t *testing.T) {
 }
 
 // TestRecoverWithWorkerInvalidBudgetRefusesBeforeArtifacts pins the
-// Rust recover() first-statement budget pre-check (M4 close gate,
-// parity P1 regression): a content-invalid budget refuses with the
-// early failure before any control, spawn, or destination artifact
-// exists, so no .iprange-publish-* attempt survives the refusal. No
+// Rust recover() first-statement budget pre-check: a content-invalid
+// budget refuses with the early failure before any control, spawn, or
+// destination artifact exists, so no .iprange-publish-* attempt
+// survives the refusal. No
 // double is installed: the refusal must fire before any spawn.
 func TestRecoverWithWorkerInvalidBudgetRefusesBeforeArtifacts(t *testing.T) {
 	source, candidate, _ := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))

@@ -34,11 +34,6 @@ func apiTestBudget() *RecoveryBudget {
 // reports exactly one I/O-unreadable envelope.
 func apiTestSource(t *testing.T, path string) {
 	t.Helper()
-	// The fixture creates its file directly and builds through the
-	// over-file constructor (Rust new_owned_with_extent over the
-	// caller-created file); the path-based Go constructor takes the
-	// exclusive lifetime lock, which is absent on freebsd, while the
-	// production recovery surface builds over-file everywhere.
 	builder := buildFixtureWriter(t, path, writer.OutputSpec{
 		AddressFamily:  format.AddressFamilyIPv4,
 		ValueKind:      format.ValueKindDirect,

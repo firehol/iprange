@@ -52,10 +52,10 @@ func validateBitmap(ctx *context, root uint32, limit uint64, kind bitmap.Kind) (
 	if err != nil {
 		return 0, err
 	}
-	if result == nil {
+	if !result.ok {
 		return 0, nil
 	}
-	return result.setBits, nil
+	return result.result.setBits, nil
 }
 
 // bitmapNodeResult mirrors Rust NodeResult: the counted set bits and
@@ -66,34 +66,42 @@ type bitmapNodeResult struct {
 	hasCandidate bool
 }
 
+// bitmapNodeOption is one optional node result passed by value (the
+// Rust Result<Option<NodeResult>> peer): the ok flag carries the None
+// separation, so the walk never forms a per-node pointer.
+type bitmapNodeOption struct {
+	result bitmapNodeResult
+	ok     bool
+}
+
 // validateBitmapNode visits one bitmap node (Rust validate_node: the
 // path slot, the graph claim, the classified header, and the
 // leaf/branch split).
-func validateBitmapNode(ctx *context, pageNumber uint32, expectedLevel uint16, base, limit uint64, kind bitmap.Kind, path *[bitmap.MaxLevel + 1]uint32, depth int) (*bitmapNodeResult, uint16, error) {
+func validateBitmapNode(ctx *context, pageNumber uint32, expectedLevel uint16, base, limit uint64, kind bitmap.Kind, path *[bitmap.MaxLevel + 1]uint32, depth int) (bitmapNodeOption, uint16, error) {
 	if depth >= len(path) {
 		pageCopy := pageNumber
 		if err := ctx.emit(ReasonTreeLevelInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
-			return nil, 0, err
+			return bitmapNodeOption{}, 0, err
 		}
-		return nil, 0, nil
+		return bitmapNodeOption{}, 0, nil
 	}
 	path[depth] = pageNumber
 	page, err := ctx.readGraphPage(pageNumber, bitmapObject(kind), path[:depth])
 	if err != nil || page == nil {
-		return nil, 0, err
+		return bitmapNodeOption{}, 0, err
 	}
 	header, problem := bitmap.CheckedHeader(page, ctx.meta.TxnID, kind, &expectedLevel)
 	if problem != bitmap.HeaderProblemNone {
 		pageCopy := pageNumber
 		if err := ctx.emit(bitmapHeaderProblemReason(problem), bitmapObject(kind), &pageCopy, nil, nil); err != nil {
-			return nil, 0, err
+			return bitmapNodeOption{}, 0, err
 		}
-		return nil, 0, nil
+		return bitmapNodeOption{}, 0, nil
 	}
 	if !bitmap.ReservedZero(page, header.Level) {
 		pageCopy := pageNumber
 		if err := ctx.emit(ReasonPageReservedNonzero, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
-			return nil, 0, err
+			return bitmapNodeOption{}, 0, err
 		}
 	}
 	if header.Level == 0 {
@@ -123,29 +131,28 @@ func bitmapHeaderProblemReason(problem bitmap.HeaderProblem) ValidationReason {
 // validate_leaf): every out-of-range bit is the BitmapSummaryInvalid
 // class, the nonzero-word count must equal the item count, and the
 // free kind marks every set bit in the allocation partition.
-func validateBitmapLeaf(ctx *context, pageNumber uint32, page []byte, base, limit uint64, kind bitmap.Kind, header bitmap.Header) (*bitmapNodeResult, error) {
+func validateBitmapLeaf(ctx *context, pageNumber uint32, page []byte, base, limit uint64, kind bitmap.Kind, header bitmap.Header) (bitmapNodeOption, error) {
 	totals := bitmapLeafTotals{}
 	for index := 0; index < bitmap.LeafWords; index++ {
 		word, err := bitmap.LeafWord(page, index)
 		if err != nil {
-			return nil, formatError(err)
+			return bitmapNodeOption{}, formatError(err)
 		}
 		wordBase, valid, validMask, err := validateBitmapWord(ctx, pageNumber, base, limit, kind, index, word)
 		if err != nil {
-			return nil, err
+			return bitmapNodeOption{}, err
 		}
 		if err := totals.add(ctx, wordBase, word, valid, validMask, kind); err != nil {
-			return nil, err
+			return bitmapNodeOption{}, err
 		}
 	}
 	if totals.nonzeroWords != uint64(header.ItemCount) {
 		pageCopy := pageNumber
 		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
-			return nil, err
+			return bitmapNodeOption{}, err
 		}
 	}
-	result := totals.result()
-	return result, nil
+	return bitmapNodeOption{result: totals.result(), ok: true}, nil
 }
 
 // bitmapLeafTotals mirrors Rust LeafTotals.
@@ -175,8 +182,8 @@ func (t *bitmapLeafTotals) add(ctx *context, wordBase uint64, word, valid, valid
 	return nil
 }
 
-func (t *bitmapLeafTotals) result() *bitmapNodeResult {
-	return &bitmapNodeResult{setBits: t.setBits, hasOne: t.setBits != 0, hasCandidate: t.hasCandidate}
+func (t *bitmapLeafTotals) result() bitmapNodeResult {
+	return bitmapNodeResult{setBits: t.setBits, hasOne: t.setBits != 0, hasCandidate: t.hasCandidate}
 }
 
 // validateBitmapWord validates one 64-bit word against the limit window
@@ -250,52 +257,52 @@ func markFreeBits(ctx *context, wordBase uint64, w uint64) error {
 // count, every present child's summary bit must equal the expected
 // contribution of its subtree, and absent children of a non-free kind
 // still contribute their candidate span.
-func validateBitmapBranch(ctx *context, pageNumber uint32, page []byte, base, limit uint64, kind bitmap.Kind, header bitmap.Header, path *[bitmap.MaxLevel + 1]uint32, depth int) (*bitmapNodeResult, error) {
+func validateBitmapBranch(ctx *context, pageNumber uint32, page []byte, base, limit uint64, kind bitmap.Kind, header bitmap.Header, path *[bitmap.MaxLevel + 1]uint32, depth int) (bitmapNodeOption, error) {
 	childSpan, err := bitmap.Coverage(header.Level - 1)
 	if err != nil {
-		return nil, formatError(err)
+		return bitmapNodeOption{}, formatError(err)
 	}
 	totals := bitmapBranchTotals{}
 	for index := 0; index < bitmap.BranchChildren; index++ {
 		child, err := bitmap.BranchChild(page, index)
 		if err != nil {
-			return nil, formatError(err)
+			return bitmapNodeOption{}, formatError(err)
 		}
 		if child != 0 {
 			totals.childCount++
 		}
-		var result *bitmapNodeResult
+		var result bitmapNodeResult
 		if child == 0 {
 			childBase, err := bitmapChildBase(base, childSpan, index)
 			if err != nil {
-				return nil, err
+				return bitmapNodeOption{}, err
 			}
 			result = absentBitmapResult(childBase, childSpan, limit, kind)
 		} else {
 			childBase, err := bitmapChildBase(base, childSpan, index)
 			if err != nil {
-				return nil, err
+				return bitmapNodeOption{}, err
 			}
-			result, _, err = validateBitmapNode(ctx, child, header.Level-1, childBase, limit, kind, path, depth+1)
+			option, _, err := validateBitmapNode(ctx, child, header.Level-1, childBase, limit, kind, path, depth+1)
 			if err != nil {
-				return nil, err
+				return bitmapNodeOption{}, err
 			}
-			if result == nil {
+			if !option.ok {
 				continue
 			}
+			result = option.result
 		}
 		if err := totals.add(ctx, pageNumber, page, index, kind, result); err != nil {
-			return nil, err
+			return bitmapNodeOption{}, err
 		}
 	}
 	if totals.childCount != uint64(header.ItemCount) {
 		pageCopy := pageNumber
 		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
-			return nil, err
+			return bitmapNodeOption{}, err
 		}
 	}
-	result := totals.result()
-	return result, nil
+	return bitmapNodeOption{result: totals.result(), ok: true}, nil
 }
 
 // bitmapBranchTotals mirrors Rust BranchTotals.
@@ -306,7 +313,7 @@ type bitmapBranchTotals struct {
 	hasCandidate bool
 }
 
-func (t *bitmapBranchTotals) add(ctx *context, pageNumber uint32, page []byte, index int, kind bitmap.Kind, result *bitmapNodeResult) error {
+func (t *bitmapBranchTotals) add(ctx *context, pageNumber uint32, page []byte, index int, kind bitmap.Kind, result bitmapNodeResult) error {
 	expected := result.hasOne
 	if kind != bitmap.KindFree {
 		expected = result.hasCandidate
@@ -330,8 +337,8 @@ func (t *bitmapBranchTotals) add(ctx *context, pageNumber uint32, page []byte, i
 	return nil
 }
 
-func (t *bitmapBranchTotals) result() *bitmapNodeResult {
-	return &bitmapNodeResult{setBits: t.setBits, hasOne: t.hasOne, hasCandidate: t.hasCandidate}
+func (t *bitmapBranchTotals) result() bitmapNodeResult {
+	return bitmapNodeResult{setBits: t.setBits, hasOne: t.hasOne, hasCandidate: t.hasCandidate}
 }
 
 // bitmapChildBase computes the base bit of one child span (Rust
@@ -350,7 +357,7 @@ func bitmapChildBase(base, span uint64, index int) (uint64, error) {
 
 // absentBitmapResult mirrors Rust absent_result: an absent child of a
 // non-free kind still contributes its candidate span.
-func absentBitmapResult(base, span, limit uint64, kind bitmap.Kind) *bitmapNodeResult {
+func absentBitmapResult(base, span, limit uint64, kind bitmap.Kind) bitmapNodeResult {
 	end := base + span
 	if end < base || end > limit {
 		end = limit
@@ -364,7 +371,7 @@ func absentBitmapResult(base, span, limit uint64, kind bitmap.Kind) *bitmapNodeR
 		}
 		candidate = low < end
 	}
-	return &bitmapNodeResult{setBits: 0, hasOne: false, hasCandidate: candidate}
+	return bitmapNodeResult{setBits: 0, hasOne: false, hasCandidate: candidate}
 }
 
 // validateFreeBitmap runs the free bitmap validator over the whole

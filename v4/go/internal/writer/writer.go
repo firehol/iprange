@@ -109,9 +109,10 @@ func (c *Core) FileIdentity() (device uint64, inode uint64, err error) {
 // costs VA and never becomes writable at open. The tail itself is trimmed
 // by TrimCommittedTail and the path identity is re-verified after the
 // remap, mirroring Rust live_writer.open_locked's terminal verify_pair
-// (the sidecar coordination of open_locked arrives with the M4 sidecar
-// milestone; until then the mapping owner's exclusive lifetime lock
-// substitutes for the sidecar writer claim, a recorded chunk-1 decision).
+// (the sidecar coordination of open_locked is not implemented in the
+// Go live surface; the mapping owner's exclusive lifetime lock
+// substitutes for the sidecar writer claim, a recorded SOW-0025
+// decision).
 // check, when non-nil, runs under the lifetime lock exactly like the
 // reader's namespace hook and arrives before the sidecar checks of M4. On
 // failure the lock and descriptor are released.
