@@ -18,6 +18,15 @@ import (
 // slice; callers fail closed by tearing it down (Munmap) and reporting the
 // error, never by restoring the old view.
 func remapPages(f *os.File, old []byte, oldSize, newSize uint64, prot int) ([]byte, error) {
+	// The Rust authority unmaps before every extent change, so resize
+	// callers pass nil here and the fresh map path applies.
+	if len(old) == 0 {
+		data, err := unix.Mmap(int(f.Fd()), 0, int(newSize), prot, unix.MAP_SHARED)
+		if err != nil {
+			return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
+		}
+		return data, nil
+	}
 	data, err := unix.Mremap(old, int(newSize), unix.MREMAP_MAYMOVE)
 	if err != nil {
 		return old, &format.Error{Code: format.CodeIO, Detail: "mremap: " + err.Error()}

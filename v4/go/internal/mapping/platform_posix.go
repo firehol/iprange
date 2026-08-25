@@ -88,6 +88,11 @@ func truncateFile(f *os.File, size int64) error {
 	return nil
 }
 
+// isMappedViewRetained reports whether a truncate failure is the
+// mapped-view retention class (Rust shrink_file_or_retain
+// mapped_view_prevents_shrink): the class exists on Windows only.
+func isMappedViewRetained(error) bool { return false }
+
 // dupFile duplicates the descriptor as one non-inheritable handle that
 // the Mapping owns independently (Rust File::try_clone; the Windows
 // arm uses DuplicateHandle with bInheritHandle=false).

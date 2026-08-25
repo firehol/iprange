@@ -43,11 +43,17 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	if m.size == newSize && physical == newSize {
 		return nil
 	}
-	// Nil the mapping before truncating so the file can shrink while the
-	// old extent is unmapped; a partial failure leaves the Mapping
+	// Rust shrink_or_retain drops the old map before changing the
+	// extent: unmap first, then ftruncate, then re-establish (unix
+	// keeps no old view for an mremap because the authority unmaps;
+	// Windows forbids truncation while a view is mapped with
+	// ERROR_USER_MAPPED_FILE). A partial failure leaves the Mapping
 	// fail-closed with size zero and every later access reports
-	// WrongState (Rust shrink_or_retain + replace_map).
-	old := m.data
+	// WrongState.
+	if err := munmapShared(m.data); err != nil {
+		m.size = 0
+		return err
+	}
 	m.data = nil
 	var truncateErr error
 	if physical != newSize {
@@ -59,9 +65,8 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	// proved the file still covers newSize even when the truncate failed,
 	// so the remap attempt is safe (Rust replaces the map regardless and
 	// combines the failure). On remap failure the Mapping is fail-closed:
-	// the old mapping is torn down and every later access reports
-	// WrongState.
-	data, err := remapPages(m.file, old, m.size, newSize, m.prot)
+	// every later access reports WrongState.
+	data, err := remapPages(m.file, nil, m.size, newSize, m.prot)
 	if err != nil {
 		if data != nil {
 			munmapShared(data)
@@ -78,9 +83,18 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	}
 	m.data = data
 	m.size = newSize
-	if truncateErr == nil {
-		m.physical = newSize
+	if truncateErr != nil {
+		// Rust shrink_file_or_retain retains the physical extent when
+		// another process's mapped view prevents truncation: the
+		// retention is a success, the file keeps its length, and the
+		// mapping covers the committed extent.
+		if isMappedViewRetained(truncateErr) {
+			work.MappingRemap(1)
+			return nil
+		}
+		return truncateErr
 	}
+	m.physical = newSize
 	work.MappingRemap(1)
-	return truncateErr
+	return nil
 }

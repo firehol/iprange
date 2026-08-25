@@ -18,8 +18,13 @@ import (
 // failure the old mapping is already unmapped and nil is returned; the
 // caller must not restore it.
 func remapPages(f *os.File, old []byte, oldSize, newSize uint64, prot int) ([]byte, error) {
-	if err := unix.Munmap(old); err != nil {
-		return old, &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+	// The Rust authority unmaps before every extent change; the old
+	// view is normally already released by the caller, and Munmap of
+	// an empty slice must not reach the kernel.
+	if len(old) > 0 {
+		if err := unix.Munmap(old); err != nil {
+			return old, &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+		}
 	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(newSize), prot, unix.MAP_SHARED)
 	if err != nil {

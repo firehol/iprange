@@ -351,7 +351,8 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 }
 
 // Grow extends the file and the mapping to newSize for a mutable mapping,
-// mirroring Rust mapping.rs resize: ftruncate first, then remap. It refuses
+// mirroring Rust mapping.rs resize: unmap first, ftruncate, then remap.
+// It refuses
 // read-only mappings, any request below the opened physical extent (a Grow
 // must never truncate the file; Remap covers sizes within the extent),
 // non-page-aligned or oversized requests, and growth on a closed mapping.
@@ -380,12 +381,22 @@ func (m *Mapping) Grow(newSize uint64) error {
 	if newSize < m.physical {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "grow below the opened physical extent"}
 	}
-	if err := truncateFile(m.file, int64(newSize)); err != nil {
+	// Rust mapping.rs resize drops the old map before set_len: unmap
+	// first, then truncate, then re-establish (Windows forbids
+	// truncation while a view is mapped with ERROR_USER_MAPPED_FILE,
+	// and the authority orders the unmap before every extent change).
+	// A truncate failure after the unmap leaves the Mapping
+	// fail-closed like Rust resize (map=None, len=0).
+	if err := munmapShared(m.data); err != nil {
+		m.size = 0
 		return err
 	}
-	old := m.data
 	m.data = nil
-	data, err := remapPages(m.file, old, m.size, newSize, m.prot)
+	if err := truncateFile(m.file, int64(newSize)); err != nil {
+		m.size = 0
+		return err
+	}
+	data, err := remapPages(m.file, nil, m.size, newSize, m.prot)
 	if err != nil {
 		// Fail closed exactly like Rust replace_map (map=None, len=0).
 		if data != nil {
