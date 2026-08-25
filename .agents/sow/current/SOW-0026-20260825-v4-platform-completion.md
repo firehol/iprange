@@ -54,6 +54,11 @@ Status: in-progress
   - Local battery green at every commit: plain, v4work, race+checkptr, vet, cross-builds linux/darwin/freebsd/windows amd64+arm64 and freebsd riscv64.
 Sub-state: milestone-5 transition started (user decision 2026-08-25). Work package A (layout-inspection allocation fix) and work package B (FreeBSD durable immutable publication, pure-Go ACL machine) are being implemented now; the remaining items (Windows live/publication surface, authorized recovery scratch + external sort, Rust XNU-16K flush-shape pin) stay tracked below and become work packages in later rounds of this SOW.
 
+### Resolved user decisions (2026-08-25)
+
+- Windows surface scope: option A - pure-Go syscall surface (mirror the FreeBSD ACL-machine approach via x/sys/windows), stays within Decision 2A (no cgo). Recorded before the Windows work package starts.
+- Swarm gate timing: run the five-reviewer gate on the milestone-5 slice delivered so far (work packages A + B) NOW, before stacking the next packages on top; the same five reviewers continue for the SOW-0026 close.
+
 ## Requirements
 
 ### Purpose
