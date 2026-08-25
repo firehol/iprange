@@ -36,7 +36,7 @@ func securityNamespaceError(err error) error {
 	case format.CodeIO:
 		op, _, _ := strings.Cut(fe.Detail, ": ")
 		switch op {
-		case "apply creator-only mode", "remove inherited access ACL", "verify absent access ACL":
+		case "apply creator-only mode", "remove inherited access ACL", "verify absent access ACL", "read access ACL", "apply stripped access ACL":
 			return &live.NamespaceError{Kind: live.NamespaceIoAt, Op: op, Err: fe}
 		}
 		return &live.NamespaceError{Kind: live.NamespaceIo, Err: fe}

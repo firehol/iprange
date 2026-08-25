@@ -2,7 +2,7 @@ package live
 
 // Platform gate for the whole live package: every test in this package
 // builds or inspects live database pairs, and live creation needs the
-// creator-only security machine (linux-only in pure Go) plus the
+// creator-only security machine (linux/freebsd in pure Go) plus the
 // proven live coordination. On platforms where CreationSupported
 // refuses, the entire package is skipped honestly instead of failing
 // every fixture; on linux nothing changes. The v4work crash matrices

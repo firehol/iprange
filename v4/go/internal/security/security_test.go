@@ -73,7 +73,7 @@ func TestCommitmentKnownAnswer(t *testing.T) {
 // proof re-applies mode 0600.
 func TestSecureCreatorOnlyProvesTheArtifact(t *testing.T) {
 	if !CreatorOnlySupported() {
-		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+		t.Skip("the creator-only machine is linux/freebsd only in pure Go")
 	}
 	profile, err := Capture()
 	if err != nil {
@@ -113,7 +113,7 @@ func TestSecureCreatorOnlyProvesTheArtifact(t *testing.T) {
 // regular-file rule: a directory cannot prove the policy.
 func TestSecureCreatorOnlyRejectsANonRegularArtifact(t *testing.T) {
 	if !CreatorOnlySupported() {
-		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+		t.Skip("the creator-only machine is linux/freebsd only in pure Go")
 	}
 	profile, err := Capture()
 	if err != nil {
@@ -134,7 +134,7 @@ func TestSecureCreatorOnlyRejectsANonRegularArtifact(t *testing.T) {
 // rule: a second hard link fails the ownership proof.
 func TestMultiLinkArtifactFailsThePolicy(t *testing.T) {
 	if !CreatorOnlySupported() {
-		t.Skip("the creator-only xattr machine is linux-only in pure Go")
+		t.Skip("the creator-only machine is linux/freebsd only in pure Go")
 	}
 	profile, err := Capture()
 	if err != nil {

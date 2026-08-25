@@ -1,11 +1,12 @@
 package iprangedb
 
 // Platform gates for the public root-package test suite (SOW-0025
-// 4-12D): the pure-Go creator-only security machine is linux-only
-// (internal/security; the darwin filesec and other-OS libc ACL machines
-// would need cgo, which the port forbids), so live database creation
-// and every publication-producing offline operation refuse honestly
-// on the other platforms. Every suite test that creates or opens a
+// 4-12D and SOW-0026): the pure-Go creator-only security machine is
+// implemented on linux and freebsd (internal/security; the darwin
+// filesec and other-OS libc ACL machines would need cgo, which the
+// port forbids), so live database creation and every
+// publication-producing offline operation refuse honestly on the other
+// platforms. Every suite test that creates or opens a
 // live pair, or whose terminal publishes a destination artifact,
 // starts with the matching gate; the skip reason names the missing
 // capability. On linux both gates are no-ops and nothing skips.
@@ -35,11 +36,12 @@ func requireLiveCreation(t *testing.T) {
 // requirePublicationSecurity skips one test whose terminal publishes a
 // destination artifact (snapshot output, recovery output, replacement,
 // publish-set): the publication attempt applies the creator-only
-// security policy, which the pure-Go machine implements only on linux.
+// security policy, which the pure-Go machine implements on linux and
+// freebsd.
 func requirePublicationSecurity(t *testing.T) {
 	t.Helper()
 	if !security.CreatorOnlySupported() {
-		t.Skip("creator-only publication security is not available on this platform (pure-Go xattr machine is linux only)")
+		t.Skip("creator-only publication security is not available on this platform (pure-Go ACL machine is linux/freebsd only)")
 	}
 }
 

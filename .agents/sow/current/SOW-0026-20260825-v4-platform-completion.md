@@ -4,6 +4,17 @@
 
 Status: in-progress
 
+### Status (2026-08-25) - milestone-5 work packages A and B
+
+- Work package A (layout-inspection allocation fix) delivered and committed at `ff3435d`: `format.InspectLayout` returns the layout by value; the validation and recovery sweeps allocate nothing per page (alloc pins tree 2138->2057, blob 927->924, exactly the walk baselines). Full battery green.
+- Work package B (FreeBSD durable immutable publication, pure-Go ACL machine) implemented in `internal/security` on top of `ff3435d`:
+  - `acl_freebsd_algo.go`: ABI-exact kernel `struct acl`/`struct acl_entry` plus exact translations of libc `acl_strip_np`, `acl_is_trivial_np`, `acl_calc_mask`, and kernel `acl_nfs4_sync_mode_from_acl` / `acl_nfs4_trivial_from_mode_libc` (PSARC/2010/029 and canonical-six draft forms).
+  - `acl_freebsd_sys.go` (freebsd build tag): raw `__acl_get_fd`/`__acl_set_fd` syscalls (349/350), the libc `fpathconf(_PC_ACL_NFS4)` brand probe (ZFS NFSv4 vs POSIX.1e), libc `_posix1e_acl_sort` presort for the POSIX set arm, and the Rust error classes (get EOPNOTSUPP -> CodeDurabilityUnsupported, other get/set failures -> CodeIO with the Rust operation labels).
+  - `acl_freebsd_algo_test.go`: host-measured vectors (FreeBSD 14.1-RELEASE, ZFS acltype=nfsv4) for the PSARC forms of eight modes, the draft form of 0600, sync-mode round trips, triviality decisions, POSIX strip/mask-recalc/trivial, and the POSIX sort.
+  - `acl_freebsd_sys_test.go` (freebsd build tag): live kernel round trip - fresh 0600 file proves; a named-entry ACL fails the proof, strips to trivial, and proves again (NFSv4 arm); the POSIX arm pins the masked-ACL behavior; devfs reports the EOPNOTSUPP class.
+  - `CreatorOnlySupported()` flips true on freebsd; `acl_other.go` drops the freebsd stub; the platform gate skip texts and "linux-only" comments updated across security/live/publication/recovery; `destination_create_linux_test.go` became `destination_create_posix_test.go` (linux || freebsd); `securityNamespaceError` recognizes the freebsd CodeIO operation labels as IoAt.
+  - The freebsd live/writer package gates stay skipped by design: live creation needs the sidecar byte-range lock machine (`lock_refuse.go`, Rust authority has no FreeBSD lock machine) and writer fixtures create database files through `mapping.Create` (`mapping.CoordinationSupported` stays false) - the publication/recovery/validation suites are the newly green freebsd surface.
+  - Local battery green (plain, v4work, race+checkptr, vet, cross-builds linux/darwin/freebsd/windows amd64+arm64, freebsd riscv64). Host proof on the freebsd VM pending (next step).
 Sub-state: milestone-5 transition started (user decision 2026-08-25). Work package A (layout-inspection allocation fix) and work package B (FreeBSD durable immutable publication, pure-Go ACL machine) are being implemented now; the remaining items (Windows live/publication surface, authorized recovery scratch + external sort, Rust XNU-16K flush-shape pin) stay tracked below and become work packages in later rounds of this SOW.
 
 ## Requirements
