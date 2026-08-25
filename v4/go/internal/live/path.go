@@ -8,7 +8,6 @@ package live
 
 import (
 	"path/filepath"
-	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -41,11 +40,12 @@ func invalidCoordinationName(name string) bool {
 }
 
 // invalidCoordinationDetail reports the exact Rust rejection detail
-// (path.rs validate_posix_name: distinct reserved prefix and suffix
-// messages; the component-shape failures share the generic detail).
+// (path.rs validate_main_name: the platform name rules in
+// coordination_name_rule_posix.go / _windows.go; the reserved prefix
+// and suffix messages are common to both).
 func invalidCoordinationDetail(name string) string {
-	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
-		return "database file name is not one path component"
+	if detail := coordinationNameRule(name); detail != "" {
+		return detail
 	}
 	if format.AsciiFoldHasPrefix(name, format.ReservedBasenamePrefix) {
 		return "database file name uses the reserved .iprange- prefix"
