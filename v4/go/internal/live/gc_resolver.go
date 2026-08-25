@@ -48,7 +48,7 @@ func gcResolveEnvelope(directory *Directory, envelope *gcEnvelope, retainedSourc
 	var moveProblem *format.Error
 	if observed.state == HousekeepingMovePending {
 		if err := gcMovePayload(directory, envelope, retainedSource); err != nil {
-			moveProblem = err
+			moveProblem = gcProblemOf(err)
 		}
 		observed = gcObservePair(directory, envelope)
 	}
@@ -72,7 +72,7 @@ func gcResolveEnvelope(directory *Directory, envelope *gcEnvelope, retainedSourc
 // retained source handle the rename goes through the handle; without
 // one the payload is re-opened and its identity and creator-only
 // policy are re-proved first.
-func gcMovePayload(directory *Directory, envelope *gcEnvelope, retainedSource *os.File) *format.Error {
+func gcMovePayload(directory *Directory, envelope *gcEnvelope, retainedSource *os.File) error {
 	if retainedSource != nil {
 		if err := directory.RenameNoReplace(envelope.sourceName, retainedSource, envelope.inertName); err != nil {
 			return gcNamespaceProblem(err)

@@ -121,7 +121,7 @@ func gcInspectHousekeeping(dir *Directory, directoryIdentity LocalFileIdentity, 
 	}
 	envelope, openErr := gcOpen(dir, envelopeName, false)
 	if openErr != nil {
-		return gcHousekeepingCandidateEntry(directoryIdentity, kind, encoded, identity, &attempt, &ordinal, nil, openErr)
+		return gcHousekeepingCandidateEntry(directoryIdentity, kind, encoded, identity, &attempt, &ordinal, nil, gcProblemOf(openErr))
 	}
 	if envelope == nil {
 		return gcHousekeepingCandidateEntry(directoryIdentity, kind, encoded, identity, &attempt, &ordinal, nil,

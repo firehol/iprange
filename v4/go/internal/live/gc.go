@@ -98,7 +98,7 @@ type envelopeFailure struct {
 
 // gcResume resumes one abandoned retirement through its envelope (Rust
 // gc::resume): nil means no envelope exists.
-func gcResume(directory *Directory, expected gcResumeAuthority) (*gcRetirement, *format.Error) {
+func gcResume(directory *Directory, expected gcResumeAuthority) (*gcRetirement, error) {
 	envelopeName, err := gcEnvelopeName(expected.attemptID, expected.ordinal)
 	if err != nil {
 		return nil, gcNamespaceProblem(err)
@@ -129,7 +129,7 @@ func gcResume(directory *Directory, expected gcResumeAuthority) (*gcRetirement, 
 // selected envelope means cleanup owns the inode and the ordinary
 // operation must fail with CleanupInProgress; a mismatched envelope is
 // CleanupConflict; absence permits the normal operation record.
-func gcRequireSourceAvailable(directory *Directory, attemptID [16]byte, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole, sourceName string, identity FileIdentity) *format.Error {
+func gcRequireSourceAvailable(directory *Directory, attemptID [16]byte, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole, sourceName string, identity FileIdentity) error {
 	envelopeName, err := gcEnvelopeName(attemptID, ordinal)
 	if err != nil {
 		return gcNamespaceProblem(err)
@@ -157,7 +157,7 @@ func gcRequireSourceAvailable(directory *Directory, attemptID [16]byte, ordinal 
 // exact source (Rust gc::fresh_attempt): the source must be unclaimed
 // by any existing envelope, and both the envelope and inert names must
 // be absent for the drawn identity.
-func gcFreshAttempt(directory *Directory, sourceName string, identity FileIdentity, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole) ([16]byte, *format.Error) {
+func gcFreshAttempt(directory *Directory, sourceName string, identity FileIdentity, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole) ([16]byte, error) {
 	if err := gcRequireUnclaimedSource(directory, sourceName, identity, kind, directoryRole); err != nil {
 		return [16]byte{}, err
 	}
@@ -193,7 +193,7 @@ func gcFreshAttempt(directory *Directory, sourceName string, identity FileIdenti
 // claiming the exact source (Rust gc::require_unclaimed_source): zero
 // claims permits, one claim means cleanup in progress, and a duplicate
 // or conflicting claim is CleanupConflict.
-func gcRequireUnclaimedSource(directory *Directory, sourceName string, identity FileIdentity, kind ArtifactKind, directoryRole DirectoryRole) *format.Error {
+func gcRequireUnclaimedSource(directory *Directory, sourceName string, identity FileIdentity, kind ArtifactKind, directoryRole DirectoryRole) error {
 	exactClaims := 0
 	scanErr := directory.Scan(func(bytes []byte) error {
 		candidate := gcCandidateOf(bytes)
@@ -264,20 +264,20 @@ func gcLoadOrCreate(directory *Directory, authority *gcAuthority, envelopeName, 
 	}
 	if regular != nil {
 		if err := gcCheckpointEnvelope(directory, authority, envelopeName, regular.Identity, inertName, observe, observer); err != nil {
-			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: err}
+			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: gcProblemOf(err)}
 		}
 		envelope, err := gcLoad(directory, envelopeName, regular.File, regular.Identity, authority.kind, true)
 		if err != nil {
-			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: err}
+			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: gcProblemOf(err)}
 		}
 		if err := gcVerifyAuthority(directory, authority, envelope); err != nil {
-			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: err}
+			return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: gcProblemOf(err)}
 		}
 		return envelope, nil
 	}
 	envelope, createErr := gcCreate(directory, authority, envelopeName, inertName, observe, observer)
 	if createErr != nil {
-		return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: createErr}
+		return nil, &envelopeFailure{envelopeName: envelopeName, inertName: inertName, problem: gcProblemOf(createErr)}
 	}
 	return envelope, nil
 }
@@ -285,7 +285,7 @@ func gcLoadOrCreate(directory *Directory, authority *gcAuthority, envelopeName, 
 // gcCreate exclusively creates the envelope pair, encodes two
 // sequence-1 blocks, synchronizes the file and directory, and proves
 // the authority before any payload move (Rust gc::create).
-func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertName string, observe bool, observer func(*HousekeepingArtifact) error) (*gcEnvelope, *format.Error) {
+func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertName string, observe bool, observer func(*HousekeepingArtifact) error) (*gcEnvelope, error) {
 	if err := gcVerifySource(directory, authority); err != nil {
 		return nil, err
 	}
@@ -393,7 +393,7 @@ func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertN
 // gcCheckpointEnvelope streams the pending artifact to the observer
 // (Rust gc::checkpoint_envelope): the artifact is visible only when
 // observation is enabled.
-func gcCheckpointEnvelope(directory *Directory, authority *gcAuthority, envelopeName string, envelopeIdentity FileIdentity, inertName string, enabled bool, observer func(*HousekeepingArtifact) error) *format.Error {
+func gcCheckpointEnvelope(directory *Directory, authority *gcAuthority, envelopeName string, envelopeIdentity FileIdentity, inertName string, enabled bool, observer func(*HousekeepingArtifact) error) error {
 	if !enabled {
 		return nil
 	}
@@ -406,7 +406,7 @@ func gcCheckpointEnvelope(directory *Directory, authority *gcAuthority, envelope
 
 // gcObserverProblem folds one observer failure (Rust the observer's
 // Result<(), Problem> is the direct problem).
-func gcObserverProblem(err error) *format.Error {
+func gcObserverProblem(err error) error {
 	var fe *format.Error
 	if errors.As(err, &fe) {
 		return fe
@@ -415,7 +415,7 @@ func gcObserverProblem(err error) *format.Error {
 }
 
 // gcOpen opens one envelope without a kind expectation (Rust gc::open).
-func gcOpen(directory *Directory, envelopeName string, writable bool) (*gcEnvelope, *format.Error) {
+func gcOpen(directory *Directory, envelopeName string, writable bool) (*gcEnvelope, error) {
 	regular, err := directory.OpenRegular(envelopeName, writable)
 	if err != nil {
 		return nil, gcNamespaceProblem(err)
@@ -428,7 +428,7 @@ func gcOpen(directory *Directory, envelopeName string, writable bool) (*gcEnvelo
 
 // gcOpenAs opens one envelope and requires it to decode under the
 // artifact kind (Rust gc::open_as).
-func gcOpenAs(directory *Directory, envelopeName string, writable bool, kind ArtifactKind) (*gcEnvelope, *format.Error) {
+func gcOpenAs(directory *Directory, envelopeName string, writable bool, kind ArtifactKind) (*gcEnvelope, error) {
 	regular, err := directory.OpenRegular(envelopeName, writable)
 	if err != nil {
 		return nil, gcNamespaceProblem(err)
@@ -443,7 +443,7 @@ func gcOpenAs(directory *Directory, envelopeName string, writable bool, kind Art
 // and identity must match the directory, the length must be exact, the
 // selected header must decode under the expected kind, and the record
 // must be coherent with the names.
-func gcLoad(directory *Directory, envelopeName string, file *os.File, identity FileIdentity, kind ArtifactKind, expectKind bool) (*gcEnvelope, *format.Error) {
+func gcLoad(directory *Directory, envelopeName string, file *os.File, identity FileIdentity, kind ArtifactKind, expectKind bool) (*gcEnvelope, error) {
 	if err := directory.VerifyName(envelopeName, identity); err != nil {
 		return nil, gcNamespaceProblem(err)
 	}
@@ -530,7 +530,7 @@ func gcHeaderOf(directory *Directory, authority *gcAuthority, inert string) *gcH
 
 // gcVerifyAuthority proves one loaded envelope carries exactly the
 // authority that retired the artifact (Rust gc::verify_authority).
-func gcVerifyAuthority(directory *Directory, authority *gcAuthority, envelope *gcEnvelope) *format.Error {
+func gcVerifyAuthority(directory *Directory, authority *gcAuthority, envelope *gcEnvelope) error {
 	header := envelope.header
 	encoding := uint16(gcBasenameEncodingValue())
 	if header.kind != authority.kind ||
@@ -556,7 +556,7 @@ func gcVerifyAuthority(directory *Directory, authority *gcAuthority, envelope *g
 // gcVerifyRecord proves one selected envelope coherent with its names
 // and directory identity and its creator-only access policy (Rust
 // gc::verify_record).
-func gcVerifyRecord(directory *Directory, envelopeFile *os.File, attemptID [16]byte, ordinal uint32, sourceEncoded []byte, sourceName, inertName string, header *gcHeader) *format.Error {
+func gcVerifyRecord(directory *Directory, envelopeFile *os.File, attemptID [16]byte, ordinal uint32, sourceEncoded []byte, sourceName, inertName string, header *gcHeader) error {
 	encoding := uint16(gcBasenameEncodingValue())
 	if header.basenameEncoding != encoding ||
 		header.attemptID != attemptID ||
@@ -584,7 +584,7 @@ func gcVerifyRecord(directory *Directory, envelopeFile *os.File, attemptID [16]b
 
 // gcVerifySource proves the retained source handle still names the
 // authority identity at its committed name (Rust gc::verify_source).
-func gcVerifySource(directory *Directory, authority *gcAuthority) *format.Error {
+func gcVerifySource(directory *Directory, authority *gcAuthority) error {
 	identity, err := RegularIdentity(authority.sourceFile, directory.Identity())
 	if err != nil {
 		return gcNamespaceProblem(err)

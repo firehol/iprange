@@ -77,6 +77,18 @@ func gcNamespaceProblem(err error) *format.Error {
 	panic("unreachable namespace error kind")
 }
 
+// gcProblemOf converts one machine error to the fixed problem value
+// (the gc machine produces only format errors; a foreign class folds
+// to the io class with its text, and the conversion sites never pass
+// nil).
+func gcProblemOf(err error) *format.Error {
+	var fe *format.Error
+	if errors.As(err, &fe) {
+		return fe
+	}
+	return gcSdkProblem(err)
+}
+
 // gcSdkProblem wraps one non-namespace failure in the io class (Rust
 // Problem::sdk; the Go sdk class carries the cause detail).
 func gcSdkProblem(err error) *format.Error {

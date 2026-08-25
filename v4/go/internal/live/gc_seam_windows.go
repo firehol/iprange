@@ -72,7 +72,7 @@ type GCResumeAuthority struct {
 
 // GCResume resumes one abandoned retirement through its envelope (Rust
 // gc::resume); nil means no envelope exists.
-func GCResume(directory *Directory, expected *GCResumeAuthority) (*GCRetirement, *format.Error) {
+func GCResume(directory *Directory, expected *GCResumeAuthority) (*GCRetirement, error) {
 	retired, err := gcResume(directory, gcResumeAuthority{
 		attemptID:     expected.AttemptID,
 		ordinal:       expected.Ordinal,
@@ -95,13 +95,13 @@ func GCResume(directory *Directory, expected *GCResumeAuthority) (*GCRetirement,
 // GCRequireSourceAvailable proves one retained source is not owned by
 // housekeeping (Rust gc::require_source_available; the requireAvailable
 // barrier of the live lifecycle uses the same machine).
-func GCRequireSourceAvailable(directory *Directory, attemptID [16]byte, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole, sourceName string, identity FileIdentity) *format.Error {
+func GCRequireSourceAvailable(directory *Directory, attemptID [16]byte, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole, sourceName string, identity FileIdentity) error {
 	return gcRequireSourceAvailable(directory, attemptID, ordinal, kind, directoryRole, sourceName, identity)
 }
 
 // GCFreshAttempt draws one collision-free attempt identity (Rust
 // gc::fresh_attempt).
-func GCFreshAttempt(directory *Directory, sourceName string, identity FileIdentity, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole) ([16]byte, *format.Error) {
+func GCFreshAttempt(directory *Directory, sourceName string, identity FileIdentity, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole) ([16]byte, error) {
 	return gcFreshAttempt(directory, sourceName, identity, ordinal, kind, directoryRole)
 }
 

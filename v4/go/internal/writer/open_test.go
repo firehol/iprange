@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -356,6 +357,14 @@ func TestOpenBudgetAndInfo(t *testing.T) {
 // rename on the second invocation lands exactly in the window between the
 // mapping owner's checks and the writer's post-remap VerifyIdentity.
 func TestOpenRefusesPathReplacedDuringOpen(t *testing.T) {
+	// The in-flight replacement cannot be staged on Windows: a file
+	// with an open section cannot be replaced (ACCESS_DENIED), and a
+	// POSIX-semantics rename would keep the name bound to the mapped
+	// inode until the section closes, so no swap is observable there.
+	// The path re-verification the test pins stays POSIX-covered.
+	if runtime.GOOS == "windows" {
+		t.Skip("the replaced-during-open swap cannot detach a mapped inode name on windows")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "replaced.iprdb")
 	raw, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
