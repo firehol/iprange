@@ -228,11 +228,21 @@ func readSourceHeader(file *os.File) (sidecarState, header, error) {
 		return 0, header{}, err
 	}
 	defer m.Close()
-	page, err := m.Page(0)
-	if err != nil {
+	// Rust live_sidecar.rs:491 read_source_header enters the
+	// Coordination probe around the header read.
+	var state sidecarState
+	var h header
+	if err := m.Probe(mapping.RoleCoordination, func() error {
+		page, err := m.Page(0)
+		if err != nil {
+			return err
+		}
+		state, h, err = readHeaderMapping(page)
+		return err
+	}); err != nil {
 		return 0, header{}, err
 	}
-	return readHeaderMapping(page)
+	return state, h, nil
 }
 
 // verifyPath re-checks the retained path identity (Rust
@@ -252,18 +262,22 @@ func (s *Sidecar) verifyHeader() error {
 	if m == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	page, err := m.Page(0)
-	if err != nil {
-		return err
-	}
-	state, h, err := readHeaderMapping(page)
-	if err != nil {
-		return err
-	}
-	if state != stateReady || h != s.header {
-		return &format.Error{Code: format.CodeFormatInvalid, Detail: "reader table header changed"}
-	}
-	return nil
+	// Rust Sidecar::verify_header reads through mapping_guard, which
+	// enters the Coordination probe for the guard lifetime.
+	return m.Probe(mapping.RoleCoordination, func() error {
+		page, err := m.Page(0)
+		if err != nil {
+			return err
+		}
+		state, h, err := readHeaderMapping(page)
+		if err != nil {
+			return err
+		}
+		if state != stateReady || h != s.header {
+			return &format.Error{Code: format.CodeFormatInvalid, Detail: "reader table header changed"}
+		}
+		return nil
+	})
 }
 
 // currentHeader reads the mapped header without comparing (Rust
@@ -273,11 +287,21 @@ func (s *Sidecar) currentHeader() (sidecarState, header, error) {
 	if m == nil {
 		return 0, header{}, &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	page, err := m.Page(0)
-	if err != nil {
+	// Rust Sidecar::current_header enters the Coordination probe
+	// through mapping_guard (live_sidecar.rs:475).
+	var state sidecarState
+	var h header
+	if err := m.Probe(mapping.RoleCoordination, func() error {
+		page, err := m.Page(0)
+		if err != nil {
+			return err
+		}
+		state, h, err = readHeaderMapping(page)
+		return err
+	}); err != nil {
 		return 0, header{}, err
 	}
-	return readHeaderMapping(page)
+	return state, h, nil
 }
 
 // lockGate takes the registration/publication gate (spec 15.2).
@@ -354,11 +378,16 @@ func (s *Sidecar) writeSlotOffset(offset uint64, txn uint64) error {
 	if m == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	bytes, err := m.View(offset, slotSize)
-	if err != nil {
-		return err
-	}
-	return writeSlot(bytes, txn)
+	// Rust claim_reader_inner writes the slot through mapping_guard
+	// (live_sidecar.rs:210 area): the Coordination probe covers the
+	// mapped slot bytes.
+	return m.Probe(mapping.RoleCoordination, func() error {
+		bytes, err := m.View(offset, slotSize)
+		if err != nil {
+			return err
+		}
+		return writeSlot(bytes, txn)
+	})
 }
 
 // clearReader zeroes the slot bytes (Rust Sidecar::clear_reader); the
@@ -372,12 +401,16 @@ func (s *Sidecar) clearReader(slot uint32) error {
 	if m == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	bytes, err := m.View(offset, slotSize)
-	if err != nil {
-		return err
-	}
-	clear(bytes)
-	return nil
+	// Rust Sidecar::clear_reader enters the Coordination probe through
+	// mapping_guard (live_sidecar.rs:221 area).
+	return m.Probe(mapping.RoleCoordination, func() error {
+		bytes, err := m.View(offset, slotSize)
+		if err != nil {
+			return err
+		}
+		clear(bytes)
+		return nil
+	})
 }
 
 // unlockReader releases the slot ownership lock (Rust
@@ -547,12 +580,17 @@ func (s *Sidecar) readActiveSlot(offset uint64) (uint64, bool, error) {
 	if m == nil {
 		return 0, false, &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	bytes, err := m.View(offset, slotSize)
-	if err != nil {
-		return 0, false, err
-	}
-	txn, err := activeTransaction(bytes)
-	if err != nil {
+	// Rust Sidecar::read_active_slot enters the Coordination probe
+	// through mapping_guard (live_sidecar.rs:440 area).
+	var txn uint64
+	if err := m.Probe(mapping.RoleCoordination, func() error {
+		bytes, err := m.View(offset, slotSize)
+		if err != nil {
+			return err
+		}
+		txn, err = activeTransaction(bytes)
+		return err
+	}); err != nil {
 		return 0, false, err
 	}
 	return txn, true, nil
@@ -565,14 +603,18 @@ func (s *Sidecar) clearStale(offset uint64) error {
 	if m == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "reader table mapping is unavailable"}
 	}
-	bytes, err := m.View(offset, slotSize)
-	if err != nil {
-		return err
-	}
-	if !slotIsClear(bytes) {
-		clear(bytes)
-	}
-	return nil
+	// Rust Sidecar::clear_stale enters the Coordination probe through
+	// mapping_guard (live_sidecar.rs:458); the slot lock stays outside.
+	return m.Probe(mapping.RoleCoordination, func() error {
+		bytes, err := m.View(offset, slotSize)
+		if err != nil {
+			return err
+		}
+		if !slotIsClear(bytes) {
+			clear(bytes)
+		}
+		return nil
+	})
 }
 
 // close unmaps the sidecar and closes the descriptor. It never unlocks

@@ -99,15 +99,37 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 		facts, artifact := attempt.DiscardFacts()
 		return failSource(problem(cause), report, &facts, artifact)
 	}
-	construction, constructionFailure := buildRecoveryKind(source.mapping(), meta, builder, effective, check, sink)
+	// Rust api.rs:234 enter_source: the source probe is armed before
+	// the machine build and dropped after it, so a real SIGBUS on any
+	// source page during the salvable scan lands in the worker fault
+	// record with the Source role (no hook in library processes: the
+	// Probe runs the build directly).
+	var construction *Construction
+	var constructionFailure *constructionFailure
+	probeErr := source.mapping().Probe(mapping.RoleSource, func() error {
+		construction, constructionFailure = buildRecoveryKind(source.mapping(), meta, builder, effective, check, sink)
+		return nil
+	})
+	if probeErr != nil {
+		return discarded(probeErr, RecoveryReport{})
+	}
 	if constructionFailure != nil {
 		return discarded(constructionFailure.cause, constructionFailure.report)
 	}
 	built := construction
 	// The final source check runs before the publication prepare (Rust
 	// api.rs finish: checkpoint, source probe, source.finish, then
-	// prepare).
-	end := source.finish(meta, check)
+	// prepare; the probe at api.rs:318 is armed across source.finish).
+	var end sourceEnd
+	finishProbeErr := source.mapping().Probe(mapping.RoleSource, func() error {
+		end = source.finish(meta, check)
+		return nil
+	})
+	if finishProbeErr != nil {
+		_ = built.finished.Close()
+		facts, artifact := attempt.DiscardFacts()
+		return failSource(problem(finishProbeErr), built.report, &facts, artifact)
+	}
 	if end.cause != nil {
 		_ = built.finished.Close()
 		facts, artifact := attempt.DiscardFacts()

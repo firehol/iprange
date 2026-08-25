@@ -6,9 +6,10 @@
 // coordination twin, and armed with state 2; every state transition
 // re-proves the exact custody facts at the exact physical steps. The
 // observed checkpoint variants are implemented here
-// (initialize/acquire/arm are thin wrappers over them); the Rust
-// worker enter_output probes stay recorded with the 4-10/4-11 worker
-// slices and are absent by design.
+// (initialize/acquire/arm are thin wrappers over them). The Rust
+// worker enter_output probes land here through the mapping Probe hook
+// (4-12A): they arm only when a worker session installed the hook, and
+// library processes run the mapping operations directly.
 
 package publication
 
@@ -148,14 +149,19 @@ func writeState1(d *reservationDraft) error {
 	if d.mapping == nil || d.header == nil {
 		return reservationHeaderInvariantError()
 	}
-	page, err := d.mapping.Page(0)
-	if err != nil {
-		return err
-	}
-	if err := d.header.encodeReservationHeader(page); err != nil {
-		return err
-	}
-	if err := d.mapping.FlushPage(0); err != nil {
+	// Rust write_state1 enters the Output probe around the mapping
+	// write (reservation_file.rs:319); the file sync and crash point
+	// stay outside like the Rust arms.
+	if err := d.mapping.Probe(mapping.RoleOutput, func() error {
+		page, err := d.mapping.Page(0)
+		if err != nil {
+			return err
+		}
+		if err := d.header.encodeReservationHeader(page); err != nil {
+			return err
+		}
+		return d.mapping.FlushPage(0)
+	}); err != nil {
 		return err
 	}
 	if err := live.SyncFile(d.file); err != nil {
@@ -173,20 +179,25 @@ func lockState1With(d *reservationDraft, output *preparedOutput, afterSelection 
 	if d.mapping == nil || d.header == nil || d.identity == nil {
 		return reservationHeaderInvariantError()
 	}
-	header := *d.header
-	if err := verifyDraftPrivate(d, output, header, 0); err != nil {
-		return err
-	}
-	d.state1Selected = true
-	if afterSelection != nil {
-		if err := afterSelection(*d.identity); err != nil {
-			return checkpointFailure(err)
+	// Rust lock_state1_with enters the Output probe for the whole
+	// machine step (reservation_file.rs:333): both state-1 proofs and
+	// the operation lock run inside the armed probe.
+	return d.mapping.Probe(mapping.RoleOutput, func() error {
+		header := *d.header
+		if err := verifyDraftPrivate(d, output, header, 0); err != nil {
+			return err
 		}
-	}
-	if err := live.LockFile(d.file, reservationOperationLock, live.LockExclusive); err != nil {
-		return err
-	}
-	return verifyDraftPrivate(d, output, header, 0)
+		d.state1Selected = true
+		if afterSelection != nil {
+			if err := afterSelection(*d.identity); err != nil {
+				return checkpointFailure(err)
+			}
+		}
+		if err := live.LockFile(d.file, reservationOperationLock, live.LockExclusive); err != nil {
+			return err
+		}
+		return verifyDraftPrivate(d, output, header, 0)
+	})
 }
 
 // checkpointFailure wraps one machine checkpoint problem in the
@@ -208,13 +219,18 @@ func verifyDraftPrivate(d *reservationDraft, output *preparedOutput, header rese
 	if d.mapping == nil || d.identity == nil {
 		return reservationHeaderInvariantError()
 	}
-	return verifyReservation(d.file, d.mapping, output, reservationExpected{
-		identity:            *d.identity,
-		privateName:         d.name,
-		header:              header,
-		block:               block,
-		reservationLocation: reservationLocationPrivate,
-		outputLocation:      outputLocationPrivate,
+	// The draft proof reads the reservation mapping; the Output probe
+	// covers it, so every caller (including lockState1With, where the
+	// probes nest) keeps the armed region while the mapping is read.
+	return d.mapping.Probe(mapping.RoleOutput, func() error {
+		return verifyReservation(d.file, d.mapping, output, reservationExpected{
+			identity:            *d.identity,
+			privateName:         d.name,
+			header:              header,
+			block:               block,
+			reservationLocation: reservationLocationPrivate,
+			outputLocation:      outputLocationPrivate,
+		})
 	})
 }
 

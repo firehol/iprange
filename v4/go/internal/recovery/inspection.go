@@ -356,7 +356,12 @@ func readClassified(file *os.File, check func() error) (classifiedMetas, error) 
 			return classifiedMetas{}, err
 		}
 		defer func() { _ = m.Close() }()
-		if err := classifyMapped(m, mappedBytes, check, &states, &has); err != nil {
+		// Rust recovery/inspection.rs:243 probe_source: the meta-pair
+		// classification sweep runs inside the armed Source probe of
+		// the bootstrap mapping.
+		if err := m.Probe(mapping.RoleSource, func() error {
+			return classifyMapped(m, mappedBytes, check, &states, &has)
+		}); err != nil {
 			return classifiedMetas{}, err
 		}
 	}

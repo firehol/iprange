@@ -686,21 +686,24 @@ func (b *OutputBuilder) Finish() error {
 		b.failed = true
 		return err
 	}
-	p0, err := b.mapping.Page(0)
-	if err != nil {
-		b.failed = true
-		return err
-	}
-	p1, err := b.mapping.Page(1)
-	if err != nil {
-		b.failed = true
-		return err
-	}
-	if err := b.meta.EncodeMapped(p0); err != nil {
-		b.failed = true
-		return err
-	}
-	if err := b.meta.EncodeMapped(p1); err != nil {
+	// Rust finish wraps the dual meta encode in with_output_protection
+	// (immutable_output.rs:711): the armed Output probe covers the
+	// write, while the resize, flush, and sync stay outside exactly
+	// like the Rust arms.
+	if err := b.mapping.Probe(mapping.RoleOutput, func() error {
+		p0, err := b.mapping.Page(0)
+		if err != nil {
+			return err
+		}
+		p1, err := b.mapping.Page(1)
+		if err != nil {
+			return err
+		}
+		if err := b.meta.EncodeMapped(p0); err != nil {
+			return err
+		}
+		return b.meta.EncodeMapped(p1)
+	}); err != nil {
 		b.failed = true
 		return err
 	}
@@ -718,19 +721,22 @@ func (b *OutputBuilder) Finish() error {
 }
 
 // sealPages verifies every data page is owned by the output transaction
-// and seals its CRC (Rust seal_pages).
+// and seals its CRC inside the armed Output probe (Rust seal_pages
+// with_output_protection).
 func (b *OutputBuilder) sealPages() error {
-	for pageNumber := uint32(2); uint64(pageNumber) < b.meta.PageCount; pageNumber++ {
-		if err := b.mapping.VisitPage(pageNumber, func(page []byte) error {
-			if !outputPageOwned(page, b.meta.TxnID) {
-				return corrupt("immutable output page ownership is invalid")
+	return b.mapping.Probe(mapping.RoleOutput, func() error {
+		for pageNumber := uint32(2); uint64(pageNumber) < b.meta.PageCount; pageNumber++ {
+			if err := b.mapping.VisitPage(pageNumber, func(page []byte) error {
+				if !outputPageOwned(page, b.meta.TxnID) {
+					return corrupt("immutable output page ownership is invalid")
+				}
+				return format.SealPageChecksum(page)
+			}); err != nil {
+				return err
 			}
-			return format.SealPageChecksum(page)
-		}); err != nil {
-			return err
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // outputPageOwned reports the magic and born-transaction ownership of one
@@ -757,15 +763,37 @@ func (b *OutputBuilder) Mapping() *mapping.Mapping { return b.mapping }
 // TargetTxn returns the output transaction (always 1).
 func (b *OutputBuilder) TargetTxn() uint64 { return b.meta.TxnID }
 
+// outputPage returns one output data page view (Rust with_output_protection
+// inside inspect_page/update_page/copy_page: the fetch runs under the
+// armed Output probe when a worker session is active, and directly
+// otherwise). The gate keeps the library writer path allocation-free:
+// the probe closure is only built when a session hook is installed.
+func (b *OutputBuilder) outputPage(pageNumber uint32) ([]byte, error) {
+	if !mapping.SessionProbeActive() {
+		return b.mapping.Page(pageNumber)
+	}
+	var page []byte
+	if err := b.mapping.Probe(mapping.RoleOutput, func() error {
+		var err error
+		page, err = b.mapping.Page(pageNumber)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
 // PageLimit returns the current page count.
 func (b *OutputBuilder) PageLimit() uint64 { return b.meta.PageCount }
 
-// Inspect returns one data page view (Rust inspect_page).
+// Inspect returns one data page view (Rust inspect_page: the fetch
+// runs inside the armed Output probe when a worker session is active,
+// and directly otherwise, so the library writer path never allocates).
 func (b *OutputBuilder) Inspect(pageNumber uint32) ([]byte, error) {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return nil, err
 	}
-	return b.mapping.Page(pageNumber)
+	return b.outputPage(pageNumber)
 }
 
 // Allocate reserves the next output page (Rust allocate = reserve_page).
@@ -790,14 +818,15 @@ func (b *OutputBuilder) reservePage() (uint32, error) {
 }
 
 // Update returns one data page view for mutation (Rust update_page +
-// require_output_owner). The output has no dirty chain, so the captured
-// tag is always zero; the caller mutates the page and then calls
-// RestoreDirty, which re-verifies the output ownership.
+// require_output_owner; the page fetch runs inside the armed Output
+// probe). The output has no dirty chain, so the captured tag is always
+// zero; the caller mutates the page and then calls RestoreDirty, which
+// re-verifies the output ownership.
 func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return nil, 0, err
 	}
-	page, err := b.mapping.Page(pageNumber)
+	page, err := b.outputPage(pageNumber)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -805,14 +834,14 @@ func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
 }
 
 // RestoreDirty re-verifies the output ownership after a successful
-// mutation or copy (Rust require_output_owner). The output has no dirty
-// chain, so the tag is never re-armed; the ownership check mirrors the
-// current Update epilogue.
+// mutation or copy (Rust require_output_owner inside the armed Output
+// probe). The output has no dirty chain, so the tag is never re-armed;
+// the ownership check mirrors the current Update epilogue.
 func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return err
 	}
-	page, err := b.mapping.Page(pageNumber)
+	page, err := b.outputPage(pageNumber)
 	if err != nil {
 		return err
 	}
@@ -825,8 +854,9 @@ func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
 // CopyPage returns the source and destination page views of one copy;
 // both views stay inside the mapping and the destination ownership is
 // re-checked through RestoreDirty after the caller copies (Rust
-// copy_page). The output has no dirty chain, so the destination tag is
-// always zero; work.PageCopied counts the copy.
+// copy_page; both page fetches run inside the armed Output probe). The
+// output has no dirty chain, so the destination tag is always zero;
+// work.PageCopied counts the copy.
 func (b *OutputBuilder) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	if err := requireOutputPage(source, b.meta.PageCount); err != nil {
 		return nil, nil, 0, err
@@ -834,11 +864,11 @@ func (b *OutputBuilder) CopyPage(source, destination uint32) ([]byte, []byte, ui
 	if err := requireOutputPage(destination, b.meta.PageCount); err != nil {
 		return nil, nil, 0, err
 	}
-	src, err := b.mapping.Page(source)
+	src, err := b.outputPage(source)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	dst, err := b.mapping.Page(destination)
+	dst, err := b.outputPage(destination)
 	if err != nil {
 		return nil, nil, 0, err
 	}

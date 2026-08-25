@@ -120,3 +120,9 @@ func (m *Mapping) SyncFile() error {
 
 // Close satisfies the common surface; unreachable on Windows in milestone 1.
 func (m *Mapping) Close() error { return nil }
+
+// Region refuses every region probe; unreachable on Windows in
+// milestone 1 (the Windows stub holds no descriptor or mapping bytes).
+func (m *Mapping) Region() (uintptr, uint64, error) {
+	return 0, 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "windows mapping owner not implemented"}
+}

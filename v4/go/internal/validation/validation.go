@@ -172,16 +172,22 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 		progress := NewProgress()
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
-	if err := ctx.reserveAllocatorPages(); err != nil {
-		progress := ctx.finish()
-		return nil, failureOf(sourceCloseFold(source, err), &progress)
-	}
-	if err := validateSelected(ctx); err != nil {
-		progress := ctx.finish()
-		return nil, failureOf(sourceCloseFold(source, err), &progress)
-	}
+	// Rust validation.rs:283 probe_source: the whole-source mapping is
+	// armed with the Source role for the reserve+selected sweep, so a
+	// real mapped fault lands in the worker fault record instead of
+	// chaining (no hook in library processes: the Probe runs the
+	// sweep directly).
+	scanErr := whole.Probe(mapping.RoleSource, func() error {
+		if err := ctx.reserveAllocatorPages(); err != nil {
+			return err
+		}
+		return validateSelected(ctx)
+	})
 	verification := source.Verify()
 	progress := ctx.finish()
+	if scanErr != nil {
+		return nil, failureOf(sourceCloseFold(source, scanErr), &progress)
+	}
 	if verification != nil {
 		return nil, failureOf(sourceCloseFold(source, verification), &progress)
 	}
@@ -255,11 +261,17 @@ func SweepSelected(file *os.File, meta format.Meta, budget *ValidationBudget, ch
 	if err != nil {
 		return ValidationProgress{}, err
 	}
-	if err := ctx.reserveAllocatorPages(); err != nil {
-		return ctx.finish(), err
-	}
-	if err := validateSelected(ctx); err != nil {
-		return ctx.finish(), err
+	// Rust validation.rs:130 probe_source (validate_offline arm): the
+	// sweep runs inside the armed Source probe of the whole-source
+	// mapping.
+	scanErr := whole.Probe(mapping.RoleSource, func() error {
+		if err := ctx.reserveAllocatorPages(); err != nil {
+			return err
+		}
+		return validateSelected(ctx)
+	})
+	if scanErr != nil {
+		return ctx.finish(), scanErr
 	}
 	return ctx.finish(), nil
 }

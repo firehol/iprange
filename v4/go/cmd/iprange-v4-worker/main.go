@@ -89,10 +89,18 @@ func run(args []string) int {
 		return exitProtocol
 	}
 	defer handler.Close()
-	// Rust worker.rs Context::enter: the worker session is active for
-	// the mode run. In Go the domain machines reach the worker solely
-	// through the check hook and the control handle, so the context is
-	// implicit and needs no thread-local.
+	// Rust worker.rs Context::enter (worker.rs:155-183): the worker
+	// session is active for the mode run. EnterSession publishes the
+	// control's ProbeRegion as the mapping session probe hook, so
+	// every domain-machine probe (validation sweeps, recovery source
+	// guards, output writes, sidecar ops) arms its region on this
+	// control; a real mapped fault inside an armed region becomes an
+	// owned fault record instead of chaining. The session context
+	// drops when the mode run returns, exactly like the Rust Context.
+	if err := worker.EnterSession(control); err != nil {
+		return exitProtocol
+	}
+	defer worker.LeaveSession()
 	opcode, ok := control.Opcode()
 	if !ok {
 		return exitProtocol
