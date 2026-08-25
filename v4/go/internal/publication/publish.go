@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Reservation-path publication of one finished immutable output (Rust
 // publication/workflow.rs create + publish): CreatePublishAttempt
 // creates and secures the private output (the fail-if-exists policy

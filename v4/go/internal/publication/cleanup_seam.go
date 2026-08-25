@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Exported discard seam for the isolated worker cleanup boundary (Rust
 // worker/cleanup.rs run_worker:14-27). The worker driver must run the
 // three-arm discard machine over wire-decoded attempt facts without

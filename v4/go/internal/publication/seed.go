@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Publication result seed (Rust publication/result.rs Seed + NameSlot).
 // The seed captures every portable fact of one prepared publication
 // attempt exactly once, before any namespace removal; cleanup and the

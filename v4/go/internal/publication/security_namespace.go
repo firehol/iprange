@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Creator-only security failures folded to the namespace classes
 // (Rust security functions return NamespaceError directly: IoAt for
 // the named operation failures, Io for the plain metadata class,

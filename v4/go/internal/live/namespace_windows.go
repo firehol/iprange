@@ -179,7 +179,7 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 	if err != nil {
 		return createdPrivate{}, cleanFailure(err)
 	}
-	f, err := dir.create(name, profile)
+	f, err := dir.CreateSecured(name, profile)
 	if err != nil {
 		return createdPrivate{}, cleanFailure(nsMap(err))
 	}

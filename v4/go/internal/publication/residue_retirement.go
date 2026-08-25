@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Platform-specific retirement of one retained coordination inode
 // (Rust publication/residue/retirement.rs): the unix arm unlinks the
 // exact inode and proves the retained link count, and the retry arm

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Shared ownership rules for private publication artifacts (Rust
 // publication/maintenance/common.rs): the exact-pattern scan in
 // constant memory, the stable-entry proof, the owned-open with the

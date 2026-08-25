@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Restart completion or removal of one exact fail-if-exists
 // publication (Rust publication/resolver.rs): the authority is
 // reconciled, the main output classified against the reservation

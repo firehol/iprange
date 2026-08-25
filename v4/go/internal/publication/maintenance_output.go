@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Portable private publication-output discovery and exact removal
 // (Rust publication/maintenance/output.rs): stable no-follow listing
 // with tuple and digest evidence when the content is a readable v4

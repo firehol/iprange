@@ -1,5 +1,3 @@
-//go:build !windows
-
 // One secured publication-output attempt (Rust output.rs SecuredOutput
 // / OutputAttempt). The attempt owns the destination, the private
 // output name, and the secured inode identity; the writer core builds

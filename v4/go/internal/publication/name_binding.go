@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Exact platform basename encoding and commitment (Rust
 // name_binding.rs). The commitment is SHA-256 over the fixed
 // IPR4NAME domain, the little-endian encoding tag, the little-endian
@@ -14,14 +12,9 @@ import (
 )
 
 // basenameEncoding is the platform basename encoding tag (Rust
-// BasenameEncoding).
+// BasenameEncoding); the platform values live in
+// name_binding_posix.go / name_binding_windows.go.
 type basenameEncoding uint16
-
-const (
-	// basenameEncodingPosixBytes is the unix raw-bytes encoding (Rust
-	// BasenameEncoding::PosixBytes = 1).
-	basenameEncodingPosixBytes basenameEncoding = 1
-)
 
 // nameDomain is the exact basename commitment domain (Rust
 // NAME_DOMAIN).
@@ -32,13 +25,10 @@ const nameDomain = "IPR4NAME"
 // the InvalidName class, every other failure is impossible in Go.
 func basenameCommitment(encoding basenameEncoding, bytes []byte) ([32]byte, error) {
 	if len(bytes) == 0 {
-		return [32]byte{}, &nameBindingError{empty: true}
+		return [32]byte{}, &nameBindingError{}
 	}
-	switch encoding {
-	case basenameEncodingPosixBytes:
-		if !validPosixComponent(bytes) {
-			return [32]byte{}, &nameBindingError{invalidPosix: true}
-		}
+	if err := validateEncoding(encoding, bytes); err != nil {
+		return [32]byte{}, err
 	}
 	var encoded [2]byte
 	var length [4]byte
@@ -56,26 +46,6 @@ func basenameCommitment(encoding basenameEncoding, bytes []byte) ([32]byte, erro
 
 // nameBindingError is the internal commitment failure (Rust
 // BasenameBindingError); the caller folds every arm to InvalidName.
-type nameBindingError struct {
-	empty        bool
-	invalidPosix bool
-}
+type nameBindingError struct{}
 
 func (*nameBindingError) Error() string { return "basename binding is invalid" }
-
-// validPosixComponent proves one PosixBytes component is valid (Rust
-// validate_posix): not "." or "..", no NUL, no separator.
-func validPosixComponent(bytes []byte) bool {
-	if len(bytes) == 2 && bytes[0] == '.' && bytes[1] == '.' {
-		return false
-	}
-	if len(bytes) == 1 && bytes[0] == '.' {
-		return false
-	}
-	for _, b := range bytes {
-		if b == 0 || b == '/' {
-			return false
-		}
-	}
-	return true
-}

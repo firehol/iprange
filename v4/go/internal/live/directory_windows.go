@@ -121,12 +121,14 @@ func (d *Directory) Entry(name string) (Entry, bool, error) {
 	}, true, nil
 }
 
-// create creates one name exclusively with the protected creator-only
-// descriptor of the captured profile (Rust Directory::create:
-// require_name_lengths, security::create_private with write-through).
-// ERROR_FILE_EXISTS is the Exists class; an overlong name fails the
-// name_max proof as InvalidName before any syscall.
-func (d *Directory) create(name string, profile security.Profile) (*os.File, error) {
+// CreateSecured creates one name exclusively with the protected
+// creator-only descriptor of the captured profile (Rust
+// Directory::create: require_name_lengths, security::create_private
+// with write-through). ERROR_FILE_EXISTS is the Exists class; an
+// overlong name fails the name_max proof as InvalidName before any
+// syscall. Publication destinations compose it with the profile
+// captured at bind; the live namespace captures its own profile.
+func (d *Directory) CreateSecured(name string, profile security.Profile) (*os.File, error) {
 	if err := d.RequireNameLengths(name); err != nil {
 		return nil, err
 	}

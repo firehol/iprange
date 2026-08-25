@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Retained, read-only evidence for the destination main during
 // residue removal (Rust publication/residue/main.rs): the main is
 // locked for its lifetime, its name is re-proved, the meta pair is

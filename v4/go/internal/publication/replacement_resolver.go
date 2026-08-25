@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Restart resolution for one exact replacement publication (Rust
 // publication/replacement_resolver.rs): the exact reservation and
 // the pair inspection unlock first (so the two-inode lifetime locks

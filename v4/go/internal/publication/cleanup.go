@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Exact discard of direct-publication artifacts before main
 // publication (Rust publication/cleanup.rs unix arm). One removal
 // proves the retained name went away, then the directory sync and

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Portable private reservation discovery and exact offline removal
 // (Rust publication/maintenance/reservation.rs): stable no-follow
 // listing with the authenticated policy/phase/output/previous

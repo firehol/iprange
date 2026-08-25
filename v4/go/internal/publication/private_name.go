@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Private attempt names (Rust publication/namespace.rs OUTPUT_PREFIX,
 // RESERVATION_PREFIX, PRIVATE_SUFFIX + artifact_name.rs hex codec).
 // The attempt identity encodes as 32 lowercase hex characters; the

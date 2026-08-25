@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Fixed-memory SHA-512 over exact publication bytes (Rust
 // publication/output_digest.rs). The digest visits every mapped byte
 // exactly once through a bounded stack buffer, with an optional

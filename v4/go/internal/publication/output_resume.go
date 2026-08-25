@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Reconstruction of a locked secured output from exact persisted
 // evidence (Rust output.rs resume_secured_output /
 // resume_secured_output_for_cleanup / bind_secured_output). The

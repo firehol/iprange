@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Structured result construction after resolver classification (Rust
 // publication/resolver_result.rs).
 

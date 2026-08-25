@@ -1,5 +1,3 @@
-//go:build !windows
-
 // One fail-if-exists or replacement publication composed from the
 // explicit ownership states (Rust publication/attempt.rs). The
 // machine creates and initializes the reservation, arms state 2 over

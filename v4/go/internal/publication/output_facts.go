@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Portable facts of one output artifact (Rust output.rs facts /
 // namespace::local_identity). The facts travel in reservation records
 // and public result surfaces; they never disclose the raw path.

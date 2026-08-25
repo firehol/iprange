@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Selection and reconstruction of one exact publication authority
 // (Rust publication/resolver_authority.rs): the caller-supplied
 // result facts and the discovered reservation are reconciled into

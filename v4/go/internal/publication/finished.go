@@ -1,5 +1,3 @@
-//go:build !windows
-
 // FinishedOutput is the terminal immutable output handed to the
 // publication owner by the writer core (Rust immutable_output::Finished
 // fields used by output.rs): the completed file, its read-only

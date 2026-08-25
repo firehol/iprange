@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Exact discovery of one restart-authoritative publication reservation
 // (Rust publication/reservation_inspection.rs, 451 lines read in
 // full). The machine finds the canonical coordination twin or scans

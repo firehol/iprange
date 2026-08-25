@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Exact reservation and prepared-output custody checks (Rust
 // publication/reservation_verify.rs). One verification proves the
 // reservation inode against the output evidence, its placement at the

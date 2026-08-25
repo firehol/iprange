@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Stable, bounded inspection of publication output bytes (Rust
 // publication/file_inspection.rs). The resolver inspects the main and
 // private outputs without validating the whole file: the meta pair,

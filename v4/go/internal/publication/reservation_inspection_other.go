@@ -1,4 +1,4 @@
-//go:build !freebsd && !windows
+//go:build !freebsd
 
 // POSIX arms of the reservation inspection machine (Rust
 // reservation_inspection.rs cfg(not(target_os = "freebsd"))): the

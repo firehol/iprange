@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Final durability and namespace checks for restart resolution (Rust
 // publication/resolver_verification.rs).
 

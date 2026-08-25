@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Destination binding for namespace publication (Rust
 // publication/namespace.rs Destination + namespace/unix.rs
 // destination_names). bind validates the main name with the SDK path
@@ -13,7 +11,6 @@ package publication
 
 import (
 	"os"
-	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/security"
@@ -51,7 +48,7 @@ func bindDestination(path string) (*destination, error) {
 		dir.Close()
 		return nil, err
 	}
-	commitment, err := basenameCommitment(basenameEncodingPosixBytes, []byte(main))
+	commitment, err := basenameCommitment(destinationBasenameEncoding(), destinationEncodedBytes(main))
 	if err != nil {
 		dir.Close()
 		return nil, &live.NamespaceError{Kind: live.NamespaceInvalidName}
@@ -70,48 +67,24 @@ func bindDestination(path string) (*destination, error) {
 	}, nil
 }
 
-// mainComponent returns the final path component of path with Rust
-// Path::file_name semantics: the raw path is not normalized (no
-// Clean), trailing separators are ignored, and a path terminating in
-// ".." has no component.
-func mainComponent(path string) (string, bool) {
-	p := trimTrailingSeparators(path)
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		p = p[i+1:]
-	}
-	if p == "" || p == ".." {
-		return "", false
-	}
-	return p, true
-}
-
-// parentOfPath returns the parent directory of path with Rust Path::
-// parent semantics over the raw path (Rust namespace::parent): paths
-// without a directory component bind the current directory.
-func parentOfPath(path string) string {
-	p := trimTrailingSeparators(path)
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		if i == 0 {
-			return "/"
-		}
-		return p[:i]
-	}
-	return "."
-}
-
-func trimTrailingSeparators(path string) string {
-	for len(path) > 1 && path[len(path)-1] == '/' {
-		path = path[:len(path)-1]
-	}
-	return path
-}
-
 // destinationNames derives the main and coordination names of one
 // destination component (Rust destination_names: main unchanged, the
-// coordination twin appends the ".readers" suffix; unix encodes
-// PosixBytes).
+// coordination twin appends the ".readers" suffix).
 func destinationNames(component string) (main, coordination string) {
 	return component, component + ".readers"
+}
+
+// destinationBasenameEncoding returns the platform basename encoding
+// of the destination names (Rust destination_names encoding tag).
+func destinationBasenameEncoding() basenameEncoding {
+	return platformBasenameEncoding()
+}
+
+// destinationEncodedBytes encodes one ASCII name for the basename
+// commitment: raw bytes on unix, UTF-16LE units on Windows (Rust
+// Name::bytes).
+func destinationEncodedBytes(name string) []byte {
+	return platformEncodedBytes(name)
 }
 
 // mainName returns the publication main name.
@@ -131,10 +104,12 @@ func (d *destination) securityCommitment() [32]byte { return d.security.Commitme
 // directory returns the retained parent directory.
 func (d *destination) directory() *live.Directory { return d.dir }
 
-// create creates one private name in the retained directory with mode
-// 0600 (Rust Destination::create).
+// create creates one private name in the retained directory with the
+// creator-only policy (Rust Destination::create; the platform arm
+// selects the unprotected 0600 create plus post-proof or the protected
+// descriptor create).
 func (d *destination) create(name string) (*os.File, error) {
-	return d.dir.Create(name)
+	return destinationCreate(d.dir, name, d.security)
 }
 
 // secureCreated applies the creator-only policy to one created

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Atomic main-name publication and exact reservation retirement (Rust
 // publication/main_file.rs unix arm). The main file appears under its
 // final name with one atomic namespace operation per policy, the file

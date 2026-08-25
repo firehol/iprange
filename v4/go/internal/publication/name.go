@@ -10,16 +10,9 @@ package publication
 
 import (
 	"path/filepath"
-	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
-
-// destinationNameMax is the component-length bound of the targeted
-// POSIX filesystems (Rust _PC_NAME_MAX: 255 on the supported linux,
-// darwin, freebsd, and netbsd filesystems). The Windows stub refuses
-// opens, so no Windows bound is needed.
-const destinationNameMax = 255
 
 // ValidDestinationName reports whether one destination path satisfies
 // the Rust Destination::bind name rules (path::validate_main_name
@@ -36,11 +29,12 @@ func ValidDestinationName(destination string) bool {
 	return len(name) <= destinationNameMax && len(name)+len(format.CoordinationSuffix) <= destinationNameMax
 }
 
-// invalidMainName mirrors Rust path::validate_main_name: true when the
-// name is not one valid publication main component.
+// invalidMainName mirrors Rust path::validate_main_name through the
+// platform component rule (name_rule_posix.go / name_rule_windows.go)
+// plus the reserved prefix and suffix (Rust reserved matches are
+// byte-wise ASCII-case-insensitive).
 func invalidMainName(name string) bool {
-	if name == "" || name == "." || name == ".." ||
-		strings.ContainsRune(name, '/') || strings.IndexByte(name, 0) >= 0 {
+	if mainNameComponentRule(name) {
 		return true
 	}
 	if format.AsciiFoldHasPrefix(name, format.ReservedBasenamePrefix) {

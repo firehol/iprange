@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Public boundary surface of the publication machine (Rust
 // publication.rs re-exports): interrupted-publication resolution,
 // canonical residue inspection and removal, and abandoned-artifact

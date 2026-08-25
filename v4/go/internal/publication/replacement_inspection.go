@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Stable two-inode inspection for replacement resolution (Rust
 // publication/replacement_inspection.rs): the main and the private
 // output open, the exclusive lifetime locks take the exact role

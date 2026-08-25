@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Explicit offline maintenance for publication-private artifacts
 // (Rust publication/maintenance.rs + maintenance/{common,output,
 // reservation}.rs): constant-memory listing of abandoned private

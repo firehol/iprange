@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Durable ownership states for one publication reservation inode
 // (Rust publication/reservation_file.rs). The reservation file is the
 // two-page dual-block record created privately, renamed to the

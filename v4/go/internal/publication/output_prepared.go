@@ -1,5 +1,3 @@
-//go:build !windows
-
 // One-pass preparation and verification of an immutable output (Rust
 // output.rs PreparedOutput / prepare_cancellable / inspect_exact /
 // verify_custody). Preparation proves custody, takes the artifact

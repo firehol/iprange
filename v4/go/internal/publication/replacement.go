@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Stable ownership of the destination replaced by one publication
 // (Rust publication/replacement.rs). The replacement bind opens the
 // canonical main, proves it is not the attempt itself, locks it for

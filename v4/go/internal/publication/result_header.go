@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Caller-result binding and header reconstruction for the resolver
 // (Rust result.rs require_result_binding + PublicationResult::
 // header_for): the supplied publication result is proven to belong to

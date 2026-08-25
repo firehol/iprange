@@ -11,8 +11,8 @@ import (
 )
 
 // Fixed reservation constants (Rust reservation.rs; the identity and
-// commitment kinds of publication/namespace/unix.rs). Windows refuses
-// publication opens, so the Go codec only ever sees the unix kinds.
+// commitment kinds are platform values from kinds_posix.go /
+// kinds_windows.go).
 const (
 	reservationMagic           = "IPR4RSV1" // [8]byte magic at offset 0
 	reservationRecordSize      = 512
@@ -20,9 +20,6 @@ const (
 	reservationFileSize        = 2 * format.PageSize
 	reservationOperationLock   = 0
 	reservationPreviousPresent = uint32(1)
-
-	basenameEncodingKind = 1
-	creationSecurityKind = 1
 )
 
 // Reservation offsets (Rust reservation.rs offset table).

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Owned construction of one private publication output (Rust
 // publication/output.rs CreatedOutput / secure_created). The private
 // output file is created at its final mapped destination path with a

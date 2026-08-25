@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Explicit inspection and offline removal of canonical publication
 // residue (Rust publication/residue.rs + residue/linux.rs): the
 // coordination inode is classified (absent, a selectable publication
