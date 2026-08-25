@@ -1,5 +1,40 @@
 # SOW-0026 - v4 platform completion: Windows surface, authorized scratch, FreeBSD durable publication, Rust durability-shape pins
 
+## Lead review rules (user decision, 2026-08-21; overrides SWARM.md)
+
+These rules govern this SOW's review process and override the shared
+swarm guide. They are placed at the top so they are re-read after every
+compaction. SWARM.md is intentionally not updated: this SOW is the
+authority for its own review process.
+
+1. ONE review level only. No level-2 gate, no other models: only five
+   reviewers, all on the lead's own model, each holding one disjoint
+   aspect of the milestone scope, adversarial mode, running with the
+   final-review skill.
+2. Spawn all five once at first use; every later round is a message to
+   the same agents. Never respawn between rounds; restart them only
+   between milestones.
+3. The milestone closes only when all five reviewers report no P0-P2
+   findings. No reviewer is ever replaced by another model.
+4. The Rust implementation is the mandatory baseline for ALL five
+   aspects. The two implementations must be identical in logic,
+   operation order, system calls, errors, and philosophy; the smallest
+   divergence in how a thing is done is a performance and correctness
+   red flag. Go must follow exactly what Rust does, while expressing
+   that logic in natural, maintainer-grade Go.
+5. Aspect split (all aspects are judged against the Rust baseline):
+   (1) Rust parity - exact logic, operation order, syscalls, errors,
+   mmap-only, memory safety, lifetime, durability/crash semantics;
+   (2) Go idioms - identical logic and structure, but written as
+   natural Go, never foreign or translated-looking;
+   (3) absolute performance - the most performant form possible; even
+   a single unnecessary branch, copy, or allocation in the hot path is
+   a defect;
+   (4) wire format and integrity - on-disk bytes, locking, Go<->Rust
+   cross-open interoperability;
+   (5) APIs, docs, records - public API, errors, documentation, and
+   SOW records in sync with Rust.
+
 ## Status
 
 Status: in-progress
@@ -7,14 +42,16 @@ Status: in-progress
 ### Status (2026-08-25) - milestone-5 work packages A and B
 
 - Work package A (layout-inspection allocation fix) delivered and committed at `ff3435d`: `format.InspectLayout` returns the layout by value; the validation and recovery sweeps allocate nothing per page (alloc pins tree 2138->2057, blob 927->924, exactly the walk baselines). Full battery green.
-- Work package B (FreeBSD durable immutable publication, pure-Go ACL machine) implemented in `internal/security` on top of `ff3435d`:
+- Work package B (FreeBSD durable immutable publication, pure-Go ACL machine) DELIVERED, committed `b91f3a7` + host-proof fixes `9415a80`/`42bd7c4`, host-proven on the freebsd VM (FreeBSD 14.1-RELEASE amd64, ZFS acltype=nfsv4): implemented in `internal/security` on top of `ff3435d`:
   - `acl_freebsd_algo.go`: ABI-exact kernel `struct acl`/`struct acl_entry` plus exact translations of libc `acl_strip_np`, `acl_is_trivial_np`, `acl_calc_mask`, and kernel `acl_nfs4_sync_mode_from_acl` / `acl_nfs4_trivial_from_mode_libc` (PSARC/2010/029 and canonical-six draft forms).
   - `acl_freebsd_sys.go` (freebsd build tag): raw `__acl_get_fd`/`__acl_set_fd` syscalls (349/350), the libc `fpathconf(_PC_ACL_NFS4)` brand probe (ZFS NFSv4 vs POSIX.1e), libc `_posix1e_acl_sort` presort for the POSIX set arm, and the Rust error classes (get EOPNOTSUPP -> CodeDurabilityUnsupported, other get/set failures -> CodeIO with the Rust operation labels).
   - `acl_freebsd_algo_test.go`: host-measured vectors (FreeBSD 14.1-RELEASE, ZFS acltype=nfsv4) for the PSARC forms of eight modes, the draft form of 0600, sync-mode round trips, triviality decisions, POSIX strip/mask-recalc/trivial, and the POSIX sort.
   - `acl_freebsd_sys_test.go` (freebsd build tag): live kernel round trip - fresh 0600 file proves; a named-entry ACL fails the proof, strips to trivial, and proves again (NFSv4 arm); the POSIX arm pins the masked-ACL behavior; devfs reports the EOPNOTSUPP class.
   - `CreatorOnlySupported()` flips true on freebsd; `acl_other.go` drops the freebsd stub; the platform gate skip texts and "linux-only" comments updated across security/live/publication/recovery; `destination_create_linux_test.go` became `destination_create_posix_test.go` (linux || freebsd); `securityNamespaceError` recognizes the freebsd CodeIO operation labels as IoAt.
   - The freebsd live/writer package gates stay skipped by design: live creation needs the sidecar byte-range lock machine (`lock_refuse.go`, Rust authority has no FreeBSD lock machine) and writer fixtures create database files through `mapping.Create` (`mapping.CoordinationSupported` stays false) - the publication/recovery/validation suites are the newly green freebsd surface.
-  - Local battery green (plain, v4work, race+checkptr, vet, cross-builds linux/darwin/freebsd/windows amd64+arm64, freebsd riscv64). Host proof on the freebsd VM pending (next step).
+  - Host proof (freebsd VM, `~/src/iprange` at HEAD): plain `go test ./...` GREEN (root suite 151 s, recovery 31 s, security, publication, live/writer skip honestly), `-tags v4work` GREEN, race+checkptr on security/live/publication/recovery GREEN, vet clean. The zero-alloc publish-set pin passes on freebsd: the ACL struct stays on the stack (escape-verified), and the only prior 4096-bucket growth (694 -> 2265) is gone.
+  - Host-proof fixes along the way: the freebsd ACL get now fills a caller-provided buffer (no page-sized heap object on the proof paths); recovery/snapshot fixtures build over-file like production so the recovery, publication, and snapshot suites run on freebsd; the live-pair algebra property test, the replacement-policy test, and the structured transaction round trip gained the exact platform gates (live creation, atomic name exchange).
+  - Local battery green at every commit: plain, v4work, race+checkptr, vet, cross-builds linux/darwin/freebsd/windows amd64+arm64 and freebsd riscv64.
 Sub-state: milestone-5 transition started (user decision 2026-08-25). Work package A (layout-inspection allocation fix) and work package B (FreeBSD durable immutable publication, pure-Go ACL machine) are being implemented now; the remaining items (Windows live/publication surface, authorized recovery scratch + external sort, Rust XNU-16K flush-shape pin) stay tracked below and become work packages in later rounds of this SOW.
 
 ## Requirements
