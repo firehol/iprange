@@ -755,7 +755,7 @@ plain/v4work tests, race, race+v4work, checkptr=2, mmap-trace PASS.
   closed with the corrected follow-up map, commit signed, push, and
   start Milestone 4.
 
-Status: in-progress
+Status: completed
 
 ### Status (2026-08-23) - chunk 3b-6 defined: randomized public models over the internal core
 
@@ -13110,3 +13110,111 @@ cross-builds plain + v4work; check-mmap-trace.sh 6 legs -> all green.
 Native host proofs: re-run on the fix-round commit after push (darwin
 plakam4mini, freebsd VM; both tag sets); results land in the M4 close
 record.
+
+### Status (2026-08-25) - milestone 4 CLOSED: five-reviewer gate PASS at a707b08
+
+Gate runs (five fresh same-model adversarial reviewers, one level,
+disjoint scopes: Rust parity / Go idioms / performance / wire format +
+integrity / APIs + docs, project-final-review skill):
+
+- Round 1 (ed4b3e6): idioms PASS (8 P3); performance FAIL (P2-1:
+  session probe arm allocates 8 B per probe, generation counter under a
+  global mutex); parity FAIL (P1: crash-interrupted worker recovery left
+  .iprange-publish-*.tmp residue; P2: macOS durability record
+  mischaracterized XNU + memmap2); wire FAIL (P2-1: FreeBSD durable
+  publication promised by the acceptance criteria but refused by pure
+  Go; P2-2: gate wording); records FAIL (P2-1: same residue; 8 P3).
+- Fix round 27f169c resolved P1/P2 and swept the P3s (recorded above):
+  closure-free value probe arm, lock-free generation counter, parent-
+  owned attempt + composed discard, SOW record corrections, FreeBSD
+  scope decision (option A), SOW-0026 follow-up container.
+- Round 2 (27f169c): idioms PASS (5 P3, all cosmetic); performance PASS
+  (P3-A measured no-action, P3-2 carried seam, P3-3 recorded follow-up);
+  parity FAIL (NEW P1: content-invalid recovery budget leaked the
+  parent-created attempt - Rust recover() validates the budget as its
+  first statement before any artifact, Go created the attempt first and
+  the machine refusal arm closed instead of unlinking; plus 4 P3); wire
+  PASS (4 P3); records PASS (5 P3).
+- Round 3 (a707b08): parity PASS. The P1 fix puts the budget pre-check
+  at the Rust recover() position (recovery.ValidateWorkerBudget,
+  exported; called as the first statement of RecoverWithWorker before
+  any control/spawn/artifact), the machine refusal arm discards
+  (unlinks) instead of closing as defense in depth, and a regression
+  test (TestRecoverWithWorkerInvalidBudgetRefusesBeforeArtifacts) pins
+  the empty destination directory. Reviewer repros at a707b08:
+  MaxOpenFiles 1/0, MaxOutputPages 1, and nil budget all refuse with
+  the exact classes and an empty destination directory; the
+  crash-restart repro still ends with exactly [out.v4].
+- All five aspects PASS at a707b08; no P0/P1/P2 remains open.
+
+P3 dispositions at close:
+
+- SourceCleanup any (validation/types.go:278) kept: validation cannot
+  import worker or recovery (import cycle) and the two shapes share no
+  common method; typed assertions at both boundaries; recorded.
+- SIGBUS matrix exit-code literals kept: verbatim pin of the Rust
+  authority matrix (posix.rs uses the same bare codes).
+- RestoreDirty double-fetch and LayoutInspection per-page heap alloc:
+  recorded performance follow-ups, carried by SOW-0026 (the first is
+  the Store split-window seam; the second gets a value-return refactor
+  plus an offline-sweep allocation pin).
+- asm role gate 1..4: tripwire test (asm_role_gate_test.go) forces a
+  synchronized .s/roleFromWire/test edit when a fifth role lands.
+- ProbeRegion noted as the production-shape test seam in its doc.
+
+Validation gate evidence:
+
+- Acceptance criteria: reader/writer/recovery/validation/live surfaces
+  match the Rust authority; FreeBSD durable publication scope amended
+  by user decision (option A) and tracked in SOW-0026; all remaining
+  criteria verified by the conformance corpus (six Rust fixtures
+  cross-open), the native proofs, and the reviewer gates.
+- Tests: full module plain + v4work 0 failures at a707b08 (work,
+  worker, crash, and wire suites included); race + checkptr=2 on
+  mapping/worker/recovery/validation/root both tag sets green; twelve
+  cross-builds green; check-mmap-trace.sh 6 legs green.
+- Real-use evidence: native proofs on plakam4mini (macOS 25.5 arm64)
+  and the freebsd VM (FreeBSD 14.1 amd64): 0 failures / 0 failures
+  (plain + v4work) at both 27f169c and a707b08; commits pushed and
+  shallow-cloned fresh on the hosts, HEAD verified before every run.
+- Reviewer findings: all five rounds recorded above; every finding
+  mapped to a fix, a recorded disposition, or a follow-up.
+- Same-failure search: the artifact-before-refusal class was searched
+  across the worker client (validation preflights at the facade and
+  re-checks in the machine; inspection preflights; recovery now
+  pre-checks at the Rust position); no other create-before-refusal
+  path remains.
+- Sensitive data gate: no secrets, credentials, or personal data in any
+  artifact touched by this milestone.
+- Artifact maintenance gate: AGENTS.md unchanged (no workflow or
+  responsibility change in this milestone; the standing gate rules were
+  already recorded); runtime project skills unchanged (project-final-
+  review and project-v4-rust already carry the gate workflow); specs
+  unchanged - the platform contract in design-iprange-engine.md and
+  binary-format-v4.md describes the v4 format (met by the Rust
+  authority, which ships FreeBSD and macOS durable publication); the
+  pure-Go SDK delivery gap is a tracked implementation item (SOW-0026),
+  not a format contract change; end-user/operator docs unchanged (no
+  public behavior changed); end-user/operator skills: none exist in
+  this repo; SOW lifecycle: this SOW moves to done with this record,
+  SOW-0026 opened (pending), SOW-0017 unchanged.
+- Lessons: (1) when a refactor moves artifact creation into a parent
+  boundary, every precondition must move with it - the Rust
+  first-statement ordering is the checklist (the budget check was left
+  inside the machine and the reviewer found the leak); (2) a comment
+  claiming an arm "cannot fire" must be reachable-audited (the machine
+  arm was reachable from the client until the pre-check landed); (3)
+  host proof clones raced the push once (stale HEAD a19d99c) - verify
+  `git rev-parse` on the host before every run.
+
+Follow-up map at close (all items live in real SOW files):
+
+- SOW-0026 (pending): FreeBSD durable immutable publication (pure-Go
+  ACL machine), Windows live/publication surface, authorized recovery
+  scratch + external sort, Rust XNU-16K native flush-shape pin,
+  LayoutInspection value-return + offline-sweep alloc pin.
+- SOW-0017 (pending): authenticated snapshot signing (Phase 2),
+  unchanged.
+- Recorded dispositions without SOW items: Store split-window seam
+  (implemented together with SOW-0026 writer-surface work), asm role
+  gate (in-tree tripwire), macOS filesec refusal (Decision 2A).
