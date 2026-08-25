@@ -9,6 +9,12 @@ import (
 // coordinationSupported reports the exclusive lifetime-lock machine availability.
 const coordinationSupported = false
 
+// CoordinationSupported reports whether the exclusive lifetime-lock
+// machine (database file creation) is implemented on this platform:
+// false on windows until the platform completion work implements the
+// real owner, so suites that create database files skip honestly.
+func CoordinationSupported() bool { return coordinationSupported }
+
 // Mapping is the Windows stub: the type and method surface exist only so
 // the reader core cross-compiles. OpenImmutable always refuses, so these
 // methods are unreachable at runtime on Windows until the platform

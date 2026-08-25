@@ -41,18 +41,29 @@ Status: in-progress
 
 ### Status (2026-08-25) - milestone-5 work packages A and B
 
-- Work package A (layout-inspection allocation fix) delivered and committed at `ff3435d`: `format.InspectLayout` returns the layout by value; the validation and recovery sweeps allocate nothing per page (alloc pins tree 2138->2057, blob 927->924, exactly the walk baselines). Full battery green.
+- Work package A (sweep allocation fix) delivered at `ff3435d` and completed in the gate fix round below: `format.InspectLayout`, the page header, and the cell iterator travel by value; the recovery tree scan keys and cursors are concrete generic values (no interface boxing, no per-record allocation); and the refusal envelopes copy the page number only inside the cold arms. The recovery tree scan allocates 0 objects per run (pin 2138 -> 0), the membership blob scan allocates exactly one fixed scanner object per run (pin 927 -> 1), and the live validation sweep costs only the fixed one-time open machinery (~103 per Validate call; pin bound tightened 1024 -> 200). Full battery green.
 - Work package B (FreeBSD durable immutable publication, pure-Go ACL machine) DELIVERED, committed `b91f3a7` + host-proof fixes `9415a80`/`42bd7c4`, host-proven on the freebsd VM (FreeBSD 14.1-RELEASE amd64, ZFS acltype=nfsv4): implemented in `internal/security` on top of `ff3435d`:
   - `acl_freebsd_algo.go`: ABI-exact kernel `struct acl`/`struct acl_entry` plus exact translations of libc `acl_strip_np`, `acl_is_trivial_np`, `acl_calc_mask`, and kernel `acl_nfs4_sync_mode_from_acl` / `acl_nfs4_trivial_from_mode_libc` (PSARC/2010/029 and canonical-six draft forms).
   - `acl_freebsd_sys.go` (freebsd build tag): raw `__acl_get_fd`/`__acl_set_fd` syscalls (349/350), the libc `fpathconf(_PC_ACL_NFS4)` brand probe (ZFS NFSv4 vs POSIX.1e), libc `_posix1e_acl_sort` presort for the POSIX set arm, and the Rust error classes (get EOPNOTSUPP -> CodeDurabilityUnsupported, other get/set failures -> CodeIO with the Rust operation labels).
   - `acl_freebsd_algo_test.go`: host-measured vectors (FreeBSD 14.1-RELEASE, ZFS acltype=nfsv4) for the PSARC forms of eight modes, the draft form of 0600, sync-mode round trips, triviality decisions, POSIX strip/mask-recalc/trivial, and the POSIX sort.
   - `acl_freebsd_sys_test.go` (freebsd build tag): live kernel round trip - fresh 0600 file proves; a named-entry ACL fails the proof, strips to trivial, and proves again (NFSv4 arm); the POSIX arm pins the masked-ACL behavior; devfs reports the EOPNOTSUPP class.
   - `CreatorOnlySupported()` flips true on freebsd; `acl_other.go` drops the freebsd stub; the platform gate skip texts and "linux-only" comments updated across security/live/publication/recovery; `destination_create_linux_test.go` became `destination_create_posix_test.go` (linux || freebsd); `securityNamespaceError` recognizes the freebsd CodeIO operation labels as IoAt.
-  - The freebsd live/writer package gates stay skipped by design: live creation needs the sidecar byte-range lock machine (`lock_refuse.go`, Rust authority has no FreeBSD lock machine) and writer fixtures create database files through `mapping.Create` (`mapping.CoordinationSupported` stays false) - the publication/recovery/validation suites are the newly green freebsd surface.
+  - The freebsd live/writer package gates stay skipped by design: live creation needs the sidecar byte-range lock machine (`lock_refuse.go`; the Rust authority on FreeBSD ships only the whole-file flock lifetime lock in `live_lock.rs freebsd_file_lock`, no OFD byte-range machine) and writer fixtures create database files through `mapping.Create` (`mapping.CoordinationSupported` stays false) - the publication/recovery/validation suites are the newly green freebsd surface.
   - Host proof (freebsd VM, `~/src/iprange` at HEAD): plain `go test ./...` GREEN (root suite 151 s, recovery 31 s, security, publication, live/writer skip honestly), `-tags v4work` GREEN, race+checkptr on security/live/publication/recovery GREEN, vet clean. The zero-alloc publish-set pin passes on freebsd: the ACL struct stays on the stack (escape-verified), and the only prior 4096-bucket growth (694 -> 2265) is gone.
   - Host-proof fixes along the way: the freebsd ACL get now fills a caller-provided buffer (no page-sized heap object on the proof paths); recovery/snapshot fixtures build over-file like production so the recovery, publication, and snapshot suites run on freebsd; the live-pair algebra property test, the replacement-policy test, and the structured transaction round trip gained the exact platform gates (live creation, atomic name exchange).
   - Local battery green at every commit: plain, v4work, race+checkptr, vet, cross-builds linux/darwin/freebsd/windows amd64+arm64 and freebsd riscv64.
-Sub-state: milestone-5 transition started (user decision 2026-08-25). Work package A (layout-inspection allocation fix) and work package B (FreeBSD durable immutable publication, pure-Go ACL machine) are being implemented now; the remaining items (Windows live/publication surface, authorized recovery scratch + external sort, Rust XNU-16K flush-shape pin) stay tracked below and become work packages in later rounds of this SOW.
+Sub-state: milestone-5 gate in progress (user decision 2026-08-25). Work packages A (sweep allocation fix) and B (FreeBSD durable immutable publication, pure-Go ACL machine) are delivered and committed; the five-reviewer gate on the slice found three P0-P2 defects (POSIX strip mask recalculation, per-page and per-record sweep allocations, stale gate records), all fixed and re-verified in the gate fix round below. The remaining items (Windows live/publication surface, authorized recovery scratch + external sort, Rust XNU-16K flush-shape pin) stay tracked below and become work packages in later rounds of this SOW.
+
+### Status (2026-08-25, milestone-5 gate fix round)
+
+- The five-reviewer gate on the A+B slice (HEAD `a07df5f`) returned three FAIL verdicts: Hubble (Rust parity) P1 - the POSIX strip mask recalculation diverged from libc `acl_calc_mask`; Hypatia (performance) P2-1 - one per-page `PageHeader` heap object in the recovery/validation sweeps, P2-2 - per-record `treeKey any` interface boxing in the recovery tree scan, P2-3 - 4088-byte by-value returns in the FreeBSD ACL algorithms; Faraday (records) P2-1 - stale Pre-Implementation-Gate text and an unresolved decision that the user had already resolved. Einstein (Go idioms) and Averroes (wire format) passed with P3s only.
+- P1 fixed: `fbsdPOSIXStrip` recalculates the mask over the surviving base entries of the already-stripped ACL (libc `acl_calc_mask` runs on the stripped ACL), not over the original named entries; the two host-measured vector tests now pin the libc-verified `r` mask.
+- P2-1 fixed for the whole class, not only the four named sites: the tree and range scans, the validation tree/range/blob/structure/bitmap/membership/structure-dictionary/catalog/retirement walkers, and the graph-read helpers all return the header by value and copy the page number only inside cold refusal arms; `format.LayoutInspection.Cells` returns the iterator by value. Pins: recovery tree scan 0 objects/run, membership blob scan 1 fixed object/run (the scanner), live validation sweep ~103 fixed one-time machinery objects (bound 200).
+- P2-2 fixed: the recovery tree scan is generic over the key type (`treeCodec[K]`, `treeKeyOption[K]`), so the membership-ID and catalog-index keys are concrete `uint32` values and the catalog-name keys are `[]byte` slices into the page; no interface boxing exists anywhere in the walk.
+- P2-3 fixed: `fbsdStrip`, `fbsdPOSIXStrip`, and `fbsdNFS4TrivialFromMode` write into caller-provided buffers and `fbsdNFS4Trivial` compares two stack candidates (the measured 1181 ns/op trivial test drops to the 76 ns/op caller-buffer form on the freebsd VM).
+- P2 (Faraday) fixed: this SOW's Pre-Implementation-Gate, status text, and decision list now describe the delivered state; decision 2 (Windows scope) is resolved (option A) below.
+- P3 sweep in the same round: unified the `freebsdACL*` identifiers on the `fbsd*` prefix (mechanical, security package only); removed the dead `inspection == nil` refusal arms; removed the milestone-lifecycle labels from the alloc-pin headers; deduplicated the over-file fixture open dance into one `buildFixtureWriter` helper per package; renamed the terse mode-bit constants in `fbsdNFS4SyncMode`; fixed the `acl_darwin.go` comment (linux+freebsd machine, SOW-0026 tracking label); added the Windows `CoordinationSupported` surface and tagged the POSIX-internal unreadable-pages test `!windows` so `GOOS=windows go vet ./...` is green; corrected the FreeBSD lock-machine wording (whole-file flock exists in Rust, no OFD byte-range machine).
+- Averroes P3-2 recorded: the POSIX.1e live arm stays unit-tested only - the freebsd host's root filesystem is ZFS with acltype=nfsv4, so an on-host POSIX-brand live proof is not possible on the current host (a UFS/`zfs set acltype=posix` filesystem would be needed).
 
 ### Resolved user decisions (2026-08-25)
 
@@ -114,7 +125,7 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: ready (work packages A and B); the Windows surface (final item) keeps a separate user decision.
+Status: resolved for work packages A and B (delivered, gate-fixed, and re-verified in this SOW's status record); the Windows surface (final item) carries its resolved scope decision below.
 
 Problem / root-cause model:
 
@@ -128,7 +139,7 @@ Evidence reviewed:
 Affected contracts and surfaces:
 
 - A. internal/format.InspectLayout callers: validation/page.go, recovery/range_scan.go, recovery/tree_scan.go, recovery/membership_blob.go; no public surface change (return type is internal).
-- B. internal/security (new freebsd machine + CreatorOnlySupported), live.CreationSupported, mapping.CoordinationSupported stays, internal/live + internal/writer platform gates (freebsd stops skipping), publication durable arms on freebsd; public capability checks; acceptance criteria wording.
+- B. internal/security (new freebsd machine + CreatorOnlySupported), live.CreationSupported, mapping.CoordinationSupported stays, internal/live + internal/writer platform gates (freebsd keeps skipping by design: no sidecar byte-range lock machine and no mapping.Create on freebsd), publication durable arms on freebsd; public capability checks; acceptance criteria wording.
 
 Existing patterns to reuse:
 
@@ -144,16 +155,16 @@ Sensitive data handling plan:
 
 - None of the items handle credentials or personal data; host proofs run on the user-authorized freebsd VM clone.
 
-Implementation plan:
+Implementation plan (delivered; the gate fix round completed both items):
 
-- A. Change InspectLayout to return the layout by value; adopt the value at the four call sites; add an offline-sweep allocation pin; rerun battery. (small, first)
-- B. FreeBSD machine: freeze the ACL struct layout and syscall numbers from the host header; port remove_inherited + require_trivial from Rust freebsd.rs; wire security_freebsd.go via build tags; flip aclSupported for freebsd; remove the freebsd skips from the live/writer gates (keep the lifetime-lock freebsd absence check - the writer gate keys on mapping.CoordinationSupported, which stays freebsd-absent: the writer package skip must be re-evaluated because writer tests create database files through mapping.Create, which needs the exclusive lifetime-lock machine - verify whether freebsd durable publication needs the lifetime lock for the WRITER, or only the security machine for publication).
-- Remaining items stay tracked: Windows surface (user decision when started), authorized scratch + external sort, Rust XNU-16K flush pin, Store split-window seam.
+- A. InspectLayout returns the layout by value; the page header and the cell iterator join the value-return shape; the recovery tree scan is generic over the key type; the sweep refusal envelopes copy the page number only inside cold arms; the offline-sweep allocation pins now pin 0 (tree) and 1 fixed scanner object (blob) per run, and the live validation pin bound tightened to 200. (committed `ff3435d` + gate fix round)
+- B. FreeBSD machine: the ACL struct layout and syscall numbers were frozen from the host headers; remove_inherited + require_trivial ported from Rust freebsd.rs; security_freebsd.go wired via build tags; aclSupported flipped for freebsd. The live/writer gates were NOT removed: the writer gate keys on mapping.CoordinationSupported (freebsd-absent because writer tests create database files through mapping.Create, which needs the exclusive lifetime-lock machine), and the live gate keys on the sidecar byte-range lock machine (also absent on freebsd); durable publication itself needs only the security machine, so the publication/recovery/validation suites run on freebsd while live/writer skip honestly. (committed `b91f3a7` + host-proof fixes `9415a80`/`42bd7c4`)
+- Remaining items stay tracked: Windows surface (decision resolved below), authorized scratch + external sort, Rust XNU-16K flush pin, Store split-window seam.
 
-Validation plan:
+Validation plan (delivered; the on-host proof ran the real freebsd surface):
 
-- A. Full battery + the new alloc pin; confirm the reader hot paths unchanged.
-- B. Full battery on linux (freebsd not skipped anymore adds the live/writer suites on the workstation cross-compile - cannot run freebsd binaries locally except via the VM); on-host proof on freebsd (plain + v4work both suites must now run the previously skipped live/writer packages); darwin unchanged.
+- A. Full battery + the alloc pins (tree 0, blob 1, live validation bound 200); reader hot paths unchanged.
+- B. Full battery on linux at every commit; on-host proof on freebsd (plain + v4work): the publication/recovery/validation suites run and pass on the VM; the live/writer suites skip by design (absent lock machines on freebsd); darwin unchanged.
 
 Artifact impact plan:
 
@@ -161,5 +172,5 @@ Artifact impact plan:
 
 Open decisions:
 
-- 1. FreeBSD durable publication: resolved (option A) - implement the pure-Go ACL machine here; on-host proof required.
-- 2. Windows live/publication surface: deferred to the final work package of this SOW; separate user decision on scope (cgo vs pure-Go syscall surface) when started.
+- 1. FreeBSD durable publication: resolved (option A) - implement the pure-Go ACL machine here; on-host proof required. Delivered.
+- 2. Windows live/publication surface: resolved (option A, 2026-08-25) - pure-Go syscall surface mirroring the FreeBSD ACL-machine approach via x/sys/windows, staying within Decision 2A (no cgo). Remains the final work package of this SOW.

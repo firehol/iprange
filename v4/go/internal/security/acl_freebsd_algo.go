@@ -8,7 +8,7 @@
 
 package security
 
-// freebsdACLTag values (sys/acl.h): POSIX.1e and NFSv4 tags share the
+// fbsdTag values (sys/acl.h): POSIX.1e and NFSv4 tags share the
 // same numeric space; the NFSv4 machine uses the USER_OBJ, GROUP_OBJ
 // and EVERYONE members.
 const (
@@ -24,13 +24,13 @@ const (
 	fbsdMaxEntries   uint32 = 254
 )
 
-// freebsdACLEntryType values (sys/acl.h; valid for NFSv4 ACLs).
+// fbsdACLEntryType values (sys/acl.h; valid for NFSv4 ACLs).
 const (
 	fbsdEntryTypeAllow uint16 = 0x0100
 	fbsdEntryTypeDeny  uint16 = 0x0200
 )
 
-// freebsdACLFlag values (sys/acl.h; valid for NFSv4 ACLs).
+// fbsdFlag values (sys/acl.h; valid for NFSv4 ACLs).
 const (
 	fbsdFlagFileInherit uint16 = 0x0001
 	fbsdFlagDirInherit  uint16 = 0x0002
@@ -38,7 +38,7 @@ const (
 	fbsdFlagInheritOnly uint16 = 0x0008
 )
 
-// freebsdACLPerm values (sys/acl.h): the NFSv4 mask bits, plus the
+// fbsdPerm values (sys/acl.h): the NFSv4 mask bits, plus the
 // POSIX.1e low three bits (READ 4, WRITE 2, EXECUTE 1) and the
 // POSIX.1e WRITE_DATA/APPEND aliases.
 const (
@@ -61,10 +61,10 @@ const (
 	fbsdPermBits        uint32 = fbsdPermExecute | fbsdPermWrite | fbsdPermRead
 )
 
-// freebsdACLEntry is one ACL entry in the kernel ABI layout
+// fbsdACLEntry is one ACL entry in the kernel ABI layout
 // (sys/acl.h "Current struct acl_entry"). The field order and widths
 // are fixed: tag, id, perm, entry type, flags.
-type freebsdACLEntry struct {
+type fbsdACLEntry struct {
 	Tag       uint32
 	ID        uint32
 	Perm      uint32
@@ -72,32 +72,32 @@ type freebsdACLEntry struct {
 	Flags     uint16
 }
 
-// freebsdACL is one access ACL in the kernel ABI layout (sys/acl.h
+// fbsdACL is one access ACL in the kernel ABI layout (sys/acl.h
 // "Current struct acl"): the entry array is fixed at the kernel
 // maximum, and Cnt names the valid prefix.
-type freebsdACL struct {
+type fbsdACL struct {
 	MaxCnt  uint32
 	Cnt     uint32
 	Spare   [4]int32
-	Entries [fbsdMaxEntries]freebsdACLEntry
+	Entries [fbsdMaxEntries]fbsdACLEntry
 }
 
-// freebsdACLBrand selects the ACL semantics of one filesystem
+// fbsdACLBrand selects the ACL semantics of one filesystem
 // (libc acl_get_fd: fpathconf(_PC_ACL_NFS4) == 1 picks the NFSv4
 // brand, everything else POSIX.1e).
-type freebsdACLBrand int
+type fbsdACLBrand int
 
 const (
 	// fbsdBrandPOSIX is the POSIX.1e brand (UFS and other POSIX ACL
 	// filesystems).
-	fbsdBrandPOSIX freebsdACLBrand = iota
+	fbsdBrandPOSIX fbsdACLBrand = iota
 	// fbsdBrandNFS4 is the NFSv4 brand (ZFS with nfsv4acls).
 	fbsdBrandNFS4
 )
 
 // fbsdACLsEqual compares two ACLs entry by entry over all five fields
 // (libc _acl_differs and kernel _acls_are_equal).
-func fbsdACLsEqual(a, b *freebsdACL) bool {
+func fbsdACLsEqual(a, b *fbsdACL) bool {
 	if a.Cnt != b.Cnt {
 		return false
 	}
@@ -116,35 +116,38 @@ func fbsdACLsEqual(a, b *freebsdACL) bool {
 // the three base entries; an NFSv4 ACL is trivial when its meaning
 // fits the file mode (the PSARC trivial form, or the canonical-six
 // draft form).
-func fbsdTrivial(acl *freebsdACL, brand freebsdACLBrand) bool {
+func fbsdTrivial(acl *fbsdACL, brand fbsdACLBrand) bool {
 	if brand == fbsdBrandPOSIX {
 		return acl.Cnt == 3
 	}
 	return fbsdNFS4Trivial(acl)
 }
 
-// fbsdStrip removes every extended entry and returns the trivial form
-// of one ACL for its brand (libc acl_strip_np). The POSIX.1e arm keeps
-// the base user/group/other entries and recalculates the mask entry
-// when one existed (the Rust machine always passes the recalculate
+// fbsdStrip removes every extended entry and writes the trivial form
+// of one ACL into out for its brand (libc acl_strip_np). The POSIX.1e
+// arm keeps the base user/group/other entries and recalculates the mask
+// entry when one existed (the Rust machine always passes the recalculate
 // flag); the NFSv4 arm rebuilds the trivial PSARC form from the mode
 // the ACL expresses.
-func fbsdStrip(acl *freebsdACL, brand freebsdACLBrand) freebsdACL {
+func fbsdStrip(acl *fbsdACL, brand fbsdACLBrand, out *fbsdACL) {
 	if brand == fbsdBrandPOSIX {
-		return fbsdPOSIXStrip(acl)
+		fbsdPOSIXStrip(acl, out)
+		return
 	}
 	mode := fbsdNFS4SyncMode(acl)
-	return fbsdNFS4TrivialFromMode(mode, false)
+	fbsdNFS4TrivialFromMode(out, mode, false)
 }
 
 // fbsdPOSIXStrip keeps ACL_USER_OBJ, ACL_GROUP_OBJ and ACL_OTHER and
-// drops every named and mask entry; when the original carried a mask
-// entry the mask is recalculated like acl_calc_mask (the union of the
-// group-class permissions, appended as the last entry exactly like
-// the libc append).
-func fbsdPOSIXStrip(acl *freebsdACL) freebsdACL {
-	var out freebsdACL
+// writes them into out, dropping every named and mask entry; when the
+// original carried a mask entry the mask is recalculated exactly like
+// libc acl_strip_np: acl_calc_mask runs over the already-stripped ACL,
+// so only the surviving group-class entries (the GROUP_OBJ entry)
+// contribute, and the mask is appended as the last entry like the libc
+// append.
+func fbsdPOSIXStrip(acl *fbsdACL, out *fbsdACL) {
 	out.MaxCnt = fbsdMaxEntries
+	out.Cnt = 0
 	hadMask := false
 	for i := uint32(0); i < acl.Cnt; i++ {
 		entry := acl.Entries[i]
@@ -158,20 +161,19 @@ func fbsdPOSIXStrip(acl *freebsdACL) freebsdACL {
 	}
 	if hadMask {
 		maskMode := uint32(0)
-		for i := uint32(0); i < acl.Cnt; i++ {
-			switch acl.Entries[i].Tag {
+		for i := uint32(0); i < out.Cnt; i++ {
+			switch out.Entries[i].Tag {
 			case fbsdTagUser, fbsdTagGroup, fbsdTagGroupObj:
-				maskMode |= acl.Entries[i].Perm & fbsdPermBits
+				maskMode |= out.Entries[i].Perm & fbsdPermBits
 			}
 		}
-		out.Entries[out.Cnt] = freebsdACLEntry{
+		out.Entries[out.Cnt] = fbsdACLEntry{
 			Tag:  fbsdTagMask,
 			ID:   fbsdUndefinedID,
 			Perm: maskMode,
 		}
 		out.Cnt++
 	}
-	return out
 }
 
 // fbsdNFS4Trivial runs the libc NFSv4 trivial test: an ACL with more
@@ -179,16 +181,18 @@ func fbsdPOSIXStrip(acl *freebsdACL) freebsdACL {
 // the ACL is rebuilt as the PSARC trivial form and, when that differs,
 // as the canonical-six draft form, and the original must equal one of
 // them (acl_strip.c acl_is_trivial_np).
-func fbsdNFS4Trivial(acl *freebsdACL) bool {
+func fbsdNFS4Trivial(acl *fbsdACL) bool {
 	if acl.Cnt > 6 {
 		return false
 	}
 	mode := fbsdNFS4SyncMode(acl)
-	psarc := fbsdNFS4TrivialFromMode(mode, false)
+	var psarc fbsdACL
+	fbsdNFS4TrivialFromMode(&psarc, mode, false)
 	if fbsdACLsEqual(acl, &psarc) {
 		return true
 	}
-	draft := fbsdNFS4TrivialFromMode(mode, true)
+	var draft fbsdACL
+	fbsdNFS4TrivialFromMode(&draft, mode, true)
 	return fbsdACLsEqual(acl, &draft)
 }
 
@@ -197,17 +201,17 @@ func fbsdNFS4Trivial(acl *freebsdACL) bool {
 // starting mode: the first permission observed per file-mode bit
 // decides, with everyone entries feeding all three classes and allow
 // entries setting the bit, deny entries leaving it clear).
-func fbsdNFS4SyncMode(acl *freebsdACL) uint32 {
+func fbsdNFS4SyncMode(acl *fbsdACL) uint32 {
 	const (
-		ir = uint32(0o400)
-		iw = uint32(0o200)
-		ix = uint32(0o100)
-		gr = uint32(0o040)
-		gw = uint32(0o020)
-		gx = uint32(0o010)
-		or = uint32(0o004)
-		ow = uint32(0o002)
-		ox = uint32(0o001)
+		userRead   = uint32(0o400)
+		userWrite  = uint32(0o200)
+		userExec   = uint32(0o100)
+		groupRead  = uint32(0o040)
+		groupWrite = uint32(0o020)
+		groupExec  = uint32(0o010)
+		otherRead  = uint32(0o004)
+		otherWrite = uint32(0o002)
+		otherExec  = uint32(0o001)
 	)
 	var mode, seen uint32
 	for i := uint32(0); i < acl.Cnt; i++ {
@@ -220,101 +224,101 @@ func fbsdNFS4SyncMode(acl *freebsdACL) uint32 {
 		}
 		switch entry.Tag {
 		case fbsdTagUserObj:
-			if entry.Perm&fbsdPermReadData != 0 && seen&ir == 0 {
-				seen |= ir
+			if entry.Perm&fbsdPermReadData != 0 && seen&userRead == 0 {
+				seen |= userRead
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= ir
+					mode |= userRead
 				}
 			}
-			if entry.Perm&fbsdPermWriteData != 0 && seen&iw == 0 {
-				seen |= iw
+			if entry.Perm&fbsdPermWriteData != 0 && seen&userWrite == 0 {
+				seen |= userWrite
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= iw
+					mode |= userWrite
 				}
 			}
-			if entry.Perm&fbsdPermExecute != 0 && seen&ix == 0 {
-				seen |= ix
+			if entry.Perm&fbsdPermExecute != 0 && seen&userExec == 0 {
+				seen |= userExec
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= ix
+					mode |= userExec
 				}
 			}
 		case fbsdTagGroupObj:
-			if entry.Perm&fbsdPermReadData != 0 && seen&gr == 0 {
-				seen |= gr
+			if entry.Perm&fbsdPermReadData != 0 && seen&groupRead == 0 {
+				seen |= groupRead
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= gr
+					mode |= groupRead
 				}
 			}
-			if entry.Perm&fbsdPermWriteData != 0 && seen&gw == 0 {
-				seen |= gw
+			if entry.Perm&fbsdPermWriteData != 0 && seen&groupWrite == 0 {
+				seen |= groupWrite
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= gw
+					mode |= groupWrite
 				}
 			}
-			if entry.Perm&fbsdPermExecute != 0 && seen&gx == 0 {
-				seen |= gx
+			if entry.Perm&fbsdPermExecute != 0 && seen&groupExec == 0 {
+				seen |= groupExec
 				if entry.EntryType == fbsdEntryTypeAllow {
-					mode |= gx
+					mode |= groupExec
 				}
 			}
 		case fbsdTagEveryone:
 			if entry.Perm&fbsdPermReadData != 0 {
-				if seen&ir == 0 {
-					seen |= ir
+				if seen&userRead == 0 {
+					seen |= userRead
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= ir
+						mode |= userRead
 					}
 				}
-				if seen&gr == 0 {
-					seen |= gr
+				if seen&groupRead == 0 {
+					seen |= groupRead
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= gr
+						mode |= groupRead
 					}
 				}
-				if seen&or == 0 {
-					seen |= or
+				if seen&otherRead == 0 {
+					seen |= otherRead
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= or
+						mode |= otherRead
 					}
 				}
 			}
 			if entry.Perm&fbsdPermWriteData != 0 {
-				if seen&iw == 0 {
-					seen |= iw
+				if seen&userWrite == 0 {
+					seen |= userWrite
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= iw
+						mode |= userWrite
 					}
 				}
-				if seen&gw == 0 {
-					seen |= gw
+				if seen&groupWrite == 0 {
+					seen |= groupWrite
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= gw
+						mode |= groupWrite
 					}
 				}
-				if seen&ow == 0 {
-					seen |= ow
+				if seen&otherWrite == 0 {
+					seen |= otherWrite
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= ow
+						mode |= otherWrite
 					}
 				}
 			}
 			if entry.Perm&fbsdPermExecute != 0 {
-				if seen&ix == 0 {
-					seen |= ix
+				if seen&userExec == 0 {
+					seen |= userExec
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= ix
+						mode |= userExec
 					}
 				}
-				if seen&gx == 0 {
-					seen |= gx
+				if seen&groupExec == 0 {
+					seen |= groupExec
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= gx
+						mode |= groupExec
 					}
 				}
-				if seen&ox == 0 {
-					seen |= ox
+				if seen&otherExec == 0 {
+					seen |= otherExec
 					if entry.EntryType == fbsdEntryTypeAllow {
-						mode |= ox
+						mode |= otherExec
 					}
 				}
 			}
@@ -324,26 +328,25 @@ func fbsdNFS4SyncMode(acl *freebsdACL) uint32 {
 }
 
 // fbsdNFS4TrivialFromMode builds the trivial NFSv4 ACL of one file
-// mode (subr_acl_nfs4.c acl_nfs4_trivial_from_mode_libc). The PSARC
-// form (canonicalSix false) emits the allow/deny owner, group and
-// everyone entries derived from the mode; the canonical-six form
+// mode into acl (subr_acl_nfs4.c acl_nfs4_trivial_from_mode_libc). The
+// PSARC form (canonicalSix false) emits the allow/deny owner, group
+// and everyone entries derived from the mode; the canonical-six form
 // (canonicalSix true) emits the six fixed entries of the NFSv4 draft
 // and distributes the mode bits between the deny and allow members.
-func fbsdNFS4TrivialFromMode(mode uint32, canonicalSix bool) freebsdACL {
-	var acl freebsdACL
+func fbsdNFS4TrivialFromMode(acl *fbsdACL, mode uint32, canonicalSix bool) {
 	acl.MaxCnt = fbsdMaxEntries
+	acl.Cnt = 0
 	if !canonicalSix {
-		fbsdNFS4TrivialPSARC(&acl, mode)
-		return acl
+		fbsdNFS4TrivialPSARC(acl, mode)
+		return
 	}
-	fbsdNFS4TrivialDraft(&acl, mode)
-	return acl
+	fbsdNFS4TrivialDraft(acl, mode)
 }
 
 // fbsdNFS4TrivialPSARC computes the PSARC/2010/029 trivial ACL of one
 // mode (subr_acl_nfs4.c acl_nfs4_compute_inherited_acl_psarc with a
 // nil parent).
-func fbsdNFS4TrivialPSARC(acl *freebsdACL, mode uint32) {
+func fbsdNFS4TrivialPSARC(acl *fbsdACL, mode uint32) {
 	base := fbsdPermReadACL | fbsdPermReadAttrs | fbsdPermReadNamed | fbsdPermSync
 	userAllow := base
 	groupAllow := base
@@ -400,7 +403,7 @@ func fbsdNFS4TrivialPSARC(acl *freebsdACL, mode uint32) {
 // (subr_acl_nfs4.c acl_nfs4_sync_acl_from_mode_draft with an empty
 // ACL: the six fixed entries are appended and the mode bits are
 // distributed between the deny and allow members).
-func fbsdNFS4TrivialDraft(acl *freebsdACL, mode uint32) {
+func fbsdNFS4TrivialDraft(acl *fbsdACL, mode uint32) {
 	writeSet := fbsdPermWriteACL | fbsdPermWriteOwner | fbsdPermWriteAttrs | fbsdPermWriteNamed
 	readSet := fbsdPermReadACL | fbsdPermReadAttrs | fbsdPermReadNamed | fbsdPermSync
 	a1 := fbsdAppendEntry(acl, fbsdTagUserObj, 0, fbsdEntryTypeDeny)
@@ -459,7 +462,7 @@ func fbsdNFS4TrivialDraft(acl *freebsdACL, mode uint32) {
 
 // fbsdAppendEntry appends one entry to the ACL and returns it (libc
 // _acl_append: the entry carries the undefined id and no flags).
-func fbsdAppendEntry(acl *freebsdACL, tag uint32, perm uint32, entryType uint16) *freebsdACLEntry {
+func fbsdAppendEntry(acl *fbsdACL, tag uint32, perm uint32, entryType uint16) *fbsdACLEntry {
 	entry := &acl.Entries[acl.Cnt]
 	acl.Cnt++
 	entry.Tag = tag
@@ -476,7 +479,7 @@ func fbsdAppendEntry(acl *freebsdACL, tag uint32, perm uint32, entryType uint16)
 // unsorted POSIX.1e submission, and the libc acl_strip_np output
 // appends the recalculated mask after the base entries, so the set arm
 // of the freebsd machine presorts exactly like libc acl_set_fd.
-func fbsdPOSIXSort(acl *freebsdACL) {
+func fbsdPOSIXSort(acl *fbsdACL) {
 	for i := uint32(1); i < acl.Cnt; i++ {
 		entry := acl.Entries[i]
 		j := i
@@ -490,7 +493,7 @@ func fbsdPOSIXSort(acl *freebsdACL) {
 
 // fbsdPOSIXLess orders two POSIX.1e entries by tag, then by id for the
 // named user and group tags (libc _posix1e_acl_entry_compare).
-func fbsdPOSIXLess(a, b freebsdACLEntry) bool {
+func fbsdPOSIXLess(a, b fbsdACLEntry) bool {
 	if a.Tag != b.Tag {
 		return a.Tag < b.Tag
 	}

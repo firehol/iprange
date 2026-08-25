@@ -65,20 +65,20 @@ func walkTreeNode(ctx *context, pageNumber uint32, object ValidationObject, code
 		state.hasPrevious = false
 		return tree.Key{}, false, err
 	}
-	header, err := treePageHeader(ctx, pageNumber, page, object, treePageSpec{
+	header, ok, err := treePageHeader(ctx, pageNumber, page, object, treePageSpec{
 		branchType:    codec.branchType,
 		leafType:      codec.leafType,
 		aux:           codec.aux,
 		expectedLevel: expectedLevel,
 	})
-	if err != nil || header == nil {
+	if err != nil || !ok {
 		state.hasPrevious = false
 		return tree.Key{}, false, err
 	}
-	if err := validateRootShape(ctx, pageNumber, object, root, header); err != nil {
+	if err := validateRootShape(ctx, pageNumber, object, root, &header); err != nil {
 		return tree.Key{}, false, err
 	}
-	inspection, ok, err := validateTreeLayout(ctx, pageNumber, page, object, header, nodeLayout(codec, header.Level))
+	inspection, ok, err := validateTreeLayout(ctx, pageNumber, page, object, &header, nodeLayout(codec, header.Level))
 	if err != nil || !ok {
 		state.hasPrevious = false
 		return tree.Key{}, false, err
@@ -94,7 +94,8 @@ func walkTreeNode(ctx *context, pageNumber uint32, object ValidationObject, code
 // tree level is the TreeLevelInvalid class).
 func readTreeNodePage(ctx *context, pageNumber uint32, object ValidationObject, path *[format.MaxTreeLevel + 1]uint32, depth int) ([]byte, error) {
 	if depth >= len(path) {
-		if err := ctx.emit(ReasonTreeLevelInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := ctx.emit(ReasonTreeLevelInvalid, object, &page, nil, nil); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -107,7 +108,8 @@ func readTreeNodePage(ctx *context, pageNumber uint32, object ValidationObject, 
 // with exactly one record is the TreeLevelInvalid class.
 func validateRootShape(ctx *context, pageNumber uint32, object ValidationObject, root bool, header *format.PageHeader) error {
 	if root && header.Level > 0 && header.ItemCount == 1 {
-		if err := ctx.emit(ReasonTreeLevelInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := ctx.emit(ReasonTreeLevelInvalid, object, &page, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -126,7 +128,7 @@ func nodeLayout(codec treeCodec, level uint16) format.CellLayout {
 // walkTreeBranch visits every branch cell in order: the per-page key
 // order, the child subtree with its expected level, and the child-first
 // fence (Rust walk_branch).
-func walkTreeBranch(ctx *context, pageNumber uint32, inspection *format.LayoutInspection, header *format.PageHeader, object ValidationObject, codec treeCodec, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeWalkState, leaf func(*context, uint32, []byte) error) (tree.Key, bool, error) {
+func walkTreeBranch(ctx *context, pageNumber uint32, inspection *format.LayoutInspection, header format.PageHeader, object ValidationObject, codec treeCodec, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeWalkState, leaf func(*context, uint32, []byte) error) (tree.Key, bool, error) {
 	var keys branchKeys
 	expected := header.Level - 1
 	cells := inspection.Cells()
@@ -172,7 +174,8 @@ func branchTreeEntry(ctx *context, pageNumber uint32, object ValidationObject, c
 	key, keyOK := codec.branchKey(cell)
 	child, childOK := codec.branchChild(cell)
 	if !keyOK || !childOK {
-		if err := ctx.emit(codec.branchInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := ctx.emit(codec.branchInvalid, object, &page, nil, nil); err != nil {
 			return tree.Key{}, 0, false, err
 		}
 		state.hasPrevious = false
@@ -189,7 +192,8 @@ func recordBranchKey(ctx *context, pageNumber uint32, object ValidationObject, k
 		keys.hasFirst = true
 	}
 	if keys.hasPrevious && !keys.previous.Less(key) {
-		if err := ctx.emit(ReasonTreeOrderInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := ctx.emit(ReasonTreeOrderInvalid, object, &page, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -203,7 +207,8 @@ func recordBranchKey(ctx *context, pageNumber uint32, object ValidationObject, k
 // class).
 func validateFence(ctx *context, pageNumber uint32, object ValidationObject, expected tree.Key, actual tree.Key, hasActual bool) error {
 	if hasActual && !actual.Equal(expected) {
-		if err := ctx.emit(ReasonTreeFenceInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := ctx.emit(ReasonTreeFenceInvalid, object, &page, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -223,7 +228,8 @@ func walkTreeLeaf(ctx *context, pageNumber uint32, inspection *format.LayoutInsp
 		}
 		key, ok := codec.leafKey(cell)
 		if !ok {
-			if err := ctx.emit(codec.leafInvalid, object, &pageNumber, nil, nil); err != nil {
+			page := pageNumber
+			if err := ctx.emit(codec.leafInvalid, object, &page, nil, nil); err != nil {
 				return tree.Key{}, false, err
 			}
 			state.hasPrevious = false
@@ -234,7 +240,8 @@ func walkTreeLeaf(ctx *context, pageNumber uint32, inspection *format.LayoutInsp
 			hasFirst = true
 		}
 		if state.hasPrevious && !state.previous.Less(key) {
-			if err := ctx.emit(ReasonTreeOrderInvalid, object, &pageNumber, nil, nil); err != nil {
+			page := pageNumber
+			if err := ctx.emit(ReasonTreeOrderInvalid, object, &page, nil, nil); err != nil {
 				return tree.Key{}, false, err
 			}
 		}

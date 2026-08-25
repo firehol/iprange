@@ -58,7 +58,8 @@ func structureTableRequiredLevel(limit uint64) (uint16, error) {
 // tail, and the leaf or directory walk.
 func walkStructureTableNode(ctx *context, pageNumber uint32, expectedLevel uint16, base uint64, path *[structureTableMaxDepth]uint32, depth int, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
 	if depth >= len(path) {
-		if err := ctx.emit(ReasonTreeLevelInvalid, ObjectStructureDictionary, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonTreeLevelInvalid, ObjectStructureDictionary, &pageCopy, nil, nil); err != nil {
 			return err
 		}
 		return nil
@@ -68,12 +69,13 @@ func walkStructureTableNode(ctx *context, pageNumber uint32, expectedLevel uint1
 	if err != nil || page == nil {
 		return err
 	}
-	header, err := structureTablePageHeader(ctx, pageNumber, page, &expectedLevel)
-	if err != nil || header == nil {
+	header, ok, err := structureTablePageHeader(ctx, pageNumber, page, &expectedLevel)
+	if err != nil || !ok {
 		return err
 	}
 	if !format.AllZero(page[header.Lower:format.PageSize]) {
-		if err := ctx.emit(ReasonPageReservedNonzero, ObjectStructureDictionary, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageReservedNonzero, ObjectStructureDictionary, &pageCopy, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -86,21 +88,22 @@ func walkStructureTableNode(ctx *context, pageNumber uint32, expectedLevel uint1
 // structureTablePageHeader runs the dense-table header inspection and
 // streams the classified finding on refusal (Rust structure_table
 // header_reason: the same classes as the tree pages).
-func structureTablePageHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (*format.PageHeader, error) {
+func structureTablePageHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (format.PageHeader, bool, error) {
 	header, problem := format.InspectStructureTableHeader(page, ctx.meta.TxnID, uint32(ctx.meta.StructureKind), expectedLevel)
 	if problem != format.TreeHeaderProblemNone {
-		if err := ctx.emit(treeHeaderProblemReason(problem), ObjectStructureDictionary, &pageNumber, nil, nil); err != nil {
-			return nil, err
+		pageCopy := pageNumber
+		if err := ctx.emit(treeHeaderProblemReason(problem), ObjectStructureDictionary, &pageCopy, nil, nil); err != nil {
+			return format.PageHeader{}, false, err
 		}
-		return nil, nil
+		return format.PageHeader{}, false, nil
 	}
-	return &header, nil
+	return header, true, nil
 }
 
 // walkStructureTableLeaf visits every nonzero record slot (Rust
 // walk_leaf): the slot cells in id order, the record count, and the
 // leaf callback with the implied id base+slot.
-func walkStructureTableLeaf(ctx *context, pageNumber uint32, page []byte, base uint64, header *format.PageHeader, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
+func walkStructureTableLeaf(ctx *context, pageNumber uint32, page []byte, base uint64, header format.PageHeader, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
 	found := 0
 	for slot := 0; slot < format.StructureRecordSlots; slot++ {
 		if err := ctx.checkpoint(); err != nil {
@@ -128,7 +131,7 @@ func walkStructureTableLeaf(ctx *context, pageNumber uint32, page []byte, base u
 // walkStructureTableBranch visits every nonzero directory child (Rust
 // walk_branch): the child span at the level below, the child base
 // arithmetic, and the recursion with the next lower level.
-func walkStructureTableBranch(ctx *context, pageNumber uint32, page []byte, base uint64, header *format.PageHeader, path *[structureTableMaxDepth]uint32, depth int, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
+func walkStructureTableBranch(ctx *context, pageNumber uint32, page []byte, base uint64, header format.PageHeader, path *[structureTableMaxDepth]uint32, depth int, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
 	span, ok := format.StructureSpanOfLevel(uint32(header.Level) - 1)
 	if !ok {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation structure coverage"}
@@ -165,5 +168,6 @@ func walkStructureTableBranch(ctx *context, pageNumber uint32, page []byte, base
 // directory page whose found cells disagree with its item count (Rust
 // page_shape_finding).
 func structureTableShapeFinding(ctx *context, pageNumber uint32) error {
-	return ctx.emit(ReasonPageHeaderInvalid, ObjectStructureDictionary, &pageNumber, nil, nil)
+	pageCopy := pageNumber
+	return ctx.emit(ReasonPageHeaderInvalid, ObjectStructureDictionary, &pageCopy, nil, nil)
 }

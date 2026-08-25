@@ -21,17 +21,19 @@ type treePageSpec struct {
 // treePageHeader runs the tree-page header inspection and streams the
 // classified finding on refusal (Rust page::slotted_header: Header and
 // Shape both report PageHeaderInvalid, Born PageBornTxnInvalid, Type
-// PageTypeMismatch, Level TreeLevelInvalid). A nil header with a nil
-// error means the page was refused as a finding.
-func treePageHeader(ctx *context, pageNumber uint32, page []byte, object ValidationObject, spec treePageSpec) (*format.PageHeader, error) {
+// PageTypeMismatch, Level TreeLevelInvalid). The header is returned by
+// value like the Rust peer: the sweep allocates nothing per page. ok is
+// false when the page was refused as a finding.
+func treePageHeader(ctx *context, pageNumber uint32, page []byte, object ValidationObject, spec treePageSpec) (format.PageHeader, bool, error) {
 	header, problem := format.InspectTreeHeader(page, ctx.meta.TxnID, spec.branchType, spec.leafType, spec.aux, spec.expectedLevel)
 	if problem != format.TreeHeaderProblemNone {
-		if err := ctx.emit(treeHeaderProblemReason(problem), object, &pageNumber, nil, nil); err != nil {
-			return nil, err
+		pageCopy := pageNumber
+		if err := ctx.emit(treeHeaderProblemReason(problem), object, &pageCopy, nil, nil); err != nil {
+			return format.PageHeader{}, false, err
 		}
-		return nil, nil
+		return format.PageHeader{}, false, nil
 	}
-	return &header, nil
+	return header, true, nil
 }
 
 // treeHeaderProblemReason maps one header problem to its reason class
@@ -68,13 +70,15 @@ func validateVariableCells(ctx *context, pageNumber uint32, page []byte, object 
 func validateTreeLayout(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, layout format.CellLayout) (format.LayoutInspection, bool, error) {
 	inspection, ok := format.InspectLayout(page, header, layout)
 	if !ok {
-		if err := ctx.emit(ReasonPageHeaderInvalid, object, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageHeaderInvalid, object, &pageCopy, nil, nil); err != nil {
 			return format.LayoutInspection{}, false, err
 		}
 		return format.LayoutInspection{}, false, nil
 	}
 	if inspection.ReservedNonzero {
-		if err := ctx.emit(ReasonPageReservedNonzero, object, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageReservedNonzero, object, &pageCopy, nil, nil); err != nil {
 			return format.LayoutInspection{}, false, err
 		}
 	}

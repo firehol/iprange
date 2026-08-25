@@ -248,7 +248,8 @@ func scanStructureNode(m *mapping.Mapping, meta format.Meta, pageNumber uint32, 
 		return err
 	}
 	if !claimed {
-		return events.unknown(reason, &pageNumber)
+		pageCopy := pageNumber
+		return events.unknown(reason, &pageCopy)
 	}
 	page, problem := checkedPage(m, pageNumber, meta.PageCount)
 	if problem != nil {
@@ -318,7 +319,8 @@ func scanStructureLeaf(m *mapping.Mapping, meta format.Meta, page []byte, header
 		}
 	}
 	if found != int(header.ItemCount) {
-		return events.unknown(validation.ReasonPageHeaderInvalid, &pageNumber)
+		pageCopy := pageNumber
+		return events.unknown(validation.ReasonPageHeaderInvalid, &pageCopy)
 	}
 	return nil
 }
@@ -360,7 +362,8 @@ func scanStructureBranch(m *mapping.Mapping, meta format.Meta, page []byte, head
 		}
 	}
 	if found != int(header.ItemCount) {
-		return events.unknown(validation.ReasonPageHeaderInvalid, &pageNumber)
+		pageCopy := pageNumber
+		return events.unknown(validation.ReasonPageHeaderInvalid, &pageCopy)
 	}
 	return nil
 }

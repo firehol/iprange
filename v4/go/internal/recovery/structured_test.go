@@ -33,16 +33,7 @@ func structuredSourceLimit(t *testing.T, path string, feedLimit uint64, feeds []
 	if err != nil {
 		t.Fatalf("FreshOutputSpec: %v", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatalf("create fixture: %v", err)
-	}
-	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
-	if err != nil {
-		f.Close()
-		t.Fatalf("NewOutputBuilderOverFile: %v", err)
-	}
-	f.Close()
+	builder := buildFixtureWriter(t, path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
 	for _, pair := range feeds {
 		if err := builder.PushFeed(pair[0].(string), pair[1].(uint32)); err != nil {
 			t.Fatalf("PushFeed: %v", err)
@@ -84,17 +75,7 @@ func structuredOutputBuilder(t *testing.T, path string, source format.Meta) *wri
 	if err != nil {
 		t.Fatalf("FreshOutputSpec: %v", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatalf("create fixture: %v", err)
-	}
-	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
-	if err != nil {
-		f.Close()
-		t.Fatalf("NewOutputBuilderOverFile: %v", err)
-	}
-	f.Close()
-	return builder
+	return buildFixtureWriter(t, path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
 }
 
 // constructStructured runs one structured construction and closes the

@@ -153,12 +153,14 @@ func validateMembershipRecord(ctx *context, pageNumber uint32, cell []byte, feed
 		*maximumID = record.ID
 	}
 	if uint64(record.ID) >= ctx.meta.MembershipIDLimit {
-		if err := membershipBitmapFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := membershipBitmapFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
 	if record.Refcount == 0 {
-		if err := membershipRefcountFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := membershipRefcountFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
@@ -167,7 +169,8 @@ func validateMembershipRecord(ctx *context, pageNumber uint32, cell []byte, feed
 		return err
 	}
 	if result != InsertInserted {
-		if err := membershipBitmapFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := membershipBitmapFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
@@ -225,12 +228,14 @@ func validateMembershipRecordBitmap(ctx *context, pageNumber uint32, cell []byte
 	}
 	lengthMatches := scan.words == record.WordCount
 	if !lengthMatches || scan.lastWord == 0 {
-		if err := membershipBitmapFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := membershipBitmapFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
 	if scan.activeInvalid {
-		if err := ctx.emit(ReasonMembershipActiveFeedInvalid, ObjectMembershipDictionary, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonMembershipActiveFeedInvalid, ObjectMembershipDictionary, &pageCopy, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -238,7 +243,8 @@ func validateMembershipRecordBitmap(ctx *context, pageNumber uint32, cell []byte
 		var digest [32]byte
 		hasher.Sum(digest[:0])
 		if digest != record.Digest {
-			if err := membershipDigestFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := membershipDigestFinding(ctx, &pageCopy); err != nil {
 				return err
 			}
 		}
@@ -286,7 +292,8 @@ func validateMembershipHash(ctx *context, pageNumber uint32, cell []byte, previo
 		return err
 	}
 	if uint64(key.ID) >= ctx.meta.MembershipIDLimit || !marked {
-		if err := membershipReverseFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := membershipReverseFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
@@ -306,10 +313,12 @@ func validateMembershipHash(ctx *context, pageNumber uint32, cell []byte, previo
 func compareMembershipCollision(ctx *context, pageNumber uint32, left, right, wordCount uint32, catalog *reader.ImmutableReader) error {
 	equal, err := equalMemberships(ctx, catalog, left, right, wordCount)
 	if err != nil {
-		return membershipReverseFinding(ctx, &pageNumber)
+		pageCopy := pageNumber
+		return membershipReverseFinding(ctx, &pageCopy)
 	}
 	if equal {
-		return membershipHashFinding(ctx, &pageNumber)
+		pageCopy := pageNumber
+		return membershipHashFinding(ctx, &pageCopy)
 	}
 	return nil
 }

@@ -51,17 +51,7 @@ func directSourceBuilder(t *testing.T, path string) *writer.OutputBuilder {
 		CommitNonce:    id16(2),
 		FeedIndexLimit: 0,
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatalf("create fixture: %v", err)
-	}
-	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, 0)
-	if err != nil {
-		f.Close()
-		t.Fatalf("NewOutputBuilderOverFile: %v", err)
-	}
-	f.Close()
-	return builder
+	return buildFixtureWriter(t, path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, 0)
 }
 
 // directOutputBuilder starts one recovery destination output at path
@@ -72,17 +62,7 @@ func directOutputBuilder(t *testing.T, path string) *writer.OutputBuilder {
 	if err != nil {
 		t.Fatalf("FreshOutputSpec: %v", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatalf("create fixture: %v", err)
-	}
-	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, 0)
-	if err != nil {
-		f.Close()
-		t.Fatalf("NewOutputBuilderOverFile: %v", err)
-	}
-	f.Close()
-	return builder
+	return buildFixtureWriter(t, path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, 0)
 }
 
 // finishRanges seals one direct source over the given ranges and

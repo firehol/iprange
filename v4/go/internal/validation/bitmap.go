@@ -71,7 +71,8 @@ type bitmapNodeResult struct {
 // leaf/branch split).
 func validateBitmapNode(ctx *context, pageNumber uint32, expectedLevel uint16, base, limit uint64, kind bitmap.Kind, path *[bitmap.MaxLevel + 1]uint32, depth int) (*bitmapNodeResult, uint16, error) {
 	if depth >= len(path) {
-		if err := ctx.emit(ReasonTreeLevelInvalid, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonTreeLevelInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return nil, 0, err
 		}
 		return nil, 0, nil
@@ -83,13 +84,15 @@ func validateBitmapNode(ctx *context, pageNumber uint32, expectedLevel uint16, b
 	}
 	header, problem := bitmap.CheckedHeader(page, ctx.meta.TxnID, kind, &expectedLevel)
 	if problem != bitmap.HeaderProblemNone {
-		if err := ctx.emit(bitmapHeaderProblemReason(problem), bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(bitmapHeaderProblemReason(problem), bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return nil, 0, err
 		}
 		return nil, 0, nil
 	}
 	if !bitmap.ReservedZero(page, header.Level) {
-		if err := ctx.emit(ReasonPageReservedNonzero, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageReservedNonzero, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -136,7 +139,8 @@ func validateBitmapLeaf(ctx *context, pageNumber uint32, page []byte, base, limi
 		}
 	}
 	if totals.nonzeroWords != uint64(header.ItemCount) {
-		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -185,7 +189,8 @@ func validateBitmapWord(ctx *context, pageNumber uint32, base, limit uint64, kin
 	}
 	validMask := inRangeMask(wordBase, limit, kind)
 	if word&^validMask != 0 {
-		if err := ctx.emit(ReasonBitmapSummaryInvalid, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonBitmapSummaryInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return 0, 0, 0, err
 		}
 	}
@@ -284,7 +289,8 @@ func validateBitmapBranch(ctx *context, pageNumber uint32, page []byte, base, li
 		}
 	}
 	if totals.childCount != uint64(header.ItemCount) {
-		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageHeaderInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -310,7 +316,8 @@ func (t *bitmapBranchTotals) add(ctx *context, pageNumber uint32, page []byte, i
 		return formatError(err)
 	}
 	if summary != expected {
-		if err := ctx.emit(ReasonBitmapSummaryInvalid, bitmapObject(kind), &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonBitmapSummaryInvalid, bitmapObject(kind), &pageCopy, nil, nil); err != nil {
 			return err
 		}
 	}

@@ -1,18 +1,16 @@
 //go:build !race
 
-// Blob branch layout-proof allocation pin (milestone-2 performance
-// fix plus the M5 value-return refactor): the membership blob walk
-// proves each branch page layout exactly once (Rust branch(): parse
-// and inspect_layout once, then branch_records_valid and
-// branch_children consume the proved cells), and InspectLayout
-// returns the inspection by value, so the walk allocates nothing per
-// branch page: the measured floor is the fixed walk baseline. Before
-// the milestone-2 fix every branch page ran three proofs (branch,
-// branchRecordsValid, branchChildren); before the M5 refactor the
-// value-returning proof still escaped one LayoutInspection per branch
-// page. The pin runs only in uninstrumented builds: race and
-// checkptr instrumentation allocate inside the measured path itself
-// (publication pins carry the same tag for the same reason).
+// Blob scan allocation pin: the membership blob walk proves each
+// branch page layout exactly once (Rust branch(): parse and
+// inspect_layout once, then branch_records_valid and
+// branch_children consume the proved cells), and the proof, the
+// header, the cell iterator, and the span cursors all travel by value
+// (the Rust Option<Span>/Option<u64> peer), so the walk allocates
+// nothing per branch page, per leaf page, or per record: the single
+// measured object per run is the scanner itself. The pin runs only in
+// uninstrumented builds: race and checkptr instrumentation allocate
+// inside the measured path itself (publication pins carry the same
+// tag for the same reason).
 
 package recovery
 
@@ -88,14 +86,10 @@ func TestMembershipBlobBranchNoLayoutProofAllocation(t *testing.T) {
 		t.Fatal("blob scan incomplete")
 	}
 	t.Logf("blob scan allocations per run over %d branch pages: %.0f", wantBranchPages, allocs)
-	// The fixture walk measures exactly the fixed 924-object leaf and
-	// branch walk baseline (three per leaf page, one per branch
-	// record, plus the branch walk state): the value-returning layout
-	// proof adds nothing per branch page. Before the M5 refactor the
-	// measured floor was 924 + wantBranchPages; before the
-	// milestone-2 fix it was 924 + 3 per branch page.
-	const walkBaseline = 924
+	// The fixture walk allocates exactly one object per run - the
+	// scanner itself - and nothing per page or record.
+	const walkBaseline = 1
 	if allocs != walkBaseline {
-		t.Fatalf("blob scan allocates %.0f objects per run, want exactly %d (measured walk baseline, no per-branch-page layout allocation)", allocs, walkBaseline)
+		t.Fatalf("blob scan allocates %.0f objects per run, want exactly %d (only the fixed scanner object; nothing per page or record)", allocs, walkBaseline)
 	}
 }

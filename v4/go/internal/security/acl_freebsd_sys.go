@@ -34,14 +34,14 @@ const (
 	fbsdPCACLNFS4     = 64                  // _PC_ACL_NFS4 pathconf name
 )
 
-// freebsdGetACL reads one fd's access ACL into the caller-provided
+// fbsdGetACL reads one fd's access ACL into the caller-provided
 // buffer (libc acl_get_fd + acl_get_fd_np). The caller's stack keeps
 // the 4088-byte kernel struct: the buffer never escapes, so no owned
 // page-sized heap object exists on the hot proof paths (the
 // complete-page ownership pin measures it). The kernel struct is
 // sized to the kernel maximum before the call because the kernel
 // refuses undersized acl_maxcnt, exactly like libc acl_init.
-func freebsdGetACL(f *os.File, acl *freebsdACL) (freebsdACLBrand, error) {
+func fbsdGetACL(f *os.File, acl *fbsdACL) (fbsdACLBrand, error) {
 	acl.MaxCnt = fbsdMaxEntries
 	brand := fbsdBrandPOSIX
 	typ := fbsdACLTypeAccess
@@ -59,10 +59,10 @@ func freebsdGetACL(f *os.File, acl *freebsdACL) (freebsdACLBrand, error) {
 	return brand, nil
 }
 
-// freebsdSetACL writes one access ACL with its brand (libc acl_set_fd:
+// fbsdSetACL writes one access ACL with its brand (libc acl_set_fd:
 // the POSIX.1e arm presorts into the canonical kernel order first; the
 // NFSv4 arm submits the ACL as built).
-func freebsdSetACL(f *os.File, acl *freebsdACL, brand freebsdACLBrand) error {
+func fbsdSetACL(f *os.File, acl *fbsdACL, brand fbsdACLBrand) error {
 	if brand == fbsdBrandPOSIX {
 		fbsdPOSIXSort(acl)
 	}
@@ -83,24 +83,25 @@ func freebsdSetACL(f *os.File, acl *freebsdACL, brand freebsdACLBrand) error {
 // recalculate flag) rebuilds the trivial form of the brand and the
 // result is applied.
 func removeInheritedACL(f *os.File) error {
-	var acl freebsdACL
-	brand, err := freebsdGetACL(f, &acl)
+	var acl fbsdACL
+	brand, err := fbsdGetACL(f, &acl)
 	if err != nil {
 		return err
 	}
 	if fbsdTrivial(&acl, brand) {
 		return nil
 	}
-	stripped := fbsdStrip(&acl, brand)
-	return freebsdSetACL(f, &stripped, brand)
+	var stripped fbsdACL
+	fbsdStrip(&acl, brand, &stripped)
+	return fbsdSetACL(f, &stripped, brand)
 }
 
 // requireTrivialACL proves the artifact carries no inherited access
 // ACL (Rust security/freebsd.rs require_trivial): a nontrivial ACL
 // fails the creator-only proof with the access-policy class.
 func requireTrivialACL(f *os.File) error {
-	var acl freebsdACL
-	brand, err := freebsdGetACL(f, &acl)
+	var acl fbsdACL
+	brand, err := fbsdGetACL(f, &acl)
 	if err != nil {
 		return err
 	}

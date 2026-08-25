@@ -4,13 +4,15 @@ package validation
 
 // Allocation pin of the live validation sweep (regression guard for
 // the range-walk per-record escape): the sweep of a dense committed
-// generation must not allocate per range record. The walk cursors
-// hold the previous record by value with a presence flag, so a
-// 2000-record sweep stays near the fixed per-page overhead (measured
-// ~255 allocations at this HEAD; the pre-fix pointer-cursor form
-// added one heap object per record, ~2255). The generous bound
-// catches that shape while tolerating Go-version fixed-overhead
-// drift.
+// generation must not allocate per range record or per page. The
+// walk cursors hold the previous record by value with a presence
+// flag, the proof and header travel by value, and the refusal
+// envelopes copy the page number inside the cold arms, so a
+// 2000-record sweep costs only the fixed one-time open machinery
+// (measured ~103 allocations per Validate call at this HEAD: the
+// directory/mapping open path, not the sweep). The bound catches the
+// per-record pointer-cursor form (~2000 extra) while tolerating
+// Go-version fixed-overhead drift.
 
 import (
 	"path/filepath"
@@ -51,7 +53,8 @@ func TestValidateLiveSweepAllocationPin(t *testing.T) {
 			t.Fatalf("validate: failure %v result %+v", failure, result)
 		}
 	})
-	if allocs > 1024 {
-		t.Fatalf("live sweep allocations %.0f, want <= 1024 (per-record allocation regression)", allocs)
+	t.Logf("live sweep allocations: %.0f", allocs)
+	if allocs > 200 {
+		t.Fatalf("live sweep allocations %.0f, want <= 200 (per-record or per-page allocation regression)", allocs)
 	}
 }

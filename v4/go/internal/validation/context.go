@@ -304,14 +304,16 @@ func (c *context) markAllocated(pageNumber uint32, object ValidationObject) erro
 		return err
 	}
 	if pageNumber < 2 || uint64(pageNumber) >= c.meta.PageCount {
-		return c.emit(ReasonPageOutOfBounds, object, &pageNumber, nil, nil)
+		page := pageNumber
+		return c.emit(ReasonPageOutOfBounds, object, &page, nil, nil)
 	}
 	previous, err := c.claims.add(pageNumber, claimAlloc)
 	if err != nil {
 		return err
 	}
 	if previous != claimUnclaimed {
-		return c.emit(ReasonAllocationPartitionInvalid, object, &pageNumber, nil, nil)
+		page := pageNumber
+		return c.emit(ReasonAllocationPartitionInvalid, object, &page, nil, nil)
 	}
 	return nil
 }
@@ -340,7 +342,8 @@ func (c *context) requireGraphBounds(pageNumber uint32, object ValidationObject)
 	if pageNumber >= 2 && uint64(pageNumber) < c.meta.PageCount {
 		return true, nil
 	}
-	if err := c.emit(ReasonPageOutOfBounds, object, &pageNumber, nil, nil); err != nil {
+	page := pageNumber
+	if err := c.emit(ReasonPageOutOfBounds, object, &page, nil, nil); err != nil {
 		return false, err
 	}
 	unbounded := object == ObjectRangeTree
@@ -363,7 +366,8 @@ func (c *context) claimGraphPage(pageNumber uint32, object ValidationObject, pat
 				break
 			}
 		}
-		if err := c.emit(reason, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := c.emit(reason, object, &page, nil, nil); err != nil {
 			return false, err
 		}
 		unbounded := object == ObjectRangeTree
@@ -376,7 +380,8 @@ func (c *context) claimGraphPage(pageNumber uint32, object ValidationObject, pat
 		return false, err
 	}
 	if previous&claimAlloc != 0 {
-		if err := c.emit(ReasonAllocationPartitionInvalid, object, &pageNumber, nil, nil); err != nil {
+		page := pageNumber
+		if err := c.emit(ReasonAllocationPartitionInvalid, object, &page, nil, nil); err != nil {
 			return false, err
 		}
 	}
@@ -389,7 +394,8 @@ func (c *context) loadGraphPage(pageNumber uint32, object ValidationObject) ([]b
 	}
 	page, err := c.mapping.Page(pageNumber)
 	if err != nil {
-		if err2 := c.emit(ReasonIoError, object, &pageNumber, nil, nil); err2 != nil {
+		pageCopy := pageNumber
+		if err2 := c.emit(ReasonIoError, object, &pageCopy, nil, nil); err2 != nil {
 			return nil, err2
 		}
 		unbounded := object == ObjectRangeTree
@@ -399,7 +405,8 @@ func (c *context) loadGraphPage(pageNumber uint32, object ValidationObject) ([]b
 		return nil, nil
 	}
 	if !format.PageChecksumValid(page) {
-		if err2 := c.emit(ReasonPageCrcMismatch, object, &pageNumber, nil, nil); err2 != nil {
+		pageCopy := pageNumber
+		if err2 := c.emit(ReasonPageCrcMismatch, object, &pageCopy, nil, nil); err2 != nil {
 			return nil, err2
 		}
 		unbounded := object == ObjectRangeTree

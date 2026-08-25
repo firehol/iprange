@@ -131,7 +131,8 @@ func catalogValidateRecord(ctx *context, pageNumber uint32, cell []byte) error {
 		return nil
 	}
 	if uint64(index) >= ctx.meta.FeedIndexLimit {
-		return ctx.emit(ReasonCatalogBijectionInvalid, ObjectCatalogIndexTree, &pageNumber, nil, nil)
+		pageCopy := pageNumber
+		return ctx.emit(ReasonCatalogBijectionInvalid, ObjectCatalogIndexTree, &pageCopy, nil, nil)
 	}
 	return nil
 }

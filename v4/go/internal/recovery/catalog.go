@@ -70,14 +70,14 @@ func (catalogNameCodec) branchInvalid() validation.ValidationReason {
 func (catalogNameCodec) leafInvalid() validation.ValidationReason {
 	return validation.ReasonCatalogInvalid
 }
-func (catalogNameCodec) decodeBranch(cell []byte) (treeKey, uint32, bool) {
+func (catalogNameCodec) decodeBranch(cell []byte) ([]byte, uint32, bool) {
 	child, name, err := format.DecodeCatalogEntry(cell)
 	if err != nil {
 		return nil, 0, false
 	}
 	return name, child, true
 }
-func (catalogNameCodec) decodeLeafKey(cell []byte) (treeKey, bool) {
+func (catalogNameCodec) decodeLeafKey(cell []byte) ([]byte, bool) {
 	_, name, err := format.DecodeCatalogEntry(cell)
 	if err != nil {
 		return nil, false
@@ -87,16 +87,16 @@ func (catalogNameCodec) decodeLeafKey(cell []byte) (treeKey, bool) {
 
 // lessTreeName orders one name key like the Rust FeedName Ord: valid
 // names are NUL-free, so the fixed-array order equals the byte order.
-func lessTreeName(a, b treeKey) bool {
-	return bytes.Compare(a.([]byte), b.([]byte)) < 0
+func lessTreeName(a, b []byte) bool {
+	return bytes.Compare(a, b) < 0
 }
 
-func equalTreeName(a, b treeKey) bool {
-	return bytes.Equal(a.([]byte), b.([]byte))
+func equalTreeName(a, b []byte) bool {
+	return bytes.Equal(a, b)
 }
 
-func (catalogNameCodec) less(a, b treeKey) bool  { return lessTreeName(a, b) }
-func (catalogNameCodec) equal(a, b treeKey) bool { return equalTreeName(a, b) }
+func (catalogNameCodec) less(a, b []byte) bool  { return lessTreeName(a, b) }
+func (catalogNameCodec) equal(a, b []byte) bool { return equalTreeName(a, b) }
 
 // catalogIndexCodec is the index-tree scan codec (Rust IndexCodec: the
 // fixed 8-byte branch cells and the variable name-record leaves keyed
@@ -121,22 +121,22 @@ func (catalogIndexCodec) branchInvalid() validation.ValidationReason {
 func (catalogIndexCodec) leafInvalid() validation.ValidationReason {
 	return validation.ReasonCatalogInvalid
 }
-func (catalogIndexCodec) decodeBranch(cell []byte) (treeKey, uint32, bool) {
+func (catalogIndexCodec) decodeBranch(cell []byte) (uint32, uint32, bool) {
 	first, child, err := format.DecodeCatalogIndexBranchFields(cell)
 	if err != nil {
-		return nil, 0, false
+		return 0, 0, false
 	}
 	return first, child, true
 }
-func (catalogIndexCodec) decodeLeafKey(cell []byte) (treeKey, bool) {
+func (catalogIndexCodec) decodeLeafKey(cell []byte) (uint32, bool) {
 	index, _, err := format.DecodeCatalogEntry(cell)
 	if err != nil {
-		return nil, false
+		return 0, false
 	}
 	return index, true
 }
-func (catalogIndexCodec) less(a, b treeKey) bool  { return a.(uint32) < b.(uint32) }
-func (catalogIndexCodec) equal(a, b treeKey) bool { return a.(uint32) == b.(uint32) }
+func (catalogIndexCodec) less(a, b uint32) bool  { return a < b }
+func (catalogIndexCodec) equal(a, b uint32) bool { return a == b }
 
 // catalogEvents wires one catalog tree scan into the reporter and the
 // table builder (Rust catalog::Events: the page and envelope events

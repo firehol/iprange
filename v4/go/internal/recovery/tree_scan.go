@@ -15,14 +15,14 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/validation"
 )
 
-// treeKey is one compared key of a recovery tree scan (Rust
-// Codec::Key: the numeric catalog index keys and the owned feed-name
-// keys). Only the codec compares keys; the walk never interprets one.
-type treeKey any
-
 // treeCodec abstracts the tree-specific operations of one recovery
-// tree scan (Rust tree_scan::Codec).
-type treeCodec interface {
+// tree scan (Rust tree_scan::Codec), parameterized by the key type K
+// (Rust Codec::Key: the numeric catalog index and membership ID keys,
+// and the owned feed-name keys). Only the codec compares keys; the
+// walk never interprets one. Parameterizing the walk over K keeps the
+// scan state and the returned first keys concrete, so no per-record
+// interface boxing exists (the Rust Option<K> peer).
+type treeCodec[K any] interface {
 	object() validation.ValidationObject
 	branchType() format.PageType
 	leafType() format.PageType
@@ -31,10 +31,18 @@ type treeCodec interface {
 	leafLayout() format.CellLayout
 	branchInvalid() validation.ValidationReason
 	leafInvalid() validation.ValidationReason
-	decodeBranch(cell []byte) (key treeKey, child uint32, ok bool)
-	decodeLeafKey(cell []byte) (key treeKey, ok bool)
-	less(a, b treeKey) bool
-	equal(a, b treeKey) bool
+	decodeBranch(cell []byte) (key K, child uint32, ok bool)
+	decodeLeafKey(cell []byte) (key K, ok bool)
+	less(a, b K) bool
+	equal(a, b K) bool
+}
+
+// treeKeyOption is one optional scan key returned by value (the Rust
+// Option<K> scan result): the ok flag carries the None separation, so
+// the walk never boxes a key.
+type treeKeyOption[K any] struct {
+	value K
+	ok    bool
 }
 
 // treeEvents consumes one recovery tree scan (Rust
@@ -49,52 +57,54 @@ type treeEvents interface {
 // scanTree walks one reachable slotted tree (Rust tree_scan::scan: an
 // absent root is the empty tree; the previous-key state resets after
 // every refused page or cell, exactly like the Rust arms).
-func scanTree(codec treeCodec, m *mapping.Mapping, meta format.Meta, root uint32, pages *pageSet, check func() error, events treeEvents) error {
+func scanTree[K any](codec treeCodec[K], m *mapping.Mapping, meta format.Meta, root uint32, pages *pageSet, check func() error, events treeEvents) error {
 	if root == 0 {
 		return nil
 	}
-	state := &treeScanState{}
+	state := treeScanState[K]{}
 	var path [format.MaxTreeLevel + 1]uint32
-	_, err := scanTreeNode(codec, m, meta, root, nil, true, &path, 0, state, pages, check, events)
+	_, err := scanTreeNode(codec, m, meta, root, nil, true, &path, 0, &state, pages, check, events)
 	return err
 }
 
 // treeScanState is the previous-key state of one tree walk (Rust
 // tree_scan::State).
-type treeScanState struct {
-	previous treeKey
+type treeScanState[K any] struct {
+	previous K
 	has      bool
 }
 
 // scanTreeNode walks one node of the tree (Rust scan_node: a refused
 // node resets the order state and returns no key; a collapsed root
 // streams the level envelope).
-func scanTreeNode(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState, pages *pageSet, check func() error, events treeEvents) (treeKey, error) {
+func scanTreeNode[K any](codec treeCodec[K], m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState[K], pages *pageSet, check func() error, events treeEvents) (treeKeyOption[K], error) {
 	if err := live.Checkpoint(check); err != nil {
-		return nil, err
+		return treeKeyOption[K]{}, err
 	}
 	claimed, reason, err := claimTreePage(meta, pageNumber, path, depth, pages)
 	if err != nil {
-		return nil, err
+		return treeKeyOption[K]{}, err
 	}
 	if !claimed {
 		state.has = false
-		if err := emitTreeUnknown(events, reason, codec.object(), &pageNumber); err != nil {
-			return nil, err
+		page := pageNumber
+		if err := emitTreeUnknown(events, reason, codec.object(), &page); err != nil {
+			return treeKeyOption[K]{}, err
 		}
-		return nil, nil
+		return treeKeyOption[K]{}, nil
 	}
 	inspection, ok, header, err := readTreePage(codec, m, meta, pageNumber, expectedLevel, events)
 	if err != nil {
-		return nil, err
+		return treeKeyOption[K]{}, err
 	}
 	if !ok {
 		state.has = false
-		return nil, nil
+		return treeKeyOption[K]{}, nil
 	}
 	if root && header.Level > 0 && header.ItemCount == 1 {
-		if err := emitTreeUnknown(events, validation.ReasonTreeLevelInvalid, codec.object(), &pageNumber); err != nil {
-			return nil, err
+		page := pageNumber
+		if err := emitTreeUnknown(events, validation.ReasonTreeLevelInvalid, codec.object(), &page); err != nil {
+			return treeKeyOption[K]{}, err
 		}
 	}
 	if header.Level == 0 {
@@ -115,31 +125,31 @@ func claimTreePage(meta format.Meta, pageNumber uint32, path *[format.MaxTreeLev
 // counts the page event). The proved inspection is returned so the
 // leaf and branch arms reuse it instead of re-proving the page, like
 // the Rust cell walks that follow the single proof.
-func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (format.LayoutInspection, bool, *format.PageHeader, error) {
+func readTreePage[K any](codec treeCodec[K], m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (format.LayoutInspection, bool, format.PageHeader, error) {
 	page, problem := checkedPage(m, pageNumber, meta.PageCount)
 	if problem != nil {
 		if err := rejectTreePage(events, codec.object(), pageNumber, problem.reason, problem.ioUnreadable); err != nil {
-			return format.LayoutInspection{}, false, nil, err
+			return format.LayoutInspection{}, false, format.PageHeader{}, err
 		}
-		return format.LayoutInspection{}, false, nil, nil
+		return format.LayoutInspection{}, false, format.PageHeader{}, nil
 	}
 	header, ok, err := parseTreePage(codec, page, meta, pageNumber, expectedLevel, events)
 	if err != nil || !ok {
-		return format.LayoutInspection{}, false, nil, err
+		return format.LayoutInspection{}, false, format.PageHeader{}, err
 	}
 	layout := codec.branchLayout()
 	if header.Level == 0 {
 		layout = codec.leafLayout()
 	}
-	inspection, valid := format.InspectLayout(page, header, layout)
+	inspection, valid := format.InspectLayout(page, &header, layout)
 	if !valid || inspection.ReservedNonzero {
 		if err := rejectTreePage(events, codec.object(), pageNumber, validation.ReasonPageHeaderInvalid, false); err != nil {
-			return format.LayoutInspection{}, false, nil, err
+			return format.LayoutInspection{}, false, format.PageHeader{}, err
 		}
-		return format.LayoutInspection{}, false, nil, nil
+		return format.LayoutInspection{}, false, format.PageHeader{}, nil
 	}
 	if err := events.pageAccepted(); err != nil {
-		return format.LayoutInspection{}, false, nil, err
+		return format.LayoutInspection{}, false, format.PageHeader{}, err
 	}
 	return inspection, true, header, nil
 }
@@ -147,7 +157,7 @@ func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 // parseTreePage runs the tree page header inspection (Rust
 // parse_tree: the type class maps to PageTypeMismatch, every other
 // header refusal to PageHeaderInvalid).
-func parseTreePage(codec treeCodec, page []byte, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (*format.PageHeader, bool, error) {
+func parseTreePage[K any](codec treeCodec[K], page []byte, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (format.PageHeader, bool, error) {
 	header, problem := format.InspectTreeHeader(page, meta.TxnID, byte(codec.branchType()), byte(codec.leafType()), codec.aux(), expectedLevel)
 	if problem != format.TreeHeaderProblemNone {
 		reason := validation.ReasonPageHeaderInvalid
@@ -155,11 +165,11 @@ func parseTreePage(codec treeCodec, page []byte, meta format.Meta, pageNumber ui
 			reason = validation.ReasonPageTypeMismatch
 		}
 		if err := rejectTreePage(events, codec.object(), pageNumber, reason, false); err != nil {
-			return nil, false, err
+			return format.PageHeader{}, false, err
 		}
-		return nil, false, nil
+		return format.PageHeader{}, false, nil
 	}
-	return &header, true, nil
+	return header, true, nil
 }
 
 // rejectTreePage streams one refused tree page (Rust
@@ -181,42 +191,39 @@ func emitTreeUnknown(events treeEvents, reason validation.ValidationReason, obje
 // undecodable cell streams the leaf-invalid envelope and the no-cell
 // event; the order regression streams its envelope; readable cells
 // stream the leaf event).
-func scanTreeLeaf(codec treeCodec, inspection *format.LayoutInspection, header *format.PageHeader, pageNumber uint32, state *treeScanState, events treeEvents) (treeKey, error) {
-	var first treeKey
-	if inspection == nil {
-		// Unreachable: readTreePage proved the layout before returning.
-		// Kept as the Rust cell() refusal arm of the inspect helper.
-		return nil, pageDecodeError()
-	}
+func scanTreeLeaf[K any](codec treeCodec[K], inspection *format.LayoutInspection, header format.PageHeader, pageNumber uint32, state *treeScanState[K], events treeEvents) (treeKeyOption[K], error) {
+	var first treeKeyOption[K]
 	cells := inspection.Cells()
 	for index := 0; index < int(header.ItemCount); index++ {
 		cell, ok := cells.Next()
 		if !ok {
-			return nil, pageDecodeError()
+			return first, pageDecodeError()
 		}
 		key, ok := codec.decodeLeafKey(cell)
 		if !ok {
-			if err := emitTreeUnknown(events, codec.leafInvalid(), codec.object(), &pageNumber); err != nil {
-				return nil, err
+			page := pageNumber
+			if err := emitTreeUnknown(events, codec.leafInvalid(), codec.object(), &page); err != nil {
+				return first, err
 			}
 			if err := events.leaf(pageNumber, index, nil, false); err != nil {
-				return nil, err
+				return first, err
 			}
 			state.has = false
 			continue
 		}
-		if first == nil {
-			first = key
+		if !first.ok {
+			first = treeKeyOption[K]{value: key, ok: true}
 		}
 		if state.has && !codec.less(state.previous, key) {
-			if err := emitTreeUnknown(events, validation.ReasonTreeOrderInvalid, codec.object(), &pageNumber); err != nil {
-				return nil, err
+			page := pageNumber
+			if err := emitTreeUnknown(events, validation.ReasonTreeOrderInvalid, codec.object(), &page); err != nil {
+				return first, err
 			}
 		}
 		state.previous = key
 		state.has = true
 		if err := events.leaf(pageNumber, index, cell, true); err != nil {
-			return nil, err
+			return first, err
 		}
 	}
 	return first, nil
@@ -226,38 +233,35 @@ func scanTreeLeaf(codec treeCodec, inspection *format.LayoutInspection, header *
 // undecodable branch cell streams the branch-invalid envelope and
 // resets the order state; the order and fence defects stream their
 // envelopes, and the walk descends into every decoded child).
-func scanTreeBranch(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, inspection *format.LayoutInspection, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState, pages *pageSet, check func() error, events treeEvents) (treeKey, error) {
-	var first treeKey
-	var previous treeKey
+func scanTreeBranch[K any](codec treeCodec[K], m *mapping.Mapping, meta format.Meta, pageNumber uint32, inspection *format.LayoutInspection, header format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *treeScanState[K], pages *pageSet, check func() error, events treeEvents) (treeKeyOption[K], error) {
+	var first treeKeyOption[K]
+	var previous K
 	var hasPrevious bool
-	if inspection == nil {
-		// Unreachable: readTreePage proved the layout before returning.
-		// Kept as the Rust cell() refusal arm of the inspect helper.
-		return nil, pageDecodeError()
-	}
 	cells := inspection.Cells()
 	for index := 0; index < int(header.ItemCount); index++ {
 		if err := live.Checkpoint(check); err != nil {
-			return nil, err
+			return first, err
 		}
 		cell, ok := cells.Next()
 		if !ok {
-			return nil, pageDecodeError()
+			return first, pageDecodeError()
 		}
 		key, child, ok := codec.decodeBranch(cell)
 		if !ok {
-			if err := emitTreeUnknown(events, codec.branchInvalid(), codec.object(), &pageNumber); err != nil {
-				return nil, err
+			page := pageNumber
+			if err := emitTreeUnknown(events, codec.branchInvalid(), codec.object(), &page); err != nil {
+				return first, err
 			}
 			state.has = false
 			continue
 		}
-		if first == nil {
-			first = key
+		if !first.ok {
+			first = treeKeyOption[K]{value: key, ok: true}
 		}
 		if hasPrevious && !codec.less(previous, key) {
-			if err := emitTreeUnknown(events, validation.ReasonTreeOrderInvalid, codec.object(), &pageNumber); err != nil {
-				return nil, err
+			page := pageNumber
+			if err := emitTreeUnknown(events, validation.ReasonTreeOrderInvalid, codec.object(), &page); err != nil {
+				return first, err
 			}
 		}
 		previous = key
@@ -265,11 +269,12 @@ func scanTreeBranch(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageN
 		expected := header.Level - 1
 		actual, err := scanTreeNode(codec, m, meta, child, &expected, false, path, depth+1, state, pages, check, events)
 		if err != nil {
-			return nil, err
+			return first, err
 		}
-		if actual != nil && !codec.equal(actual, key) {
-			if err := emitTreeUnknown(events, validation.ReasonTreeFenceInvalid, codec.object(), &pageNumber); err != nil {
-				return nil, err
+		if actual.ok && !codec.equal(actual.value, key) {
+			page := pageNumber
+			if err := emitTreeUnknown(events, validation.ReasonTreeFenceInvalid, codec.object(), &page); err != nil {
+				return first, err
 			}
 		}
 	}

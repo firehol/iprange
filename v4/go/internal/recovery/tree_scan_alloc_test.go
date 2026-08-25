@@ -1,18 +1,15 @@
 //go:build !race
 
-// Tree-scan layout-proof allocation pin (milestone-2 performance fix
-// plus the M5 value-return refactor): the generic recovery tree walk
-// proves the page layout exactly once per visited page (Rust read_page
-// proves; scan_leaf and scan_branch consume), and InspectLayout
-// returns the inspection by value, so the walk allocates nothing per
-// page: the measured floor is the fixed leaf/branch walk baseline.
-// Before the milestone-2 fix every visited page ran a second proof in
-// the leaf/branch arm (twice the page count), and before the M5
-// refactor the value-returning proof still escaped one
-// LayoutInspection per page. Race and checkptr instrumentation
-// allocate inside the measured path themselves, so the pin runs only
-// in uninstrumented builds (publication pins carry the same tag for
-// the same reason).
+// Tree-scan allocation pin: the generic recovery tree walk proves the
+// page layout exactly once per visited page (Rust read_page proves;
+// scan_leaf and scan_branch consume), and the proof, the header, the
+// cell iterator, and the order cursors all travel by value (the Rust
+// Option<K> peer), so the walk allocates nothing per page and nothing
+// per run: keys are never boxed into interfaces, and refusal envelopes
+// copy the page number only inside the cold arms. Race and checkptr
+// instrumentation allocate inside the measured path themselves, so the
+// pin runs only in uninstrumented builds (publication pins carry the
+// same tag for the same reason).
 
 package recovery
 
@@ -130,13 +127,10 @@ func TestTreeScanNoLayoutProofAllocation(t *testing.T) {
 		}
 	})
 	t.Logf("tree scan allocations per run over %d pages: %.0f", want, allocs)
-	// The fixture walk measures exactly the fixed 2057-object
-	// leaf/branch walk baseline: the value-returning layout proof
-	// adds nothing per page. Before the M5 refactor the measured
-	// floor was 2057 + want (one escaping LayoutInspection per page);
-	// before the milestone-2 fix it was 2057 + 2*want.
-	const walkBaseline = 2057
+	// The fixture walk allocates nothing: zero objects per run over
+	// the whole tree, page or record.
+	const walkBaseline = 0
 	if allocs != float64(walkBaseline) {
-		t.Fatalf("tree scan allocates %.0f objects per run over %d pages, want exactly %d (measured walk baseline, no per-page layout allocation)", allocs, want, walkBaseline)
+		t.Fatalf("tree scan allocates %.0f objects per run over %d pages, want exactly %d (no per-page or per-record allocation)", allocs, want, walkBaseline)
 	}
 }

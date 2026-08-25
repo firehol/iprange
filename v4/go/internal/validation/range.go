@@ -82,20 +82,20 @@ func validateRangeFamily6(ctx *context) (uint64, error) {
 // rangePageHeader validates one range tree page and returns its header
 // (Rust validate_range_page over page::slotted_header; the degenerate
 // single-record root branch is the TreeLevelInvalid class).
-func rangePageHeader(ctx *context, pageNumber uint32, page []byte, object ValidationObject, family uint8, expectedLevel *uint16, root bool) (*format.PageHeader, error) {
-	header, err := treePageHeader(ctx, pageNumber, page, object, treePageSpec{
+func rangePageHeader(ctx *context, pageNumber uint32, page []byte, object ValidationObject, family uint8, expectedLevel *uint16, root bool) (format.PageHeader, bool, error) {
+	header, ok, err := treePageHeader(ctx, pageNumber, page, object, treePageSpec{
 		branchType:    byte(format.PageTypeRangeBranch),
 		leafType:      byte(format.PageTypeRangeLeaf),
 		aux:           uint32(family),
 		expectedLevel: expectedLevel,
 	})
-	if err != nil || header == nil {
-		return nil, err
+	if err != nil || !ok {
+		return format.PageHeader{}, false, err
 	}
-	if err := validateRootShape(ctx, pageNumber, object, root, header); err != nil {
-		return nil, err
+	if err := validateRootShape(ctx, pageNumber, object, root, &header); err != nil {
+		return format.PageHeader{}, false, err
 	}
-	return header, nil
+	return header, true, nil
 }
 
 func walkRangeNode4(ctx *context, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
@@ -108,13 +108,13 @@ func walkRangeNode4(ctx *context, pageNumber uint32, expectedLevel *uint16, root
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	header, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 4, expectedLevel, root)
-	if err != nil || header == nil {
+	header, ok, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 4, expectedLevel, root)
+	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen4(header.Level))
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, &header, rangeCellLen4(header.Level))
 	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
@@ -133,13 +133,13 @@ func walkRangeNode6(ctx *context, pageNumber uint32, expectedLevel *uint16, root
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	header, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 6, expectedLevel, root)
-	if err != nil || header == nil {
+	header, ok, err := rangePageHeader(ctx, pageNumber, page, ObjectRangeTree, 6, expectedLevel, root)
+	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen6(header.Level))
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, &header, rangeCellLen6(header.Level))
 	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
@@ -351,7 +351,7 @@ func neighborProblem6(previous *format.RangeRecordV6, current format.RangeRecord
 // walkRangeBranch4 visits every branch cell in order: the per-page key
 // order, the child subtree at the expected level, and the child-first
 // fence (Rust validate_branch).
-func walkRangeBranch4(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
+func walkRangeBranch4(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
 	var keys branchKeys
 	expected := header.Level - 1
 	iterator := cells.Cells()
@@ -380,7 +380,7 @@ func walkRangeBranch4(ctx *context, pageNumber uint32, cells *format.LayoutInspe
 }
 
 // walkRangeBranch6 is the IPv6 form of walkRangeBranch4.
-func walkRangeBranch6(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
+func walkRangeBranch6(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
 	var keys branchKeys
 	expected := header.Level - 1
 	iterator := cells.Cells()

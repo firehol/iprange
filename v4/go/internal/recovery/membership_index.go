@@ -95,26 +95,26 @@ func (membershipIDCodec) branchInvalid() validation.ValidationReason {
 func (membershipIDCodec) leafInvalid() validation.ValidationReason {
 	return validation.ReasonMembershipInvalid
 }
-func (membershipIDCodec) decodeBranch(cell []byte) (treeKey, uint32, bool) {
+func (membershipIDCodec) decodeBranch(cell []byte) (uint32, uint32, bool) {
 	record, err := format.DecodeMembershipIDBranch(cell)
 	if err != nil {
-		return nil, 0, false
+		return 0, 0, false
 	}
 	return record.FirstID, record.Child, true
 }
-func (membershipIDCodec) decodeLeafKey(cell []byte) (treeKey, bool) {
+func (membershipIDCodec) decodeLeafKey(cell []byte) (uint32, bool) {
 	// Rust IdCodec::leaf_key decodes the complete record (codec::decode
 	// -> record.id), so a corrupt ID leaf with a valid id but a
 	// malformed tail is refused by the leaf-invalid envelope instead of
 	// being accepted on the shape-only key.
 	record, err := format.DecodeMembershipRecord(cell)
 	if err != nil {
-		return nil, false
+		return 0, false
 	}
 	return record.ID, true
 }
-func (membershipIDCodec) less(a, b treeKey) bool  { return a.(uint32) < b.(uint32) }
-func (membershipIDCodec) equal(a, b treeKey) bool { return a.(uint32) == b.(uint32) }
+func (membershipIDCodec) less(a, b uint32) bool  { return a < b }
+func (membershipIDCodec) equal(a, b uint32) bool { return a == b }
 
 // membershipEvents wires the ID tree scan into the reporter and the
 // locator table (Rust membership_index::Events: every leaf counts one

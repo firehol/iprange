@@ -236,7 +236,8 @@ func scanRangeNode(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageN
 		return rangeKeyOption{}, err
 	}
 	if !claimed {
-		if err := events.unknown(reason, &pageNumber, true); err != nil {
+		page := pageNumber
+		if err := events.unknown(reason, &page, true); err != nil {
 			return rangeKeyOption{}, err
 		}
 		return rangeKeyOption{}, nil
@@ -263,20 +264,20 @@ func claimRangePage(meta format.Meta, pageNumber uint32, path *[format.MaxTreeLe
 // readRangePage reads and parses one range tree node (Rust
 // read_range_page: a refused page or header streams its envelope and
 // returns nil, an accepted page counts the page event).
-func readRangePage(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events rangeEvents) ([]byte, *format.PageHeader, error) {
+func readRangePage(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events rangeEvents) ([]byte, format.PageHeader, error) {
 	page, problem := checkedPage(m, pageNumber, meta.PageCount)
 	if problem != nil {
 		if err := rejectRangePage(events, pageNumber, problem.reason, problem.ioUnreadable); err != nil {
-			return nil, nil, err
+			return nil, format.PageHeader{}, err
 		}
-		return nil, nil, nil
+		return nil, format.PageHeader{}, nil
 	}
 	header, ok, err := parseRangePage(codec, page, meta, pageNumber, expectedLevel, events)
 	if err != nil || !ok {
-		return nil, nil, err
+		return nil, format.PageHeader{}, err
 	}
 	if err := events.pageAccepted(); err != nil {
-		return nil, nil, err
+		return nil, format.PageHeader{}, err
 	}
 	return page, header, nil
 }
@@ -284,7 +285,7 @@ func readRangePage(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageN
 // parseRangePage runs the range tree page inspection (Rust
 // parse_range_page: the type class maps to PageTypeMismatch, every
 // header or layout refusal to PageHeaderInvalid).
-func parseRangePage(codec rangeCodec, page []byte, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events rangeEvents) (*format.PageHeader, bool, error) {
+func parseRangePage(codec rangeCodec, page []byte, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events rangeEvents) (format.PageHeader, bool, error) {
 	header, problem := format.InspectTreeHeader(page, meta.TxnID, byte(format.PageTypeRangeBranch), byte(format.PageTypeRangeLeaf), uint32(meta.AddressFamily), expectedLevel)
 	if problem != format.TreeHeaderProblemNone {
 		reason := validation.ReasonPageHeaderInvalid
@@ -292,9 +293,9 @@ func parseRangePage(codec rangeCodec, page []byte, meta format.Meta, pageNumber 
 			reason = validation.ReasonPageTypeMismatch
 		}
 		if err := rejectRangePage(events, pageNumber, reason, false); err != nil {
-			return nil, false, err
+			return format.PageHeader{}, false, err
 		}
-		return nil, false, nil
+		return format.PageHeader{}, false, nil
 	}
 	cellLen := codec.leafCell()
 	if header.Level != 0 {
@@ -303,11 +304,11 @@ func parseRangePage(codec rangeCodec, page []byte, meta format.Meta, pageNumber 
 	inspection, valid := format.InspectLayout(page, &header, format.FixedLayout(cellLen))
 	if !valid || inspection.ReservedNonzero {
 		if err := rejectRangePage(events, pageNumber, validation.ReasonPageHeaderInvalid, false); err != nil {
-			return nil, false, err
+			return format.PageHeader{}, false, err
 		}
-		return nil, false, nil
+		return format.PageHeader{}, false, nil
 	}
-	return &header, true, nil
+	return header, true, nil
 }
 
 // rejectRangePage streams one refused page (Rust reject_page in
@@ -322,12 +323,12 @@ func rejectRangePage(events rangeEvents, pageNumber uint32, reason validation.Va
 // scanRangeLeaf streams the records of one leaf page (Rust scan_leaf:
 // the order and reversed-record defects stream their envelopes, the
 // readable records stream the range event).
-func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header *format.PageHeader, events rangeEvents) (rangeKeyOption, error) {
+func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header format.PageHeader, events rangeEvents) (rangeKeyOption, error) {
 	var first rangeKey
 	var firstOk bool
 	var previous rangeKey
 	var previousOk bool
-	slotted, err := format.OpenSlottedHeader(page, *header, format.PageTypeRangeLeaf, codec.aux(), format.SlotItemsPerPage)
+	slotted, err := format.OpenSlottedHeader(page, header, format.PageTypeRangeLeaf, codec.aux(), format.SlotItemsPerPage)
 	if err != nil {
 		return rangeKeyOption{}, err
 	}
@@ -345,7 +346,8 @@ func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header *for
 			firstOk = true
 		}
 		if previousOk && !codec.lessKey(previous, decoded.from) {
-			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumber, false); err != nil {
+			pageNumberCopy := pageNumber
+			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumberCopy, false); err != nil {
 				return rangeKeyOption{}, err
 			}
 		}
@@ -355,7 +357,8 @@ func scanRangeLeaf(codec rangeCodec, pageNumber uint32, page []byte, header *for
 		if codec.lessKey(decoded.from, decoded.to) || decoded.from == decoded.to {
 			record = rangeRecordOption{value: decoded, ok: true}
 		} else {
-			if err := events.unknown(validation.ReasonRangeReversed, &pageNumber, true); err != nil {
+			pageNumberCopy := pageNumber
+			if err := events.unknown(validation.ReasonRangeReversed, &pageNumberCopy, true); err != nil {
 				return rangeKeyOption{}, err
 			}
 		}
@@ -376,12 +379,12 @@ func pageDecodeError() error {
 // scanRangeBranch walks one branch page (Rust scan_branch: the order
 // and fence defects stream their envelopes, and the walk descends into
 // every child).
-func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, page []byte, header *format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (rangeKeyOption, error) {
+func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, page []byte, header format.PageHeader, path *[format.MaxTreeLevel + 1]uint32, depth int, pages *pageSet, check func() error, events rangeEvents) (rangeKeyOption, error) {
 	var first rangeKey
 	var firstOk bool
 	var previous rangeKey
 	var previousOk bool
-	slotted, err := format.OpenSlottedHeader(page, *header, format.PageTypeRangeBranch, codec.aux(), format.SlotItemsPerPage)
+	slotted, err := format.OpenSlottedHeader(page, header, format.PageTypeRangeBranch, codec.aux(), format.SlotItemsPerPage)
 	if err != nil {
 		return rangeKeyOption{}, err
 	}
@@ -402,7 +405,8 @@ func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pag
 			firstOk = true
 		}
 		if previousOk && !codec.lessKey(previous, key) {
-			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumber, false); err != nil {
+			pageNumberCopy := pageNumber
+			if err := events.unknown(validation.ReasonTreeOrderInvalid, &pageNumberCopy, false); err != nil {
 				return rangeKeyOption{}, err
 			}
 		}
@@ -414,7 +418,8 @@ func scanRangeBranch(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pag
 			return rangeKeyOption{}, err
 		}
 		if actual.ok && actual.value != key {
-			if err := events.unknown(validation.ReasonTreeFenceInvalid, &pageNumber, false); err != nil {
+			pageNumberCopy := pageNumber
+			if err := events.unknown(validation.ReasonTreeFenceInvalid, &pageNumberCopy, false); err != nil {
 				return rangeKeyOption{}, err
 			}
 		}

@@ -118,7 +118,8 @@ func structureHashTreeKey(key format.StructureHashKey) tree.Key {
 func validateStructureRecord(ctx *context, pageNumber uint32, expectedID uint64, cell []byte, maximumID *uint32, catalog *reader.ImmutableReader) error {
 	record, err := format.DecodeStructureRecord(cell)
 	if err != nil {
-		return structurePayloadFinding(ctx, &pageNumber)
+		pageCopy := pageNumber
+		return structurePayloadFinding(ctx, &pageCopy)
 	}
 	if record.ID > *maximumID {
 		*maximumID = record.ID
@@ -127,12 +128,14 @@ func validateStructureRecord(ctx *context, pageNumber uint32, expectedID uint64,
 	// validation/structure.rs validate_record: decode_record, then the
 	// id and limit proof with the structure finding).
 	if uint64(record.ID) != expectedID || expectedID >= ctx.meta.StructureIDLimit {
-		if err := structureFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := structureFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
 	if record.Refcount == 0 {
-		if err := structureRefcountFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := structureRefcountFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
@@ -141,7 +144,8 @@ func validateStructureRecord(ctx *context, pageNumber uint32, expectedID uint64,
 		return err
 	}
 	if digest != record.Digest {
-		if err := structureHashFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := structureHashFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
@@ -151,26 +155,30 @@ func validateStructureRecord(ctx *context, pageNumber uint32, expectedID uint64,
 		return err
 	}
 	if result != InsertInserted {
-		if err := structureFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := structureFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
 	if membershipID != 0 {
 		switch ctx.countMembershipOwner(membershipID) {
 		case CountFull:
-			if err := structureMembershipFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := structureMembershipFinding(ctx, &pageCopy); err != nil {
 				return err
 			}
 		case CountCancelled:
 			return &format.Error{Code: format.CodeCancelled, Detail: "validation cancelled"}
 		case CountUnavailable:
-			if err := structureMembershipFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := structureMembershipFinding(ctx, &pageCopy); err != nil {
 				return err
 			}
 		case CountInserted, CountExisting:
 		}
 		if _, err := catalog.LookupMembershipID(membershipID); err != nil {
-			if err := structureMembershipFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := structureMembershipFinding(ctx, &pageCopy); err != nil {
 				return err
 			}
 		}
@@ -192,14 +200,16 @@ func validateStructureHash(ctx *context, pageNumber uint32, cell []byte, previou
 		return err
 	}
 	if uint64(key.ID) >= ctx.meta.StructureIDLimit || !marked {
-		if err := structureReverseFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := structureReverseFinding(ctx, &pageCopy); err != nil {
 			return err
 		}
 	}
 	if *hasPrevious && previous.Digest == key.Digest {
 		equal, err := equalStructurePayloads(catalog, previous.ID, key.ID)
 		if err != nil || equal {
-			if err := structureHashFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := structureHashFinding(ctx, &pageCopy); err != nil {
 				return err
 			}
 		}

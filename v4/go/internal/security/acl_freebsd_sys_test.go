@@ -61,8 +61,8 @@ func TestFreeBSDACLMachineLiveProveOrStrip(t *testing.T) {
 		t.Fatalf("commitment = %x, want %x", got, profile.Commitment())
 	}
 
-	var liveACL freebsdACL
-	brand, err := freebsdGetACL(f, &liveACL)
+	var liveACL fbsdACL
+	brand, err := fbsdGetACL(f, &liveACL)
 	if err != nil {
 		t.Fatalf("get ACL: %v", err)
 	}
@@ -73,9 +73,9 @@ func TestFreeBSDACLMachineLiveProveOrStrip(t *testing.T) {
 		// proof fails with the access-policy class, removeInheritedACL
 		// rebuilds the trivial PSARC form of the expressed mode, and
 		// the proof passes again (Rust remove_inherited on ZFS).
-		acl.Entries[acl.Cnt] = freebsdACLEntry{Tag: fbsdTagUser, ID: 1337, Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
+		acl.Entries[acl.Cnt] = fbsdACLEntry{Tag: fbsdTagUser, ID: 1337, Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
 		acl.Cnt++
-		if err := freebsdSetACL(f, acl, brand); err != nil {
+		if err := fbsdSetACL(f, acl, brand); err != nil {
 			t.Fatalf("set nontrivial ACL: %v", err)
 		}
 		if err := requireTrivialACL(f); !isCode(err, format.CodeAccessPolicyUnsupported) {
@@ -95,9 +95,9 @@ func TestFreeBSDACLMachineLiveProveOrStrip(t *testing.T) {
 		// entries), and libc acl_strip_np keeps the recalculated mask,
 		// so the proof refuses before and after the strip: the Rust
 		// machine behaves identically on POSIX hosts.
-		acl.Entries[acl.Cnt] = freebsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead | fbsdPermWrite, EntryType: fbsdEntryTypeAllow}
+		acl.Entries[acl.Cnt] = fbsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead | fbsdPermWrite, EntryType: fbsdEntryTypeAllow}
 		acl.Cnt++
-		if err := freebsdSetACL(f, acl, brand); err != nil {
+		if err := fbsdSetACL(f, acl, brand); err != nil {
 			t.Fatalf("set masked ACL: %v", err)
 		}
 		if err := requireTrivialACL(f); !isCode(err, format.CodeAccessPolicyUnsupported) {
@@ -134,8 +134,8 @@ func TestFreeBSDACLGetReportsUnsupportedOnDevfs(t *testing.T) {
 		t.Skipf("open /dev/null: %v", err)
 	}
 	defer f.Close()
-	var devACL freebsdACL
-	_, err = freebsdGetACL(f, &devACL)
+	var devACL fbsdACL
+	_, err = fbsdGetACL(f, &devACL)
 	if err == nil {
 		t.Skip("devfs unexpectedly supports access ACLs on this host")
 	}

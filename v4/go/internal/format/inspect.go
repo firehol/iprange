@@ -193,9 +193,10 @@ func InspectLayout(page []byte, header *PageHeader, layout CellLayout) (LayoutIn
 
 // Cells returns the cell iterator of one inspection (Rust
 // LayoutInspection::cells; every step counts the cell probe and the slot
-// read exactly like the Rust iterator).
-func (l *LayoutInspection) Cells() *LayoutCells {
-	return &LayoutCells{inspection: l}
+// read exactly like the Rust iterator). The iterator is returned by
+// value like the Rust peer, so a sweep allocates nothing per page.
+func (l *LayoutInspection) Cells() LayoutCells {
+	return LayoutCells{inspection: l}
 }
 
 // LayoutCells iterates the inspected cells of one page (Rust

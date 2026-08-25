@@ -83,13 +83,15 @@ func validateRetirement(ctx *context) error {
 func validateRetirementExtent(ctx *context, pageNumber uint32, extent retire.Extent, previous retire.Extent, hasPrevious bool) error {
 	end := uint64(extent.FirstPage()) + extent.PageCount()
 	if !retirementExtentValid(ctx, extent, end) {
-		if err := ctx.emit(ReasonRetirementListInvalid, ObjectRetirementTree, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonRetirementListInvalid, ObjectRetirementTree, &pageCopy, nil, nil); err != nil {
 			return err
 		}
 		return nil
 	}
 	if hasPrevious && retirementExtentsOverlap(previous, extent) {
-		if err := ctx.emit(ReasonRetirementOrderInvalid, ObjectRetirementTree, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonRetirementOrderInvalid, ObjectRetirementTree, &pageCopy, nil, nil); err != nil {
 			return err
 		}
 	}

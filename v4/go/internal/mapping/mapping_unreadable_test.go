@@ -1,3 +1,5 @@
+//go:build !windows
+
 package mapping
 
 // Unreadable-page mapping tests (Rust mapping.rs set_unreadable_pages +

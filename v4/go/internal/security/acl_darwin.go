@@ -6,7 +6,8 @@ import (
 	"os"
 )
 
-// aclSupported reports the creator-only machine availability (false off linux).
+// aclSupported reports the creator-only machine availability (false on
+// darwin; the pure-Go ACL machine exists on linux and freebsd).
 const aclSupported = false
 
 // removeInheritedACL on darwin is an honest typed refusal: the Rust
@@ -15,7 +16,8 @@ const aclSupported = false
 // x/sys exposes no binding). Refusing keeps the creator-only proof
 // honest instead of silently weakening it; the live create/initialize
 // surface therefore reports CodeOSUnsupported on darwin until a
-// pure-Go ACL mechanism exists (tracked with the 4-12 platform proof).
+// pure-Go ACL mechanism exists (tracked by the SOW-0026 platform
+// completion work).
 func removeInheritedACL(*os.File) error {
 	return unsupported("creator-only access policy requires libc filesec APIs unavailable to pure Go on darwin")
 }

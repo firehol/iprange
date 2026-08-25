@@ -13,14 +13,14 @@ package security
 
 import "testing"
 
-// entry is one expected freebsdACLEntry in a vector.
-func entry(tag, perm uint32, entryType uint16) freebsdACLEntry {
-	return freebsdACLEntry{Tag: tag, ID: fbsdUndefinedID, Perm: perm, EntryType: entryType}
+// entry is one expected fbsdACLEntry in a vector.
+func entry(tag, perm uint32, entryType uint16) fbsdACLEntry {
+	return fbsdACLEntry{Tag: tag, ID: fbsdUndefinedID, Perm: perm, EntryType: entryType}
 }
 
 // wantACL builds the expected ACL from entries.
-func wantACL(entries ...freebsdACLEntry) freebsdACL {
-	var acl freebsdACL
+func wantACL(entries ...fbsdACLEntry) fbsdACL {
+	var acl fbsdACL
 	acl.MaxCnt = fbsdMaxEntries
 	for _, e := range entries {
 		acl.Entries[acl.Cnt] = e
@@ -45,7 +45,7 @@ func TestFreeBSDPSARCVectors(t *testing.T) {
 	all := uint32(fbsdPermReadData | fbsdPermWriteData | fbsdPermAppendData | fbsdPermExecute)
 	cases := []struct {
 		mode uint32
-		want freebsdACL
+		want fbsdACL
 	}{
 		{0o000, wantACL(entry(fbsdTagUserObj, userBase, fbsdEntryTypeAllow), entry(fbsdTagGroupObj, base, fbsdEntryTypeAllow), entry(fbsdTagEveryone, base, fbsdEntryTypeAllow))},
 		{0o001, wantACL(entry(fbsdTagUserObj, fbsdPermExecute, fbsdEntryTypeDeny), entry(fbsdTagGroupObj, fbsdPermExecute, fbsdEntryTypeDeny), entry(fbsdTagUserObj, userBase, fbsdEntryTypeAllow), entry(fbsdTagGroupObj, base, fbsdEntryTypeAllow), entry(fbsdTagEveryone, base|fbsdPermExecute, fbsdEntryTypeAllow))},
@@ -57,7 +57,7 @@ func TestFreeBSDPSARCVectors(t *testing.T) {
 		{0o601, wantACL(entry(fbsdTagUserObj, fbsdPermExecute, fbsdEntryTypeDeny), entry(fbsdTagGroupObj, fbsdPermExecute, fbsdEntryTypeDeny), entry(fbsdTagUserObj, userBase|readWrite, fbsdEntryTypeAllow), entry(fbsdTagGroupObj, base, fbsdEntryTypeAllow), entry(fbsdTagEveryone, base|fbsdPermExecute, fbsdEntryTypeAllow))},
 	}
 	for _, c := range cases {
-		var acl freebsdACL
+		var acl fbsdACL
 		acl.MaxCnt = fbsdMaxEntries
 		fbsdNFS4TrivialPSARC(&acl, c.mode)
 		if !fbsdACLsEqual(&acl, &c.want) {
@@ -78,7 +78,8 @@ func TestFreeBSDDraftVector(t *testing.T) {
 		readSet  = uint32(fbsdPermReadACL | fbsdPermReadAttrs | fbsdPermReadNamed | fbsdPermSync)
 		all      = uint32(fbsdPermReadData | fbsdPermWriteData | fbsdPermAppendData | fbsdPermExecute)
 	)
-	got := fbsdNFS4TrivialFromMode(0o600, true)
+	var got fbsdACL
+	fbsdNFS4TrivialFromMode(&got, 0o600, true)
 	want := wantACL(
 		entry(fbsdTagUserObj, fbsdPermExecute, fbsdEntryTypeDeny),
 		entry(fbsdTagUserObj, writeSet|fbsdPermReadData|fbsdPermWriteData|fbsdPermAppendData, fbsdEntryTypeAllow),
@@ -98,11 +99,13 @@ func TestFreeBSDDraftVector(t *testing.T) {
 func TestFreeBSDNFS4SyncModeRoundTrip(t *testing.T) {
 	modes := []uint32{0o000, 0o001, 0o600, 0o644, 0o755, 0o777, 0o140, 0o601}
 	for _, mode := range modes {
-		psarc := fbsdNFS4TrivialFromMode(mode, false)
+		var psarc fbsdACL
+		fbsdNFS4TrivialFromMode(&psarc, mode, false)
 		if got := fbsdNFS4SyncMode(&psarc); got != mode {
 			t.Fatalf("sync(psarc(%04o)) = %04o", mode, got)
 		}
-		draft := fbsdNFS4TrivialFromMode(mode, true)
+		var draft fbsdACL
+		fbsdNFS4TrivialFromMode(&draft, mode, true)
 		if got := fbsdNFS4SyncMode(&draft); got != mode {
 			t.Fatalf("sync(draft(%04o)) = %04o", mode, got)
 		}
@@ -115,11 +118,13 @@ func TestFreeBSDNFS4SyncModeRoundTrip(t *testing.T) {
 // trivial even when seven entries happen to express the mode.
 func TestFreeBSDNFS4Triviality(t *testing.T) {
 	for _, mode := range []uint32{0o000, 0o001, 0o600, 0o644, 0o777} {
-		psarc := fbsdNFS4TrivialFromMode(mode, false)
+		var psarc fbsdACL
+		fbsdNFS4TrivialFromMode(&psarc, mode, false)
 		if !fbsdNFS4Trivial(&psarc) {
 			t.Fatalf("psarc(%04o) must be trivial", mode)
 		}
-		draft := fbsdNFS4TrivialFromMode(mode, true)
+		var draft fbsdACL
+		fbsdNFS4TrivialFromMode(&draft, mode, true)
 		if !fbsdNFS4Trivial(&draft) {
 			t.Fatalf("draft(%04o) must be trivial", mode)
 		}
@@ -127,18 +132,20 @@ func TestFreeBSDNFS4Triviality(t *testing.T) {
 
 	base := wantACL(entry(fbsdTagUserObj, fbsdPermReadACL|fbsdPermWriteACL|fbsdPermReadAttrs|fbsdPermWriteAttrs|fbsdPermReadNamed|fbsdPermWriteNamed|fbsdPermSync|fbsdPermReadData|fbsdPermWriteData|fbsdPermAppendData, fbsdEntryTypeAllow))
 	nontrivial := base
-	nontrivial.Entries[nontrivial.Cnt] = freebsdACLEntry{Tag: fbsdTagUser, ID: 1337, Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
+	nontrivial.Entries[nontrivial.Cnt] = fbsdACLEntry{Tag: fbsdTagUser, ID: 1337, Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
 	nontrivial.Cnt++
 	if fbsdNFS4Trivial(&nontrivial) {
 		t.Fatalf("nontrivial ACL must not be trivial")
 	}
-	if got := fbsdStrip(&nontrivial, fbsdBrandNFS4); !fbsdNFS4Trivial(&got) {
+	var got fbsdACL
+	fbsdStrip(&nontrivial, fbsdBrandNFS4, &got)
+	if !fbsdNFS4Trivial(&got) {
 		t.Fatalf("stripped nontrivial ACL must be trivial: %+v", got)
 	}
 
 	seven := base
 	for i := 0; i < 4; i++ {
-		seven.Entries[seven.Cnt] = freebsdACLEntry{Tag: fbsdTagGroup, ID: uint32(2000 + i), Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
+		seven.Entries[seven.Cnt] = fbsdACLEntry{Tag: fbsdTagGroup, ID: uint32(2000 + i), Perm: fbsdPermReadData, EntryType: fbsdEntryTypeDeny}
 		seven.Cnt++
 	}
 	if fbsdNFS4Trivial(&seven) {
@@ -153,18 +160,19 @@ func TestFreeBSDNFS4Triviality(t *testing.T) {
 func TestFreeBSDPOSIXStripMaskRecalc(t *testing.T) {
 	acl := wantACL(
 		entry(fbsdTagUserObj, fbsdPermRead|fbsdPermWrite, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagUser, ID: 1000, Perm: fbsdPermRead | fbsdPermWrite, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagUser, ID: 1000, Perm: fbsdPermRead | fbsdPermWrite, EntryType: fbsdEntryTypeAllow},
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
 		entry(fbsdTagMask, fbsdPermRead|fbsdPermWrite|fbsdPermExecute, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 	)
-	got := fbsdPOSIXStrip(&acl)
+	var got fbsdACL
+	fbsdPOSIXStrip(&acl, &got)
 	want := wantACL(
 		entry(fbsdTagUserObj, fbsdPermRead|fbsdPermWrite, fbsdEntryTypeAllow),
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead | fbsdPermWrite},
+		fbsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead},
 	)
 	if !fbsdACLsEqual(&got, &want) {
 		t.Fatalf("posix strip = %+v, want %+v", got, want)
@@ -180,7 +188,8 @@ func TestFreeBSDPOSIXStripWithoutMask(t *testing.T) {
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 	)
-	got := fbsdPOSIXStrip(&acl)
+	var got fbsdACL
+	fbsdPOSIXStrip(&acl, &got)
 	if !fbsdACLsEqual(&got, &acl) {
 		t.Fatalf("strip without mask changed the ACL: %+v", got)
 	}
@@ -195,15 +204,15 @@ func TestFreeBSDPOSIXSort(t *testing.T) {
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 		entry(fbsdTagMask, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
-		freebsdACLEntry{Tag: fbsdTagGroup, ID: 1000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagGroup, ID: 1000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
 	)
 	fbsdPOSIXSort(&acl)
 	want := wantACL(
 		entry(fbsdTagUserObj, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagGroup, ID: 1000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
-		freebsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagGroup, ID: 1000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
+		fbsdACLEntry{Tag: fbsdTagGroup, ID: 2000, Perm: fbsdPermRead, EntryType: fbsdEntryTypeAllow},
 		entry(fbsdTagMask, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 	)
@@ -236,8 +245,10 @@ func TestFreeBSDPOSIXTrivial(t *testing.T) {
 // is always trivial for its brand (the libc acl_strip_np contract).
 func TestFreeBSDStripRoundTrip(t *testing.T) {
 	for _, mode := range []uint32{0o000, 0o001, 0o600, 0o644, 0o755, 0o777} {
-		psarc := fbsdNFS4TrivialFromMode(mode, false)
-		stripped := fbsdStrip(&psarc, fbsdBrandNFS4)
+		var psarc fbsdACL
+		fbsdNFS4TrivialFromMode(&psarc, mode, false)
+		var stripped fbsdACL
+		fbsdStrip(&psarc, fbsdBrandNFS4, &stripped)
 		if !fbsdNFS4Trivial(&stripped) {
 			t.Fatalf("strip(psarc(%04o)) = %+v, must be trivial", mode, stripped)
 		}
@@ -252,12 +263,13 @@ func TestFreeBSDStripRoundTrip(t *testing.T) {
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 		entry(fbsdTagMask, fbsdPermRead, fbsdEntryTypeAllow),
 	)
-	stripped := fbsdStrip(&posix, fbsdBrandPOSIX)
+	var stripped fbsdACL
+	fbsdStrip(&posix, fbsdBrandPOSIX, &stripped)
 	want := wantACL(
 		entry(fbsdTagUserObj, fbsdPermRead|fbsdPermWrite, fbsdEntryTypeAllow),
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
-		freebsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead},
+		fbsdACLEntry{Tag: fbsdTagMask, ID: fbsdUndefinedID, Perm: fbsdPermRead},
 	)
 	if !fbsdACLsEqual(&stripped, &want) {
 		t.Fatalf("strip(posix) = %+v, want %+v", stripped, want)
@@ -271,7 +283,8 @@ func TestFreeBSDStripRoundTrip(t *testing.T) {
 		entry(fbsdTagGroupObj, fbsdPermRead, fbsdEntryTypeAllow),
 		entry(fbsdTagOther, 0, fbsdEntryTypeAllow),
 	)
-	plainStripped := fbsdStrip(&plain, fbsdBrandPOSIX)
+	var plainStripped fbsdACL
+	fbsdStrip(&plain, fbsdBrandPOSIX, &plainStripped)
 	if !fbsdACLsEqual(&plainStripped, &plain) || !fbsdTrivial(&plainStripped, fbsdBrandPOSIX) {
 		t.Fatalf("strip(plain posix) = %+v, must stay trivial", plainStripped)
 	}

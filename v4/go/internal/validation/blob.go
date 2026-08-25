@@ -65,7 +65,8 @@ func finishBlobSpan(ctx *context, root uint32, length uint64, span blobSpan) (bo
 // graph claim, and the leaf/branch split on the page type).
 func scanBlobNode(ctx *context, pageNumber uint32, expectedLevel *uint16, expectedStart uint64, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int, consume func(*context, []byte) error) (*blobSpan, error) {
 	if depth >= len(path) {
-		if err := ctx.emit(ReasonTreeLevelInvalid, ObjectMembershipBlob, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonTreeLevelInvalid, ObjectMembershipBlob, &pageCopy, nil, nil); err != nil {
 			return nil, err
 		}
 		if err := ctx.markUntraversable(false); err != nil {
@@ -104,7 +105,8 @@ func scanBlobLeaf(ctx *context, pageNumber uint32, page []byte, expectedLevel *u
 	}
 	geometry, err := format.DecodeBlobLeafGeometry(page, expectedLevel, expectedStart, length)
 	if err != nil {
-		if err := blobFinding(ctx, &pageNumber); err != nil {
+		pageCopy := pageNumber
+		if err := blobFinding(ctx, &pageCopy); err != nil {
 			return nil, err
 		}
 		if err := ctx.markUntraversable(false); err != nil {
@@ -113,7 +115,8 @@ func scanBlobLeaf(ctx *context, pageNumber uint32, page []byte, expectedLevel *u
 		return nil, nil
 	}
 	if !allZero(page[format.BlobLeafData+geometry.DataLen : format.PageSize]) {
-		if err := ctx.emit(ReasonPageReservedNonzero, ObjectMembershipBlob, &pageNumber, nil, nil); err != nil {
+		pageCopy := pageNumber
+		if err := ctx.emit(ReasonPageReservedNonzero, ObjectMembershipBlob, &pageCopy, nil, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -163,31 +166,31 @@ func scanBlobBranch(ctx *context, pageNumber uint32, page []byte, expectedLevel 
 // blobBranchHeader runs the slotted header and layout checks of one blob
 // branch (Rust branch_header: a refused page or a zero level is
 // untraversable).
-func blobBranchHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (*format.PageHeader, format.LayoutInspection, bool, error) {
-	header, err := treePageHeader(ctx, pageNumber, page, ObjectMembershipBlob, treePageSpec{
+func blobBranchHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (format.PageHeader, format.LayoutInspection, bool, error) {
+	header, ok, err := treePageHeader(ctx, pageNumber, page, ObjectMembershipBlob, treePageSpec{
 		branchType:    byte(format.PageTypeBlobBranch),
 		leafType:      byte(format.PageTypeBlobLeaf),
 		aux:           format.BlobKindMembership,
 		expectedLevel: expectedLevel,
 	})
-	if err != nil || header == nil {
-		if err == nil {
-			err = ctx.markUntraversable(false)
-		}
-		return nil, format.LayoutInspection{}, false, err
-	}
-	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectMembershipBlob, header, format.BlobBranchSize)
 	if err != nil || !ok {
 		if err == nil {
 			err = ctx.markUntraversable(false)
 		}
-		return nil, format.LayoutInspection{}, false, err
+		return format.PageHeader{}, format.LayoutInspection{}, false, err
+	}
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectMembershipBlob, &header, format.BlobBranchSize)
+	if err != nil || !ok {
+		if err == nil {
+			err = ctx.markUntraversable(false)
+		}
+		return format.PageHeader{}, format.LayoutInspection{}, false, err
 	}
 	if header.Level == 0 {
 		if err := ctx.markUntraversable(false); err != nil {
-			return nil, format.LayoutInspection{}, false, err
+			return format.PageHeader{}, format.LayoutInspection{}, false, err
 		}
-		return nil, format.LayoutInspection{}, false, nil
+		return format.PageHeader{}, format.LayoutInspection{}, false, nil
 	}
 	return header, cells, true, nil
 }
@@ -208,13 +211,15 @@ func blobBranchRecordsValid(ctx *context, pageNumber uint32, cells *format.Layou
 		}
 		offset, child, err := format.DecodeBlobBranchFields(cell)
 		if err != nil {
-			if err := blobFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := blobFinding(ctx, &pageCopy); err != nil {
 				return false
 			}
 			return false
 		}
 		if !blobBranchRecordValid(ctx, offset, child, previous, hasPrevious, index, expectedStart, length) {
-			if err := blobFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := blobFinding(ctx, &pageCopy); err != nil {
 				return false
 			}
 			return false
@@ -238,7 +243,7 @@ func blobBranchRecordValid(ctx *context, offset uint64, child uint32, previous u
 // scanBlobBranchChildren recurses into every branch child and joins the
 // spans (Rust scan_branch_children: a gap or a shifted start is the blob
 // class on the branch page).
-func scanBlobBranchChildren(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header *format.PageHeader, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int, consume func(*context, []byte) error) (*blobSpan, error) {
+func scanBlobBranchChildren(ctx *context, pageNumber uint32, cells *format.LayoutInspection, header format.PageHeader, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int, consume func(*context, []byte) error) (*blobSpan, error) {
 	expected := header.Level - 1
 	var first *uint64
 	var previousEnd *uint64
@@ -268,7 +273,8 @@ func scanBlobBranchChildren(ctx *context, pageNumber uint32, cells *format.Layou
 			first = &span.start
 		}
 		if span.start != offset || (previousEnd != nil && *previousEnd != span.start) {
-			if err := blobFinding(ctx, &pageNumber); err != nil {
+			pageCopy := pageNumber
+			if err := blobFinding(ctx, &pageCopy); err != nil {
 				return nil, err
 			}
 			complete = false
@@ -289,7 +295,8 @@ func scanBlobBranchChildren(ctx *context, pageNumber uint32, cells *format.Layou
 // invalidBlobPage streams one page-class finding and marks the subgraph
 // untraversable (Rust invalid_page).
 func invalidBlobPage(ctx *context, pageNumber uint32, reason ValidationReason) error {
-	if err := ctx.emit(reason, ObjectMembershipBlob, &pageNumber, nil, nil); err != nil {
+	pageCopy := pageNumber
+	if err := ctx.emit(reason, ObjectMembershipBlob, &pageCopy, nil, nil); err != nil {
 		return err
 	}
 	return ctx.markUntraversable(false)
