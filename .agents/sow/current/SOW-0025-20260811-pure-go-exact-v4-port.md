@@ -12754,7 +12754,85 @@ module plain + v4work; race + checkptr on the routed packages both tag
 sets; six cross-builds plain + v4work; check-mmap-trace.sh 4 legs ->
 all green.
 
-Next: milestone 4 slice 4-12B - production SDK routing through the
-worker client arms on linux/amd64 (facade Validate/Recover/
-InspectRecoveryCandidates), the mmap-trace worker + recovery legs, and
-the Rust error classes; the test harness locates the worker binary.
+### Status (2026-08-25) - milestone 4 slice 4-12B delivered: production facade routing through the worker client
+
+Delivered at 9b55814 (battery green, pushed):
+
+- New thin dispatcher internal/routing (routing_linux_amd64.go +
+  routing_other.go): the public facade entry points
+  (Validate, ValidateOfflineCandidate, InspectRecoveryCandidates,
+  RecoverImmutable/Offline/Live) run the Rust preflight first and then
+  route through the worker client arms on linux/amd64; every other
+  platform keeps the in-process machines. No silent in-process
+  fallback: a missing worker binary surfaces the verbatim
+  CodeOSUnsupported "SDK validation/recovery worker is unavailable"
+  class (Rust Error::Unsupported parity), pinned end-to-end through
+  Validate, InspectRecoveryCandidates, and RecoverImmutable with zero
+  progress and clean state.
+- The worker client arms were exported (ValidateWithWorker,
+  InspectRecoveryCandidatesWithWorker, RecoverWithWorker) and their
+  wire shapes convert back to the exact domain types the in-process
+  machines return, via exported constructors:
+  validation.ProgressFromCounters + validation.Preflight,
+  recovery.InspectionOf + recovery.PreflightInspection, and
+  recovery.FromWorkerCleanup (the recovery package cannot import the
+  worker package - cycle - so the guard takes a minimal
+  workerCleanup interface; the guard's release() and problem() wire
+  the worker arms; guardSourceWorker is no longer reserved-only).
+  A wireCauseToDomain fold keeps WireError/errno causes off the
+  public SDK surface. Guard-pending terminals retain the worker
+  cleanup inside the domain source-cleanup guard and keep the
+  CoordinationCleanup CleanupGuard class (the in-process machine's
+  terminal parity).
+- The public recovery facade gained the previously missing
+  ValidateOfflineCandidate entry (Rust validate_offline; the Go mode
+  enum cannot carry the candidate payload), with the same
+  cancellation/budget discipline and the verbatim nil-candidate
+  refusal.
+- Test harness: worker_harness_linux_amd64_test.go builds the real
+  cmd/iprange-v4-worker once per run (TestMain) and installs it via
+  the new test-only worker.SetWorkerCandidatesForTest seam (production
+  rule is unchanged); worker_harness_other_test.go is the no-op
+  non-worker path. The four existing root-package tests that route
+  (TestPublicValidateLiveCleanSweep,
+  TestPublicValidateLiveAfterRetainedCapacity,
+  TestRecoverImmutablePublicSinkFailureReportsThePublicErrorClass,
+  TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt)
+  install the harness; preflight-refusing tests need no worker.
+- New routed parity tests pin: byte-identical worker vs in-process
+  Validate results (every progress counter), offline-candidate parity,
+  inspection parity (identity, candidates, progress), published
+  readable output after routed recovery, employee
+  guard-pending retention through the facade (retained
+  RecoverySourceCleanupGuard + RetryCleanup completes), no residue
+  roots, and the binary-unavailable class.
+- check-mmap-trace.sh: the violation pattern now also matches the
+  worker control file (.iprange-v4-worker- anywhere in the fd path),
+  leg 2 (public live validation) is a worker leg automatically, and
+  new legs 5 (routed recovery) and 6 (routed validation) trace parent
+  + worker proving source, output, and control are only ever mapped,
+  never streamed (all six legs green; openat/mmap counts recorded).
+- publicRecoverySource test fixture rewritten mmap-only so the traced
+  legs stay clean (the previous WriteAt would have tripped the
+  pattern).
+
+Recorded notes: the parent-side live-support gate is not repeated in
+routing.RecoverLive (the worker machine performs it before any path
+access); routing depends on worker+recovery+validation+format with no
+cycle; public SDK surface types unchanged.
+
+Battery (all under nice): gofmt clean; vet plain + v4work; full
+module plain + v4work; race + checkptr on the routed packages both tag
+sets; six cross-builds plain + v4work; check-mmap-trace.sh 6 legs ->
+all green.
+
+Next: milestone 4 slice 4-12C - resource + crash matrix completion:
+budget/fault-injection resource tests (validation/recovery budget
+edges, unreadable-page ledger bounds, worker heap limits), the
+worker-build mismatch matrix extension beyond the single 4-11E case
+(protocol/magic/parent-pid/build-id patch variants, handshake
+classes), and the create/init/reset/metadata crash matrix for the
+live writer lifecycle (kill-during-operation subprocess pattern over
+the Rust live_crash_tests.rs authority). Review the recorded 4-12A
+follow-ups (unwrapped enter_output sites; the Go Store split-window
+probe) for the 4-12C scope decision.
