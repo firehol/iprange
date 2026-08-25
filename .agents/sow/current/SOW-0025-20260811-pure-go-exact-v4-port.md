@@ -12888,11 +12888,109 @@ module plain + v4work; race + checkptr on the seven touched packages
 both tag sets; six cross-builds plain + v4work; check-mmap-trace.sh 6
 legs -> all green.
 
-Next: milestone 4 slice 4-12D - native proofs: run the
-offline/immutable validation, recovery, writer, and reader suites
-natively on darwin (plakam4mini macOS M4) and freebsd, plus the
-cross-compile matrix; the SIGBUS worker isolation stays linux/amd64
-with the typed refusal elsewhere (recorded stance). REQUIRES
-user-authorized remote hosts - the lead asks for authorization
-before first use per the standing remote policy; the slice records
-host + date + suite results.
+### Status (2026-08-25) - milestone 4 slice 4-12D delivered: native proofs on darwin and freebsd
+
+Delivered across fea8cf2 (msync portability fix), b582761 (creator-only
++ live-creation gates), 53e385d (exclusive lifetime-lock predicate),
+ede8e4f + a19d99c (platform suite gates). Battery green; pushed.
+
+Hosts (user-authorized 2026-08-25): plakam4mini macOS 25.5 arm64
+(go1.26.3), freebsd FreeBSD 14.1 amd64 (go1.26.5). Each host: fresh
+shallow clone at the verified HEAD, full module suites plain AND
+-tags v4work. Final state at a19d99c: darwin 0 failures / 0 failures,
+freebsd 0 failures / 0 failures.
+
+- macOS msync portability defect (found, fixed): XNU msync rejects
+  every range that does not start at the mapping base with EINVAL,
+  even page-aligned ones (verified on-host: [0:7] ok, [1:2]/[2:7]/[2:2]
+  EINVAL, shared and private, sync and async). FlushRange/FlushPage
+  sync [0, offset+length) now, the single shape that works on linux,
+  darwin, and freebsd; pages before the requested range are already
+  clean in the durability flows, so the wider msync is a no-op scan
+  there. This was the root cause of ~50 offline writer/recovery/
+  snapshot failures on the first native run.
+- Rust-side durability finding (recorded, not changed): memmap2
+  0.9.11 flush_range returns Ok(()) on darwin for the rejected
+  subrange shape (probe on-host), i.e. the Rust engine silently skips
+  synchronizing on darwin; its crash matrix still passes because all
+  readers see the page cache. The full Rust cargo suite on macOS ran
+  clean (46 binaries, 0 failures). Rust follow-up: pin flush semantics
+  on darwin (base-prefix or whole-mapping flush; the Go port is
+  strictly more correct).
+- Suite platform gates (three classes, three predicates): the recorded
+  pure-Go creator-only limitation (no libc filesec/ACL; Decision 2A)
+  refuses live creation and every publication-producing offline op on
+  darwin/freebsd; the exclusive lifetime-lock machine is absent on
+  freebsd. New authorities: security.CreatorOnlySupported (linux
+  only), live.CreationSupported (lock gate + creator-only),
+  mapping.CoordinationSupported (linux/darwin). Gates applied: live
+  package and writer package skip wholesale via TestMain; 62 root
+  gates (live/publication) + 71 root gates (file creation); recovery
+  liveGate/publicationGate/creationGate; validation live gates + a
+  linux/darwin file tag for the unreadable-session fixtures (every
+  test builds file fixtures); security creator-only skips; the fd-leak
+  proof counter is portable (/proc/self/fd + /dev/fd raw readdir,
+  macOS devfs needs it). On linux and darwin no gate skips; the
+  offline reader/immutable-validation/conformance/zeroalloc pins run
+  genuinely on both hosts.
+- FreeBSD disk blocker + authorized cleanup: the VM was 100% full on
+  all datasets. The user authorized removing the /tmp updater scratch
+  and the 2024 snapshots. 1,743 /tmp/netdata-updater-* scratch dirs
+  were removed (~1.1G+); the five 2024 snapshots could NOT be
+  destroyed because each is the origin of a boot-environment clone
+  (13.1-RELEASE-p2/p9, 14.1-RELEASE, 14.1-RELEASE-p1 x2) - destroying
+  them requires -R (boot-environment removal), which was outside the
+  approved scope; the old boot environments are the real remaining
+  space consumers (recorded for a future decision). 1.1G pool-free was
+  enough for the proof (cache + clone).
+- Host artifacts: clones under ~/src/iprange on both hosts (plus the
+  rotated earlier clones under ~/src/iprange-4-12d-* and
+  ~/src/iprange-old-* on plakam4mini and ~/src/iprange-old-4-12d on
+  freebsd; the freebsd /tmp/cargo-test-mac.log lives in /tmp scratch).
+  No repository files were changed on the hosts.
+
+### Status (2026-08-25) - milestone 4 slice 4-12E delivered: code-size/duplication audit
+
+Audit at HEAD a19d99c (production = *.go excluding *_test.go; Rust =
+non-test *.rs under v4/rust/iprange-livedb/src):
+
+- Go module 87,283 production lines (249 files, 21 packages incl. the
+  root facade and cmd) vs Rust crate 82,516 lines (298 files) -> 1.06x
+  production parity with the authority. The ~5,000-line directional
+  goal was met once at the go-gate epoch (5,049) and is superseded by
+  the Rust-parity contract: the port must equal the authority in
+  surface, and Go error plumbing + exported-API documentation add
+  ~20-30% inherently (evidence: wire.go 1,233 vs wire.rs 639 lines).
+  Go tests 66k lines vs Rust tests 16.9k (pin-everything strategy).
+- Per-package verdicts: reader 0.96x, recovery 0.73x, publication
+  0.78x, format 0.83x, worker 1.30x, bitmap 1.30x, mapping 1.34x,
+  writer 1.90x (1.28x with shared-module credit - the Go package
+  merges Rust writer_core/draft_store/workflow/range modules to avoid
+  import cycles), live 1.88x (~1.5x with the namespace share - Go
+  ports three Rust lifecycle files per file), root facade 3.53x
+  (typed Go SDK surface vs Rust C-ABI-private modules + 22% doc
+  weight), work 3.12x (v4work dual-compile build-tag necessity).
+- Duplication dispositions: worker control-header wire constants in
+  the cmd fixture are test-pinned against the package authority (D1,
+  justified); the asm CTL_* offset/fault constants duplicate the Go
+  wire tables with a behavioral pin - risk note: the asm role range
+  check hardcodes 1..4, so a 5th MappingRole needs a synchronized asm
+  edit (D2, justified, recorded); scratch-checkpoint validation twin
+  mirrors the Rust authority's own duplication (D3); per-OS stubs
+  (50 files, 2,285 lines) are platform reality or typed refusals (D6);
+  no-follow constants repeat per package by Go privacy idiom (D4);
+  the error-code table is the single Go source with cross-language
+  repeat being the contract itself (D5). No actionable consolidation
+  with a positive risk/reward was found.
+
+Battery (all under nice) at a19d99c: gofmt clean; vet plain + v4work;
+full module plain + v4work; race + checkptr on the gated/routed
+packages both tag sets; twelve cross-builds plain + v4work;
+check-mmap-trace.sh 6 legs -> all green; darwin and freebsd native
+proofs -> 0 failures each, both tag sets.
+
+Next: milestone 4 chunk close - five fresh same-model adversarial
+reviewers (Rust parity / Go idioms / performance / wire format +
+integrity / APIs + docs), one level, disjoint scopes, the
+project-final-review skill, adversarial mode; fix rounds until PASS;
+then the M4 close record and the milestone-5 transition.
