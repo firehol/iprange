@@ -68,6 +68,20 @@ func TestLiveCrashChild(t *testing.T) {
 		if result, err := w.Commit(nil); err != nil || result.Durability != CommitCommitted {
 			t.Fatalf("commit: %+v (%v)", result, err)
 		}
+	case "metadata":
+		w, err := OpenLiveWriter(path, crashWriterBudget(), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.BeginDirect(); err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := w.SetMetadata([]byte("metadata crash value")); err != nil || !changed {
+			t.Fatalf("set metadata: changed=%v err=%v", changed, err)
+		}
+		if result, err := w.Commit(nil); err != nil || result.Durability != CommitCommitted {
+			t.Fatalf("commit: %+v (%v)", result, err)
+		}
 	default:
 		t.Fatalf("unknown crash action %q", action)
 	}
@@ -251,6 +265,88 @@ func TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration(t *testing.T) 
 			if tc.wantTxn == 2 && (!found || got != 123) {
 				r.Close()
 				t.Fatalf("lookup 10 after %s = (%d,%v), want (123,true)", tc.point, got, found)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestLiveWriterMetadataCrashPointsSelectAbsenceOrCompleteValue arms
+// the four writer-core publication crash points through a metadata
+// commit (Rust
+// live_crash_tests::metadata_crashes_select_absence_or_the_complete_value):
+// a crash before the private sync leaves the selected generation
+// without the metadata, a crash after the meta write or sync exposes
+// the complete payload through the trimmed main (Rust
+// reader.metadata_json() parity via the immutable reader on the
+// sidecar-free copy).
+func TestLiveWriterMetadataCrashPointsSelectAbsenceOrCompleteValue(t *testing.T) {
+	payload := []byte("metadata crash value")
+	cases := []struct {
+		point      string
+		wantTxn    uint64
+		wantAbsent bool
+	}{
+		{"commit.before_private_sync", 1, true},
+		{"commit.after_private_sync", 1, true},
+		{"commit.after_meta_write", 2, false},
+		{"commit.after_meta_sync", 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.point, func(t *testing.T) {
+			main := filepath.Join(t.TempDir(), "db.iprdb")
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+				t.Fatal(err)
+			}
+			runCrashChild(t, main, "metadata", tc.point)
+
+			// The writer open is the recovery surface: it re-selects
+			// the committed generation and trims any unpublished tail
+			// (the commit crash-matrix pattern).
+			w, err := OpenLiveWriter(main, crashWriterBudget(), nil, nil)
+			if err != nil {
+				t.Fatalf("writer open after %s: %v", tc.point, err)
+			}
+			info, err := w.BaseInfo()
+			if err != nil {
+				w.Close()
+				t.Fatalf("BaseInfo after %s: %v", tc.point, err)
+			}
+			if info.TransactionID != tc.wantTxn {
+				w.Close()
+				t.Fatalf("writer txn after %s = %d, want %d", tc.point, info.TransactionID, tc.wantTxn)
+			}
+			if result, err := w.Close(); err != nil || result.Outcome != CloseOutcomeClosed {
+				t.Fatalf("close after %s = %+v (%v)", tc.point, result, err)
+			}
+
+			raw, err := os.ReadFile(main)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := main + ".copy"
+			if err := os.WriteFile(copy, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r, err := reader.OpenImmutable(copy)
+			if err != nil {
+				t.Fatalf("immutable open after %s: %v", tc.point, err)
+			}
+			got, present, err := r.ReadMetadataJSON()
+			if err != nil {
+				r.Close()
+				t.Fatal(err)
+			}
+			if tc.wantAbsent {
+				if present || got != nil {
+					r.Close()
+					t.Fatalf("metadata after %s = (%q,%v), want absent", tc.point, got, present)
+				}
+			} else if !present || !bytes.Equal(got, payload) {
+				r.Close()
+				t.Fatalf("metadata after %s = (%q,%v), want the exact payload", tc.point, got, present)
 			}
 			if err := r.Close(); err != nil {
 				t.Fatal(err)

@@ -6,6 +6,8 @@ package recovery
 // budget refusals.
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -114,19 +116,48 @@ func TestPageSetClaimReasonClasses(t *testing.T) {
 
 func TestRecoveryBudgetRefusals(t *testing.T) {
 	budget := HeapOnly(1<<20, 100, 1)
-	if err := budget.validate(); err == nil {
-		t.Fatal("one open file accepted")
-	}
+	wantBudgetRefusal(t, budget.validate(), format.CodeInsufficientResourceBudget, "recovery requires source and output files")
 	budget = HeapOnly(1<<20, 1, 2)
-	if err := budget.validate(); err == nil {
-		t.Fatal("one output page accepted")
-	}
+	wantBudgetRefusal(t, budget.validate(), format.CodeInsufficientResourceBudget, "recovery output pages")
 	scratch := &RecoveryBudget{MaxHeapBytes: 1 << 20, MaxOutputPages: 100, MaxOpenFiles: 2, MaxScratchBytes: 1}
-	if err := scratch.validate(); err == nil {
-		t.Fatal("scratch bytes without files accepted")
-	}
+	wantBudgetRefusal(t, scratch.validate(), format.CodeInvalidArgument, "recovery scratch path and limits must be supplied together")
+	limitsWithoutDir := &RecoveryBudget{MaxHeapBytes: 1 << 20, MaxOutputPages: 100, MaxOpenFiles: 2, MaxScratchBytes: 1, MaxScratchFiles: 1}
+	wantBudgetRefusal(t, limitsWithoutDir.validate(), format.CodeInvalidArgument, "recovery scratch path and limits must be supplied together")
+	filesWithoutBytes := &RecoveryBudget{MaxHeapBytes: 1 << 20, MaxOutputPages: 100, MaxOpenFiles: 2, MaxScratchFiles: 1, ScratchDirectory: "/tmp"}
+	wantBudgetRefusal(t, filesWithoutBytes.validate(), format.CodeInvalidArgument, "recovery scratch path and limits must be supplied together")
 	budget = HeapOnly(1<<20, 100, 2)
 	if err := budget.validate(); err != nil {
 		t.Fatalf("valid heap-only budget refused: %v", err)
+	}
+	// The same refusal runs through the machine before any path access
+	// (Rust api.rs validate_budget before the destination attempt and
+	// the source open): the missing source and destination paths are
+	// never touched. The machine folds the cause through the fixed
+	// problem() detail exactly like Rust terminal.rs early over
+	// source_guard.rs problem (the budget code survives).
+	result, failure := RecoverImmutable(filepath.Join(t.TempDir(), "missing.v4"), &RecoveryCandidate{Label: CandidateNewest}, filepath.Join(t.TempDir(), "out.v4"), HeapOnly(1<<20, 100, 1), nil, nil)
+	if result != nil || failure == nil {
+		t.Fatalf("machine = (%v, %v), want the early failure arm", result, failure)
+	}
+	var e *format.Error
+	if !errors.As(failure.Cause, &e) || e.Code != format.CodeInsufficientResourceBudget || e.Detail != "recovery source operation failed" {
+		t.Fatalf("machine cause = %v, want the budget class with the fixed problem fold", failure.Cause)
+	}
+	if !failure.Cleanup.Empty() {
+		t.Fatalf("machine cleanup = %+v, want empty (nothing was created)", failure.Cleanup)
+	}
+}
+
+// wantBudgetRefusal fails unless err is exactly the verbatim Rust
+// budget class and detail (budget.rs validate; the Go format codes
+// mirror the Rust error classes).
+func wantBudgetRefusal(t *testing.T, err error, code format.ErrorCode, detail string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %q, got nil", detail)
+	}
+	var e *format.Error
+	if !errors.As(err, &e) || e.Code != code || e.Detail != detail {
+		t.Fatalf("budget error = %v, want code %d detail %q", err, code, detail)
 	}
 }

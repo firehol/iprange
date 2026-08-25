@@ -467,6 +467,15 @@ func TestRecordUnreadablePage(t *testing.T) {
 	if e.Detail != "unreadable source-page list" {
 		t.Fatalf("detail = %q, want the Rust ledger detail", e.Detail)
 	}
+	// The heap floor: a footprint exactly equal to the budget is
+	// accepted (Rust record_unreadable_page bytes > max_heap_bytes).
+	var floor []uint32
+	if err := RecordUnreadablePage(&floor, 4, 4, "candidate inspection fault did not advance"); err != nil {
+		t.Fatalf("floor budget refused: %v", err)
+	}
+	if len(floor) != 1 || floor[0] != 4 {
+		t.Fatalf("floor pages = %v, want [4]", floor)
+	}
 }
 
 func TestWorkerCleanupReleaseComplete(t *testing.T) {

@@ -321,6 +321,45 @@ func TestHandshakeBuildIDMismatch(t *testing.T) {
 	wantConflictDetail(t, err, "SDK worker version or protocol does not match")
 }
 
+// TestHandshakeHeaderMismatches extends the build-id handshake refusal
+// to every remaining header field verify_request checks (Rust
+// control.rs:214-223): a patched magic, protocol, state (away from
+// Request), or zeroed parent pid makes the real worker exit before
+// WorkerReady, so the parent handshake reports the exact protocol
+// Conflict class (client.rs handshake parity).
+func TestHandshakeHeaderMismatches(t *testing.T) {
+	binary := buildRealWorker(t)
+	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
+	t.Cleanup(func() { workerCandidatesHook = nil })
+
+	variants := []struct {
+		name  string
+		patch func(data []byte)
+	}{
+		{"magic", func(data []byte) { copy(data[offMagic:offMagic+8], []byte("XXXXXXXX")) }},
+		{"protocol", func(data []byte) { format.PutU32(data[offProtocol:offProtocol+4], 2) }},
+		{"state", func(data []byte) { format.PutU32(data[offState:offState+4], stateComplete) }},
+		{"parent-pid", func(data []byte) { format.PutU32(data[offParentPID:offParentPID+4], 0) }},
+	}
+	for _, variant := range variants {
+		t.Run(variant.name, func(t *testing.T) {
+			control, err := CreateParent()
+			if err != nil {
+				t.Fatal("create parent:", err)
+			}
+			defer control.Close()
+			variant.patch(control.data)
+			child, err := SpawnWorker(control)
+			if err != nil {
+				t.Fatal("spawn worker:", err)
+			}
+			err = Handshake(child, control)
+			child.Abort()
+			wantConflictDetail(t, err, "SDK worker version or protocol does not match")
+		})
+	}
+}
+
 // TestHandshakeRealBinarySanity guards the mismatch patch helper: an
 // unpatched control with the real binary still completes the version
 // handshake.

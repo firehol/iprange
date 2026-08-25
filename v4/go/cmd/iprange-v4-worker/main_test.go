@@ -50,6 +50,8 @@ const (
 const (
 	fixtureControlLen   = 1024 * 1024
 	fixtureProtocol     = uint32(1)
+	fixtureMagicOffset  = 0
+	fixtureProtocolOff  = 8
 	fixtureStateOffset  = 12
 	fixtureBuildOffset  = 16
 	fixtureParentPIDOff = 96
@@ -415,16 +417,16 @@ func TestWorkerCleanupDispatch(t *testing.T) {
 	wantCode(t, discarded.Artifact.Error, format.CodeInvalidArgument)
 }
 
-// patchBuildID overwrites the 64 build-id header bytes of one control
-// file with a different valid-length value before any worker spawns
-// (test-only; the Rust worker-side refusal is verify_request
-// control.rs:214-223, and the control keeps every other header field).
-// The write lands in the file's page cache through a fresh writable
-// mapping, so every existing mapping of the control observes it.
-func patchBuildID(t *testing.T, path, value string) {
+// patchControl overwrites one header field of one control file before
+// any worker spawns (test-only; the Rust worker-side refusals are
+// verify_request control.rs:214-223, and every other header field
+// stays intact). The write lands in the file's page cache through a
+// fresh writable mapping, so every existing mapping of the control
+// observes it.
+func patchControl(t *testing.T, path string, offset int, value []byte) {
 	t.Helper()
-	if len(value) != buildIDLen {
-		t.Fatalf("patch build id length = %d, want %d", len(value), buildIDLen)
+	if len(value) == 0 || offset < 0 || offset+len(value) > fixtureControlLen {
+		t.Fatalf("patch control range %d+%d out of bounds", offset, len(value))
 	}
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -438,7 +440,7 @@ func patchBuildID(t *testing.T, path, value string) {
 	if err != nil {
 		t.Fatal("patch control view:", err)
 	}
-	copy(data[fixtureBuildOffset:fixtureBuildOffset+buildIDLen], value)
+	copy(data[offset:offset+len(value)], value)
 	if err := m.Close(); err != nil {
 		t.Fatal("patch control close map:", err)
 	}
@@ -454,7 +456,7 @@ func patchBuildID(t *testing.T, path, value string) {
 func TestProtocolRefusalBuildIDMismatch(t *testing.T) {
 	parent := newFakeParent(t)
 	defer parent.close()
-	patchBuildID(t, parent.path, strings.Repeat("x", buildIDLen))
+	patchControl(t, parent.path, fixtureBuildOffset, []byte(strings.Repeat("x", buildIDLen)))
 	if code := run([]string{"--control", parent.path}); code != exitProtocol {
 		t.Errorf("run = %d, want %d", code, exitProtocol)
 	}
@@ -473,5 +475,50 @@ func TestProtocolRefusalBuildIDMismatch(t *testing.T) {
 	var fe *format.Error
 	if !errors.As(err, &fe) || fe.Code != format.CodeConflict || fe.Detail != "worker protocol does not match the SDK" {
 		t.Fatalf("verify error = %v, want the exact protocol Conflict", err)
+	}
+}
+
+// TestProtocolRefusalHeaderMismatches extends the build-id refusal to
+// every remaining header field verify_request checks (Rust
+// control.rs:214-223): a patched magic, protocol, state (away from
+// Request), or zeroed parent pid makes the worker exit 65 before
+// WorkerReady, and the parent VerifyRequest reports the exact protocol
+// Conflict on the same control.
+func TestProtocolRefusalHeaderMismatches(t *testing.T) {
+	variants := []struct {
+		name   string
+		offset int
+		value  []byte
+	}{
+		{"magic", fixtureMagicOffset, []byte("XXXXXXXX")},
+		{"protocol", fixtureProtocolOff, []byte{2, 0, 0, 0}},
+		{"state", fixtureStateOffset, []byte{2, 0, 0, 0}},
+		{"parent-pid", fixtureParentPIDOff, []byte{0, 0, 0, 0}},
+	}
+	for _, variant := range variants {
+		t.Run(variant.name, func(t *testing.T) {
+			parent := newFakeParent(t)
+			defer parent.close()
+			patchControl(t, parent.path, variant.offset, variant.value)
+			if code := run([]string{"--control", parent.path}); code != exitProtocol {
+				t.Errorf("run = %d, want %d", code, exitProtocol)
+			}
+			if code := runWorkerMain(t, "--control", parent.path); code != exitProtocol {
+				t.Errorf("subprocess protocol = %d, want %d", code, exitProtocol)
+			}
+			control, err := worker.OpenWorker(parent.path)
+			if err != nil {
+				t.Fatal("open patched control:", err)
+			}
+			defer control.Close()
+			err = control.VerifyRequest()
+			if err == nil {
+				t.Fatal("patched control verified")
+			}
+			var fe *format.Error
+			if !errors.As(err, &fe) || fe.Code != format.CodeConflict || fe.Detail != "worker protocol does not match the SDK" {
+				t.Fatalf("verify error = %v, want the exact protocol Conflict", err)
+			}
+		})
 	}
 }

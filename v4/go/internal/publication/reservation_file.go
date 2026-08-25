@@ -298,6 +298,15 @@ func (f *acquiringReservationFailure) Unwrap() error { return f.cause }
 // after-rename checkpoint, syncs the directory, and re-proves the
 // canonical placement (Rust acquire).
 func acquireReservation(owner *acquiringReservation, output *preparedOutput, afterRename func(live.FileIdentity) error) error {
+	// Rust acquire enters the Output probe for the whole machine step
+	// (reservation_file.rs:347): enter_output arms the region guard
+	// before the machine and releases it after, with no closure on the
+	// library path (the guard is inert without a worker session).
+	guard, err := owner.reservation.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return err
+	}
+	defer guard.Exit()
 	if err := verifyPrivateReservation(&owner.reservation, output); err != nil {
 		return err
 	}
@@ -397,6 +406,15 @@ func (c *canonicalReservation) resumeArmed(output *preparedOutput) (armedReserva
 	if c.header.state != reservationStateMainMayHaveBeenAttempted || c.header.sequence != 2 {
 		return armedReservation{}, &canonicalReservationFailure{owner: *c, cause: reservationHeaderInvariantError()}
 	}
+	// Rust resume_armed enters the Output probe around the canonical
+	// re-proof (reservation_file.rs:222; the header contract check
+	// stays outside like the Rust arm). enter_output returns the armed
+	// region guard; without a worker session it is inert.
+	guard, err := c.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return armedReservation{}, &canonicalReservationFailure{owner: *c, cause: err}
+	}
+	defer guard.Exit()
 	if err := verifyCanonicalReservation(c, output); err != nil {
 		return armedReservation{}, &canonicalReservationFailure{owner: *c, cause: err}
 	}
@@ -443,6 +461,15 @@ func (f *armingReservationFailure) Unwrap() error { return f.cause }
 // after-selection checkpoint, and re-proves the canonical placement
 // (Rust arm_with).
 func armWith(owner *armingReservation, output *preparedOutput, afterSelection func(live.FileIdentity) error) error {
+	// Rust arm_with enters the Output probe for the whole machine step
+	// (reservation_file.rs:380): enter_output arms the region guard
+	// before the machine and releases it after, with no closure on the
+	// library path (the guard is inert without a worker session).
+	guard, err := owner.reservation.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return err
+	}
+	defer guard.Exit()
 	if owner.target == nil {
 		return reservationHeaderInvariantError()
 	}

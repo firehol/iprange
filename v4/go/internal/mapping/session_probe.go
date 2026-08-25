@@ -30,15 +30,15 @@ const (
 	RoleCoordination ProbeRole = 4
 )
 
-// probeSlot boxes the installed probe hook for the atomic slot (the
+// probeSlot boxes the installed probe arm for the atomic slot (the
 // shipped worker process runs exactly one session, so one slot is
 // enough; the atomic makes the read race-free for tests and keeps the
 // hot-path probe check a single load).
 type probeSlot struct {
-	hook func(role ProbeRole, base uintptr, length uint64, operation func() error) error
+	arm func(role ProbeRole, base uintptr, length uint64) (func(), error)
 }
 
-// sessionProbeSlot is the one installed session probe hook (Rust
+// sessionProbeSlot is the one installed session probe arm (Rust
 // CURRENT_CONTROL): nil when no worker session is active. The worker
 // binary is the single writer (once, before the domain machine runs);
 // domain machines read the slot at every probe site; library
@@ -47,21 +47,23 @@ type probeSlot struct {
 // nest.
 var sessionProbeSlot atomic.Pointer[probeSlot]
 
-// SetSessionProbe installs one worker-session probe hook (Rust
-// Context::enter publishing CURRENT_CONTROL; the hook receives the
-// role, the mapping region, and the operation to run inside the armed
-// probe). A nil hook clears the session state.
-func SetSessionProbe(hook func(role ProbeRole, base uintptr, length uint64, operation func() error) error) {
-	if hook == nil {
+// SetSessionProbe installs one worker-session probe arm (Rust
+// Context::enter publishing CURRENT_CONTROL; the arm receives the
+// role and the mapping region and returns the release function that
+// restores the previous registration or disarms the probe, mirroring
+// Rust enter_region + Probe::drop). A nil arm clears the session
+// state.
+func SetSessionProbe(arm func(role ProbeRole, base uintptr, length uint64) (func(), error)) {
+	if arm == nil {
 		sessionProbeSlot.Store(nil)
 		return
 	}
-	sessionProbeSlot.Store(&probeSlot{hook: hook})
+	sessionProbeSlot.Store(&probeSlot{arm: arm})
 }
 
 // ClearSessionProbe removes the session probe hook (Rust Context::drop
-// clearing CURRENT_CONTROL): Mapping.Probe returns to running its
-// operation directly.
+// clearing CURRENT_CONTROL): Mapping.Probe and Mapping.EnterProbe
+// return to running directly.
 func ClearSessionProbe() {
 	sessionProbeSlot.Store(nil)
 }
@@ -74,6 +76,56 @@ func SessionProbeActive() bool {
 	return sessionProbeSlot.Load() != nil
 }
 
+// ProbeGuard is the armed region of one machine step (Rust
+// enter_output guard): the release function restores the previous
+// registration or disarms the probe, and the guard carries no state
+// when no session is active, so machine callers can defer Exit
+// unconditionally.
+type ProbeGuard struct {
+	release func()
+}
+
+// inertProbeGuard is the shared no-session guard (Rust enter_output
+// with a null CURRENT_CONTROL): Exit is a no-op and the machine runs
+// directly. One shared instance keeps the library path allocation-free.
+var inertProbeGuard = &ProbeGuard{}
+
+// Exit releases the armed region (Rust Probe::drop: restores the
+// previous registration or disarms; a nil release is the no-session
+// no-op).
+func (g *ProbeGuard) Exit() {
+	if g != nil && g.release != nil {
+		g.release()
+	}
+}
+
+// EnterProbe arms one mapped region for a machine step (Rust
+// enter_output: the region is resolved and armed before the machine
+// runs, and the caller releases the guard when the step finishes).
+// Without an installed hook the guard is inert and the machine runs
+// directly; with a hook, arming failures surface before the machine
+// runs (Rust enter_region error propagation). Unlike Probe, the
+// machine is not wrapped in a closure: Go's escape analysis promotes
+// caller stack values captured by an escaping probe closure, so the
+// closure-free guard is the only shape that keeps the pinned library
+// publish path allocation-free (the writer/output.go gate has the
+// same purpose for per-page Store ops).
+func (m *Mapping) EnterProbe(role ProbeRole) (*ProbeGuard, error) {
+	slot := sessionProbeSlot.Load()
+	if slot == nil {
+		return inertProbeGuard, nil
+	}
+	base, length, err := m.Region()
+	if err != nil {
+		return nil, err
+	}
+	release, err := slot.arm(role, base, length)
+	if err != nil {
+		return nil, err
+	}
+	return &ProbeGuard{release: release}, nil
+}
+
 // Probe runs one operation with the region protected by the session
 // probe hook (Rust probe_region: the region is resolved and entered
 // before the operation runs, and the probe restores the previous
@@ -81,13 +133,10 @@ func SessionProbeActive() bool {
 // operation runs directly; with a hook, arming failures surface
 // before the operation runs (Rust enter_region error propagation).
 func (m *Mapping) Probe(role ProbeRole, operation func() error) error {
-	slot := sessionProbeSlot.Load()
-	if slot == nil {
-		return operation()
-	}
-	base, length, err := m.Region()
+	guard, err := m.EnterProbe(role)
 	if err != nil {
 		return err
 	}
-	return slot.hook(role, base, length, operation)
+	defer guard.Exit()
+	return operation()
 }

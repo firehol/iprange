@@ -80,39 +80,48 @@ func (c *Control) registration() (MappingRegistration, bool, error) {
 	return MappingRegistration{Generation: generation, Role: role, Base: uintptr(mappingBase), Len: length}, true, nil
 }
 
-// ProbeRegion runs one operation with the region armed on this control
-// (Rust enter_region + Probe drop): the handler ownership is verified
-// first, the previous registration is captured, the region is armed
-// with a fresh nonzero generation, the operation runs, and the
-// previous registration is restored (or the probe is disarmed) on
-// release. Restore failures are swallowed exactly like the Rust
-// `let _ = control.arm(...)` in Probe::drop, and the restore still
-// runs after a failed operation.
-func (c *Control) ProbeRegion(role mapping.ProbeRole, base uintptr, length uint64, operation func() error) error {
+// ArmProbe arms one region on this control (Rust enter_region): the
+// handler ownership is verified first, the previous registration is
+// captured, and the region is armed with a fresh nonzero generation.
+// The returned release function restores the previous registration
+// (or disarms the probe) exactly like Rust Probe::drop: restore
+// failures are swallowed like the Rust `let _ = control.arm(...)`
+// arm, and the release still runs after a failed operation.
+func (c *Control) ArmProbe(role mapping.ProbeRole, base uintptr, length uint64) (func(), error) {
 	// Rust posix.rs verify_owned gate: only an owned handler may arm a
 	// probe; the Go seam is the process-global the naked handler
 	// reads (sigbus_linux_amd64.go activeControl).
 	if atomic.LoadUintptr(&activeControl) != c.base() {
-		return &format.Error{Code: format.CodeConflict, Detail: "SIGBUS worker handler ownership was lost"}
+		return nil, &format.Error{Code: format.CodeConflict, Detail: "SIGBUS worker handler ownership was lost"}
 	}
 	previous, armed, err := c.registration()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	generation := nextMappingGeneration()
 	if err := c.Arm(generation, MappingRole(role), base, length); err != nil {
+		return nil, err
+	}
+	return func() {
+		if armed {
+			_ = c.Arm(previous.Generation, previous.Role, previous.Base, previous.Len)
+		} else {
+			c.Disarm()
+		}
+	}, nil
+}
+
+// ProbeRegion runs one operation with the region armed on this control
+// (Rust enter_region + Probe drop, the guard-based session arm):
+// ArmProbe arms the region, the operation runs, and the release
+// restores the previous registration or disarms.
+func (c *Control) ProbeRegion(role mapping.ProbeRole, base uintptr, length uint64, operation func() error) error {
+	release, err := c.ArmProbe(role, base, length)
+	if err != nil {
 		return err
 	}
-	operationErr := operation()
-	if armed {
-		// Mirror Rust Probe::drop exactly: a failed operation still
-		// restores the previous registration, and a restore failure is
-		// swallowed like the Rust `let _` arm.
-		_ = c.Arm(previous.Generation, previous.Role, previous.Base, previous.Len)
-	} else {
-		c.Disarm()
-	}
-	return operationErr
+	defer release()
+	return operation()
 }
 
 // EnterSession activates the worker mapping-probe session for one
@@ -128,8 +137,8 @@ func EnterSession(control *Control) error {
 		return &format.Error{Code: format.CodeConflict, Detail: "worker context is already active"}
 	}
 	sessionControl = control
-	mapping.SetSessionProbe(func(role mapping.ProbeRole, base uintptr, length uint64, operation func() error) error {
-		return control.ProbeRegion(role, base, length, operation)
+	mapping.SetSessionProbe(func(role mapping.ProbeRole, base uintptr, length uint64) (func(), error) {
+		return control.ArmProbe(role, base, length)
 	})
 	return nil
 }

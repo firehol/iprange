@@ -92,8 +92,16 @@ func (p *preparedOutput) verifyDestinationBeforeMain() error {
 }
 
 func (p *preparedOutput) verify(location outputLocation) error {
-	// Rust worker::enter_output: test-only probe, recorded with the
-	// 4-10/4-11 observed-checkpoint chunks, absent here by design.
+	// Rust PreparedOutput::verify enters the Output probe for the
+	// whole custody machine (output.rs:405): enter_output arms the
+	// region guard before the proof and releases it after, with no
+	// closure on the library path (the guard is inert without a
+	// worker session).
+	guard, err := p.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return err
+	}
+	defer guard.Exit()
 	length, err := inspectExact(&p.attempt, p.file, p.mapping, p.meta, location)
 	if err != nil {
 		return err
@@ -118,8 +126,16 @@ func prepareMachine(owner *unpreparedOutput, check func() error) (uint64, [64]by
 	if err := live.Checkpoint(check); err != nil {
 		return 0, [64]byte{}, err
 	}
-	// Rust worker::enter_output probe deferred with the observed
-	// checkpoints (4-10/4-11); no observable semantics.
+	// Rust prepare_cancellable enters the Output probe after the
+	// cancellation check (output.rs:449): enter_output arms the
+	// region guard before the machine and releases it after, with no
+	// closure on the library path (the guard is inert without a
+	// worker session).
+	guard, err := owner.finished.Mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return 0, [64]byte{}, err
+	}
+	defer guard.Exit()
 	if err := verifyCustody(&owner.attempt, owner.finished.File, outputLocationPrivate); err != nil {
 		return 0, [64]byte{}, err
 	}
