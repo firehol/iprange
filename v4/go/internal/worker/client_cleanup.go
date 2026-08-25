@@ -92,11 +92,12 @@ func discardRecoveryAttemptComposed(destinationPath string, output *publication.
 	if err == nil {
 		return discarded, cleanup
 	}
-	problem := problemOf(err)
+	// Rust cleanup.rs worker_problem: every non-guard-pending session
+	// failure folds to the cause's code with the fixed isolated-cleanup
+	// detail; the Go boundary drops the errno like every arm.
+	problem := &format.Error{Code: WireProblemOf(err).Code, Detail: "isolated recovery cleanup failed"}
 	facts := WireEarlyDiscardOf(publication.FailedAttemptFacts(output, problem))
-	// problemOf always returns a *format.Error (WireProblem.Err), so the
-	// assertion is total on this fold.
-	return &facts, failedScratchCleanup(scratch, problem.(*format.Error))
+	return &facts, failedScratchCleanup(scratch, problem)
 }
 
 // failedScratchCleanup builds the scratch-cleanup evidence of a failed

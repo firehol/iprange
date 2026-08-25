@@ -373,8 +373,9 @@ func (c LiveCommitCleanupArtifacts) CleanupState() CleanupState {
 
 // LiveCommitResult is the exact identity, durability, and cleanup facts
 // of one live commit attempt (Rust live_writer::CommitResult). The
-// immutable-mode CommitResult remains the milestone-4-gap shape; the
-// live result carries the full sidecar and coordination surface.
+// immutable-mode CommitResult carries the pre-sidecar shape of the
+// accepted coordination divergence; the live result carries the full
+// sidecar and coordination surface.
 type LiveCommitResult struct {
 	AttemptedDatabaseID    [16]byte
 	DirectoryIdentity      *FileIdentity

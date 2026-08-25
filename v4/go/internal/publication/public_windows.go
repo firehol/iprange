@@ -1,7 +1,7 @@
 //go:build windows
 
 // Windows stubs of the public publication boundary (Rust
-// publication.rs M5 tracked surface): every entry point refuses with
+// publication.rs SOW-0026 tracked surface): every entry point refuses with
 // the same OS-unsupported class as the destination bind of the POSIX
 // arms, following the mapping-owner platform-stub pattern. The types
 // exist only so the SDK facade compiles on Windows; nothing is ever
@@ -20,7 +20,7 @@ const (
 	PublicationResolutionRemove
 )
 
-// ResolvePublication refuses on Windows (M5).
+// ResolvePublication refuses on Windows (SOW-0026).
 func ResolvePublication(string, *PublicationResult, PublicationResolutionMode, func() error) (PublicationResult, error) {
 	return PublicationResult{}, windowsCreateRefusal()
 }
@@ -60,7 +60,7 @@ type PublicationResidueHandle struct{}
 // Close is a no-op on the Windows stub.
 func (h *PublicationResidueHandle) Close() {}
 
-// Remove refuses on Windows (M5).
+// Remove refuses on Windows (SOW-0026).
 func (h *PublicationResidueHandle) Remove(func() error) (*PublicationResidueRemoval, error) {
 	return nil, windowsCreateRefusal()
 }
@@ -74,12 +74,12 @@ type PublicationResidueRemoval struct{}
 // CleanupState reports clean on the Windows stub.
 func (r *PublicationResidueRemoval) CleanupState() CleanupState { return CleanupStateClean }
 
-// InspectPublicationResidue refuses on Windows (M5).
+// InspectPublicationResidue refuses on Windows (SOW-0026).
 func InspectPublicationResidue(string, func() error) (*PublicationResidueInspection, error) {
 	return nil, windowsCreateRefusal()
 }
 
-// RemovePublicationResidue refuses on Windows (M5).
+// RemovePublicationResidue refuses on Windows (SOW-0026).
 func RemovePublicationResidue(*PublicationResidueHandle, func() error) (*PublicationResidueRemoval, error) {
 	return nil, windowsCreateRefusal()
 }
@@ -126,22 +126,22 @@ type AbandonedPublicationTempList struct{}
 // sentinel lives in the !windows maintenance machine).
 var ErrMaintenanceSinkStop = errors.New("publication maintenance sink stopped")
 
-// ListAbandonedPublicationTemps refuses on Windows (M5).
+// ListAbandonedPublicationTemps refuses on Windows (SOW-0026).
 func ListAbandonedPublicationTemps(string, func() error, func(*AbandonedPublicationTempEntry) error) (AbandonedPublicationTempList, error) {
 	return AbandonedPublicationTempList{}, windowsCreateRefusal()
 }
 
-// RemoveAbandonedPublicationTemp refuses on Windows (M5).
+// RemoveAbandonedPublicationTemp refuses on Windows (SOW-0026).
 func RemoveAbandonedPublicationTemp(string, LocalFileIdentity, [16]byte, LocalFileIdentity, *PublicationTuple, *PublicationDigest, func() error) (AbandonedArtifactRemoval, error) {
 	return AbandonedArtifactRemoval{}, windowsCreateRefusal()
 }
 
-// ListAbandonedReservationArtifacts refuses on Windows (M5).
+// ListAbandonedReservationArtifacts refuses on Windows (SOW-0026).
 func ListAbandonedReservationArtifacts(string, func() error, func(*AbandonedReservationEntry) error) (AbandonedReservationList, error) {
 	return AbandonedReservationList{}, windowsCreateRefusal()
 }
 
-// RemoveAbandonedReservationArtifact refuses on Windows (M5).
+// RemoveAbandonedReservationArtifact refuses on Windows (SOW-0026).
 func RemoveAbandonedReservationArtifact(string, LocalFileIdentity, [16]byte, LocalFileIdentity, func() error) (AbandonedArtifactRemoval, error) {
 	return AbandonedArtifactRemoval{}, windowsCreateRefusal()
 }

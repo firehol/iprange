@@ -8,7 +8,7 @@
 // lock, the selectable refusals, and the retained-handle proofs, and
 // the destination main is hashed but never changed. The Rust
 // gc_barrier availability calls are #[cfg(windows)] and absent here
-// like every other Go publication surface (M5 refuses Windows opens
+// like every other Go publication surface (SOW-0026 refuses Windows opens
 // at destination bind); the sidecar header read that only feeds the
 // barrier is omitted for the same reason.
 

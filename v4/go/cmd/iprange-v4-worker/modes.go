@@ -125,9 +125,10 @@ func runValidation(control *worker.Control) (*recovery.RecoverySourceCleanupGuar
 	}
 	var guard *recovery.RecoverySourceCleanupGuard
 	if failure != nil {
-		// The Go validation machine does not retain a source cleanup
-		// guard yet (its failure field stays nil; recorded with the
-		// 4-11 completion). Accept the guard when a later slice does.
+		// The Go validation machine never retains a source cleanup
+		// guard (release failures surface directly; recorded with the
+		// 4-11 completion); the assertion stays for the wire-boundary
+		// shapes that can still carry one.
 		if source, ok := failure.SourceCleanup.(*recovery.RecoverySourceCleanupGuard); ok {
 			guard = source
 			failure.SourceCleanup = nil

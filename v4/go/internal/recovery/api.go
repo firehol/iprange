@@ -71,11 +71,13 @@ func recoverPrecreatedWithAttempt(sourcePath string, candidate *RecoveryCandidat
 	}
 	effective, failure := validateRecoveryBudget(budget, mode)
 	if failure != nil {
-		// The parent-created attempt is released without namespace
-		// work (Rust drop of the consumed owners on the machine
-		// refusal arm; the worker client pre-validates the same
-		// budget, so this arm cannot fire inside a worker session).
-		attempt.Close()
+		// Defense in depth: the worker client pre-validates the same
+		// budget at the Rust recover() position (ValidateWorkerBudget),
+		// so this arm fires only when the machine is entered without
+		// that pre-check. The attempt is discarded (identity-guarded
+		// unlink), not merely closed, so no private artifact survives
+		// the refusal.
+		attempt.Discard()
 		return nil, failure
 	}
 	return recoverMachine(sourcePath, candidate, destinationPath, mode, effective, check, sink, attempt)
@@ -282,6 +284,26 @@ func validateRecoveryBudget(budget *RecoveryBudget, mode sourceMode) (*RecoveryB
 	effective := *budget
 	effective.MaxOpenFiles -= reserved
 	return &effective, nil
+}
+
+// ValidateWorkerBudget pre-validates one recovery budget at the Rust
+// worker-client position (recovery::validate_worker_budget, the first
+// statement of worker/client/recovery.rs recover()): the machine
+// checks run before any control, spawn, or attempt artifact exists, so
+// a refusal has zero destination side effects. live selects the Rust
+// Mode::Live arm (one reserved open file). A nil budget refuses with
+// the public "recovery budget is required" class, exactly like the
+// facade entries.
+func ValidateWorkerBudget(budget *RecoveryBudget, live bool) *RecoveryPreparationFailure {
+	if budget == nil {
+		return earlyRecoveryFailure(&format.Error{Code: format.CodeInvalidArgument, Detail: "recovery budget is required"})
+	}
+	mode := sourceModeImmutable
+	if live {
+		mode = sourceModeLive
+	}
+	_, failure := validateRecoveryBudget(budget, mode)
+	return failure
 }
 
 // FromAttemptFailure folds one publication attempt-creation failure

@@ -46,16 +46,22 @@ func init() { mappingGeneration.Store(1) }
 // nextMappingGeneration returns the next nonzero generation (Rust
 // NEXT_MAPPING_GENERATION get-then-checked-add: the returned value is
 // the current counter and the counter advances to value+1, wrapping
-// to 1 on overflow).
+// to 1 on overflow). The CAS retry loop keeps the read-modify-write
+// atomic, so the never-0 invariant holds even if two sessions ever
+// arm concurrently at the wrap instant.
 func nextMappingGeneration() uint64 {
-	generation := mappingGeneration.Add(1) - 1
-	if generation == ^uint64(0) {
-		// Add wrapped through ^uint64(0): the consumed value was the
-		// maximum, so the next call must return 1 (the never-0
-		// invariant survives the wrap).
-		mappingGeneration.Store(1)
+	for {
+		generation := mappingGeneration.Load()
+		next := generation + 1
+		if next == 0 {
+			// The consumed value was the maximum; the next call must
+			// return 1 (the never-0 invariant survives the wrap).
+			next = 1
+		}
+		if mappingGeneration.CompareAndSwap(generation, next) {
+			return generation
+		}
 	}
-	return generation
 }
 
 // registration reads the armed mapping registration of the control
@@ -85,7 +91,7 @@ func (c *Control) registration() (MappingRegistration, bool, error) {
 // ArmProbe arms one region on this control (Rust enter_region): the
 // handler ownership is verified first, the previous registration is
 // captured, and the region is armed with a fresh nonzero generation.
-// The returned release function restores the previous registration
+// The returned release value restores the previous registration
 // (or disarms the probe) exactly like Rust Probe::drop: restore
 // failures are swallowed like the Rust `let _ = control.arm(...)`
 // arm, and the release still runs after a failed operation.
@@ -132,9 +138,12 @@ func (c *Control) RestoreProbe(previous mapping.ProbeRegistration, armed bool) {
 }
 
 // ProbeRegion runs one operation with the region armed on this control
-// (Rust enter_region + Probe drop, the guard-based session arm):
+// (Rust enter_region + Probe drop; the guard-based session arm):
 // ArmProbe arms the region, the operation runs, and the release
-// restores the previous registration or disarms.
+// restores the previous registration or disarms. Production wiring
+// arms through ArmProbe directly (EnterSession installs the closure),
+// so this method is the test seam that exercises the exact production
+// arm and release shape.
 func (c *Control) ProbeRegion(role mapping.ProbeRole, base uintptr, length uint64, operation func() error) error {
 	release, err := c.ArmProbe(role, base, length)
 	if err != nil {

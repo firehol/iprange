@@ -11,7 +11,7 @@ import (
 // FreeBSD, Windows, and every other platform have no proven Go
 // implementation of the sidecar byte-range lock contract: FreeBSD lacks
 // OFD locks (spec section 15 platform table), and the Windows live
-// surface is a tracked M5 item. Every live constructor refuses before
+// surface is a tracked SOW-0026 item. Every live constructor refuses before
 // path access; these primitives stay typed refusals for defense in
 // depth, exactly like the mapping owner's platform refusals.
 
@@ -36,7 +36,7 @@ func refuseUnlock(_ *os.File, _ uint64) error {
 
 // requireLiveSupported refuses live coordination before any path access
 // (Rust live_lock::require_live_supported; spec section 15 platform
-// table). The Windows live surface is a tracked M5 item and refuses
+// table). The Windows live surface is a tracked SOW-0026 item and refuses
 // here exactly like the mapping owner refuses Windows opens.
 func requireLiveSupported() error {
 	return liveRefusal()

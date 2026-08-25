@@ -168,7 +168,7 @@ func nsMapParentIdentity(err error) error {
 // namespace classes (Rust create_private folds security errors through
 // namespace_error: AccessPolicy becomes the WrongState ownership class,
 // Unsupported becomes DurabilityUnsupported; the CodeAccessPolicyUnsupported
-// problem class belongs to the publication resolver surface, chunk 4-8).
+// problem class belongs to the publication resolver surface).
 func liveSecurityError(err error) error {
 	var fe *format.Error
 	if !errors.As(err, &fe) {

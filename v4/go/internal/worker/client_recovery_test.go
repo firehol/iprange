@@ -15,6 +15,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -285,5 +286,34 @@ func TestRecoverWithWorkerRealBinaryDeclaredPageRefuses(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); err != nil {
 		t.Fatalf("published output missing after the refused page: %v", err)
+	}
+}
+
+// TestRecoverWithWorkerInvalidBudgetRefusesBeforeArtifacts pins the
+// Rust recover() first-statement budget pre-check (M4 close gate,
+// parity P1 regression): a content-invalid budget refuses with the
+// early failure before any control, spawn, or destination artifact
+// exists, so no .iprange-publish-* attempt survives the refusal. No
+// double is installed: the refusal must fire before any spawn.
+func TestRecoverWithWorkerInvalidBudgetRefusesBeforeArtifacts(t *testing.T) {
+	source, candidate, _ := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
+	destination := filepath.Join(t.TempDir(), "out.v4")
+	budget := &recovery.RecoveryBudget{MaxHeapBytes: 1 << 30, MaxOutputPages: 1 << 16, MaxOpenFiles: 1}
+	outcome, cleanup := RecoverWithWorker(source, destination, candidate, WorkerModeImmutable, budget, nil, nil)
+	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
+		t.Fatalf("outcome = %+v, want the early refusal failure", outcome)
+	}
+	if cleanup != nil {
+		t.Fatal("budget refusal retained a cleanup guard")
+	}
+	wantCode(t, outcome.Failure.Cause, format.CodeInsufficientResourceBudget)
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		t.Fatal("read destination directory:", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".iprange-publish-") {
+			t.Fatalf("private attempt %s survived the budget refusal", entry.Name())
+		}
 	}
 }

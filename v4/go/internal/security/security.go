@@ -13,7 +13,7 @@
 // them to their context exactly like Rust: the live namespace folds
 // AccessPolicy to WrongState (live_namespace::namespace_error), the
 // worker folds everything to Conflict, and the publication resolver
-// (chunk 4-8) keeps the problem.rs classes.
+// keeps the problem.rs classes.
 
 package security
 
@@ -89,9 +89,8 @@ func SecureCreatorOnly(f *os.File, profile Profile) error {
 // CreatorOnlyCommitment proves the creator-only policy of one open
 // artifact and returns the ownership commitment of its current owner
 // (Rust security::creator_only_commitment). Production consumers land
-// with the publication resolver slice (chunk 4-8, Rust
-// reservation_inspection and recovery scratch surfaces); tests cover
-// the proof today.
+// with the publication resolver surface (Rust reservation_inspection
+// and recovery scratch surfaces); tests cover the proof today.
 func CreatorOnlyCommitment(f *os.File) ([32]byte, error) {
 	meta, err := creatorOnlyMetadata(f)
 	if err != nil {

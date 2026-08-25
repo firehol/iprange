@@ -10,7 +10,7 @@ import (
 // helpers with the namespace-unsupported class: the live sidecar and
 // publication surfaces refuse before any path access (Rust compiles
 // real windows arms; the Go Windows publication surface is a tracked
-// M5 item). The signatures exist so the machine compiles everywhere.
+// SOW-0026 item). The signatures exist so the machine compiles everywhere.
 
 func RegularIdentityAnyLink(_ *os.File, _ FileIdentity) (FileIdentity, error) {
 	return FileIdentity{}, nsUnsupportedError()

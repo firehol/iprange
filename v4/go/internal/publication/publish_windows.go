@@ -9,7 +9,7 @@ import (
 )
 
 // PublishAttempt is the Windows refusal stub of the reservation-path
-// publication composition (Rust namespace/windows.rs is a tracked M5
+// publication composition (Rust namespace/windows.rs is a tracked SOW-0026
 // surface): the package binds nothing and creates nothing until the
 // native surface exists.
 type PublishAttempt struct{}
@@ -43,7 +43,7 @@ func (p *PublishAttempt) DiscardFacts() (PrivateOutputAttempt, *CleanupArtifact)
 
 // CreatePublishAttempt refuses on Windows before any path access
 // exactly like the destination bind of the POSIX arms (Rust
-// namespace/windows.rs is a tracked M5 surface; Go keeps the
+// namespace/windows.rs is a tracked SOW-0026 surface; Go keeps the
 // honest-refusal stance).
 func CreatePublishAttempt(string, PublicationPolicy) (*PublishAttempt, *PublicationPreparationFailure) {
 	return nil, windowsCreateRefusal()

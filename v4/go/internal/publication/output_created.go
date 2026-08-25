@@ -64,7 +64,7 @@ func createOutputWith(path string, requireAbsent bool) (*createdOutput, error) {
 // createAttempt allocates one random nonzero attempt id and creates its
 // private output file (Rust output.rs create_attempt non-windows arm).
 // The Rust windows arm retries on namespace collisions; Go publication
-// refuses Windows opens at destination bind (M5), so that retry loop
+// refuses Windows opens at destination bind (SOW-0026), so that retry loop
 // is unreachable and intentionally absent.
 func createAttempt(d *destination) ([16]byte, string, *os.File, error) {
 	attemptID, err := random.Nonzero128()

@@ -6,7 +6,7 @@
 // and directory synced and re-proved; retirement then unlinks the
 // replaced previous and the coordination reservation and proves the
 // namespace empty of them before the result facts are built. The Rust
-// windows gc-transition arms are intentionally absent (M5: Go refuses
+// windows gc-transition arms are intentionally absent (SOW-0026: Go refuses
 // Windows publication opens at destination bind).
 
 package publication
@@ -202,7 +202,7 @@ func proveMain(owner *mainAttempt, checkpoint func(mainPoint) error) error {
 // retire retires one published main without checkpoints (Rust
 // PublishedMain::retire). retire_observed shares the same unix arms;
 // only the #[cfg(windows)] gc wiring observes housekeeping, absent
-// here per M5 (Go publication refuses Windows opens at destination
+// here per SOW-0026 (Go publication refuses Windows opens at destination
 // bind), so housekeeping always stays unobserved on the supported
 // POSIX path.
 func (p *publishedMain) retire() (publishedOutput, *retiringMainFailure) {

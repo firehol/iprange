@@ -6,7 +6,7 @@
 // publication temps and reservation artifacts with exact evidence,
 // and exact removal of one retained artifact after the caller
 // certified its quiescence. The Windows housekeeping machines are
-// M5 refusals here like every other Go publication surface.
+// SOW-0026 refusals here like every other Go publication surface.
 
 package publication
 
@@ -211,7 +211,7 @@ func listWindowsHousekeeping(path string, check func() error) error {
 }
 
 // removeWindowsHousekeeping is the refused Windows-only housekeeping
-// removal (Rust remove_windows_housekeeping non-windows arm; M5).
+// removal (Rust remove_windows_housekeeping non-windows arm; SOW-0026).
 func removeWindowsHousekeeping(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, ordinal uint32, expectedEnvelope LocalFileIdentity, expectedPayloadIdentity *residuePayloadIdentity, check func() error) error {
 	return problem(format.CodeOSUnsupported, "Windows housekeeping is unavailable on this platform")
 }

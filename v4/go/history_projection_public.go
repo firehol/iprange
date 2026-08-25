@@ -35,7 +35,7 @@ const (
 	HistoryProjectionSourceImmutable HistoryProjectionSourceKind = iota
 	// HistoryProjectionSourceLive would project one live database
 	// generation through the sidecar coordination; the Go SDK refuses
-	// it for now (Rust Unsupported, milestone-4 scope).
+	// it for now (Rust Unsupported; tracked platform surface).
 	HistoryProjectionSourceLive
 )
 

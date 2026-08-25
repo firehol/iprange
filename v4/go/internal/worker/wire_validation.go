@@ -52,7 +52,7 @@ func WriteValidationRequest(control *Control, path string, mode validation.Valid
 		}
 	case validation.ValidationModeOfflineCandidate:
 		if candidate == nil {
-			return &format.Error{Code: format.CodeInvalidArgument, Detail: "worker offline validation requires a candidate"}
+			return &format.Error{Code: format.CodeInvalidArgument, Detail: "offline-candidate validation requires the candidate token (recovery.ValidateOfflineCandidate)"}
 		}
 		if err := w.Byte(3); err != nil {
 			return err

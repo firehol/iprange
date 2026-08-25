@@ -433,9 +433,10 @@ func (m *Mapping) Flush() error {
 // succeed), so the base-prefix shape is the one implementation that is
 // portable across linux, darwin, and freebsd. Pages before offset are
 // already clean in the durability flows (their own flush or the create
-// write), so the wider msync is a no-op scan there; the Rust subrange
-// shape is affected by the same XNU limitation (Rust follow-up
-// recorded in SOW-0025).
+// write), so the wider msync is a no-op scan there; memmap2 re-aligns
+// its subrange through page-size floor alignment on the same XNU
+// shape, and a native XNU-16K flush pin is tracked for the Rust side
+// (SOW-0026).
 func (m *Mapping) FlushRange(offset, length uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}

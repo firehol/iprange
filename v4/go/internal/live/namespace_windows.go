@@ -5,11 +5,11 @@ package live
 import "os"
 
 // Windows stub of the live namespace: the whole live surface is a
-// tracked M5 item and every namespace operation refuses before any path
+// tracked SOW-0026 item and every namespace operation refuses before any path
 // access (lock_refuse.go refuses the byte-range locks the same way, and
 // mapping.MapFile refuses its Windows mapping). The FileIdentity shape
 // stays identical so the portable slot/cleanup/header code compiles
-// against it; no Windows code path reaches these functions before M5.
+// against it; no Windows code path reaches these functions before SOW-0026.
 type FileIdentity struct {
 	device uint64
 	inode  uint64

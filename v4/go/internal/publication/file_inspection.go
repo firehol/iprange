@@ -7,7 +7,7 @@
 // the output lifetime lock is held for the inspection, and custody is
 // re-proved at the exact names. The Rust gc_barrier availability
 // calls are #[cfg(windows)] and absent here like every other Go
-// publication surface (M5 refuses Windows opens at destination bind).
+// publication surface (SOW-0026 refuses Windows opens at destination bind).
 
 package publication
 

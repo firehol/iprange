@@ -227,7 +227,7 @@ func inspectLive(path string, check func() error) (*RecoveryCandidateInspection,
 	}
 	// require_main_available is the recorded POSIX no-op (Rust
 	// live_cleanup::require_main_available; the Windows GC custody
-	// arrives with the M5 surface).
+	// arrives with the SOW-0026 surface).
 	gate, err := live.OpenLiveRecoveryGate(path, current.DatabaseID, check)
 	if err != nil {
 		return fail(live.CoordinationCause(err))

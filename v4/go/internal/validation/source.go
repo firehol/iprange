@@ -103,7 +103,7 @@ func (s *ImmutableSource) FileHandle() *os.File { return s.file }
 // RequireAvailable verifies the retained source is still available for
 // the database identity (Rust live_cleanup::require_main_available;
 // the recorded POSIX no-op - the Windows GC custody arrives with the
-// M5 surface).
+// SOW-0026 surface).
 func (s *ImmutableSource) RequireAvailable(databaseID [16]byte) error { return nil }
 
 // Close releases the lifetime lock and the descriptor (Rust drops the

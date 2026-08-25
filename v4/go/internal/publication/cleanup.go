@@ -5,7 +5,7 @@
 // proves the retained name went away, then the directory sync and
 // verify run; a removal that cannot be proved pushes one exact
 // cleanup artifact into the result ledger. Go refuses Windows
-// publication opens at destination bind (M5), so the Rust Windows
+// publication opens at destination bind (SOW-0026), so the Rust Windows
 // gc-transition arm of cleanup.rs is never reachable and
 // intentionally absent.
 

@@ -10,7 +10,7 @@
 // keeps the v4work test tree cross-buildable on windows: the machine
 // needs the POSIX Linkat and directory-identity primitives, which
 // have no Windows counterpart (the Windows live surface is a tracked
-// M5 stub).
+// SOW-0026 stub).
 
 package live
 

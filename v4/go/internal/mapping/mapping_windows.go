@@ -9,11 +9,12 @@ import (
 // coordinationSupported reports the exclusive lifetime-lock machine availability.
 const coordinationSupported = false
 
-// Mapping is the milestone-1 Windows stub: the type and method surface exist
-// only so the reader core cross-compiles. OpenImmutable always refuses, so
-// these methods are unreachable at runtime on Windows until the platform
-// milestone implements the real owner. The type holds no descriptor: the
-// raw *os.File never escapes the mapping owner on any platform.
+// Mapping is the Windows stub: the type and method surface exist only so
+// the reader core cross-compiles. OpenImmutable always refuses, so these
+// methods are unreachable at runtime on Windows until the platform
+// completion work (SOW-0026) implements the real owner. The type holds no
+// descriptor: the raw *os.File never escapes the mapping owner on any
+// platform.
 type Mapping struct{}
 
 // OpenImmutable refuses every Windows open in milestone 1.

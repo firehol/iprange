@@ -472,7 +472,7 @@ func WireEarlyDiscardOf(facts publication.EarlyDiscardFacts) EarlyDiscard {
 // one cleanup request (Rust client/recovery.rs cleanup_checkpoint:433):
 // a nil checkpoint is the clean nil cleanup, and a present checkpoint
 // reports one removal outcome per checkpoint entry. The Go recovery
-// machine never creates authorized scratch (SOW-0025 chunk 4-10 record:
+// machine never creates authorized scratch (SOW-0025 recovery-scratch record:
 // "external sort + authorized scratch ... tracked as a follow-up ...
 // recorded as deferred, not ported"), so the removal arm of the Rust
 // machine (recovery.rs:439-499, remove_checkpointed_scratch) is a

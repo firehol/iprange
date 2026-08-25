@@ -3,7 +3,7 @@
 // Shared fixtures for the output-machine tests (Rust output_tests.rs
 // metaPage-style builders). Linux is the only Go target whose pure-Go
 // security owner proves the creator-only ACL today; the darwin/freebsd
-// refusal is recorded with 4-12/M5, so the created/secure arms run
+// refusal is recorded with the 4-12 platform gate, so the created/secure arms run
 // natively there only after the platform acceptance.
 
 package publication

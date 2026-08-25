@@ -152,7 +152,7 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 
 	// require_available is the recorded POSIX no-op (Rust
 	// live_cleanup::require_main_available); the Windows GC custody
-	// arrives with the M5 surface.
+	// arrives with the SOW-0026 surface.
 
 	whole, err := mapping.MapFile(source.FileHandle(), res.Meta.PageCount*format.PageSize, false)
 	if err != nil {

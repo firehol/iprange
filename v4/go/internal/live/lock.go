@@ -13,7 +13,7 @@
 // by an open file description and released automatically when its last
 // descriptor closes: Linux and macOS provide F_OFD_SETLK, every other
 // platform is refused before path access (the Windows live surface is a
-// tracked M5 item and stays an honest refusal here). The artifact
+// tracked SOW-0026 item and stays an honest refusal here). The artifact
 // surface (LockFile / TryLockFile / UnlockFile / LockFileCancellable)
 // locks one complete publication artifact: Linux and macOS keep the
 // caller-supplied byte-range offset with OFD locks, FreeBSD locks the

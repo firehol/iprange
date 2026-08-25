@@ -26,6 +26,7 @@ Facts:
   - FreeBSD durable immutable publication in pure Go: refused today (no libc ACL in pure Go; Decision 2A); Rust implements it (publication/security/freebsd.rs). Scope decision requested from the user at the M4 close (reader-only amendment vs machine delivery).
   - Rust-side durability-shape pins on Apple Silicon: memmap2 floor-align extends flush ranges (16 KiB hardware pages); raw msync callers on XNU-16K need a pinned native flush shape.
   - Naked-SIGBUS asm role gate (sigbus_linux_amd64.s): roles 1..4 hardcoded; the new tripwire test (asm_role_gate_test.go) fails when a fifth MappingRole is added until the gate is extended.
+  - Per-page heap allocation in the offline validation/recovery sweeps: format.InspectLayout returns *LayoutInspection (one heap alloc per visited page; Rust returns the layout by value). Tracked as a performance follow-up with a value-return refactor plus an offline-sweep allocation pin (M4 close review P3-3).
 - SOW-0017 (snapshot signing, phase 2) already tracks the authenticated-snapshot work and is independent of these items.
 
 Inferences:
@@ -34,7 +35,7 @@ Inferences:
 
 Unknowns:
 
-- Whether the user chooses reader-only FreeBSD (scope amendment) or machine delivery at the M4 close decision.
+- None: the M4 close decision (2026-08-25, option A) resolved the FreeBSD scope; the remaining unknowns are implementation details discovered when this SOW starts.
 
 ### Acceptance Criteria
 

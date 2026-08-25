@@ -84,10 +84,11 @@ type Writer struct {
 }
 
 // OpenWriter opens path as the single live writer (Rust LiveWriter::open
-// minus the sidecar coordination, which milestone 4 adds; the mapping
-// owner's exclusive lifetime lock is the writer claim). Readers block on
-// the writer's lock until Close. budget declares the draft resource
-// limits; use DefaultBudget for the proven values.
+// minus the sidecar coordination, an accepted divergence (SOW-0025
+// chunk-6 design record); the mapping owner's exclusive lifetime lock
+// is the writer claim). Readers block on the writer's lock until
+// Close. budget declares the draft resource limits; use DefaultBudget
+// for the proven values.
 func OpenWriter(path string, budget PageBudget) (*Writer, error) {
 	core, err := writer.Open(path, budget.internal(), writerNamespaceCheck)
 	if err != nil {

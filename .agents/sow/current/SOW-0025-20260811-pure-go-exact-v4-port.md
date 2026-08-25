@@ -2797,7 +2797,9 @@ Unknowns:
   implements immutable reading, offline validation/recovery, and durable
   immutable publication while every live entry rejects before path access or
   mutation. Scope amendment (user decision, 2026-08-25, option A): the Go
-  port delivers FreeBSD as a reader/recovery platform in milestone 4 and
+  port delivers FreeBSD immutable reading and offline validation/recovery in
+  milestone 4 (its live entries and publication-producing operations refuse
+  before path access, exactly like the 4-12D platform-gate record) and
   tracks FreeBSD durable immutable publication for the platform-completion
   milestone (pending SOW-0026), because pure Go has no libc ACL surface
   (Decision 2A); the Rust authority already ships it

@@ -1,5 +1,5 @@
 // Platform-neutral security helpers (the POSIX surface lives in
-// security.go; the Windows live surface is a tracked M5 item and
+// security.go; the Windows live surface is a tracked SOW-0026 item and
 // refuses through the same typed class).
 
 package security

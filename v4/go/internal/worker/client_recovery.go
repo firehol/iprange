@@ -69,9 +69,18 @@ const (
 // the Rust RecoveryOutcome; a guard-pending completion attaches the
 // retained WorkerCleanup to the failure's coordination class and
 // returns it as the second value so the routing package can build the
-// recovery source-cleanup guard. The Go machine creates its own
-// output attempt, so the parent owns no attempt facts.
+// recovery source-cleanup guard. The parent creates and secures the
+// private output attempt before each request (Rust recover_once
+// create + secure arms), so the attempt facts travel the wire and
+// every failed terminal discards the owned artifact.
 func RecoverWithWorker(sourcePath, destinationPath string, candidate *recovery.RecoveryCandidate, mode WorkerMode, budget *recovery.RecoveryBudget, check Checkpoint, sink recovery.RecoverySink) (*RecoveryOutcome, *WorkerCleanup) {
+	// Rust recover(): validate_worker_budget is the first statement,
+	// before the retry loop and before any control, spawn, or attempt
+	// artifact exists; a refusal reports the early failure with zero
+	// destination side effects.
+	if failure := recovery.ValidateWorkerBudget(budget, mode == WorkerModeLive); failure != nil {
+		return &RecoveryOutcome{Failure: failure}, nil
+	}
 	var unreadablePages []uint32
 	var deliveredUnknowns uint64
 	for {
@@ -162,11 +171,13 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 	if err := WriteRecoveryRequest(control, sourcePath, destinationPath, candidate, mode, budget, &facts, unreadablePages, *deliveredUnknowns); err != nil {
 		child.Abort()
 		// Rust recover_once write_request arm: the created attempt is
-		// discarded in-process (no cleanup session exists yet) and its
-		// exact facts fold into the discarded failure.
+		// discarded in-process (no cleanup session exists yet) and the
+		// cause folds through source_guard::problem with the fixed
+		// detail (recovery/source_guard.rs:306-311).
 		discardFacts, artifact := created.DiscardFacts()
 		discarded := &EarlyDiscard{Output: discardFacts, Artifact: artifact}
-		return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(problemOf(err), recovery.RecoveryReport{}, discarded, nil)}}
+		wire := WireProblemOf(err)
+		return recoveryAttempt{kind: attemptComplete, outcome: &RecoveryOutcome{Failure: discardedRecoveryFailureOf(&format.Error{Code: wire.Code, Detail: "recovery source operation failed"}, recovery.RecoveryReport{}, discarded, nil)}}
 	}
 	// The parent's descriptors are released once the request is sealed
 	// (Rust drop(file); drop(attempt)); the worker resumes the
@@ -181,7 +192,14 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 		if callback != nil {
 			return recoveryCallbackFailureWorker(control, callback, destinationPath, &facts, budget)
 		}
-		return recoveryAttempt{kind: attemptFailed, cause: driveErr, output: &facts, scratch: scratchCheckpointOf(control)}
+		// Rust drive-error arm: a corrupt scratch checkpoint becomes
+		// the cause with a nil scratch (client/recovery.rs:263-272);
+		// a valid checkpoint keeps the drive cause.
+		scratch, scratchErr := scratchCheckpointStrict(control)
+		if scratchErr != nil {
+			return recoveryAttempt{kind: attemptFailed, cause: scratchErr, output: &facts, scratch: nil}
+		}
+		return recoveryAttempt{kind: attemptFailed, cause: driveErr, output: &facts, scratch: scratch}
 	case driven.Complete:
 		outcome, retainedProblem, readErr := ReadRecoveryOutcome(control)
 		if readErr != nil {

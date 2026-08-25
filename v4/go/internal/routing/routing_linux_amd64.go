@@ -7,10 +7,13 @@
 // machines stay the worker-side engines and the non-linux path
 // (routing_other.go). The worker arms return the 4-11A wire shapes,
 // so this package converts them back to the domain types the
-// in-process machines return; the conversion constructors are the
-// only exported additions to the validation and recovery packages.
-// There is no silent in-process fallback here: a missing worker
-// binary surfaces the Rust Unsupported class through the arms.
+// in-process machines return; the exported additions to the
+// validation and recovery packages are the worker-entry seams
+// (Preflight, ValidateWorkerBudget, PreflightInspection,
+// FromWorkerCleanup) and the wire-to-domain conversion constructors.
+// There is no silent in-process fallback here: an exhausted or empty
+// worker candidate list surfaces the Rust Io or Unsupported class
+// through the arms.
 
 package routing
 
