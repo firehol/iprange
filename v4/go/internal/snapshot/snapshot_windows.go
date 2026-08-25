@@ -1,39 +1,101 @@
-// Windows stubs for the live snapshot self-replacement probe. The
-// snapshot To machine refuses live snapshot sources before any path
-// access (CheckSupported), so the probe is unreachable here; the stubs
-// keep the package compiling, following the mapping package's
-// platform-stub pattern.
+// Windows arms of the live snapshot self-replacement probe (Rust
+// publication::namespace open_regular, regular_identity, and
+// directory identity over the destination): the destination main is
+// opened read-only with the full share modes and
+// FILE_FLAG_OPEN_REPARSE_POINT, a reparse-point or directory
+// destination refuses as the non-regular class, and the identity pair
+// is the volume serial plus the 64-bit file index of
+// BY_HANDLE_FILE_INFORMATION like the live namespace machine.
 
 //go:build windows
 
 package snapshot
 
 import (
+	"errors"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"golang.org/x/sys/windows"
 )
 
-// openDestinationNoFollow satisfies the common surface; unreachable on
-// Windows in milestone 1.
+// openDestinationNoFollow opens the destination main name without
+// following a final reparse point (Rust Directory::open_regular
+// read-only arm: GENERIC_READ|READ_CONTROL with FILE_FLAG_OPEN_
+// REPARSE_POINT and the full share set; regular_identity refuses
+// directory and reparse attributes with the non-regular class).
 func openDestinationNoFollow(path string) (*os.File, error) {
-	return os.Open(path)
+	handle, err := windows.CreateFile(
+		windows.StringToUTF16Ptr(path),
+		windows.GENERIC_READ|windows.READ_CONTROL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		file.Close()
+		return nil, err
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+		file.Close()
+		return nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+	}
+	return file, nil
 }
 
-// fileIdentityOf satisfies the common surface; unreachable on Windows
-// in milestone 1.
+// fileIdentityOf captures the volume+index of one open descriptor
+// (Rust namespace/windows.rs file_identity).
 func fileIdentityOf(f *os.File) (uint64, uint64, error) {
-	return 0, 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "live snapshot self-replacement probe not implemented on windows"}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
 }
 
-// directoryIdentityOf satisfies the common surface; unreachable on
-// Windows in milestone 1.
-func directoryIdentityOf(path string) (uint64, uint64, error) {
-	return 0, 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "live snapshot self-replacement probe not implemented on windows"}
+// directoryIdentityOf captures the volume+index of the destination
+// parent directory (Rust Destination::bind Directory::open identity;
+// the reject_live_self same-filesystem rule compares the destination
+// file against it; the mutation machine already proved the parent is
+// a plain directory through publication.CheckPublicationParent).
+func directoryIdentityOf(path string) (device uint64, inode uint64, err error) {
+	handle, err := windows.CreateFile(
+		windows.StringToUTF16Ptr(path),
+		windows.GENERIC_READ|windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	defer windows.CloseHandle(handle)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
 }
 
-// fileLinksOf satisfies the common surface; unreachable on Windows in
-// milestone 1.
+// fileLinksOf reports the hard-link count of one open descriptor
+// (Rust regular_link_count over BY_HANDLE_FILE_INFORMATION; the
+// publication destination must have exactly one link).
 func fileLinksOf(f *os.File) (uint64, error) {
-	return 0, &format.Error{Code: format.CodeOSUnsupported, Detail: "live snapshot self-replacement probe not implemented on windows"}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+		return 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	return uint64(info.NumberOfLinks), nil
 }

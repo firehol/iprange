@@ -123,11 +123,12 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 	}
 	identity := FileIdentity{device: device, inode: inode}
 	// bind_current: verify the path, bootstrap the committed generation
-	// in live-reader mode over a freshly sampled extent, and verify the
-	// path again (Rust bind_current; bootstrap_file re-stats the
-	// descriptor; require_main_available is a POSIX no-op, omitted like
-	// every other Go live open; both path proofs map through
-	// live_coordination).
+	// in live-reader mode over a freshly sampled extent, prove the
+	// main is not owned by Windows housekeeping, and verify the path
+	// again (Rust bind_current: verify_path, bootstrap_file, then
+	// live_cleanup::require_main_available, then verify_path; both
+	// path proofs map through live_coordination, the custody proof
+	// propagates its own errors).
 	if err := verifyPath(path, identity); err != nil {
 		return fail(liveCoordination(err))
 	}
@@ -136,6 +137,14 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 		return fail(err)
 	}
 	meta := core.Meta()
+	if err := requireAvailable(path, identity, cleanupAuthority{
+		attemptID:     meta.DatabaseID,
+		ordinal:       0,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
+	}); err != nil {
+		return fail(err)
+	}
 	if err := verifyPath(path, identity); err != nil {
 		return fail(liveCoordination(err))
 	}

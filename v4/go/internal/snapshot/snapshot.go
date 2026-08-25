@@ -416,6 +416,10 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	}
 	file, err := openDestinationNoFollow(clean)
 	if err != nil {
+		var fe *format.Error
+		if errors.As(err, &fe) {
+			return fe
+		}
 		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
 	device, inode, err := fileIdentityOf(file)

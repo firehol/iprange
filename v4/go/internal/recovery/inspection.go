@@ -225,9 +225,17 @@ func inspectLive(path string, check func() error) (*RecoveryCandidateInspection,
 	if err != nil {
 		return fail(err)
 	}
-	// require_main_available is the recorded POSIX no-op (Rust
-	// live_cleanup::require_main_available; the Windows GC custody
-	// arrives with the SOW-0026 surface).
+	// Rust inspect_live runs require_main_available after the
+	// proven-current requirement, before the reader-table gate (the
+	// Windows arm proves the main is not owned by housekeeping; the
+	// POSIX arm is the recorded no-op).
+	device, inode, err := m.FileIdentity()
+	if err != nil {
+		return fail(err)
+	}
+	if err := live.RequireMainAvailable(path, live.IdentityFromDeviceInode(device, inode), current.DatabaseID); err != nil {
+		return fail(err)
+	}
 	gate, err := live.OpenLiveRecoveryGate(path, current.DatabaseID, check)
 	if err != nil {
 		return fail(live.CoordinationCause(err))
@@ -323,7 +331,9 @@ func requireLiveCurrent(classified *classifiedMetas) (format.Meta, error) {
 
 // requireImmutableAvailable verifies every projected candidate is
 // available in the retained source (Rust require_immutable_available;
-// require_available is the recorded POSIX no-op).
+// the custody proof is the platform seam of the immutable source: the
+// Windows arm proves the exact GC envelope absence, every other
+// platform keeps the recorded no-op).
 func requireImmutableAvailable(source *validation.ImmutableSource, classified *classifiedMetas) error {
 	for _, candidate := range classified.candidates(source.PublicIdentity()) {
 		if candidate != nil {
@@ -337,7 +347,9 @@ func requireImmutableAvailable(source *validation.ImmutableSource, classified *c
 
 // requireOfflineAvailable verifies every projected candidate is
 // available in the retained source (Rust require_offline_available;
-// require_available is the recorded POSIX no-op).
+// the custody proof is the platform seam of the offline source: the
+// Windows arm proves the exact GC envelope absence, every other
+// platform keeps the recorded no-op).
 func requireOfflineAvailable(source *offlineSource, classified *classifiedMetas) error {
 	for _, candidate := range classified.candidates(source.publicIdentity()) {
 		if candidate != nil {
@@ -461,9 +473,9 @@ type offlineSource struct {
 // lifetime lock, then the path identity re-check).
 func openOfflineSource(path string, check func() error) (*offlineSource, error) {
 	clean := filepath.Clean(path)
-	file, err := os.OpenFile(clean, os.O_RDWR|unixO_NOFOLLOW, 0)
+	file, err := openSourceFile(clean, false)
 	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
+		return nil, err
 	}
 	identity, err := live.IdentityAnyLink(file)
 	if err != nil {
@@ -498,8 +510,12 @@ func (s *offlineSource) publicIdentity() publication.LocalFileIdentity {
 
 // requireAvailable verifies the retained source is still available for
 // the database identity (Rust OfflineSource::require_available over
-// live_cleanup::require_main_available; the recorded POSIX no-op).
-func (s *offlineSource) requireAvailable(databaseID [16]byte) error { return nil }
+// live_cleanup::require_main_available: the Windows arm proves the
+// exact GC envelope absence, every other platform keeps the recorded
+// no-op).
+func (s *offlineSource) requireAvailable(databaseID [16]byte) error {
+	return live.RequireMainAvailable(s.path, s.identity, databaseID)
+}
 
 // close releases the exclusive lifetime lock and the descriptor (the
 // unlock error folds first).

@@ -45,10 +45,10 @@ func OpenLiveSourceCandidate(path string, token bootstrap.RecoveryCandidateToken
 	}
 	identity := FileIdentity{device: device, inode: inode}
 	// bind_candidate: verify the path, select the exact candidate
-	// (identity, pair classification, token match), and verify the
-	// path again (Rust bind_candidate: verify_path, select,
-	// require_main_available as the recorded POSIX no-op,
-	// verify_path).
+	// (identity, pair classification, token match), prove the main is
+	// not owned by Windows housekeeping, and verify the path again
+	// (Rust bind_candidate: verify_path, select,
+	// require_main_available, verify_path).
 	meta, err := bindCandidateLive(m, path, identity, token, check)
 	if err != nil {
 		return fail(err)
@@ -161,7 +161,18 @@ func bindCandidateLive(m *mapping.Mapping, path string, identity FileIdentity, t
 	if !ok {
 		return format.Meta{}, candidateChangedError()
 	}
-	// require_main_available is the recorded POSIX no-op.
+	// Rust bind_candidate runs require_main_available between the
+	// selection and the second path proof (recovery/source_guard/
+	// live.rs bind_candidate); the custody proof propagates its own
+	// errors, the path proofs stay candidate-changed.
+	if err := requireAvailable(path, identity, cleanupAuthority{
+		attemptID:     meta.DatabaseID,
+		ordinal:       0,
+		kind:          ArtifactOwnedMain,
+		directoryRole: DirectoryRoleMainFile,
+	}); err != nil {
+		return format.Meta{}, err
+	}
 	if err := verifyPath(path, identity); err != nil {
 		return format.Meta{}, candidateChangedError()
 	}

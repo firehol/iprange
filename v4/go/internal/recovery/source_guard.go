@@ -454,8 +454,12 @@ func openSourceFile(path string, immutable bool) (*os.File, error) {
 	if immutable {
 		flags = os.O_RDONLY
 	}
-	file, err := os.OpenFile(filepath.Clean(path), flags|unixO_NOFOLLOW, 0)
+	file, err := openSourceFilePlatform(filepath.Clean(path), flags)
 	if err != nil {
+		var fe *format.Error
+		if errors.As(err, &fe) {
+			return nil, fe
+		}
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
 	}
 	return file, nil
@@ -495,7 +499,13 @@ func bindCandidate(source *basicSource, candidate *RecoveryCandidate, check func
 	if err != nil {
 		return format.Meta{}, err
 	}
-	// require_main_available is the recorded POSIX no-op.
+	// Rust bind runs require_main_available between the selection and
+	// the second path proof (source_guard/basic.rs bind); the custody
+	// proof propagates its own errors, the path proofs stay
+	// candidate-changed.
+	if err := live.RequireMainAvailable(source.path, source.identity, meta.DatabaseID); err != nil {
+		return format.Meta{}, err
+	}
 	if err := verifyBindPath(source); err != nil {
 		return format.Meta{}, err
 	}
@@ -517,7 +527,12 @@ func bindCurrent(source *basicSource, check func() error) (format.Meta, error) {
 	if err != nil {
 		return format.Meta{}, err
 	}
-	// require_main_available is the recorded POSIX no-op.
+	// Rust bind_current runs require_main_available between the
+	// bootstrap and the second path proof (source_guard/basic.rs
+	// bind_current); the custody proof propagates its own errors.
+	if err := live.RequireMainAvailable(source.path, source.identity, meta.DatabaseID); err != nil {
+		return format.Meta{}, err
+	}
 	if err := verifyBindPath(source); err != nil {
 		return format.Meta{}, err
 	}

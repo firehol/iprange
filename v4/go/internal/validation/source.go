@@ -5,10 +5,13 @@ package validation
 // shared lifetime lock is taken, the path identity and sidecar
 // absence are proved under the lock, and the source is re-verified
 // after the sweep. The live sources live in live.go (the LiveCurrent
-// arm composes the internal/live registration machine);
-// require_available is the recorded POSIX no-op.
+// arm composes the internal/live registration machine); the
+// retained-source custody proof (require_main_available) is a
+// platform seam: the Windows arm proves the exact GC envelope
+// absence, every other platform keeps the recorded no-op.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -44,8 +47,12 @@ func OpenImmutableSource(path string, check func() error) (*ImmutableSource, err
 	if err := live.RequireSidecarAbsent(sidecar); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(clean, os.O_RDONLY|unixO_NOFOLLOW, 0)
+	file, err := openReadOnlyNoFollow(clean)
 	if err != nil {
+		var fe *format.Error
+		if errors.As(err, &fe) {
+			return nil, fe
+		}
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
 	}
 	identity, err := live.IdentityAnyLink(file)
@@ -101,10 +108,12 @@ func (s *ImmutableSource) PublicIdentity() LocalFileIdentity {
 func (s *ImmutableSource) FileHandle() *os.File { return s.file }
 
 // RequireAvailable verifies the retained source is still available for
-// the database identity (Rust live_cleanup::require_main_available;
-// the recorded POSIX no-op - the Windows GC custody arrives with the
-// SOW-0026 surface).
-func (s *ImmutableSource) RequireAvailable(databaseID [16]byte) error { return nil }
+// the database identity (Rust live_cleanup::require_main_available:
+// the Windows arm proves the exact GC envelope absence, every other
+// platform keeps the recorded no-op).
+func (s *ImmutableSource) RequireAvailable(databaseID [16]byte) error {
+	return live.RequireMainAvailable(s.path, s.identity, databaseID)
+}
 
 // Close releases the lifetime lock and the descriptor (Rust drops the
 // ImmutableSource; the lock release runs before the fd close, and the

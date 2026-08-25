@@ -12,6 +12,7 @@ package validation
 // Rust ValidationMode::OfflineCandidate variant.
 
 import (
+	"errors"
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
@@ -131,6 +132,13 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 		if problem, ok := bootstrap.AsProblem(err); ok {
 			if problem.Kind == bootstrap.ProblemNoBootstrapMeta || sourceBootstrapReportable(problem) {
 				progress := NewProgress()
+				// Rust validate_immutable runs
+				// require_bound_source_available before the bootstrap
+				// report: the bound raw-pair identity proves the main
+				// is not owned by Windows housekeeping.
+				if err2 := requireBoundSourceAvailable(source, m); err2 != nil {
+					return nil, failureOf(sourceCloseFold(source, err2), &progress)
+				}
 				if reportErr := writeBootstrapFindings(problem, sink, &progress); reportErr != nil {
 					return nil, failureOf(sourceCloseFold(source, reportErr), &progress)
 				}
@@ -150,9 +158,14 @@ func sweepImmutable(source *ImmutableSource, path string, budget *ValidationBudg
 		return nil, failureOf(sourceCloseFold(source, err), &progress)
 	}
 
-	// require_available is the recorded POSIX no-op (Rust
-	// live_cleanup::require_main_available); the Windows GC custody
-	// arrives with the SOW-0026 surface.
+	// Rust validate_immutable proves the selected main is not owned by
+	// Windows housekeeping before the committed extent is mapped
+	// (source.require_available over live_cleanup::
+	// require_main_available; the POSIX arm is the recorded no-op).
+	if err := source.RequireAvailable(res.Meta.DatabaseID); err != nil {
+		progress := NewProgress()
+		return nil, failureOf(sourceCloseFold(source, err), &progress)
+	}
 
 	whole, err := mapping.MapFile(source.FileHandle(), res.Meta.PageCount*format.PageSize, false)
 	if err != nil {
@@ -386,4 +399,31 @@ func failureOf(cause error, progress *ValidationProgress) *ValidationFailure {
 		Progress:            progress,
 		CoordinationCleanup: publication.CoordinationCleanupNone,
 	}
+}
+
+// requireBoundSourceAvailable proves the retained main is not owned
+// by Windows housekeeping when the committed generation cannot be
+// selected (Rust require_bound_source_available over
+// selected_or_bound_database_id): the raw meta pair's bound identity
+// feeds the same custody proof as the selected identity, a format or
+// corrupt bound read skips the proof like the Rust class filter, and
+// every other bound failure propagates.
+func requireBoundSourceAvailable(source *ImmutableSource, m *mapping.Mapping) error {
+	p0, err := m.Page(0)
+	if err != nil {
+		return err
+	}
+	p1, err := m.Page(1)
+	if err != nil {
+		return err
+	}
+	databaseID, err := bootstrap.DatabaseIDFromPages(p0, p1)
+	if err != nil {
+		var problem *bootstrap.ProblemError
+		if errors.As(err, &problem) {
+			return nil
+		}
+		return err
+	}
+	return source.RequireAvailable(databaseID)
 }
