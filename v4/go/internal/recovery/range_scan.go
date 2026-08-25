@@ -300,8 +300,8 @@ func parseRangePage(codec rangeCodec, page []byte, meta format.Meta, pageNumber 
 	if header.Level != 0 {
 		cellLen = codec.branchCell()
 	}
-	inspection := format.InspectLayout(page, &header, format.FixedLayout(cellLen))
-	if inspection == nil || inspection.ReservedNonzero {
+	inspection, valid := format.InspectLayout(page, &header, format.FixedLayout(cellLen))
+	if !valid || inspection.ReservedNonzero {
 		if err := rejectRangePage(events, pageNumber, validation.ReasonPageHeaderInvalid, false); err != nil {
 			return nil, false, err
 		}

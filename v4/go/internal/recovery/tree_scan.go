@@ -84,11 +84,11 @@ func scanTreeNode(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 		}
 		return nil, nil
 	}
-	inspection, header, err := readTreePage(codec, m, meta, pageNumber, expectedLevel, events)
+	inspection, ok, header, err := readTreePage(codec, m, meta, pageNumber, expectedLevel, events)
 	if err != nil {
 		return nil, err
 	}
-	if inspection == nil {
+	if !ok {
 		state.has = false
 		return nil, nil
 	}
@@ -98,9 +98,9 @@ func scanTreeNode(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNum
 		}
 	}
 	if header.Level == 0 {
-		return scanTreeLeaf(codec, inspection, header, pageNumber, state, events)
+		return scanTreeLeaf(codec, &inspection, header, pageNumber, state, events)
 	}
-	return scanTreeBranch(codec, m, meta, pageNumber, inspection, header, path, depth, state, pages, check, events)
+	return scanTreeBranch(codec, m, meta, pageNumber, &inspection, header, path, depth, state, pages, check, events)
 }
 
 // claimTreePage claims one node through the page set (Rust
@@ -115,33 +115,33 @@ func claimTreePage(meta format.Meta, pageNumber uint32, path *[format.MaxTreeLev
 // counts the page event). The proved inspection is returned so the
 // leaf and branch arms reuse it instead of re-proving the page, like
 // the Rust cell walks that follow the single proof.
-func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (*format.LayoutInspection, *format.PageHeader, error) {
+func readTreePage(codec treeCodec, m *mapping.Mapping, meta format.Meta, pageNumber uint32, expectedLevel *uint16, events treeEvents) (format.LayoutInspection, bool, *format.PageHeader, error) {
 	page, problem := checkedPage(m, pageNumber, meta.PageCount)
 	if problem != nil {
 		if err := rejectTreePage(events, codec.object(), pageNumber, problem.reason, problem.ioUnreadable); err != nil {
-			return nil, nil, err
+			return format.LayoutInspection{}, false, nil, err
 		}
-		return nil, nil, nil
+		return format.LayoutInspection{}, false, nil, nil
 	}
 	header, ok, err := parseTreePage(codec, page, meta, pageNumber, expectedLevel, events)
 	if err != nil || !ok {
-		return nil, nil, err
+		return format.LayoutInspection{}, false, nil, err
 	}
 	layout := codec.branchLayout()
 	if header.Level == 0 {
 		layout = codec.leafLayout()
 	}
-	inspection := format.InspectLayout(page, header, layout)
-	if inspection == nil || inspection.ReservedNonzero {
+	inspection, valid := format.InspectLayout(page, header, layout)
+	if !valid || inspection.ReservedNonzero {
 		if err := rejectTreePage(events, codec.object(), pageNumber, validation.ReasonPageHeaderInvalid, false); err != nil {
-			return nil, nil, err
+			return format.LayoutInspection{}, false, nil, err
 		}
-		return nil, nil, nil
+		return format.LayoutInspection{}, false, nil, nil
 	}
 	if err := events.pageAccepted(); err != nil {
-		return nil, nil, err
+		return format.LayoutInspection{}, false, nil, err
 	}
-	return inspection, header, nil
+	return inspection, true, header, nil
 }
 
 // parseTreePage runs the tree page header inspection (Rust

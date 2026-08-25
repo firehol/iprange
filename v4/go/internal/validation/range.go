@@ -114,16 +114,16 @@ func walkRangeNode4(ctx *context, pageNumber uint32, expectedLevel *uint16, root
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	cells, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen4(header.Level))
-	if err != nil || cells == nil {
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen4(header.Level))
+	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	if header.Level == 0 {
-		return walkRangeLeaf4(ctx, pageNumber, cells, state)
+		return walkRangeLeaf4(ctx, pageNumber, &cells, state)
 	}
-	return walkRangeBranch4(ctx, pageNumber, cells, header, path, depth, state)
+	return walkRangeBranch4(ctx, pageNumber, &cells, header, path, depth, state)
 }
 
 func walkRangeNode6(ctx *context, pageNumber uint32, expectedLevel *uint16, root bool, path *[format.MaxTreeLevel + 1]uint32, depth int, state *rangeState) (tree.Key, bool, error) {
@@ -139,16 +139,16 @@ func walkRangeNode6(ctx *context, pageNumber uint32, expectedLevel *uint16, root
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
-	cells, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen6(header.Level))
-	if err != nil || cells == nil {
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectRangeTree, header, rangeCellLen6(header.Level))
+	if err != nil || !ok {
 		state.hasPrevious = false
 		state.hasPrev6 = false
 		return tree.Key{}, false, err
 	}
 	if header.Level == 0 {
-		return walkRangeLeaf6(ctx, pageNumber, cells, state)
+		return walkRangeLeaf6(ctx, pageNumber, &cells, state)
 	}
-	return walkRangeBranch6(ctx, pageNumber, cells, header, path, depth, state)
+	return walkRangeBranch6(ctx, pageNumber, &cells, header, path, depth, state)
 }
 
 // rangeCellLen4/6 mirror range.rs range_cell_len: the record size at

@@ -147,23 +147,23 @@ func blobCommonIdentity(ctx *context, pageNumber uint32, page []byte) (bool, err
 // (Rust scan_branch: the slotted header, the fixed cells, the record
 // validity, and the offset-continuity of the child spans).
 func scanBlobBranch(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16, expectedStart uint64, length uint64, path *[format.MaxTreeLevel + 1]uint32, depth int, consume func(*context, []byte) error) (*blobSpan, error) {
-	header, cells, err := blobBranchHeader(ctx, pageNumber, page, expectedLevel)
-	if err != nil || cells == nil {
+	header, cells, ok, err := blobBranchHeader(ctx, pageNumber, page, expectedLevel)
+	if err != nil || !ok {
 		return nil, err
 	}
-	if !blobBranchRecordsValid(ctx, pageNumber, cells, expectedStart, length) {
+	if !blobBranchRecordsValid(ctx, pageNumber, &cells, expectedStart, length) {
 		if err := ctx.markUntraversable(false); err != nil {
 			return nil, err
 		}
 		return nil, nil
 	}
-	return scanBlobBranchChildren(ctx, pageNumber, cells, header, length, path, depth, consume)
+	return scanBlobBranchChildren(ctx, pageNumber, &cells, header, length, path, depth, consume)
 }
 
 // blobBranchHeader runs the slotted header and layout checks of one blob
 // branch (Rust branch_header: a refused page or a zero level is
 // untraversable).
-func blobBranchHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (*format.PageHeader, *format.LayoutInspection, error) {
+func blobBranchHeader(ctx *context, pageNumber uint32, page []byte, expectedLevel *uint16) (*format.PageHeader, format.LayoutInspection, bool, error) {
 	header, err := treePageHeader(ctx, pageNumber, page, ObjectMembershipBlob, treePageSpec{
 		branchType:    byte(format.PageTypeBlobBranch),
 		leafType:      byte(format.PageTypeBlobLeaf),
@@ -174,22 +174,22 @@ func blobBranchHeader(ctx *context, pageNumber uint32, page []byte, expectedLeve
 		if err == nil {
 			err = ctx.markUntraversable(false)
 		}
-		return nil, nil, err
+		return nil, format.LayoutInspection{}, false, err
 	}
-	cells, err := validateFixedCells(ctx, pageNumber, page, ObjectMembershipBlob, header, format.BlobBranchSize)
-	if err != nil || cells == nil {
+	cells, ok, err := validateFixedCells(ctx, pageNumber, page, ObjectMembershipBlob, header, format.BlobBranchSize)
+	if err != nil || !ok {
 		if err == nil {
 			err = ctx.markUntraversable(false)
 		}
-		return nil, nil, err
+		return nil, format.LayoutInspection{}, false, err
 	}
 	if header.Level == 0 {
 		if err := ctx.markUntraversable(false); err != nil {
-			return nil, nil, err
+			return nil, format.LayoutInspection{}, false, err
 		}
-		return nil, nil, nil
+		return nil, format.LayoutInspection{}, false, nil
 	}
-	return header, cells, nil
+	return header, cells, true, nil
 }
 
 // blobBranchRecordsValid proves the branch records (Rust

@@ -51,13 +51,13 @@ func treeHeaderProblemReason(problem format.TreeHeaderProblem) ValidationReason 
 
 // validateFixedCells checks the fixed-cell layout of one tree page (Rust
 // page::validate_fixed_cells).
-func validateFixedCells(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, cellLen int) (*format.LayoutInspection, error) {
+func validateFixedCells(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, cellLen int) (format.LayoutInspection, bool, error) {
 	return validateTreeLayout(ctx, pageNumber, page, object, header, format.FixedLayout(cellLen))
 }
 
 // validateVariableCells checks the variable-record layout of one tree
 // page (Rust page::validate_variable_cells).
-func validateVariableCells(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, minimum, maximum int) (*format.LayoutInspection, error) {
+func validateVariableCells(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, minimum, maximum int) (format.LayoutInspection, bool, error) {
 	return validateTreeLayout(ctx, pageNumber, page, object, header, format.VariableLayout(minimum, maximum))
 }
 
@@ -65,18 +65,18 @@ func validateVariableCells(ctx *context, pageNumber uint32, page []byte, object 
 // reports PageHeaderInvalid and refuses the page; a nonzero reserved
 // region reports PageReservedNonzero and keeps the page (Rust keeps the
 // inspection in both cases).
-func validateTreeLayout(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, layout format.CellLayout) (*format.LayoutInspection, error) {
-	inspection := format.InspectLayout(page, header, layout)
-	if inspection == nil {
+func validateTreeLayout(ctx *context, pageNumber uint32, page []byte, object ValidationObject, header *format.PageHeader, layout format.CellLayout) (format.LayoutInspection, bool, error) {
+	inspection, ok := format.InspectLayout(page, header, layout)
+	if !ok {
 		if err := ctx.emit(ReasonPageHeaderInvalid, object, &pageNumber, nil, nil); err != nil {
-			return nil, err
+			return format.LayoutInspection{}, false, err
 		}
-		return nil, nil
+		return format.LayoutInspection{}, false, nil
 	}
 	if inspection.ReservedNonzero {
 		if err := ctx.emit(ReasonPageReservedNonzero, object, &pageNumber, nil, nil); err != nil {
-			return nil, err
+			return format.LayoutInspection{}, false, err
 		}
 	}
-	return inspection, nil
+	return inspection, true, nil
 }

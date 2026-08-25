@@ -1,16 +1,18 @@
 //go:build !race
 
-// Tree-scan layout-proof allocation pin (milestone-2 performance
-// fix): the generic recovery tree walk must prove the page layout
-// exactly once per visited page (Rust read_page proves; scan_leaf and
-// scan_branch consume). The measured floor is one LayoutInspection per
-// page, which format.InspectLayout must heap-allocate because it
-// cannot be inlined; before the fix every visited page ran a second
-// proof in the leaf/branch arm, so a multi-page tree measured twice
-// the page count. Race and checkptr instrumentation allocate inside
-// the measured path themselves, so the pin runs only in
-// uninstrumented builds (publication pins carry the same tag for the
-// same reason).
+// Tree-scan layout-proof allocation pin (milestone-2 performance fix
+// plus the M5 value-return refactor): the generic recovery tree walk
+// proves the page layout exactly once per visited page (Rust read_page
+// proves; scan_leaf and scan_branch consume), and InspectLayout
+// returns the inspection by value, so the walk allocates nothing per
+// page: the measured floor is the fixed leaf/branch walk baseline.
+// Before the milestone-2 fix every visited page ran a second proof in
+// the leaf/branch arm (twice the page count), and before the M5
+// refactor the value-returning proof still escaped one
+// LayoutInspection per page. Race and checkptr instrumentation
+// allocate inside the measured path themselves, so the pin runs only
+// in uninstrumented builds (publication pins carry the same tag for
+// the same reason).
 
 package recovery
 
@@ -91,12 +93,12 @@ func treePinSource(t *testing.T) (string, format.Meta) {
 	return path, meta
 }
 
-// TestTreeScanOneLayoutProofPerPage pins the tree walk to exactly one
-// heap object per visited page: the LayoutInspection allocated by the
-// single format.InspectLayout in readTreePage. A fresh (reset) page
-// set is created per run so every measured run re-walks the whole
-// tree.
-func TestTreeScanOneLayoutProofPerPage(t *testing.T) {
+// TestTreeScanNoLayoutProofAllocation pins the tree walk to the fixed
+// leaf/branch walk baseline with nothing allocated per visited page:
+// the single InspectLayout in readTreePage returns the inspection by
+// value. A fresh (reset) page set is created per run so every
+// measured run re-walks the whole tree.
+func TestTreeScanNoLayoutProofAllocation(t *testing.T) {
 	creationGate(t)
 	path, meta := treePinSource(t)
 	source := mapSource(t, path)
@@ -128,12 +130,13 @@ func TestTreeScanOneLayoutProofPerPage(t *testing.T) {
 		}
 	})
 	t.Logf("tree scan allocations per run over %d pages: %.0f", want, allocs)
-	// The fixture walk measures 2138 objects: a fixed 2057-object
-	// leaf/branch walk baseline plus exactly one LayoutInspection per
-	// visited page (want). Before the fix the leaf/branch arms
-	// re-proved the page and the fixture measured 2219 = 2138 + want.
+	// The fixture walk measures exactly the fixed 2057-object
+	// leaf/branch walk baseline: the value-returning layout proof
+	// adds nothing per page. Before the M5 refactor the measured
+	// floor was 2057 + want (one escaping LayoutInspection per page);
+	// before the milestone-2 fix it was 2057 + 2*want.
 	const walkBaseline = 2057
-	if allocs != float64(walkBaseline+want) {
-		t.Fatalf("tree scan allocates %.0f objects per run over %d pages, want exactly %d (measured walk baseline plus one layout proof per page)", allocs, want, walkBaseline+want)
+	if allocs != float64(walkBaseline) {
+		t.Fatalf("tree scan allocates %.0f objects per run over %d pages, want exactly %d (measured walk baseline, no per-page layout allocation)", allocs, want, walkBaseline)
 	}
 }

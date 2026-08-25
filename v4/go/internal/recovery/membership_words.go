@@ -243,7 +243,7 @@ func findBlobLeaf(m *mapping.Mapping, meta format.Meta, root uint32, totalBytes,
 		// select below is the direct fixed-cell read (the persistent
 		// slot values stay untrusted and are re-checked per probe,
 		// like slotted_page::cell).
-		if format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize)) == nil {
+		if _, valid := format.InspectLayout(page, &header, format.FixedLayout(format.BlobBranchSize)); !valid {
 			return blobLeafInfo{}, corruptError("membership blob branch layout is invalid")
 		}
 		first, err := blobBranchRecordAt(m, page, &header, 0)

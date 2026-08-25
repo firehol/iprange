@@ -1,16 +1,18 @@
 //go:build !race
 
 // Blob branch layout-proof allocation pin (milestone-2 performance
-// fix): the membership blob walk must prove each branch page layout
-// exactly once (Rust branch(): parse and inspect_layout once, then
-// branch_records_valid and branch_children consume the proved cells).
-// The measured floor is one LayoutInspection per branch page, which
-// format.InspectLayout must heap-allocate because it cannot be
-// inlined; before the fix every branch page ran three proofs (branch,
-// branchRecordsValid, branchChildren). The pin runs only in
-// uninstrumented builds: race and checkptr instrumentation allocate
-// inside the measured path itself (publication pins carry the same
-// tag for the same reason).
+// fix plus the M5 value-return refactor): the membership blob walk
+// proves each branch page layout exactly once (Rust branch(): parse
+// and inspect_layout once, then branch_records_valid and
+// branch_children consume the proved cells), and InspectLayout
+// returns the inspection by value, so the walk allocates nothing per
+// branch page: the measured floor is the fixed walk baseline. Before
+// the milestone-2 fix every branch page ran three proofs (branch,
+// branchRecordsValid, branchChildren); before the M5 refactor the
+// value-returning proof still escaped one LayoutInspection per branch
+// page. The pin runs only in uninstrumented builds: race and
+// checkptr instrumentation allocate inside the measured path itself
+// (publication pins carry the same tag for the same reason).
 
 package recovery
 
@@ -26,15 +28,15 @@ import (
 // scans.
 func blobPinConsume(bytes []byte) error { return nil }
 
-// TestMembershipBlobBranchOneLayoutProofPerPage pins the blob branch
-// walk to exactly one heap object per branch page: the
-// LayoutInspection allocated by the single format.InspectLayout in
-// branch(). The fixture is the three-level blob of the multi-level
-// membership test (114356 words: 226 leaves, two level-1 branches and
-// one root branch = three branch pages; the 226 leaf pages allocate
-// nothing). A fresh (reset) page set is created per run so every
-// measured run re-walks the whole blob.
-func TestMembershipBlobBranchOneLayoutProofPerPage(t *testing.T) {
+// TestMembershipBlobBranchNoLayoutProofAllocation pins the blob
+// branch walk to the fixed walk baseline with nothing allocated per
+// branch page: the single format.InspectLayout in branch() returns
+// the inspection by value. The fixture is the three-level blob of the
+// multi-level membership test (114356 words: 226 leaves, two level-1
+// branches and one root branch = three branch pages; the 226 leaf
+// pages allocate nothing). A fresh (reset) page set is created per
+// run so every measured run re-walks the whole blob.
+func TestMembershipBlobBranchNoLayoutProofAllocation(t *testing.T) {
 	creationGate(t)
 	const (
 		wordCount = 114_356 // 226 leaves: 225 fill one branch level
@@ -86,14 +88,14 @@ func TestMembershipBlobBranchOneLayoutProofPerPage(t *testing.T) {
 		t.Fatal("blob scan incomplete")
 	}
 	t.Logf("blob scan allocations per run over %d branch pages: %.0f", wantBranchPages, allocs)
-	// The fixture walk measures 927 objects: a fixed 924-object leaf
-	// and branch walk baseline (three per leaf page, one per branch
-	// record, plus the branch walk state) plus exactly one
-	// LayoutInspection per branch page. Before the fix
-	// branchRecordsValid and branchChildren re-proved the page and the
-	// fixture measured 933 = 927 + 2 per branch page.
+	// The fixture walk measures exactly the fixed 924-object leaf and
+	// branch walk baseline (three per leaf page, one per branch
+	// record, plus the branch walk state): the value-returning layout
+	// proof adds nothing per branch page. Before the M5 refactor the
+	// measured floor was 924 + wantBranchPages; before the
+	// milestone-2 fix it was 924 + 3 per branch page.
 	const walkBaseline = 924
-	if allocs != walkBaseline+wantBranchPages {
-		t.Fatalf("blob scan allocates %.0f objects per run, want exactly %d (measured walk baseline plus one layout proof per branch page)", allocs, walkBaseline+wantBranchPages)
+	if allocs != walkBaseline {
+		t.Fatalf("blob scan allocates %.0f objects per run, want exactly %d (measured walk baseline, no per-branch-page layout allocation)", allocs, walkBaseline)
 	}
 }

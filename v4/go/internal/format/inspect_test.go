@@ -86,43 +86,43 @@ func TestInspectLayoutFixed(t *testing.T) {
 	fixed := FixedLayout(16)
 	valid := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4064, 4048}, nil)
 	// Packed cells: minimum start equals upper.
-	if inspection := InspectLayout(valid, mustHeader(t, valid), fixed); inspection == nil || inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(valid, mustHeader(t, valid), fixed); !ok || inspection.ReservedNonzero {
 		t.Fatalf("valid layout refused: %+v", inspection)
 	}
 	// Overlapping cells fail the extent proof.
 	overlap := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4064, 4064}, nil)
-	if inspection := InspectLayout(overlap, mustHeader(t, overlap), fixed); inspection != nil {
+	if _, ok := InspectLayout(overlap, mustHeader(t, overlap), fixed); ok {
 		t.Fatal("overlap accepted")
 	}
 	// A cell below upper fails.
 	below := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4080}, func(p []byte) {
 		PutU16(p[22:24], 4090)
 	})
-	if inspection := InspectLayout(below, mustHeader(t, below), fixed); inspection != nil {
+	if _, ok := InspectLayout(below, mustHeader(t, below), fixed); ok {
 		t.Fatal("cell below upper accepted")
 	}
 	// A cell overrunning the page fails.
 	overrun := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4088}, nil)
-	if inspection := InspectLayout(overrun, mustHeader(t, overrun), fixed); inspection != nil {
+	if _, ok := InspectLayout(overrun, mustHeader(t, overrun), fixed); ok {
 		t.Fatal("overrunning cell accepted")
 	}
 	// A nonzero reserved byte is reported, not refused.
 	reserved := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4064, 4048}, func(p []byte) {
 		p[100] = 1
 	})
-	if inspection := InspectLayout(reserved, mustHeader(t, reserved), fixed); inspection == nil || !inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(reserved, mustHeader(t, reserved), fixed); !ok || !inspection.ReservedNonzero {
 		t.Fatalf("reserved byte missed: %+v", inspection)
 	}
 	// A nonzero byte in an unmarked gap is reported.
 	gap := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4080, 4000}, func(p []byte) {
 		p[4048] = 1
 	})
-	if inspection := InspectLayout(gap, mustHeader(t, gap), fixed); inspection == nil || !inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(gap, mustHeader(t, gap), fixed); !ok || !inspection.ReservedNonzero {
 		t.Fatalf("unmarked byte missed: %+v", inspection)
 	}
 	// The same gap with a zero byte is clean.
 	cleanGap := inspectPage(t, byte(PageTypeRetirementLeaf), 0, []int{4080, 4000}, nil)
-	if inspection := InspectLayout(cleanGap, mustHeader(t, cleanGap), fixed); inspection == nil || inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(cleanGap, mustHeader(t, cleanGap), fixed); !ok || inspection.ReservedNonzero {
 		t.Fatalf("zero gap reported: %+v", inspection)
 	}
 }
@@ -134,7 +134,7 @@ func TestInspectLayoutVariable(t *testing.T) {
 		PutU16(p[4088:4090], 6)
 		copy(p[4090:4094], "name")
 	})
-	if inspection := InspectLayout(page, mustHeader(t, page), variable); inspection == nil || inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(page, mustHeader(t, page), variable); !ok || inspection.ReservedNonzero {
 		t.Fatalf("valid variable layout refused: %+v", inspection)
 	}
 	// Two records: the first record spans [4060,4064) (2-byte length
@@ -146,7 +146,7 @@ func TestInspectLayoutVariable(t *testing.T) {
 		PutU16(p[4060:4062], 4)
 		copy(p[4062:4064], "fe")
 	})
-	if inspection := InspectLayout(two, mustHeader(t, two), variable); inspection == nil || inspection.ReservedNonzero {
+	if inspection, ok := InspectLayout(two, mustHeader(t, two), variable); !ok || inspection.ReservedNonzero {
 		t.Fatalf("two-record layout refused: %+v", inspection)
 	}
 	// Overlapping records fail (record at 4084 spans [4084,4092) and
@@ -157,21 +157,21 @@ func TestInspectLayoutVariable(t *testing.T) {
 		PutU16(p[4084:4086], 8)
 		copy(p[4086:4090], "xyz")
 	})
-	if inspection := InspectLayout(overlap, mustHeader(t, overlap), variable); inspection != nil {
+	if _, ok := InspectLayout(overlap, mustHeader(t, overlap), variable); ok {
 		t.Fatal("overlapping records accepted")
 	}
 	// A record length outside the bounds fails.
 	long := inspectPage(t, byte(PageTypeCatalogNameLeaf), 0, []int{4080}, func(p []byte) {
 		PutU16(p[4080:4082], 41)
 	})
-	if inspection := InspectLayout(long, mustHeader(t, long), variable); inspection != nil {
+	if _, ok := InspectLayout(long, mustHeader(t, long), variable); ok {
 		t.Fatal("over-long record accepted")
 	}
 	// A record length that overruns the page fails.
 	short := inspectPage(t, byte(PageTypeCatalogNameLeaf), 0, []int{4090}, func(p []byte) {
 		PutU16(p[4090:4092], 8)
 	})
-	if inspection := InspectLayout(short, mustHeader(t, short), variable); inspection != nil {
+	if _, ok := InspectLayout(short, mustHeader(t, short), variable); ok {
 		t.Fatal("overrunning record accepted")
 	}
 }
@@ -182,8 +182,8 @@ func TestInspectLayoutCells(t *testing.T) {
 		copy(p[4048:4064], "abcdefghijklmnop")
 		copy(p[4064:4080], "0123456789abcdef")
 	})
-	inspection := InspectLayout(page, mustHeader(t, page), fixed)
-	if inspection == nil {
+	inspection, ok := InspectLayout(page, mustHeader(t, page), fixed)
+	if !ok {
 		t.Fatal("layout refused")
 	}
 	cells := inspection.Cells()

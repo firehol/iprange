@@ -78,7 +78,11 @@ func rewriteNameIndex(t *testing.T, path string, meta format.Meta, name string, 
 	if err != nil {
 		t.Fatalf("slotted: %v", err)
 	}
-	cells := format.InspectLayout(page, &header, format.VariableLayout(format.MinCatalogNameRecord, format.MaxCatalogNameRecord)).Cells()
+	inspection, ok := format.InspectLayout(page, &header, format.VariableLayout(format.MinCatalogNameRecord, format.MaxCatalogNameRecord))
+	if !ok {
+		t.Fatal("catalog leaf layout refused")
+	}
+	cells := inspection.Cells()
 	found := false
 	for cellIndex := 0; cellIndex < int(header.ItemCount); cellIndex++ {
 		cell, ok := cells.Next()
@@ -99,7 +103,11 @@ func rewriteNameIndex(t *testing.T, path string, meta format.Meta, name string, 
 		t.Fatalf("name %q not found on the root leaf", name)
 	}
 	// Re-decode the cells and rewrite the index of the matching name.
-	cells = format.InspectLayout(page, &header, format.VariableLayout(format.MinCatalogNameRecord, format.MaxCatalogNameRecord)).Cells()
+	inspection, ok = format.InspectLayout(page, &header, format.VariableLayout(format.MinCatalogNameRecord, format.MaxCatalogNameRecord))
+	if !ok {
+		t.Fatal("catalog leaf layout refused on re-decode")
+	}
+	cells = inspection.Cells()
 	for cellIndex := 0; cellIndex < int(header.ItemCount); cellIndex++ {
 		cell, ok := cells.Next()
 		if !ok {

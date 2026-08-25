@@ -78,15 +78,15 @@ func walkTreeNode(ctx *context, pageNumber uint32, object ValidationObject, code
 	if err := validateRootShape(ctx, pageNumber, object, root, header); err != nil {
 		return tree.Key{}, false, err
 	}
-	inspection, err := validateTreeLayout(ctx, pageNumber, page, object, header, nodeLayout(codec, header.Level))
-	if err != nil || inspection == nil {
+	inspection, ok, err := validateTreeLayout(ctx, pageNumber, page, object, header, nodeLayout(codec, header.Level))
+	if err != nil || !ok {
 		state.hasPrevious = false
 		return tree.Key{}, false, err
 	}
 	if header.Level == 0 {
-		return walkTreeLeaf(ctx, pageNumber, inspection, object, codec, state, leaf)
+		return walkTreeLeaf(ctx, pageNumber, &inspection, object, codec, state, leaf)
 	}
-	return walkTreeBranch(ctx, pageNumber, inspection, header, object, codec, path, depth, state, leaf)
+	return walkTreeBranch(ctx, pageNumber, &inspection, header, object, codec, path, depth, state, leaf)
 }
 
 // readTreeNodePage records the page in the walk path and reads it through

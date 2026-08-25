@@ -170,22 +170,25 @@ type LayoutInspection struct {
 // InspectLayout mirrors slotted_page::inspect_layout: the complete extent
 // proof (fixed or variable cells, in the record area, non-overlapping, and
 // the minimum record start equal to upper) and the reserved-region plus
-// unmarked-region nonzero scan. A nil result means the layout is invalid
-// (PageHeaderInvalid class for the validators).
-func InspectLayout(page []byte, header *PageHeader, layout CellLayout) *LayoutInspection {
+// unmarked-region nonzero scan. The inspection is returned by value like
+// the Rust Option<LayoutInspection<S>>: the proof itself never allocates,
+// so the validation and recovery sweeps stay allocation-free per page.
+// ok is false when the layout is invalid (PageHeaderInvalid class for the
+// validators).
+func InspectLayout(page []byte, header *PageHeader, layout CellLayout) (LayoutInspection, bool) {
 	if len(page) != PageSize || !SlottedShapeValid(header) {
-		return nil
+		return LayoutInspection{}, false
 	}
 	var used [PageSize / 64]uint64
 	minimum, ok := inspectExtents(page, header, layout, &used)
 	if !ok || minimum != int(header.Upper) {
-		return nil
+		return LayoutInspection{}, false
 	}
 	reservedNonzero := !AllZero(page[header.Lower:header.Upper])
 	if !reservedNonzero {
 		reservedNonzero = unmarkedNonzero(page, &used, int(header.Upper))
 	}
-	return &LayoutInspection{ReservedNonzero: reservedNonzero, page: page, header: *header, layout: layout}
+	return LayoutInspection{ReservedNonzero: reservedNonzero, page: page, header: *header, layout: layout}, true
 }
 
 // Cells returns the cell iterator of one inspection (Rust
