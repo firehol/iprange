@@ -16,22 +16,22 @@
 // checks its pin before touching the bytes, so a retained slice never
 // outlives the mapping it aliases.
 //
-// Windows gets its own file in milestone 1; this POSIX implementation
-// covers Linux and macOS (OFD lifetime lock). FreeBSD has no proven OFD
-// byte-range primitive, so live coordination is unsupported there, but
-// immutable readers keep the canonical whole-file shared flock lifetime lock
-// (binary-format-v4.md platform table; Rust live_lock.rs freebsd_file_lock).
-//
-//go:build !windows
-
+// Every platform implements the same surface through a small set of
+// primitives: the no-follow open and protected create, the shared
+// section/anon mapping operations, the extent change, the descriptor
+// duplicate, the identity probe, the lifetime locks, and the sync
+// (platform_posix.go / platform_windows.go + mapping_lifetime_* +
+// mapping_sync_* + remap_*). Linux and macOS use OFD lifetime locks and
+// mremap; FreeBSD keeps the whole-file shared flock for immutable
+// readers with no live coordination; Windows uses per-handle
+// LockFileEx byte ranges and section mappings.
 package mapping
 
 import (
 	"os"
 	"path/filepath"
 	"sort"
-
-	"golang.org/x/sys/unix"
+	"unsafe"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -105,15 +105,13 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 	if !before.Mode().IsRegular() {
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 	}
-	flags := os.O_RDONLY
-	prot := unix.PROT_READ
+	prot := protRead
 	if rdwr {
-		flags = os.O_RDWR
-		prot = unix.PROT_READ | unix.PROT_WRITE
+		prot = protRead | protWrite
 	}
-	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW, 0)
+	f, err := openNoFollow(clean, rdwr)
 	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
+		return nil, err
 	}
 	cleanup := true
 	defer func() {
@@ -179,20 +177,20 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
-	data, err := unix.Mmap(int(f.Fd()), 0, 2*format.PageSize, prot, unix.MAP_SHARED)
+	data, err := mmapShared(f, 2*format.PageSize, prot)
 	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
+		return nil, err
 	}
 	// The path may have been replaced while the lock was taken or the
 	// mapping was created; recheck identity and the namespace contract on
 	// the mapped file before publishing the Mapping.
 	if err := verifyPathIdentity(); err != nil {
-		unix.Munmap(data)
+		munmapShared(data)
 		return nil, err
 	}
 	if check != nil {
 		if err := check(clean); err != nil {
-			unix.Munmap(data)
+			munmapShared(data)
 			return nil, err
 		}
 	}
@@ -264,11 +262,7 @@ func (m *Mapping) PhysicalSize() uint64 { return m.physical }
 // writer uses it to capture the attempt-file identity at creation, so
 // cleanup discard stays bound to the exact inode it created.
 func (m *Mapping) FileIdentity() (device uint64, inode uint64, err error) {
-	var st unix.Stat_t
-	if err := unix.Fstat(int(m.file.Fd()), &st); err != nil {
-		return 0, 0, err
-	}
-	return uint64(st.Dev), uint64(st.Ino), nil
+	return statIdentity(m.file)
 }
 
 // VerifyIdentity re-checks that the path still names the opened inode.
@@ -345,7 +339,7 @@ func (m *Mapping) Remap(committedBytes uint64) error {
 		// mapped; the fallback already unmapped it) and every later
 		// access reports WrongState.
 		if data != nil {
-			unix.Munmap(data)
+			munmapShared(data)
 		}
 		m.size = 0
 		return err
@@ -368,7 +362,7 @@ func (m *Mapping) Grow(newSize uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
 	}
-	if m.prot&unix.PROT_WRITE == 0 {
+	if m.prot&protWrite == 0 {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping is read-only"}
 	}
 	if newSize%format.PageSize != 0 {
@@ -386,8 +380,8 @@ func (m *Mapping) Grow(newSize uint64) error {
 	if newSize < m.physical {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "grow below the opened physical extent"}
 	}
-	if err := unix.Ftruncate(int(m.file.Fd()), int64(newSize)); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
+	if err := truncateFile(m.file, int64(newSize)); err != nil {
+		return err
 	}
 	old := m.data
 	m.data = nil
@@ -395,7 +389,7 @@ func (m *Mapping) Grow(newSize uint64) error {
 	if err != nil {
 		// Fail closed exactly like Rust replace_map (map=None, len=0).
 		if data != nil {
-			unix.Munmap(data)
+			munmapShared(data)
 		}
 		m.size = 0
 		return err
@@ -413,8 +407,8 @@ func (m *Mapping) Flush() error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
 	}
-	if err := unix.Msync(m.data, unix.MS_SYNC); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
+	if err := msyncShared(m.data); err != nil {
+		return err
 	}
 	work.MappingFlush(1)
 	return nil
@@ -447,8 +441,8 @@ func (m *Mapping) FlushRange(offset, length uint64) error {
 	if offset > m.size || length > m.size-offset {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "flush range out of mapped extent"}
 	}
-	if err := unix.Msync(m.data[:offset+length], unix.MS_SYNC); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
+	if err := msyncShared(m.data[:offset+length]); err != nil {
+		return err
 	}
 	work.MappingFlush(1)
 	return nil
@@ -566,11 +560,21 @@ func (m *Mapping) Unmap() error {
 	if m.data == nil {
 		return nil
 	}
-	if err := unix.Munmap(m.data); err != nil {
-		return &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+	if err := munmapShared(m.data); err != nil {
+		return err
 	}
 	m.data = nil
 	return nil
+}
+
+// Region returns the mapped extent of one live mapping (Rust
+// mapping.rs region: base, length). An unmapped Mapping refuses with
+// the same WrongState detail as View.
+func (m *Mapping) Region() (base uintptr, length uint64, err error) {
+	if m.data == nil {
+		return 0, 0, &format.Error{Code: format.CodeWrongState, Detail: "mapping unavailable"}
+	}
+	return uintptr(unsafe.Pointer(&m.data[0])), m.size, nil
 }
 
 // Close releases the mapping and the shared lifetime lock. Close is
@@ -583,8 +587,8 @@ func (m *Mapping) Close() error {
 	}
 	var first error
 	if m.data != nil {
-		if err := unix.Munmap(m.data); err != nil && first == nil {
-			first = &format.Error{Code: format.CodeIO, Detail: "munmap: " + err.Error()}
+		if err := munmapShared(m.data); err != nil && first == nil {
+			first = err
 		}
 	}
 	m.data = nil

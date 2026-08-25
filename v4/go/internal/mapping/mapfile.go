@@ -1,11 +1,7 @@
-//go:build !windows
-
 package mapping
 
 import (
 	"os"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -35,37 +31,30 @@ func MapFile(f *os.File, size uint64, rdwr bool) (*Mapping, error) {
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
-	fd, err := unix.Dup(int(f.Fd()))
+	dup, err := dupFile(f)
 	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "dup: " + err.Error()}
+		return nil, err
 	}
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
-		unix.Close(fd)
+	st, err := dup.Stat()
+	if err != nil {
+		dup.Close()
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
-	if st.Size < 0 || uint64(st.Size) < size {
-		unix.Close(fd)
+	if uint64(st.Size()) < size {
+		dup.Close()
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "mapping exceeds the file extent"}
 	}
-	// The duplicated descriptor must not survive exec: spec 15.6
-	// requires every live descriptor close-on-exec so a child process
-	// cannot inherit the sidecar mapping and its OFD locks.
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
-		unix.Close(fd)
-		return nil, &format.Error{Code: format.CodeIO, Detail: "fcntl cloexec: " + err.Error()}
-	}
-	prot := unix.PROT_READ
+	prot := protRead
 	if rdwr {
-		prot |= unix.PROT_WRITE
+		prot |= protWrite
 	}
-	data, err := unix.Mmap(fd, 0, int(size), prot, unix.MAP_SHARED)
+	data, err := mmapShared(dup, int(size), prot)
 	if err != nil {
-		unix.Close(fd)
-		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
+		dup.Close()
+		return nil, err
 	}
 	return &Mapping{
-		file:     os.NewFile(uintptr(fd), f.Name()),
+		file:     dup,
 		data:     data,
 		size:     size,
 		physical: size,

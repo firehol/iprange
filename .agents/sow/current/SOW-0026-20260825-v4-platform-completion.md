@@ -39,6 +39,19 @@ authority for its own review process.
 
 Status: in-progress
 
+### Status (2026-08-25) - work package C (Windows live/publication surface) started
+
+- Work package C started per the user-approved order (Windows surface first, then authorized scratch + external sort, then the Rust XNU-16K flush pin). The five-reviewer gate ran and PASSED on work packages A+B at HEAD `6296730`; this package is the next gate round.
+- Slice plan (bottom-up, Rust authority for every syscall/error):
+  - C1 lock machine: `internal/live/lock_windows.go` implements the sidecar byte-range and artifact locks with `LockFileEx`/`UnlockFileEx` (Rust live_lock.rs windows platform; ERROR_LOCK_VIOLATION -> try-false), `requireLiveSupported` returns nil; the refusal files tighten their build tags to exclude windows.
+  - C2 mapping owner: real `internal/mapping/mapping_windows.go` (CreateFileW open with share modes + FILE_FLAG_OPEN_REPARSE_POINT, reparse refusal, identity verify, LockFileEx lifetime lock at 1<<44, CreateFileMappingW/MapViewOfFile, remap by unmap+map, Grow/Shrink with ERROR_USER_MAPPED_FILE retention, FlushViewOfFile + FlushFileBuffers); `mapfile_windows.go`, `mapping_lifetime_windows.go`, `mapping_identity_probe_windows.go`, `mapping_publish_windows.go` (ExchangeAvailable true: rename with POSIX semantics), shrink/remap/region/sync arms.
+  - C3 creator-only security: `internal/security/security_windows.go` - SID capture (OpenThreadToken -> OpenProcessToken, TokenUser), protected creator-only DACL (SetEntriesInAclW, SE_DACL_PROTECTED), commitment SHA-256("IPR4PSEC" || sid_len:u32le || sid || FILE_ALL_ACCESS:u32le || SE_DACL_PROTECTED:u16le); CreatorOnlySupported true.
+  - C4 live namespace/install: FileIdentity projection (volume + file index), open/verify/create/remove with Windows handles, install via NtSetInformationFile(FileRenameInformationEx) + FILE_DISPOSITION_INFO_EX POSIX semantics, directory scan via FileIdBothDirectoryInfo.
+  - C5 publication surface: destination bind, private output creation with the protected descriptor, main-file replace/retire, finished/residue/maintenance windows arms, NTFS-local requirement.
+  - C6 Windows GC/housekeeping machinery (envelope codec IPR4GCA1, gc names, resolver/source, gc_barrier, list/remove windows housekeeping) wired into live cleanup `requireAvailable` and publication retirement.
+  - C7 worker/recovery/validation/snapshot windows arms + live/creation suite gates; suite runs on the authorized Windows host (costa-win11) at the end.
+- Host-proof plan: cross-build + `GOOS=windows go vet` per slice locally; full battery on the Windows VM after C7; the same five reviewers gate the package.
+
 ### Status (2026-08-25) - milestone-5 work packages A and B
 
 - Work package A (sweep allocation fix) delivered at `ff3435d` and completed in the gate fix round below: `format.InspectLayout`, the page header, and the cell iterator travel by value; the recovery tree scan keys and cursors are concrete generic values (no interface boxing, no per-record allocation); and the refusal envelopes copy the page number only inside the cold arms. The recovery tree scan allocates 0 objects per run (pin 2138 -> 0), the membership blob scan allocates exactly one fixed scanner object per run (pin 927 -> 1), and the live validation sweep costs only the fixed one-time open machinery (~103 per Validate call; pin bound tightened 1024 -> 200). Full battery green.

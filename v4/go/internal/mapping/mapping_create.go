@@ -1,12 +1,8 @@
-//go:build !windows
-
 package mapping
 
 import (
 	"os"
 	"path/filepath"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -35,12 +31,9 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "size larger than host address space"}
 	}
-	f, err := os.OpenFile(clean, os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	f, err := createNoFollow(clean)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, &format.Error{Code: format.CodeNameExists, Detail: "destination exists"}
-		}
-		return nil, &format.Error{Code: format.CodeIO, Detail: "create: " + err.Error()}
+		return nil, err
 	}
 	createdStat, statErr := f.Stat()
 	cleanup := true
@@ -99,18 +92,18 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 			return nil, err
 		}
 	}
-	if err := unix.Ftruncate(int(f.Fd()), int64(size)); err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
-	}
-	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "mmap: " + err.Error()}
-	}
-	if err := verifyPathIdentity(); err != nil {
-		unix.Munmap(data)
+	if err := truncateFile(f, int64(size)); err != nil {
 		return nil, err
 	}
-	m := &Mapping{file: f, data: data, size: size, physical: size, prot: unix.PROT_READ | unix.PROT_WRITE, locked: true}
+	data, err := mmapShared(f, int(size), protRead|protWrite)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyPathIdentity(); err != nil {
+		munmapShared(data)
+		return nil, err
+	}
+	m := &Mapping{file: f, data: data, size: size, physical: size, prot: protRead | protWrite, locked: true}
 	cleanup = false
 	work.MappingGrowth(1)
 	return m, nil

@@ -1,10 +1,6 @@
-//go:build !windows
-
 package mapping
 
 import (
-	"golang.org/x/sys/unix"
-
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
@@ -27,7 +23,7 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
 	}
-	if m.prot&unix.PROT_WRITE == 0 {
+	if m.prot&protWrite == 0 {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping is read-only"}
 	}
 	if newSize%format.PageSize != 0 {
@@ -55,8 +51,8 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	m.data = nil
 	var truncateErr error
 	if physical != newSize {
-		if err := unix.Ftruncate(int(m.file.Fd()), int64(newSize)); err != nil {
-			truncateErr = &format.Error{Code: format.CodeIO, Detail: "ftruncate: " + err.Error()}
+		if err := truncateFile(m.file, int64(newSize)); err != nil {
+			truncateErr = err
 		}
 	}
 	// Re-establish the mapping at the requested extent. The pre-stat
@@ -68,7 +64,7 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	data, err := remapPages(m.file, old, m.size, newSize, m.prot)
 	if err != nil {
 		if data != nil {
-			unix.Munmap(data)
+			munmapShared(data)
 		}
 		m.size = 0
 		// Both-failure reporting (Rust combines the two errors via

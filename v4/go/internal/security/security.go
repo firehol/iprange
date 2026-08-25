@@ -23,17 +23,11 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // CreatorMode is the only permitted mode of a creator-only artifact
 // (Rust security CREATOR_MODE).
 const CreatorMode = 0o600
-
-// commitmentDomain is the exact domain string of the ownership
-// commitment (Rust COMMITMENT_DOMAIN).
-const commitmentDomain = "IPR4PSEC"
 
 // Profile is the creator identity captured before creation (Rust
 // security::Profile): the effective uid and its commitment.
@@ -133,12 +127,4 @@ func commitment(uid uint32) [32]byte {
 	copy(input[8:12], leUID[:])
 	copy(input[12:16], leMode[:])
 	return sha256.Sum256(input[:])
-}
-
-func accessPolicy() error {
-	return &format.Error{Code: format.CodeAccessPolicyUnsupported, Detail: "creator-only access policy is not proved"}
-}
-
-func ioError(operation string, cause error) error {
-	return &format.Error{Code: format.CodeIO, Detail: operation + ": " + cause.Error()}
 }

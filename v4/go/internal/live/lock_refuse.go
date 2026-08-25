@@ -1,4 +1,4 @@
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package live
 
@@ -8,11 +8,12 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// FreeBSD, Windows, and every other platform have no proven Go
-// implementation of the sidecar byte-range lock contract: FreeBSD lacks
-// OFD locks (spec section 15 platform table), and the Windows live
-// surface is a tracked SOW-0026 item. Every live constructor refuses before
-// path access; these primitives stay typed refusals for defense in
+// FreeBSD and every other platform without a proven sidecar lock
+// machine refuse here: FreeBSD lacks OFD byte-range locks (spec
+// section 15 platform table) and has no equivalent primitive; Windows
+// implements the real LockFileEx machine in lock_windows.go. Every
+// live constructor refuses before path access on the remaining
+// platforms; these primitives stay typed refusals for defense in
 // depth, exactly like the mapping owner's platform refusals.
 
 func init() {
@@ -36,8 +37,9 @@ func refuseUnlock(_ *os.File, _ uint64) error {
 
 // requireLiveSupported refuses live coordination before any path access
 // (Rust live_lock::require_live_supported; spec section 15 platform
-// table). The Windows live surface is a tracked SOW-0026 item and refuses
-// here exactly like the mapping owner refuses Windows opens.
+// table). Windows implements the machine and returns nil from
+// lock_windows.go; the remaining platforms refuse here exactly like
+// the mapping owner refuses their opens.
 func requireLiveSupported() error {
 	return liveRefusal()
 }

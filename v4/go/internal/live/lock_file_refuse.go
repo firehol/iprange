@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !freebsd
+//go:build !linux && !darwin && !freebsd && !windows
 
 package live
 
@@ -6,10 +6,11 @@ import (
 	"os"
 )
 
-// Windows and every remaining platform refuse the artifact-level file
-// locks with the same typed refusal as the byte-range surface (Rust
-// live_lock non-unix arm). The Windows publication surface is a tracked
-// SOW-0026 item and refuses here before any path access.
+// Every platform without an artifact-level lock machine refuses here
+// with the same typed refusal as the byte-range surface (Rust live_lock
+// non-unix arm). Windows implements the real byte-range machine in
+// lock_windows.go (Rust lock_file uses LockFileEx there); the remaining
+// platforms refuse before any path access.
 
 func init() {
 	fileLockSet = refuseFileSet
