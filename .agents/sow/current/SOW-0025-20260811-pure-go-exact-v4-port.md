@@ -12674,5 +12674,87 @@ Open decisions: none blocking. The remote-host authorization for
 in-process fallback when the binary is missing) are recorded items
 the lead surfaces at the relevant slice.
 
-Next: milestone 4 slice 4-12A - the worker-side probe arm and the
-session-1 crash-matrix extension.
+### Status (2026-08-25) - milestone 4 slice 4-12A delivered: worker-side probe arm and real-binary source-fault crash fixture
+
+Delivered at d7247f6 (battery green, pushed):
+
+- mapping leaf owns the session probe hook: ProbeRole wire constants
+  (1-4, Rust control.rs MappingRole), atomic hook slot with
+  SetSessionProbe/ClearSessionProbe/SessionProbeActive (worker is the
+  only writer; library processes never install it), Mapping.Region
+  (region_posix.go; the Windows stub refuses the probe), and
+  Mapping.Probe (hook nil -> operation runs directly, zero behavior
+  change in library mode).
+- internal/worker owns Control.ProbeRegion: handler-ownership verify
+  (activeControl seam, verbatim "SIGBUS worker handler ownership was
+  lost"), previous registration read (registration(), Rust
+  control.rs:636 parity with the same Conflict detail), monotonic
+  nonzero generation counter (starts 1, wraps to 1 on overflow, never
+  0), Arm with a fresh generation, operation, then restore of the
+  previous registration or Disarm on release. Restore errors are
+  swallowed exactly like Rust Probe::drop `let _`; the restore runs
+  after a failed operation. EnterSession/LeaveSession mirror Rust
+  Context::enter/drop (worker.rs:64/155-183; double enter is the
+  verbatim Conflict), and cmd/iprange-v4-worker enters the session
+  right after the handler install.
+- Parity wrap points (Go -> Rust): validation.go:176/264 sweeps ->
+  validation.rs:283/130; validation/live.go:64 -> validation.rs:218;
+  recovery/api.go:107 machine build -> recovery/api.rs:234 and
+  api.go:124 finish -> api.rs:318 (enter_source held across each);
+  recovery/inspection.go:359 classifyMapped -> inspection.rs:243;
+  writer/output.go outputPage/sealPages/Finish-meta-encode ->
+  immutable_output.rs:711/590/617/657/672/687 (output role);
+  publication/reservation_file.go writeState1/lockState1With/
+  verifyDraftPrivate -> reservation_file.rs:319/333 (output role);
+  live/sidecar.go readSourceHeader/verifyHeader/currentHeader/
+  writeSlotOffset/clearReader/readActiveSlot/clearStale ->
+  live_sidecar.rs:491/475-ish (coordination role).
+- Per-page writer Store ops (Inspect/Update/RestoreDirty/CopyPage)
+  gate on SessionProbeActive with a direct zero-alloc path, because a
+  probe closure per page push regressed TestRecoveryOutputPushPath-
+  AllocPin (68 allocs vs bound 8; green again after the gate). Rust
+  pays the same branch (region-option match), so the guard is parity,
+  not divergence.
+- Crash matrix: client_crash_test.go
+  TestRecoverWithWorkerRealBinarySourceFaultRestartable mirrors Rust
+  worker/client_tests.rs fault_fixture with the real worker binary:
+  hand-built 5-page source (dual meta, range branch root at page 2
+  with cells (10,3)/(100,4), CRC-damaged leaf page 3, valid leaf
+  page 4); session 1 truncates the source to 4 pages inside the sink,
+  the worker's next source scan SIGBUSes inside the armed Source
+  probe, the parent reads fault {RoleSource, relative 4*PAGE,
+  mapping_len 5*PAGE} after the DriveLoop proved exit 197, session 2
+  restores the file and reruns with page 4 declared unreadable:
+  deterministic completion with one IoError envelope at page 4,
+  report.pages.io_unreadable == 1, publication Published, output
+  range_record_count 0.
+- New unit tests: mapping session_probe_test.go (hook nil/installed/
+  cleared, Region refuses unmapped) and worker probe_region_test.go
+  (nesting restore, restore-after-failure, unarmed leaves disarmed,
+  generation monotonic nonzero, invalid armed state refusal,
+  ownership mismatch refusal).
+
+Recorded flags for the following slices (no code divergence in this
+slice):
+- Rust enter_output sites whose Go peers remain unwrapped:
+  reservation_file.rs:222 (resume_armed), :347 (acquire), :380
+  (arm_with) and publication/output.rs:405/:449 (prepared-output
+  verify/finish custody). Candidate follow-up for 4-12C if output-role
+  fault coverage must reach those paths; the session-1 crash matrix
+  (source role, the recorded 4-12A deliverable) is fully covered.
+- Go Store split window: Rust update_page holds the armed probe across
+  the caller's page mutation; Go Update returns the page slice and the
+  caller mutates before RestoreDirty, so a fault during the mutation
+  window chains instead of recording. Fetch and ownership re-check are
+  armed. Closing it changes the shared tree.Store/builder interface;
+  recorded for 4-12C resource/crash completion decision.
+
+Battery (all under nice): gofmt clean; vet plain + v4work; full
+module plain + v4work; race + checkptr on the routed packages both tag
+sets; six cross-builds plain + v4work; check-mmap-trace.sh 4 legs ->
+all green.
+
+Next: milestone 4 slice 4-12B - production SDK routing through the
+worker client arms on linux/amd64 (facade Validate/Recover/
+InspectRecoveryCandidates), the mmap-trace worker + recovery legs, and
+the Rust error classes; the test harness locates the worker binary.
