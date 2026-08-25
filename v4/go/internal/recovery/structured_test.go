@@ -33,10 +33,16 @@ func structuredSourceLimit(t *testing.T, path string, feedLimit uint64, feeds []
 	if err != nil {
 		t.Fatalf("FreshOutputSpec: %v", err)
 	}
-	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit, nil)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		t.Fatalf("NewOutputBuilder: %v", err)
+		t.Fatalf("create fixture: %v", err)
 	}
+	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
+	if err != nil {
+		f.Close()
+		t.Fatalf("NewOutputBuilderOverFile: %v", err)
+	}
+	f.Close()
 	for _, pair := range feeds {
 		if err := builder.PushFeed(pair[0].(string), pair[1].(uint32)); err != nil {
 			t.Fatalf("PushFeed: %v", err)
@@ -78,10 +84,16 @@ func structuredOutputBuilder(t *testing.T, path string, source format.Meta) *wri
 	if err != nil {
 		t.Fatalf("FreshOutputSpec: %v", err)
 	}
-	builder, err := writer.NewOutputBuilder(path, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit, nil)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		t.Fatalf("NewOutputBuilder: %v", err)
+		t.Fatalf("create fixture: %v", err)
 	}
+	builder, err := writer.NewOutputBuilderOverFile(f, spec, writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit)
+	if err != nil {
+		f.Close()
+		t.Fatalf("NewOutputBuilderOverFile: %v", err)
+	}
+	f.Close()
 	return builder
 }
 
@@ -105,7 +117,6 @@ func constructStructured(t *testing.T, source *mapping.Mapping, meta format.Meta
 // table::required_level: Corrupt "structure table ID limit is
 // invalid").
 func TestStructuredRecoveryConstructRefusesInvalidIDLimit(t *testing.T) {
-	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -197,7 +208,6 @@ func rewriteStructureBranchChild(t *testing.T, path string, meta format.Meta, in
 // structure record and proves only the dependent range rejects (Rust
 // damaged_structure_rejects_only_its_dependent_range).
 func TestStructuredRecoveryConstructDamagedRecord(t *testing.T) {
-	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -245,7 +255,6 @@ func TestStructuredRecoveryConstructDamagedRecord(t *testing.T) {
 // envelope (Rust structure_index Events::leaf: decode_record, then the
 // id and limit proof; the mismatch is not a decode failure).
 func TestStructuredRecoveryConstructSlotIDMismatch(t *testing.T) {
-	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -287,7 +296,6 @@ func TestStructuredRecoveryConstructSlotIDMismatch(t *testing.T) {
 // membership ID root and proves the structure depending on it rejects
 // (Rust missing_membership_rejects_only_dependent_structure).
 func TestStructuredRecoveryConstructMissingMembership(t *testing.T) {
-	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, [][2]any{{"threat", uint32(1)}}, []structuredPush{
@@ -331,7 +339,6 @@ func TestStructuredRecoveryConstructMissingMembership(t *testing.T) {
 // child out of bounds and proves the other leaf still recovers (Rust
 // invalid_structure_branch_pointer_is_reported_and_best_effort_recovers_other_leaves).
 func TestStructuredRecoveryConstructBranchPointer(t *testing.T) {
-	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	pushes := make([]structuredPush, 0, 51)
