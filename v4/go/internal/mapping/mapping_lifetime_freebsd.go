@@ -8,6 +8,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// coordinationSupported reports the exclusive lifetime-lock machine availability.
+const coordinationSupported = false
+
 // FreeBSD has no proven OFD byte-range primitive, so live coordination is
 // unsupported there: every live constructor rejects before path access
 // (requireLiveCoordination), and the exclusive lock is unreachable. Immutable

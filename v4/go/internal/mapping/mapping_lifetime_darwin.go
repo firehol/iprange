@@ -10,6 +10,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// coordinationSupported reports the exclusive lifetime-lock machine availability.
+const coordinationSupported = true
+
 // The lifetime lock is the shared OFD byte-range lock at offset 1<<44,
 // mirroring the Rust MAIN_LIFETIME_LOCK (live_sidecar.rs, also F_OFD_SETLK
 // on Apple platforms).

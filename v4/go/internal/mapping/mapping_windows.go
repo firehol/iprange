@@ -6,6 +6,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// coordinationSupported reports the exclusive lifetime-lock machine availability.
+const coordinationSupported = false
+
 // Mapping is the milestone-1 Windows stub: the type and method surface exist
 // only so the reader core cross-compiles. OpenImmutable always refuses, so
 // these methods are unreachable at runtime on Windows until the platform

@@ -6,6 +6,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// coordinationSupported reports the exclusive lifetime-lock machine availability.
+const coordinationSupported = false
+
 // Other unix platforms mirror the Rust platform table: live coordination
 // (the OFD byte-range lifetime lock) is not implemented there, so every
 // open is refused with the typed Unsupported error. No content is mapped.
