@@ -412,12 +412,21 @@ func (m *Mapping) Flush() error {
 	return nil
 }
 
-// FlushRange synchronizes the mapped pages of [offset, offset+length) to
-// the file (msync MS_SYNC over the subrange), mirroring Rust mapping.rs
-// flush_range. The range must be page-aligned and inside the mapped
-// extent, exactly like Rust checked_range + flush_range; the caller is
-// the publication path (data flush of the committed extent, meta-page
-// flush).
+// FlushRange makes the mapped pages of [offset, offset+length) durable
+// (msync MS_SYNC; Rust mapping.rs flush_range). The request must be
+// page-aligned and inside the mapped extent, exactly like Rust
+// checked_range + flush_range; the caller is the publication path (data
+// flush of the committed extent, meta-page flush).
+//
+// The synced range is [0, offset+length), not the literal subrange:
+// macOS/XNU msync rejects any range that does not start at the mapping
+// base with EINVAL (verified natively on darwin 25.5: aligned subranges
+// [1:2], [2:7] fail, [0:n] succeeds), so the base-prefix shape is the
+// only single implementation that is portable across linux, darwin, and
+// freebsd. Pages before offset are already clean in the durability flows
+// (their own flush or the create write), so the wider msync is a no-op
+// scan there; the Rust subrange shape is affected by the same macOS
+// limitation (Rust follow-up recorded in SOW-0025).
 func (m *Mapping) FlushRange(offset, length uint64) error {
 	if m.data == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "mapping closed"}
@@ -428,7 +437,7 @@ func (m *Mapping) FlushRange(offset, length uint64) error {
 	if offset > m.size || length > m.size-offset {
 		return &format.Error{Code: format.CodeFormatInvalid, Detail: "flush range out of mapped extent"}
 	}
-	if err := unix.Msync(m.data[offset:offset+length], unix.MS_SYNC); err != nil {
+	if err := unix.Msync(m.data[:offset+length], unix.MS_SYNC); err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "msync: " + err.Error()}
 	}
 	work.MappingFlush(1)
