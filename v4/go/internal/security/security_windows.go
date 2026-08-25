@@ -12,6 +12,13 @@ import (
 	"os"
 )
 
+// aclSupported reports the creator-only machine availability (false on windows).
+const aclSupported = false
+
+// CreatorOnlySupported reports the creator-only machine availability
+// (false on windows, where the stub refuses every policy operation).
+func CreatorOnlySupported() bool { return false }
+
 // Profile is the creator identity captured before creation (Rust
 // security Profile). The Windows shape carries the SID; the stub keeps
 // the POSIX field layout so callers compile on every target.

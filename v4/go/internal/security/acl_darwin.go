@@ -6,6 +6,9 @@ import (
 	"os"
 )
 
+// aclSupported reports the creator-only machine availability (false off linux).
+const aclSupported = false
+
 // removeInheritedACL on darwin is an honest typed refusal: the Rust
 // authority removes inherited extended ACLs through libc filesec and
 // acl_get_fd_np, which pure Go cannot call (Decision 2A forbids cgo and

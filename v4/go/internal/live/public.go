@@ -7,13 +7,35 @@
 
 package live
 
-import "os"
+import (
+	"os"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/security"
+)
 
 // CheckSupported reports whether the live coordination primitives are
 // proven on this platform (Rust require_live_supported). The snapshot
 // and recovery machines call it before budget validation, at the Rust
 // api.rs refusal position; the owners repeat it before any path access.
 func CheckSupported() error { return requireLiveSupported() }
+
+// CreationSupported reports whether live database creation works on
+// this platform: the live coordination primitives must be proven
+// (CheckSupported) and the creator-only security machine must be
+// available (internal/security; pure Go implements it only on linux —
+// the darwin filesec and other-OS libc ACL machines are refused
+// honestly). Suite gates and public capability checks use this single
+// authority so a refusal cannot drift from the create path.
+func CreationSupported() error {
+	if err := requireLiveSupported(); err != nil {
+		return err
+	}
+	if !security.CreatorOnlySupported() {
+		return &format.Error{Code: format.CodeOSUnsupported, Detail: "creator-only access policy requires libc ACL APIs unavailable to pure Go on this platform"}
+	}
+	return nil
+}
 
 // IdentityDeviceInode reports the portable device+inode pair of one
 // retained identity (Rust live_namespace::public_identity). A nil

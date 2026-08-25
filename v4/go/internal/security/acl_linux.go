@@ -11,6 +11,9 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
+// aclSupported reports the creator-only machine availability (linux: true).
+const aclSupported = true
+
 // accessACL is the inherited-access ACL xattr name (Rust
 // security/linux.rs ACCESS_ACL).
 const accessACL = "system.posix_acl_access"

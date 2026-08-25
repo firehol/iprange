@@ -1,10 +1,13 @@
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package security
 
 import (
 	"os"
 )
+
+// aclSupported reports the creator-only machine availability (false off linux).
+const aclSupported = false
 
 // removeInheritedACL on platforms without a pure-Go ACL machine is an
 // honest typed refusal. The live surface is already refused earlier on

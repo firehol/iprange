@@ -61,6 +61,14 @@ func (p *Profile) Commitment() [32]byte {
 // classes: CodeAccessPolicyUnsupported when the policy cannot be
 // proved, CodeDurabilityUnsupported when the filesystem lacks the
 // required ACL operations, CodeIO for operation failures.
+// CreatorOnlySupported reports whether the secure creator-only
+// artifact policy is implemented on this platform. Only the linux
+// xattr machine is reachable from pure Go: the darwin filesec and
+// other-OS libc ACL machines would need cgo (Decision 2A forbids it),
+// so every other target refuses honestly. The predicate drives the
+// platform gates of the live and publication test suites.
+func CreatorOnlySupported() bool { return aclSupported }
+
 func SecureCreatorOnly(f *os.File, profile Profile) error {
 	if err := f.Chmod(CreatorMode); err != nil {
 		return ioError("apply creator-only mode", err)
