@@ -204,9 +204,12 @@ func buildDescriptor(sid []byte) (windows.SecurityAttributes, func(), error) {
 		_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(acl))) // LocalFree takes HLOCAL (a handle-sized pointer)
 	}
 	var sd windows.SECURITY_DESCRIPTOR
-	if ret, _, _ := procInitializeSecurityDesc.Call(uintptr(unsafe.Pointer(&sd)), 1); ret == 0 {
+	if ret, _, callErr := procInitializeSecurityDesc.Call(uintptr(unsafe.Pointer(&sd)), 1); ret == 0 {
 		cleanup()
-		return windows.SecurityAttributes{}, func() {}, ioError("build creator-only security descriptor", windows.GetLastError())
+		if callErr == nil {
+			callErr = windows.Errno(0)
+		}
+		return windows.SecurityAttributes{}, func() {}, ioError("build creator-only security descriptor", callErr)
 	}
 	owner := (*windows.SID)(unsafe.Pointer(&sid[0]))
 	if err := sd.SetOwner(owner, false); err != nil {
@@ -249,9 +252,16 @@ func effectiveUserSID() ([]byte, error) {
 	}
 	defer windows.CloseHandle(windows.Handle(token))
 	var length uint32
-	_ = windows.GetTokenInformation(token, windows.TokenUser, nil, 0, &length) // always ERROR_INSUFFICIENT_BUFFER
-	if lastErr := windows.GetLastError(); lastErr != windows.ERROR_INSUFFICIENT_BUFFER {
-		return nil, ioError("size effective token user", lastErr)
+	// The size probe always reports ERROR_INSUFFICIENT_BUFFER; the
+	// x/sys wrapper returns that error directly, so the preceding
+	// last-error value is never read (it may already be cleared on
+	// the Go runtime and would nil-panic in ioError).
+	err = windows.GetTokenInformation(token, windows.TokenUser, nil, 0, &length)
+	if err != windows.ERROR_INSUFFICIENT_BUFFER {
+		if err == nil {
+			err = windows.Errno(0)
+		}
+		return nil, ioError("size effective token user", err)
 	}
 	buffer := make([]byte, length)
 	if err := windows.GetTokenInformation(token, windows.TokenUser, &buffer[0], length, &length); err != nil {
