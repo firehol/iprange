@@ -17,6 +17,7 @@ import (
 // gives headroom for Go release differences while still failing on any
 // new per-record or per-insert allocation.
 func TestProjectHistoryAllocCeiling(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -60,6 +61,7 @@ func TestProjectHistoryAllocCeiling(t *testing.T) {
 // path; like the abort path its cost is per projection, never per
 // record. Measured floor at 1,000 source records: 84 per run.
 func TestProjectHistoryCommitAllocCeiling(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	source := histSource(t, sourcePath)
 	defer source.Close()

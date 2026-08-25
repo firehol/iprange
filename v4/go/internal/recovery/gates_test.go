@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
@@ -33,5 +34,16 @@ func publicationGate(t *testing.T) {
 	t.Helper()
 	if !security.CreatorOnlySupported() {
 		t.Skip("creator-only publication security is not available on this platform (pure-Go xattr machine is linux only)")
+	}
+}
+
+// creationGate skips one test whose fixture or construction creates a
+// database file through the writer or the mapping owner (the
+// exclusive lifetime-lock machine; freebsd refuses every file
+// creation, the offline writer included).
+func creationGate(t *testing.T) {
+	t.Helper()
+	if !mapping.CoordinationSupported() {
+		t.Skip("database file creation is not supported on this platform")
 	}
 }

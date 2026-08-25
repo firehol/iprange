@@ -123,6 +123,7 @@ func rewriteNameIndex(t *testing.T, path string, meta format.Meta, name string, 
 }
 
 func TestCatalogCountScansBothTrees(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := catalogSource(t, path, []string{"alpha", "beta", "gamma"})
@@ -142,6 +143,7 @@ func TestCatalogCountScansBothTrees(t *testing.T) {
 }
 
 func TestRecoverCatalogReconcilesEqualConflictFreePairs(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := catalogSource(t, path, []string{"alpha", "beta", "gamma"})
@@ -197,6 +199,7 @@ func TestRecoverCatalogReconcilesEqualConflictFreePairs(t *testing.T) {
 }
 
 func TestCatalogNameConflictRejectsThePair(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	names := []string{"alpha", "beta"}

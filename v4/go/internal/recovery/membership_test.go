@@ -108,6 +108,7 @@ func prepareMembershipRecovery(t *testing.T, source *mapping.Mapping, meta forma
 }
 
 func TestRecoverMembershipsValidatesInlineAndBlobBitmaps(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	// The source mirrors the Rust clean-recovery test shape: two wide
@@ -175,6 +176,7 @@ func TestRecoverMembershipsValidatesInlineAndBlobBitmaps(t *testing.T) {
 // reads back words across every blob level (Rust blob_tree: the
 // branch-over-branch walk through find_leaf and select_branch).
 func TestRecoverMembershipsMultiLevelBlobWords(t *testing.T) {
+	creationGate(t)
 	const (
 		wordCount = 114_356 // 226 leaves: 225 fill one branch level
 		feedLimit = 8_000_000
@@ -257,6 +259,7 @@ func (f *blobRootFinder) leaf(page uint32, index int, cell []byte, ok bool) erro
 // (Rust damaged_blob_rejects_its_membership_and_known_range minus the
 // range side, which the range recovery of a later slice owns).
 func TestRecoverMembershipsDamagedBlobRejectsEntry(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := membershipSource(t, path, [][2]any{{"alpha", uint32(3)}, {"middle", uint32(31_999)}, {"omega", uint32(51_137)}}, []membershipRange{
@@ -327,6 +330,7 @@ func TestRecoverMembershipsDamagedBlobRejectsEntry(t *testing.T) {
 // their memberships (Rust
 // either_catalog_tree_is_sufficient_for_equal_conflict_free_pairs).
 func TestRecoverCatalogEitherTreeIsSufficient(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := membershipSourceLimit(t, path, 64, [][2]any{{"a", uint32(1)}, {"b", uint32(5)}}, []membershipRange{
@@ -415,6 +419,7 @@ func constructMembership(t *testing.T, source *mapping.Mapping, meta format.Meta
 // bitmaps, the metadata, and the report counts (Rust
 // clean_membership_recovery_preserves_feeds_bitmaps_metadata_and_high_water).
 func TestMembershipRecoveryConstructClean(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	builder, err := writer.NewOutputBuilder(sourcePath, membershipSourceSpec(32_002), writer.OutputBudget{MaxOutputPages: 20_000}, writer.ReferenceBatchEntryLimit, nil)
@@ -523,6 +528,7 @@ func reopenMember(t *testing.T, path string) *reader.ImmutableReader {
 // CRC and proves the membership and its range reject while the feeds
 // survive (Rust damaged_blob_rejects_its_membership_and_known_range).
 func TestMembershipRecoveryConstructDamagedBlob(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := membershipSource(t, path, [][2]any{{"alpha", uint32(3)}, {"middle", uint32(31_999)}, {"omega", uint32(51_137)}}, []membershipRange{
@@ -584,6 +590,7 @@ func TestMembershipRecoveryConstructDamagedBlob(t *testing.T) {
 // crosses half the total heap, where the tables bytes used to leak
 // into the charge and trip a spurious budget refusal.
 func TestMembershipRecoveryMetadataChargesOnlyTheMetadataBytes(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	var feeds [][2]any
@@ -638,6 +645,7 @@ func TestMembershipRecoveryMetadataChargesOnlyTheMetadataBytes(t *testing.T) {
 // require_leaf_identity arm of parse_leaf_info: the identity proof
 // runs before the geometry proof.
 func TestMembershipRecoveryConstructBlobLeafIdentityDamaged(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := membershipSource(t, path, [][2]any{{"alpha", uint32(3)}, {"middle", uint32(31_999)}, {"omega", uint32(51_137)}}, []membershipRange{
@@ -721,6 +729,7 @@ func corruptPageBorn(t *testing.T, path string, pageNumber uint32, txn uint64) {
 // its range reject (Rust
 // catalog_conflicts_reject_only_dependent_memberships_and_ranges).
 func TestMembershipRecoveryConstructCatalogConflict(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := membershipSourceLimit(t, path, 64, [][2]any{{"a", uint32(1)}, {"b", uint32(5)}}, []membershipRange{

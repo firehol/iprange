@@ -240,6 +240,7 @@ func finishWorkflowCommit(t *testing.T, finished *FinishedWorkflow, context stri
 // Rust randomized_direct_replacement_matches_scalar_state_and_report:
 // 100 rounds of unordered direct replacement.
 func TestRandomizedDirectReplacementMatchesScalarStateAndReport(t *testing.T) {
+	requireFileCreation(t)
 	path := directWorkflowDB(t, mustTag(t, "direct"))
 	var random workflowRandom
 	random.state = 0x8bcf28d1930e44a7
@@ -291,6 +292,7 @@ func TestRandomizedDirectReplacementMatchesScalarStateAndReport(t *testing.T) {
 // randomized_first_seen_refresh_matches_full_delta_semantics: 100
 // rounds of first-seen refresh.
 func TestRandomizedFirstSeenRefreshMatchesFullDeltaSemantics(t *testing.T) {
+	requireFileCreation(t)
 	path := directWorkflowDB(t, ValueTagFirstSeen())
 	var random workflowRandom
 	random.state = 0x57de8a11c442793b
@@ -353,6 +355,7 @@ func TestRandomizedFirstSeenRefreshMatchesFullDeltaSemantics(t *testing.T) {
 // Rust randomized_last_seen_refresh_matches_cutoff_and_monotonic_time:
 // 100 rounds of last-seen refresh with periodic stale cutoffs.
 func TestRandomizedLastSeenRefreshMatchesCutoffAndMonotonicTime(t *testing.T) {
+	requireFileCreation(t)
 	path := directWorkflowDB(t, ValueTagLastSeen())
 	var random workflowRandom
 	random.state = 0xd39ac6247b105e81

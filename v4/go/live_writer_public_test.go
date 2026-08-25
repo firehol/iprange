@@ -183,6 +183,7 @@ func TestPublicLiveWriterSecondOpenIsWriterBusy(t *testing.T) {
 }
 
 func TestPublicOpenLiveWriterRefusesNonLiveMain(t *testing.T) {
+	requireFileCreation(t)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	if _, err := Create(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {

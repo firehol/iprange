@@ -14,6 +14,7 @@ import (
 )
 
 func TestWriterSecondCommitSameWriter(t *testing.T) {
+	requireFileCreation(t)
 	path := filepath.Join(t.TempDir(), "double.iprdb")
 	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
 		t.Fatal(err)

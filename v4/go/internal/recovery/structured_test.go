@@ -105,6 +105,7 @@ func constructStructured(t *testing.T, source *mapping.Mapping, meta format.Meta
 // table::required_level: Corrupt "structure table ID limit is
 // invalid").
 func TestStructuredRecoveryConstructRefusesInvalidIDLimit(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -196,6 +197,7 @@ func rewriteStructureBranchChild(t *testing.T, path string, meta format.Meta, in
 // structure record and proves only the dependent range rejects (Rust
 // damaged_structure_rejects_only_its_dependent_range).
 func TestStructuredRecoveryConstructDamagedRecord(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -243,6 +245,7 @@ func TestStructuredRecoveryConstructDamagedRecord(t *testing.T) {
 // envelope (Rust structure_index Events::leaf: decode_record, then the
 // id and limit proof; the mismatch is not a decode failure).
 func TestStructuredRecoveryConstructSlotIDMismatch(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, nil, []structuredPush{
@@ -284,6 +287,7 @@ func TestStructuredRecoveryConstructSlotIDMismatch(t *testing.T) {
 // membership ID root and proves the structure depending on it rejects
 // (Rust missing_membership_rejects_only_dependent_structure).
 func TestStructuredRecoveryConstructMissingMembership(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	meta := structuredSourceLimit(t, path, 64, [][2]any{{"threat", uint32(1)}}, []structuredPush{
@@ -327,6 +331,7 @@ func TestStructuredRecoveryConstructMissingMembership(t *testing.T) {
 // child out of bounds and proves the other leaf still recovers (Rust
 // invalid_structure_branch_pointer_is_reported_and_best_effort_recovers_other_leaves).
 func TestStructuredRecoveryConstructBranchPointer(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")
 	pushes := make([]structuredPush, 0, 51)

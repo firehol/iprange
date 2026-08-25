@@ -14,6 +14,9 @@ import (
 // stable-storage syncs count exactly once per operation.
 
 func TestMappingWorkCounters(t *testing.T) {
+	if !CoordinationSupported() {
+		t.Skip("database file creation is not supported on this platform")
+	}
 	dir := t.TempDir()
 	path := makePagesFile(t, dir, 6)
 

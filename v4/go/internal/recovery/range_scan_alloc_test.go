@@ -23,6 +23,7 @@ import (
 )
 
 func TestRangeScanPerRecordPathIsHeapFree(t *testing.T) {
+	creationGate(t)
 	// The root is one leaf at both sizes, so every measured run
 	// visits exactly one page and one node (200 x 12-byte cells fit
 	// the leaf without branching).

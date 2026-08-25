@@ -14,6 +14,7 @@ import (
 )
 
 func TestNoPageSizedHeapAllocationsHistoryProjection(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())

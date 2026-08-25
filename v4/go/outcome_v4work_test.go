@@ -75,6 +75,7 @@ func runOutcomeChild(t *testing.T, path, action string) {
 // TestWriterOutcomeUnknownFailClosed drives both fault points through the
 // real public facade in a child process.
 func TestWriterOutcomeUnknownFailClosed(t *testing.T) {
+	requireFileCreation(t)
 	dir := t.TempDir()
 	runOutcomeChild(t, filepath.Join(dir, "outcome.iprdb"), "outcome_unknown")
 	runOutcomeChild(t, filepath.Join(dir, "aborted.iprdb"), "abort_class")
@@ -84,6 +85,7 @@ func TestWriterOutcomeUnknownFailClosed(t *testing.T) {
 // TestOutcomeUnknownChild is the subprocess entry point; it only runs
 // when the parent set the spawn marker.
 func TestOutcomeUnknownChild(t *testing.T) {
+	requireFileCreation(t)
 	if os.Getenv(outcomeChildSpawned) != "1" {
 		t.Skip("subprocess entry point")
 	}

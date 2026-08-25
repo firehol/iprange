@@ -18,6 +18,7 @@ import (
 // the structured transaction lifecycle: intern attempts, dedup hits,
 // assign/clear silence, and the delete-feed re-intern transform.
 func TestWorkStructuredInternPins(t *testing.T) {
+	requireFileCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())

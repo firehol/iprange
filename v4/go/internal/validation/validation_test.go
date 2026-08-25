@@ -128,16 +128,28 @@ func TestValidateBudgetRefusals(t *testing.T) {
 	}
 	// Live validation needs two open files; one is refused before any
 	// path access (Rust validation.rs:76-79 arm; the missing path is
-	// never touched).
-	live := HeapOnly(1<<20, 1)
-	missing := filepath.Join(t.TempDir(), "missing.v4")
-	if _, failure := Validate(missing, ValidationModeLiveCurrent, live, nil, nil); failure == nil {
-		t.Fatal("live budget with one open file accepted")
-	} else if cause, ok := failure.Cause.(*format.Error); !ok || cause.Code != format.CodeInsufficientResourceBudget || cause.Detail != "live validation open files" {
-		t.Fatalf("live open-file refusal = %v", failure.Cause)
-	} else if failure.CleanupState() != publication.CleanupStateClean {
-		t.Fatalf("live refusal cleanup = %v, want Clean", failure.CleanupState())
-	}
+	// never touched). The live-mode preflight refuses with the
+	// coordination class first on platforms without the exclusive
+	// lifetime-lock machine, so this refusal shape is asserted only
+	// where the live preflight passes.
+	t.Run("live", func(t *testing.T) {
+		// The live preflight refuses with the coordination class first
+		// on platforms without the exclusive lifetime-lock machine, so
+		// the budget-arm refusal is asserted only where the preflight
+		// passes (darwin reaches it; freebsd refuses earlier).
+		if err := live.CheckSupported(); err != nil {
+			t.Skipf("live coordination is not supported on this platform: %v", err)
+		}
+		live := HeapOnly(1<<20, 1)
+		missing := filepath.Join(t.TempDir(), "missing.v4")
+		if _, failure := Validate(missing, ValidationModeLiveCurrent, live, nil, nil); failure == nil {
+			t.Fatal("live budget with one open file accepted")
+		} else if cause, ok := failure.Cause.(*format.Error); !ok || cause.Code != format.CodeInsufficientResourceBudget || cause.Detail != "live validation open files" {
+			t.Fatalf("live open-file refusal = %v", failure.Cause)
+		} else if failure.CleanupState() != publication.CleanupStateClean {
+			t.Fatalf("live refusal cleanup = %v, want Clean", failure.CleanupState())
+		}
+	})
 	scratch := &ValidationBudget{MaxHeapBytes: 1 << 20, MaxOpenFiles: 1, MaxScratchFiles: 1}
 	if _, failure := Validate(path, ValidationModeImmutableCurrent, scratch, nil, nil); failure == nil {
 		t.Fatal("scratch limits without directory accepted")

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
@@ -39,5 +40,18 @@ func requirePublicationSecurity(t *testing.T) {
 	t.Helper()
 	if !security.CreatorOnlySupported() {
 		t.Skip("creator-only publication security is not available on this platform (pure-Go xattr machine is linux only)")
+	}
+}
+
+// requireFileCreation skips one test that creates a database file
+// through the non-live writer path: every file creation takes the
+// exclusive lifetime-lock machine (mapping.CoordinationSupported is
+// the authority), which the pure-Go port implements only on linux and
+// darwin. Live-creation and publication-gated tests do not need this
+// gate: their own gates already skip before any file is created.
+func requireFileCreation(t *testing.T) {
+	t.Helper()
+	if !mapping.CoordinationSupported() {
+		t.Skip("database file creation is not supported on this platform (the exclusive lifetime-lock machine is linux/darwin only)")
 	}
 }

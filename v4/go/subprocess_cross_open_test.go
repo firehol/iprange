@@ -61,12 +61,14 @@ func runGoSubprocess(t *testing.T) {
 // TestGoSubprocessCrossOpen is the parent gate: the child proves the real
 // opened paths in a separate process whose exit code is the verdict.
 func TestGoSubprocessCrossOpen(t *testing.T) {
+	requireFileCreation(t)
 	runGoSubprocess(t)
 }
 
 // TestGoSubprocessChild is the subprocess entry point; it only runs when
 // the parent set the spawn marker (a normal suite run skips it).
 func TestGoSubprocessChild(t *testing.T) {
+	requireFileCreation(t)
 	if os.Getenv(subprocessSpawned) != "1" {
 		t.Skip("subprocess entry point")
 	}

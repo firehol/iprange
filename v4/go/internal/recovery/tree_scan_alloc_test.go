@@ -97,6 +97,7 @@ func treePinSource(t *testing.T) (string, format.Meta) {
 // set is created per run so every measured run re-walks the whole
 // tree.
 func TestTreeScanOneLayoutProofPerPage(t *testing.T) {
+	creationGate(t)
 	path, meta := treePinSource(t)
 	source := mapSource(t, path)
 	defer source.Close()

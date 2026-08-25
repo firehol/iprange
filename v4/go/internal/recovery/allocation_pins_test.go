@@ -272,6 +272,7 @@ func driveStructured(policy *structuredOutput, records []rangeRecord) error {
 // seam box per record and the writer intern hasher per push), with no
 // policy-internal per-record allocation left.
 func TestRecoveryOutputPushPathAllocPin(t *testing.T) {
+	creationGate(t)
 	membershipAllocs := measureMembershipPush(t)
 	structuredAllocs := measureStructuredPush(t)
 	t.Logf("membership push path: %v allocs per 4-record pass (bound %d)", membershipAllocs, membershipPushAllocBound)

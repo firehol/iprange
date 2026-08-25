@@ -330,6 +330,7 @@ func TestZeroAllocationLookups(t *testing.T) {
 // charge the general input's one-time locator, so the measured stream
 // never wraps.
 func TestZeroAllocationFeedSliceIngestion(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {

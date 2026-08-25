@@ -586,6 +586,7 @@ func TestLogicalCursorsClosedReader(t *testing.T) {
 // feed cursors need a membership database, so each half uses the kind
 // it drives.
 func TestEmptyDatabaseCursors(t *testing.T) {
+	requireFileCreation(t)
 	dir := t.TempDir()
 
 	// Direct range cursors in both directions are empty, not corrupt.

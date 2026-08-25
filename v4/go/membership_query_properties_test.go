@@ -75,6 +75,7 @@ type queryPropertyOutput struct {
 // verifying every point match, feed cardinality, and unordered pair
 // overlap against the model.
 func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
+	requireFileCreation(t)
 	cancellation := NewCancellationToken()
 	state := uint64(0x51d209baa36ec47f)
 	for round := 0; round < queryPropertyRounds; round++ {

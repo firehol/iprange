@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package validation
 
 // Worker-session unreadable-page tests (Rust validation.rs:310
@@ -6,7 +8,12 @@ package validation
 // page deterministically with the io-unreadable class (CodeIO)
 // instead of faulting; an empty session list keeps the sweep
 // unchanged. The fixtures are real committed databases, so the
-// declared page is a page the sweep genuinely probes.
+// declared page is a page the sweep genuinely probes. Both tests in
+// this file need database-file creation: the live arm builds a live
+// pair through the live writer and the immutable arm builds its
+// fixture through writer.NewOutputBuilder (mapping.Create), which
+// freebsd refuses like every file creation; the file carries the same
+// linux || darwin tag as the live writer and validation suites.
 
 import (
 	"os"

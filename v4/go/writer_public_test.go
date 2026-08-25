@@ -44,6 +44,7 @@ func pubCreate(t *testing.T, family AddressFamily, tag ValueTag) (string, Create
 // TestPublicCreateWriteCommitReadBack runs the full public workflow and
 // verifies ranges and metadata through the public reader.
 func TestPublicCreateWriteCommitReadBack(t *testing.T) {
+	requireFileCreation(t)
 	tag, err := NewValueTag([]byte("go-public"))
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +124,7 @@ func TestPublicCreateWriteCommitReadBack(t *testing.T) {
 // TestPublicAbortDiscards verifies Abort drops the draft: no range, no
 // metadata, and the writer stays usable for a fresh transaction.
 func TestPublicAbortDiscards(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -169,6 +171,7 @@ func TestPublicAbortDiscards(t *testing.T) {
 // TestPublicCommitNoPending verifies an unchanged transaction reports
 // ErrorNoPendingTransaction at commit (Rust commit_attempt parity).
 func TestPublicCommitNoPending(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -187,6 +190,7 @@ func TestPublicCommitNoPending(t *testing.T) {
 // TestPublicBeginDirectRequiresDirect verifies a membership database
 // refuses direct transactions with ErrorWrongValueKind.
 func TestPublicBeginDirectRequiresDirect(t *testing.T) {
+	requireFileCreation(t)
 	path := filepath.Join(t.TempDir(), "membership.iprdb")
 	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}); err != nil {
 		t.Fatal(err)
@@ -204,6 +208,7 @@ func TestPublicBeginDirectRequiresDirect(t *testing.T) {
 // TestPublicFamilyAndOrderGates verifies the mutation preconditions:
 // wrong family and reversed ranges refuse with the exact codes.
 func TestPublicFamilyAndOrderGates(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -228,6 +233,7 @@ func TestPublicFamilyAndOrderGates(t *testing.T) {
 // TestPublicV6Workflow runs one IPv6 assignment through the full facade
 // with an empty metadata payload staged in the same transaction.
 func TestPublicV6Workflow(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv6, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -271,6 +277,7 @@ func TestPublicV6Workflow(t *testing.T) {
 // second Create on an existing path returns ErrorNameExists and the
 // original file survives byte-for-byte.
 func TestPublicCreateRefusesExisting(t *testing.T) {
+	requireFileCreation(t)
 	tag, err := NewValueTag([]byte("keep-me"))
 	if err != nil {
 		t.Fatal(err)
@@ -294,6 +301,7 @@ func TestPublicCreateRefusesExisting(t *testing.T) {
 
 // TestPublicClearMetadataJSON stages absence in a second transaction.
 func TestPublicClearMetadataJSON(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -347,6 +355,7 @@ func TestPublicClearMetadataJSON(t *testing.T) {
 // left behind (Rust DirectState ops route every store error through
 // LiveWriter::mutate -> abort_after).
 func TestPublicDirectOpFailureAbortsDraft(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	budget := DefaultBudget()
 	budget.MaxHeapBytes = 0
@@ -430,6 +439,7 @@ func TestPublicDirectOpFailureAbortsDraft(t *testing.T) {
 // before the store, so the draft survives and the transaction can still
 // commit its already-staged ranges.
 func TestPublicDirectOversizedMetadataKeepsDraft(t *testing.T) {
+	requireFileCreation(t)
 	path, _ := pubCreate(t, AddressFamilyIPv4, ValueTag{})
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {

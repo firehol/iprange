@@ -133,6 +133,7 @@ func ranges1000() [][3]uint32 {
 // then the commit, the committed reader evidence, and the no-change
 // rerun with the Rust Abort-on-clean parity.
 func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 
@@ -267,6 +268,7 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 // TestPublicProjectHistoryFullIPv6Space verifies one `::/0` source
 // range counts as 2^128 addresses (format.IPv6Inclusive parity).
 func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource6(t, 0, 0, ^uint64(0), ^uint64(0), 7)
 	tag, err := NewValueTag([]byte("feeds"))
 	if err != nil {
@@ -305,6 +307,7 @@ func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
 // changed projection leaves the writer healthy for a fresh projection
 // and commit.
 func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 9, 10}, {10, 19, 20}})
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -357,6 +360,7 @@ func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
 // the changed handle and verifies the committed metadata through the
 // public reader (Rust PreparedHistoryProjection set/clear parity).
 func TestPublicProjectHistoryMetadataStage(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{5, 5, 1}})
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -423,6 +427,7 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 // preconditions, plus the live-source refusal and the empty-window
 // count gate.
 func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 0, 1}})
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -527,6 +532,7 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 // cancellation check reports ErrorCancelled (Rust project_history_state
 // cancellation.check before start_feed_workflow_draft).
 func TestPublicProjectHistoryCancellation(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 0, 1}})
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -554,6 +560,7 @@ func TestPublicProjectHistoryCancellation(t *testing.T) {
 // projection with one extra window keeps the first window's committed
 // coverage, and the identical third rerun is a no change.
 func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 9, 10}, {10, 19, 20}, {20, 29, 30}, {40, 49, 20}})
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())

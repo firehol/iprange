@@ -156,6 +156,7 @@ func feedPropertyAssertDatabase(t *testing.T, path string, target, other *[workf
 // 100 rounds of complete replacement of one feed while a second feed
 // built from every 4th address stays untouched.
 func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *testing.T) {
+	requireFileCreation(t)
 	tag, err := NewValueTag([]byte("membership"))
 	if err != nil {
 		t.Fatal(err)

@@ -41,6 +41,7 @@ func enrichmentValue(asn uint32) NetworkEnrichmentV1 {
 // aborted transaction is stale for its writer (operation nonce
 // mismatch) and foreign for another writer (database id mismatch).
 func TestPublicStructuredTransactionReferencesBound(t *testing.T) {
+	requireFileCreation(t)
 	firstPath := structuredDB(t)
 	secondPath := structuredDB(t)
 	cancellation := NewCancellationToken()
@@ -98,6 +99,7 @@ func TestPublicStructuredTransactionReferencesBound(t *testing.T) {
 // the record at prepare, and the next intern reuses the lowest free
 // structure id.
 func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.T) {
+	requireFileCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -605,6 +607,7 @@ func assertEnrichmentSnapshot(t *testing.T, path string, threatIndex uint32) {
 // so the guard is Rust-parity defense and the wrong-kind open class is
 // FormatInvalid, pinned by the open tests.
 func TestPublicStructuredTransactionSurface(t *testing.T) {
+	requireFileCreation(t)
 	cancellation := NewCancellationToken()
 
 	// Outer guard: a direct database has no structure kind.
@@ -771,6 +774,7 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 // another transaction refuses as stale (Rust
 // intern_network_enrichment_v1 Some require_current_membership).
 func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
+	requireFileCreation(t)
 	path := structuredDB(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -808,6 +812,7 @@ func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
 // state), exactly like Rust require_active / commit_attempt / abort
 // after abort_after.
 func TestPublicStructuredTransactionOpErrorAborts(t *testing.T) {
+	requireFileCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())

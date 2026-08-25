@@ -35,6 +35,7 @@ func blobPinConsume(bytes []byte) error { return nil }
 // nothing). A fresh (reset) page set is created per run so every
 // measured run re-walks the whole blob.
 func TestMembershipBlobBranchOneLayoutProofPerPage(t *testing.T) {
+	creationGate(t)
 	const (
 		wordCount = 114_356 // 226 leaves: 225 fill one branch level
 		feedLimit = 8_000_000

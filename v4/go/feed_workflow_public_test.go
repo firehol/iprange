@@ -56,6 +56,7 @@ func feedName(t *testing.T, name string) FeedName {
 // slice records coalesce with zero per-record allocations, the finish
 // reports the exact comparison, and the changed terminal aborts.
 func TestPublicCreateFeedSliceIngestion(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -120,6 +121,7 @@ func TestPublicCreateFeedSliceIngestion(t *testing.T) {
 // first feed commits, the second feed with identical ranges produces a
 // changed prepared terminal whose commit lands durably.
 func TestPublicSecondFeedAlternatingDeltas(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -179,6 +181,7 @@ func TestPublicSecondFeedAlternatingDeltas(t *testing.T) {
 // replace is prepared and aborted, rename and delete prepare and
 // abort, each with the exact catalog lookup count.
 func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -251,6 +254,7 @@ func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
 // classes: create on an existing name, replace on a missing name, the
 // pending-transaction refusal, and the wrong value kind.
 func TestPublicFeedWorkflowPreconditions(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -284,6 +288,7 @@ func TestPublicFeedWorkflowPreconditions(t *testing.T) {
 // TestPublicFeedWorkflowReversedAndWrongFamily pins the input errors of
 // the Rust require_ordered and require_input_family classes.
 func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -331,6 +336,7 @@ func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
 // TestPublicPreparedFeedChangeMetadata pins the prepared
 // rename/delete metadata stage and the terminal rules.
 func TestPublicPreparedFeedChangeMetadata(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -397,6 +403,7 @@ func TestPublicPreparedFeedChangeMetadata(t *testing.T) {
 // reproduces the committed state is NoChange and aborts with
 // ErrorNoPendingTransaction.
 func TestPublicFeedWorkflowAbortOnNoChange(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -451,6 +458,7 @@ func TestPublicFeedWorkflowAbortOnNoChange(t *testing.T) {
 // workflow over the complete address space commits and reads back the
 // full range through the v6 feed cursor.
 func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
+	requireFileCreation(t)
 	tag, err := NewValueTag([]byte("feeds"))
 	if err != nil {
 		t.Fatal(err)
@@ -516,6 +524,7 @@ func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
 // an unfinished workflow blocks the next workflow until aborted, and no
 // aborted workflow publishes a feed.
 func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -586,6 +595,7 @@ func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
 // NotCommitted carrying the cancellation cause, leaving the committed
 // feed untouched.
 func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -662,6 +672,7 @@ func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
 // named feed lifecycle operations refuse a direct database with
 // WrongValueKind.
 func TestPublicDirectDatabaseRejectsFeedLifecycle(t *testing.T) {
+	requireFileCreation(t)
 	tag, err := NewValueTag([]byte("direct"))
 	if err != nil {
 		t.Fatal(err)
@@ -688,6 +699,7 @@ func TestPublicDirectDatabaseRejectsFeedLifecycle(t *testing.T) {
 // preserving the feed index and metadata, a delete clearing the
 // membership bits, and a fresh feed reusing the released index.
 func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
+	requireFileCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())

@@ -303,6 +303,7 @@ func assertRanges(t *testing.T, got []reader.DirectRange4, want [][3]uint32) {
 }
 
 func TestOrderedDirectRecoveryStreamsACanonicalOutput(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	meta := finishRanges(t, directSourceBuilder(t, sourcePath), [][3]uint32{{0, 9, 1}, {10, 19, 2}, {30, 39, 2}, {100, 199, 3}})
@@ -337,6 +338,7 @@ func TestOrderedDirectRecoveryStreamsACanonicalOutput(t *testing.T) {
 }
 
 func TestCRCDamagedLeafIsSkippedAndReportedAsUnbounded(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	builder := directSourceBuilder(t, sourcePath)
@@ -393,6 +395,7 @@ func TestCRCDamagedLeafIsSkippedAndReportedAsUnbounded(t *testing.T) {
 }
 
 func TestAnOverlapComponentIsRejectedWhole(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	meta := finishRanges(t, directSourceBuilder(t, sourcePath), [][3]uint32{{0, 9, 1}, {20, 29, 2}, {40, 49, 3}})
@@ -434,6 +437,7 @@ func TestAnOverlapComponentIsRejectedWhole(t *testing.T) {
 }
 
 func TestDisorderedReadableRecordsAreSortedWithBoundedHeap(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	meta := finishRanges(t, directSourceBuilder(t, sourcePath), [][3]uint32{{0, 9, 1}, {20, 29, 2}, {40, 49, 3}})
@@ -471,6 +475,7 @@ func TestDisorderedReadableRecordsAreSortedWithBoundedHeap(t *testing.T) {
 }
 
 func TestDisorderedRecoveryRefusesInsufficientHeapBeforeOutputMutation(t *testing.T) {
+	creationGate(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.iprdb")
 	meta := finishRanges(t, directSourceBuilder(t, sourcePath), [][3]uint32{{0, 9, 1}, {20, 29, 2}, {40, 49, 3}})
@@ -495,6 +500,7 @@ func TestDisorderedRecoveryRefusesInsufficientHeapBeforeOutputMutation(t *testin
 }
 
 func TestCompleteMetadataIsPreservedAndDamagedMetadataIsOmitted(t *testing.T) {
+	creationGate(t)
 	payload := []byte(`{"source":"recovery"}`)
 	dir := t.TempDir()
 
@@ -595,6 +601,7 @@ func TestCompleteMetadataIsPreservedAndDamagedMetadataIsOmitted(t *testing.T) {
 // exactly like the Rust require_page_header arm: the common, kind, and
 // born identity gates run before the chunk body proof.
 func TestDamagedMetadataHeaderIsOmitted(t *testing.T) {
+	creationGate(t)
 	payload := []byte(`{"source":"recovery"}`)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.iprdb")

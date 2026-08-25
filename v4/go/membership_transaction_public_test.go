@@ -57,6 +57,7 @@ func memberTxDB(t *testing.T) string {
 // membership, metadata staging, the committed outcome, and the
 // cross-transaction reference refusal (Rust ForeignReference).
 func TestPublicMembershipTransactionApplyCommit(t *testing.T) {
+	requireFileCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -143,6 +144,7 @@ func TestPublicMembershipTransactionApplyCommit(t *testing.T) {
 // membership-epoch rule: a membership reference produced before a feed
 // deletion is stale for every later mutation of the same transaction.
 func TestPublicMembershipTransactionStaleEpoch(t *testing.T) {
+	requireFileCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -185,6 +187,7 @@ func TestPublicMembershipTransactionStaleEpoch(t *testing.T) {
 // rules: the ordered enum cursor, lookup/ensure/rename, the metadata
 // stage, error classes, and the committed-transaction abort.
 func TestPublicMembershipTransactionSurface(t *testing.T) {
+	requireFileCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -276,6 +279,7 @@ func TestPublicMembershipTransactionSurface(t *testing.T) {
 // the transaction surface: reversed ranges, wrong family, and the
 // inactive-transaction class after abort.
 func TestPublicMembershipTransactionErrors(t *testing.T) {
+	requireFileCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())
@@ -315,6 +319,7 @@ func TestPublicMembershipTransactionErrors(t *testing.T) {
 // check_or_abort path: a cancelled token refuses the next mutation and
 // aborts the transaction through the writer (ErrorTransactionAborted).
 func TestPublicMembershipTransactionCancellation(t *testing.T) {
+	requireFileCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
 	w, err := OpenWriter(path, DefaultBudget())

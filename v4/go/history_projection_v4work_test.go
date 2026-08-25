@@ -19,6 +19,7 @@ import (
 )
 
 func TestHistoryProjectionWorkCounters(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 	w, err := OpenWriter(destinationPath, DefaultBudget())
@@ -65,6 +66,7 @@ func TestHistoryProjectionWorkCounters(t *testing.T) {
 }
 
 func TestHistoryProjectionUnusedPrefixesNotInterned(t *testing.T) {
+	requireFileCreation(t)
 	// An empty last_seen database: Create alone leaves the empty
 	// txn-1 generation (no transaction is ever committed).
 	sourcePath := filepath.Join(t.TempDir(), "empty-source.iprdb")

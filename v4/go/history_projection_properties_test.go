@@ -70,6 +70,7 @@ func histPropertyUnion(states *[historyPropertyWindows][workflowDomain]bool) [wo
 // one pre-existing unrelated feed, with the exact report and committed
 // membership asserted against the scalar model every round.
 func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
+	requireFileCreation(t)
 	sourcePath := histPropertyCreateSource(t)
 	destinationPath := histCreateMembership(t)
 

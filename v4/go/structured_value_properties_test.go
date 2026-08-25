@@ -385,6 +385,7 @@ func assertStructuredDatabase(t *testing.T, path string, expected *structuredMod
 // narrow assignment, clear, and randomized extra operations with the
 // abort/commit cadence (round+seedIndex)%4==3.
 func TestRandomizedStructuredTransactionsMatchIndependentAddressModel(t *testing.T) {
+	requireFileCreation(t)
 	for seedIndex, seed := range structuredSeeds {
 		runStructuredSeed(t, seedIndex, seed)
 	}

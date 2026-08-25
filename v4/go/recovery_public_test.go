@@ -131,6 +131,7 @@ func TestRecoverImmutablePublicNilBudgetRefusesBeforeAnyPathAccess(t *testing.T)
 // TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt pins
 // the pre-creation cancellation position through the public token.
 func TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt(t *testing.T) {
+	requireFileCreation(t)
 	installWorkerForTest(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")

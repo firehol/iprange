@@ -51,6 +51,7 @@ func assertZeroAllocWindow(t *testing.T, before, after runtime.MemStats, context
 // a documented one-time ceiling and the continuation batches stay
 // within the runtime window.
 func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
+	requireFileCreation(t)
 	if raceEnabled {
 		t.Skip("race shadow memory inflates MemStats; the zero-allocation pin runs without -race")
 	}
@@ -123,6 +124,7 @@ func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
 // discarded by Abort, so Commit and a second Abort report
 // ErrorNoPendingTransaction.
 func TestDirectWorkflowCommitAfterAbort(t *testing.T) {
+	requireFileCreation(t)
 	path := directWorkflowDB(t, mustTag(t, "direct"))
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -161,6 +163,7 @@ func TestDirectWorkflowCommitAfterAbort(t *testing.T) {
 // failing sink aborts the workflow with the sink error nested in
 // TransactionAborted while the database stays intact.
 func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
+	requireFileCreation(t)
 	path := directWorkflowDB(t, ValueTagFirstSeen())
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
@@ -309,6 +312,7 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 // and the family gate: the IPv6 refresh streams IPv6 removals, and the
 // IPv4 sink on an IPv6 database reports the exact Rust family error.
 func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
+	requireFileCreation(t)
 	path := filepath.Join(t.TempDir(), "first-seen-v6.iprdb")
 	if _, err := Create(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagFirstSeen()); err != nil {
 		t.Fatal(err)
@@ -389,6 +393,7 @@ func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 // repositions, views refuse after Close, a second Close reports
 // WrongState, and the reader cannot close while the cursor is open.
 func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
+	requireFileCreation(t)
 	path := structuredDB(t)
 	w, err := OpenWriter(path, DefaultBudget())
 	if err != nil {
