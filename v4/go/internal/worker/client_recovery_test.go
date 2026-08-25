@@ -40,7 +40,7 @@ func recoveryRequest(t *testing.T, destination string) (source string, candidate
 func TestRecoverWithWorkerComplete(t *testing.T) {
 	armDouble(t, "recovery_complete")
 	source, candidate, budget := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
-	outcome, cleanup := recoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
+	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
 	if outcome == nil || outcome.Result == nil || outcome.Failure != nil {
 		t.Fatalf("outcome = %+v, want the completed result arm", outcome)
 	}
@@ -60,7 +60,7 @@ func TestRecoverWithWorkerUnknownStream(t *testing.T) {
 		}
 		return recovery.RecoverySinkContinue, nil
 	})
-	outcome, cleanup := recoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, sink)
+	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, sink)
 	if outcome == nil || outcome.Result == nil {
 		t.Fatalf("outcome = %+v, want the completed result arm", outcome)
 	}
@@ -90,7 +90,7 @@ func TestRecoverOnceFaultRecordReadBack(t *testing.T) {
 func TestRecoverWithWorkerFaultRetryRecordsUnreadablePage(t *testing.T) {
 	armDouble(t, "fault")
 	source, candidate, budget := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
-	outcome, cleanup := recoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
+	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
 	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
 		t.Fatalf("outcome = %+v, want the failure arm", outcome)
 	}
@@ -111,7 +111,7 @@ func TestRecoverWithWorkerFaultRetryRecordsUnreadablePage(t *testing.T) {
 func TestRecoverWithWorkerGuardPending(t *testing.T) {
 	armDouble(t, "recovery_guard_pending")
 	source, candidate, budget := recoveryRequest(t, filepath.Join(t.TempDir(), "out.v4"))
-	outcome, cleanup := recoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
+	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, nil)
 	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
 		t.Fatalf("outcome = %+v, want the failure arm", outcome)
 	}
@@ -135,7 +135,7 @@ func TestRecoverWithWorkerCallbackFailure(t *testing.T) {
 	sink := recovery.RecoverySinkFunc(func(*recovery.RecoveryUnknownEnvelope) (recovery.RecoverySinkControl, error) {
 		return 0, errors.New("sink exploded")
 	})
-	outcome, cleanup := recoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, sink)
+	outcome, cleanup := RecoverWithWorker(source, filepath.Join(t.TempDir(), "out.v4"), candidate, WorkerModeImmutable, budget, nil, sink)
 	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
 		t.Fatalf("outcome = %+v, want the failure arm", outcome)
 	}
@@ -159,7 +159,7 @@ func TestRecoverWithWorkerRealBinary(t *testing.T) {
 	directory := t.TempDir()
 	destination := filepath.Join(directory, "out.v4")
 	source, candidate, budget := recoveryRequest(t, destination)
-	outcome, cleanup := recoverWithWorker(source, destination, candidate, WorkerModeImmutable, budget, nil, nil)
+	outcome, cleanup := RecoverWithWorker(source, destination, candidate, WorkerModeImmutable, budget, nil, nil)
 	if outcome == nil || outcome.Failure == nil || outcome.Result != nil {
 		t.Fatalf("outcome = %+v, want the failure arm", outcome)
 	}

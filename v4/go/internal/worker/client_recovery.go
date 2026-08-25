@@ -14,14 +14,14 @@
 // Recorded Go stances: the client does not create the destination
 // output attempt (the Go recovery machine creates its own secured
 // output at the request destination; the request carries the zero
-// attempt facts), and the recovery package has no
-// RecoverySourceCleanupGuard::from_worker constructor yet (its
-// guardSourceWorker slot is reserved), so a guard-pending terminal
-// retains the child through WorkerCleanup and the arm returns that
-// retained cleanup alongside the outcome. The parent-side
-// discardRecoveryAttempt cleanup arm exists (client_cleanup.go) but
-// the production recovery arms do not compose it: the parent owns no
-// attempt facts (the Go machine creates its own output).
+// attempt facts), so a guard-pending terminal retains the child
+// through WorkerCleanup and the arm returns that retained cleanup
+// alongside the outcome; the routing package builds the
+// recovery.RecoverySourceCleanupGuard from it (source_cleanup.go
+// FromWorkerCleanup). The parent-side discardRecoveryAttempt cleanup
+// arm exists (client_cleanup.go) but the production recovery arms do
+// not compose it: the parent owns no attempt facts (the Go machine
+// creates its own output).
 package worker
 
 import (
@@ -55,12 +55,14 @@ const (
 
 // RecoverWithWorker runs one worker recovery, restarting after every
 // source mapped fault with the page recorded unreadable (Rust
-// client/recovery.rs recover). The outcome mirrors the Rust
-// RecoveryOutcome; a guard-pending completion attaches the retained
-// WorkerCleanup to the failure's coordination class and returns it as
-// the second value (the Go from_worker seam). The Go machine creates
-// its own output attempt, so the parent owns no attempt facts.
-func recoverWithWorker(sourcePath, destinationPath string, candidate *recovery.RecoveryCandidate, mode WorkerMode, budget *recovery.RecoveryBudget, check Checkpoint, sink recovery.RecoverySink) (*RecoveryOutcome, *WorkerCleanup) {
+// client/recovery.rs recover; the facade routing package composes
+// this arm after the public nil-budget refusal). The outcome mirrors
+// the Rust RecoveryOutcome; a guard-pending completion attaches the
+// retained WorkerCleanup to the failure's coordination class and
+// returns it as the second value so the routing package can build the
+// recovery source-cleanup guard. The Go machine creates its own
+// output attempt, so the parent owns no attempt facts.
+func RecoverWithWorker(sourcePath, destinationPath string, candidate *recovery.RecoveryCandidate, mode WorkerMode, budget *recovery.RecoveryBudget, check Checkpoint, sink recovery.RecoverySink) (*RecoveryOutcome, *WorkerCleanup) {
 	var unreadablePages []uint32
 	var deliveredUnknowns uint64
 	for {

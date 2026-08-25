@@ -37,8 +37,10 @@ func TestPublicValidateCancellation(t *testing.T) {
 // TestPublicValidateLiveCleanSweep mirrors Rust
 // live_current_validation_pins_and_releases_its_reader_slot through
 // the public surface: one committed direct generation validates
-// cleanly, and the released reader slot is claimable again.
+// cleanly (through the isolated worker on linux/amd64), and the
+// released reader slot is claimable again.
 func TestPublicValidateLiveCleanSweep(t *testing.T) {
+	installWorkerForTest(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
 	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, nil)
 	if err != nil {
@@ -111,10 +113,12 @@ func TestPublicValidateLiveCleanSweep(t *testing.T) {
 // (commit_lifecycle.rs): while one live reader stays pinned the
 // writer retains the grown main extent across commits; once the pin
 // is released the next writer open trims back to the committed
-// length; the LiveCurrent validation in between proves exactly the
-// committed generation (page_count * page size equals the current
-// reader's committed length) and leaves no findings.
+// length; the LiveCurrent validation in between (through the isolated
+// worker on linux/amd64) proves exactly the committed generation
+// (page_count * page size equals the current reader's committed
+// length) and leaves no findings.
 func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
+	installWorkerForTest(t)
 	type pair struct {
 		main string
 	}

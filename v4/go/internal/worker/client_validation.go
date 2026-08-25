@@ -40,12 +40,14 @@ type validationAttempt struct {
 
 // ValidateWithWorker runs one explicit worker validation, restarting
 // after every source mapped fault with the page recorded unreadable
-// (Rust client/validation.rs validate + validate_all). The returned
+// (Rust client/validation.rs validate + validate_all). The facade
+// routing package composes this arm after the public preflight; the
+// returned
 // pair mirrors Result<ValidationResult, ValidationFailure> in the
 // 4-11A wire shapes: exactly one of result and failure is non-nil,
 // and a drive-level error folds into the zero-progress failure exactly
 // like the Rust wrapper.
-func validateWithWorker(path string, mode validation.ValidationMode, candidate *recovery.RecoveryCandidate, budget *validation.ValidationBudget, check Checkpoint, sink validation.ValidationSink) (*ValidationResultWire, *ValidationFailureWire) {
+func ValidateWithWorker(path string, mode validation.ValidationMode, candidate *recovery.RecoveryCandidate, budget *validation.ValidationBudget, check Checkpoint, sink validation.ValidationSink) (*ValidationResultWire, *ValidationFailureWire) {
 	attempt, err := validateAllWorker(path, mode, candidate, budget, check, sink)
 	if err != nil {
 		return nil, &ValidationFailureWire{
@@ -256,9 +258,11 @@ type inspectionAttempt struct {
 // InspectRecoveryCandidatesWithWorker runs one worker
 // recovery-candidate inspection, restarting after every source mapped
 // meta fault with the page recorded unreadable (Rust
-// inspect_recovery_candidates). Inspection maps at most the two meta
-// pages, so a fault page at or above 2 is the recorded Conflict.
-func inspectRecoveryCandidatesWithWorker(path string, mode recovery.RecoveryInspectionMode, budget *validation.ValidationBudget, check Checkpoint) (*InspectionWire, error) {
+// inspect_recovery_candidates; the facade routing package composes
+// this arm after the inspection preflight). Inspection maps at most
+// the two meta pages, so a fault page at or above 2 is the recorded
+// Conflict.
+func InspectRecoveryCandidatesWithWorker(path string, mode recovery.RecoveryInspectionMode, budget *validation.ValidationBudget, check Checkpoint) (*InspectionWire, error) {
 	var unreadablePages []uint32
 	for {
 		if err := checkpointCall(check); err != nil {

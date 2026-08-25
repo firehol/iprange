@@ -362,6 +362,16 @@ func Handshake(child *Process, control *Control) error {
 // the Rust authority has no such seam.
 var workerCandidatesHook func() ([]string, error)
 
+// SetWorkerCandidatesForTest installs a test-only spawn candidate
+// source; nil restores the production executable-relative rule. The
+// Rust authority has no such seam: production never calls this, and
+// the root-package facade tests install the real worker binary
+// through it (the unexported hook is unreachable from package
+// iprangedb).
+func SetWorkerCandidatesForTest(source func() ([]string, error)) {
+	workerCandidatesHook = source
+}
+
 // workerCandidates returns the spawn candidate list (Rust
 // worker/client.rs worker_candidates): the executable's own directory
 // for "iprange-v4-worker", plus the deps-parent rule (Cargo places
@@ -607,6 +617,17 @@ func (w *WorkerCleanup) Release() error {
 // WorkerCleanup::last_problem; the caller shares the wrapper's
 // storage).
 func (w *WorkerCleanup) LastProblem() *WireProblem { return w.lastProblem }
+
+// LastProblemError reports the retained publication problem on the Go
+// error surface (WireProblem::Err parity). The recovery package
+// source-cleanup guard needs the error form but cannot import this
+// package, so the conversion lives here.
+func (w *WorkerCleanup) LastProblemError() error {
+	if w.lastProblem == nil {
+		return nil
+	}
+	return w.lastProblem.Err()
+}
 
 // Close aborts the retained child when it is still active (Rust
 // WorkerCleanup drops the retained Process, which aborts).

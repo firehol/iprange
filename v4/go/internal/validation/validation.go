@@ -56,6 +56,14 @@ func Validate(path string, mode ValidationMode, budget *ValidationBudget, check 
 	}
 }
 
+// Preflight checks the platform, the budget, and the cancellation
+// state before any path access (Rust validation::preflight; the
+// facade routing reproduces the public entry's preflight before it
+// routes to the worker client).
+func Preflight(mode ValidationMode, budget *ValidationBudget, check func() error) error {
+	return preflight(mode, budget, check)
+}
+
 // preflight checks the platform, the budget, and the cancellation
 // state before any path access (Rust validation::preflight).
 func preflight(mode ValidationMode, budget *ValidationBudget, check func() error) error {

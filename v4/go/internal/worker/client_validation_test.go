@@ -38,7 +38,7 @@ func armDouble(t *testing.T, mode string) {
 func TestValidateWithWorkerComplete(t *testing.T) {
 	armDouble(t, "validation_complete")
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
 	if result == nil || failure != nil {
 		t.Fatalf("result = %v, failure = %v; want the completed arm", result, failure)
 	}
@@ -55,7 +55,7 @@ func TestValidateWithWorkerFindingStream(t *testing.T) {
 		}
 		return validation.SinkContinue, nil
 	})
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
 	if result == nil || failure != nil {
 		t.Fatalf("result = %v, failure = %v; want the completed arm", result, failure)
 	}
@@ -70,7 +70,7 @@ func TestValidateWithWorkerSinkStopWithOkResultConflicts(t *testing.T) {
 	sink := validation.SinkFunc(func(*validation.ValidationFinding) (validation.ValidationSinkControl, error) {
 		return validation.SinkStop, nil
 	})
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
 	if result != nil || failure == nil {
 		t.Fatalf("result = %v, failure = %v; want the failure arm", result, failure)
 	}
@@ -101,7 +101,7 @@ func TestValidateOnceFaultRecordReadBack(t *testing.T) {
 func TestValidateWithWorkerFaultRetryRecordsUnreadablePage(t *testing.T) {
 	armDouble(t, "fault")
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
 	if result != nil || failure == nil {
 		t.Fatalf("result = %v, failure = %v; want the failure arm", result, failure)
 	}
@@ -113,7 +113,7 @@ func TestValidateWithWorkerFaultRetryRecordsUnreadablePage(t *testing.T) {
 func TestValidateWithWorkerGuardPending(t *testing.T) {
 	armDouble(t, "validation_guard_pending")
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
 	if result != nil || failure == nil {
 		t.Fatalf("result = %v, failure = %v; want the failure arm", result, failure)
 	}
@@ -142,7 +142,7 @@ func TestValidateWithWorkerCallbackFailure(t *testing.T) {
 	sink := validation.SinkFunc(func(*validation.ValidationFinding) (validation.ValidationSinkControl, error) {
 		return 0, errors.New("sink exploded")
 	})
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, sink)
 	if result != nil || failure == nil {
 		t.Fatalf("result = %v, failure = %v; want the failure arm", result, failure)
 	}
@@ -167,7 +167,7 @@ func TestInspectOnceFaultRecordReadBack(t *testing.T) {
 func TestInspectRecoveryCandidatesWithWorkerFaultRetryConflict(t *testing.T) {
 	armDouble(t, "fault")
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	value, err := inspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
+	value, err := InspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
 	if value != nil || err == nil {
 		t.Fatalf("inspection = %v, err = %v; want the error arm", value, err)
 	}
@@ -179,7 +179,7 @@ func TestInspectRecoveryCandidatesWithWorkerFaultRetryConflict(t *testing.T) {
 func TestInspectRecoveryCandidatesWithWorkerComplete(t *testing.T) {
 	armDouble(t, "inspection_complete")
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	value, err := inspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
+	value, err := InspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
 	if err != nil {
 		t.Fatal("inspect:", err)
 	}
@@ -232,7 +232,7 @@ func TestValidateWithWorkerRealBinary(t *testing.T) {
 	// accepts the list into its fault memory, and the machine runs (the
 	// missing source surfaces the machine's CodeIO open failure).
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	result, failure := validateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
+	result, failure := ValidateWithWorker(t.TempDir()+"/missing.v4", validation.ValidationModeImmutableCurrent, nil, budget, nil, nil)
 	if result != nil || failure == nil {
 		t.Fatalf("result = %v, failure = %v; want the failure arm", result, failure)
 	}
@@ -281,7 +281,7 @@ func TestInspectRecoveryCandidatesWithWorkerRealBinary(t *testing.T) {
 	t.Cleanup(func() { workerCandidatesHook = nil })
 
 	budget := &validation.ValidationBudget{MaxHeapBytes: 1 << 30, MaxOpenFiles: 4}
-	value, err := inspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
+	value, err := InspectRecoveryCandidatesWithWorker(t.TempDir()+"/missing.v4", recovery.RecoveryInspectionImmutable, budget, nil)
 	if value != nil || err == nil {
 		t.Fatalf("inspection = %v, err = %v; want the error arm", value, err)
 	}

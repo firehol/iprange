@@ -12,6 +12,7 @@
 package iprangedb
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/routing"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 )
 
@@ -187,12 +188,15 @@ type ValidationFailure = validation.ValidationFailure
 
 // Validate runs one explicit validation over the selected source
 // without changing it (Rust validation::validate): the mode preflight
-// and budget checks run before any path access, the sweep streams
-// findings into sink, and the failure carries the partial progress and
-// the cleanup ledger. cancellation, when non-nil, is checked between
-// bounded steps. Exactly one of the result and the failure is non-nil.
+// and budget checks run before any path access (on linux/amd64 the
+// preflight runs and then the operation routes through the isolated
+// worker client, exactly like the Rust public entry), the sweep
+// streams findings into sink, and the failure carries the partial
+// progress and the cleanup ledger. cancellation, when non-nil, is
+// checked between bounded steps. Exactly one of the result and the
+// failure is non-nil.
 func Validate(path string, mode ValidationMode, budget *ValidationBudget, cancellation *CancellationToken, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
-	result, failure := validation.Validate(path, mode, budget, cancellation.check, sink)
+	result, failure := routing.Validate(path, mode, budget, cancellation.check, sink)
 	if failure != nil {
 		converted := *failure
 		converted.Cause = publicError(failure.Cause)

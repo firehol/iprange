@@ -13,9 +13,11 @@
 // through fault_problem exactly like Rust
 // client/recovery.rs fault_problem:525). The Go recovery machine
 // creates its own secured output at the request destination, so the
-// production recovery arms do not call this arm yet (the from_worker
-// constructor stays reserved); the arm is delivered for the Rust
-// surface and the wire tests.
+// production recovery arms do not call this arm yet; a guard-pending
+// terminal retains the child through WorkerCleanup and the routing
+// package builds the recovery source-cleanup guard from it
+// (source_cleanup.go FromWorkerCleanup). The arm is delivered for
+// the Rust surface and the wire tests.
 
 package worker
 

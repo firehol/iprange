@@ -77,21 +77,36 @@ func newRecoveryCandidateInspection(identity publication.LocalFileIdentity, prog
 	return &RecoveryCandidateInspection{SourceIdentity: identity, Progress: progress, candidates: candidates}
 }
 
+// InspectionOf builds one inspection result from its full facts (Rust
+// RecoveryCandidateInspection::new; the worker boundary reconstructs
+// a domain inspection because the candidate slots are private).
+func InspectionOf(identity publication.LocalFileIdentity, progress validation.ValidationProgress, candidates [2]*RecoveryCandidate) *RecoveryCandidateInspection {
+	return newRecoveryCandidateInspection(identity, progress, candidates)
+}
+
+// PreflightInspection checks the platform support, the shared budget,
+// and the cancellation state before any path access (Rust
+// inspect_recovery_candidates preflight; the facade routing reuses
+// the entry's preflight before it routes to the worker client).
+func PreflightInspection(mode RecoveryInspectionMode, budget *validation.ValidationBudget, check func() error) error {
+	if mode == RecoveryInspectionLive {
+		if err := live.CheckSupported(); err != nil {
+			return err
+		}
+	}
+	if err := requireInspectionBudget(budget, mode); err != nil {
+		return err
+	}
+	return live.Checkpoint(check)
+}
+
 // InspectRecoveryCandidates classifies the retained recovery
 // candidates of one database path under the selected mode (Rust
 // inspect_recovery_candidates): the platform, budget, and cancellation
 // preflights run before any path access, exactly like the Rust entry;
 // the public facade composes this entry.
 func InspectRecoveryCandidates(path string, mode RecoveryInspectionMode, budget *validation.ValidationBudget, check func() error) (*RecoveryCandidateInspection, error) {
-	if mode == RecoveryInspectionLive {
-		if err := live.CheckSupported(); err != nil {
-			return nil, err
-		}
-	}
-	if err := requireInspectionBudget(budget, mode); err != nil {
-		return nil, err
-	}
-	if err := live.Checkpoint(check); err != nil {
+	if err := PreflightInspection(mode, budget, check); err != nil {
 		return nil, err
 	}
 	switch mode {

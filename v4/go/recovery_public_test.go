@@ -11,11 +11,16 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // publicRecoverySource builds one incomplete direct source at path (the
-// internal api-test fixture peer: one dangling range root).
+// internal api-test fixture peer: one dangling range root). The dual
+// meta rewrite goes through a writable mapping (the mmap-only fixture
+// discipline): the routed trace legs prove the machine never streams
+// the source or the output through file I/O, so the fixture must not
+// either.
 func publicRecoverySource(t *testing.T, path string) {
 	t.Helper()
 	builder, err := writer.NewOutputBuilder(path, writer.OutputSpec{
@@ -41,22 +46,32 @@ func publicRecoverySource(t *testing.T, path string) {
 	if err := builder.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer file.Close()
-	var page [format.PageSize]byte
-	if err := meta.EncodeMapped(page[:]); err != nil {
-		t.Fatalf("EncodeMapped: %v", err)
+	rewrite, err := mapping.MapFile(file, 2*format.PageSize, true)
+	if err != nil {
+		t.Fatalf("MapFile: %v", err)
 	}
-	for _, offset := range []int64{0, format.PageSize} {
-		if _, err := file.WriteAt(page[:], offset); err != nil {
-			t.Fatalf("write meta at %d: %v", offset, err)
+	for _, pageNumber := range []uint32{0, 1} {
+		page, err := rewrite.Page(pageNumber)
+		if err != nil {
+			t.Fatalf("Page(%d): %v", pageNumber, err)
+		}
+		if err := meta.EncodeMapped(page); err != nil {
+			t.Fatalf("EncodeMapped: %v", err)
 		}
 	}
-	if err := file.Sync(); err != nil {
-		t.Fatalf("sync: %v", err)
+	if err := rewrite.FlushRange(0, 2*format.PageSize); err != nil {
+		t.Fatalf("FlushRange: %v", err)
+	}
+	if err := rewrite.SyncFile(); err != nil {
+		t.Fatalf("SyncFile: %v", err)
+	}
+	if err := rewrite.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
@@ -64,6 +79,7 @@ func publicRecoverySource(t *testing.T, path string) {
 // proves the facade converts the internal failure cause onto the
 // public error type with the exact class.
 func TestRecoverImmutablePublicSinkFailureReportsThePublicErrorClass(t *testing.T) {
+	installWorkerForTest(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")
@@ -114,6 +130,7 @@ func TestRecoverImmutablePublicNilBudgetRefusesBeforeAnyPathAccess(t *testing.T)
 // TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt pins
 // the pre-creation cancellation position through the public token.
 func TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt(t *testing.T) {
+	installWorkerForTest(t)
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.v4")
 	outputPath := filepath.Join(dir, "output.v4")

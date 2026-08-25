@@ -293,6 +293,22 @@ func NewProgress() ValidationProgress {
 	return ValidationProgress{}
 }
 
+// ProgressFromCounters builds one validation progress from its full
+// counter set (Rust ValidationProgress::new plus the count arms; the
+// worker boundary reconstructs a domain progress from the wire form
+// because the per-reason and per-object counter arrays are private).
+func ProgressFromCounters(checkedUniquePages, findingCount, untraversableSubgraphs uint64, hasUnboundedUnknown bool, bounded Cardinality129, reasons [ValidationReasonCount]uint64, objects [ValidationObjectCount]uint64) *ValidationProgress {
+	return &ValidationProgress{
+		CheckedUniquePages:           checkedUniquePages,
+		FindingCount:                 findingCount,
+		UntraversableSubgraphs:       untraversableSubgraphs,
+		HasUnboundedUnknown:          hasUnboundedUnknown,
+		BoundedPossibleSpanAddresses: bounded,
+		reasonCounts:                 reasons,
+		objectCounts:                 objects,
+	}
+}
+
 // Failure builds one operational validation failure with the partial
 // progress and the clean ledger (Rust validation::failure; the
 // recovery offline-candidate arm composes its terminal through this
