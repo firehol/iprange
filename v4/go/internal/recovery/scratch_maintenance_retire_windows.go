@@ -54,17 +54,15 @@ func (r *scratchRemovalMachine) retirePlatform(file *os.File, header scratchDeco
 // machine (Rust Removal::retire_checkpointed windows arm).
 //
 // The GC move renames the payload through the retained source handle
-// and fsyncs it, and both operations need a writable and
-// delete-capable handle. Rust passes the read-only `open_exact` probe
-// handle into this arm and its windows flow is unexercised (the
-// scratch_maintenance tests are linux-gated), so it would fail at
-// FlushFileBuffers with ACCESS_DENIED. This arm therefore re-opens
-// the authenticated artifact with the exact access Rust defines for
-// writable opens (`open_regular(name, true)`: GENERIC_READ |
-// READ_CONTROL | GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | DELETE),
-// re-proves it, closes the read-only probe, and then retires the
-// writable handle. This is a recorded deviation; the follow-up is to
-// fix the Rust windows arm the same way.
+// and flushes it (FlushFileBuffers), and both operations need a
+// writable and delete-capable handle. This arm therefore re-opens the
+// authenticated artifact with the exact writable access of the Rust
+// `open_regular(name, true)` arm (GENERIC_READ | READ_CONTROL |
+// GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | DELETE), re-proves it
+// (require_owned + verify-name, exactly like the checkpointed open),
+// closes the read-only probe, and then retires the writable handle.
+// The Rust windows arm (Removal::open_writable) implements the same
+// shape.
 func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, creationSecurity publication.CreationSecurity, lostDetail string) (publication.AbandonedArtifactRemoval, error) {
 	writable, err := r.openWritableRetireSource(file, lostDetail)
 	if err != nil {

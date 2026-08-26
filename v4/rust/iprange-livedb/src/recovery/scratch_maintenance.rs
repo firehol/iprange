@@ -535,6 +535,31 @@ mod platform {
             )
         }
 
+        /// Re-open one probe-authenticated artifact with the writable
+        /// access of the `open_regular(name, true)` arm and prove it
+        /// exactly like `open_exact_checkpointed`, then drop the
+        /// read-only probe handle so its share mode cannot block the
+        /// GC rename. The GC move renames the payload through the
+        /// retained source handle and flushes it (FlushFileBuffers),
+        /// so the retired handle must be writable and delete-capable;
+        /// the Go arm follows the same shape.
+        #[cfg(windows)]
+        fn open_writable(&self, probe: File) -> Result<File> {
+            let regular = self
+                .directory
+                .open_regular(&self.name, true)
+                .map_err(namespace_error)?
+                .ok_or(Error::CleanupConflict(
+                    "abandoned scratch lost its exact name",
+                ))?;
+            require_owned(true, 1, regular.identity, self.expected_artifact)?;
+            self.directory
+                .verify_name(&self.name, self.expected_artifact)
+                .map_err(cleanup_error)?;
+            drop(probe);
+            Ok(regular.file)
+        }
+
         #[cfg(windows)]
         fn retire_checkpointed(
             &self,
@@ -543,6 +568,7 @@ mod platform {
         ) -> Result<AbandonedArtifactRemoval> {
             use crate::publication::gc::{self, Authority};
 
+            let writable = self.open_writable(file)?;
             let retired = gc::retire(
                 &self.directory,
                 Authority {
@@ -551,7 +577,7 @@ mod platform {
                     kind: ArtifactKind::AuthorizedScratch,
                     directory_role: DirectoryRole::ScratchDirectory,
                     source_name: &self.name,
-                    source_file: &file,
+                    source_file: &writable,
                     identity: self.expected_artifact,
                     creation_security,
                     payload: None,
