@@ -2,12 +2,20 @@
 
 ## Status
 
-Status: open
+Status: in-progress
 
-Sub-state: intentionally blocked until the pure-Go port and the bidirectional
-Go/Rust Phase-1 proof tracked by SOW-0025 are complete and accepted. The Rust and
-Rust-provided C surfaces are proven; no signing design or implementation work is
-authorized while the pure-Go peer is missing.
+Sub-state (2026-08-26): unblocked. The prerequisite evidence now exists: the
+pure-Go port and the final bidirectional Go/Rust Phase-1 conformance completed
+(SOW-0025 milestone 5, closed 2026-08-25), and SOW-0026 closed the platform
+completion (Windows live/publication surface, FreeBSD durable publication,
+authorized recovery scratch + external sort, Rust XNU-16K flush-shape pins, the
+Store split-window seam, the Go live history-projection source port, and the
+Rust windows removal-arm repair; SOW-0026 gate-closed 2026-08-26). This SOW's
+implementation plan step 2 (benchmark representative unsigned snapshots) is
+recorded below; step 3 (unresolved wire, provider, trust, and rollout
+decisions) is presented to the user; no signing design or implementation work
+starts until the user resolves those decisions (plan step 3) and the v4
+specification is updated (plan step 4).
 
 ## Requirements
 
@@ -105,8 +113,9 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: blocked; the pure-Go peer and final bidirectional Phase-1 evidence do not
-yet exist
+Status: resolved (2026-08-26); the pure-Go peer, the final bidirectional
+Go/Rust Phase-1 evidence, and the representative unsigned snapshot benchmarks
+now exist (evidence below)
 
 Problem / root-cause model:
 
@@ -150,9 +159,31 @@ Sensitive data handling plan:
 Implementation plan:
 
 1. Reopen this gate only after SOW-0025 completes the pure-Go peer and final
-   bidirectional Phase-1 evidence.
+   bidirectional Phase-1 evidence. DONE (SOW-0025 milestone 5 and SOW-0026
+   closed; evidence in the status section above).
 2. Benchmark representative unsigned snapshots and model signing/verification I/O.
+   DONE (2026-08-26): the Rust authority `snapshot_to` scenario (live -> compact
+   immutable snapshot, `SnapshotPublicationPolicy::FailIfExists`) measured under
+   `nice` on this workstation (release bench binary, 1 warmup, 5/3 samples):
+   - 100,000 ranges: p50 9.53 ms (10.49 M units/s), 31 alloc calls / 939 bytes,
+     file 1,425,408 logical bytes, RSS peak 8,664 KiB, 4 FDs, within the accepted
+     CI limit (ratio 1.025).
+   - 1,000,000 ranges: p50 44.35 ms (22.55 M units/s), 31 alloc calls / 939
+     bytes, file 14,176,256 logical bytes, RSS peak 35,596 KiB, 4 FDs, within
+     the accepted CI limit (ratio 1.038).
+   Signing model (Ed25519ph, the recorded product intent): the prehash
+   SHA-512 over the artifact dominates. At ~2-6 GB/s hashing, a 14.2 MB
+   snapshot adds roughly 2.5-7 ms of prehash plus a fixed ~50-100 us Ed25519ph
+   sign, i.e. about +7-18% on the 1 M snapshot and +30-80% on the 100 k one IF
+   the prehash runs as a separate read pass; folding the prehash into the
+   publication write pass (the snapshot writer already copies every byte) costs
+   only the CPU hashing time with no extra file pass. Verification is the
+   prehash plus a fixed ~30-80 us verify. Resources available without new
+   dependencies: Go stdlib crypto/ed25519 (Ed25519ph via ed25519.Options,
+   SHA-512, Go 1.26.4); Rust pins sha2 already and would add ed25519-dalek.
 3. Present unresolved wire, provider, trust, and rollout decisions to the user.
+   OPEN (2026-08-26): the decisions below are presented to the user; nothing is
+   implemented until resolved.
 4. Update the exact v4 specification before adding crypto code or dependencies.
 5. If the wire changes, replace the entire Phase-1 conformance corpus and its
    generators before claiming one exact v4 identity.
@@ -218,6 +249,18 @@ Open decisions:
 
 - Created as the real follow-up for work explicitly removed from SOW-0016.
 - No implementation or final wire design was performed.
+
+### 2026-08-26
+
+- Gate unblocked: SOW-0025 milestone 5 and SOW-0026 closed; the pure-Go peer,
+  the bidirectional Go/Rust Phase-1 conformance, and the platform completion
+  evidence exist.
+- Implementation plan step 2 done: representative unsigned snapshot benchmarks
+  recorded in the Pre-Implementation Gate (Rust authority `snapshot_to`
+  scenario, 100 k and 1 M ranges, under `nice`).
+- Implementation plan step 3 started: the unresolved wire, provider, trust,
+  replay, and performance decisions are presented to the user; implementation
+  is blocked on the resolution.
 
 ## Validation
 
