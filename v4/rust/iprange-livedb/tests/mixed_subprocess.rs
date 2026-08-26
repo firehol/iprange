@@ -74,8 +74,7 @@ fn go_produced_fixtures_cross_open_child() {
     // (the Rust conformance suite verifies every range and projection
     // of this fixture; the smoke verdict here is catalog + record
     // count).
-    let history =
-        ImmutableReader::open(root.join("go/history-membership-ipv4.iprdb")).unwrap();
+    let history = ImmutableReader::open(root.join("go/history-membership-ipv4.iprdb")).unwrap();
     for (name, index) in [("one", 0u32), ("two", 1), ("three", 2)] {
         assert_eq!(
             history.lookup_feed(name).unwrap().unwrap().index,
@@ -92,15 +91,20 @@ fn go_produced_fixtures_cross_open_child() {
     // (the Rust conformance suite verifies every range, feed link, and
     // membership of these fixtures; the smoke verdict here is one typed
     // lookup per fixture plus the feed catalog of the threat fixture).
-    let structured =
-        ImmutableReader::open(root.join("go/structured-ipv4.iprdb")).unwrap();
+    let structured = ImmutableReader::open(root.join("go/structured-ipv4.iprdb")).unwrap();
     let broad = structured
         .lookup_network_enrichment_v1_v4(Ipv4Key(0x0a01_0000))
         .unwrap()
         .expect("go structured fixture 10.1.0.0")
         .value();
     assert_eq!(broad.asn, 64512, "go structured fixture broad asn");
-    assert_eq!(broad.location, Some(NetworkEnrichmentV1Location { latitude_microdegrees: 37_983_810, longitude_microdegrees: 23_727_539 }));
+    assert_eq!(
+        broad.location,
+        Some(NetworkEnrichmentV1Location {
+            latitude_microdegrees: 37_983_810,
+            longitude_microdegrees: 23_727_539
+        })
+    );
     assert_eq!(
         structured.lookup_feed("botnet").unwrap().unwrap().index,
         0,
@@ -122,13 +126,15 @@ fn go_produced_fixtures_cross_open_child() {
         "go structured fixture clear hole 10.1.0.100"
     );
 
-    let nothreat =
-        ImmutableReader::open(root.join("go/structured-ipv4-nothreat.iprdb")).unwrap();
+    let nothreat = ImmutableReader::open(root.join("go/structured-ipv4-nothreat.iprdb")).unwrap();
     let plain = nothreat
         .lookup_network_enrichment_v1_v4(Ipv4Key(0x0a02_0000))
         .unwrap()
         .expect("go nothreat fixture 10.2.0.0")
         .value();
     assert_eq!(plain.asn, 64514, "go nothreat fixture plain asn");
-    assert!(nothreat.lookup_feed("botnet").unwrap().is_none(), "go nothreat fixture has no feeds");
+    assert!(
+        nothreat.lookup_feed("botnet").unwrap().is_none(),
+        "go nothreat fixture has no feeds"
+    );
 }

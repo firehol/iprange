@@ -196,16 +196,66 @@ impl Mapping {
 
     pub(crate) fn flush_range(&self, offset: u64, len: u64) -> Result<()> {
         let (offset, len) = checked_range(offset, len, self.len)?;
-        self.raw()?.flush_range(offset, len)?;
+        self.flush_prefix(offset + len)?;
         crate::work::mapping_flush(1);
         Ok(())
     }
 
     pub(crate) fn flush_page(&self, page_number: u32, page_limit: u64) -> Result<()> {
         let offset = page_offset(page_number, page_limit, self.len)?;
-        self.raw()?.flush_range(offset, PAGE_SIZE)?;
+        self.flush_prefix(offset + PAGE_SIZE)?;
         crate::work::mapping_flush(1);
         Ok(())
+    }
+
+    /// Synchronize the mapped base prefix [0, bytes) to the file.
+    ///
+    /// This is the chosen native flush shape: the whole range from the
+    /// mapping base through the end of the request. XNU rejects
+    /// subranges that are not aligned to the hardware page boundary
+    /// with EINVAL (verified natively on darwin 25.5, Apple Silicon
+    /// 16 KiB pages: [4K:4K] fails while [16K:16K] and [32K:16K]
+    /// succeed), so the literal-subrange shape of memmap2's
+    /// flush_range is not portable; the base prefix [0, offset+len) is
+    /// the one shape verified on linux, darwin, and freebsd and is the
+    /// same shape the Go mapping uses. Pages before the request are
+    /// already clean in the durability flows, so the wider msync is a
+    /// no-op scan there. The caller proves bytes lands inside the
+    /// mapped extent; the mapping base is always page-aligned.
+    #[cfg(unix)]
+    fn flush_prefix(&self, bytes: usize) -> Result<()> {
+        // SAFETY: `bytes` was bounded inside the mapped extent by the
+        // caller's checked_range or page_offset, and the mapping base
+        // is page-aligned, so the msync arguments are valid.
+        let result = unsafe {
+            libc::msync(
+                self.base()? as *mut libc::c_void,
+                bytes as libc::size_t,
+                libc::MS_SYNC,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().into())
+        }
+    }
+
+    /// Windows arm of the native base-prefix flush (Rust
+    /// flush_prefix): FlushViewOfFile over [0, bytes), with the
+    /// file-buffer flush left to sync_file exactly like the unix arm.
+    #[cfg(windows)]
+    fn flush_prefix(&self, bytes: usize) -> Result<()> {
+        use windows_sys::Win32::System::Memory::FlushViewOfFile;
+
+        // SAFETY: same bound as the unix arm; the view base is the
+        // mapping start and `bytes` was proven inside the extent.
+        let result = unsafe { FlushViewOfFile(self.base()? as *const core::ffi::c_void, bytes) };
+        if result == 0 {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn sync_file(&self) -> Result<()> {
@@ -576,5 +626,68 @@ mod tests {
             writer.file().metadata().unwrap().len(),
             (3 * PAGE_SIZE) as u64
         );
+    }
+
+    /// The native flush shape is the base prefix [0, offset+len): the
+    /// one syscall shape verified on linux, darwin, and freebsd. On
+    /// darwin with 16 KiB hardware pages this pins that every 4 KiB
+    /// position of the requested range is accepted by XNU msync
+    /// (memmap2's literal-subrange flush produces the [16K:4K]-style
+    /// shapes XNU rejects with EINVAL); on every platform it also
+    /// proves the flushed bytes survive a reopen after sync_file.
+    #[test]
+    fn flush_pins_the_base_prefix_shape_at_every_page_position() {
+        let (_path, file) = TestFile::new();
+        let pages = 16u64;
+        file.set_len(pages * PAGE_SIZE as u64).unwrap();
+        let mut mapping = Mapping::read_write(file, pages * PAGE_SIZE as u64).unwrap();
+
+        for page in 0..pages {
+            let mut page_view = mapping.page_mut(page as u32, pages).unwrap();
+            page_view.put_u64(0, page * PAGE_SIZE as u64).unwrap();
+        }
+
+        // Every 4 KiB-aligned request shape, including the ones whose
+        // literal subrange would be misaligned on 16 KiB hardware
+        // pages.
+        let mapped = pages * PAGE_SIZE as u64;
+        for offset in (0..mapped).step_by(PAGE_SIZE) {
+            for len in [
+                PAGE_SIZE as u64,
+                2 * PAGE_SIZE as u64,
+                3 * PAGE_SIZE as u64,
+                4 * PAGE_SIZE as u64,
+            ] {
+                if offset + len > mapped {
+                    continue;
+                }
+                mapping.flush_range(offset, len).unwrap();
+            }
+        }
+        for page in 0..pages {
+            mapping.flush_page(page as u32, pages).unwrap();
+        }
+        mapping.sync_file().unwrap();
+
+        let file = mapping.into_file();
+        let mapping = Mapping::read_only(file, pages * PAGE_SIZE as u64).unwrap();
+        for page in 0..pages {
+            let offset = page * PAGE_SIZE as u64;
+            assert_eq!(u64_le(mapping.page(page as u32, pages).unwrap(), 0), offset);
+        }
+    }
+
+    /// flush_range refuses requests that reach past the mapped extent
+    /// (Rust checked_range; the same refusal class as the Go port).
+    #[test]
+    fn flush_range_rejects_ranges_beyond_the_mapping() {
+        let (_path, file) = TestFile::new();
+        file.set_len((2 * PAGE_SIZE) as u64).unwrap();
+        let mapping = Mapping::read_write(file, (2 * PAGE_SIZE) as u64).unwrap();
+        assert!(matches!(
+            mapping.flush_range(PAGE_SIZE as u64, 2 * PAGE_SIZE as u64),
+            Err(Error::ArithmeticOverflow(_))
+        ));
+        assert!(mapping.flush_range(0, 2 * PAGE_SIZE as u64).is_ok());
     }
 }
