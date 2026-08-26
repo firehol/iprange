@@ -2,7 +2,14 @@
 
 ## Status
 
-Status: in-progress
+Status: paused
+
+Sub-state (2026-08-26): paused by user decision (SOW-0027 Open Decision 1,
+option A): the Go/Rust SDK parity reconciliation (SOW-0027) is the
+prerequisite for signing design; the six wire/provider/trust/performance
+decisions presented on 2026-08-26 remain recorded and unresolved until
+SOW-0027 completes and the restored unsigned SDK is accepted. This SOW stays
+in `current/` while paused; the earlier (2026-08-26) unblock note is below.
 
 Sub-state (2026-08-26): unblocked. The prerequisite evidence now exists: the
 pure-Go port and the final bidirectional Go/Rust Phase-1 conformance completed
@@ -261,6 +268,9 @@ Open decisions:
 - Implementation plan step 3 started: the unresolved wire, provider, trust,
   replay, and performance decisions are presented to the user; implementation
   is blocked on the resolution.
+- Paused (2026-08-26): the presented decisions are superseded by the Go/Rust
+  parity work (SOW-0027), which owns the unsigned-SDK prerequisite this SOW
+  depends on; the decisions stay recorded here for the re-open.
 
 ## Validation
 
