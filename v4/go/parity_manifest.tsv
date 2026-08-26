@@ -19,7 +19,7 @@ writer-offcontract	LiveWriter::project_history	Writer.ProjectHistory	remove-plan
 writer-offcontract	LiveWriter::begin_membership_import		missing	No public membership import anywhere (only the WorkflowMembershipImport enum constant)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
 writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
-writer-offcontract	commit_resolution.rs resolve_commit		missing	Same-file/superseded-unknown commit-outcome resolution absent; Go CommitStatus derives from durability only
+live-writer	commit_resolution.rs resolve_commit	ResolveCommit	present	commit_resolution_public.go; two-meta classify with sync and sidecar proof; public CommitResolutionMode/CommitResolution/CommitResolutionResult/LocalFileRelation types
 live-writer	live_lifecycle.rs CreateLive	CreateLive	present	lifecycle_public.go:160
 live-writer	live_lifecycle.rs InitializeLive	InitializeLive	present	lifecycle_public.go:177
 live-writer	live_writer.rs LiveWriter::open	OpenLiveWriter	present	live_writer_public.go:34

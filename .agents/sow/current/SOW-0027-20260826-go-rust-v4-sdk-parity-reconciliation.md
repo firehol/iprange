@@ -101,15 +101,28 @@ documented in code, not yet a resolved SOW decision): workflow
 (workflow commits omit directory/main identity; workflow abort returns
 `error`), and mixed-language live fixtures stay a recorded slice-2c gap.
 
-Sub-state (2026-08-26): slice 2b part 1 delivered (working tree
-`532fa582+`, gate pending): clean-writer metadata read-your-writes
-(`LiveWriter.MetadataJSONLen` / `ReadMetadataJSON` / `MetadataJSON` over
-the staged-or-committed current generation, with the buffer-too-small
-class; ledger rows flipped to present) and bounded reader-safe
-reclamation (`LiveWriter.Reclaim` auto-publishes the selected oldest
-retirement prefix through the commit terminal; the pinned-reader
-block/release vector is ported from the Rust test). Remaining 2b items:
-commit resolution, live join sources, and membership import.
+Sub-state (2026-08-26): slice 2b part 1 delivered at `532fa582`
+(clean-writer metadata read-your-writes and bounded reader-safe
+reclamation; gate pending at `7f627c6f`). Slice 2b part 2 (commit
+resolution) delivered (working tree `7f627c6f+`, gate pending):
+`ResolveCommit` with the `CommitResolutionMode` / `LocalFileRelation` /
+`CommitResolution` / `CommitResolutionResult` public types (Rust
+commit_resolution.rs parity) proves one exact attempted transaction
+and nonce against both meta pages without validating either page
+graph, in Live mode (shared main lifetime lock, ready reader-table
+gate of the attempted database, writer-lease claim, slot scan,
+classify-sync-classify stability proof, tail trim) and Immutable mode
+(sidecar-absent, any-link identity rule); the bootstrap authority
+gained `ResolveCommitAttempt` (exact two-meta transaction/nonce
+classification) and the mapping owner gained the file-level
+`ShrinkFileOrRetain` tail primitive; the Rust commit_lifecycle tests
+are ported (live resolution facts, WriterBusy while the lease is
+held, same/different local-file relation, superseded-unknown old
+attempts, tail-only removal, invalid-attempt refusal). The parity
+ledger flipped the commit-resolution row to present (73
+present/remove-planned, 13 missing) and the gate test passes. Full
+battery green (plain, v4work, vet, gofmt, race+checkptr) at the slice
+commit. Remaining 2b items: live join sources and membership import.
 
 ## Requirements
 

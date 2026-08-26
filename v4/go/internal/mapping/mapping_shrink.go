@@ -1,6 +1,8 @@
 package mapping
 
 import (
+	"os"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
@@ -97,4 +99,35 @@ func (m *Mapping) Shrink(newSize uint64) error {
 	m.physical = newSize
 	work.MappingRemap(1)
 	return nil
+}
+
+// ShrinkFileOrRetain truncates one retained descriptor to exactly
+// length without re-establishing any mapping, mirroring Rust
+// mapping.rs shrink_file_or_retain. It is the tail-cleanup primitive
+// of the commit-resolution owner, which classifies through temporary
+// read-only views: a file shorter than the requested extent is the
+// Corrupt class (FormatInvalid, "a shrink must never extend the
+// file"), a same-size request is a no-op returning the extent, and a
+// Windows truncation refused because another process retains a
+// mapped view keeps the physical extent and reports it (the retention
+// is the observable success of the cleanup).
+func ShrinkFileOrRetain(f *os.File, length uint64) (uint64, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return 0, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	physical := uint64(st.Size())
+	if physical < length {
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "main file is shorter than its committed generation"}
+	}
+	if physical == length {
+		return length, nil
+	}
+	if err := truncateFile(f, int64(length)); err != nil {
+		if isMappedViewRetained(err) {
+			return physical, nil
+		}
+		return 0, err
+	}
+	return length, nil
 }
