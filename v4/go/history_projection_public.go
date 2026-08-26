@@ -113,7 +113,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
 	}
 	// require_compatible_source (Rust history_projection.rs): the same
-	// five checks run over the bound source regardless of its mode.
+	// four checks run over the bound source regardless of its mode.
 	if info.ValueKind != ValueKindDirect {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "history projection requires a direct source"}
 	}
