@@ -148,8 +148,8 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 	rows := loadParityManifest(t)
 	// The off-contract Writer surface and the normative LiveWriter
 	// surface are both closed: every public method that actually exists
-	// must be recorded in the ledger, so a new unrecorded mutation or
-	// begin method fails CI until it is deliberately recorded.
+	// must be recorded in the ledger, so a new unrecorded method on
+	// either surface fails CI until it is deliberately recorded.
 	closedSurfaces := map[string]bool{"Writer": true, "LiveWriter": true}
 	recordedMethods := map[string]map[string]string{} // surface -> symbol -> rust_ref
 	var failures []string

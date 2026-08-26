@@ -46,7 +46,8 @@ Implementation starts with the parity ledger freeze (plan step 1).
 
 Sub-state (2026-08-26): milestone 1 (parity ledger freeze) delivered at
 `bff1f550`. Milestone 2 slice 2a (live-writer consolidation) is delivered at
-`11ff5848` with review round 2 in flight: all advanced transactions and
+`11ff5848` and its five-reviewer gate closed at `6853e4fd` (all five
+reviewers PASS on round 3; rounds 1-2 findings all fixed and recorded below): all advanced transactions and
 high-level workflows bind to the sidecar-bound `LiveWriter` through the
 shared `mutationHost` (core owner, open/healthy probe, abort, discard, and
 commit terminals); the live public surface is `LiveWriter.BeginDirect`,

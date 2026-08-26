@@ -65,10 +65,10 @@ func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*S
 
 // BeginStructuredTransaction begins one advanced structured transaction
 // on a clean live writer (Rust LiveWriter::begin_structured_transaction):
-// the structure-kind gate runs first (Rust checks it before any writer
-// state), then cancellation, then the live writer open/healthy probe,
-// then the value-kind gate; the operation nonce pins every reference
-// produced by the transaction.
+// the Go-only closed-writer probe precedes the structure-kind gate (Rust
+// checks the kind before any writer state), then cancellation, then the
+// live writer open/healthy probe, then the value-kind gate; the operation
+// nonce pins every reference produced by the transaction.
 func (w *LiveWriter) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
 	return beginStructuredTransaction(w, cancellation)
 }
