@@ -68,10 +68,9 @@ func (w *LiveWriter) Info() (DatabaseInfo, error) {
 
 // mutationHost is the writer-facing surface the advanced transaction
 // and workflow facades compose (Rust LiveWriter): the mapped core owner
-// plus the abort and commit terminals. Both the pending off-contract
-// Writer and the sidecar-bound LiveWriter satisfy it during the
-// consolidation migration (SOW-0027); the Writer disappears when the
-// consolidation lands and the ledger flips its rows.
+// plus the abort, discard, and commit terminals. Both hosts satisfy it
+// today: the sidecar-bound LiveWriter and the off-contract Writer (the
+// latter recorded remove-planned in the parity ledger).
 type mutationHost interface {
 	coreOf() *writer.Core
 	healthy() error

@@ -139,10 +139,10 @@ func beginTimestampState(h mutationHost, semantic DirectSemantic, workflow Workf
 	// require_healthy). The closed state cannot exist in Rust (the
 	// writer is consumed); the nil-core probe preserves the Go closed
 	// class.
-	if h.coreOf() == nil {
+	core := h.coreOf()
+	if core == nil {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
-	core := h.coreOf()
 	if core.BaseInfo().ValueKind != format.ValueKindDirect {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "timestamp refresh requires a direct database"}
 	}

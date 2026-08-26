@@ -76,10 +76,6 @@ type MembershipTransaction struct {
 	spent           bool
 }
 
-// BeginMembershipTransaction begins one advanced membership transaction
-// on a clean writer (Rust LiveWriter::begin_membership_transaction): a
-// membership database is required and the operation nonce pins every
-// reference produced by the transaction.
 // beginAdvancedTransaction starts one advanced transaction draft on the
 // host core (Rust begin_<kind>_state): the kind gate runs before the
 // nonce draw. The caller checks cancellation and the host state first,

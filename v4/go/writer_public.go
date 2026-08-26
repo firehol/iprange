@@ -82,8 +82,7 @@ func Create(path string, family AddressFamily, kind ValueKind, structure Structu
 //
 // The Writer surface is the recorded off-contract shape (SOW-0027): the
 // normative SDK exposes the sidecar-bound LiveWriter instead. The parity
-// ledger tracks every Writer symbol as remove-planned; this type
-// disappears when the live-writer consolidation lands.
+// ledger records every Writer symbol as remove-planned.
 type Writer struct {
 	core *writer.Core
 }
