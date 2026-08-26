@@ -809,9 +809,6 @@ func (b *OutputBuilder) TargetTxn() uint64 { return b.meta.TxnID }
 // PageLimit returns the current page count.
 func (b *OutputBuilder) PageLimit() uint64 { return b.meta.PageCount }
 
-// Inspect returns one data page view (Rust inspect_page: the fetch
-// runs inside the armed Output probe when a worker session is active,
-// and directly otherwise, so the library writer path never allocates).
 // Inspect returns one data page view for reading (Rust inspect_page +
 // with_output_protection: the caller's inspection runs inside the armed
 // output region). The window is armed before the fetch and released at

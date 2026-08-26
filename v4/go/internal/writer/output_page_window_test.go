@@ -176,6 +176,7 @@ func TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation(t *testi
 	if rec.releases != 1 {
 		t.Fatalf("the aborted window was not released at the next store operation: releases=%d", rec.releases)
 	}
+	wantOutputRegion(t, b, rec)
 }
 
 // TestOutputPageWindowInspectSpansTheRead pins the inspection window:
@@ -208,7 +209,7 @@ func TestOutputPageWindowInspectSpansTheRead(t *testing.T) {
 		t.Fatalf("Allocate after inspect: %v", err)
 	}
 	if rec.releases != 1 {
-		t.Fatalf("the next store operation did not release the made window: releases=%d", rec.releases)
+		t.Fatalf("the next store operation did not release the armed window: releases=%d", rec.releases)
 	}
 	wantOutputRegion(t, b, rec)
 }
@@ -229,6 +230,7 @@ func TestOutputPageWindowAbortedMutationReleasesAtClose(t *testing.T) {
 	if _, _, err := b.Update(pageNumber); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
+	wantOutputRegion(t, b, rec)
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
