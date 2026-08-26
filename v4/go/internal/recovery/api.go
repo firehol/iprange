@@ -27,12 +27,7 @@ import (
 // the worker session consumes a parent-created attempt through the
 // Recover*WithAttempt entries instead.
 func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink) (*RecoveryResult, *RecoveryPreparationFailure) {
-	// A nil check is the uncancellable convention everywhere in the
-	// machine; the publication engine always calls its checkpoint, so
-	// the seam is normalized once here.
-	if check == nil {
-		check = func() error { return nil }
-	}
+	check = nonNilCheck(check)
 	effective, failure := validateRecoveryBudget(budget, mode)
 	if failure != nil {
 		return nil, failure
@@ -63,12 +58,7 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 // machine step) and then runs the machine; every machine terminal
 // consumes the provided attempt exactly like the created one.
 func recoverPrecreatedWithAttempt(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink, attempt *publication.PublishAttempt) (*RecoveryResult, *RecoveryPreparationFailure) {
-	// A nil check is the uncancellable convention everywhere in the
-	// machine; the publication engine always calls its checkpoint, so
-	// the seam is normalized once here.
-	if check == nil {
-		check = func() error { return nil }
-	}
+	check = nonNilCheck(check)
 	effective, failure := validateRecoveryBudget(budget, mode)
 	if failure != nil {
 		// Defense in depth: the worker client pre-validates the same
@@ -94,14 +84,15 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 		// Rust recover_precreated open_source arm: the created attempt
 		// is discarded and its exact facts fold into the failure.
 		facts, artifact := attempt.DiscardFacts()
-		return nil, newRecoveryPreparationFailure(problem(openFailure.cause), RecoveryReport{}, &facts, artifact, openFailure.guard)
+		return nil, newRecoveryPreparationFailure(problem(openFailure.cause), RecoveryReport{}, &facts, artifact, openFailure.guard, nil)
 	}
 	// failSource runs the failing terminal of an opened source (Rust
 	// fail_source: the release failure lives only in the cleanup
-	// guard, never in the folded cause).
-	failSource := func(cause error, report RecoveryReport, output *publication.PrivateOutputAttempt, artifact *publication.CleanupArtifact) (*RecoveryResult, *RecoveryPreparationFailure) {
+	// guard, never in the folded cause, and the construction scratch
+	// absorbs into the ledger).
+	failSource := func(cause error, report RecoveryReport, output *publication.PrivateOutputAttempt, artifact *publication.CleanupArtifact, scratch *scratchCleanup) (*RecoveryResult, *RecoveryPreparationFailure) {
 		end := source.releaseOnly()
-		return nil, newRecoveryPreparationFailure(cause, report, output, artifact, end.guard)
+		return nil, newRecoveryPreparationFailure(cause, report, output, artifact, end.guard, scratch)
 	}
 	// The source and the private output identity must differ (Rust
 	// api.rs compare after the attempt exists).
@@ -109,7 +100,7 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 	attemptDevice, attemptInode := attempt.FileIdentity()
 	if encodeRecoveryIdentity(sourceDevice, sourceInode) == encodeRecoveryIdentity(attemptDevice, attemptInode) {
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and recovery output identities match"}), RecoveryReport{}, &facts, artifact)
+		return failSource(problem(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and recovery output identities match"}), RecoveryReport{}, &facts, artifact, nil)
 	}
 	meta := source.meta()
 	// The output-spec structure-kind gate runs before the builder
@@ -121,12 +112,12 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 		facts, artifact := attempt.DiscardFacts()
 		// The refusal folds through problem() like every sibling arm
 		// (Rust fail_attempt: PublicationProblem over the cause).
-		return failSource(problem(&format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}), RecoveryReport{}, &facts, artifact)
+		return failSource(problem(&format.Error{Code: format.CodeUnsupportedStructure, Detail: "recovery structure kind is unsupported"}), RecoveryReport{}, &facts, artifact, nil)
 	}
 	spec, err := writer.FreshOutputSpec(meta.AddressFamily, meta.ValueKind, structureKind, meta.ValueTag, meta.FeedIndexLimit)
 	if err != nil {
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(err), RecoveryReport{}, &facts, artifact)
+		return failSource(problem(err), RecoveryReport{}, &facts, artifact, nil)
 	}
 	// Recovery reserves its heap budget for salvage state, not output
 	// acceleration: the reference batches charge nothing (the Rust
@@ -134,12 +125,12 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 	builder, err := writer.NewStructuredOutputBuilderOverFile(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: effective.MaxOutputPages}, 0, 0)
 	if err != nil {
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(err), RecoveryReport{}, &facts, artifact)
+		return failSource(problem(err), RecoveryReport{}, &facts, artifact, nil)
 	}
-	discarded := func(cause error, report RecoveryReport) (*RecoveryResult, *RecoveryPreparationFailure) {
+	discarded := func(cause error, report RecoveryReport, scratch *scratchCleanup) (*RecoveryResult, *RecoveryPreparationFailure) {
 		_ = builder.Close()
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(cause), report, &facts, artifact)
+		return failSource(problem(cause), report, &facts, artifact, scratch)
 	}
 	// Rust api.rs:234 enter_source: the source probe is armed before
 	// the machine build and dropped after it, so a real SIGBUS on any
@@ -153,10 +144,12 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 		return nil
 	})
 	if probeErr != nil {
-		return discarded(probeErr, RecoveryReport{})
+		return discarded(probeErr, RecoveryReport{}, nil)
 	}
 	if constructionFailure != nil {
-		return discarded(constructionFailure.cause, constructionFailure.report)
+		// Rust construct build arm: the failed construction carries
+		// its page-set scratch into the failing terminal.
+		return discarded(constructionFailure.cause, constructionFailure.report, constructionFailure.scratch)
 	}
 	built := construction
 	// The final source check runs before the publication prepare (Rust
@@ -170,12 +163,12 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 	if finishProbeErr != nil {
 		_ = built.finished.Close()
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(finishProbeErr), built.report, &facts, artifact)
+		return failSource(problem(finishProbeErr), built.report, &facts, artifact, built.scratch)
 	}
 	if end.cause != nil {
 		_ = built.finished.Close()
 		facts, artifact := attempt.DiscardFacts()
-		return failSource(problem(end.cause), built.report, &facts, artifact)
+		return failSource(problem(end.cause), built.report, &facts, artifact, built.scratch)
 	}
 	result, finishFailure := attempt.Finish(publication.FinishedOutput{
 		File:    attempt.File(),
@@ -183,9 +176,9 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 		Meta:    built.finished.Meta(),
 	}, check)
 	if finishFailure != nil {
-		return nil, fromPublicationFailure(finishFailure, built.report)
+		return nil, fromPublicationFailure(finishFailure, built.report, built.scratch)
 	}
-	return completedRecoveryView(built.report, result), nil
+	return completedRecoveryView(built.report, built.scratch, result), nil
 }
 
 // RecoverImmutable runs one immutable recovery (Rust api::
@@ -258,14 +251,25 @@ func buildRecoveryKind(m *mapping.Mapping, meta format.Meta, builder *writer.Out
 
 // completedRecoveryView folds the completed publication into the
 // recovery terminal (Rust terminal::completed).
-func completedRecoveryView(report RecoveryReport, publication publication.PublicationResult) *RecoveryResult {
-	result := completedRecovery(report, publication)
+func completedRecoveryView(report RecoveryReport, scratch *scratchCleanup, publication publication.PublicationResult) *RecoveryResult {
+	result := completedRecovery(report, scratch, publication)
 	return &result
 }
 
 // validateRecoveryBudget proves the budget against the source mode
 // (Rust api.rs validate_budget: the budget validation, the open-files
 // minimum of two plus the live reserve, and the effective budget).
+// nonNilCheck normalizes a nil checkpoint into the uncancellable
+// convention of the machine (every machine step calls its checkpoint;
+// the publication engine always supplies one, so the seam is
+// documented once here).
+func nonNilCheck(check func() error) func() error {
+	if check == nil {
+		return func() error { return nil }
+	}
+	return check
+}
+
 func validateRecoveryBudget(budget *RecoveryBudget, mode sourceMode) (*RecoveryBudget, *RecoveryPreparationFailure) {
 	if err := budget.validate(); err != nil {
 		return nil, earlyRecoveryFailure(err)
@@ -313,7 +317,7 @@ func ValidateWorkerBudget(budget *RecoveryBudget, live bool) *RecoveryPreparatio
 // The worker client arm builds its parent-side create/secure failure
 // through this exported entry.
 func FromAttemptFailure(failure *publication.PublicationPreparationFailure) *RecoveryPreparationFailure {
-	out := fromPublicationFailure(failure, RecoveryReport{})
+	out := fromPublicationFailure(failure, RecoveryReport{}, nil)
 	if failure.Cleanup.Empty() {
 		out.Output = nil
 	}

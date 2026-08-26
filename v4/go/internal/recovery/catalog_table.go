@@ -364,14 +364,28 @@ func (c *catalog) acceptedNameSlot(tables *tableStore, slot *[catalogNameSlotSiz
 }
 
 // record reads and decodes one catalog record (Rust Catalog::record:
-// the record index bound is the Corrupt class). The record bytes are
-// a view of the store arena, so the returned name aliases the tables
-// heap instead of a per-call buffer; the caller copies the name only
-// at the boundary that outlives the tables (Rust FeedName owns the
-// copy inside the accessor; the arena view is the Go equivalent).
+// the record index bound is the Corrupt class). The heap arm views
+// the store arena (zero copy); the scratch arm reads into the caller
+// stack buffer like Rust and copies only the owned name out, so the
+// returned entry never aliases a per-call allocation (Rust FeedName
+// owns the copy inside the accessor).
 func (c *catalog) record(tables *tableStore, index uint64) (catalogFeed, error) {
 	if index >= c.recordsLen {
 		return catalogFeed{}, corruptError("recovery catalog record index is invalid")
+	}
+	if tables.file != nil {
+		var bytes [catalogRecordSize]byte
+		if err := tables.read(c.records, index, bytes[:]); err != nil {
+			return catalogFeed{}, err
+		}
+		entry, err := decodeCatalogRecord(bytes[:])
+		if err != nil {
+			return catalogFeed{}, err
+		}
+		name := make([]byte, len(entry.name))
+		copy(name, entry.name)
+		entry.name = name
+		return entry, nil
 	}
 	bytes, err := tables.view(c.records, index)
 	if err != nil {
@@ -382,8 +396,10 @@ func (c *catalog) record(tables *tableStore, index uint64) (catalogFeed, error) 
 
 // view returns one region entry as a slice of the store arena (Rust
 // Tables::read over the entry slice): the same offset proof as read,
-// but the caller decodes the arena bytes directly, so a per-record
-// catalog read copies no record into a local buffer.
+// and the caller decodes the bytes directly, so a per-record catalog
+// read copies no record into a local buffer. The file arm never
+// reaches this helper (catalog.record handles it with a stack
+// buffer).
 func (t *tableStore) view(region tableRegion, index uint64) ([]byte, error) {
 	offset, err := t.offset(region, index, int(region.width))
 	if err != nil {

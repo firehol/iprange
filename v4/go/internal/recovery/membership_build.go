@@ -22,7 +22,7 @@ func membershipConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *wr
 			}
 			return nil
 		},
-		output: func(context indirectOutputContext) (any, *rangeBuildFailure) {
+		output: func(context indirectOutputContext) (*scratchCleanup, *rangeBuildFailure) {
 			codec, ok := indirectCodec(context.request.meta.AddressFamily)
 			if !ok {
 				return nil, &rangeBuildFailure{cause: &format.Error{Code: format.CodeFormatInvalid, Detail: "recovery membership output family is invalid"}}

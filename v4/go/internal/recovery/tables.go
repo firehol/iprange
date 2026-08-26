@@ -1,12 +1,12 @@
 package recovery
 
 // One bounded backing store for the recovery catalog and membership
-// tables (Rust recovery/tables.rs): the heap-only arm lays out every
+// tables (Rust recovery/tables.rs): the heap arm lays out every
 // fixed-size region (catalog records/names/indexes, membership records/
 // ids, structure records/ids) in one owned byte slice sized from the
-// counted records at the load cap. The authorized-scratch migration is
-// the recorded chunk-4-10 follow-up, so a layout that does not fit the
-// heap refuses with the Rust non-posix tables class.
+// counted records at the load cap; when the heap cannot hold the
+// layout, the store migrates into an authorized scratch file and hands
+// its region to the external sort (Rust tables::File).
 
 import "github.com/firehol/iprange/v4/go/internal/format"
 
@@ -136,17 +136,19 @@ func hashTableSlots(records uint64) (uint64, error) {
 	return slots + 1, nil
 }
 
-// tableStore is the heap-only recovery table backing store (Rust
-// Tables with Storage::Heap).
+// tableStore is the recovery table backing store (Rust Tables with
+// Storage::Heap or Storage::Scratch).
 type tableStore struct {
 	layout tableLayout
 	bytes  []byte
+	file   *scratchFile
 }
 
 // allocateTables builds the recovery table store for the counted
-// records inside the remaining heap (Rust Tables::allocate heap-only
-// arm: the layout must fit the budget minus the page set and the
-// reserved heap, else the tables class refuses).
+// records (Rust Tables::allocate: the layout must fit the budget
+// minus the page set and the reserved heap in memory, otherwise the
+// store migrates into an authorized scratch file past the 128-byte
+// ownership header).
 func allocateTables(counts tableCounts, pages *pageSet, budget *RecoveryBudget, reservedHeapBytes uint64) (*tableStore, error) {
 	layout, err := newTableLayout(counts)
 	if err != nil {
@@ -159,24 +161,49 @@ func allocateTables(counts tableCounts, pages *pageSet, budget *RecoveryBudget, 
 	if !ok {
 		available = 0
 	}
-	if layout.bytes > available || layout.bytes > uint64(maxInt) {
-		return nil, budgetError("recovery tables")
+	if layout.bytes <= available && layout.bytes <= uint64(maxInt) {
+		return &tableStore{layout: layout, bytes: make([]byte, int(layout.bytes))}, nil
 	}
-	return &tableStore{layout: layout, bytes: make([]byte, int(layout.bytes))}, nil
+	length, ok := checkedAdd(layout.bytes, scratchHeaderSize)
+	if !ok {
+		return nil, overflowError("recovery table scratch")
+	}
+	file, err := pages.createScratchFile(length)
+	if err != nil {
+		return nil, err
+	}
+	return &tableStore{layout: layout, file: &file}, nil
 }
 
 // retainedBytes is the heap retained by the store (Rust
-// Tables::retained_bytes heap arm).
+// Tables::retained_bytes: scratch storage retains no heap).
 func (t *tableStore) retainedBytes() uint64 {
-	return uint64(len(t.bytes))
+	if t.file == nil {
+		return uint64(len(t.bytes))
+	}
+	return 0
+}
+
+// scratchRegion is the detached scratch region of the store (Rust
+// Tables::scratch_region: the sort-reuse area of the indirect build).
+func (t *tableStore) scratchRegion() *sortArea {
+	if t.file == nil {
+		return nil
+	}
+	area := newSortArea(t.file.slot(), t.file.length())
+	return &area
 }
 
 // read copies one region entry into output (Rust Tables::read: the
-// exact width and slot proof, then the heap copy).
+// exact width and slot proof, then the heap copy or the mapped
+// scratch read past the header).
 func (t *tableStore) read(region tableRegion, index uint64, output []byte) error {
 	offset, err := t.offset(region, index, len(output))
 	if err != nil {
 		return err
+	}
+	if t.file != nil {
+		return t.file.read(offset+scratchHeaderSize, output)
 	}
 	copy(output, t.bytes[offset:offset+uint64(len(output))])
 	return nil
@@ -187,6 +214,9 @@ func (t *tableStore) write(region tableRegion, index uint64, input []byte) error
 	offset, err := t.offset(region, index, len(input))
 	if err != nil {
 		return err
+	}
+	if t.file != nil {
+		return t.file.write(offset+scratchHeaderSize, input)
 	}
 	copy(t.bytes[offset:offset+uint64(len(input))], input)
 	return nil

@@ -7,8 +7,9 @@
 // wire and the artifact disappears), the parent DiscardRecoveryAttempt
 // arm runs against the real binary and the in-process double
 // (guard-pending Conflict and the mapped-fault class), the scratch
-// checkpoint reports the recorded deferral honestly, and a mismatched
-// build identity refuses the handshake exactly like the Rust
+// checkpoint runs the real checkpointed removal machine (exact
+// removal and the changed-link-count residue), and a mismatched build
+// identity refuses the handshake exactly like the Rust
 // verify_request (control.rs verify_request:214-223).
 
 package worker
@@ -19,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -94,15 +96,19 @@ func equalPrivateOutput(a, b *publication.PrivateOutputAttempt) bool {
 		a.CreationSecurity == b.CreationSecurity
 }
 
-// TestCleanupCheckpointDeferral pins the honest scratch stance of this
-// tree (SOW-0025 chunk 4-10: authorized scratch and external sort stay
-// a recorded follow-up, not ported): a nil checkpoint is the clean nil
-// cleanup, and a present checkpoint reports the deferral as one
-// Conflict residue per entry with the exact checkpoint basenames.
-func TestCleanupCheckpointDeferral(t *testing.T) {
-	if cleanup := CleanupCheckpoint(nil); cleanup != nil {
+// TestCleanupCheckpointNilIsClean pins the nil-checkpoint arm of the
+// worker scratch cleanup (Rust client/recovery.rs cleanup_checkpoint:
+// a nil checkpoint is the clean nil cleanup).
+func TestCleanupCheckpointNilIsClean(t *testing.T) {
+	if cleanup := CleanupCheckpoint(nil, nil); cleanup != nil {
 		t.Fatalf("nil checkpoint cleanup = %+v, want nil", cleanup)
 	}
+}
+
+// TestCleanupCheckpointWithoutDirectoryReportsConflict pin the
+// missing-directory arm (Rust cleanup_checkpoint: the Conflict class
+// with the verbatim detail and one residue per entry).
+func TestCleanupCheckpointWithoutDirectoryReportsConflict(t *testing.T) {
 	checkpoint := &ScratchCheckpoint{
 		AttemptID:         [16]byte{0x10},
 		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(1, 2),
@@ -112,16 +118,13 @@ func TestCleanupCheckpointDeferral(t *testing.T) {
 			{Ordinal: 1, Identity: publication.LocalFileIdentityFromDeviceInode(5, 6)},
 		},
 	}
-	cleanup := CleanupCheckpoint(checkpoint)
+	cleanup := CleanupCheckpoint(nil, checkpoint)
 	if cleanup == nil {
 		t.Fatal("present checkpoint cleanup is nil")
 	}
 	if cleanup.AttemptID != checkpoint.AttemptID || cleanup.DirectoryIdentity != checkpoint.DirectoryIdentity ||
 		cleanup.CreationSecurityKind != checkpoint.CreationSecurity.Kind || cleanup.CreationSecurityCommitment != checkpoint.CreationSecurity.Commitment {
 		t.Fatalf("scratch cleanup identity facts = %+v", cleanup)
-	}
-	if cleanup.Housekeeping != publication.HousekeepingNone || len(cleanup.VisibleHousekeeping) != 0 {
-		t.Fatalf("cleanup housekeeping = %+v / %+v, want none", cleanup.Housekeeping, cleanup.VisibleHousekeeping)
 	}
 	if len(cleanup.Residues) != len(checkpoint.Entries) {
 		t.Fatalf("residues = %d, want %d", len(cleanup.Residues), len(checkpoint.Entries))
@@ -137,9 +140,107 @@ func TestCleanupCheckpointDeferral(t *testing.T) {
 		if !bytes.Equal(residue.Basename, checkpointBasename(checkpoint.AttemptID, entry.Ordinal)) {
 			t.Fatalf("residue %d basename = %q, want the checkpoint basename", index, residue.Basename)
 		}
-		if residue.Problem.Code != format.CodeConflict || residue.Problem.Detail != "worker scratch cleanup machine is not ported" {
-			t.Fatalf("residue %d problem = %+v, want the recorded deferral Conflict", index, residue.Problem)
+		if residue.Problem.Code != format.CodeConflict || residue.Problem.Detail != "checkpointed recovery scratch cleanup failed" {
+			t.Fatalf("residue %d problem = %+v, want the missing-directory Conflict", index, residue.Problem)
 		}
+	}
+}
+
+// TestCleanupCheckpointRemovesHeaderlessExactScratch runs the real
+// checkpointed removal (Rust client_tests
+// checkpoint_cleanup_removes_headerless_exact_scratch): the
+// checkpointed machine does not re-read the ownership header, so a
+// bare 0600 exact-name file is removed and the cleanup is clean.
+func TestCleanupCheckpointRemovesHeaderlessExactScratch(t *testing.T) {
+	directory := t.TempDir()
+	checkpoint := createScratchCheckpointFixture(t, directory, false)
+	cleanup := CleanupCheckpoint(&directory, checkpoint)
+	if cleanup == nil {
+		t.Fatal("present checkpoint cleanup is nil")
+	}
+	if !cleanup.Clean() {
+		t.Fatalf("cleanup not clean: %+v", cleanup.Residues)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal("read directory:", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory retained %d entries", len(entries))
+	}
+}
+
+// TestCleanupCheckpointReportsChangedLinkCountWithoutUnlinking runs
+// the changed-link-count arm (Rust client_tests
+// checkpoint_cleanup_reports_changed_link_count_without_unlinking):
+// an aliased artifact reports one residue and the alias survives.
+func TestCleanupCheckpointReportsChangedLinkCountWithoutUnlinking(t *testing.T) {
+	directory := t.TempDir()
+	checkpoint := createScratchCheckpointFixture(t, directory, true)
+	cleanup := CleanupCheckpoint(&directory, checkpoint)
+	if cleanup == nil {
+		t.Fatal("present checkpoint cleanup is nil")
+	}
+	if cleanup.Clean() {
+		t.Fatal("changed-link-count cleanup reported clean")
+	}
+	if len(cleanup.Residues) != 1 {
+		t.Fatalf("residues = %d, want 1", len(cleanup.Residues))
+	}
+	if cleanup.Residues[0].Problem.Code != format.CodeCleanupConflict {
+		t.Fatalf("residue problem = %+v, want cleanup conflict", cleanup.Residues[0].Problem)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal("read directory:", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("directory retained %d entries, want 2", len(entries))
+	}
+}
+
+// createScratchCheckpointFixture builds one checkpoint over one real
+// exact-name scratch file (Rust client_tests create_checkpoint: a
+// fresh 0600 file named by the checkpoint basename, optionally
+// aliased, with the directory and artifact identities captured live).
+func createScratchCheckpointFixture(t *testing.T, directory string, alias bool) *ScratchCheckpoint {
+	t.Helper()
+	attemptID := [16]byte{0x32}
+	ordinal := uint32(9)
+	name := string(checkpointBasename(attemptID, ordinal))
+	path := filepath.Join(directory, name)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal("create scratch file:", err)
+	}
+	if alias {
+		if err := os.Link(path, filepath.Join(directory, "alias")); err != nil {
+			file.Close()
+			t.Fatal("link alias:", err)
+		}
+	}
+	st, err := file.Stat()
+	if err != nil {
+		file.Close()
+		t.Fatal("stat scratch file:", err)
+	}
+	file.Close()
+	dirStat, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal("stat directory:", err)
+	}
+	sys, ok := dirStat.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("directory stat is not a unix stat")
+	}
+	artifactSys := st.Sys().(*syscall.Stat_t)
+	return &ScratchCheckpoint{
+		AttemptID:         attemptID,
+		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(uint64(sys.Dev), uint64(sys.Ino)),
+		CreationSecurity:  publication.CreationSecurity{Kind: 1, Commitment: [32]byte{0x6b}},
+		Entries: []ScratchCheckpointEntry{
+			{Ordinal: ordinal, Identity: publication.LocalFileIdentityFromDeviceInode(uint64(artifactSys.Dev), uint64(artifactSys.Ino))},
+		},
 	}
 }
 
@@ -226,10 +327,12 @@ func TestDiscardRecoveryAttemptRealBinary(t *testing.T) {
 	}
 }
 
-// TestDiscardRecoveryAttemptRealBinaryScratch proves the recorded
-// scratch deferral over the real worker: a request carrying a scratch
-// checkpoint returns one Conflict residue per checkpoint entry, never
-// a fabricated removal.
+// TestDiscardRecoveryAttemptRealBinaryScratch runs the real
+// checkpointed-scratch removal over the real worker: a request
+// carrying a scratch checkpoint and a real (empty) scratch directory
+// returns a clean scratch cleanup, proving the checkpointed removal
+// machine inside the worker session (Rust worker/client/recovery.rs
+// cleanup_checkpoint over remove_checkpointed_scratch).
 func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
@@ -237,16 +340,19 @@ func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 
 	directory := t.TempDir()
 	destination, facts, _ := cleanupAttemptFixture(t, directory)
+	scratchDirectory := filepath.Join(directory, "scratch")
+	if err := os.Mkdir(scratchDirectory, 0o700); err != nil {
+		t.Fatal("create scratch directory:", err)
+	}
 	checkpoint := &ScratchCheckpoint{
 		AttemptID:         [16]byte{0x30},
-		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(7, 8),
+		DirectoryIdentity: scratchDirectoryIdentity(t, scratchDirectory),
 		CreationSecurity:  publication.CreationSecurity{Kind: 1, Commitment: [32]byte{0x40}},
 		Entries: []ScratchCheckpointEntry{
 			{Ordinal: 0, Identity: publication.LocalFileIdentityFromDeviceInode(9, 10)},
 			{Ordinal: 1, Identity: publication.LocalFileIdentityFromDeviceInode(11, 12)},
 		},
 	}
-	scratchDirectory := filepath.Join(directory, "scratch")
 	discarded, scratch, err := discardRecoveryAttempt(destination, facts, &scratchDirectory, checkpoint)
 	if err != nil {
 		t.Fatal("discard recovery attempt:", err)
@@ -257,14 +363,24 @@ func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 	if scratch == nil {
 		t.Fatal("scratch cleanup is nil for a checkpointed request")
 	}
-	if len(scratch.Residues) != len(checkpoint.Entries) {
-		t.Fatalf("residues = %d, want %d", len(scratch.Residues), len(checkpoint.Entries))
+	if !scratch.Clean() {
+		t.Fatalf("scratch cleanup not clean: %+v", scratch.Residues)
 	}
-	for index, residue := range scratch.Residues {
-		if residue.Problem.Code != format.CodeConflict || residue.Problem.Detail != "worker scratch cleanup machine is not ported" {
-			t.Fatalf("residue %d problem = %+v, want the recorded deferral Conflict", index, residue.Problem)
-		}
+}
+
+// scratchDirectoryIdentity captures the portable identity of one
+// directory for the wire scratch checkpoint fixture.
+func scratchDirectoryIdentity(t *testing.T, path string) publication.LocalFileIdentity {
+	t.Helper()
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal("stat scratch directory:", err)
 	}
+	sys, ok := stat.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("directory stat is not a unix stat")
+	}
+	return publication.LocalFileIdentityFromDeviceInode(uint64(sys.Dev), uint64(sys.Ino))
 }
 
 // TestDiscardRecoveryAttemptGuardPending runs the cleanup arm against

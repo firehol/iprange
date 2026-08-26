@@ -7,6 +7,7 @@ package recovery
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,12 +16,12 @@ import (
 )
 
 func TestSparseMaximumPageDoesNotSizeTheHeapTable(t *testing.T) {
-	set, err := newPageSet(1024, format.MaxPageCount)
+	set, err := newPageSet(1024, format.MaxPageCount, nil)
 	if err != nil {
 		t.Fatalf("newPageSet: %v", err)
 	}
-	if len(set.slots) > 128 {
-		t.Fatalf("slot count %d, want at most 128", len(set.slots))
+	if set.slotCount() > 128 {
+		t.Fatalf("slot count %d, want at most 128", set.slotCount())
 	}
 	newClaim, err := set.insert(^uint32(0))
 	if err != nil || !newClaim {
@@ -33,12 +34,12 @@ func TestSparseMaximumPageDoesNotSizeTheHeapTable(t *testing.T) {
 }
 
 func TestFullHeapTableFailsBeforeAllocationOrLooping(t *testing.T) {
-	set, err := newPageSet(64, 100)
+	set, err := newPageSet(64, 100, nil)
 	if err != nil {
 		t.Fatalf("newPageSet: %v", err)
 	}
-	if len(set.slots) != 8 {
-		t.Fatalf("slot count %d, want 8", len(set.slots))
+	if set.slotCount() != 8 {
+		t.Fatalf("slot count %d, want 8", set.slotCount())
 	}
 	for page := uint32(0); page < 6; page++ {
 		newClaim, err := set.insert(page)
@@ -52,7 +53,7 @@ func TestFullHeapTableFailsBeforeAllocationOrLooping(t *testing.T) {
 }
 
 func TestPageSetClaimReasonClasses(t *testing.T) {
-	set, err := newPageSet(4096, 100)
+	set, err := newPageSet(4096, 100, nil)
 	if err != nil {
 		t.Fatalf("newPageSet: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestPageSetClaimReasonClasses(t *testing.T) {
 	}
 	// Reset clears every claim, and the retained bytes are the exact
 	// heap table size.
-	if set.retainedBytes() != uint64(len(set.slots))*slotBytes {
+	if set.retainedBytes() != uint64(set.slotCount())*slotBytes {
 		t.Fatalf("retained %d", set.retainedBytes())
 	}
 	if err := set.reset(); err != nil {
@@ -159,5 +160,113 @@ func wantBudgetRefusal(t *testing.T, err error, code format.ErrorCode, detail st
 	var e *format.Error
 	if !errors.As(err, &e) || e.Code != code || e.Detail != detail {
 		t.Fatalf("budget error = %v, want code %d detail %q", err, code, detail)
+	}
+}
+
+// pageSetScratchBudget builds the shared fixed-scratch budget of the
+// Rust page_set_tests linux module (max_heap 64, two scratch files).
+func pageSetScratchBudget(directory string, maxScratchBytes uint64) *RecoveryBudget {
+	return &RecoveryBudget{
+		MaxHeapBytes:     64,
+		MaxOutputPages:   1000,
+		MaxOpenFiles:     4,
+		MaxScratchBytes:  maxScratchBytes,
+		MaxScratchFiles:  2,
+		ScratchDirectory: directory,
+	}
+}
+
+// TestFullHeapMigratesOnceToFixedScratchAndResets mirrors Rust
+// page_set_tests full_heap_migrates_once_to_fixed_scratch_and_resets:
+// the full heap table migrates exactly once into the fixed-slot
+// scratch file, reset re-establishes the table, and the page-set
+// terminal cleans the directory.
+func TestFullHeapMigratesOnceToFixedScratchAndResets(t *testing.T) {
+	directory := t.TempDir()
+	scratchMeta := scratchTestMeta()
+	scratchMeta.PageCount = 100
+	set, err := forRecovery(64, 100, scratchMeta, pageSetScratchBudget(directory, 4096))
+	if err != nil {
+		t.Fatalf("forRecovery: %v", err)
+	}
+	for page := uint32(0); page < 100; page++ {
+		newClaim, err := set.insert(page)
+		if err != nil || !newClaim {
+			t.Fatalf("insert %d: new=%v err=%v", page, newClaim, err)
+		}
+	}
+	newClaim, err := set.insert(42)
+	if err != nil || newClaim {
+		t.Fatalf("re-insert 42: new=%v err=%v", newClaim, err)
+	}
+	if set.retainedBytes() != 0 {
+		t.Fatalf("retained bytes %d, want 0 after migration", set.retainedBytes())
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("directory entries %d, want 1 scratch file", len(entries))
+	}
+	if err := set.reset(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	newClaim, err = set.insert(^uint32(0))
+	if err != nil || !newClaim {
+		t.Fatalf("insert max after reset: new=%v err=%v", newClaim, err)
+	}
+	newClaim, err = set.insert(^uint32(0))
+	if err != nil || newClaim {
+		t.Fatalf("re-insert max after reset: new=%v err=%v", newClaim, err)
+	}
+	failure := set.finish(nil)
+	if failure == nil || failure.cause != nil || failure.cleanup == nil {
+		t.Fatalf("finish terminal %+v, want nil cause with cleanup", failure)
+	}
+	if !failure.cleanup.clean() {
+		t.Fatal("cleanup left residues")
+	}
+	entries, err = os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory entries %d, want 0 after cleanup", len(entries))
+	}
+}
+
+// TestInsufficientScratchFailsWithoutAnArtifact mirrors Rust
+// page_set_tests insufficient_scratch_fails_without_an_artifact: the
+// byte budget too small for the minimum fixed-slot table refuses on
+// migration, and no scratch artifact is ever created.
+func TestInsufficientScratchFailsWithoutAnArtifact(t *testing.T) {
+	directory := t.TempDir()
+	scratchMeta := scratchTestMeta()
+	scratchMeta.PageCount = 100
+	set, err := forRecovery(64, 100, scratchMeta, pageSetScratchBudget(directory, 256))
+	if err != nil {
+		t.Fatalf("forRecovery: %v", err)
+	}
+	for page := uint32(0); page < 6; page++ {
+		newClaim, err := set.insert(page)
+		if err != nil || !newClaim {
+			t.Fatalf("insert %d: new=%v err=%v", page, newClaim, err)
+		}
+	}
+	_, err = set.insert(7)
+	if !isCode(err, format.CodeInsufficientResourceBudget) {
+		t.Fatalf("insert migration err %v, want BudgetExceeded", err)
+	}
+	failure := set.finish(nil)
+	if failure.cleanup != nil {
+		t.Fatalf("finish carried cleanup %+v, want none", failure.cleanup)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory entries %d, want 0", len(entries))
 	}
 }

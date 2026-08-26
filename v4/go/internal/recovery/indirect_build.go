@@ -18,7 +18,7 @@ import (
 type indirectMode struct {
 	kind            uint8
 	checkStructures func(structures *structureIndex) error
-	output          func(context indirectOutputContext) (any, *rangeBuildFailure)
+	output          func(context indirectOutputContext) (*scratchCleanup, *rangeBuildFailure)
 }
 
 // indirectOutputContext carries one mode output request (Rust
@@ -77,7 +77,7 @@ func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sour
 	// metadata bytes (Rust indirect_build::build: complete_ranges over
 	// retained_metadata_bytes); the full retained tables heap travels
 	// only in the range-build context below.
-	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retainedMetadataBytes(analysis.metadata), analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (any, *rangeBuildFailure) {
+	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retainedMetadataBytes(analysis.metadata), analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (*scratchCleanup, *rangeBuildFailure) {
 		context := indirectOutputContext{
 			request: rangeBuild{
 				mapping:           m,
@@ -87,6 +87,11 @@ func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sour
 				readableRecords:   analysis.readableRecords,
 				ordered:           analysis.ordered,
 				retainedHeapBytes: retained,
+				// The tables storage becomes the sort-reuse area of the
+				// external sort when it lives in scratch (Rust
+				// indirect_build: SortReuse::area over
+				// tables.scratch_region()).
+				sortReuse: analysis.tables.scratchRegion(),
 			},
 			pages:       analysis.pages,
 			memberships: analysis.memberships,

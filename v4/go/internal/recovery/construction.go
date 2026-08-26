@@ -15,11 +15,12 @@ import (
 
 // Construction is the completed recovery output build (Rust
 // construction::Construction): the finished builder facts, the partial
-// report, and the scratch facts (none in the heap-only arm).
+// report, and the scratch cleanup facts (nil when no scratch attempt
+// existed).
 type Construction struct {
 	finished *writer.OutputBuilder
 	report   RecoveryReport
-	scratch  any
+	scratch  *scratchCleanup
 }
 
 // constructionFailure is one failed construction (Rust
@@ -29,7 +30,7 @@ type constructionFailure struct {
 	builder *writer.OutputBuilder
 	cause   error
 	report  RecoveryReport
-	scratch any
+	scratch *scratchCleanup
 }
 
 // analysisFailure is one failed analysis (Rust
@@ -37,7 +38,7 @@ type constructionFailure struct {
 type analysisFailure struct {
 	cause   error
 	report  RecoveryReport
-	scratch any
+	scratch *scratchCleanup
 }
 
 // prepareConstruction proves the builder against the source and runs
@@ -86,7 +87,7 @@ func requireBuilder(builder *writer.OutputBuilder, source format.Meta, kind uint
 
 // finishConstruction seals the built output (Rust construction::finish:
 // the metadata write, then the sealed finish).
-func finishConstruction(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes, retainedHeapBytes uint64, report RecoveryReport, scratch any) (*Construction, *constructionFailure) {
+func finishConstruction(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes, retainedHeapBytes uint64, report RecoveryReport, scratch *scratchCleanup) (*Construction, *constructionFailure) {
 	if err := writeMetadata(builder, metadata, maxHeapBytes, retainedHeapBytes); err != nil {
 		return nil, constructionFailureOf(builder, err, report, scratch)
 	}
@@ -99,7 +100,7 @@ func finishConstruction(builder *writer.OutputBuilder, metadata []byte, maxHeapB
 // completeRanges builds the ranges and seals the output (Rust
 // construction::complete_ranges): the reporter resumes over the
 // partial report, the build runs, and the finish folds.
-func completeRanges(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes, retainedHeapBytes uint64, report RecoveryReport, sink RecoverySink, build func(*writer.OutputBuilder, *reporter) (any, *rangeBuildFailure)) (*Construction, *constructionFailure) {
+func completeRanges(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes, retainedHeapBytes uint64, report RecoveryReport, sink RecoverySink, build func(*writer.OutputBuilder, *reporter) (*scratchCleanup, *rangeBuildFailure)) (*Construction, *constructionFailure) {
 	rep := resumeReporter(report, sink)
 	scratch, failure := build(builder, rep)
 	finishedReport := rep.finish()
@@ -111,13 +112,13 @@ func completeRanges(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes
 
 // constructionFailureOf builds one failed construction (Rust
 // construction::failure).
-func constructionFailureOf(builder *writer.OutputBuilder, cause error, report RecoveryReport, scratch any) *constructionFailure {
+func constructionFailureOf(builder *writer.OutputBuilder, cause error, report RecoveryReport, scratch *scratchCleanup) *constructionFailure {
 	return &constructionFailure{builder: builder, cause: cause, report: report, scratch: scratch}
 }
 
 // analysisFailureOf builds one failed analysis (Rust
 // construction::analysis_failure).
-func analysisFailureOf(cause error, report RecoveryReport, scratch any) *analysisFailure {
+func analysisFailureOf(cause error, report RecoveryReport, scratch *scratchCleanup) *analysisFailure {
 	return &analysisFailure{cause: cause, report: report, scratch: scratch}
 }
 

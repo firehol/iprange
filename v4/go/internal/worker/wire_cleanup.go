@@ -15,6 +15,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
+	"github.com/firehol/iprange/v4/go/internal/recovery"
 )
 
 // CleanupRequest is the decoded cleanup request (Rust
@@ -471,18 +472,16 @@ func WireEarlyDiscardOf(facts publication.EarlyDiscardFacts) EarlyDiscard {
 // CleanupCheckpoint builds the worker-side scratch-cleanup facts of
 // one cleanup request (Rust client/recovery.rs cleanup_checkpoint:433):
 // a nil checkpoint is the clean nil cleanup, and a present checkpoint
-// reports one removal outcome per checkpoint entry. The Go recovery
-// machine never creates authorized scratch (SOW-0025 recovery-scratch record:
-// "external sort + authorized scratch ... tracked as a follow-up ...
-// recorded as deferred, not ported"), so the removal arm of the Rust
-// machine (recovery.rs:439-499, remove_checkpointed_scratch) is a
-// recorded deferral: a present checkpoint admits the deferral honestly
-// as one residue per entry with the fixed Conflict problem, the same
-// failed-removal residue shape Rust pushes per entry
-// (recovery.rs:502-524), so the wire contract stays meaningful and the
-// parent sees every entry it must handle. No scratch-removal
-// implementation is invented here.
-func CleanupCheckpoint(checkpoint *ScratchCheckpoint) *ScratchCleanup {
+// reports one removal outcome per checkpoint entry through the
+// checkpointed-scratch machine (Rust recovery.rs:439-499,
+// remove_checkpointed_scratch). The removal needs the scratch
+// directory the parent recorded in the cleanup request; a missing
+// directory is the Conflict class and every removal failure becomes
+// one exact residue of the entry, exactly like the Rust arm. The
+// checkpointed machine's format.Error-wrapped IO failures keep the
+// code and the fixed detail only; the wire does carry the errno limb
+// (WireProblemOf fills it whenever the wrapped error exposes one).
+func CleanupCheckpoint(directory *string, checkpoint *ScratchCheckpoint) *ScratchCleanup {
 	if checkpoint == nil {
 		return nil
 	}
@@ -492,20 +491,50 @@ func CleanupCheckpoint(checkpoint *ScratchCheckpoint) *ScratchCleanup {
 		CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
 		CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
 	}
-	problem := ScratchProblem{
-		Code:   format.CodeConflict,
-		Detail: "worker scratch cleanup machine is not ported",
+	creationSecurity := publication.CreationSecurity{
+		Kind:       checkpoint.CreationSecurity.Kind,
+		Commitment: checkpoint.CreationSecurity.Commitment,
 	}
 	for _, entry := range checkpoint.Entries {
-		cleanup.Residues = append(cleanup.Residues, ScratchResidue{
-			Ordinal:                    entry.Ordinal,
-			DirectoryIdentity:          checkpoint.DirectoryIdentity,
-			Basename:                   checkpointBasename(checkpoint.AttemptID, entry.Ordinal),
-			Identity:                   entry.Identity,
-			CreationSecurityKind:       checkpoint.CreationSecurity.Kind,
-			CreationSecurityCommitment: checkpoint.CreationSecurity.Commitment,
-			Problem:                    problem,
-		})
+		removal, cause := func() (publication.AbandonedArtifactRemoval, error) {
+			if directory == nil {
+				return publication.AbandonedArtifactRemoval{}, &format.Error{Code: format.CodeConflict, Detail: "worker recorded scratch without a scratch directory"}
+			}
+			return recovery.RemoveCheckpointedScratch(*directory, checkpoint.DirectoryIdentity, checkpoint.AttemptID, entry.Ordinal, entry.Identity, creationSecurity)
+		}()
+		if cause == nil {
+			cleanup.Housekeeping = cleanup.Housekeeping.Merge(removal.Housekeeping)
+			cleanup.VisibleHousekeeping = append(cleanup.VisibleHousekeeping, removal.VisibleHousekeeping...)
+			problem := removal.Cause
+			if problem == nil && removal.CleanupState == publication.CleanupStateResiduePossible {
+				problem = &format.Error{Code: format.CodeCleanupConflict, Detail: "checkpointed recovery scratch cleanup was not proved"}
+			}
+			if problem != nil {
+				pushCheckpointResidue(cleanup, entry, WireProblemOf(problem))
+			}
+			continue
+		}
+		failed := WireProblemOf(cause)
+		failed.Detail = "checkpointed recovery scratch cleanup failed"
+		pushCheckpointResidue(cleanup, entry, failed)
 	}
 	return cleanup
+}
+
+// pushCheckpointResidue appends one exact residue of a checkpoint
+// entry (Rust worker push_scratch_residue over checkpoint_basename).
+func pushCheckpointResidue(cleanup *ScratchCleanup, entry ScratchCheckpointEntry, problem WireProblem) {
+	cleanup.Residues = append(cleanup.Residues, ScratchResidue{
+		Ordinal:                    entry.Ordinal,
+		DirectoryIdentity:          cleanup.DirectoryIdentity,
+		Basename:                   checkpointBasename(cleanup.AttemptID, entry.Ordinal),
+		Identity:                   entry.Identity,
+		CreationSecurityKind:       cleanup.CreationSecurityKind,
+		CreationSecurityCommitment: cleanup.CreationSecurityCommitment,
+		Problem: ScratchProblem{
+			Code:   problem.Code,
+			OSCode: problem.OSCode,
+			Detail: problem.Detail,
+		},
+	})
 }

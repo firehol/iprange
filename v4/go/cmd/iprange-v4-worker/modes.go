@@ -205,9 +205,10 @@ func runRecovery(control *worker.Control) (*recovery.RecoverySourceCleanupGuard,
 // -> failed_attempt with the Problem::output fold). Rust cleanup does
 // not call set_unreadable_source_pages (worker.rs:416 installs the
 // fault memory only for inspect/validate/recover), so no fault memory
-// is armed here. The scratch cleanup stays the recorded 4-10 deferral
-// (CleanupCheckpoint), then the result is written and the session
-// returns without a cleanup guard (Rust returns Ok(None)).
+// is armed here. The scratch cleanup runs the real checkpointed
+// removal machine for every recorded entry (CleanupCheckpoint), then
+// the result is written and the session returns without a cleanup
+// guard (Rust returns Ok(None)).
 func runCleanup(control *worker.Control) error {
 	request, err := worker.ReadCleanupRequest(control)
 	if err != nil {
@@ -215,7 +216,7 @@ func runCleanup(control *worker.Control) error {
 	}
 	discarded := publication.DiscardSecuredAttempt(request.DestinationPath, &request.Output)
 	facts := worker.WireEarlyDiscardOf(discarded)
-	scratch := worker.CleanupCheckpoint(request.Scratch)
+	scratch := worker.CleanupCheckpoint(request.ScratchDirectory, request.Scratch)
 	return worker.WriteCleanupResult(control, &facts, scratch)
 }
 

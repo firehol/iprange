@@ -25,9 +25,9 @@ const (
 )
 
 // ValidationBudget bounds one validation operation (Rust
-// ValidationBudget). Scratch limits are accepted and recorded; the
-// recovery scratch machinery is a tracked follow-up, so the current
-// sweep is heap-only by construction.
+// ValidationBudget). The scratch limits are validated for API parity
+// and otherwise unused: validation is read-only and never creates
+// scratch files (the Rust sweep ignores them too).
 type ValidationBudget struct {
 	MaxHeapBytes     uint64
 	MaxOpenFiles     uint32

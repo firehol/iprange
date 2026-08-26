@@ -460,7 +460,7 @@ func doubleRunCleanupMachine(control *Control) int {
 	}
 	discarded := publication.DiscardSecuredAttempt(request.DestinationPath, &request.Output)
 	facts := WireEarlyDiscardOf(discarded)
-	scratch := CleanupCheckpoint(request.Scratch)
+	scratch := CleanupCheckpoint(request.ScratchDirectory, request.Scratch)
 	if err := WriteCleanupResult(control, &facts, scratch); err != nil {
 		return 123
 	}

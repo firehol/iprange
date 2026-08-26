@@ -108,7 +108,7 @@ func directConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer
 // finish).
 func directBuild(codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, analysis *directAnalysis) (*Construction, *constructionFailure) {
 	retained := retainedMetadataBytes(analysis.metadata)
-	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retained, analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (any, *rangeBuildFailure) {
+	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retained, analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (*scratchCleanup, *rangeBuildFailure) {
 		policy := &directOutput{builder: builder, rep: rep, codec: codec}
 		output := &components{check: check, codec: codec, policy: policy}
 		return buildRanges(codec, rangeBuild{

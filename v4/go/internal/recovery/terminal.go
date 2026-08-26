@@ -3,15 +3,18 @@ package recovery
 // Recovery terminal (Rust recovery/terminal.rs): the public completed
 // facts of one recovery (report, scratch attempt, publication), and
 // the failing preparation facts with the exact cleanup ledger, the
-// source cleanup guard, and the fixed problem. The scratch attempt
-// stays nil in the heap-only arm; the authorized-scratch absorb is
-// the recorded chunk-4-10 follow-up.
+// source cleanup guard, and the fixed problem. The scratch cleanup of
+// a construction is absorbed into the ledger exactly like the Rust
+// absorb_scratch arm: every residue becomes one AuthorizedScratch
+// artifact of the ScratchDirectory role.
 
-import "github.com/firehol/iprange/v4/go/internal/publication"
+import (
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/publication"
+)
 
 // RecoveryScratchAttempt identifies one authorized scratch attempt of
-// a recovery build (Rust RecoveryScratchAttempt). The heap-only arm
-// never creates one; the type keeps the public terminal shape.
+// a recovery build (Rust RecoveryScratchAttempt).
 type RecoveryScratchAttempt struct {
 	AttemptID         [16]byte
 	DirectoryIdentity publication.LocalFileIdentity
@@ -61,19 +64,19 @@ func (f *RecoveryPreparationFailure) CleanupState() publication.CleanupState {
 // RecoveryPreparationFailure::early: the fixed problem of the cause
 // and the empty facts).
 func earlyRecoveryFailure(cause error) *RecoveryPreparationFailure {
-	return newRecoveryPreparationFailure(problem(cause), RecoveryReport{}, nil, nil, nil)
+	return newRecoveryPreparationFailure(problem(cause), RecoveryReport{}, nil, nil, nil, nil)
 }
 
 // newRecoveryPreparationFailure builds one complete recovery
 // preparation failure (Rust RecoveryPreparationFailure::new: the
 // output artifact and the scratch absorb fold into the ledger, and a
 // retained source guard carries the coordination cleanup class).
-func newRecoveryPreparationFailure(cause error, report RecoveryReport, output *publication.PrivateOutputAttempt, outputArtifact *publication.CleanupArtifact, sourceCleanup *RecoverySourceCleanupGuard) *RecoveryPreparationFailure {
+func newRecoveryPreparationFailure(cause error, report RecoveryReport, output *publication.PrivateOutputAttempt, outputArtifact *publication.CleanupArtifact, sourceCleanup *RecoverySourceCleanupGuard, scratch *scratchCleanup) *RecoveryPreparationFailure {
 	cleanup := publication.NewCleanupArtifacts()
 	if outputArtifact != nil {
 		cleanup.Push(*outputArtifact)
 	}
-	absorbed := absorbScratch(nil, &cleanup)
+	absorbed := absorbScratch(scratch, &cleanup)
 	coordination := publication.CoordinationCleanupNone
 	if sourceCleanup != nil {
 		coordination = publication.CoordinationCleanupCleanupGuard
@@ -94,7 +97,7 @@ func newRecoveryPreparationFailure(cause error, report RecoveryReport, output *p
 // fromPublicationFailure folds one publication preparation failure
 // into the recovery failure (Rust
 // RecoveryPreparationFailure::from_publication).
-func fromPublicationFailure(failure *publication.PublicationPreparationFailure, report RecoveryReport) *RecoveryPreparationFailure {
+func fromPublicationFailure(failure *publication.PublicationPreparationFailure, report RecoveryReport, scratch *scratchCleanup) *RecoveryPreparationFailure {
 	output := &publication.PrivateOutputAttempt{
 		PublicationAttemptID: failure.PublicationAttemptID,
 		DirectoryIdentity:    failure.DirectoryIdentity,
@@ -104,7 +107,7 @@ func fromPublicationFailure(failure *publication.PublicationPreparationFailure, 
 		IdentityPresent:      true,
 		CreationSecurity:     failure.CreationSecurity,
 	}
-	absorbed := absorbScratch(nil, &failure.Cleanup)
+	absorbed := absorbScratch(scratch, &failure.Cleanup)
 	housekeeping := failure.Housekeeping.Merge(absorbed.housekeeping)
 	visible := failure.VisibleHousekeeping
 	visible = append(visible, absorbed.visible...)
@@ -123,9 +126,9 @@ func fromPublicationFailure(failure *publication.PublicationPreparationFailure, 
 
 // completedRecovery builds the completed recovery outcome (Rust
 // terminal::completed): the publication result absorbs the scratch
-// facts (none in the heap-only arm).
-func completedRecovery(report RecoveryReport, publication publication.PublicationResult) RecoveryResult {
-	absorbed := absorbScratch(nil, &publication.Cleanup)
+// facts.
+func completedRecovery(report RecoveryReport, scratch *scratchCleanup, publication publication.PublicationResult) RecoveryResult {
+	absorbed := absorbScratch(scratch, &publication.Cleanup)
 	publication.Housekeeping = publication.Housekeeping.Merge(absorbed.housekeeping)
 	publication.VisibleHousekeeping = append(publication.VisibleHousekeeping, absorbed.visible...)
 	return RecoveryResult{
@@ -136,7 +139,7 @@ func completedRecovery(report RecoveryReport, publication publication.Publicatio
 }
 
 // absorbedScratch is the folded scratch facts of one terminal (Rust
-// AbsorbedScratch; the heap-only arm always absorbs nothing).
+// AbsorbedScratch).
 type absorbedScratch struct {
 	attempt      *RecoveryScratchAttempt
 	housekeeping publication.Housekeeping
@@ -144,11 +147,49 @@ type absorbedScratch struct {
 }
 
 // absorbScratch folds one scratch cleanup into the artifact ledger
-// (Rust absorb_scratch non-posix arm: the heap-only arm carries no
-// scratch cleanup, so nothing is absorbed; the authorized-scratch
-// follow-up fills the residue arm).
-func absorbScratch(scratch any, artifacts *publication.CleanupArtifacts) absorbedScratch {
-	_ = scratch
-	_ = artifacts
-	return absorbedScratch{housekeeping: publication.HousekeepingNone}
+// (Rust absorb_scratch): every residue becomes one AuthorizedScratch
+// artifact of the ScratchDirectory role with its exact basename,
+// identity, creation security, and problem.
+func absorbScratch(cleanup *scratchCleanup, artifacts *publication.CleanupArtifacts) absorbedScratch {
+	if cleanup == nil {
+		return absorbedScratch{housekeeping: publication.HousekeepingNone}
+	}
+	for _, residue := range cleanup.residues {
+		identity := residue.identity
+		creationSecurity := publication.CreationSecurity{
+			Kind:       residue.creationSecurityKind,
+			Commitment: residue.creationSecurityCommitment,
+		}
+		problem := &format.Error{Code: residue.problem.code, Detail: residue.problem.detail}
+		artifacts.Push(publication.CleanupArtifact{
+			Kind:              publication.ArtifactAuthorizedScratch,
+			DirectoryRole:     publication.DirectoryRoleScratchDirectory,
+			DirectoryIdentity: residue.directoryIdentity,
+			BasenameEncoding:  scratchBasenameEncodingValue(),
+			Basename:          residue.basename,
+			Identity:          &identity,
+			CreationSecurity:  &creationSecurity,
+			UnpublishedTail:   nil,
+			Error:             problem,
+		})
+	}
+	return absorbedScratch{
+		attempt: &RecoveryScratchAttempt{
+			AttemptID:         cleanup.attemptID,
+			DirectoryIdentity: cleanup.directoryIdentity,
+			CreationSecurity: publication.CreationSecurity{
+				Kind:       cleanup.creationSecurityKind,
+				Commitment: cleanup.creationSecurityCommitment,
+			},
+		},
+		housekeeping: cleanup.housekeeping,
+		visible:      cleanup.visibleHousekeeping,
+	}
+}
+
+// scratchBasenameEncodingValue is the numeric platform basename
+// encoding of the scratch artifacts (Rust
+// publication::namespace::BASENAME_ENCODING_KIND).
+func scratchBasenameEncodingValue() uint16 {
+	return uint16(scratchBasenameEncoding())
 }

@@ -80,15 +80,34 @@ type rangeCodec interface {
 	pushRecord(builder *writer.OutputBuilder, record rangeRecord) error
 	reportAccepted(rep *reporter, record rangeRecord) error
 	reportRejected(rep *reporter, count uint64, from, to rangeKey) error
+	// The fixed-width scratch record surface (Rust DirectKey
+	// SCRATCH_RECORD_SIZE + encode_scratch + decode_scratch): the
+	// little-endian from and to keys followed by the LE value.
+	scratchRecordSize() int
+	encodeScratch(record rangeRecord, output []byte)
+	decodeScratch(bytes []byte) rangeRecord
 }
 
 // rangeV4Codec is the IPv4 range codec (Rust Ipv4Key).
 type rangeV4Codec struct{}
 
-func (rangeV4Codec) leafCell() int   { return 12 }
-func (rangeV4Codec) branchCell() int { return 8 }
-func (rangeV4Codec) recordSize() int { return 12 }
-func (rangeV4Codec) aux() uint32     { return uint32(format.AddressFamilyIPv4) }
+func (rangeV4Codec) leafCell() int          { return 12 }
+func (rangeV4Codec) branchCell() int        { return 8 }
+func (rangeV4Codec) recordSize() int        { return 12 }
+func (rangeV4Codec) aux() uint32            { return uint32(format.AddressFamilyIPv4) }
+func (rangeV4Codec) scratchRecordSize() int { return 12 }
+func (rangeV4Codec) encodeScratch(record rangeRecord, output []byte) {
+	format.PutU32(output[0:4], uint32(record.from.hi))
+	format.PutU32(output[4:8], uint32(record.to.hi))
+	format.PutU32(output[8:12], record.value)
+}
+func (rangeV4Codec) decodeScratch(bytes []byte) rangeRecord {
+	return rangeRecord{
+		from:  rangeKey{hi: uint64(format.U32(bytes[0:4]))},
+		to:    rangeKey{hi: uint64(format.U32(bytes[4:8]))},
+		value: format.U32(bytes[8:12]),
+	}
+}
 func (rangeV4Codec) decodeRecord(cell []byte) (rangeRecord, bool) {
 	if len(cell) < format.RangeRecordV4Size {
 		return rangeRecord{}, false
@@ -136,10 +155,28 @@ func (rangeV4Codec) reportRejected(rep *reporter, count uint64, from, to rangeKe
 // rangeV6Codec is the IPv6 range codec (Rust Ipv6Key).
 type rangeV6Codec struct{}
 
-func (rangeV6Codec) leafCell() int   { return 36 }
-func (rangeV6Codec) branchCell() int { return 24 }
-func (rangeV6Codec) recordSize() int { return 40 }
-func (rangeV6Codec) aux() uint32     { return uint32(format.AddressFamilyIPv6) }
+func (rangeV6Codec) leafCell() int          { return 36 }
+func (rangeV6Codec) branchCell() int        { return 24 }
+func (rangeV6Codec) recordSize() int        { return 40 }
+func (rangeV6Codec) scratchRecordSize() int { return 36 }
+func (rangeV6Codec) encodeScratch(record rangeRecord, output []byte) {
+	// The scratch record carries each key as one little-endian u128
+	// (Rust Ipv6Key::write_le: low limb first), matching the v4 tree
+	// cell layout.
+	format.PutU64(output[0:8], record.from.lo)
+	format.PutU64(output[8:16], record.from.hi)
+	format.PutU64(output[16:24], record.to.lo)
+	format.PutU64(output[24:32], record.to.hi)
+	format.PutU32(output[32:36], record.value)
+}
+func (rangeV6Codec) decodeScratch(bytes []byte) rangeRecord {
+	return rangeRecord{
+		from:  rangeKey{lo: format.U64(bytes[0:8]), hi: format.U64(bytes[8:16])},
+		to:    rangeKey{lo: format.U64(bytes[16:24]), hi: format.U64(bytes[24:32])},
+		value: format.U32(bytes[32:36]),
+	}
+}
+func (rangeV6Codec) aux() uint32 { return uint32(format.AddressFamilyIPv6) }
 func (rangeV6Codec) decodeRecord(cell []byte) (rangeRecord, bool) {
 	if len(cell) < format.RangeRecordV6Size {
 		return rangeRecord{}, false

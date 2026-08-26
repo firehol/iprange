@@ -5,13 +5,12 @@ package recovery
 // page-ownership set. The ordered arm streams the scan directly into
 // the output policy; the unordered arm buffers the readable records,
 // sorts them in memory inside the heap budget, and streams the sorted
-// run. The authorized multi-pass scratch sort is the recorded
-// chunk-4-10 follow-up, so the heap-exceeded unordered build refuses
-// with the unordered-ranges class exactly like the Rust heap-only arm.
+// run; when the heap cannot hold the records, the authorized
+// multi-pass scratch sort takes over inside the scratch budget.
 
 import (
 	"errors"
-	"sort"
+	"slices"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -32,14 +31,15 @@ type rangeBuild struct {
 	readableRecords   uint64
 	ordered           bool
 	retainedHeapBytes uint64
+	sortReuse         *sortArea
 }
 
 // rangeBuildFailure is one failed range build (Rust BuildFailure): the
 // cause and the scratch cleanup authority of the retained pages (nil
-// in the heap-only arm).
+// when no scratch attempt existed).
 type rangeBuildFailure struct {
 	cause   error
-	scratch any
+	scratch *scratchCleanup
 }
 
 // rangeOutput consumes the produced record stream (Rust RangeOutput).
@@ -50,8 +50,8 @@ type rangeOutput interface {
 
 // buildRanges produces the range output (Rust build_ranges: the
 // ordered scan streams directly, the unordered records are sorted in
-// memory).
-func buildRanges(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (any, *rangeBuildFailure) {
+// memory or through the authorized scratch sort).
+func buildRanges(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (*scratchCleanup, *rangeBuildFailure) {
 	if request.ordered {
 		return buildOrdered(codec, request, pages, output)
 	}
@@ -61,7 +61,7 @@ func buildRanges(codec rangeCodec, request rangeBuild, pages *pageSet, output ra
 // buildOrdered streams the scan into the output (Rust build_ordered:
 // the page set reset, the ordered events, the readable-record proof,
 // and the output finish fold through the page-set terminal).
-func buildOrdered(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (any, *rangeBuildFailure) {
+func buildOrdered(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (*scratchCleanup, *rangeBuildFailure) {
 	scan := func() error {
 		if err := pages.reset(); err != nil {
 			return err
@@ -81,10 +81,10 @@ func buildOrdered(codec rangeCodec, request rangeBuild, pages *pageSet, output r
 }
 
 // buildSorted sorts the readable records inside the heap budget (Rust
-// build_sorted: the retained heap proof, then the in-memory sort, or
-// the unordered-ranges refusal when the heap cannot hold the buffer;
-// the multi-pass scratch sort is the recorded follow-up).
-func buildSorted(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (any, *rangeBuildFailure) {
+// build_sorted: the retained heap proof, then the in-memory sort;
+// when the heap cannot hold the buffer, the external scratch sort
+// takes over (Rust build_external).
+func buildSorted(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (*scratchCleanup, *rangeBuildFailure) {
 	retained, ok := checkedAdd(request.retainedHeapBytes, pages.retainedBytes())
 	if !ok {
 		return finishPages(pages, overflowError("recovery retained heap"))
@@ -94,19 +94,40 @@ func buildSorted(codec rangeCodec, request rangeBuild, pages *pageSet, output ra
 	case err == nil:
 		return buildInMemory(codec, request, retained, pages, output)
 	case isBudgetExceeded(err):
-		// The Rust authority routes the heap-exceeded build to the
-		// authorized multi-pass scratch sort, which is the recorded
-		// chunk-4-10 follow-up; the heap-only build refuses with the
-		// exact unordered-ranges class of the Rust heap-only arm.
-		return finishPages(pages, budgetError("recovery unordered ranges"))
+		return buildExternal(codec, request, pages, output)
 	default:
 		return finishPages(pages, err)
 	}
 }
 
+// buildExternal sorts the readable records through the authorized
+// multi-pass scratch sort (Rust build_external: sort_and_emit streams
+// the sorted run into the output, the output finish failure carries
+// the retained cleanup, and a scratchless budget fails inside the
+// sort with the unordered-ranges class).
+func buildExternal(codec rangeCodec, request rangeBuild, pages *pageSet, output rangeOutput) (*scratchCleanup, *rangeBuildFailure) {
+	cleanup, failure := sortAndEmit(codec, request.mapping, sortRequest{
+		meta:              request.meta,
+		budget:            request.budget,
+		retainedHeapBytes: request.retainedHeapBytes,
+		readableRecords:   request.readableRecords,
+		check:             request.check,
+		initialArea:       request.sortReuse,
+	}, pages, func(record rangeRecord) error {
+		return output.push(record)
+	})
+	if failure != nil {
+		return nil, &rangeBuildFailure{cause: failure.cause, scratch: failure.cleanup}
+	}
+	if err := output.finish(); err != nil {
+		return nil, &rangeBuildFailure{cause: err, scratch: cleanup}
+	}
+	return cleanup, nil
+}
+
 // buildInMemory sorts the readable records in one bounded heap buffer
 // and streams them into the output (Rust build_in_memory).
-func buildInMemory(codec rangeCodec, request rangeBuild, retained uint64, pages *pageSet, output rangeOutput) (any, *rangeBuildFailure) {
+func buildInMemory(codec rangeCodec, request rangeBuild, retained uint64, pages *pageSet, output rangeOutput) (*scratchCleanup, *rangeBuildFailure) {
 	available, ok := checkedSub(request.budget.MaxHeapBytes, retained)
 	if !ok {
 		return finishPages(pages, budgetError("recovery unordered ranges"))
@@ -129,8 +150,15 @@ func buildInMemory(codec rangeCodec, request rangeBuild, retained uint64, pages 
 		if err := requireCount(events.readableRecords, request.readableRecords); err != nil {
 			return err
 		}
-		sort.Slice(records, func(i, j int) bool {
-			return lessRecord(codec, records[i], records[j])
+		slices.SortFunc(records, func(left, right rangeRecord) int {
+			switch {
+			case lessRecord(codec, left, right):
+				return -1
+			case lessRecord(codec, right, left):
+				return 1
+			default:
+				return 0
+			}
 		})
 		return nil
 	}()
@@ -200,7 +228,7 @@ func requireCount(actual, expected uint64) error {
 // envelope streams to the reporter; the order proof flips on the first
 // from-regression of the readable stream).
 func analyzeRanges(codec rangeCodec, m *mapping.Mapping, meta format.Meta, pages *pageSet, check func() error, rep *reporter) (uint64, bool, error) {
-	events := &analysisEvents{rep: rep, codec: codec}
+	events := &analysisEvents{rep: rep, codec: codec, ordered: true}
 	if err := scanRanges(codec, m, meta, pages, check, events); err != nil {
 		return 0, false, err
 	}
@@ -250,7 +278,7 @@ func (e *analysisEvents) rangeEvent(page uint32, record rangeRecordOption) error
 	if !record.ok {
 		return e.rep.rangeRejectedWithoutBounds()
 	}
-	if e.previousFromOk && !e.codec.lessKey(record.value.from, e.previousFrom) {
+	if e.previousFromOk && !e.codec.lessKey(e.previousFrom, record.value.from) {
 		e.ordered = false
 	}
 	e.previousFrom = record.value.from
@@ -296,7 +324,7 @@ func (e *buildEvents) rangeEvent(page uint32, record rangeRecordOption) error {
 	if !record.ok {
 		return nil
 	}
-	if e.ordered && e.previousFromOk && !e.codec.lessKey(record.value.from, e.previousFrom) {
+	if e.ordered && e.previousFromOk && !e.codec.lessKey(e.previousFrom, record.value.from) {
 		return candidateChangedError()
 	}
 	e.previousFrom = record.value.from
@@ -337,7 +365,7 @@ func writeMetadata(builder *writer.OutputBuilder, metadata []byte, maxHeapBytes,
 // finishPages folds the build result through the page-set terminal
 // (Rust finish_pages: the failing terminal carries the cause and the
 // scratch cleanup authority).
-func finishPages(pages *pageSet, result error) (any, *rangeBuildFailure) {
+func finishPages(pages *pageSet, result error) (*scratchCleanup, *rangeBuildFailure) {
 	failure := pages.finish(result)
 	if failure.cause != nil {
 		return nil, &rangeBuildFailure{cause: failure.cause, scratch: failure.cleanup}
@@ -347,7 +375,7 @@ func finishPages(pages *pageSet, result error) (any, *rangeBuildFailure) {
 
 // afterCleanup wraps one post-scan failure with the page-set scratch
 // (Rust after_cleanup).
-func afterCleanup(cause error, scratch any) (any, *rangeBuildFailure) {
+func afterCleanup(cause error, scratch *scratchCleanup) (*scratchCleanup, *rangeBuildFailure) {
 	return nil, &rangeBuildFailure{cause: cause, scratch: scratch}
 }
 

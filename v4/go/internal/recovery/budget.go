@@ -2,9 +2,9 @@ package recovery
 
 // Recovery budget (Rust recovery/budget.rs RecoveryBudget): the
 // maximum simultaneously retained resources of one recovery
-// operation. Scratch limits are accepted and validated; the
-// authorized-scratch machinery is the recorded chunk-4-10 follow-up,
-// so the current builds are heap-only by construction.
+// operation. Scratch limits are accepted and validated together with
+// the scratch directory, and a supplied scratch budget enables the
+// file-backed page table and the external sort.
 
 import "github.com/firehol/iprange/v4/go/internal/format"
 
