@@ -193,6 +193,22 @@ func (w *LiveWriter) BaseInfo() (writer.WriterInfo, error) {
 // the live writer).
 func (w *LiveWriter) Draft() *writer.Draft { return w.core.Draft() }
 
+// Core exposes the mapped writer core to the SDK root facade (SOW-0027
+// live-writer consolidation): the advanced transaction and workflow
+// surfaces compose the core through this one owner while every abort,
+// commit, and close terminal stays in the live writer machine.
+func (w *LiveWriter) Core() *writer.Core { return w.core }
+
+// Healthy proves the live writer is open and usable (Rust
+// LiveWriter::require_healthy).
+func (w *LiveWriter) Healthy() error { return w.requireHealthy() }
+
+// AbortAfter aborts the draft after a failed mutation or commit
+// preparation (Rust LiveWriter::abort_after): the fatal classes (Io,
+// Format, Corrupt) make the writer unusable even when the discard
+// succeeds. Exported for the SDK root facade's transaction surfaces.
+func (w *LiveWriter) AbortAfter(cause error) error { return w.abortAfter(cause) }
+
 // BeginDirect draws the commit nonce and starts one COW draft over the
 // committed generation (Rust begin_direct_transaction: cancellation
 // check, require_healthy, the direct value-kind gate, then

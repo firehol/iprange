@@ -36,7 +36,7 @@ type StructureRef struct {
 // also serves the membership catalog operations (feeds, memberships)
 // that structured values link to.
 type StructuredTransaction struct {
-	w               *Writer
+	w               mutationHost
 	edit            *writer.WriterEdit
 	databaseID      [16]byte
 	operationNonce  [16]byte
@@ -60,37 +60,61 @@ type StructuredTransaction struct {
 // is built for its own literal family like the Rust typed assignment
 // inputs, so an IPv4 database carries no dead IPv6 locator.
 func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
-	if w.core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	return beginStructuredTransaction(w, cancellation)
+}
+
+// BeginStructuredTransaction begins one advanced structured transaction
+// on a clean live writer (Rust LiveWriter::begin_structured_transaction):
+// cancellation is checked first (a fired token classifies as Cancelled
+// even on a closed writer), the live writer must be open and healthy, a
+// network_enrichment_v1 structured database is required, and the
+// operation nonce pins every reference produced by the transaction.
+func (w *LiveWriter) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
+	return beginStructuredTransaction(w, cancellation)
+}
+
+// beginStructuredTransaction is the shared host-based begin (Rust
+// begin_structured_transaction with the LiveWriter healthy gate): the
+// closed-writer probe (a state Rust cannot express because it consumes
+// the writer), then the structure-kind outer guard, then cancellation,
+// healthy, and the value-kind inner guard. The draft installed by
+// BeginTransaction is bound once so every operation reuses one edit
+// (Rust writer.mutate borrows the draft for the transaction lifetime);
+// each input locator is built for its own literal family like the Rust
+// typed assignment inputs, so an IPv4 database carries no dead IPv6
+// locator.
+func beginStructuredTransaction(h mutationHost, cancellation *CancellationToken) (*StructuredTransaction, error) {
+	if err := h.healthy(); err != nil {
+		return nil, err
 	}
-	if w.core.BaseInfo().StructureKind != format.StructureKindNetworkEnrichmentV1 {
+	if h.coreOf().BaseInfo().StructureKind != format.StructureKindNetworkEnrichmentV1 {
 		return nil, &format.Error{Code: format.CodeWrongStructureKind, Detail: "no typed transaction exists for this structure kind"}
 	}
 	if err := cancellation.check(); err != nil {
 		return nil, err
 	}
-	if err := w.core.Healthy(); err != nil {
+	if err := h.healthy(); err != nil {
 		return nil, err
 	}
-	if w.core.BaseInfo().ValueKind != format.ValueKindStructured {
+	if h.coreOf().BaseInfo().ValueKind != format.ValueKindStructured {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "structured transaction requires a structured database"}
 	}
-	nonce, err := w.core.BeginTransaction()
+	nonce, err := h.coreOf().BeginTransaction()
 	if err != nil {
 		return nil, err
 	}
-	edit, err := w.core.BindEdit()
+	edit, err := h.coreOf().BindEdit()
 	if err != nil {
 		return nil, err
 	}
 	return &StructuredTransaction{
-		w:              w,
+		w:              h,
 		edit:           edit,
-		databaseID:     w.core.BaseInfo().DatabaseID,
+		databaseID:     h.coreOf().BaseInfo().DatabaseID,
 		operationNonce: nonce,
 		cancellation:   cancellation,
-		inputV4:        writer.NewAssignmentInput(format.AddressFamilyIPv4, w.core.Budget().MaxHeapBytes),
-		inputV6:        writer.NewAssignmentInput(format.AddressFamilyIPv6, w.core.Budget().MaxHeapBytes),
+		inputV4:        writer.NewAssignmentInput(format.AddressFamilyIPv4, h.coreOf().Budget().MaxHeapBytes),
+		inputV6:        writer.NewAssignmentInput(format.AddressFamilyIPv6, h.coreOf().Budget().MaxHeapBytes),
 	}, nil
 }
 
@@ -103,7 +127,7 @@ func (t *StructuredTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return nil, err
 	}
-	cursor, err := t.w.core.CurrentFeedCursor()
+	cursor, err := t.w.coreOf().CurrentFeedCursor()
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +409,7 @@ func (t *StructuredTransaction) Commit() (CommitResult, error) {
 	if err := t.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
-	return commitPrepared(t.w, t.cancellation, func() { t.spent = true }, "structured transaction")
+	return t.w.commitPrepared(t.cancellation, func() { t.spent = true }, "structured transaction")
 }
 
 // Abort discards this transaction and invalidates all of its references
@@ -434,14 +458,11 @@ func (t *StructuredTransaction) requireActive() error {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	// Rust require_transaction reports the stale transaction before the
-	// closed writer; the core nil check only guards the nonce probe.
-	if t.w.core != nil && !t.w.core.OperationIs(t.operationNonce) {
+	// closed writer; the host probe only guards the nonce check.
+	if t.w.coreOf() != nil && !t.w.coreOf().OperationIs(t.operationNonce) {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
-	if t.w.core == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	return t.w.core.Healthy()
+	return t.w.healthy()
 }
 
 // checkOrAbort mirrors Rust MembershipState::check_or_abort: the
@@ -488,7 +509,7 @@ func (t *StructuredTransaction) requireCurrentFeed(feed FeedRef) error {
 	if err := t.requireReference(feed); err != nil {
 		return err
 	}
-	current, found, err := t.w.core.LookupCurrentFeed(feed.entry.Name)
+	current, found, err := t.w.coreOf().LookupCurrentFeed(feed.entry.Name)
 	if err != nil {
 		return err
 	}
@@ -561,7 +582,7 @@ func (t *StructuredTransaction) requireStructureFamily(family uint8, ordered boo
 	if !ordered {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
 	}
-	if t.w.core.BaseInfo().AddressFamily != family {
+	if t.w.coreOf().BaseInfo().AddressFamily != family {
 		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "structured mutation does not match the database family"}
 	}
 	return nil

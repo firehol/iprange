@@ -62,18 +62,38 @@ type HistoryProjectionSource struct {
 // token for the prepared commit; cancel the token to stop the
 // projection between bounded units of work.
 func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
-	if w.core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	return projectHistory(w, source, windows, cancellation)
+}
+
+// ProjectHistory projects one last-seen direct source into named
+// destination feeds of this live membership writer (Rust
+// LiveWriter::project_history): cancellation is checked first, the live
+// writer must be open and healthy, and the source compatibility checks
+// run before the workflow draft. Every source range is consumed exactly
+// once in ascending order, every requested window feed is ensured on
+// the destination, and the report carries the exact aggregate and
+// per-window statistics. The changed handle records the cancellation
+// token for the prepared commit; cancel the token to stop the
+// projection between bounded units of work.
+func (w *LiveWriter) ProjectHistory(source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
+	return projectHistory(w, source, windows, cancellation)
+}
+
+// projectHistory is the shared host-based projection (Rust
+// project_history_state over the host core): the feed-workflow
+// preconditions, the source compatibility checks, the exact-workflow
+// draft, the one-pass source drive with corruption gating, and the
+// changed/no-change terminal.
+func projectHistory(h mutationHost, source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
+	if err := h.healthy(); err != nil {
+		return nil, err
 	}
 	// require_feed_workflow_ready (Rust feed_workflow.rs): healthy, a
 	// membership destination, no pending transaction.
-	if err := w.core.Healthy(); err != nil {
-		return nil, err
-	}
-	if w.core.BaseInfo().ValueKind != format.ValueKindMembership {
+	if h.coreOf().BaseInfo().ValueKind != format.ValueKindMembership {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "named-feed workflow requires a membership database"}
 	}
-	if w.core.HasDraft() {
+	if h.coreOf().HasDraft() {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
 	}
 	if len(windows) == 0 || uint64(len(windows)) > math.MaxUint32 {
@@ -120,7 +140,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if semantic, ok := info.DirectSemantic(); !ok || semantic != DirectSemanticLastSeen {
 		return nil, &format.Error{Code: format.CodeWrongValueTag, Detail: "history projection requires a last_seen direct source"}
 	}
-	if uint8(info.Family) != w.core.BaseInfo().AddressFamily {
+	if uint8(info.Family) != h.coreOf().BaseInfo().AddressFamily {
 		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "history projection source family differs"}
 	}
 	var sourceDevice, sourceInode uint64
@@ -133,7 +153,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if err != nil {
 		return nil, err
 	}
-	writerDevice, writerInode, err := w.core.FileIdentity()
+	writerDevice, writerInode, err := h.coreOf().FileIdentity()
 	if err != nil {
 		return nil, err
 	}
@@ -143,22 +163,22 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if err := cancellation.check(); err != nil {
 		return nil, err
 	}
-	if err := w.core.BeginMembershipWorkflow(); err != nil {
+	if err := h.coreOf().BeginMembershipWorkflow(); err != nil {
 		return nil, err
 	}
 	internalWindows := make([]writer.HistoryWindow, len(windows))
 	for index, window := range windows {
 		internalWindows[index] = writer.HistoryWindow{FeedName: window.FeedName, Cutoff: window.Cutoff}
 	}
-	projection, err := w.core.BeginHistoryProjection(internalWindows, cancellation.check)
+	projection, err := h.coreOf().BeginHistoryProjection(internalWindows, cancellation.check)
 	if err != nil {
-		return nil, w.abortAfter(err)
+		return nil, h.abortAfter(err)
 	}
-	report, err := w.driveHistoryProjection(sourceCore, info, projection, cancellation)
+	report, err := driveHistoryProjection(h, sourceCore, info, projection, cancellation)
 	if err != nil {
 		return nil, err
 	}
-	return w.finishHistoryProjection(report, cancellation)
+	return finishHistoryProjection(h, report, cancellation)
 }
 
 // driveHistoryProjection scans the source direct ranges once in
@@ -168,7 +188,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 // fixed-tree cursor open charges its own source pass, and each
 // consumed range is charged by the reader cursor itself (Rust
 // range_cursor::next; the drive does not charge ranges again).
-func (w *Writer) driveHistoryProjection(src *reader.ImmutableReader, info DatabaseInfo, projection *writer.HistoryProjection, cancellation *CancellationToken) (*writer.HistoryProjectionReport, error) {
+func driveHistoryProjection(h mutationHost, src *reader.ImmutableReader, info DatabaseInfo, projection *writer.HistoryProjection, cancellation *CancellationToken) (*writer.HistoryProjectionReport, error) {
 	sourceRangeCount := uint64(0)
 	sourceAddresses := format.CardinalityZero()
 	check := cancellation.check
@@ -176,78 +196,78 @@ func (w *Writer) driveHistoryProjection(src *reader.ImmutableReader, info Databa
 	if info.Family == AddressFamilyIPv4 {
 		cursor, err := src.NewDirectCursor4(reader.RangeForward)
 		if err != nil {
-			return nil, w.abortAfterSource(err)
+			return nil, abortAfterSource(h, err)
 		}
 		var previous histPrevious4
 		for {
 			current, ok, err := cursor.Next()
 			if err != nil {
-				return nil, w.abortAfterSource(err)
+				return nil, abortAfterSource(h, err)
 			}
 			if !ok {
 				break
 			}
 			if !canonicalSource4(previous, current) {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
 			if err := projection.Push4(current.From, current.To, current.Value, check); err != nil {
-				return nil, w.abortAfter(err)
+				return nil, h.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
 			}
 			sourceRangeCount++
 			size, err := format.IPv4Inclusive(current.From, current.To)
 			if err != nil {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			sourceAddresses, err = sourceAddresses.Add(size)
 			if err != nil {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			previous = histPrevious4{set: true, from: current.From, to: current.To, value: current.Value}
 		}
 	} else {
 		cursor, err := src.NewDirectCursor6(reader.RangeForward)
 		if err != nil {
-			return nil, w.abortAfterSource(err)
+			return nil, abortAfterSource(h, err)
 		}
 		var previous histPrevious6
 		for {
 			current, ok, err := cursor.Next()
 			if err != nil {
-				return nil, w.abortAfterSource(err)
+				return nil, abortAfterSource(h, err)
 			}
 			if !ok {
 				break
 			}
 			if !canonicalSource6(previous, current) {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
 			if err := projection.Push6(current.FromHi, current.FromLo, current.ToHi, current.ToLo, current.Value, check); err != nil {
-				return nil, w.abortAfter(err)
+				return nil, h.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
 			}
 			sourceRangeCount++
 			size, err := format.IPv6Inclusive(current.FromHi, current.FromLo, current.ToHi, current.ToLo)
 			if err != nil {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			sourceAddresses, err = sourceAddresses.Add(size)
 			if err != nil {
-				return nil, w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			previous = histPrevious6{set: true, fromHi: current.FromHi, fromLo: current.FromLo, toHi: current.ToHi, toLo: current.ToLo, value: current.Value}
 		}
 	}
 	if sourceRangeCount != info.RangeRecordCount {
-		return nil, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen range count disagrees"})
+		return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen range count disagrees"})
 	}
 	report, err := projection.Finish(sourceRangeCount, sourceAddresses, check)
 	if err != nil {
-		return nil, w.abortAfter(err)
+		return nil, h.abortAfter(err)
 	}
 	return report, nil
 }
@@ -323,21 +343,21 @@ type histPrevious6 struct {
 // finish_state): a no-change report discards the draft and returns the
 // clean handle; a changed report finishes the membership workflow and
 // returns the prepared handle with the cancellation captured.
-func (w *Writer) finishHistoryProjection(report *writer.HistoryProjectionReport, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
+func finishHistoryProjection(h mutationHost, report *writer.HistoryProjectionReport, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
 	public := publicHistoryReport(report)
 	if report.LogicalChange == writer.LogicalNoChange {
-		if err := w.core.DiscardUnpublished(); err != nil {
-			w.core.MarkUnresolved(err)
+		if err := h.coreOf().DiscardUnpublished(); err != nil {
+			h.coreOf().MarkUnresolved(err)
 			return nil, err
 		}
-		return &FinishedHistoryProjection{w: w, report: public, cancellation: cancellation}, nil
+		return &FinishedHistoryProjection{w: h, report: public, cancellation: cancellation}, nil
 	}
-	if err := w.core.Mutate(func(edit *writer.WriterEdit) error {
+	if err := h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	}); err != nil {
-		return nil, w.abortAfter(err)
+		return nil, h.abortAfter(err)
 	}
-	return &FinishedHistoryProjection{w: w, report: public, changed: true, cancellation: cancellation}, nil
+	return &FinishedHistoryProjection{w: h, report: public, changed: true, cancellation: cancellation}, nil
 }
 
 // publicHistoryReport copies the internal projection report onto the
@@ -379,11 +399,11 @@ func publicHistoryReport(report *writer.HistoryProjectionReport) HistoryProjecti
 // class; when the discard itself fails, brand the writer unresolved and
 // nest the CleanupInProgress class (Rust CleanupIncomplete) around the
 // cause.
-func (w *Writer) abortAfterSource(cause error) error {
-	discardErr := w.core.DiscardUnpublished()
+func abortAfterSource(h mutationHost, cause error) error {
+	discardErr := h.coreOf().DiscardUnpublished()
 	inner := cause
 	if discardErr != nil {
-		w.core.MarkUnresolved(discardErr)
+		h.coreOf().MarkUnresolved(discardErr)
 		inner = &abortError{
 			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "workflow discard failed"},
 			cause: cause,
@@ -403,7 +423,7 @@ func (w *Writer) abortAfterSource(cause error) error {
 // then brand the writer unusable when the cause is a fatal class (Rust
 // Io/Format/Corrupt).
 func (w *Writer) abortAfter(cause error) error {
-	result := w.abortAfterSource(cause)
+	result := abortAfterSource(w, cause)
 	var typed *format.Error
 	if errors.As(cause, &typed) && (typed.Code == format.CodeIO || typed.Code == format.CodeFormatInvalid) {
 		w.core.MarkUnresolved(typed)
@@ -420,7 +440,7 @@ func (w *Writer) abortAfter(cause error) error {
 // parity). The changed handle owns the draft until Commit, Abort, or
 // Writer.Close.
 type FinishedHistoryProjection struct {
-	w            *Writer
+	w            mutationHost
 	report       HistoryProjectionReport
 	changed      bool
 	spent        bool
@@ -446,7 +466,13 @@ func (h *FinishedHistoryProjection) requireChangedActive() error {
 	if !h.changed {
 		return &format.Error{Code: format.CodeWrongState, Detail: "history projection did not change"}
 	}
-	if h.spent || h.w.core == nil || h.w.core.Draft() == nil {
+	if h.spent {
+		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+	}
+	if err := h.w.healthy(); err != nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+	}
+	if h.w.coreOf().Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	return nil
@@ -464,7 +490,7 @@ func (h *FinishedHistoryProjection) SetMetadataJSON(input []byte) (bool, error) 
 		h.spent = true
 		return false, h.w.abortAfter(err)
 	}
-	changed, err := h.w.core.SetMetadata(input)
+	changed, err := h.w.coreOf().SetMetadata(input)
 	if err != nil {
 		h.spent = true
 		return false, h.w.abortAfter(err)
@@ -487,7 +513,7 @@ func (h *FinishedHistoryProjection) ClearMetadataJSON() (bool, error) {
 		h.spent = true
 		return false, h.w.abortAfter(err)
 	}
-	changed, err := h.w.core.ClearMetadata()
+	changed, err := h.w.coreOf().ClearMetadata()
 	if err != nil {
 		h.spent = true
 		return false, h.w.abortAfter(err)
@@ -514,85 +540,13 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 	if err := h.requireChangedActive(); err != nil {
 		return CommitResult{}, err
 	}
-	draft := h.w.core.Draft()
-	if !draft.Changed() {
-		if err := h.w.core.DiscardUnpublished(); err != nil {
-			h.spent = true
-			return CommitResult{}, err
-		}
-		h.spent = true
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
-	}
-	attempt, err := h.w.core.CommitAttempt()
-	if err != nil {
-		h.spent = true
-		return CommitResult{}, err
-	}
-	// Rust commit_with prepare_and_lock: check, prepare, check, then
-	// the sidecar lock (Go noop).
-	if err := h.cancellation.check(); err != nil {
-		return h.commitAbortAfter(attempt, err), nil
-	}
-	if err := h.w.core.Prepare(h.cancellation.check); err != nil {
-		return h.commitAbortAfter(attempt, err), nil
-	}
-	if err := h.cancellation.check(); err != nil {
-		return h.commitAbortAfter(attempt, err), nil
-	}
-	// Rust prepublication_checks: unchanged base, then the sidecar scan
-	// (Go noop), then the locked file covering the draft length. A
-	// failure is a BeforePublication abort, same class as a preparation
-	// failure.
-	if err := h.w.core.RequireUnchangedBase(); err != nil {
-		return h.commitAbortAfter(attempt, err), nil
-	}
-	if err := h.w.core.RequireDraftLength(); err != nil {
-		return h.commitAbortAfter(attempt, err), nil
-	}
-	res := h.w.core.Publish(h.cancellation.check)
-	h.spent = true
-	result := CommitResult{DatabaseID: attempt.DatabaseID, TransactionID: attempt.TransactionID, CommitNonce: attempt.CommitNonce, Err: res.Err}
-	switch res.Status {
-	case writer.PublishCommitted:
-		result.Status = CommitCommitted
-	case writer.PublishBeforePublication:
-		// Rust finish_commit_locked_with wraps a BeforePublication
-		// cause through abort_after (TransactionAborted class, draft
-		// discarded) before building the NotCommitted result.
-		result.Status = CommitNotCommitted
-		result.Err = h.w.abortAfter(res.Err)
-	default:
-		result.Status = CommitOutcomeUnknown
-	}
-	return result, nil
-}
-
-// commitAbortAfter reports an aborted prepared commit exactly like the
-// direct transaction commit abort (Rust commit_with abort_after): the
-// result error class is TransactionAborted, and a failed abandonment
-// discard nests the CleanupInProgress class. The name is distinct from
-// Writer.abortAfter, which wraps a plain cause with writer branding.
-func (h *FinishedHistoryProjection) commitAbortAfter(attempt writer.CommitAttempt, cause error) CommitResult {
-	discardErr := h.w.core.DiscardUnpublished()
-	h.spent = true
-	inner := cause
-	if discardErr != nil {
-		h.w.core.MarkUnresolved(discardErr)
-		inner = &abortError{
-			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "history projection commit discard failed"},
-			cause: cause,
-		}
-	}
-	return CommitResult{
-		Status:        CommitNotCommitted,
-		DatabaseID:    attempt.DatabaseID,
-		TransactionID: attempt.TransactionID,
-		CommitNonce:   attempt.CommitNonce,
-		Err: &abortError{
-			class: &format.Error{Code: format.CodeTransactionAborted, Detail: "history projection commit aborted after a preparation failure"},
-			cause: inner,
-		},
-	}
+	// One authoritative commit terminal: the host's commitPrepared runs
+	// the exact commit_with sequence (changed-draft check, commit
+	// attempt, prepare with the captured cancellation, prepublication
+	// checks, and the classified outcome). On the live host this also
+	// holds the reader-table gate through publication and retains the
+	// cleanup and coordination evidence (Rust LiveWriter::commit_with).
+	return h.w.commitPrepared(h.cancellation, func() { h.spent = true }, "history projection")
 }
 
 // Abort discards the changed projection draft; the writer stays open
@@ -607,8 +561,11 @@ func (h *FinishedHistoryProjection) Abort() error {
 	if !h.changed {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	if h.w.core == nil || h.w.core.Draft() == nil {
+	if err := h.w.healthy(); err != nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
-	return h.w.core.DiscardUnpublished()
+	if h.w.coreOf().Draft() == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+	}
+	return h.w.coreOf().DiscardUnpublished()
 }

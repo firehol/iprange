@@ -13,6 +13,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
+	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // LiveWriter is the exclusive writer of one live database (Rust
@@ -65,18 +66,102 @@ func (w *LiveWriter) Info() (DatabaseInfo, error) {
 	}, nil
 }
 
+// mutationHost is the writer-facing surface the advanced transaction
+// and workflow facades compose (Rust LiveWriter): the mapped core owner
+// plus the abort and commit terminals. Both the pending off-contract
+// Writer and the sidecar-bound LiveWriter satisfy it during the
+// consolidation migration (SOW-0027); the Writer disappears when the
+// consolidation lands and the ledger flips its rows.
+type mutationHost interface {
+	coreOf() *writer.Core
+	Info() (DatabaseInfo, error)
+	healthy() error
+	abortAfter(cause error) error
+	Abort() error
+	commitPrepared(cancellation *CancellationToken, markSpent func(), context string) (CommitResult, error)
+}
+
+// coreOf exposes the mapped writer core to the transaction facades
+// (SOW-0027 consolidation host accessor).
+func (w *LiveWriter) coreOf() *writer.Core { return w.lw.Core() }
+
+// healthy proves the live writer is open and usable (Rust
+// LiveWriter::require_healthy; the mutationHost state probe): the
+// closed state reports WrongState.
+func (w *LiveWriter) healthy() error {
+	if w.lw == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	return w.lw.Healthy()
+}
+
+// abortAfter aborts the draft after a failed mutation or commit
+// preparation (Rust LiveWriter::abort_after; the mutationHost terminal).
+func (w *LiveWriter) abortAfter(cause error) error { return w.lw.AbortAfter(cause) }
+
+// Abort discards any open draft without publishing it (Rust
+// LiveWriter::abort): a clean writer reports ErrorNoPendingTransaction.
+// The writer stays open and healthy. An incomplete discard keeps the
+// writer close-only and reports the factual cause.
+func (w *LiveWriter) Abort() error {
+	if w.lw == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	result, err := w.lw.Abort()
+	if err != nil {
+		return err
+	}
+	if result.Outcome == live.AbortOutcomeAbortIncomplete {
+		return result.Cause
+	}
+	return nil
+}
+
+// commitPrepared publishes the open draft through the live commit
+// barrier (Rust LiveWriter::commit_with; the mutationHost terminal used
+// by the advanced transaction and workflow surfaces): the attempt is
+// named, the draft prepared, the reader-table gate taken exclusive, the
+// pair, the unchanged base, the reader slots, and the draft length are
+// proven, and the alternate meta page is published, with the retained
+// cleanup and coordination evidence mapped into the public CommitResult.
+// An unchanged draft is discarded and reports ErrorNoPendingTransaction,
+// exactly like the Rust commit_attempt.
+func (w *LiveWriter) commitPrepared(cancellation *CancellationToken, markSpent func(), context string) (CommitResult, error) {
+	result, err := w.lw.Commit(cancellation.check)
+	if err != nil {
+		markSpent()
+		return CommitResult{}, err
+	}
+	markSpent()
+	return CommitResult{
+		Status:              CommitStatus(result.Durability),
+		DatabaseID:          result.AttemptedDatabaseID,
+		TransactionID:       result.AttemptedTransactionID,
+		CommitNonce:         result.AttemptedCommitNonce,
+		Err:                 result.Cause,
+		Cleanup:             publicCleanupArtifacts(result.Cleanup),
+		CoordinationCleanup: publicCoordinationCleanup(result.CoordinationCleanup),
+	}, nil
+}
+
 // BeginDirect opens one ordered direct transaction on a clean live
-// writer (Rust LiveWriter::begin_direct_transaction): a direct database
-// is required, the commit nonce is drawn inside the writer core, and the
-// transaction owns every later mutation until Commit or Abort.
-func (w *LiveWriter) BeginDirect() (*LiveDirectTransaction, error) {
+// writer (Rust LiveWriter::begin_direct_transaction): cancellation is
+// checked first (a fired token classifies as Cancelled even on a closed
+// writer), a direct database is required, the commit nonce is drawn
+// inside the writer core, and the transaction owns every later mutation
+// until Commit or Abort. The captured token checkpoints every mutation
+// and the commit.
+func (w *LiveWriter) BeginDirect(cancellation *CancellationToken) (*LiveDirectTransaction, error) {
+	if err := cancellation.check(); err != nil {
+		return nil, err
+	}
 	if w.lw == nil {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if err := w.lw.BeginDirect(); err != nil {
 		return nil, err
 	}
-	return &LiveDirectTransaction{w: w, active: true}, nil
+	return &LiveDirectTransaction{w: w, active: true, cancellation: cancellation}, nil
 }
 
 // Close finishes the live writer (Rust LiveWriter::close): any open
@@ -105,8 +190,24 @@ func (w *LiveWriter) Close() (LiveCloseResult, error) {
 // call order; the draft is discarded by Commit and Abort and by
 // LiveWriter.Close.
 type LiveDirectTransaction struct {
-	w      *LiveWriter
-	active bool
+	w            *LiveWriter
+	active       bool
+	cancellation *CancellationToken
+}
+
+// checkOrAbort mirrors the Rust transaction state checkpoint: the
+// transaction must be active and the captured cancellation must not have
+// fired; a fired cancellation aborts the workflow through the live
+// writer and spends the handle.
+func (t *LiveDirectTransaction) checkOrAbort() error {
+	if err := t.requireActive(); err != nil {
+		return err
+	}
+	if err := t.cancellation.check(); err != nil {
+		t.active = false
+		return t.w.abortAfter(err)
+	}
+	return nil
 }
 
 func (t *LiveDirectTransaction) requireActive() error {
@@ -148,6 +249,9 @@ func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, err
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
 		return false, err
 	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	changed, err := t.w.lw.AssignV4(uint32(from), uint32(to), value)
 	if err != nil {
 		// Rust mutate -> abort_after discards the draft on a store
@@ -171,6 +275,9 @@ func (t *LiveDirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, err
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
 		return false, err
 	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	changed, err := t.w.lw.AssignV6(from.Hi, from.Lo, to.Hi, to.Lo, value)
 	if err != nil {
 		if t.w.lw.Draft() == nil {
@@ -187,6 +294,9 @@ func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
 		return false, err
 	}
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	changed, err := t.w.lw.ClearV4(uint32(from), uint32(to))
 	if err != nil {
 		if t.w.lw.Draft() == nil {
@@ -201,6 +311,9 @@ func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 // DirectTransaction::clear_v6).
 func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
+		return false, err
+	}
+	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
 	changed, err := t.w.lw.ClearV6(from.Hi, from.Lo, to.Hi, to.Lo)

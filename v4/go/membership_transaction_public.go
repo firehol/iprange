@@ -68,7 +68,7 @@ func (c *TransactionFeedCursor) Next() (FeedRef, bool, error) {
 // owns the draft until Commit, Abort, or Writer.Close, and every
 // reference produced by it is refused by any other transaction.
 type MembershipTransaction struct {
-	w               *Writer
+	w               mutationHost
 	databaseID      [16]byte
 	operationNonce  [16]byte
 	membershipEpoch uint64
@@ -80,6 +80,23 @@ type MembershipTransaction struct {
 // on a clean writer (Rust LiveWriter::begin_membership_transaction): a
 // membership database is required and the operation nonce pins every
 // reference produced by the transaction.
+// beginAdvancedTransaction starts one advanced transaction draft on the
+// host core (Rust begin_<kind>_state): the kind gate runs before the
+// nonce draw. The caller checks cancellation and the host state first,
+// in the Rust order.
+func beginAdvancedTransaction(core *writer.Core, kind uint8, detail string) ([16]byte, error) {
+	if core.BaseInfo().ValueKind != kind {
+		return [16]byte{}, &format.Error{Code: format.CodeWrongValueKind, Detail: detail}
+	}
+	return core.BeginTransaction()
+}
+
+// BeginMembershipTransaction begins one advanced membership transaction
+// on a clean writer (Rust LiveWriter::begin_membership_transaction): a
+// membership database is required and the operation nonce pins every
+// reference produced by the transaction. The old off-contract writer
+// surface stays until the consolidation removes it (SOW-0027 ledger:
+// remove-planned); the LiveWriter surface below is the normative one.
 func (w *Writer) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
 	// Rust begin_membership_state checks cancellation first, so a fired
 	// token classifies as Cancelled even on a closed writer.
@@ -92,16 +109,41 @@ func (w *Writer) BeginMembershipTransaction(cancellation *CancellationToken) (*M
 	if err := w.core.Healthy(); err != nil {
 		return nil, err
 	}
-	if w.core.BaseInfo().ValueKind != format.ValueKindMembership {
-		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "membership transaction requires a membership database"}
-	}
-	nonce, err := w.core.BeginTransaction()
+	nonce, err := beginAdvancedTransaction(w.core, uint8(ValueKindMembership), "membership transaction requires a membership database")
 	if err != nil {
 		return nil, err
 	}
 	return &MembershipTransaction{
 		w:              w,
 		databaseID:     w.core.BaseInfo().DatabaseID,
+		operationNonce: nonce,
+		cancellation:   cancellation,
+	}, nil
+}
+
+// BeginMembershipTransaction begins one advanced membership transaction
+// on a clean live writer (Rust LiveWriter::begin_membership_transaction):
+// cancellation is checked first (a fired token classifies as Cancelled
+// even on a closed writer), the live writer must be open and healthy, a
+// membership database is required, and the operation nonce pins every
+// reference produced by the transaction.
+func (w *LiveWriter) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
+	if err := cancellation.check(); err != nil {
+		return nil, err
+	}
+	if w.lw == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	if err := w.lw.Healthy(); err != nil {
+		return nil, err
+	}
+	nonce, err := beginAdvancedTransaction(w.coreOf(), uint8(ValueKindMembership), "membership transaction requires a membership database")
+	if err != nil {
+		return nil, err
+	}
+	return &MembershipTransaction{
+		w:              w,
+		databaseID:     w.coreOf().BaseInfo().DatabaseID,
 		operationNonce: nonce,
 		cancellation:   cancellation,
 	}, nil
@@ -116,7 +158,7 @@ func (t *MembershipTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return nil, err
 	}
-	cursor, err := t.w.core.CurrentFeedCursor()
+	cursor, err := t.w.coreOf().CurrentFeedCursor()
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +190,7 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 		return MembershipRef{}, err
 	}
 	var handle writer.MembershipHandle
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		handle, err = edit.AddFeedToMembership(membership.handle, feed.entry)
 		return err
@@ -179,7 +221,7 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 		return false, err
 	}
 	var changed bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 		return err
@@ -206,7 +248,7 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 		return false, err
 	}
 	var changed bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 		return err
@@ -234,7 +276,7 @@ func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 	}
 	var entry writer.FeedEntry
 	var found bool
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, found, err = edit.LookupFeed(string(name))
 		return err
@@ -264,7 +306,7 @@ func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 		return FeedRef{}, err
 	}
 	var entry writer.FeedEntry
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, _, err = edit.EnsureFeed(string(name))
 		return err
@@ -293,7 +335,7 @@ func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 		return FeedRef{}, err
 	}
 	var entry writer.FeedEntry
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, err = edit.RenameCurrentFeed(feed.entry, string(newName))
 		return err
@@ -321,7 +363,7 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 	if nextEpoch == 0 {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
-	err := t.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check)
 	})
 	if err != nil {
@@ -343,7 +385,7 @@ func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
-	changed, err := t.w.core.SetMetadata(input)
+	changed, err := t.w.coreOf().SetMetadata(input)
 	if err != nil {
 		// Rust stage_metadata_json raises the already-staged WrongState
 		// and the 20 MiB cap before mutate; those stay raw. Errors from
@@ -369,7 +411,7 @@ func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
-	changed, err := t.w.core.ClearMetadata()
+	changed, err := t.w.coreOf().ClearMetadata()
 	if err != nil {
 		// Rust stage_clear_metadata_json raises the already-staged
 		// WrongState before mutate; that stays raw. Errors from inside
@@ -399,7 +441,7 @@ func (t *MembershipTransaction) Commit() (CommitResult, error) {
 	if err := t.requireActive(); err != nil {
 		return CommitResult{}, err
 	}
-	return commitPrepared(t.w, t.cancellation, func() { t.spent = true }, "membership transaction")
+	return t.w.commitPrepared(t.cancellation, func() { t.spent = true }, "membership transaction")
 }
 
 // Abort discards this transaction and invalidates all of its references
@@ -436,13 +478,13 @@ func (t *MembershipTransaction) requireActive() error {
 	}
 	// Rust require_transaction reports the stale transaction before the
 	// closed writer; the core nil check only guards the nonce probe.
-	if t.w.core != nil && !t.w.core.OperationIs(t.operationNonce) {
+	if core := t.w.coreOf(); core != nil && !core.OperationIs(t.operationNonce) {
 		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
-	if t.w.core == nil {
+	if t.w.coreOf() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
-	return t.w.core.Healthy()
+	return t.w.coreOf().Healthy()
 }
 
 // checkOrAbort mirrors Rust MembershipState::check_or_abort: the
@@ -476,7 +518,7 @@ func (t *MembershipTransaction) requireCurrentFeed(feed FeedRef) error {
 	if err := t.requireReference(feed); err != nil {
 		return err
 	}
-	current, found, err := t.w.core.LookupCurrentFeed(feed.entry.Name)
+	current, found, err := t.w.coreOf().LookupCurrentFeed(feed.entry.Name)
 	if err != nil {
 		return err
 	}
@@ -530,7 +572,7 @@ func (t *MembershipTransaction) requireFamily(family uint8, ordered bool) error 
 	if !ordered {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
 	}
-	if t.w.core.BaseInfo().AddressFamily != family {
+	if t.w.coreOf().BaseInfo().AddressFamily != family {
 		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "membership mutation does not match the database family"}
 	}
 	return nil

@@ -79,8 +79,27 @@ func Create(path string, family AddressFamily, kind ValueKind, structure Structu
 // Writer is one opened live writer: the exclusive-lifetime-locked
 // read-write mapping of the committed generation (Rust LiveWriter). At
 // most one direct transaction is open at a time.
+//
+// The Writer surface is the recorded off-contract shape (SOW-0027): the
+// normative SDK exposes the sidecar-bound LiveWriter instead. The parity
+// ledger tracks every Writer symbol as remove-planned; this type
+// disappears when the live-writer consolidation lands.
 type Writer struct {
 	core *writer.Core
+}
+
+// coreOf is the mutationHost accessor for the transaction/workflow
+// facades (the parity-ledger migration holder).
+func (w *Writer) coreOf() *writer.Core { return w.core }
+
+// healthy proves the writer is open and usable (the mutationHost state
+// probe on the off-contract consolidation holder): a closed writer
+// reports WrongState.
+func (w *Writer) healthy() error {
+	if w.core == nil {
+		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	return w.core.Healthy()
 }
 
 // OpenWriter opens path as the single live writer (Rust LiveWriter::open
@@ -315,14 +334,27 @@ const (
 )
 
 // CommitResult is the factual outcome of one commit attempt (Rust
-// CommitResult minus the sidecar/cleanup/coordination surface,
-// milestone-4 gap).
+// CommitResult): the durability status, the pinned attempt identity, the
+// cause, and - on the live-writer paths - the retained cleanup and
+// coordination evidence. The off-contract writer paths leave the cleanup
+// fields zero (no sidecar exists there).
 type CommitResult struct {
-	Status        CommitStatus
-	DatabaseID    [16]byte
-	TransactionID uint64
-	CommitNonce   [16]byte
-	Err           error
+	Status              CommitStatus
+	DatabaseID          [16]byte
+	TransactionID       uint64
+	CommitNonce         [16]byte
+	Err                 error
+	Cleanup             LiveCommitCleanupArtifacts
+	CoordinationCleanup CoordinationCleanup
+}
+
+// CleanupState reports whether the commit left coordination residue
+// (Rust CommitResult::cleanup_state).
+func (r CommitResult) CleanupState() CleanupState {
+	if r.Cleanup.Empty() && r.CoordinationCleanup == CoordinationCleanupNone {
+		return CleanupStateClean
+	}
+	return CleanupStateResiduePossible
 }
 
 // Commit publishes this transaction (Rust DirectTransaction::commit). An

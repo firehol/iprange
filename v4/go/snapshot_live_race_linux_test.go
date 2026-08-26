@@ -137,7 +137,7 @@ func TestSnapshotLivePinsItsGenerationWhileWriterAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatal("writer:", err)
 	}
-	transaction, err := writer.BeginDirect()
+	transaction, err := writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatal("begin:", err)
 	}
@@ -253,7 +253,7 @@ func TestSnapshotLiveSourceReselectsGenerationCommittedWhileOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal("writer:", err)
 	}
-	transaction, err := writer.BeginDirect()
+	transaction, err := writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatal("begin:", err)
 	}

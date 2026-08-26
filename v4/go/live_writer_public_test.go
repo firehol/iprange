@@ -48,7 +48,7 @@ func TestPublicOpenLiveWriterRoundTrip(t *testing.T) {
 		t.Fatalf("meta selection = %v, want ProvenCurrent", info.MetaSelection)
 	}
 
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestPublicLiveWriterNoopAndAbort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestPublicLiveWriterNoopAndAbort(t *testing.T) {
 		t.Fatalf("noop commit = %v, want NoPendingTransaction", err)
 	}
 
-	tx, err = w.BeginDirect()
+	tx, err = w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestPublicLiveDirectCommitAbortAfterOpFailure(t *testing.T) {
 		}
 	}()
 
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestPublicLiveDirectCommitAbortAfterOpFailure(t *testing.T) {
 	}
 
 	// The same contract on Abort after a failed op.
-	tx2, err := w.BeginDirect()
+	tx2, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestPublicLiveDirectCommitAbortAfterOpFailure(t *testing.T) {
 	// The failure class is not fatal (budget exhaustion): a fresh
 	// transaction commits normally and the partial mutation never
 	// published.
-	tx3, err := w.BeginDirect()
+	tx3, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect after aborted ops: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestPublicLiveStaleHandleAfterOpFailure(t *testing.T) {
 		}
 	}()
 
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestPublicLiveStaleHandleAfterOpFailure(t *testing.T) {
 	}
 	// A newer transaction began with its own draft; the stale handle
 	// must not see it (Rust: the nonce lives in the discarded draft).
-	tx2, err := w.BeginDirect()
+	tx2, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect after aborted op: %v", err)
 	}

@@ -54,7 +54,7 @@ func TestPublicValidateLiveCleanSweep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLiveWriter: %v", err)
 	}
-	transaction, err := writer.BeginDirect()
+	transaction, err := writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLiveWriter: %v", err)
 	}
-	transaction, err := writer.BeginDirect()
+	transaction, err := writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
 	if result, err := transaction.Commit(); err != nil || result.Status != CommitCommitted {
 		t.Fatalf("Commit: %v (result %+v)", err, result)
 	}
-	transaction, err = writer.BeginDirect()
+	transaction, err = writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect 2: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
 	} else if uint64(size.Size()) != committedLength {
 		t.Fatalf("reopen length %d, want the committed length %d", size.Size(), committedLength)
 	}
-	transaction, err = writer.BeginDirect()
+	transaction, err = writer.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("BeginDirect 3: %v", err)
 	}

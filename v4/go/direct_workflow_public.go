@@ -16,7 +16,7 @@ import (
 // (Rust DirectReplacement): the input ranges carry direct values and
 // overwrite the whole map at finish.
 type DirectReplacement struct {
-	w     *Writer
+	w     mutationHost
 	state *directWorkflowState
 }
 
@@ -24,7 +24,7 @@ type DirectReplacement struct {
 // FirstSeenRefresh): covered addresses keep their old value, newly
 // covered addresses stamp the refresh value.
 type FirstSeenRefresh struct {
-	w            *Writer
+	w            mutationHost
 	state        *directWorkflowState
 	refreshValue uint32
 }
@@ -34,7 +34,7 @@ type FirstSeenRefresh struct {
 // value, recent absence survives, and absence at or below the cutoff
 // expires.
 type LastSeenRefresh struct {
-	w            *Writer
+	w            mutationHost
 	state        *directWorkflowState
 	refreshValue uint32
 	cutoff       uint32
@@ -46,7 +46,7 @@ type LastSeenRefresh struct {
 // workflows own the assignment input, timestamp workflows own the
 // coverage union input.
 type directWorkflowState struct {
-	w            *Writer
+	w            mutationHost
 	cancellation *CancellationToken
 	workflow     WorkflowKind
 	inputRecords uint64
@@ -58,44 +58,88 @@ type directWorkflowState struct {
 // BeginDirectReplacement begins a complete direct-map replacement on a
 // clean direct writer (Rust begin_direct_replacement).
 func (w *Writer) BeginDirectReplacement(cancellation *CancellationToken) (*DirectReplacement, error) {
-	state, err := w.beginExactDirectState(WorkflowDirectReplacement, cancellation)
+	return beginDirectReplacement(w, cancellation)
+}
+
+// BeginDirectReplacement begins a complete direct-map replacement on a
+// clean live writer (Rust begin_direct_replacement): cancellation is
+// checked first, the live writer must be open and healthy, and the
+// direct database precondition is proven before the workflow draft.
+func (w *LiveWriter) BeginDirectReplacement(cancellation *CancellationToken) (*DirectReplacement, error) {
+	return beginDirectReplacement(w, cancellation)
+}
+
+// beginDirectReplacement is the shared host-based begin (Rust
+// begin_direct_replacement): the exact-direct state over the host core.
+func beginDirectReplacement(h mutationHost, cancellation *CancellationToken) (*DirectReplacement, error) {
+	state, err := beginExactDirectState(h, WorkflowDirectReplacement, cancellation)
 	if err != nil {
 		return nil, err
 	}
-	return &DirectReplacement{w: w, state: state}, nil
+	return &DirectReplacement{w: h, state: state}, nil
 }
 
 // BeginFirstSeenRefresh begins a full-snapshot refresh on an exact
 // first_seen database (Rust begin_first_seen_refresh).
 func (w *Writer) BeginFirstSeenRefresh(refreshValue uint32, cancellation *CancellationToken) (*FirstSeenRefresh, error) {
-	state, err := w.beginTimestampState(DirectSemanticFirstSeen, WorkflowFirstSeenRefresh, cancellation)
+	return beginFirstSeenRefresh(w, refreshValue, cancellation)
+}
+
+// BeginFirstSeenRefresh begins a full-snapshot refresh on an exact
+// first_seen database (Rust begin_first_seen_refresh): cancellation is
+// checked first and the live writer must be open and healthy before the
+// exact value-tag gate.
+func (w *LiveWriter) BeginFirstSeenRefresh(refreshValue uint32, cancellation *CancellationToken) (*FirstSeenRefresh, error) {
+	return beginFirstSeenRefresh(w, refreshValue, cancellation)
+}
+
+// beginFirstSeenRefresh is the shared host-based begin (Rust
+// begin_first_seen_refresh): the timestamp preconditions over the host,
+// then the exact-direct state.
+func beginFirstSeenRefresh(h mutationHost, refreshValue uint32, cancellation *CancellationToken) (*FirstSeenRefresh, error) {
+	state, err := beginTimestampState(h, DirectSemanticFirstSeen, WorkflowFirstSeenRefresh, cancellation)
 	if err != nil {
 		return nil, err
 	}
-	return &FirstSeenRefresh{w: w, state: state, refreshValue: refreshValue}, nil
+	return &FirstSeenRefresh{w: h, state: state, refreshValue: refreshValue}, nil
 }
 
 // BeginLastSeenRefresh begins a full-snapshot refresh on an exact
 // last_seen database (Rust begin_last_seen_refresh).
 func (w *Writer) BeginLastSeenRefresh(refreshValue, cutoff uint32, cancellation *CancellationToken) (*LastSeenRefresh, error) {
-	state, err := w.beginTimestampState(DirectSemanticLastSeen, WorkflowLastSeenRefresh, cancellation)
+	return beginLastSeenRefresh(w, refreshValue, cutoff, cancellation)
+}
+
+// BeginLastSeenRefresh begins a full-snapshot refresh on an exact
+// last_seen database (Rust begin_last_seen_refresh): cancellation is
+// checked first and the live writer must be open and healthy before the
+// exact value-tag gate.
+func (w *LiveWriter) BeginLastSeenRefresh(refreshValue, cutoff uint32, cancellation *CancellationToken) (*LastSeenRefresh, error) {
+	return beginLastSeenRefresh(w, refreshValue, cutoff, cancellation)
+}
+
+// beginLastSeenRefresh is the shared host-based begin (Rust
+// begin_last_seen_refresh): the timestamp preconditions over the host,
+// then the exact-direct state.
+func beginLastSeenRefresh(h mutationHost, refreshValue, cutoff uint32, cancellation *CancellationToken) (*LastSeenRefresh, error) {
+	state, err := beginTimestampState(h, DirectSemanticLastSeen, WorkflowLastSeenRefresh, cancellation)
 	if err != nil {
 		return nil, err
 	}
-	return &LastSeenRefresh{w: w, state: state, refreshValue: refreshValue, cutoff: cutoff}, nil
+	return &LastSeenRefresh{w: h, state: state, refreshValue: refreshValue, cutoff: cutoff}, nil
 }
 
 // beginTimestampState runs the timestamp preconditions then the shared
 // exact-direct begin (Rust begin_timestamp_state): the database must be
 // direct and carry exactly the requested semantic tag.
-func (w *Writer) beginTimestampState(semantic DirectSemantic, workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
-	if w.core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+func beginTimestampState(h mutationHost, semantic DirectSemantic, workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
+	if err := h.healthy(); err != nil {
+		return nil, err
 	}
-	if w.core.BaseInfo().ValueKind != format.ValueKindDirect {
+	if h.coreOf().BaseInfo().ValueKind != format.ValueKindDirect {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "timestamp refresh requires a direct database"}
 	}
-	info, err := w.Info()
+	info, err := h.Info()
 	if err != nil {
 		return nil, err
 	}
@@ -103,21 +147,18 @@ func (w *Writer) beginTimestampState(semantic DirectSemantic, workflow WorkflowK
 	if !ok || actual != semantic {
 		return nil, &format.Error{Code: format.CodeWrongValueTag, Detail: "timestamp refresh requires its exact value tag"}
 	}
-	return w.beginExactDirectState(workflow, cancellation)
+	return beginExactDirectState(h, workflow, cancellation)
 }
 
 // requireDirectReady is the direct-workflow precondition shared by every
 // begin: a healthy writer with no pending draft (Rust
 // require_healthy inside begin_exact_direct_state; the draft check runs
 // in Core.BeginRangeWorkflow through BeginTransaction).
-func (w *Writer) requireDirectReady() error {
-	if w.core == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	if err := w.core.Healthy(); err != nil {
+func requireDirectReady(h mutationHost) error {
+	if err := h.healthy(); err != nil {
 		return err
 	}
-	if w.core.BaseInfo().ValueKind != format.ValueKindDirect {
+	if h.coreOf().BaseInfo().ValueKind != format.ValueKindDirect {
 		return &format.Error{Code: format.CodeWrongValueKind, Detail: "exact direct workflow requires a direct database"}
 	}
 	return nil
@@ -126,33 +167,33 @@ func (w *Writer) requireDirectReady() error {
 // beginExactDirectState mirrors Rust begin_exact_direct_state: the
 // direct-kind precondition, the cancellation checkpoint, the range
 // workflow draft, and the input state for the workflow kind.
-func (w *Writer) beginExactDirectState(workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
-	if err := w.requireDirectReady(); err != nil {
+func beginExactDirectState(h mutationHost, workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
+	if err := requireDirectReady(h); err != nil {
 		return nil, err
 	}
 	if err := cancellation.check(); err != nil {
 		return nil, err
 	}
-	if err := w.core.BeginRangeWorkflow(); err != nil {
+	if err := h.coreOf().BeginRangeWorkflow(); err != nil {
 		return nil, err
 	}
-	edit, err := w.core.BindEdit()
+	edit, err := h.coreOf().BindEdit()
 	if err != nil {
 		return nil, err
 	}
-	family := w.core.BaseInfo().AddressFamily
+	family := h.coreOf().BaseInfo().AddressFamily
 	state := &directWorkflowState{
-		w:            w,
+		w:            h,
 		cancellation: cancellation,
 		workflow:     workflow,
 		edit:         edit,
 	}
 	switch workflow {
 	case WorkflowFirstSeenRefresh, WorkflowLastSeenRefresh:
-		coverage := writer.NewUnionInput(family, format.ValueKindDirect, w.core.Budget().MaxHeapBytes)
+		coverage := writer.NewUnionInput(family, format.ValueKindDirect, h.coreOf().Budget().MaxHeapBytes)
 		state.coverage = &coverage
 	default:
-		assignment := writer.NewAssignmentInput(family, w.core.Budget().MaxHeapBytes)
+		assignment := writer.NewAssignmentInput(family, h.coreOf().Budget().MaxHeapBytes)
 		state.assignment = &assignment
 	}
 	return state, nil
@@ -457,7 +498,7 @@ func (s *directWorkflowState) requireInputFamily(family uint8) error {
 	if err := s.requireActive(); err != nil {
 		return err
 	}
-	if s.w.core.BaseInfo().AddressFamily != family {
+	if s.w.coreOf().BaseInfo().AddressFamily != family {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongAddressFamily, Detail: "range family does not match the database"})
 	}
 	return nil
@@ -466,13 +507,10 @@ func (s *directWorkflowState) requireInputFamily(family uint8) error {
 // requireActive mirrors Rust require_input_active: healthy writer with
 // an open workflow input.
 func (s *directWorkflowState) requireActive() error {
-	if s.w.core == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	if err := s.w.core.Healthy(); err != nil {
+	if err := s.w.healthy(); err != nil {
 		return err
 	}
-	if !s.w.core.WorkflowInputOpen() {
+	if !s.w.coreOf().WorkflowInputOpen() {
 		return &format.Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
 	}
 	return nil
@@ -502,11 +540,11 @@ func (s *directWorkflowState) releaseInput() {
 // replacement report from the full map comparison, then the shared
 // workflow completion.
 func (s *directWorkflowState) finishReplacement() (*FinishedWorkflow, error) {
-	comparison, err := s.w.core.CompareMaps(s.cancellation.check)
+	comparison, err := s.w.coreOf().CompareMaps(s.cancellation.check)
 	if err != nil {
 		return nil, s.w.abortAfter(err)
 	}
-	afterIntervals := s.w.core.Draft().Meta().RangeRecordCount
+	afterIntervals := s.w.coreOf().Draft().Meta().RangeRecordCount
 	report := s.replacementReport(comparison, afterIntervals, afterIntervals, comparison.After)
 	return completeDirectWorkflow(s.w, report, s.cancellation)
 }
@@ -583,7 +621,7 @@ func (s *directWorkflowState) requireFirstSeen() error {
 // aborts the workflow through the writer (Rust mutate -> abort_after),
 // discarding the draft so no partially merged tree can be committed.
 func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit) (writer.TimestampMerge, error)) (*FinishedWorkflow, error) {
-	if err := s.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	if err := s.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if s.coverage == nil {
 			return &format.Error{Code: format.CodeWrongState, Detail: "timestamp workflow has direct replacement input"}
 		}
@@ -592,7 +630,7 @@ func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit
 		return nil, s.w.abortAfter(err)
 	}
 	var merged writer.TimestampMerge
-	err := s.w.core.Mutate(func(edit *writer.WriterEdit) error {
+	err := s.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merged, err = merge(edit)
 		return err
@@ -600,7 +638,7 @@ func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit
 	if err != nil {
 		return nil, s.w.abortAfter(err)
 	}
-	afterIntervals := s.w.core.Draft().Meta().RangeRecordCount
+	afterIntervals := s.w.coreOf().Draft().Meta().RangeRecordCount
 	report := s.replacementReport(merged.Comparison, merged.InputIntervals, afterIntervals, merged.InputAddresses)
 	return completeDirectWorkflow(s.w, report, s.cancellation)
 }
@@ -610,7 +648,7 @@ func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit
 // from the caller (the scanned comparison or the merge), and the
 // address classes come from the comparison.
 func (s *directWorkflowState) replacementReport(comparison writer.Comparison, inputIntervals, afterIntervals uint64, inputAddresses Cardinality129) *WorkflowReport {
-	beforeIntervals := s.w.core.BaseInfo().RangeRecordCount
+	beforeIntervals := s.w.coreOf().BaseInfo().RangeRecordCount
 	logical := classifyComparison(comparison)
 	return &WorkflowReport{
 		Workflow:                     s.workflow,
@@ -644,18 +682,18 @@ func (s *directWorkflowState) nextInputRecord() (uint64, error) {
 // workflows: a no-change report discards the draft and returns the clean
 // terminal; a changed report retires the base through
 // finish_direct_workflow and returns the prepared terminal.
-func completeDirectWorkflow(w *Writer, report *WorkflowReport, cancellation *CancellationToken) (*FinishedWorkflow, error) {
+func completeDirectWorkflow(h mutationHost, report *WorkflowReport, cancellation *CancellationToken) (*FinishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
-		if err := w.core.DiscardUnpublished(); err != nil {
-			w.core.MarkUnresolved(err)
+		if err := h.coreOf().DiscardUnpublished(); err != nil {
+			h.coreOf().MarkUnresolved(err)
 			return nil, err
 		}
-		return &FinishedWorkflow{w: w, report: *report, changed: false}, nil
+		return &FinishedWorkflow{w: h, report: *report, changed: false}, nil
 	}
-	if err := w.core.Mutate(func(edit *writer.WriterEdit) error {
+	if err := h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinishDirectWorkflow(cancellation.check)
 	}); err != nil {
-		return nil, w.abortAfter(err)
+		return nil, h.abortAfter(err)
 	}
-	return &FinishedWorkflow{w: w, report: *report, changed: true, cancellation: cancellation}, nil
+	return &FinishedWorkflow{w: h, report: *report, changed: true, cancellation: cancellation}, nil
 }

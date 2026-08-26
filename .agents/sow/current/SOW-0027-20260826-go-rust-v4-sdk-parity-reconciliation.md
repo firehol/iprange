@@ -1,5 +1,31 @@
 # SOW-0027 - Go/Rust v4 SDK Parity Reconciliation
 
+## Review Gate (user directive 2026-08-26)
+
+Every milestone and slice gate under this SOW uses exactly five reviewers,
+all of the lead's own model, running the final-review skill in adversarial
+mode, each with one distinct scope. The Rust implementation is the baseline:
+the reviewers check the Go work in contrast to Rust for all aspects, while
+ensuring optimal Go idioms, performance, accuracy, interoperability, and
+compatibility.
+
+1. Rust parity: Go must do exactly what Rust does; the smallest divergence is
+   a performance or behavior red flag. This includes mmap-only access and
+   memory safety and lifetime ownership.
+2. Go idioms: the work must be natural Go despite being identical in logic,
+   system calls, philosophy, and structure to Rust.
+3. Performance: the absolutely most performant way; even one unnecessary
+   branch in the hot path is expensive.
+4. Wire format and integrity: Rust/Go interoperability of the file format on
+   disk, locking, coordination, and the shared conformance corpus.
+5. APIs and records: public APIs, docs, errors, and records all in sync with
+   Rust.
+
+Reviewers are level-1 only (no level-2 tier). They are spawned once and kept
+open for incremental delta re-reviews; they are restarted only between
+milestones. No reviewer model other than the lead's own is used. These rules
+live here at the top of the SOW, not in SWARM.md.
+
 ## Status
 
 Status: in-progress
@@ -17,6 +43,23 @@ non-Linux worker routing, the private Windows housekeeping, the asymmetric
 fixture producers, the same-language immutable-only subprocess tests, the
 missing benchmark matrix, and the incorrect SOW-0025 acceptance record.
 Implementation starts with the parity ledger freeze (plan step 1).
+
+Sub-state (2026-08-26): milestone 1 (parity ledger freeze) delivered at
+`bff1f550`; the parity ledger `v4/go/parity_manifest.tsv` and its CI tripwire
+`v4/go/parity_gate_test.go` are the frozen API record. Milestone 2 slice 2a
+(live-writer consolidation) is under way at working tree `bff1f550+`: all
+advanced transactions and high-level workflows now bind to the sidecar-bound
+`LiveWriter` through the shared `mutationHost` (live-state probe, core owner,
+abort, and commitPrepared terminals); `LiveWriter.BeginDirect`,
+`BeginMembershipTransaction`, `BeginStructuredTransaction`, `BeginCreateFeed`,
+`BeginReplaceFeed`, `BeginFirstSeenRefresh`, `BeginLastSeenRefresh`,
+`ProjectHistory`, `RenameFeed`, and `DeleteFeed` are public; the
+`FinishedHistoryProjection` commit path is unified through the host terminal
+(reader-table gate on the live path); and the end-to-end live test chain
+(CreateLive -> OpenLiveWriter -> BeginCreateFeed -> FinishInput -> Commit ->
+SnapshotTo -> OpenImmutable) plus live lifecycle, direct workflow, structured
+transaction, and live-source history projection tests pass. The ledger flipped
+the twelve implemented rows from missing to present.
 
 ## Requirements
 

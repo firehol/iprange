@@ -73,7 +73,7 @@ func TestPublicOpenLiveReaderRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestPublicLiveReaderCursorSurfaceDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestPublicLiveReaderPinCloseRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
