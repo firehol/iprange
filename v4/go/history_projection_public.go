@@ -9,10 +9,10 @@
 // The changed terminal is one prepared handle (DirectTransaction
 // precedent) that owns the draft until Commit, Abort, or Writer.Close,
 // with the cancellation token captured at prepare and checked through
-// commit (Rust PreparedState). The live source mode is refused by
-// the Go SDK (the port is not implemented; the Rust authority
-// supports HistoryProjectionSource::Live over the live reader core,
-// history_projection.rs).
+// commit (Rust PreparedState). Both source modes are implemented: the
+// immutable mode over a committed generation and the live mode over a
+// registered live reader (Rust HistoryProjectionSource::Live binds the
+// live reader core, history_projection.rs).
 
 package iprangedb
 
@@ -35,19 +35,21 @@ const (
 	// HistoryProjectionSourceImmutable projects the committed
 	// generation of one immutable database path.
 	HistoryProjectionSourceImmutable HistoryProjectionSourceKind = iota
-	// HistoryProjectionSourceLive would project one live database
-	// generation through the sidecar coordination; the Go SDK refuses
-	// it for now (Rust history_projection.rs implements it over the
-	// live reader core; tracked port surface).
+	// HistoryProjectionSourceLive projects the generation pinned by one
+	// registered live reader (Rust history_projection.rs
+	// HistoryProjectionSource::Live over the live reader core).
 	HistoryProjectionSourceLive
 )
 
 // HistoryProjectionSource is the source of one history projection
-// (Rust HistoryProjectionSource). Only the immutable mode is accepted;
-// Live reports ErrorOSUnsupported (not yet ported).
+// (Rust HistoryProjectionSource): an immutable reader for the
+// committed mode, or a registered live reader for the live mode (the
+// projection pins this reader's generation; the reader must stay open
+// for the whole projection).
 type HistoryProjectionSource struct {
 	Kind   HistoryProjectionSourceKind
 	Reader *ImmutableReader
+	Live   *LiveReader
 }
 
 // ProjectHistory projects one last-seen direct source into named
@@ -76,17 +78,41 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if len(windows) == 0 || uint64(len(windows)) > math.MaxUint32 {
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history window count is invalid"}
 	}
-	// Source::new + require_compatible_source (Rust history_projection.rs).
-	if source.Kind == HistoryProjectionSourceLive {
-		return nil, &Error{Code: ErrorOSUnsupported, Detail: "live history projection source is not implemented in the Go SDK"}
-	}
-	if source.Kind != HistoryProjectionSourceImmutable || source.Reader == nil {
+	// Source::new (Rust history_projection.rs): the immutable mode uses
+	// the public reader's inner core; the live mode binds the live
+	// reader core through its open-state check (Rust
+	// HistoryProjectionSource::Live -> reader.core()).
+	var sourceCore *reader.ImmutableReader
+	var info DatabaseInfo
+	switch source.Kind {
+	case HistoryProjectionSourceImmutable:
+		if source.Reader == nil {
+			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
+		}
+		sourceCore = source.Reader.inner
+		var err error
+		info, err = source.Reader.Info()
+		if err != nil {
+			return nil, err
+		}
+	case HistoryProjectionSourceLive:
+		if source.Live == nil {
+			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
+		}
+		core, err := source.Live.lr.Core()
+		if err != nil {
+			return nil, publicError(err)
+		}
+		sourceCore = core
+		info, err = source.Live.Info()
+		if err != nil {
+			return nil, err
+		}
+	default:
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
 	}
-	info, err := source.Reader.Info()
-	if err != nil {
-		return nil, err
-	}
+	// require_compatible_source (Rust history_projection.rs): the same
+	// five checks run over the bound source regardless of its mode.
 	if info.ValueKind != ValueKindDirect {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "history projection requires a direct source"}
 	}
@@ -96,7 +122,13 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if uint8(info.Family) != w.core.BaseInfo().AddressFamily {
 		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "history projection source family differs"}
 	}
-	sourceDevice, sourceInode, err := source.Reader.FileIdentity()
+	var sourceDevice, sourceInode uint64
+	var err error
+	if source.Kind == HistoryProjectionSourceImmutable {
+		sourceDevice, sourceInode, err = source.Reader.FileIdentity()
+	} else {
+		sourceDevice, sourceInode, err = source.Live.FileIdentity()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +153,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	if err != nil {
 		return nil, w.abortAfter(err)
 	}
-	report, err := w.driveHistoryProjection(source.Reader, info, projection, cancellation)
+	report, err := w.driveHistoryProjection(sourceCore, info, projection, cancellation)
 	if err != nil {
 		return nil, err
 	}
@@ -135,13 +167,13 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 // fixed-tree cursor open charges its own source pass, and each
 // consumed range is charged by the reader cursor itself (Rust
 // range_cursor::next; the drive does not charge ranges again).
-func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo, projection *writer.HistoryProjection, cancellation *CancellationToken) (*writer.HistoryProjectionReport, error) {
+func (w *Writer) driveHistoryProjection(src *reader.ImmutableReader, info DatabaseInfo, projection *writer.HistoryProjection, cancellation *CancellationToken) (*writer.HistoryProjectionReport, error) {
 	sourceRangeCount := uint64(0)
 	sourceAddresses := format.CardinalityZero()
 	check := cancellation.check
 	work.InputSourcePass(1)
 	if info.Family == AddressFamilyIPv4 {
-		cursor, err := src.inner.NewDirectCursor4(reader.RangeForward)
+		cursor, err := src.NewDirectCursor4(reader.RangeForward)
 		if err != nil {
 			return nil, w.abortAfterSource(err)
 		}
@@ -175,7 +207,7 @@ func (w *Writer) driveHistoryProjection(src *ImmutableReader, info DatabaseInfo,
 			previous = histPrevious4{set: true, from: current.From, to: current.To, value: current.Value}
 		}
 	} else {
-		cursor, err := src.inner.NewDirectCursor6(reader.RangeForward)
+		cursor, err := src.NewDirectCursor6(reader.RangeForward)
 		if err != nil {
 			return nil, w.abortAfterSource(err)
 		}

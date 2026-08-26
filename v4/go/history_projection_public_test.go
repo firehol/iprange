@@ -438,11 +438,12 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 	source := histSource(t, sourcePath)
 	defer source.Close()
 
-	// Live source refusal happens at the API boundary.
+	// A live source without the live reader binding is invalid at the
+	// API boundary (the live arm is implemented; see
+	// history_projection_live_test.go for the live mode coverage).
 	_, liveErr := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Reader: source}, windows3(), nil)
-	var public *Error
-	if !errors.As(liveErr, &public) || public.Code != ErrorOSUnsupported {
-		t.Fatalf("live source err = %v, want public ErrorOSUnsupported", liveErr)
+	if !isPubCode(liveErr, ErrorInvalidArgument) {
+		t.Fatalf("unbound live source err = %v, want ErrorInvalidArgument", liveErr)
 	}
 
 	// Invalid enum and nil reader.
