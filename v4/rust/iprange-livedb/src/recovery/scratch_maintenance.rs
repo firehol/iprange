@@ -371,7 +371,11 @@ mod platform {
                 return Ok(removal(false, None, Housekeeping::None, Box::default()));
             }
             let file = self.open_exact_checkpointed()?;
-            self.retire_checkpointed(file, creation_security)
+            self.retire_checkpointed(
+                file,
+                creation_security,
+                "checkpointed scratch lost its exact name",
+            )
         }
 
         fn present(&self) -> Result<bool> {
@@ -468,6 +472,7 @@ mod platform {
                     kind: 0,
                     commitment: [0; 32],
                 },
+                "abandoned scratch lost its exact name",
             )
         }
 
@@ -476,6 +481,7 @@ mod platform {
             &self,
             file: File,
             _creation_security: crate::publication::CreationSecurity,
+            _lost_detail: &'static str,
         ) -> Result<AbandonedArtifactRemoval> {
             let removed = self
                 .directory
@@ -532,6 +538,7 @@ mod platform {
                     kind: header.creation_security_kind,
                     commitment: header.creation_security_commitment,
                 },
+                "abandoned scratch lost its exact name",
             )
         }
 
@@ -542,16 +549,18 @@ mod platform {
         /// GC rename. The GC move renames the payload through the
         /// retained source handle and flushes it (FlushFileBuffers),
         /// so the retired handle must be writable and delete-capable;
-        /// the Go arm follows the same shape.
+        /// the Go arm follows the same shape. `lost_detail` names the
+        /// missing-artifact conflict per flow ("checkpointed scratch
+        /// lost its exact name" for the checkpointed retirement,
+        /// "abandoned scratch lost its exact name" for the abandoned
+        /// one), exactly like the Go arm's parameter.
         #[cfg(windows)]
-        fn open_writable(&self, probe: File) -> Result<File> {
+        fn open_writable(&self, probe: File, lost_detail: &'static str) -> Result<File> {
             let regular = self
                 .directory
                 .open_regular(&self.name, true)
                 .map_err(namespace_error)?
-                .ok_or(Error::CleanupConflict(
-                    "abandoned scratch lost its exact name",
-                ))?;
+                .ok_or(Error::CleanupConflict(lost_detail))?;
             require_owned(true, 1, regular.identity, self.expected_artifact)?;
             self.directory
                 .verify_name(&self.name, self.expected_artifact)
@@ -565,10 +574,11 @@ mod platform {
             &self,
             file: File,
             creation_security: CreationSecurity,
+            lost_detail: &'static str,
         ) -> Result<AbandonedArtifactRemoval> {
             use crate::publication::gc::{self, Authority};
 
-            let writable = self.open_writable(file)?;
+            let writable = self.open_writable(file, lost_detail)?;
             let retired = gc::retire(
                 &self.directory,
                 Authority {
