@@ -70,7 +70,7 @@ func TestAggregationWorkCounters(t *testing.T) {
 func TestJoinDirectWorkCounters(t *testing.T) {
 	scope, _, direct := memberScopes(t)
 	work.Reset()
-	report, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 4096}, nil, nil)
+	report, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 4096}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

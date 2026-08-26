@@ -602,7 +602,7 @@ func TestJoinDirectV4(t *testing.T) {
 	want := joinDirectExpect(rows, directs, feedSet(t, scope))
 
 	var cells []DirectJoinCell
-	report, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 4096}, func(batch []DirectJoinCell) error {
+	report, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 4096}, func(batch []DirectJoinCell) error {
 		cells = append(cells, batch...)
 		return nil
 	}, nil)
@@ -668,7 +668,7 @@ func TestJoinDirectV4(t *testing.T) {
 	}
 	want2 := joinDirectExpect(rows, directs, feedSet(t, named))
 	var cells2 []DirectJoinCell
-	report2, err := named.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 4096}, func(batch []DirectJoinCell) error {
+	report2, err := named.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 4096}, func(batch []DirectJoinCell) error {
 		cells2 = append(cells2, batch...)
 		return nil
 	}, nil)
@@ -707,7 +707,7 @@ func TestJoinDirectErrors(t *testing.T) {
 	}
 
 	// Wrong value kind: a membership source is not a direct provider.
-	if _, err := scope.JoinDirect(member, DirectJoinBudget{MaxResultCells: 1 << 20}, nil, nil); errorAsCode(err) != ErrorWrongValueKind {
+	if _, err := scope.JoinDirect(DirectJoinSourceImmutable(member), DirectJoinBudget{MaxResultCells: 1 << 20}, nil, nil); errorAsCode(err) != ErrorWrongValueKind {
 		t.Fatalf("membership source error = %v, want WrongValueKind", err)
 	}
 	// Wrong address family: v6 membership scope against the v4 direct db.
@@ -719,21 +719,21 @@ func TestJoinDirectErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scope6.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 1 << 20}, nil, nil); errorAsCode(err) != ErrorWrongAddressFamily {
+	if _, err := scope6.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 1 << 20}, nil, nil); errorAsCode(err) != ErrorWrongAddressFamily {
 		t.Fatalf("family mismatch error = %v, want WrongAddressFamily", err)
 	}
 	// The result-cell budget bounds distinct cells: 22 exist, 21 must
 	// fail after the first 21.
-	if _, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 21}, nil, nil); errorAsCode(err) != ErrorInsufficientResourceBudget {
+	if _, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 21}, nil, nil); errorAsCode(err) != ErrorInsufficientResourceBudget {
 		t.Fatalf("budget 21 error = %v, want InsufficientResourceBudget", err)
 	}
-	if _, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 0}, nil, nil); errorAsCode(err) != ErrorInsufficientResourceBudget {
+	if _, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 0}, nil, nil); errorAsCode(err) != ErrorInsufficientResourceBudget {
 		t.Fatalf("budget 0 error = %v, want InsufficientResourceBudget", err)
 	}
 	// Cancellation: a pre-cancelled token fails the op.
 	cancel := NewCancellationToken()
 	cancel.Cancel()
-	if _, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 1 << 20}, nil, cancel); errorAsCode(err) != ErrorCancelled {
+	if _, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 1 << 20}, nil, cancel); errorAsCode(err) != ErrorCancelled {
 		t.Fatalf("cancelled direct join error = %v, want Cancelled", err)
 	}
 }

@@ -122,7 +122,19 @@ attempts, tail-only removal, invalid-attempt refusal). The parity
 ledger flipped the commit-resolution row to present (73
 present/remove-planned, 13 missing) and the gate test passes. Full
 battery green (plain, v4work, vet, gofmt, race+checkptr) at the slice
-commit. Remaining 2b items: live join sources and membership import.
+commit. Slice 2b part 3 (live join sources) delivered (working tree
+`9f0a9c93+`, gate pending): `DirectJoinSource` with the
+`DirectJoinSourceImmutable` / `DirectJoinSourceLive` constructors
+(Rust DirectJoinSource parity) lets `MembershipScope.JoinDirect` merge
+a membership scope with the pinned generation of a live direct
+provider; the variant resolution proves the live reader's open state
+before any page is touched (Rust Source::new over LiveReader::core),
+the zero source is refused as InvalidArgument, and the live-provider
+test pins the exact report facts, result cells, closed-reader
+WrongState, wrong-kind, and empty-source arms. The parity ledger
+flipped the join row to present (74 present/remove-planned, 12
+missing) and the gate test passes. Full battery green at the slice
+commit. Remaining 2b item: membership import.
 
 ## Requirements
 

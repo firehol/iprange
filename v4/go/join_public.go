@@ -14,6 +14,48 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
+// DirectJoinSource is the pinned direct-value side of one
+// membership/direct join (Rust DirectJoinSource): an immutable or a
+// live reader, pinned for the join duration by the caller's open
+// handle. The zero value names no reader and is refused.
+type DirectJoinSource struct {
+	immutable *ImmutableReader
+	live      *LiveReader
+}
+
+// DirectJoinSourceImmutable builds the immutable-reader variant (Rust
+// DirectJoinSource::Immutable).
+func DirectJoinSourceImmutable(r *ImmutableReader) DirectJoinSource {
+	return DirectJoinSource{immutable: r}
+}
+
+// DirectJoinSourceLive builds the live-reader variant (Rust
+// DirectJoinSource::Live): the join resolves the pinned generation
+// through the live reader's open state, so a closing or closed reader
+// reports WrongState before any page is touched.
+func DirectJoinSourceLive(r *LiveReader) DirectJoinSource {
+	return DirectJoinSource{live: r}
+}
+
+// core resolves the pinned reader core of the selected variant with
+// the variant's open proof (Rust Source::new: the immutable core is
+// unconditionally open, the live core requires the open state).
+func (s DirectJoinSource) core() (*reader.ImmutableReader, error) {
+	if s.immutable != nil {
+		if err := s.immutable.checkOpen(); err != nil {
+			return nil, err
+		}
+		return s.immutable.inner, nil
+	}
+	if s.live != nil {
+		if err := s.live.checkOpen(); err != nil {
+			return nil, err
+		}
+		return s.live.core(), nil
+	}
+	return nil, &Error{Code: ErrorInvalidArgument, Detail: "direct join source is empty"}
+}
+
 // DirectJoinCell is one exact mapped or unmapped direct-provider result.
 // DirectValue is nil for the single unmapped cell of every feed and
 // points at the direct value otherwise.
@@ -67,15 +109,17 @@ type DirectJoinBudget struct {
 // count, and exceeding it fails with ErrorInsufficientResourceBudget.
 // cellYield receives bounded batches from one reusable per-operation
 // buffer; a nil yield discards. The source must be a direct-value
-// database of the scope's address family.
-func (s *MembershipScope) JoinDirect(source *ImmutableReader, budget DirectJoinBudget, cellYield func([]DirectJoinCell) error, cancellation *CancellationToken) (DirectJoinReport, error) {
+// database of the scope's address family; the live variant resolves
+// the join through the reader's pinned generation.
+func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinBudget, cellYield func([]DirectJoinCell) error, cancellation *CancellationToken) (DirectJoinReport, error) {
 	if err := s.r.checkOpen(); err != nil {
 		return DirectJoinReport{}, err
 	}
-	if err := source.checkOpen(); err != nil {
+	sourceReader, err := source.core()
+	if err != nil {
 		return DirectJoinReport{}, err
 	}
-	sourceMeta := source.inner.Meta()
+	sourceMeta := sourceReader.Meta()
 	if sourceMeta.ValueKind != format.ValueKindDirect {
 		return DirectJoinReport{}, &Error{Code: ErrorWrongValueKind, Detail: "membership/direct join requires a direct source"}
 	}
@@ -86,7 +130,7 @@ func (s *MembershipScope) JoinDirect(source *ImmutableReader, budget DirectJoinB
 	if err != nil {
 		return DirectJoinReport{}, err
 	}
-	report, err := s.r.core().JoinDirect(s.data, s.family(), source.inner, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
+	report, err := s.r.core().JoinDirect(s.data, s.family(), sourceReader, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
 		if cellYield == nil {
 			return nil
 		}

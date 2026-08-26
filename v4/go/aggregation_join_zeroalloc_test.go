@@ -35,7 +35,7 @@ func TestNoPageSizedHeapAllocationsJoins(t *testing.T) {
 		if _, err := scope.Aggregate(MembershipAggregationAllPairs(), nil, nil, nil); err != nil {
 			t.Fatal("warm aggregate:", err)
 		}
-		if _, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 4096}, nil, nil); err != nil {
+		if _, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 4096}, nil, nil); err != nil {
 			t.Fatal("warm direct join:", err)
 		}
 		if _, err := scope.JoinMembership(right, nil, nil, nil); err != nil {
@@ -51,7 +51,7 @@ func TestNoPageSizedHeapAllocationsJoins(t *testing.T) {
 		if _, err := scope.Aggregate(MembershipAggregationAllPairs(), nil, nil, nil); err != nil {
 			t.Fatal("aggregate:", err)
 		}
-		if _, err := scope.JoinDirect(direct, DirectJoinBudget{MaxResultCells: 4096}, nil, nil); err != nil {
+		if _, err := scope.JoinDirect(DirectJoinSourceImmutable(direct), DirectJoinBudget{MaxResultCells: 4096}, nil, nil); err != nil {
 			t.Fatal("direct join:", err)
 		}
 		if _, err := scope.JoinMembership(right, nil, nil, nil); err != nil {

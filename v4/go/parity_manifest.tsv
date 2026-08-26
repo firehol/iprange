@@ -66,7 +66,7 @@ cancellation	CancellationToken::new	NewCancellationToken	present	name variant
 cancellation	CancellationToken::cancel	CancellationToken.Cancel	present	
 cancellation	CancellationToken::is_cancelled	CancellationToken.IsCancelled	present	
 cancellation	CancellationToken::from_poll		missing	Rust async poll integration not ported; Go nil token is the uncancellable form
-join	membership_query/join.rs DirectJoinSource::Live		missing	Go JoinDirect accepts ImmutableReader only (join_public.go:63-89); the live direct source is absent
+join	membership_query/join.rs DirectJoinSource::Live	DirectJoinSourceLive	present	join_public.go; DirectJoinSource union with DirectJoinSourceImmutable/DirectJoinSourceLive; JoinDirect resolves the variant core with its open proof (Rust Source::new)
 publication	publication.rs list_windows_housekeeping		missing	Windows housekeeping is private in Go (internal/publication/maintenance_gc_windows.go)
 publication	publication.rs remove_windows_housekeeping		missing	Windows housekeeping is private in Go
 publication	publication.rs list_abandoned_publication_temps	ListAbandonedPublicationTemps	present	publication_public.go
