@@ -16,7 +16,7 @@ writer-offcontract	LiveWriter::begin_replace_feed	Writer.BeginReplaceFeed	remove
 writer-offcontract	LiveWriter::begin_membership_transaction	Writer.BeginMembershipTransaction	remove-planned	Wrong owner: transaction bound to Writer
 writer-offcontract	LiveWriter::begin_structured_transaction	Writer.BeginStructuredTransaction	remove-planned	Wrong owner: transaction bound to Writer
 writer-offcontract	LiveWriter::project_history	Writer.ProjectHistory	remove-planned	Wrong owner: projection driven from the Writer surface (history_projection_public.go:64)
-writer-offcontract	LiveWriter::begin_membership_import		missing	No public membership import anywhere (only the WorkflowMembershipImport enum constant)
+writer-offcontract	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Complete name-based import from a pinned membership reader (membership_import_public.go)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
 writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
 live-writer	commit_resolution.rs resolve_commit	ResolveCommit	present	commit_resolution_public.go; two-meta classify with sync and sidecar proof; public CommitResolutionMode/CommitResolution/CommitResolutionResult/LocalFileRelation types
@@ -35,7 +35,7 @@ live-writer	LiveWriter::begin_replace_feed	LiveWriter.BeginReplaceFeed	present	f
 live-writer	LiveWriter::begin_first_seen_refresh	LiveWriter.BeginFirstSeenRefresh	present	direct_workflow_public.go; sidecar-bound live begin
 live-writer	LiveWriter::begin_last_seen_refresh	LiveWriter.BeginLastSeenRefresh	present	direct_workflow_public.go; sidecar-bound live begin
 live-writer	LiveWriter::project_history	LiveWriter.ProjectHistory	present	history_projection_public.go; sidecar-bound live projection
-live-writer	LiveWriter::begin_membership_import		missing	Membership import must be implemented
+live-writer	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Membership import implemented (SOW-0027 slice 2b)
 live-writer	LiveWriter::delete_feed	LiveWriter.DeleteFeed	present	feed_workflow_public.go; sidecar-bound live lifecycle
 live-writer	LiveWriter::rename_feed	LiveWriter.RenameFeed	present	feed_workflow_public.go; sidecar-bound live lifecycle
 live-writer	LiveWriter::reclaim	LiveWriter.Reclaim	present	live_writer_public.go; bounded oldest-safe reclamation with auto-publish

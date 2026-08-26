@@ -119,7 +119,7 @@ func newFirstSeenPolicyWithRemovals(refreshValue uint32, family uint8, removals 
 	return &firstSeenPolicy{refreshValue: refreshValue, counters: timestampCounters{family: family}, removals: removals}
 }
 
-func (p *firstSeenPolicy) transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error) {
+func (p *firstSeenPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	switch {
 	case old.present && incoming.present:
 		return old, nil
@@ -130,8 +130,8 @@ func (p *firstSeenPolicy) transform(store *DraftStore, old, incoming optionalVal
 	}
 }
 
-func (p *firstSeenPolicy) observe(from, to tree.Key, old, incoming, new optionalValue) error {
-	addresses, err := p.counters.observe(from, to, old, incoming, new)
+func (p *firstSeenPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
+	addresses, err := p.counters.observe(from, to, old, optionalValue{value: incoming.value, present: incoming.present}, new)
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func newLastSeenPolicy(refreshValue, cutoff uint32, family uint8) *lastSeenPolic
 	}
 }
 
-func (p *lastSeenPolicy) transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error) {
+func (p *lastSeenPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	switch {
 	case old.present && incoming.present:
 		if old.value >= p.refreshValue {
@@ -271,8 +271,8 @@ func (p *lastSeenPolicy) transform(store *DraftStore, old, incoming optionalValu
 	}
 }
 
-func (p *lastSeenPolicy) observe(from, to tree.Key, old, incoming, new optionalValue) error {
-	_, err := p.counters.observe(from, to, old, incoming, new)
+func (p *lastSeenPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
+	_, err := p.counters.observe(from, to, old, optionalValue{value: incoming.value, present: incoming.present}, new)
 	return err
 }
 
@@ -323,7 +323,7 @@ func (s *DraftStore) mergeLastSeen(base format.Meta, refreshValue, cutoff uint32
 // merge_timestamp_family): the draft meta is the input, the merge output
 // replaces the draft range root, and the base tree retires inside the
 // merge finish.
-func (s *DraftStore) mergeTimestamp(base format.Meta, policy mergePolicy[timestampOutput], check func() error) (TimestampMerge, error) {
+func (s *DraftStore) mergeTimestamp(base format.Meta, policy mergePolicy[uint32, timestampOutput], check func() error) (TimestampMerge, error) {
 	var codec rangeFamily
 	if base.AddressFamily == format.AddressFamilyIPv4 {
 		codec = rangeCodec4{}

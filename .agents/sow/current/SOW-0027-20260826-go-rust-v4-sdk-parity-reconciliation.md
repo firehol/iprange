@@ -134,7 +134,41 @@ test pins the exact report facts, result cells, closed-reader
 WrongState, wrong-kind, and empty-source arms. The parity ledger
 flipped the join row to present (74 present/remove-planned, 12
 missing) and the gate test passes. Full battery green at the slice
-commit. Remaining 2b item: membership import.
+commit. Slice 2b part 4 (membership import) delivered (working tree
+`9f0a9c93+`, gate pending): `LiveWriter.BeginMembershipImport` with the
+`MembershipImportSource` / `MembershipImportSourceImmutable` /
+`MembershipImportSourceLive` constructors and the `MembershipImport`
+handle (Rust live_writer/membership_import.rs parity) imports a
+complete name-based membership database from an explicitly pinned live
+or immutable reader into the preserved destination: the source
+resolution and compatibility proof (membership kind, same family and
+value tag, a different local file via the live writer's main identity),
+the catalog sweep re-proving every source feed by name, the v4/v6
+range sweeps with the last-translation fast path, the import cache
+(the draft-private fixed tree with page types 240/241 and the aux
+discriminator, Rust draft_store/import_cache.rs), the ordered
+preserve-without-input union through `begin_import_merge` carrying the
+already-translated membership pair in the merge record exactly like
+Rust `Incoming<TranslatedMembership>` (draft_store/import_merge.rs
+parity: the merge never re-resolves a translation - the ordered merge
+input became generic over the policy's value type like the Rust
+`OrderedMerge<K, V, P>`, with history/timestamp inputs staying u32),
+the exact six-way classification
+report, the empty-feed catalog change, and the full IPv6 space with
+the exact 2^128 cardinality. All abort arms are atomic and leave the
+writer reusable: cancellation, same-file InvalidArgument, incompatible
+family/tag/kind, zero-budget TransactionAborted wrapping
+InsufficientResourceBudget, and corrupted-source TransactionAborted
+wrapping FormatInvalid (the reader cursor now maps every header
+problem to the Corrupt class exactly like Rust slotted_page
+parse_tree). The parity ledger flipped both membership-import rows to
+present (76 present/remove-planned, 10 missing) and the gate test
+passes; the full battery (plain, v4work, vet, gofmt, race,
+checkptr=2, mmap trace, Rust membership_import authority) is green at
+this state. With this commit slice 2b (live workflows) is complete;
+slice 2c (remove/privatize the off-contract `Create`/`OpenWriter`/
+`Writer` surface and regenerate fixtures through the live path)
+follows.
 
 ## Requirements
 

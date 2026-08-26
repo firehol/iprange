@@ -169,7 +169,7 @@ func newFeedPolicy(member MembershipHandle, family uint8) feedPolicy {
 // FeedPolicy::transform): no old bitmap adopts the member when covered
 // and stays absent otherwise; an old bitmap combines with the member
 // through the cached union/difference.
-func (p *feedPolicy) transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error) {
+func (p *feedPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	covered := incoming.present
 	memberID, memberWords := p.member.stored()
 	if !old.present {
@@ -197,7 +197,7 @@ func (p *feedPolicy) transform(store *DraftStore, old, incoming optionalValue) (
 // observe projects one transformed segment into the before/after counts
 // (Rust FeedPolicy::observe: the before classification compares the new
 // bitmap with the old one around the coverage).
-func (p *feedPolicy) observe(from, to tree.Key, old, incoming, new optionalValue) error {
+func (p *feedPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
 	after := incoming.present
 	var before bool
 	if after {

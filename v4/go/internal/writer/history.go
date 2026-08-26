@@ -110,7 +110,7 @@ type historyPlan struct {
 
 // historyMerge is one running projection merge (Rust HistoryMerge).
 type historyMerge struct {
-	inner            *orderedMerge[historyPolicy]
+	inner            *orderedMerge[uint32, historyPolicy]
 	createdFeedCount uint64
 }
 
@@ -222,7 +222,7 @@ func (p *historyPlan) begin(store *DraftStore, base format.Meta, check func() er
 	} else {
 		codec = rangeCodec6{}
 	}
-	inner, err := newOrderedMerge[historyPolicy](store, base, codec, &p.policy, check)
+	inner, err := newOrderedMerge[uint32, historyPolicy](store, base, codec, &p.policy, check)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +386,7 @@ func orderHistoryFeedIndexes(original []uint32, feedToWindow []uint32, heap *hea
 // push feeds one source range into the projection merge (Rust
 // HistoryMerge::push).
 func (m *historyMerge) push(store *DraftStore, from, to tree.Key, lastSeen uint32, check func() error) error {
-	return m.inner.push(store, incomingRange{from: from, to: to, value: lastSeen}, check)
+	return m.inner.push(store, incomingRange[uint32]{from: from, to: to, value: lastSeen}, check)
 }
 
 // finish ends the merge and produces the projection report (Rust
@@ -405,7 +405,7 @@ func (p *historyPolicy) preserveWithoutInput() bool { return false }
 // HistoryPolicy::transform): the destination bitmap loses every feed
 // whose cutoff is below the incoming last-seen, then gains exactly the
 // feeds ranked below the current prefix.
-func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue) (optionalValue, error) {
+func (p *historyPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	p.currentPrefix = 0
 	if incoming.present {
 		p.currentPrefix = sort.Search(len(p.cutoffOrder), func(index int) bool {
@@ -485,7 +485,7 @@ func (p *historyPolicy) transform(store *DraftStore, old, incoming optionalValue
 
 // observe folds one segment into every window and the aggregate (Rust
 // HistoryPolicy::observe).
-func (p *historyPolicy) observe(from, to tree.Key, _old, _incoming, _new optionalValue) error {
+func (p *historyPolicy) observe(from, to tree.Key, _old optionalValue, _incoming incomingValue[uint32], _new optionalValue) error {
 	count, err := familyInclusiveCardinality(p.family, from, to)
 	if err != nil {
 		return err

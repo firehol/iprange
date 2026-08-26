@@ -51,6 +51,14 @@ const (
 	// committed generation.
 	PageTypeDeltaBranch PageType = 250
 	PageTypeDeltaLeaf   PageType = 251
+	// Operation-private import-cache tree types (Rust
+	// draft_store/import_cache.rs CACHE_BRANCH / CACHE_LEAF): the draft
+	// source-feed map, source-membership translations, and translated
+	// membership words of one name-based membership import. These pages
+	// are private to one import operation and never appear in a
+	// committed generation.
+	PageTypeImportCacheBranch PageType = 240
+	PageTypeImportCacheLeaf   PageType = 241
 )
 
 // Address families (binary-format-v4.md section 2).

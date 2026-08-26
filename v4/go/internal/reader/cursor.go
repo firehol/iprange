@@ -195,7 +195,8 @@ func (c *treeCursor) readPage(pageNumber uint32, expected int) (nodeView, bool, 
 	}
 	h, err := format.DecodePageHeader(page, c.r.meta.TxnID)
 	if err != nil {
-		return nodeView{}, false, err
+		// Rust parse_tree maps every header problem to the Corrupt class.
+		return nodeView{}, false, corrupt("slotted-page header is invalid: " + err.Error())
 	}
 	if expected >= 0 && int(h.Level) != expected {
 		return nodeView{}, false, corrupt("tree level %d expected %d", h.Level, expected)

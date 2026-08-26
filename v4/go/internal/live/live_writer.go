@@ -199,6 +199,12 @@ func (w *LiveWriter) Draft() *writer.Draft { return w.core.Draft() }
 // commit, and close terminal stays in the live writer machine.
 func (w *LiveWriter) Core() *writer.Core { return w.core }
 
+// MainIdentity returns the retained main-file identity of the open
+// writer (Rust LiveWriter::main_identity; the membership import
+// compares it with the source reader identity to refuse importing a
+// database onto itself).
+func (w *LiveWriter) MainIdentity() FileIdentity { return w.mainIdentity }
+
 // Healthy proves the live writer is open and usable (Rust
 // LiveWriter::require_healthy).
 func (w *LiveWriter) Healthy() error { return w.requireHealthy() }
