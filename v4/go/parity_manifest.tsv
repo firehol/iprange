@@ -26,7 +26,9 @@ live-writer	live_lifecycle.rs InitializeLive	InitializeLive	present	lifecycle_pu
 live-writer	live_writer.rs LiveWriter::open	OpenLiveWriter	present	live_writer_public.go:34
 live-writer	LiveWriter::info	LiveWriter.Info	present	live_writer_public.go:45
 live-writer	LiveWriter::close	LiveWriter.Close	present	live_writer_public.go:89
+live-writer	LiveWriter::abort	LiveWriter.Abort	present	live_writer_public.go; live machine abort with AbortResult mapping
 live-writer	LiveWriter::begin_direct_transaction	LiveWriter.BeginDirect	present	live_writer_public.go:150; cancellation-bearing live begin
+live-writer	LiveWriter::begin_direct_replacement	LiveWriter.BeginDirectReplacement	present	direct_workflow_public.go; sidecar-bound live begin
 live-writer	LiveWriter::begin_membership_transaction	LiveWriter.BeginMembershipTransaction	present	membership_transaction_public.go; sidecar-bound live begin
 live-writer	LiveWriter::begin_structured_transaction	LiveWriter.BeginStructuredTransaction	present	structured_transaction_public.go; sidecar-bound live begin
 live-writer	LiveWriter::begin_create_feed	LiveWriter.BeginCreateFeed	present	feed_workflow_public.go; sidecar-bound live begin

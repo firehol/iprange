@@ -38,7 +38,7 @@ func liveDirectSource(t *testing.T, tag ValueTag, readerCapacity uint32) string 
 }
 
 // TestPublicLiveFeedWorkflowEndToEnd runs the full normative public
-// chain (Rust tests/live_feed_workflow_roundtrip.rs parity): the live
+// chain (Rust tests/feed_workflows.rs parity): the live
 // membership pair is created, the named feed workflow runs over the
 // live writer, the commit publishes through the reader-table gate, the
 // live snapshot packs the committed generation, and the immutable

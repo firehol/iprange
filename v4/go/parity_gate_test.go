@@ -146,7 +146,12 @@ func loadParityManifest(t *testing.T) []parityManifestRow {
 func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 	symbols := rootSymbols(t)
 	rows := loadParityManifest(t)
-	writerMethods := map[string]string{} // symbol -> rust_ref (for the close check)
+	// The off-contract Writer surface and the normative LiveWriter
+	// surface are both closed: every public method that actually exists
+	// must be recorded in the ledger, so a new unrecorded mutation or
+	// begin method fails CI until it is deliberately recorded.
+	closedSurfaces := map[string]bool{"Writer": true, "LiveWriter": true}
+	recordedMethods := map[string]map[string]string{} // surface -> symbol -> rust_ref
 	var failures []string
 	present, missing, removePlanned := 0, 0, 0
 
@@ -157,8 +162,14 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 			present++
 			if row.status == "remove-planned" {
 				removePlanned++
-				if strings.HasPrefix(sym, "Writer.") {
-					writerMethods[sym] = row.rustRef
+			}
+			if sym != "" && strings.Contains(sym, ".") {
+				surface, _, _ := strings.Cut(sym, ".")
+				if closedSurfaces[surface] {
+					if recordedMethods[surface] == nil {
+						recordedMethods[surface] = map[string]string{}
+					}
+					recordedMethods[surface][sym] = row.rustRef
 				}
 			}
 			if sym == "" || !symbols[sym] {
@@ -175,12 +186,15 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 		}
 	}
 
-	// The off-contract Writer surface is closed: every public Writer
-	// method that actually exists must be recorded in the ledger.
+	// Every public method on the closed surfaces that actually exists
+	// must be recorded in the ledger.
 	for sym := range symbols {
-		if strings.HasPrefix(sym, "Writer.") {
-			if _, recorded := writerMethods[sym]; !recorded {
-				failures = append(failures, "unrecorded-writer-method: "+sym)
+		for surface := range closedSurfaces {
+			prefix := surface + "."
+			if strings.HasPrefix(sym, prefix) {
+				if _, recorded := recordedMethods[surface][sym]; !recorded {
+					failures = append(failures, "unrecorded-"+strings.ToLower(surface)+"-method: "+sym)
+				}
 			}
 		}
 	}

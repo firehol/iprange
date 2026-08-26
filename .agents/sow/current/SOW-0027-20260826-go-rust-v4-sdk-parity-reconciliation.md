@@ -45,42 +45,60 @@ missing benchmark matrix, and the incorrect SOW-0025 acceptance record.
 Implementation starts with the parity ledger freeze (plan step 1).
 
 Sub-state (2026-08-26): milestone 1 (parity ledger freeze) delivered at
-`bff1f550`; the parity ledger `v4/go/parity_manifest.tsv` and its CI tripwire
-`v4/go/parity_gate_test.go` are the frozen API record. Milestone 2 slice 2a
-(live-writer consolidation) is under way at working tree `bff1f550+`: all
-advanced transactions and high-level workflows now bind to the sidecar-bound
-`LiveWriter` through the shared `mutationHost` (live-state probe, core owner,
-abort, and commitPrepared terminals); `LiveWriter.BeginDirect`,
-`BeginMembershipTransaction`, `BeginStructuredTransaction`, `BeginCreateFeed`,
-`BeginReplaceFeed`, `BeginFirstSeenRefresh`, `BeginLastSeenRefresh`,
-`ProjectHistory`, `RenameFeed`, and `DeleteFeed` are public; the
-`FinishedHistoryProjection` commit path is unified through the host terminal
-(reader-table gate on the live path); and the end-to-end live test chain
-(CreateLive -> OpenLiveWriter -> BeginCreateFeed -> FinishInput -> Commit ->
-SnapshotTo -> OpenImmutable) plus live lifecycle, direct workflow, structured
-transaction, and live-source history projection tests pass. The ledger flipped
-the twelve implemented rows from missing to present. Interim self-review
-(before the review gate) found and fixed the live-machine bypass class: every
-workflow teardown and source failure now routes through the host machine
-terminals (Rust LiveWriter::abort/abort_after_source/discard_draft parity), so
-live aborts keep the pair proof, unpublished-tail trim, and Unusable branding;
-the timestamp begin order now matches Rust (kind gate, tag gate, then healthy)
-and the begin-feed setup mutation maps its failures through abort_after like
-Rust LiveWriter::mutate. The full battery (plain, v4work, vet, gofmt,
-race+checkptr) passes at the slice commits. Review round 1 (five reviewers:
-Rust parity, Go idioms, performance, wire/integrity, APIs/records) returned
-PASS on idioms/performance/wire with P3 cosmetics (all fixed), and two
-verified parity findings on the live direct transaction, now fixed and
-covered by regression tests:
+`bff1f550`. Milestone 2 slice 2a (live-writer consolidation) is delivered at
+`11ff5848` with review round 2 in flight: all advanced transactions and
+high-level workflows bind to the sidecar-bound `LiveWriter` through the
+shared `mutationHost` (core owner, open/healthy probe, abort, discard, and
+commit terminals); the live public surface is `LiveWriter.BeginDirect`,
+`BeginMembershipTransaction`, `BeginStructuredTransaction`,
+`BeginCreateFeed`, `BeginReplaceFeed`, `BeginDirectReplacement`,
+`BeginFirstSeenRefresh`, `BeginLastSeenRefresh`, `ProjectHistory`,
+`RenameFeed`, `DeleteFeed`, `Abort`, and `Close` with the captured
+cancellation carried through every begin, mutation, metadata stage, commit,
+and cleanup checkpoint; the `FinishedHistoryProjection` commit path is
+unified through the host terminal (reader-table gate on the live path); the
+end-to-end live test chain (CreateLive -> OpenLiveWriter -> BeginCreateFeed
+-> FinishInput -> Commit -> SnapshotTo -> OpenImmutable) plus live
+lifecycle, direct workflow, structured transaction, and live-source history
+projection tests pass. The parity ledger flipped the implemented rows from
+missing to present (68 present/remove-planned, 18 missing) and the gate test
+now closes both the `Writer` and `LiveWriter` method surfaces. The full
+battery (plain, v4work, vet, gofmt, race+checkptr) passes at the slice
+commits.
 
-- F1 (P1): LiveDirectTransaction.Commit passed a nil checkpoint; the
-  captured cancellation token now checkpoints the attempt, the
-  prepare-and-lock sequence, and the publication loop (Rust
+Review round 1 (five reviewers: Rust parity, Go idioms, performance,
+wire/integrity, APIs/records) found and the lead fixed:
+
+- P1 (Rust parity, F1): `LiveDirectTransaction.Commit` passed a nil
+  checkpoint; the captured cancellation token now checkpoints the commit
+  attempt, the prepare-and-lock sequence, and the publication loop (Rust
   DirectTransaction::commit -> commit_operation parity).
-- F2 (P2): the live direct range ops lacked the Rust run_transaction
-  post-mutation checkpoint and the metadata stages lacked both
-  checkpoints; pre+post checkpoints are now applied to AssignV4/AssignV6/
-  ClearV4/ClearV6/SetMetadataJSON/ClearMetadataJSON.
+- P2 (Rust parity, F2): the live direct range ops lacked the Rust
+  run_transaction post-mutation checkpoint and the metadata stages lacked
+  both checkpoints; pre+post checkpoints are now applied to
+  AssignV4/AssignV6/ClearV4/ClearV6/SetMetadataJSON/ClearMetadataJSON.
+- P2 (APIs/records): the parity ledger omitted the
+  `LiveWriter.BeginDirectReplacement` row and had no tripwire for
+  unrecorded `LiveWriter` methods; the row is added and the gate now closes
+  both method surfaces (it also caught and recorded `LiveWriter.Abort`).
+- P2 (APIs/records): the status record still claimed slice 2a was "under
+  way at working tree `bff1f550+`" while the slice was delivered; rewritten
+  to present state here.
+- P3 (APIs/records): the structured begin probed healthy before the Rust
+  structure-kind gate and its doc claimed cancellation-first; the shared
+  helper now runs closed-probe, structure-kind, cancellation, healthy,
+  value-kind (Rust begin_structured_transaction order) and the doc matches
+  both hosts.
+- P3 (wire/integrity): a stale Rust test-file citation in
+  `live_workflow_public_test.go` was replaced with the real Rust suite name.
+- P3 (Go idioms): dangling doc fragment, double coreOf probe, and
+  plan-narrative sentences fixed in the slice commits.
+
+Two outcomes remain recorded as accepted Go-shape divergences (P3,
+documented in code, not yet a resolved SOW decision): workflow
+`CommitResult`/`AbortResult` terminals carry fewer fields than Rust
+(workflow commits omit directory/main identity; workflow abort returns
+`error`), and mixed-language live fixtures stay a recorded slice-2c gap.
 
 ## Requirements
 

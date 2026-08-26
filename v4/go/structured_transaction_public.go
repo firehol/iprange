@@ -65,27 +65,27 @@ func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*S
 
 // BeginStructuredTransaction begins one advanced structured transaction
 // on a clean live writer (Rust LiveWriter::begin_structured_transaction):
-// cancellation is checked first (a fired token classifies as Cancelled
-// even on a closed writer), the live writer must be open and healthy, a
-// network_enrichment_v1 structured database is required, and the
-// operation nonce pins every reference produced by the transaction.
+// the structure-kind gate runs first (Rust checks it before any writer
+// state), then cancellation, then the live writer open/healthy probe,
+// then the value-kind gate; the operation nonce pins every reference
+// produced by the transaction.
 func (w *LiveWriter) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
 	return beginStructuredTransaction(w, cancellation)
 }
 
 // beginStructuredTransaction is the shared host-based begin (Rust
-// begin_structured_transaction with the LiveWriter healthy gate): the
-// closed-writer probe (a state Rust cannot express because it consumes
-// the writer), then the structure-kind outer guard, then cancellation,
-// healthy, and the value-kind inner guard. The draft installed by
+// begin_structured_transaction): the closed-writer probe (a state Rust
+// cannot express because it consumes the writer), then the
+// structure-kind outer guard, then cancellation, then the open/healthy
+// probe, and the value-kind inner guard. The draft installed by
 // BeginTransaction is bound once so every operation reuses one edit
 // (Rust writer.mutate borrows the draft for the transaction lifetime);
 // each input locator is built for its own literal family like the Rust
 // typed assignment inputs, so an IPv4 database carries no dead IPv6
 // locator.
 func beginStructuredTransaction(h mutationHost, cancellation *CancellationToken) (*StructuredTransaction, error) {
-	if err := h.healthy(); err != nil {
-		return nil, err
+	if h.coreOf() == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if h.coreOf().BaseInfo().StructureKind != format.StructureKindNetworkEnrichmentV1 {
 		return nil, &format.Error{Code: format.CodeWrongStructureKind, Detail: "no typed transaction exists for this structure kind"}
