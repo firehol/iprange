@@ -37,7 +37,7 @@ authority for its own review process.
 
 ## Status
 
-Status: in-progress
+Status: completed
 
 ### Status (2026-08-26) - work package G (Go live history-projection source port) delivered
 
@@ -59,6 +59,12 @@ Status: in-progress
 - Delivered at `f710274a` (signed, pushed): the Rust windows arm now re-opens the authenticated artifact with the exact writable access of `open_regular(name, true)` (GENERIC_READ | READ_CONTROL | GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | DELETE), re-proves it exactly like `open_exact_checkpointed` (require_owned + verify_name), drops the read-only probe (so its share mode cannot block the GC rename), and retires the writable handle - the verbatim shape of the host-proven Go arm, now with the Rust authority as the source. The new `Removal::open_writable` helper is windows-only; unix arms unchanged. The Go deviation wording is dropped from `scratch_maintenance_retire_windows.go` (the arm is now the Rust shape, not a deviation).
 - Verification: the windows-gnu target compiles with `-D warnings` through the source-graph gate (459 sources / 4 supported targets); the arm is structurally identical to the host-proven Go arm; linux workspace tests, clippy, and fmt clean; Go suite green (plain 17/17, v4work 17/17, windows build + vet clean). The arm cannot be exercised as a Rust test (linux-gated module tests); recorded: the behavior evidence is the Go host battery (WP-D) plus the structural parity.
 - This closes the last tracked item of SOW-0026; the completion closeout follows the gate round.
+
+### Status (2026-08-26) - five-reviewer gate for work package H, close record
+
+- Work package H gate CLOSED: all five reviewers report PASS at the reviewed revisions (delivery `f710274a`, record `329c33c`, fix round `3a4e50ba`, all signed and pushed to master). Round records: first pass Darwin PASS, Hooke PASS, McClintock PASS (P3-1 only: the per-flow wording divergence documented below), Faraday PASS, Linnaeus FAIL P2-1 (the new Rust `Removal::open_writable` hard-coded the nil-open conflict detail to "abandoned scratch lost its exact name", so the checkpointed retirement flow diverged from the Go arm's per-flow detail "checkpointed scratch lost its exact name" when the artifact vanished between the probe open and the writable re-open). Fix round `3a4e50ba`: the lost detail is now a `&'static str` parameter of the windows `open_writable` and `retire_checkpointed`; `run_checkpointed` passes "checkpointed scratch lost its exact name", both `retire` arms pass "abandoned scratch lost its exact name", and the unix `retire_checkpointed` accepts and ignores it exactly like the Go posix arm (`scratch_maintenance_retire_posix.go` ignores the parameter and hard-codes the abandoned detail), so the Rust and Go flows are detail-identical in both flows and both platforms. Re-review: all five PASS with no remaining P0-P2 findings.
+- Battery evidence (all under `nice`): Go plain 17/17, `-tags v4work` 17/17, `-race ./...` 17/17, vet clean (linux + windows), gofmt clean, eight cross-builds clean; Rust workspace tests, clippy `--all-targets -D warnings`, fmt, and the source-graph gate (459 sources / 4 supported targets, `x86_64-pc-windows-gnu` included) all pass. The windows arm cannot be exercised as a Rust test (linux-gated module tests); the behavior evidence stays the Go host battery (WP-D) plus the structural parity and the fresh windows-gnu compile with `-D warnings`.
+- SOW-0026 is COMPLETE. Acceptance criteria: every tracked item is delivered, host-proven where a host applies, and gate-closed with evidence in this status section - the per-page sweep allocation fix and the naked-SIGBUS asm role gate (work package A; the asm gate covers the closed 4-role set RoleSource/RoleScratch/RoleOutput/RoleCoordination and the `asm_role_gate_test.go` tripwire pins that a fifth role fails until the gate is extended), FreeBSD durable immutable publication (work package B), Windows live/publication surface (work package C), authorized recovery scratch + bounded external sort (work package D, with its Rust windows removal-arm repair as work package H), Rust XNU-16K flush-shape pins (work package E), the Store split-window seam (work package F), and the Go live history-projection source port (work package G).
 
 ### Status (2026-08-26) - work package F (Store split-window seam) started
 
@@ -333,7 +339,7 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: resolved for work packages A, B, C, D, E, F, and G (A and B in this SOW's status record; C gate-closed at `25bd4ddc`; D gate-closed in the D close record; E gate-closed in the E close record; F gate-closed in the F close record; G gate-closed in the G close record); the remaining tracked item is the Rust windows removal-arm repair (D close record tracked follow-up).
+Status: resolved for work packages A, B, C, D, E, F, G, and H (A and B in this SOW's status record; C gate-closed at `25bd4ddc`; D gate-closed in the D close record; E gate-closed in the E close record; F gate-closed in the F close record; G gate-closed in the G close record; H gate-closed in the H close record); no tracked items remain.
 
 Problem / root-cause model:
 
