@@ -71,7 +71,7 @@ func (r *scratchRemovalMachine) runCheckpointed(creationSecurity publication.Cre
 	if err != nil {
 		return publication.AbandonedArtifactRemoval{}, err
 	}
-	return r.retireCheckpointedPlatform(file, creationSecurity)
+	return r.retireCheckpointedPlatform(file, creationSecurity, "checkpointed scratch lost its exact name")
 }
 
 // present proves the artifact is still present and exactly owned

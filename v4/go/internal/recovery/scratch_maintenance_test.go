@@ -30,7 +30,7 @@ func TestScratchMaintenanceListingReportsOnlyExactNamesAndAuthenticates(t *testi
 	if _, err := scratch.create(); err != nil {
 		t.Fatal(err)
 	}
-	validBytes, err := os.ReadFile(filepath.Join(directory, mustScratchName(t, attempt, 0)))
+	validBytes, err := readScratchTestFile(filepath.Join(directory, mustScratchName(t, attempt, 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestScratchMaintenanceRemovalRejectsDirectoryInodeHeaderAndName(t *testing.
 		t.Fatalf("artifact mismatch = %v", err)
 	}
 
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	file, err := openScratchTestFile(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,10 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // scratchPublicHeader builds the exact 128-byte ownership header of
@@ -35,7 +35,15 @@ func scratchPublicHeader(attempt [16]byte, ordinal uint32) [128]byte {
 	copy(out[56:72], attempt[:])
 	format.PutU32(out[72:76], ordinal)
 	format.PutU16(out[76:78], scratchPublicSecurityKind()) // creator-only security kind
-	copy(out[80:112], []byte{9})                           // security commitment (nonzero)
+	// The commitment is the real captured creator profile: the
+	// windows removal arm compares the header commitment against the
+	// live profile, so a synthetic value would be refused.
+	profile, err := security.Capture()
+	if err != nil {
+		panic(err)
+	}
+	commitment := profile.Commitment()
+	copy(out[80:112], commitment[:])
 	checksum, ok := format.CRC32CWithZeroed(out[:], 124, 4)
 	if !ok {
 		panic("fixed header CRC range")
@@ -54,17 +62,6 @@ func scratchPublicName(attempt [16]byte, ordinal uint32) string {
 		name += string([]byte{hex[b>>4], hex[b&0x0f]})
 	}
 	return name + "-" + fmt.Sprintf("%08x", ordinal) + ".tmp"
-}
-
-// writeScratchArtifact creates one exact scratch artifact in the
-// directory.
-func writeScratchArtifact(t *testing.T, directory string, attempt [16]byte, ordinal uint32) {
-	t.Helper()
-	header := scratchPublicHeader(attempt, ordinal)
-	name := scratchPublicName(attempt, ordinal)
-	if err := os.WriteFile(filepath.Join(directory, name), header[:], 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // TestPublicScratchMaintenanceListReadsFieldsAndRemovesExact mirrors

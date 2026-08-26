@@ -61,7 +61,7 @@ func TestScratchExactNamesHeadersIOAndCleanupRoundTrip(t *testing.T) {
 		t.Fatalf("names = %q %q", firstBytes, secondBytes)
 	}
 
-	headerBytes, err := os.ReadFile(filepath.Join(directory, firstBytes))
+	headerBytes, err := readScratchTestFile(filepath.Join(directory, firstBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestScratchExactNamesHeadersIOAndCleanupRoundTrip(t *testing.T) {
 	if string(headerBytes[56:72]) != string(attempt[:]) {
 		t.Fatalf("attempt = %x", headerBytes[56:72])
 	}
-	if format.U32(headerBytes[72:76]) != 0 || format.U16(headerBytes[76:78]) != 1 {
+	if format.U32(headerBytes[72:76]) != 0 || format.U16(headerBytes[76:78]) != scratchCreationSecurityKind() {
 		t.Fatalf("ordinal/security kind = %d %d", format.U32(headerBytes[72:76]), format.U16(headerBytes[76:78]))
 	}
 	checksum, ok := format.CRC32CWithZeroed(headerBytes, scratchHeaderCRCOffset, scratchHeaderCRCSize)
@@ -272,10 +272,10 @@ func TestScratchChangedLinkCountIsReturnedAsExactResidue(t *testing.T) {
 	if cleanup.residues[0].ordinal != 0 || string(cleanup.residues[0].basename) != name {
 		t.Fatalf("residue = %+v", cleanup.residues[0])
 	}
-	if cleanup.residues[0].problem.code != format.CodeCleanupConflict {
+	if cleanup.residues[0].problem.code != scratchChangedLinkResidueClass() {
 		t.Fatalf("residue problem = %+v", cleanup.residues[0].problem)
 	}
-	file, err := os.Open(filepath.Join(directory, name))
+	file, err := openScratchTestFile(filepath.Join(directory, name), false)
 	if err != nil {
 		t.Fatal(err)
 	}

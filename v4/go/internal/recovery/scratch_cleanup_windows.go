@@ -54,6 +54,9 @@ func (s *scratch) cleanupPlatform() *scratchCleanup {
 			problem := scratchProblemOfFormat(retirement.Problem)
 			cleanup.residues = append(cleanup.residues, scratchResidueOf(directoryIdentity, s.profile, owner, problem))
 		}
+		if owner.shared != nil {
+			owner.shared.close()
+		}
 	}
 	return cleanup
 }

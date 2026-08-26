@@ -23,13 +23,13 @@ func (r *scratchRemovalMachine) resumePlatform(bool) (publication.AbandonedArtif
 // retirePlatform removes one authenticated artifact (Rust
 // Removal::retire unix arm: the fixed empty creation security).
 func (r *scratchRemovalMachine) retirePlatform(file *os.File, _ scratchDecodedHeader) (publication.AbandonedArtifactRemoval, error) {
-	return r.retireCheckpointedPlatform(file, publication.CreationSecurity{})
+	return r.retireCheckpointedPlatform(file, publication.CreationSecurity{}, "abandoned scratch lost its exact name")
 }
 
 // retireCheckpointedPlatform removes one artifact through the exact
 // unlink and proves the durable absence (Rust Removal::
 // retire_checkpointed unix arm).
-func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, _ publication.CreationSecurity) (publication.AbandonedArtifactRemoval, error) {
+func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, _ publication.CreationSecurity, _ string) (publication.AbandonedArtifactRemoval, error) {
 	removed, err := r.directory.UnlinkExact(r.name, r.expectedArtifact)
 	if err != nil {
 		return publication.AbandonedArtifactRemoval{}, maintenanceCleanupError(err)

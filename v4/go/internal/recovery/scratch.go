@@ -108,6 +108,20 @@ type scratchSharedFile struct {
 	capacity atomic.Uint64
 }
 
+// close releases the mapped file of one slot (Rust SharedFile drop:
+// the cleanup consumes every owned slot and closes its handles
+// deterministically instead of waiting for the Go garbage collector;
+// an open handle keeps the artifact undeletable on Windows).
+func (f *scratchSharedFile) close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mapping != nil {
+		_ = f.mapping.Close()
+		f.mapping = nil
+	}
+	_ = f.file.Close()
+}
+
 // scratchStart opens the scratch namespace of one recovery operation
 // (Rust Scratch::start): the file and byte budgets, the retained
 // directory open, the creator profile capture, the fresh attempt

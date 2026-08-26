@@ -10,6 +10,7 @@ package recovery
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
@@ -46,19 +47,36 @@ func (r *scratchRemovalMachine) retirePlatform(file *os.File, header scratchDeco
 	return r.retireCheckpointedPlatform(file, publication.CreationSecurity{
 		Kind:       header.securityKind,
 		Commitment: header.securityCommitment,
-	})
+	}, "abandoned scratch lost its exact name")
 }
 
 // retireCheckpointedPlatform retires one artifact through the GC
 // machine (Rust Removal::retire_checkpointed windows arm).
-func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, creationSecurity publication.CreationSecurity) (publication.AbandonedArtifactRemoval, error) {
+//
+// The GC move renames the payload through the retained source handle
+// and fsyncs it, and both operations need a writable and
+// delete-capable handle. Rust passes the read-only `open_exact` probe
+// handle into this arm and its windows flow is unexercised (the
+// scratch_maintenance tests are linux-gated), so it would fail at
+// FlushFileBuffers with ACCESS_DENIED. This arm therefore re-opens
+// the authenticated artifact with the exact access Rust defines for
+// writable opens (`open_regular(name, true)`: GENERIC_READ |
+// READ_CONTROL | GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | DELETE),
+// re-proves it, closes the read-only probe, and then retires the
+// writable handle. This is a recorded deviation; the follow-up is to
+// fix the Rust windows arm the same way.
+func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, creationSecurity publication.CreationSecurity, lostDetail string) (publication.AbandonedArtifactRemoval, error) {
+	writable, err := r.openWritableRetireSource(file, lostDetail)
+	if err != nil {
+		return publication.AbandonedArtifactRemoval{}, err
+	}
 	retirement := live.GCRetire(r.directory, &live.GCAuthority{
 		AttemptID:        r.attempt,
 		Ordinal:          r.ordinal,
 		Kind:             live.ArtifactAuthorizedScratch,
 		DirectoryRole:    live.DirectoryRoleScratchDirectory,
 		SourceName:       r.name,
-		SourceFile:       file,
+		SourceFile:       writable,
 		Identity:         r.expectedArtifact,
 		CreationSecurity: creationSecurity,
 		Payload:          nil,
@@ -68,4 +86,35 @@ func (r *scratchRemovalMachine) retireCheckpointedPlatform(file *os.File, creati
 		visible = append(visible, *retirement.Visible)
 	}
 	return maintenanceRemoval(true, retirement.Problem, retirement.Housekeeping, visible), nil
+}
+
+// openWritableRetireSource re-opens the probe-authenticated artifact
+// with the writable access of the Rust `open_regular(name, true)`
+// arm and re-proves it exactly like the checkpointed open (the
+// require_owned and verify-name proofs), then closes the read-only
+// probe so its share mode cannot block the GC rename. The missing,
+// identity-changed, and namespace failure arms map exactly like
+// Rust Removal::open_exact / open_exact_checkpointed.
+func (r *scratchRemovalMachine) openWritableRetireSource(probe *os.File, lostDetail string) (*os.File, error) {
+	regular, err := r.directory.OpenRegular(r.name, true)
+	if err != nil {
+		probe.Close()
+		return nil, maintenanceNamespaceError(err)
+	}
+	if regular == nil {
+		probe.Close()
+		return nil, &format.Error{Code: format.CodeCleanupConflict, Detail: lostDetail}
+	}
+	if err := requireMaintenanceOwned(true, 1, regular.Identity, r.expectedArtifact); err != nil {
+		regular.File.Close()
+		probe.Close()
+		return nil, err
+	}
+	if err := r.directory.VerifyName(r.name, r.expectedArtifact); err != nil {
+		regular.File.Close()
+		probe.Close()
+		return nil, maintenanceCleanupError(err)
+	}
+	probe.Close()
+	return regular.File, nil
 }
