@@ -7,7 +7,7 @@
 // compatibility checks, the exact-workflow draft, the one-pass source
 // drive with corruption gating, and the changed/no-change terminal.
 // The changed terminal is one prepared handle (DirectTransaction
-// precedent) that owns the draft until Commit, Abort, or Writer.Close,
+// precedent) that owns the draft until Commit, Abort, or LiveWriter.Close,
 // with the cancellation token captured at prepare and checked through
 // commit (Rust PreparedState). Both source modes are implemented: the
 // immutable mode over a committed generation and the live mode over a
@@ -17,7 +17,6 @@
 package iprangedb
 
 import (
-	"errors"
 	"math"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -51,18 +50,6 @@ type HistoryProjectionSource struct {
 	Kind   HistoryProjectionSourceKind
 	Reader *ImmutableReader
 	Live   *LiveReader
-}
-
-// ProjectHistory projects one last-seen direct source into named
-// destination feeds of this membership writer (Rust
-// LiveWriter::project_history): every source range is consumed exactly
-// once in ascending order, every requested window feed is ensured on
-// the destination, and the report carries the exact aggregate and
-// per-window statistics. The changed handle records the cancellation
-// token for the prepared commit; cancel the token to stop the
-// projection between bounded units of work.
-func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
-	return projectHistory(w, source, windows, cancellation)
 }
 
 // ProjectHistory projects one last-seen direct source into named
@@ -391,43 +378,6 @@ func publicHistoryReport(report *writer.HistoryProjectionReport) HistoryProjecti
 		}
 	}
 	return out
-}
-
-// abortAfterSource mirrors Rust LiveWriter::abort_after_source: discard
-// the draft and report the cause wrapped in the TransactionAborted
-// class; when the discard itself fails, brand the writer unresolved and
-// nest the CleanupInProgress class (Rust CleanupIncomplete) around the
-// cause.
-func (w *Writer) abortAfterSource(cause error) error {
-	discardErr := w.core.DiscardUnpublished()
-	inner := cause
-	if discardErr != nil {
-		w.core.MarkUnresolved(discardErr)
-		inner = &abortError{
-			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "workflow discard failed"},
-			cause: cause,
-		}
-	}
-	// The class detail is neutral because this helper is shared by every
-	// workflow kind (history projection, feed workflow, membership
-	// transaction, prepared feed change); Rust TransactionAborted
-	// carries no detail.
-	return &abortError{
-		class: &format.Error{Code: format.CodeTransactionAborted, Detail: "workflow aborted"},
-		cause: inner,
-	}
-}
-
-// abortAfter mirrors Rust LiveWriter::abort_after: abort_after_source,
-// then brand the writer unusable when the cause is a fatal class (Rust
-// Io/Format/Corrupt).
-func (w *Writer) abortAfter(cause error) error {
-	result := w.abortAfterSource(cause)
-	var typed *format.Error
-	if errors.As(cause, &typed) && (typed.Code == format.CodeIO || typed.Code == format.CodeFormatInvalid) {
-		w.core.MarkUnresolved(typed)
-	}
-	return result
 }
 
 // FinishedHistoryProjection is the terminal of one history projection

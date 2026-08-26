@@ -5,10 +5,11 @@
 // 128-address domain; a second "other" feed built from every 4th
 // address must survive every round untouched. The independent scalar
 // model derives the exact expected report and membership of both feeds
-// after every round. Go has no live-reader sidecar (Milestone 4), so
-// the writer closes after each committed round before the immutable
-// reader asserts the database, and reopens for the next round, unlike
-// the Rust test that keeps the live writer open across rounds.
+// after every round. The live pair is committed and read through the
+// live writer and live reader: the writer closes after each committed
+// round before the live reader asserts the database, and reopens for
+// the next round, unlike the Rust test that keeps the live writer open
+// across rounds.
 
 package iprangedb
 
@@ -102,7 +103,7 @@ func feedPropertyFinish(t *testing.T, finished *FinishedWorkflow, context string
 // assert_database).
 func feedPropertyAssertDatabase(t *testing.T, path string, target, other *[workflowDomain]bool, iteration int) {
 	t.Helper()
-	r, err := OpenImmutable(path)
+	r, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,13 +157,13 @@ func feedPropertyAssertDatabase(t *testing.T, path string, target, other *[workf
 // 100 rounds of complete replacement of one feed while a second feed
 // built from every 4th address stays untouched.
 func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	tag, err := NewValueTag([]byte("membership"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-property.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +171,7 @@ func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *test
 	targetName := FeedName("target")
 	otherName := FeedName("other")
 
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +204,7 @@ func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *test
 		t.Fatal(err)
 	}
 	feedPropertyFinish(t, finished, "create other")
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +222,7 @@ func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *test
 				after[address] = true
 			}
 		}
-		w, err := OpenWriter(path, DefaultBudget())
+		w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +246,7 @@ func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *test
 		context := fmt.Sprintf("feed replacement iteration %d", iteration)
 		feedPropertyAssertReport(t, finished.Report(), &before, &after, uint64(recordCount), context)
 		feedPropertyFinish(t, finished, context)
-		if err := w.Close(); err != nil {
+		if _, err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
 		feedPropertyAssertDatabase(t, path, &after, &otherExpected, iteration)

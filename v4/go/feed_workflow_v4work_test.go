@@ -22,9 +22,9 @@ import (
 // TestWorkBeginCreateFeedPins pins the Rust begin_create_feed vector:
 // one base lookup, one catalog intern, and one membership intern.
 func TestWorkBeginCreateFeedPins(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,9 +55,9 @@ func TestWorkBeginCreateFeedPins(t *testing.T) {
 // exactly one consumed range per record, the coalesced emission, and
 // zero membership and output work during ingestion.
 func TestWorkSliceIngestionPins(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +103,9 @@ func TestWorkSliceIngestionPins(t *testing.T) {
 // counted as emitted without being consumed again, and each refcount
 // delta spilled exactly once.
 func TestWorkEmptyMapFinishPins(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +162,9 @@ func TestWorkEmptyMapFinishPins(t *testing.T) {
 // the uniform 1000-record merge submits three range-proportional
 // refcount batches and three delta-tree spills in one output pass.
 func TestWorkSecondFeedMergePins(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,9 +221,9 @@ func TestWorkSecondFeedMergePins(t *testing.T) {
 // base name once, rename proves old and new names once each, and delete
 // proves the base name once.
 func TestWorkFeedLifecycleLookupPins(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

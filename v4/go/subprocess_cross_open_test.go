@@ -61,14 +61,14 @@ func runGoSubprocess(t *testing.T) {
 // TestGoSubprocessCrossOpen is the parent gate: the child proves the real
 // opened paths in a separate process whose exit code is the verdict.
 func TestGoSubprocessCrossOpen(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	runGoSubprocess(t)
 }
 
 // TestGoSubprocessChild is the subprocess entry point; it only runs when
 // the parent set the spawn marker (a normal suite run skips it).
 func TestGoSubprocessChild(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	if os.Getenv(subprocessSpawned) != "1" {
 		t.Skip("subprocess entry point")
 	}
@@ -134,14 +134,14 @@ func TestGoSubprocessChild(t *testing.T) {
 
 	// 3. One full create -> write -> commit -> read-back roundtrip.
 	path := filepath.Join(t.TempDir(), "child-roundtrip.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
 		t.Fatalf("go child: create: %v", err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatalf("go child: open writer: %v", err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatalf("go child: begin: %v", err)
 	}
@@ -155,18 +155,18 @@ func TestGoSubprocessChild(t *testing.T) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("go child: commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatalf("go child: close writer: %v", err)
 	}
-	r, err = OpenImmutable(path)
+	liveReadback, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatalf("go child: readback open: %v", err)
 	}
-	defer r.Close()
-	if v, ok, err := r.LookupDirectV4(IPv4(150)); err != nil || !ok || v != 77 {
+	defer liveReadback.Close()
+	if v, ok, err := liveReadback.LookupDirectV4(IPv4(150)); err != nil || !ok || v != 77 {
 		t.Fatalf("go child: readback lookup = (%d, %v, %v), want (77, true, nil)", v, ok, err)
 	}
-	meta, present, err := r.MetadataJSON()
+	meta, present, err := liveReadback.MetadataJSON()
 	if err != nil || !present || string(meta) != `{"child":"go"}` {
 		t.Fatalf("go child: readback metadata = %q present %v err %v", meta, present, err)
 	}

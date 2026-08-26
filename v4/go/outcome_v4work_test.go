@@ -75,7 +75,7 @@ func runOutcomeChild(t *testing.T, path, action string) {
 // TestWriterOutcomeUnknownFailClosed drives both fault points through the
 // real public facade in a child process.
 func TestWriterOutcomeUnknownFailClosed(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	dir := t.TempDir()
 	runOutcomeChild(t, filepath.Join(dir, "outcome.iprdb"), "outcome_unknown")
 	runOutcomeChild(t, filepath.Join(dir, "aborted.iprdb"), "abort_class")
@@ -85,7 +85,7 @@ func TestWriterOutcomeUnknownFailClosed(t *testing.T) {
 // TestOutcomeUnknownChild is the subprocess entry point; it only runs
 // when the parent set the spawn marker.
 func TestOutcomeUnknownChild(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	if os.Getenv(outcomeChildSpawned) != "1" {
 		t.Skip("subprocess entry point")
 	}
@@ -94,14 +94,14 @@ func TestOutcomeUnknownChild(t *testing.T) {
 
 	path := os.Getenv(outcomeChildPath)
 	action := os.Getenv(outcomeChildAction)
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +122,10 @@ func TestOutcomeUnknownChild(t *testing.T) {
 		if res.Status != CommitNotCommitted {
 			t.Fatalf("commit status = %v, want NotCommitted", res.Status)
 		}
-		if !isPubCode(res.Err, ErrorTransactionAborted) {
-			t.Fatalf("outer class = %v, want TransactionAborted", res.Err)
+		if !isPubCode(res.Cause, ErrorTransactionAborted) {
+			t.Fatalf("outer class = %v, want TransactionAborted", res.Cause)
 		}
-		first := errors.Unwrap(res.Err)
+		first := errors.Unwrap(res.Cause)
 		if first == nil {
 			t.Fatal("aborted commit carries no nested cause")
 		}
@@ -138,13 +138,13 @@ func TestOutcomeUnknownChild(t *testing.T) {
 		// A failed abandonment discard brands the writer unusable
 		// (Rust abort_after_source State::Unusable): every mutating
 		// entry point fails closed and only Close remains legal.
-		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+		if _, err := w.BeginDirect(nil); !isPubCode(err, ErrorWrongState) {
 			t.Fatalf("BeginDirect after nested abort err = %v, want WrongState", err)
 		}
-		if err := w.Close(); err != nil {
+		if _, err := w.Close(); err != nil {
 			t.Fatalf("close after nested abort: %v", err)
 		}
-		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+		if _, err := w.BeginDirect(nil); !isPubCode(err, ErrorWrongState) {
 			t.Fatalf("BeginDirect after close err = %v, want WrongState", err)
 		}
 		return
@@ -153,15 +153,15 @@ func TestOutcomeUnknownChild(t *testing.T) {
 		// The fault fires after the alternate meta write: the commit
 		// reports OutcomeUnknown and the writer turns unhealthy.
 		if res.Status != CommitOutcomeUnknown {
-			t.Fatalf("commit status = %v, want OutcomeUnknown (err %v)", res.Status, res.Err)
+			t.Fatalf("commit status = %v, want OutcomeUnknown (err %v)", res.Status, res.Cause)
 		}
-		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+		if _, err := w.BeginDirect(nil); !isPubCode(err, ErrorWrongState) {
 			t.Fatalf("BeginDirect after outcome-unknown err = %v, want WrongState", err)
 		}
-		if err := w.Close(); err != nil {
+		if _, err := w.Close(); err != nil {
 			t.Fatalf("close after outcome-unknown: %v", err)
 		}
-		if _, err := w.BeginDirect(); !isPubCode(err, ErrorWrongState) {
+		if _, err := w.BeginDirect(nil); !isPubCode(err, ErrorWrongState) {
 			t.Fatalf("BeginDirect after close err = %v, want WrongState", err)
 		}
 	case "abort_class":
@@ -170,12 +170,12 @@ func TestOutcomeUnknownChild(t *testing.T) {
 		if res.Status != CommitNotCommitted {
 			t.Fatalf("commit status = %v, want NotCommitted", res.Status)
 		}
-		if !isPubCode(res.Err, ErrorTransactionAborted) {
-			t.Fatalf("aborted commit Err = %v, want TransactionAborted class", res.Err)
+		if !isPubCode(res.Cause, ErrorTransactionAborted) {
+			t.Fatalf("aborted commit Err = %v, want TransactionAborted class", res.Cause)
 		}
 		// A preparation failure is not fatal: the writer stays healthy
 		// and a fresh transaction commits normally.
-		tx, err := w.BeginDirect()
+		tx, err := w.BeginDirect(nil)
 		if err != nil {
 			t.Fatalf("BeginDirect after aborted commit: %v", err)
 		}
@@ -186,7 +186,7 @@ func TestOutcomeUnknownChild(t *testing.T) {
 		if err != nil || res.Status != CommitCommitted {
 			t.Fatalf("retry commit = %+v err %v, want committed", res, err)
 		}
-		if err := w.Close(); err != nil {
+		if _, err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
 	default:

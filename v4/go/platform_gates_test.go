@@ -16,8 +16,10 @@ package iprangedb
 // these helpers are the public-facade peers.
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/security"
@@ -57,6 +59,16 @@ func requireAtomicExchange(t *testing.T) {
 	if !mapping.ExchangeAvailable() {
 		t.Skip("rollback-safe replacement requires atomic name exchange, unavailable on this platform")
 	}
+}
+
+// isPubCode reports whether one error carries the exact public code
+// class through the wrapped chain (errors.go is the name authority,
+// format/codes.go the value authority). Shared by every public-facade
+// suite; it previously lived with the removed off-contract writer
+// tests.
+func isPubCode(err error, code ErrorCode) bool {
+	var fe *format.Error
+	return errors.As(err, &fe) && ErrorCode(fe.Code) == code
 }
 
 // requireFileCreation skips one test that creates a database file

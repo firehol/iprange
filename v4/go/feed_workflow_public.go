@@ -4,7 +4,7 @@
 // consumes one ordered input, finishes into a changed or no-change
 // terminal, and the changed terminal is one prepared handle
 // (DirectTransaction precedent) that owns the draft until Commit,
-// Abort, or Writer.Close. The PreparedFeedChange handles own the
+// Abort, or LiveWriter.Close. The PreparedFeedChange handles own the
 // rename/delete drafts the same way.
 
 package iprangedb
@@ -21,7 +21,7 @@ import (
 // draft, input ranges are streamed through AddRangesV4/AddRangesV6, and
 // FinishInput produces the terminal handle. The handle borrows the
 // writer; the pending draft survives the handle (Rust owns the draft on
-// the writer), so a dropped input is discarded with Writer.Abort.
+// the writer), so a dropped input is discarded with LiveWriter.Abort.
 type CreateFeed struct {
 	state *exactFeedWorkflow
 }
@@ -56,18 +56,6 @@ type exactFeedWorkflow struct {
 }
 
 // BeginCreateFeed begins creation of one absent named feed on a clean
-// membership writer (Rust LiveWriter::begin_create_feed): the writer
-// must be healthy, hold a membership database, and have no pending
-// transaction; the name must not exist (ErrorNameExists).
-func (w *Writer) BeginCreateFeed(name FeedName, cancellation *CancellationToken) (*CreateFeed, error) {
-	state, err := beginExactFeed(w, name, true, cancellation)
-	if err != nil {
-		return nil, err
-	}
-	return &CreateFeed{state: state}, nil
-}
-
-// BeginCreateFeed begins creation of one absent named feed on a clean
 // live writer (Rust LiveWriter::begin_create_feed): the live writer must
 // be open and healthy, hold a membership database, and have no pending
 // transaction; the name must not exist (ErrorNameExists).
@@ -77,17 +65,6 @@ func (w *LiveWriter) BeginCreateFeed(name FeedName, cancellation *CancellationTo
 		return nil, err
 	}
 	return &CreateFeed{state: state}, nil
-}
-
-// BeginReplaceFeed begins complete replacement of one existing named feed
-// (Rust LiveWriter::begin_replace_feed): the writer preconditions are
-// the same and the name must exist (ErrorNameNotFound).
-func (w *Writer) BeginReplaceFeed(name FeedName, cancellation *CancellationToken) (*ReplaceFeed, error) {
-	state, err := beginExactFeed(w, name, false, cancellation)
-	if err != nil {
-		return nil, err
-	}
-	return &ReplaceFeed{state: state}, nil
 }
 
 // BeginReplaceFeed begins complete replacement of one existing named
@@ -422,7 +399,7 @@ func (in *exactFeedWorkflow) requireInputFamily(family uint8) error {
 // SetMetadataJSON, and ClearMetadataJSON, which require the changed
 // variant; Abort on a no-change result reports ErrorNoPendingTransaction
 // (Rust FinishedWorkflow::abort parity). The changed handle owns the
-// draft until Commit, Abort, or Writer.Close.
+// draft until Commit, Abort, or LiveWriter.Close.
 type FinishedWorkflow struct {
 	w            mutationHost
 	report       WorkflowReport
@@ -551,14 +528,6 @@ func (f *FinishedWorkflow) Abort() error {
 }
 
 // RenameFeed renames one existing feed without changing its index or
-// membership (Rust LiveWriter::rename_feed): the new name must not
-// exist (ErrorNameExists), and the prepared change owns the draft until
-// Commit, Abort, or Writer.Close.
-func (w *Writer) RenameFeed(old, new FeedName, cancellation *CancellationToken) (*PreparedFeedChange, error) {
-	return beginRenameFeed(w, old, new, cancellation)
-}
-
-// RenameFeed renames one existing feed without changing its index or
 // membership (Rust LiveWriter::rename_feed): the live writer must be
 // open and healthy, the new name must not exist (ErrorNameExists), and
 // the prepared change owns the draft until Commit, Abort, or Close.
@@ -622,14 +591,6 @@ func beginRenameFeed(h mutationHost, old, new FeedName, cancellation *Cancellati
 }
 
 // DeleteFeed deletes one existing feed while preserving every other feed
-// (Rust LiveWriter::delete_feed): the name must exist
-// (ErrorNameNotFound), and the prepared change owns the draft until
-// Commit, Abort, or Writer.Close.
-func (w *Writer) DeleteFeed(name FeedName, cancellation *CancellationToken) (*PreparedFeedChange, error) {
-	return beginDeleteFeed(w, name, cancellation)
-}
-
-// DeleteFeed deletes one existing feed while preserving every other feed
 // (Rust LiveWriter::delete_feed): the live writer must be open and
 // healthy, the name must exist (ErrorNameNotFound), and the prepared
 // change owns the draft until Commit, Abort, or Close.
@@ -678,7 +639,7 @@ func beginDeleteFeed(h mutationHost, name FeedName, cancellation *CancellationTo
 
 // PreparedFeedChange is one prepared feed rename or delete awaiting
 // optional metadata and publication (Rust PreparedFeedChange): the
-// single handle owns the draft until Commit, Abort, or Writer.Close.
+// single handle owns the draft until Commit, Abort, or LiveWriter.Close.
 type PreparedFeedChange struct {
 	w            mutationHost
 	cancellation *CancellationToken
@@ -776,22 +737,6 @@ func (p *PreparedFeedChange) Abort() error {
 	// machine terminal (pair proof and unpublished-tail trim on the live
 	// path).
 	return p.w.Abort()
-}
-
-// Abort discards any open draft without publishing it (Rust
-// LiveWriter::abort): a clean writer reports ErrorNoPendingTransaction.
-// The writer stays open and healthy.
-func (w *Writer) Abort() error {
-	if w.core == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	if err := w.core.Healthy(); err != nil {
-		return err
-	}
-	if !w.core.HasDraft() {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
-	}
-	return w.core.DiscardUnpublished()
 }
 
 // finishState mirrors Rust ExactFeedState::finish_state: the empty-map
@@ -984,89 +929,4 @@ func (in *exactFeedWorkflow) finishInput() (*FinishedWorkflow, error) {
 // Error::Corrupt("replacement feed disappeared")).
 func corruptError(detail string) error {
 	return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
-}
-
-// commitPrepared publishes one prepared draft through the shared
-// commit_with sequence (Rust LiveWriter::commit_operation): the
-// changed-draft check, the commit attempt, the prepare-and-lock steps
-// with the captured cancellation, the prepublication checks, and the
-// classified outcome. markSpent records the handle's terminal state on
-// every consuming path.
-func (w *Writer) commitPrepared(cancellation *CancellationToken, markSpent func(), context string) (CommitResult, error) {
-	draft := w.core.Draft()
-	if !draft.Changed() {
-		if err := w.core.DiscardUnpublished(); err != nil {
-			markSpent()
-			return CommitResult{}, err
-		}
-		markSpent()
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
-	}
-	attempt, err := w.core.CommitAttempt()
-	if err != nil {
-		markSpent()
-		return CommitResult{}, err
-	}
-	// Rust commit_with prepare_and_lock: check, prepare, check, then
-	// the sidecar lock (Go noop).
-	if err := cancellation.check(); err != nil {
-		return w.commitAbortAfter(attempt, err, markSpent, context), nil
-	}
-	if err := w.core.Prepare(cancellation.check); err != nil {
-		return w.commitAbortAfter(attempt, err, markSpent, context), nil
-	}
-	if err := cancellation.check(); err != nil {
-		return w.commitAbortAfter(attempt, err, markSpent, context), nil
-	}
-	// Rust prepublication_checks: unchanged base, then the sidecar scan
-	// (Go noop), then the locked file covering the draft length.
-	if err := w.core.RequireUnchangedBase(); err != nil {
-		return w.commitAbortAfter(attempt, err, markSpent, context), nil
-	}
-	if err := w.core.RequireDraftLength(); err != nil {
-		return w.commitAbortAfter(attempt, err, markSpent, context), nil
-	}
-	res := w.core.Publish(cancellation.check)
-	markSpent()
-	result := CommitResult{DatabaseID: attempt.DatabaseID, TransactionID: attempt.TransactionID, CommitNonce: attempt.CommitNonce, Err: res.Err}
-	switch res.Status {
-	case writer.PublishCommitted:
-		result.Status = CommitCommitted
-	case writer.PublishBeforePublication:
-		// Rust finish_commit_locked_with wraps a BeforePublication
-		// cause through abort_after (TransactionAborted class, draft
-		// discarded) before building the NotCommitted result.
-		result.Status = CommitNotCommitted
-		result.Err = w.abortAfter(res.Err)
-	default:
-		result.Status = CommitOutcomeUnknown
-	}
-	return result, nil
-}
-
-// commitAbortAfter reports an aborted prepared commit exactly like the
-// direct transaction commit abort (Rust commit_with abort_after): the
-// result error class is TransactionAborted, and a failed abandonment
-// discard nests the CleanupInProgress class.
-func (w *Writer) commitAbortAfter(attempt writer.CommitAttempt, cause error, markSpent func(), context string) CommitResult {
-	discardErr := w.core.DiscardUnpublished()
-	markSpent()
-	inner := cause
-	if discardErr != nil {
-		w.core.MarkUnresolved(discardErr)
-		inner = &abortError{
-			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: context + " commit discard failed"},
-			cause: cause,
-		}
-	}
-	return CommitResult{
-		Status:        CommitNotCommitted,
-		DatabaseID:    attempt.DatabaseID,
-		TransactionID: attempt.TransactionID,
-		CommitNonce:   attempt.CommitNonce,
-		Err: &abortError{
-			class: &format.Error{Code: format.CodeTransactionAborted, Detail: context + " commit aborted after a preparation failure"},
-			cause: inner,
-		},
-	}
 }

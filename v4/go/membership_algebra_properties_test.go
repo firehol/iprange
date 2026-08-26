@@ -81,7 +81,7 @@ func algebraPropertyNames(indexes []int) []string {
 
 // algebraPropertyAddFeed creates one named feed from one per-address
 // boolean model on the writer (Rust add_feed()).
-func algebraPropertyAddFeed(t *testing.T, writer *Writer, name string, values []bool) {
+func algebraPropertyAddFeed(t *testing.T, writer *LiveWriter, name string, values []bool) {
 	t.Helper()
 	feed, err := NewFeedName(name)
 	if err != nil {
@@ -219,24 +219,24 @@ func TestRandomizedGlobalAlgebraMatchesAScalarAddressModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Create(sourcePaths[source], AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+		if _, err := CreateLive(sourcePaths[source], AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 			t.Fatal(err)
 		}
-		writer, err := OpenWriter(sourcePaths[source], algebraPropertyTransactionBudget())
+		writer, err := OpenLiveWriter(sourcePaths[source], algebraPropertyTransactionBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for feed := 0; feed < algebraPropertyFeeds; feed++ {
 			algebraPropertyAddFeed(t, writer, fmt.Sprintf("f%d", feed), sourceModel[source][feed][:])
 		}
-		if err := writer.Close(); err != nil {
+		if _, err := writer.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	readers := make([]*ImmutableReader, algebraPropertySources)
+	readers := make([]*LiveReader, algebraPropertySources)
 	for source := 0; source < algebraPropertySources; source++ {
-		reader, err := OpenImmutable(sourcePaths[source])
+		reader, err := OpenLiveReader(sourcePaths[source], nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,6 +442,8 @@ func TestRandomizedGlobalAlgebraMatchesAScalarAddressModel(t *testing.T) {
 	algebra = nil
 	scopes = nil
 	for _, reader := range readers {
-		mustClose(t, reader)
+		if _, err := reader.Close(); err != nil {
+			t.Errorf("close source reader: %v", err)
+		}
 	}
 }

@@ -65,7 +65,7 @@ func (c *TransactionFeedCursor) Next() (FeedRef, bool, error) {
 
 // MembershipTransaction is one advanced logical membership operation
 // over a clean live writer (Rust MembershipTransaction): the transaction
-// owns the draft until Commit, Abort, or Writer.Close, and every
+// owns the draft until Commit, Abort, or LiveWriter.Close, and every
 // reference produced by it is refused by any other transaction.
 type MembershipTransaction struct {
 	w               mutationHost
@@ -85,36 +85,6 @@ func beginAdvancedTransaction(core *writer.Core, kind uint8, detail string) ([16
 		return [16]byte{}, &format.Error{Code: format.CodeWrongValueKind, Detail: detail}
 	}
 	return core.BeginTransaction()
-}
-
-// BeginMembershipTransaction begins one advanced membership transaction
-// on a clean writer (Rust LiveWriter::begin_membership_transaction): a
-// membership database is required and the operation nonce pins every
-// reference produced by the transaction. The old off-contract writer
-// surface stays until the consolidation removes it (SOW-0027 ledger:
-// remove-planned); the LiveWriter surface below is the normative one.
-func (w *Writer) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
-	// Rust begin_membership_state checks cancellation first, so a fired
-	// token classifies as Cancelled even on a closed writer.
-	if err := cancellation.check(); err != nil {
-		return nil, err
-	}
-	if w.core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
-	}
-	if err := w.core.Healthy(); err != nil {
-		return nil, err
-	}
-	nonce, err := beginAdvancedTransaction(w.core, uint8(ValueKindMembership), "membership transaction requires a membership database")
-	if err != nil {
-		return nil, err
-	}
-	return &MembershipTransaction{
-		w:              w,
-		databaseID:     w.core.BaseInfo().DatabaseID,
-		operationNonce: nonce,
-		cancellation:   cancellation,
-	}, nil
 }
 
 // BeginMembershipTransaction begins one advanced membership transaction

@@ -170,6 +170,29 @@ slice 2c (remove/privatize the off-contract `Create`/`OpenWriter`/
 `Writer` surface and regenerate fixtures through the live path)
 follows.
 
+Sub-state (2026-08-26): slice 2c (remove the off-contract writer surface)
+delivered (working tree `5e458c37+`, gate pending): the public `Create`,
+`OpenWriter`, and `Writer` types and every `Writer.*` method (direct, feed,
+membership, and structured transactions; direct-replacement and first/last-
+seen workflows; create/replace/rename/delete feed; project history; abort;
+close; info) are removed; every operation's sole owner is the sidecar-bound
+`LiveWriter` or `LiveDirectTransaction`. All warm-path, workflow, zero-alloc,
+lifecycle, and subprocess/cross-open suites were migrated to
+`CreateLive` + `OpenLiveWriter` (+ `OpenLiveReader` for read-backs and
+`SnapshotTo` with `SnapshotSourceLive`, `PolicyFailIfExists`, and the proven
+budget for publish), and the parity ledger flipped all 17 `remove-planned`
+off-contract rows to `missing` (59 present, 27 missing); the gate now also
+enforces that no public `Writer` symbol exists. The five Go conformance
+fixtures are regenerated through the live writer path and re-verified by the
+staging subprocess conformance and the Rust conformance suite. The live
+projection-commit allocation pin was recalibrated to 400 with both measured
+floors recorded (plain 233, race+checkptr 375); the abort pin stays 100. Full
+battery green at this state: plain and v4work Go suites, vet, gofmt,
+race+checkptr, cross-builds (windows/darwin/freebsd), mmap trace gate, Rust
+source graph, full Rust livedb/capi suites, and Rust conformance on the
+regenerated fixtures. Slice 2c is complete; slice 2d (platform boundary)
+follows.
+
 ## Requirements
 
 ### Purpose

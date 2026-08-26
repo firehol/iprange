@@ -5,11 +5,10 @@
 // derives the exact expected database after every round (per-address
 // value plus threat mask, coalesced enrichment ranges, and per-feed
 // boolean ranges). Profile 7 is the empty structure: the expected model
-// is absent, so assigning it must behave exactly like a clear. Go has
-// no live-reader sidecar and no validation surface (Milestone 4), so
-// the writer closes after every round before the immutable reader
-// asserts the database and the Rust validate_clean checks are replaced
-// by the public-reader cross-check (recorded decision).
+// is absent, so assigning it must behave exactly like a clear. The
+// writer closes after every round before the live reader asserts
+// the database; the Rust validate_clean checks are replaced by the
+// public-reader cross-check (recorded decision).
 
 package iprangedb
 
@@ -259,7 +258,7 @@ func assertStructuredMembership(t *testing.T, view NetworkEnrichmentV1View, want
 
 // assertStructuredRanges checks the enrichment range cursor against the
 // coalesced model runs (Rust assert_structured_ranges).
-func assertStructuredRanges(t *testing.T, r *ImmutableReader, expected *structuredModel, feedIndexes []uint32, context string) {
+func assertStructuredRanges(t *testing.T, r *LiveReader, expected *structuredModel, feedIndexes []uint32, context string) {
 	t.Helper()
 	wanted := structuredRuns(expected)
 	cursor, err := r.NetworkEnrichmentV1CursorV4(RangeDirectionForward)
@@ -296,7 +295,7 @@ func assertStructuredRanges(t *testing.T, r *ImmutableReader, expected *structur
 
 // assertStructuredFeedRanges checks every named feed projection against
 // the model mask bits (Rust assert_feed_ranges).
-func assertStructuredFeedRanges(t *testing.T, r *ImmutableReader, expected *structuredModel, context string) {
+func assertStructuredFeedRanges(t *testing.T, r *LiveReader, expected *structuredModel, context string) {
 	t.Helper()
 	for bit, name := range structuredFeeds {
 		wanted := structuredBooleanRuns(expected, bit)
@@ -330,7 +329,7 @@ func assertStructuredFeedRanges(t *testing.T, r *ImmutableReader, expected *stru
 // replaced by this public-reader cross-check).
 func assertStructuredDatabase(t *testing.T, path string, expected *structuredModel, context string) {
 	t.Helper()
-	r, err := OpenImmutable(path)
+	r, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +384,7 @@ func assertStructuredDatabase(t *testing.T, path string, expected *structuredMod
 // narrow assignment, clear, and randomized extra operations with the
 // abort/commit cadence (round+seedIndex)%4==3.
 func TestRandomizedStructuredTransactionsMatchIndependentAddressModel(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	for seedIndex, seed := range structuredSeeds {
 		runStructuredSeed(t, seedIndex, seed)
 	}
@@ -397,7 +396,7 @@ func runStructuredSeed(t *testing.T, seedIndex int, seed uint64) {
 
 	// Create the six feeds in one structured transaction at the start
 	// (Rust create_feeds), then assert the still-empty database.
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +416,7 @@ func runStructuredSeed(t *testing.T, seedIndex int, seed uint64) {
 	if result.Status != CommitCommitted {
 		t.Fatalf("seed=%#018x feed creation commit = %v, want committed", seed, result.Status)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	var committed structuredModel
@@ -427,7 +426,7 @@ func runStructuredSeed(t *testing.T, seedIndex int, seed uint64) {
 	random.state = seed
 	for round := 0; round < structuredRounds; round++ {
 		draft := committed
-		w, err := OpenWriter(path, DefaultBudget())
+		w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -480,7 +479,7 @@ func runStructuredSeed(t *testing.T, seedIndex int, seed uint64) {
 			}
 			committed = draft
 		}
-		if err := w.Close(); err != nil {
+		if _, err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
 		assertStructuredDatabase(t, path, &committed, structuredContext(seed, round))

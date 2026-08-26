@@ -51,16 +51,15 @@ func regenDirectIPv4(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "direct-ipv4.iprdb")
-	_, err = Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag)
+	live := filepath.Join(t.TempDir(), "live-direct")
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,9 +94,10 @@ func regenDirectIPv4(t *testing.T, dir string) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("fixture commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	regenPublish(t, live, filepath.Join(dir, "direct-ipv4.iprdb"))
 }
 
 // regenFirstSeenIPv6 writes first-seen-ipv6.iprdb into dir: the whole
@@ -110,15 +110,15 @@ func regenFirstSeenIPv6(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "first-seen-ipv6.iprdb")
-	if _, err := Create(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, tag); err != nil {
+	live := filepath.Join(t.TempDir(), "live-first-seen")
+	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,14 +132,15 @@ func regenFirstSeenIPv6(t *testing.T, dir string) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("fixture commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	regenPublish(t, live, filepath.Join(dir, "first-seen-ipv6.iprdb"))
 }
 
 // regenHistoryMembershipIPv4 writes history-membership-ipv4.iprdb into
 // dir: the Rust one_source_pass vector projected through the public
-// Writer.ProjectHistory workflow into three last-seen feeds (cutoffs
+// LiveWriter.ProjectHistory workflow into three last-seen feeds (cutoffs
 // 9/10/11 over last_seen 10+index%3), so cutoffs keep 1000/666/333
 // points. The destination is the committed projection itself - feed
 // catalog, membership dictionary, and ranges all produced by the Go
@@ -147,17 +148,18 @@ func regenFirstSeenIPv6(t *testing.T, dir string) {
 func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	t.Helper()
 
-	// The source: one fresh last_seen direct database with the exact
-	// Rust ranges1000 vector (a temporary input, never a corpus file).
+	// The source: one fresh last_seen live direct database with the
+	// exact Rust ranges1000 vector (a temporary input, never a corpus
+	// file).
 	sourcePath := filepath.Join(t.TempDir(), "history-source.iprdb")
-	if _, err := Create(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	sourceWriter, err := OpenWriter(sourcePath, DefaultBudget())
+	sourceWriter, err := OpenLiveWriter(sourcePath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := sourceWriter.BeginDirect()
+	tx, err := sourceWriter.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +173,7 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("source commit = %+v err %v", res, err)
 	}
-	if err := sourceWriter.Close(); err != nil {
+	if _, err := sourceWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,19 +181,19 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "history-membership-ipv4.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+	live := filepath.Join(t.TempDir(), "live-history")
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := OpenImmutable(sourcePath)
+	source, err := OpenLiveReader(sourcePath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, []HistoryWindow{
 		{FeedName: "one", Cutoff: 9},
 		{FeedName: "two", Cutoff: 10},
 		{FeedName: "three", Cutoff: 11},
@@ -206,16 +208,17 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	if report.SourceRangeCount != 1000 || report.CreatedFeedCount != 3 {
 		t.Fatalf("history report source=%d feeds=%d, want 1000/3", report.SourceRangeCount, report.CreatedFeedCount)
 	}
-	res, err = handle.Commit()
-	if err != nil || res.Status != CommitCommitted {
-		t.Fatalf("history commit = %+v err %v", res, err)
+	historyResult, err := handle.Commit()
+	if err != nil || historyResult.Status != CommitCommitted {
+		t.Fatalf("history commit = %+v err %v", historyResult, err)
 	}
-	if err := source.Close(); err != nil {
+	if _, err := source.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	regenPublish(t, live, filepath.Join(dir, "history-membership-ipv4.iprdb"))
 }
 
 // regenStructuredIPv4 writes structured-ipv4.iprdb into dir with the
@@ -229,11 +232,11 @@ func regenStructuredIPv4(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "structured-ipv4.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag); err != nil {
+	live := filepath.Join(t.TempDir(), "live-structured")
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,9 +300,10 @@ func regenStructuredIPv4(t *testing.T, dir string) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("fixture commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	regenPublish(t, live, filepath.Join(dir, "structured-ipv4.iprdb"))
 }
 
 // regenStructuredIPv4NoThreat writes structured-ipv4-nothreat.iprdb into
@@ -313,11 +317,11 @@ func regenStructuredIPv4NoThreat(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "structured-ipv4-nothreat.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag); err != nil {
+	live := filepath.Join(t.TempDir(), "live-structured-nothreat")
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,8 +359,28 @@ func regenStructuredIPv4NoThreat(t *testing.T, dir string) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("fixture commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
+	}
+	regenPublish(t, live, filepath.Join(dir, "structured-ipv4-nothreat.iprdb"))
+}
+
+// regenPublish snapshots one closed live pair into the corpus (Rust
+// generate.rs snapshot_to parity): the live main is the scratch source
+// and the corpus receives the compact snapshot output, so the corpus
+// files stay main-only exactly like the Rust-produced fixtures.
+func regenPublish(t *testing.T, livePath, outputPath string) {
+	t.Helper()
+	result, err := SnapshotTo(livePath, SnapshotSourceLive, outputPath, PolicyFailIfExists, &SnapshotBudget{
+		MaxHeapBytes:   32 << 20,
+		MaxOutputPages: 200_000,
+		MaxOpenFiles:   3,
+	}, nil)
+	if err != nil {
+		t.Fatalf("snapshot publish %s: %v", outputPath, err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("snapshot publish %s: status = %v, want published", outputPath, result.Publication.Publication)
 	}
 }
 

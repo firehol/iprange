@@ -31,7 +31,7 @@ type StructureRef struct {
 
 // StructuredTransaction is one advanced typed structure operation over a
 // clean live writer (Rust StructuredTransaction): the transaction owns
-// the draft until Commit, Abort, or Writer.Close, and every reference
+// the draft until Commit, Abort, or LiveWriter.Close, and every reference
 // produced by it is refused by any other transaction. The transaction
 // also serves the membership catalog operations (feeds, memberships)
 // that structured values link to.
@@ -45,22 +45,6 @@ type StructuredTransaction struct {
 	spent           bool
 	inputV4         writer.AssignmentInput
 	inputV6         writer.AssignmentInput
-}
-
-// BeginStructuredTransaction begins one advanced structured transaction
-// on a clean writer (Rust LiveWriter::begin_structured_transaction): a
-// network_enrichment_v1 structured database is required and the
-// operation nonce pins every reference produced by the transaction. The
-// guard order is the Rust exact sequence: the closed-writer probe (a
-// state Rust cannot express because it consumes the writer), then the
-// structure-kind outer guard, then cancellation, healthy, and the
-// value-kind inner guard. The draft installed by BeginTransaction is
-// bound once so every operation reuses one edit (Rust writer.mutate
-// borrows the draft for the transaction lifetime); each input locator
-// is built for its own literal family like the Rust typed assignment
-// inputs, so an IPv4 database carries no dead IPv6 locator.
-func (w *Writer) BeginStructuredTransaction(cancellation *CancellationToken) (*StructuredTransaction, error) {
-	return beginStructuredTransaction(w, cancellation)
 }
 
 // BeginStructuredTransaction begins one advanced structured transaction

@@ -1,14 +1,14 @@
 package iprangedb
 
-// Public Writer.ProjectHistory facade tests (SOW-0025 chunk 3b-4 slice
-// C): created feeds on empty destinations, the exact aggregate and
-// per-window report of the Rust multi-window vector, the full IPv6
+// Public LiveWriter.ProjectHistory facade tests (SOW-0025 chunk 3b-4
+// slice C): created feeds on empty destinations, the exact aggregate
+// and per-window report of the Rust multi-window vector, the full IPv6
 // space count, the no-change rerun, the aborted-draft recovery, the
-// metadata stage, cancellation, and the invalid request classes. The
-// destination feeds are produced through the public projection itself;
-// the white-box destination fixture of the Rust tests stays covered by
-// the internal slice-B tests (there is no public create_feed workflow
-// yet).
+// metadata stage, cancellation, and the invalid request classes. Every
+// fixture is a live pair through CreateLive; the destination feeds are
+// produced through the public projection itself, and the white-box
+// destination fixture of the Rust tests stays covered by the internal
+// slice-B tests (there is no public create_feed workflow yet).
 
 import (
 	"errors"
@@ -23,15 +23,15 @@ import (
 func histCreateSource4(t *testing.T, ranges [][3]uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-source.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,15 +51,15 @@ func histCreateSource4(t *testing.T, ranges [][3]uint32) string {
 func histCreateSource6(t *testing.T, fromHi, fromLo, toHi, toLo uint64, value uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-source6.iprdb")
-	if _, err := Create(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,16 +81,17 @@ func histCreateMembership(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "history-dest.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-// histSource opens one immutable source reader for a projection.
-func histSource(t *testing.T, path string) *ImmutableReader {
+// histSource opens one live source reader for a projection (every Go
+// fixture is a live pair; the live arm binds the registered reader).
+func histSource(t *testing.T, path string) *LiveReader {
 	t.Helper()
-	source, err := OpenImmutable(path)
+	source, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,11 +134,11 @@ func ranges1000() [][3]uint32 {
 // then the commit, the committed reader evidence, and the no-change
 // rerun with the Rust Abort-on-clean parity.
 func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 	source := histSource(t, sourcePath)
 	defer source.Close()
 
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,12 +221,12 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 	}
 
 	// The committed destination carries the three feeds (close the
-	// writer first: immutable opens wait on the writer's exclusive
+	// writer first: live readers wait on the writer's exclusive
 	// lifetime lock).
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r, err := OpenImmutable(destinationPath)
+	r, err := OpenLiveReader(destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,20 +235,20 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 			t.Fatalf("feed %q after commit: found %v err %v", name, found, err)
 		}
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// its clean handle reports NoPendingTransaction at Abort (Rust
 	// FinishedHistoryProjection::abort parity).
-	reopened, err := OpenWriter(destinationPath, DefaultBudget())
+	reopened, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
 	source2 := histSource(t, sourcePath)
 	defer source2.Close()
-	rerun, err := reopened.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source2}, windows3(), nil)
+	rerun, err := reopened.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source2}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 	if err := rerun.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
 		t.Fatalf("rerun abort err = %v, want ErrorNoPendingTransaction", err)
 	}
-	if err := reopened.core.Healthy(); err != nil {
+	if err := reopened.coreOf().Healthy(); err != nil {
 		t.Fatalf("writer unhealthy after the no-change rerun: %v", err)
 	}
 }
@@ -268,17 +269,17 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 // TestPublicProjectHistoryFullIPv6Space verifies one `::/0` source
 // range counts as 2^128 addresses (format.IPv6Inclusive parity).
 func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource6(t, 0, 0, ^uint64(0), ^uint64(0), 7)
 	tag, err := NewValueTag([]byte("feeds"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	destinationPath := filepath.Join(t.TempDir(), "history-dest6.iprdb")
-	if _, err := Create(destinationPath, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(destinationPath, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +287,7 @@ func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
 	source := histSource(t, sourcePath)
 	defer source.Close()
 
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "all", Cutoff: 1}}, nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, []HistoryWindow{{FeedName: "all", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,17 +308,17 @@ func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
 // changed projection leaves the writer healthy for a fresh projection
 // and commit.
 func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 9, 10}, {10, 19, 20}})
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
 
 	source := histSource(t, sourcePath)
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,14 +337,14 @@ func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
 	if err := handle.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
 		t.Fatalf("abort after abort = %v, want no pending transaction", err)
 	}
-	if err := w.core.Healthy(); err != nil || w.core.HasDraft() {
+	if err := w.coreOf().Healthy(); err != nil || w.coreOf().HasDraft() {
 		t.Fatalf("writer not healthy and draft-free after abort: %v", err)
 	}
 
 	// The same projection succeeds again and commits.
 	source2 := histSource(t, sourcePath)
 	defer source2.Close()
-	again, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source2}, windows3(), nil)
+	again, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source2}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,10 +361,10 @@ func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
 // the changed handle and verifies the committed metadata through the
 // public reader (Rust PreparedHistoryProjection set/clear parity).
 func TestPublicProjectHistoryMetadataStage(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{5, 5, 1}})
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +372,7 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 
 	source := histSource(t, sourcePath)
 	defer source.Close()
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,16 +389,16 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 	if changed, err := handle.SetMetadataJSON(meta); err != nil || !changed {
 		t.Fatalf("set metadata = changed %v err %v", changed, err)
 	}
-	if _, err := handle.SetMetadataJSON([]byte(`{"again":true}`)); !isPubCode(err, ErrorTransactionAborted) {
+	if _, err := handle.SetMetadataJSON([]byte(`{"again":true}`)); lifecycleCode(err) != ErrorTransactionAborted {
 		t.Fatalf("second set err = %v, want ErrorTransactionAborted (single stage)", err)
 	}
-	if err := w.core.Healthy(); err != nil || w.core.HasDraft() {
+	if err := w.coreOf().Healthy(); err != nil || w.coreOf().HasDraft() {
 		t.Fatalf("writer not healthy and draft-free after the refused stage: %v", err)
 	}
 
 	// A fresh projection stages the metadata and commits it (the
-	// public reader sees the committed value after the writer closes).
-	fresh, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
+	// live reader sees the committed value after the writer closes).
+	fresh, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, []HistoryWindow{{FeedName: "seen", Cutoff: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,10 +409,10 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 	if err != nil || res.Status != CommitCommitted {
 		t.Fatalf("commit = %+v err %v", res, err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r, err := OpenImmutable(destinationPath)
+	r, err := OpenLiveReader(destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,10 +428,10 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 // preconditions, plus the unbound live-source class and the
 // empty-window count gate.
 func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 0, 1}})
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,9 +440,9 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 	defer source.Close()
 
 	// A live source without the live reader binding is invalid at the
-	// API boundary (the live arm is implemented; see
-	// history_projection_live_test.go for the live mode coverage).
-	_, liveErr := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Reader: source}, windows3(), nil)
+	// API boundary (see history_projection_live_test.go for the live
+	// mode coverage).
+	_, liveErr := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive}, windows3(), nil)
 	if !isPubCode(liveErr, ErrorInvalidArgument) {
 		t.Fatalf("unbound live source err = %v, want ErrorInvalidArgument", liveErr)
 	}
@@ -455,7 +456,7 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 	}
 
 	// Empty window count is rejected before any source work.
-	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, nil, nil); !isPubCode(err, ErrorInvalidArgument) {
+	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, nil, nil); !isPubCode(err, ErrorInvalidArgument) {
 		t.Fatalf("empty windows err = %v, want ErrorInvalidArgument", err)
 	}
 
@@ -463,68 +464,68 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 	// writer-locked destination) as the source.
 	membershipSource := histSource(t, histCreateMembership(t))
 	defer membershipSource.Close()
-	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: membershipSource}, windows3(), nil); !isPubCode(err, ErrorWrongValueKind) {
+	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: membershipSource}, windows3(), nil); !isPubCode(err, ErrorWrongValueKind) {
 		t.Fatalf("membership source err = %v, want ErrorWrongValueKind", err)
 	}
 
 	// Wrong source semantic: a generic direct tag is not last_seen.
 	genericPath := filepath.Join(t.TempDir(), "generic.iprdb")
-	if _, err := Create(genericPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
+	if _, err := CreateLive(genericPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	generic, err := OpenImmutable(genericPath)
+	generic, err := OpenLiveReader(genericPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer generic.Close()
-	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: generic}, windows3(), nil); !isPubCode(err, ErrorWrongValueTag) {
+	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: generic}, windows3(), nil); !isPubCode(err, ErrorWrongValueTag) {
 		t.Fatalf("generic source err = %v, want ErrorWrongValueTag", err)
 	}
 
 	// Wrong destination value kind: a direct writer (on a separate
 	// file, never the reader-locked source path) refuses the named
 	// feed workflow.
-	directWriter, err := OpenWriter(histCreateSource4(t, [][3]uint32{{0, 0, 1}}), DefaultBudget())
+	directWriter, err := OpenLiveWriter(histCreateSource4(t, [][3]uint32{{0, 0, 1}}), DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer directWriter.Close()
-	if _, err := directWriter.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil); !isPubCode(err, ErrorWrongValueKind) {
+	if _, err := directWriter.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil); !isPubCode(err, ErrorWrongValueKind) {
 		t.Fatalf("direct destination err = %v, want ErrorWrongValueKind", err)
 	}
 
 	// Wrong source family.
 	source6 := histCreateSource6(t, 0, 0, 1, 1, 1)
-	six, err := OpenImmutable(source6)
+	six, err := OpenLiveReader(source6, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer six.Close()
-	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: six}, windows3(), nil); !isPubCode(err, ErrorWrongAddressFamily) {
+	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: six}, windows3(), nil); !isPubCode(err, ErrorWrongAddressFamily) {
 		t.Fatalf("v6 source err = %v, want ErrorWrongAddressFamily", err)
 	}
 
 	// A pending transaction on the membership writer refuses the
 	// workflow (Rust require_feed_workflow_ready).
-	if err := w.core.BeginDraft(); err != nil {
+	if err := w.coreOf().BeginDraft(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil); !isPubCode(err, ErrorWrongState) {
+	if _, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil); !isPubCode(err, ErrorWrongState) {
 		t.Fatalf("pending draft err = %v, want ErrorWrongState", err)
 	}
-	if err := w.core.DiscardUnpublished(); err != nil {
+	if err := w.coreOf().DiscardUnpublished(); err != nil {
 		t.Fatal(err)
 	}
 
 	// A closed writer refuses with ErrorWrongState.
-	closed, err := OpenWriter(histCreateMembership(t), DefaultBudget())
+	closed, err := OpenLiveWriter(histCreateMembership(t), DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := closed.Close(); err != nil {
+	if _, err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := closed.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil); !isPubCode(err, ErrorWrongState) {
+	if _, err := closed.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil); !isPubCode(err, ErrorWrongState) {
 		t.Fatalf("closed writer err = %v, want ErrorWrongState", err)
 	}
 }
@@ -533,10 +534,10 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 // cancellation check reports ErrorCancelled (Rust project_history_state
 // cancellation.check before start_feed_workflow_draft).
 func TestPublicProjectHistoryCancellation(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 0, 1}})
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,12 +547,12 @@ func TestPublicProjectHistoryCancellation(t *testing.T) {
 
 	token := NewCancellationToken()
 	token.Cancel()
-	_, err = w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), token)
+	_, err = w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), token)
 	var public *Error
 	if !errors.As(err, &public) || public.Code != ErrorCancelled {
 		t.Fatalf("cancelled err = %v, want ErrorCancelled", err)
 	}
-	if err := w.core.Healthy(); err != nil || w.core.HasDraft() {
+	if err := w.coreOf().Healthy(); err != nil || w.coreOf().HasDraft() {
 		t.Fatalf("cancellation before the draft left the writer dirty: %v", err)
 	}
 }
@@ -561,17 +562,17 @@ func TestPublicProjectHistoryCancellation(t *testing.T) {
 // projection with one extra window keeps the first window's committed
 // coverage, and the identical third rerun is a no change.
 func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 9, 10}, {10, 19, 20}, {20, 29, 30}, {40, 49, 20}})
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
 
 	firstSource := histSource(t, sourcePath)
-	first, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: firstSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}}, nil)
+	first, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: firstSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +585,7 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 	}
 
 	secondSource := histSource(t, sourcePath)
-	second, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: secondSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
+	second, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: secondSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 
 	thirdSource := histSource(t, sourcePath)
 	defer thirdSource.Close()
-	third, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: thirdSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
+	third, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: thirdSource}, []HistoryWindow{{FeedName: "recent", Cutoff: 15}, {FeedName: "very-recent", Cutoff: 25}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,13 +619,13 @@ func TestPublicProjectHistoryUnrelatedFeedsSurviveRerun(t *testing.T) {
 	}
 
 	// The destination still carries the unrelated recent coverage plus
-	// the newer very-recent coverage, verifiable through the reader
-	// (close the writer first: immutable opens wait on the exclusive
-	// lifetime lock).
-	if err := w.Close(); err != nil {
+	// the newer very-recent coverage, verifiable through the live
+	// reader (close the writer first: live readers wait on the
+	// exclusive lifetime lock).
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r, err := OpenImmutable(destinationPath)
+	r, err := OpenLiveReader(destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -586,15 +586,15 @@ func TestLogicalCursorsClosedReader(t *testing.T) {
 // feed cursors need a membership database, so each half uses the kind
 // it drives.
 func TestEmptyDatabaseCursors(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	dir := t.TempDir()
 
 	// Direct range cursors in both directions are empty, not corrupt.
 	directPath := filepath.Join(dir, "empty-direct.iprdb")
-	if _, err := Create(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
+	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
 		t.Fatal("create direct:", err)
 	}
-	directDB, err := OpenImmutable(directPath)
+	directDB, err := OpenLiveReader(directPath, nil)
 	if err != nil {
 		t.Fatal("open direct:", err)
 	}
@@ -607,16 +607,16 @@ func TestEmptyDatabaseCursors(t *testing.T) {
 			t.Fatalf("direct cursor %v on an empty database: ok=%v err=%v", direction, ok, err)
 		}
 	}
-	if err := directDB.Close(); err != nil {
+	if _, err := directDB.Close(); err != nil {
 		t.Fatal("close direct:", err)
 	}
 
 	// The membership catalog feed cursor is empty, not corrupt.
 	path := filepath.Join(dir, "empty-membership.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}, 4, nil); err != nil {
 		t.Fatal("create:", err)
 	}
-	db, err := OpenImmutable(path)
+	db, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal("open:", err)
 	}

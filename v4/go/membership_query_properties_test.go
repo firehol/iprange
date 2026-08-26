@@ -75,7 +75,7 @@ type queryPropertyOutput struct {
 // verifying every point match, feed cardinality, and unordered pair
 // overlap against the model.
 func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	cancellation := NewCancellationToken()
 	state := uint64(0x51d209baa36ec47f)
 	for round := 0; round < queryPropertyRounds; round++ {
@@ -91,10 +91,10 @@ func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+		if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 			t.Fatal(err)
 		}
-		writer, err := OpenWriter(path, queryPropertyBudget())
+		writer, err := OpenLiveWriter(path, queryPropertyBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,11 +121,11 @@ func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
 				t.Fatalf("round %d: feed f%d commit = %v, want committed", round, feedIndex, result.Status)
 			}
 		}
-		if err := writer.Close(); err != nil {
+		if _, err := writer.Close(); err != nil {
 			t.Fatal(err)
 		}
 
-		reader, err := OpenImmutable(path)
+		reader, err := OpenLiveReader(path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +220,7 @@ func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
 				}
 			}
 		}
-		if err := reader.Close(); err != nil {
+		if _, err := reader.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}

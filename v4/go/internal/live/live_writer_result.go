@@ -117,7 +117,7 @@ type LiveCloseResult struct {
 }
 
 // classedError carries one declared error class while keeping the
-// wrapped cause chain inspectable (mirror of the public abortError
+// wrapped cause chain inspectable (mirror of the former public abortError
 // shape; Rust TransactionAborted(Box<cause>) / CleanupIncomplete).
 type classedError struct {
 	class *format.Error

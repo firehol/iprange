@@ -19,10 +19,10 @@ import (
 )
 
 func TestHistoryProjectionWorkCounters(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestHistoryProjectionWorkCounters(t *testing.T) {
 	defer source.Close()
 
 	work.Reset()
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows3(), nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,21 +60,21 @@ func TestHistoryProjectionWorkCounters(t *testing.T) {
 	if err := handle.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.core.Healthy(); err != nil {
+	if err := w.coreOf().Healthy(); err != nil {
 		t.Fatalf("writer unhealthy after abort: %v", err)
 	}
 }
 
 func TestHistoryProjectionUnusedPrefixesNotInterned(t *testing.T) {
-	requireFileCreation(t)
-	// An empty last_seen database: Create alone leaves the empty
+	requireLiveCreation(t)
+	// An empty last_seen database: CreateLive alone leaves the empty
 	// txn-1 generation (no transaction is ever committed).
 	sourcePath := filepath.Join(t.TempDir(), "empty-source.iprdb")
-	if _, err := Create(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestHistoryProjectionUnusedPrefixesNotInterned(t *testing.T) {
 		windows[index] = HistoryWindow{FeedName: "history-" + string(rune('0'+index/10)) + string(rune('0'+index%10)), Cutoff: uint32(index)}
 	}
 	work.Reset()
-	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows, nil)
+	handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

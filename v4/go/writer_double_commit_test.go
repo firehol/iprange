@@ -14,12 +14,12 @@ import (
 )
 
 func TestWriterSecondCommitSameWriter(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := filepath.Join(t.TempDir(), "double.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestWriterSecondCommitSameWriter(t *testing.T) {
 
 	commit := func(step string, lo uint32, value uint32) {
 		t.Helper()
-		tx, err := w.BeginDirect()
+		tx, err := w.BeginDirect(nil)
 		if err != nil {
 			t.Fatalf("%s BeginDirect: %v", step, err)
 		}

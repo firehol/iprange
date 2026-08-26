@@ -1,21 +1,21 @@
 class	rust_ref	go_symbol	status	note
-writer-offcontract	(spec: no offline mutation API)	Create	remove-planned	binary-format-v4.md:1272-1279 forbids offline in-place mutation; Rust authority is CreateLive
-writer-offcontract	(spec: all public writers live-bound)	OpenWriter	remove-planned	Rust authority is LiveWriter::open with the sidecar lease
-writer-offcontract	(spec: no sidecar-free writer type)	Writer	remove-planned	Public Writer type and its whole surface are off-contract
-writer-offcontract	(spec: writer surface)	Writer.Info	remove-planned	Off-contract writer info owner
-writer-offcontract	(spec: writer surface)	Writer.Close	remove-planned	Off-contract writer close owner
-writer-offcontract	(spec: writer surface)	Writer.Abort	remove-planned	Off-contract writer abort owner
-writer-offcontract	LiveWriter::delete_feed	Writer.DeleteFeed	remove-planned	Wrong owner: feed delete bound to Writer (feed_workflow_public.go:575)
-writer-offcontract	LiveWriter::rename_feed	Writer.RenameFeed	remove-planned	Wrong owner: feed rename bound to Writer (feed_workflow_public.go:520)
-writer-offcontract	LiveWriter::begin_direct_transaction	Writer.BeginDirect	remove-planned	Wrong owner: the transaction is bound to the sidecar-free Writer, not the live writer
-writer-offcontract	LiveWriter::begin_direct_replacement	Writer.BeginDirectReplacement	remove-planned	Wrong owner: workflow bound to Writer
-writer-offcontract	LiveWriter::begin_first_seen_refresh	Writer.BeginFirstSeenRefresh	remove-planned	Wrong owner: workflow bound to Writer
-writer-offcontract	LiveWriter::begin_last_seen_refresh	Writer.BeginLastSeenRefresh	remove-planned	Wrong owner: workflow bound to Writer
-writer-offcontract	LiveWriter::begin_create_feed	Writer.BeginCreateFeed	remove-planned	Wrong owner: workflow bound to Writer
-writer-offcontract	LiveWriter::begin_replace_feed	Writer.BeginReplaceFeed	remove-planned	Wrong owner: workflow bound to Writer
-writer-offcontract	LiveWriter::begin_membership_transaction	Writer.BeginMembershipTransaction	remove-planned	Wrong owner: transaction bound to Writer
-writer-offcontract	LiveWriter::begin_structured_transaction	Writer.BeginStructuredTransaction	remove-planned	Wrong owner: transaction bound to Writer
-writer-offcontract	LiveWriter::project_history	Writer.ProjectHistory	remove-planned	Wrong owner: projection driven from the Writer surface (history_projection_public.go:64)
+writer-offcontract	(spec: no offline mutation API)		missing	removed slice 2c; Rust authority is CreateLive
+writer-offcontract	(spec: all public writers live-bound)		missing	removed slice 2c; Rust authority is LiveWriter::open with the sidecar lease
+writer-offcontract	(spec: no sidecar-free writer type)		missing	removed slice 2c; the public Writer type is gone; LiveWriter is the only writer owner
+writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Info
+writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Close
+writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Abort
+writer-offcontract	LiveWriter::delete_feed		missing	removed slice 2c; owned by LiveWriter.DeleteFeed
+writer-offcontract	LiveWriter::rename_feed		missing	removed slice 2c; owned by LiveWriter.RenameFeed
+writer-offcontract	LiveWriter::begin_direct_transaction		missing	removed slice 2c; owned by LiveWriter.BeginDirect
+writer-offcontract	LiveWriter::begin_direct_replacement		missing	removed slice 2c; owned by LiveWriter.BeginDirectReplacement
+writer-offcontract	LiveWriter::begin_first_seen_refresh		missing	removed slice 2c; owned by LiveWriter.BeginFirstSeenRefresh
+writer-offcontract	LiveWriter::begin_last_seen_refresh		missing	removed slice 2c; owned by LiveWriter.BeginLastSeenRefresh
+writer-offcontract	LiveWriter::begin_create_feed		missing	removed slice 2c; owned by LiveWriter.BeginCreateFeed
+writer-offcontract	LiveWriter::begin_replace_feed		missing	removed slice 2c; owned by LiveWriter.BeginReplaceFeed
+writer-offcontract	LiveWriter::begin_membership_transaction		missing	removed slice 2c; owned by LiveWriter.BeginMembershipTransaction
+writer-offcontract	LiveWriter::begin_structured_transaction		missing	removed slice 2c; owned by LiveWriter.BeginStructuredTransaction
+writer-offcontract	LiveWriter::project_history		missing	removed slice 2c; owned by LiveWriter.ProjectHistory
 writer-offcontract	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Complete name-based import from a pinned membership reader (membership_import_public.go)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
 writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go

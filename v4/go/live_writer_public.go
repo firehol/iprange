@@ -4,8 +4,9 @@
 // gate, committed selection, slot scan, writer claim, tail trim), the
 // direct transaction commits through the gate-around-Publish barrier,
 // and Close releases the writer lease, the gate, and the lifetime lock
-// in the Rust order. The immutable-mode Writer/OpenWriter paths are
-// unchanged.
+// in the Rust order. The immutable-mode Writer/OpenWriter surface was
+// removed in SOW-0027 slice 2c: no sidecar-free mutation owner exists;
+// every mutation path binds the sidecar lease.
 
 package iprangedb
 
@@ -68,9 +69,9 @@ func (w *LiveWriter) Info() (DatabaseInfo, error) {
 
 // mutationHost is the writer-facing surface the advanced transaction
 // and workflow facades compose (Rust LiveWriter): the mapped core owner
-// plus the abort, discard, and commit terminals. Both hosts satisfy it
-// today: the sidecar-bound LiveWriter and the off-contract Writer (the
-// latter recorded remove-planned in the parity ledger).
+// plus the abort, discard, and commit terminals. The sidecar-bound
+// LiveWriter is the only host (the off-contract Writer surface was
+// removed in SOW-0027 slice 2c).
 type mutationHost interface {
 	coreOf() *writer.Core
 	healthy() error

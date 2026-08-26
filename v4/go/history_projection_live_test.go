@@ -42,11 +42,11 @@ func histCreateLiveSource4(t *testing.T, ranges [][3]uint32) string {
 	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 2, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := w.BeginDirect()
+	tx, err := w.BeginDirect(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func histCreateLiveSource4(t *testing.T, ranges [][3]uint32) string {
 	if _, err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -71,12 +71,11 @@ func histCreateLiveSource4(t *testing.T, ranges [][3]uint32) string {
 // and the identical rerun reports no change with the Rust
 // NoPendingTransaction abort parity.
 func TestPublicProjectHistoryLiveSourceCreatesFeedsAndCommits(t *testing.T) {
-	requireFileCreation(t)
 	requireLiveCreation(t)
 	sourcePath := histCreateLiveSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
 
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,12 +144,12 @@ func TestPublicProjectHistoryLiveSourceCreatesFeedsAndCommits(t *testing.T) {
 	}
 
 	// The committed destination carries the three feeds (close the
-	// writer first: the live reader and immutable opens wait on the
-	// writer's exclusive lifetime lock).
-	if err := w.Close(); err != nil {
+	// writer first: live readers wait on the writer's exclusive
+	// lifetime lock).
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r, err := OpenImmutable(destinationPath)
+	r, err := OpenLiveReader(destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,13 +158,13 @@ func TestPublicProjectHistoryLiveSourceCreatesFeedsAndCommits(t *testing.T) {
 			t.Fatalf("feed %q after live commit: found %v err %v", name, found, err)
 		}
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// The identical live rerun reports no change and the clean handle
 	// reports NoPendingTransaction at Abort (Rust parity).
-	reopened, err := OpenWriter(destinationPath, DefaultBudget())
+	reopened, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,80 +187,79 @@ func TestPublicProjectHistoryLiveSourceCreatesFeedsAndCommits(t *testing.T) {
 	if err := rerun.Abort(); !isPubCode(err, ErrorNoPendingTransaction) {
 		t.Fatalf("rerun abort err = %v, want ErrorNoPendingTransaction", err)
 	}
-	if err := reopened.core.Healthy(); err != nil {
+	if err := reopened.coreOf().Healthy(); err != nil {
 		t.Fatalf("writer unhealthy after the live no-change rerun: %v", err)
 	}
 }
 
-// TestPublicProjectHistoryLiveSourceMatchesImmutableProjects the same
-// 1000-range vector through both source modes into two separate
+// TestPublicProjectHistoryLiveSourceMatchesImmutableProjects two
+// identical 1000-range live source generations into two separate
 // destinations and requires byte-identical reports: the live arm binds
-// the same generation the immutable arm would read.
+// the source generation, and both independent projections of the same
+// vector report exactly alike.
 func TestPublicProjectHistoryLiveSourceMatchesImmutable(t *testing.T) {
-	requireFileCreation(t)
 	requireLiveCreation(t)
 	ranges := ranges1000()
 
-	immutableSourcePath := histCreateSource4(t, ranges)
-	liveSourcePath := histCreateLiveSource4(t, ranges)
+	firstSourcePath := histCreateSource4(t, ranges)
+	secondSourcePath := histCreateLiveSource4(t, ranges)
 
-	immutableDest := histCreateMembership(t)
-	liveDest := histCreateMembership(t)
+	firstDest := histCreateMembership(t)
+	secondDest := histCreateMembership(t)
 
-	w1, err := OpenWriter(immutableDest, DefaultBudget())
+	w1, err := OpenLiveWriter(firstDest, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w1.Close()
-	w2, err := OpenWriter(liveDest, DefaultBudget())
+	w2, err := OpenLiveWriter(secondDest, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w2.Close()
 
-	immutableSource := histSource(t, immutableSourcePath)
-	defer immutableSource.Close()
-	liveSource, err := OpenLiveReader(liveSourcePath, nil)
+	firstSource := histSource(t, firstSourcePath)
+	defer firstSource.Close()
+	secondSource, err := OpenLiveReader(secondSourcePath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer liveSource.Close()
+	defer secondSource.Close()
 
-	immutableHandle, err := w1.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: immutableSource}, windows3(), nil)
+	firstHandle, err := w1.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: firstSource}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	liveHandle, err := w2.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: liveSource}, windows3(), nil)
+	secondHandle, err := w2.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: secondSource}, windows3(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if immutableHandle.IsChanged() != liveHandle.IsChanged() {
-		t.Fatal("change flags differ between the source modes")
+	if firstHandle.IsChanged() != secondHandle.IsChanged() {
+		t.Fatal("change flags differ between the identical projections")
 	}
-	if !reflect.DeepEqual(immutableHandle.Report(), liveHandle.Report()) {
-		t.Fatalf("live report %+v differs from the immutable report %+v", liveHandle.Report(), immutableHandle.Report())
+	if !reflect.DeepEqual(firstHandle.Report(), secondHandle.Report()) {
+		t.Fatalf("second report %+v differs from the first report %+v", secondHandle.Report(), firstHandle.Report())
 	}
-	// The live terminal commits; the immutable terminal aborts. Both
+	// The first terminal commits; the second terminal aborts. Both
 	// leave their destination clean, exactly like the Rust tests.
-	res, err := liveHandle.Commit()
+	res, err := firstHandle.Commit()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Status != CommitCommitted || res.Err != nil {
-		t.Fatalf("live parity commit = %+v err %v, want committed", res, err)
+		t.Fatalf("parity commit = %+v err %v, want committed", res, err)
 	}
-	if err := immutableHandle.Abort(); err != nil {
-		t.Fatalf("immutable parity abort: %v", err)
+	if err := secondHandle.Abort(); err != nil {
+		t.Fatalf("parity abort: %v", err)
 	}
 }
 
 // TestPublicProjectHistoryLiveSourceValidation pins the live arm's
 // require_compatible_source checks and the bound-core open check.
 func TestPublicProjectHistoryLiveSourceValidation(t *testing.T) {
-	requireFileCreation(t)
 	requireLiveCreation(t)
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

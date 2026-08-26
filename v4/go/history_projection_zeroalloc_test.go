@@ -14,10 +14,10 @@ import (
 )
 
 func TestNoPageSizedHeapAllocationsHistoryProjection(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
 	destinationPath := histCreateMembership(t)
-	w, err := OpenWriter(destinationPath, DefaultBudget())
+	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestNoPageSizedHeapAllocationsHistoryProjection(t *testing.T) {
 	// Warm every path outside the measured window: projection,
 	// report read, and abort on the same writer.
 	for range 8 {
-		handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows, nil)
+		handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows, nil)
 		if err != nil {
 			t.Fatal("warm project:", err)
 		}
@@ -41,7 +41,7 @@ func TestNoPageSizedHeapAllocationsHistoryProjection(t *testing.T) {
 			t.Fatal("warm abort:", err)
 		}
 	}
-	if err := w.core.Healthy(); err != nil {
+	if err := w.coreOf().Healthy(); err != nil {
 		t.Fatal("writer unhealthy after warm-up:", err)
 	}
 
@@ -50,7 +50,7 @@ func TestNoPageSizedHeapAllocationsHistoryProjection(t *testing.T) {
 	runtime.ReadMemStats(&before)
 
 	for range 64 {
-		handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows, nil)
+		handle, err := w.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows, nil)
 		if err != nil {
 			t.Fatal("project:", err)
 		}

@@ -10,7 +10,6 @@
 package iprangedb
 
 import (
-	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -24,7 +23,7 @@ func structuredDB(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "structured.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -41,12 +40,12 @@ func enrichmentValue(asn uint32) NetworkEnrichmentV1 {
 // aborted transaction is stale for its writer (operation nonce
 // mismatch) and foreign for another writer (database id mismatch).
 func TestPublicStructuredTransactionReferencesBound(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	firstPath := structuredDB(t)
 	secondPath := structuredDB(t)
 	cancellation := NewCancellationToken()
 
-	first, err := OpenWriter(firstPath, DefaultBudget())
+	first, err := OpenLiveWriter(firstPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +74,7 @@ func TestPublicStructuredTransactionReferencesBound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, err := OpenWriter(secondPath, DefaultBudget())
+	second, err := OpenLiveWriter(secondPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,10 +98,10 @@ func TestPublicStructuredTransactionReferencesBound(t *testing.T) {
 // the record at prepare, and the next intern reuses the lowest free
 // structure id.
 func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +123,12 @@ func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.
 		t.Fatal(err)
 	}
 
-	// The reader needs the exclusive writer lock released (Go has no
-	// sidecar coordination yet), so the writer closes before every read.
-	if err := w.Close(); err != nil {
+	// The writer closes before every read; the live reader then opens
+	// the stable committed generation without the writer lease.
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err := OpenImmutable(path)
+	reader, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +144,7 @@ func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.
 	pin.Close()
 	reader.Close()
 
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,10 +209,10 @@ func TestPublicStructuredTransactionAbortDedupReleaseReuseCleanGraph(t *testing.
 		t.Fatal(err)
 	}
 
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err = OpenImmutable(path)
+	reader, err = OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +254,7 @@ func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
 	requireLiveCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,13 +310,13 @@ func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
 	if result.Status != CommitCommitted {
 		t.Fatalf("commit status = %v, want committed", result.Status)
 	}
-	// The reader needs the exclusive writer lock released (Go has no
-	// sidecar coordination yet), so the writer closes before every read.
-	if err := w.Close(); err != nil {
+	// The writer closes before every read; the live reader then opens
+	// the stable committed generation without the writer lease.
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reader, err := OpenImmutable(path)
+	reader, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,10 +442,10 @@ func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
 
 	// The committed file snapshots into an immutable copy preserving the
 	// structured values and their lazy threat membership (Rust
-	// snapshot_to with a live source; Go uses the immutable source
-	// because live-source coordination is milestone 4).
+	// snapshot_to with a live source; Go snapshots through the live
+	// source coordinator into the immutable published output).
 	snapshotPath := filepath.Join(t.TempDir(), "structured-snapshot.iprdb")
-	if _, err := SnapshotTo(path, SnapshotSourceImmutable, snapshotPath, PolicyFailIfExists, snapshotBudget(2), cancellation); err != nil {
+	if _, err := SnapshotTo(path, SnapshotSourceLive, snapshotPath, PolicyFailIfExists, snapshotBudget(3), cancellation); err != nil {
 		t.Fatal(err)
 	}
 	assertEnrichmentSnapshot(t, snapshotPath, threatIndex)
@@ -454,7 +453,7 @@ func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
 	// Deleting the feed re-interns every stored payload without the
 	// feed's bit: [10] keeps its value but loses the threat membership,
 	// and every reference produced before the delete is stale.
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,11 +489,11 @@ func TestPublicStructuredTransactionRoundTrip(t *testing.T) {
 	if _, err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reader, err = OpenImmutable(path)
+	reader, err = OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +607,7 @@ func assertEnrichmentSnapshot(t *testing.T, path string, threatIndex uint32) {
 // so the guard is Rust-parity defense and the wrong-kind open class is
 // FormatInvalid, pinned by the open tests.
 func TestPublicStructuredTransactionSurface(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	cancellation := NewCancellationToken()
 
 	// Outer guard: a direct database has no structure kind.
@@ -617,30 +616,30 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(directPath, DefaultBudget())
+	w, err := OpenLiveWriter(directPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.BeginStructuredTransaction(cancellation); !isPubCode(err, ErrorWrongStructureKind) {
 		t.Fatalf("begin on direct database = %v, want wrong structure kind", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// Outer guard: a membership database also has no structure kind.
 	membershipPath := testFeedMembership(t)
-	w, err = OpenWriter(membershipPath, DefaultBudget())
+	w, err = OpenLiveWriter(membershipPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.BeginStructuredTransaction(cancellation); !isPubCode(err, ErrorWrongStructureKind) {
 		t.Fatalf("begin on membership database = %v, want wrong structure kind", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -650,24 +649,24 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	// wrong-kind class.
 	fired := NewCancellationToken()
 	fired.Cancel()
-	w, err = OpenWriter(membershipPath, DefaultBudget())
+	w, err = OpenLiveWriter(membershipPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.BeginStructuredTransaction(fired); !isPubCode(err, ErrorWrongStructureKind) {
 		t.Fatalf("begin with fired token on membership database = %v, want wrong structure kind", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// Closed writer.
 	path := structuredDB(t)
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.BeginStructuredTransaction(cancellation); !isPubCode(err, ErrorWrongState) {
@@ -675,7 +674,7 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	}
 
 	// Surface errors on a healthy structured database.
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,9 +774,9 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 // another transaction refuses as stale (Rust
 // intern_network_enrichment_v1 Some require_current_membership).
 func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := structuredDB(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -813,10 +812,10 @@ func TestPublicStructuredTransactionStaleEmptyMembership(t *testing.T) {
 // state), exactly like Rust require_active / commit_attempt / abort
 // after abort_after.
 func TestPublicStructuredTransactionOpErrorAborts(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,8 +832,7 @@ func TestPublicStructuredTransactionOpErrorAborts(t *testing.T) {
 	if _, err := tx.InternNetworkEnrichmentV1(bad, MembershipRef{}); err == nil {
 		t.Fatal("intern with out-of-range coordinates was accepted")
 	} else {
-		var ab *abortError
-		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorInvalidArgument) {
+		if abortCauseCode(err) != ErrorInvalidArgument {
 			t.Fatalf("intern coordinates = %v, want transaction aborted wrapping invalid argument", err)
 		}
 	}
@@ -865,8 +863,7 @@ func TestPublicStructuredTransactionOpErrorAborts(t *testing.T) {
 	if _, err := tx.RenameFeed(first, feedName(t, "second-a")); err == nil {
 		t.Fatal("rename onto existing name was accepted")
 	} else {
-		var ab *abortError
-		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorNameExists) {
+		if abortCauseCode(err) != ErrorNameExists {
 			t.Fatalf("rename onto existing = %v, want transaction aborted wrapping name exists", err)
 		}
 	}

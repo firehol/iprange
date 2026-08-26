@@ -7,7 +7,6 @@
 package iprangedb
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func memberTxDB(t *testing.T) string {
 	t.Helper()
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +56,10 @@ func memberTxDB(t *testing.T) string {
 // membership, metadata staging, the committed outcome, and the
 // cross-transaction reference refusal (Rust ForeignReference).
 func TestPublicMembershipTransactionApplyCommit(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,10 +143,10 @@ func TestPublicMembershipTransactionApplyCommit(t *testing.T) {
 // membership-epoch rule: a membership reference produced before a feed
 // deletion is stale for every later mutation of the same transaction.
 func TestPublicMembershipTransactionStaleEpoch(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +186,10 @@ func TestPublicMembershipTransactionStaleEpoch(t *testing.T) {
 // rules: the ordered enum cursor, lookup/ensure/rename, the metadata
 // stage, error classes, and the committed-transaction abort.
 func TestPublicMembershipTransactionSurface(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +221,7 @@ func TestPublicMembershipTransactionSurface(t *testing.T) {
 	if _, err := tx.RenameFeed(renamed, feedName(t, "beta")); err == nil {
 		t.Fatal("rename onto existing name was accepted")
 	} else {
-		var ab *abortError
-		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorNameExists) {
+		if abortCauseCode(err) != ErrorNameExists {
 			t.Fatalf("rename onto existing = %v, want transaction aborted wrapping name exists", err)
 		}
 	}
@@ -279,10 +277,10 @@ func TestPublicMembershipTransactionSurface(t *testing.T) {
 // the transaction surface: reversed ranges, wrong family, and the
 // inactive-transaction class after abort.
 func TestPublicMembershipTransactionErrors(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,10 +317,10 @@ func TestPublicMembershipTransactionErrors(t *testing.T) {
 // check_or_abort path: a cancelled token refuses the next mutation and
 // aborts the transaction through the writer (ErrorTransactionAborted).
 func TestPublicMembershipTransactionCancellation(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := memberTxDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

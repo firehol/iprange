@@ -1,15 +1,15 @@
 // Randomized scalar-model property test of the history projection over
-// the public facade (Rust tests/history_projection_properties.rs
+// the live surface (Rust tests/history_projection_properties.rs
 // parity): one deterministic xorshift generator drives 40 rounds of
 // direct last_seen source replacement over a 128-address domain; the
 // independent scalar model derives the exact expected per-window and
 // aggregate report after every round plus the committed destination
-// membership. Go has no live-reader sidecar (Milestone 4), so the
-// projection source is the committed generation of the source path
-// (HistoryProjectionSourceImmutable after the source writer closes),
-// and the destination writer closes after each committed round before
-// the immutable reader asserts the database, unlike the Rust test that
-// keeps both live writers open across rounds.
+// membership. Every fixture is a live pair: the projection source is
+// the committed generation of the source path bound by a live reader
+// (HistoryProjectionSourceLive after the source writer closes), and
+// the destination writer closes after each committed round before the
+// live reader asserts the database, unlike the Rust test that keeps
+// both live writers open across rounds.
 
 package iprangedb
 
@@ -27,7 +27,7 @@ const historyPropertyWindows = 4
 func histPropertyCreateSource(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-property-source.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen()); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -70,14 +70,14 @@ func histPropertyUnion(states *[historyPropertyWindows][workflowDomain]bool) [wo
 // one pre-existing unrelated feed, with the exact report and committed
 // membership asserted against the scalar model every round.
 func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	sourcePath := histPropertyCreateSource(t)
 	destinationPath := histCreateMembership(t)
 
 	// The unrelated destination feed covers every 5th address as single
 	// point ranges and must survive every projection round (Rust
 	// begin_create_feed before the rounds).
-	destination, err := OpenWriter(destinationPath, DefaultBudget())
+	destination, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 			t.Fatalf("unrelated feed commit = %+v err %v, want committed", result, err)
 		}
 	}
-	if err := destination.Close(); err != nil {
+	if _, err := destination.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,9 +128,9 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 
 		// Replace the whole source database with the round input in
 		// batches of 5 (Rust begin_direct_replacement + finish_workflow
-		// + writer close so the immutable projection source sees the
+		// + writer close so the live projection source binds the
 		// committed generation).
-		sourceWriter, err := OpenWriter(sourcePath, DefaultBudget())
+		sourceWriter, err := OpenLiveWriter(sourcePath, DefaultBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 				t.Fatalf("source commit = %+v err %v, want committed", result, err)
 			}
 		}
-		if err := sourceWriter.Close(); err != nil {
+		if _, err := sourceWriter.Close(); err != nil {
 			t.Fatal(err)
 		}
 
@@ -181,14 +181,13 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 		}
 
 		// Project the committed source generation into the destination
-		// (Rust project_history over the live source; the Go immutable
-		// mode covers the Milestone-4 gap).
+		// (Rust project_history over the live source).
 		source := histSource(t, sourcePath)
-		destinationWriter, err := OpenWriter(destinationPath, DefaultBudget())
+		destinationWriter, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		handle, err := destinationWriter.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceImmutable, Reader: source}, windows, nil)
+		handle, err := destinationWriter.ProjectHistory(HistoryProjectionSource{Kind: HistoryProjectionSourceLive, Live: source}, windows, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +265,7 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 		}
 
 		// Commit the changed projection; a no-change result is already
-		// clean. The destination writer must close before the immutable
+		// clean. The destination writer must close before the live
 		// reader opens (exclusive lifetime lock).
 		if handle.IsChanged() {
 			result, err := handle.Commit()
@@ -277,14 +276,14 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 				t.Fatalf("round %d: projection commit status = %v (%v), want committed", round, result.Status, result.Err)
 			}
 		}
-		if err := destinationWriter.Close(); err != nil {
+		if _, err := destinationWriter.Close(); err != nil {
 			t.Fatal(err)
 		}
 
 		// The committed destination carries every window feed plus the
 		// unrelated feed; the membership of every address must match the
 		// scalar model for all four windows and the unrelated feed.
-		reader, err := OpenImmutable(destinationPath)
+		reader, err := OpenLiveReader(destinationPath, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -336,10 +335,10 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 		if err := pin.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := reader.Close(); err != nil {
+		if _, err := reader.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := source.Close(); err != nil {
+		if _, err := source.Close(); err != nil {
 			t.Fatal(err)
 		}
 		before = after

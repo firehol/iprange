@@ -9,9 +9,10 @@ package iprangedb
 //     symbol to exist in this package;
 //   - a row with status missing requires the symbol to stay absent (rows
 //     flip to present only in the commit that implements the operation);
-//   - the off-contract Writer surface is closed: every public Writer
-//     method in reality must appear in the ledger, so a new sidecar-free
-//     mutation method fails CI until it is deliberately recorded.
+//   - the off-contract Writer surface was removed in SOW-0027 slice 2c:
+//     no public Writer symbol may exist, and a re-added sidecar-free
+//     mutation method fails CI as unrecorded until it is deliberately
+//     recorded in the ledger.
 //
 // The ledger is the record; this test is the tripwire that keeps the
 // record truthful across milestones.
@@ -146,10 +147,10 @@ func loadParityManifest(t *testing.T) []parityManifestRow {
 func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 	symbols := rootSymbols(t)
 	rows := loadParityManifest(t)
-	// The off-contract Writer surface and the normative LiveWriter
-	// surface are both closed: every public method that actually exists
-	// must be recorded in the ledger, so a new unrecorded method on
-	// either surface fails CI until it is deliberately recorded.
+	// The removed off-contract Writer surface must stay absent and the
+	// normative LiveWriter surface is closed: every public method that
+	// actually exists must be recorded in the ledger, so a new
+	// unrecorded method fails CI until it is deliberately recorded.
 	closedSurfaces := map[string]bool{"Writer": true, "LiveWriter": true}
 	recordedMethods := map[string]map[string]string{} // surface -> symbol -> rust_ref
 	var failures []string

@@ -56,12 +56,6 @@ type directWorkflowState struct {
 }
 
 // BeginDirectReplacement begins a complete direct-map replacement on a
-// clean direct writer (Rust begin_direct_replacement).
-func (w *Writer) BeginDirectReplacement(cancellation *CancellationToken) (*DirectReplacement, error) {
-	return beginDirectReplacement(w, cancellation)
-}
-
-// BeginDirectReplacement begins a complete direct-map replacement on a
 // clean live writer (Rust begin_direct_replacement): cancellation is
 // checked first, the live writer must be open and healthy, and the
 // direct database precondition is proven before the workflow draft.
@@ -77,12 +71,6 @@ func beginDirectReplacement(h mutationHost, cancellation *CancellationToken) (*D
 		return nil, err
 	}
 	return &DirectReplacement{w: h, state: state}, nil
-}
-
-// BeginFirstSeenRefresh begins a full-snapshot refresh on an exact
-// first_seen database (Rust begin_first_seen_refresh).
-func (w *Writer) BeginFirstSeenRefresh(refreshValue uint32, cancellation *CancellationToken) (*FirstSeenRefresh, error) {
-	return beginFirstSeenRefresh(w, refreshValue, cancellation)
 }
 
 // BeginFirstSeenRefresh begins a full-snapshot refresh on an exact
@@ -102,12 +90,6 @@ func beginFirstSeenRefresh(h mutationHost, refreshValue uint32, cancellation *Ca
 		return nil, err
 	}
 	return &FirstSeenRefresh{w: h, state: state, refreshValue: refreshValue}, nil
-}
-
-// BeginLastSeenRefresh begins a full-snapshot refresh on an exact
-// last_seen database (Rust begin_last_seen_refresh).
-func (w *Writer) BeginLastSeenRefresh(refreshValue, cutoff uint32, cancellation *CancellationToken) (*LastSeenRefresh, error) {
-	return beginLastSeenRefresh(w, refreshValue, cutoff, cancellation)
 }
 
 // BeginLastSeenRefresh begins a full-snapshot refresh on an exact

@@ -15,11 +15,9 @@ import (
 	"time"
 )
 
-// createLiveMembershipPair builds one live IPv4 membership pair with one
-// committed feed: the membership database is written through the
-// immutable writer and converted by InitializeLive (the live writer
-// surface is direct-only, so live membership content arrives through the
-// conversion path).
+// createLiveMembershipPair creates one live IPv4 membership pair with
+// one committed feed through the live writer surface (Rust
+// populated_membership parity; no conversion step is needed).
 func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 	t.Helper()
 	tag, err := NewValueTag([]byte("feeds"))
@@ -27,10 +25,10 @@ func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 		t.Fatal(err)
 	}
 	main := filepath.Join(t.TempDir(), "membership.iprdb")
-	if _, err := Create(main, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, capacity, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(main, DefaultBudget())
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,11 +55,8 @@ func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 	if result.Status != CommitCommitted {
 		t.Fatalf("commit status = %v, want committed", result.Status)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := InitializeLive(main, capacity, nil); err != nil {
-		t.Fatalf("InitializeLive: %v", err)
 	}
 	return main
 }
@@ -519,12 +514,12 @@ func TestPublicLiveReaderCursorSurfaceMembership(t *testing.T) {
 // cursor Close.
 func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
 	requireLiveCreation(t)
-	// A structured live pair arrives through conversion: the live
-	// writer is direct-only, so the enrichment content is written by
-	// the immutable writer and converted by InitializeLive.
+	// The structured live pair already carries the enrichment content;
+	// the live writer is opened directly (the live writer owns the
+	// structured transaction surface, no conversion step).
 	path := structuredDB(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,11 +544,8 @@ func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
 	if _, err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := InitializeLive(path, 2, nil); err != nil {
-		t.Fatalf("InitializeLive: %v", err)
 	}
 
 	r, err := OpenLiveReader(path, nil)

@@ -6,7 +6,6 @@
 package iprangedb
 
 import (
-	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -51,12 +50,12 @@ func assertZeroAllocWindow(t *testing.T, before, after runtime.MemStats, context
 // a documented one-time ceiling and the continuation batches stay
 // within the runtime window.
 func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	if raceEnabled {
 		t.Skip("race shadow memory inflates MemStats; the zero-allocation pin runs without -race")
 	}
 	replacementPath := directWorkflowDB(t, mustTag(t, "direct"))
-	w, err := OpenWriter(replacementPath, DefaultBudget())
+	w, err := OpenLiveWriter(replacementPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +90,7 @@ func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
 	}
 
 	refreshPath := directWorkflowDB(t, ValueTagFirstSeen())
-	w, err = OpenWriter(refreshPath, DefaultBudget())
+	w, err = OpenLiveWriter(refreshPath, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,9 +123,9 @@ func TestZeroAllocationDirectWorkflowIngestion(t *testing.T) {
 // discarded by Abort, so Commit and a second Abort report
 // ErrorNoPendingTransaction.
 func TestDirectWorkflowCommitAfterAbort(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := directWorkflowDB(t, mustTag(t, "direct"))
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,9 +162,9 @@ func TestDirectWorkflowCommitAfterAbort(t *testing.T) {
 // failing sink aborts the workflow with the sink error nested in
 // TransactionAborted while the database stays intact.
 func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := directWorkflowDB(t, ValueTagFirstSeen())
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,11 +184,11 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishWorkflowCommit(t, finished, "first-seen seed")
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +234,13 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 	}
 	// Rust aborts the prepared expiry; the database keeps the seed.
 	prepared.Abort()
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// A failing sink aborts the workflow; the database keeps the last
 	// committed generation and the writer can run a fresh refresh.
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,14 +251,13 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ab *abortError
-	if _, err := refresh.FinishInputWithRemovalsV4(failing); !errors.As(err, &ab) || causeCode(ab.cause) != ErrorInvalidArgument {
+	if _, err := refresh.FinishInputWithRemovalsV4(failing); abortCauseCode(err) != ErrorInvalidArgument {
 		t.Fatalf("failing sink error = %v, want TransactionAborted wrapping the sink error", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err := OpenImmutable(path)
+	reader, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,12 +271,12 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 	} else if !found || got != 77 {
 		t.Fatalf("last address lookup = (%d, %v), want (77, true)", got, found)
 	}
-	if err := reader.Close(); err != nil {
+	if _, err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// A fresh refresh after the sink abort commits an empty map.
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,10 +289,10 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishWorkflowCommit(t, final, "refresh after sink abort")
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err = OpenImmutable(path)
+	reader, err = OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +301,7 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 	} else if found {
 		t.Fatal("committed empty refresh left a value behind")
 	}
-	if err := reader.Close(); err != nil {
+	if _, err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -312,12 +310,12 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 // and the family gate: the IPv6 refresh streams IPv6 removals, and the
 // IPv4 sink on an IPv6 database reports the exact Rust family error.
 func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := filepath.Join(t.TempDir(), "first-seen-v6.iprdb")
-	if _, err := Create(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagFirstSeen()); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagFirstSeen(), 4, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,11 +335,11 @@ func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishWorkflowCommit(t, finished, "v6 seed")
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,11 +365,11 @@ func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 		}
 	}
 	prepared.Abort()
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	w, err = OpenWriter(path, DefaultBudget())
+	w, err = OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,11 +377,10 @@ func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ab *abortError
-	if _, err := mismatch.FinishInputWithRemovalsV4(func([]FirstSeenRemoval4) error { return nil }); !errors.As(err, &ab) || causeCode(ab.cause) != ErrorWrongAddressFamily {
+	if _, err := mismatch.FinishInputWithRemovalsV4(func([]FirstSeenRemoval4) error { return nil }); abortCauseCode(err) != ErrorWrongAddressFamily {
 		t.Fatalf("family mismatch error = %v, want TransactionAborted wrapping WrongAddressFamily", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -393,9 +390,9 @@ func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 // repositions, views refuse after Close, a second Close reports
 // WrongState, and the reader cannot close while the cursor is open.
 func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := structuredDB(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,11 +421,11 @@ func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
 	if result.Status != CommitCommitted {
 		t.Fatalf("commit status = %v (%v)", result.Status, result.Err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reader, err := OpenImmutable(path)
+	reader, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +434,7 @@ func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The cursor pin blocks reader Close.
-	if err := reader.Close(); errorAsCode(err) != ErrorHandleBusy {
+	if _, err := reader.Close(); errorAsCode(err) != ErrorHandleBusy {
 		t.Fatalf("reader close with open cursor = %v, want HandleBusy", err)
 	}
 	// Seek repositions into the second range.
@@ -474,7 +471,7 @@ func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
 		t.Fatalf("NextRange after close = %v, want WrongState", err)
 	}
 	// The reader closes cleanly once the cursor pin is released.
-	if err := reader.Close(); err != nil {
+	if _, err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

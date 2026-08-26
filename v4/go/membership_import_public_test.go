@@ -732,7 +732,7 @@ func TestImportPreconditionsCancellationSourceFailureAndBudgetFailureAreAtomic(t
 // failure and reports the nested cause class (Rust
 // TransactionAborted(cause)): the live writer nests the internal
 // classedError with the public Unwrap chain, unlike the immutable
-// writer path which returns the public abortError directly.
+// writer path which used to return the public abortError directly (removed with the Writer surface).
 func abortCauseCode(err error) ErrorCode {
 	cause := errors.Unwrap(err)
 	if cause == nil {

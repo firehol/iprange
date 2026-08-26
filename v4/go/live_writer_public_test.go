@@ -183,12 +183,10 @@ func TestPublicLiveWriterSecondOpenIsWriterBusy(t *testing.T) {
 }
 
 func TestPublicOpenLiveWriterRefusesNonLiveMain(t *testing.T) {
-	requireFileCreation(t)
-	dir := t.TempDir()
-	main := filepath.Join(dir, "db.iprdb")
-	if _, err := Create(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}); err != nil {
-		t.Fatal(err)
-	}
+	// The committed Rust corpus main is immutable (no sidecar pair):
+	// opening the live writer on it must refuse before any claim, and
+	// the open must leave the fixture untouched.
+	main := fixture(t, "direct-ipv4.iprdb")
 	if _, err := OpenLiveWriter(main, DefaultBudget(), nil); err == nil {
 		t.Fatal("live writer opened an immutable main")
 	}

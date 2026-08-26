@@ -34,7 +34,7 @@ func testFeedMembership(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-workflow.iprdb")
-	if _, err := Create(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -56,9 +56,9 @@ func feedName(t *testing.T, name string) FeedName {
 // slice records coalesce with zero per-record allocations, the finish
 // reports the exact comparison, and the changed terminal aborts.
 func TestPublicCreateFeedSliceIngestion(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +121,10 @@ func TestPublicCreateFeedSliceIngestion(t *testing.T) {
 // first feed commits, the second feed with identical ranges produces a
 // changed prepared terminal whose commit lands durably.
 func TestPublicSecondFeedAlternatingDeltas(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,10 +181,10 @@ func TestPublicSecondFeedAlternatingDeltas(t *testing.T) {
 // replace is prepared and aborted, rename and delete prepare and
 // abort, each with the exact catalog lookup count.
 func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,10 +254,10 @@ func TestPublicExactFeedWorkflowNameLookups(t *testing.T) {
 // classes: create on an existing name, replace on a missing name, the
 // pending-transaction refusal, and the wrong value kind.
 func TestPublicFeedWorkflowPreconditions(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,9 +288,9 @@ func TestPublicFeedWorkflowPreconditions(t *testing.T) {
 // TestPublicFeedWorkflowReversedAndWrongFamily pins the input errors of
 // the Rust require_ordered and require_input_family classes.
 func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,8 +302,7 @@ func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = create.AddRangesV4([]AddressRange4{{From: 10, To: 9}})
-	var ab *abortError
-	if !errors.As(err, &ab) || causeCode(ab.cause) != ErrorInvalidArgument {
+	if abortCauseCode(err) != ErrorInvalidArgument {
 		t.Fatalf("reversed range = %v, want transaction aborted wrapping invalid argument", err)
 	}
 	// Rust drain_source errors wrap through writer.mutate abort_after:
@@ -322,8 +321,7 @@ func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
 		// Rust require_input_family aborts the workflow through
 		// abort_after: the public class is TransactionAborted and
 		// the nesting cause is WrongAddressFamily.
-		var ab *abortError
-		if !errors.As(err, &ab) || !isPubCode(ab.cause, ErrorWrongAddressFamily) {
+		if abortCauseCode(err) != ErrorWrongAddressFamily {
 			t.Fatalf("wrong family = %v, want transaction aborted wrapping wrong address family", err)
 		}
 	}
@@ -336,10 +334,10 @@ func TestPublicFeedWorkflowReversedAndWrongFamily(t *testing.T) {
 // TestPublicPreparedFeedChangeMetadata pins the prepared
 // rename/delete metadata stage and the terminal rules.
 func TestPublicPreparedFeedChangeMetadata(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,10 +401,10 @@ func TestPublicPreparedFeedChangeMetadata(t *testing.T) {
 // reproduces the committed state is NoChange and aborts with
 // ErrorNoPendingTransaction.
 func TestPublicFeedWorkflowAbortOnNoChange(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,17 +456,17 @@ func TestPublicFeedWorkflowAbortOnNoChange(t *testing.T) {
 // workflow over the complete address space commits and reads back the
 // full range through the v6 feed cursor.
 func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	tag, err := NewValueTag([]byte("feeds"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-ipv6.iprdb")
-	if _, err := Create(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
 		t.Fatal(err)
 	}
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,11 +490,11 @@ func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
 	} else if result.Status != CommitCommitted {
 		t.Fatalf("IPv6 feed commit = %v, want committed", result.Status)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := OpenImmutable(path)
+	r, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,9 +522,9 @@ func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
 // an unfinished workflow blocks the next workflow until aborted, and no
 // aborted workflow publishes a feed.
 func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,8 +539,7 @@ func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
 	}
 	cancelled.Cancel()
 	err = create.AddRangesV4([]AddressRange4{{From: 0, To: 100}})
-	var ab *abortError
-	if !errors.As(err, &ab) || causeCode(ab.cause) != ErrorCancelled {
+	if abortCauseCode(err) != ErrorCancelled {
 		t.Fatalf("cancelled input = %v, want transaction aborted wrapping cancelled", err)
 	}
 	// The aborted workflow discarded its draft; the writer is clean.
@@ -572,11 +569,11 @@ func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
 	if _, err := w.BeginReplaceFeed(feedName(t, "missing"), cancellation); !isPubCode(err, ErrorNameNotFound) {
 		t.Fatalf("replace of a missing feed = %v, want name not found", err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := OpenImmutable(path)
+	r, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,10 +592,10 @@ func TestPublicFeedInputCancellationAbortsWorkflow(t *testing.T) {
 // NotCommitted carrying the cancellation cause, leaving the committed
 // feed untouched.
 func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,8 +619,7 @@ func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = oversized.SetMetadataJSON(make([]byte, MaxMetadataUncompressed+1))
-	var ab *abortError
-	if !errors.As(err, &ab) || causeCode(ab.cause) != ErrorInvalidArgument {
+	if abortCauseCode(err) != ErrorInvalidArgument {
 		t.Fatalf("oversized metadata = %v, want transaction aborted wrapping invalid argument", err)
 	}
 	// The aborted workflow discarded its draft; the writer is clean.
@@ -647,14 +643,14 @@ func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
 	if result.Status != CommitNotCommitted {
 		t.Fatalf("cancelled delete commit = %v, want not committed", result.Status)
 	}
-	if !errors.As(result.Err, &ab) || causeCode(ab.cause) != ErrorCancelled {
+	if abortCauseCode(result.Err) != ErrorCancelled {
 		t.Fatalf("cancelled delete cause = %v, want transaction aborted wrapping cancelled", result.Err)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := OpenImmutable(path)
+	r, err := OpenLiveReader(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,13 +668,16 @@ func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
 // named feed lifecycle operations refuse a direct database with
 // WrongValueKind.
 func TestPublicDirectDatabaseRejectsFeedLifecycle(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	tag, err := NewValueTag([]byte("direct"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, _ := pubCreate(t, AddressFamilyIPv4, tag)
-	w, err := OpenWriter(path, DefaultBudget())
+	path := filepath.Join(t.TempDir(), "direct.iprdb")
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,10 +698,10 @@ func TestPublicDirectDatabaseRejectsFeedLifecycle(t *testing.T) {
 // preserving the feed index and metadata, a delete clearing the
 // membership bits, and a fresh feed reusing the released index.
 func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
-	requireFileCreation(t)
+	requireLiveCreation(t)
 	path := testFeedMembership(t)
 	cancellation := NewCancellationToken()
-	w, err := OpenWriter(path, DefaultBudget())
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,21 +745,21 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 			t.Fatalf("membership commit = %v, want committed", result.Status)
 		}
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	openWriter := func() *Writer {
+	openWriter := func() *LiveWriter {
 		t.Helper()
-		ww, err := OpenWriter(path, DefaultBudget())
+		ww, err := OpenLiveWriter(path, DefaultBudget(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return ww
 	}
-	openReader := func() *ImmutableReader {
+	openReader := func() *LiveReader {
 		t.Helper()
-		rr, err := OpenImmutable(path)
+		rr, err := OpenLiveReader(path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -788,7 +787,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 		t.Fatalf("beta before rename = found %v err %v, want present", found, err)
 	}
 	betaIndex := betaEntry.Index
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -803,7 +802,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 		t.Fatalf("rename metadata = changed %v err %v, want true/nil", changed, err)
 	}
 	commitFeedChange(t, rename)
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -843,7 +842,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 	if err := pin.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -858,7 +857,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 		t.Fatalf("delete metadata clear = %v err %v, want true/nil", clearedMeta, err)
 	}
 	commitFeedChange(t, del)
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -900,7 +899,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 	if _, present, err := r.MetadataJSON(); err != nil || present {
 		t.Fatalf("metadata after delete = present %v err %v, want absent", present, err)
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -920,7 +919,7 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 	} else if result.Status != CommitCommitted {
 		t.Fatalf("reused feed commit = %v, want committed", result.Status)
 	}
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	r = openReader()
@@ -931,14 +930,14 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 	if reusedEntry.Index != alphaIndex {
 		t.Fatalf("reused feed index = %d, want released %d", reusedEntry.Index, alphaIndex)
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// Deleting the empty feed leaves beta untouched.
 	w = openWriter()
 	commitFeedChange(t, mustDelete(t, w, "empty", cancellation))
-	if err := w.Close(); err != nil {
+	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	r = openReader()
@@ -948,13 +947,13 @@ func TestPublicRenameDeleteReuseCommittedIndex(t *testing.T) {
 	if _, found, err := r.LookupFeed("beta"); err != nil || !found {
 		t.Fatalf("beta after empty delete = found %v err %v, want present", found, err)
 	}
-	if err := r.Close(); err != nil {
+	if _, err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // mustDelete starts and commits one feed deletion.
-func mustDelete(t *testing.T, w *Writer, name string, cancellation *CancellationToken) *PreparedFeedChange {
+func mustDelete(t *testing.T, w *LiveWriter, name string, cancellation *CancellationToken) *PreparedFeedChange {
 	t.Helper()
 	delete, err := w.DeleteFeed(feedName(t, name), cancellation)
 	if err != nil {
