@@ -776,6 +776,12 @@ func publicError(err error) error {
 	}
 	var ferr *format.Error
 	if errors.As(err, &ferr) {
+		// A typed-nil internal error (for example a zero-valued
+		// *format.Error carried inside a result struct) means "no
+		// error"; mapping it to nil keeps the public boundary honest.
+		if ferr == nil {
+			return nil
+		}
 		return &Error{Code: ferr.Code, Detail: ferr.Detail}
 	}
 	// Internal header/decode validation failures (fixedsize header errors

@@ -67,8 +67,8 @@ cancellation	CancellationToken::cancel	CancellationToken.Cancel	present
 cancellation	CancellationToken::is_cancelled	CancellationToken.IsCancelled	present	
 cancellation	CancellationToken::from_poll		missing	Rust async poll integration not ported; Go nil token is the uncancellable form
 join	membership_query/join.rs DirectJoinSource::Live	DirectJoinSourceLive	present	join_public.go; DirectJoinSource union with DirectJoinSourceImmutable/DirectJoinSourceLive; JoinDirect resolves the variant core with its open proof (Rust Source::new)
-publication	publication.rs list_windows_housekeeping		missing	Windows housekeeping is private in Go (internal/publication/maintenance_gc_windows.go)
-publication	publication.rs remove_windows_housekeeping		missing	Windows housekeeping is private in Go
+publication	publication.rs list_windows_housekeeping	ListWindowsHousekeeping	present	windows_housekeeping_public.go; exact GC candidate stream with the exported error class on other platforms
+publication	publication.rs remove_windows_housekeeping	RemoveWindowsHousekeeping	present	windows_housekeeping_public.go; identity-bound removal with the exported payload evidence
 publication	publication.rs list_abandoned_publication_temps	ListAbandonedPublicationTemps	present	publication_public.go
 publication	publication.rs remove_abandoned_publication_temp	RemoveAbandonedPublicationTemp	present	publication_public.go
 publication	publication.rs list_abandoned_reservation_artifacts	ListAbandonedReservationArtifacts	present	publication_public.go
@@ -83,5 +83,5 @@ recovery	recovery.rs recover_immutable	RecoverImmutable	present	recovery_public.
 recovery	recovery.rs recover_offline	RecoverOffline	present	recovery_public.go
 recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
 worker	binary-format-v4.md:3155+ version-matched worker		missing	Go routes validation/recovery in-process on every non-linux/amd64 target (routing_other.go); the worker process is linux/amd64-only
-platform	publication/security/apple.rs filesec creator-only		missing	Go refuses macOS creator-only publication (acl_darwin.go aclSupported=false); Rust implements filesec
+platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended); no root symbol; native macOS proof pending in the authorized platform round
 cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported

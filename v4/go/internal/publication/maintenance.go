@@ -114,6 +114,16 @@ func deliverMaintenance(sink func() error) error {
 	return nil
 }
 
+// deliverWindowsHousekeeping runs one housekeeping sink call and maps
+// the control surface exactly like deliverMaintenance (Rust
+// gc_maintenance::deliver: Continue passes, Stop becomes
+// StoppedBySink, any sink error becomes SinkFailed).
+func deliverWindowsHousekeeping(sink func(entry *WindowsHousekeepingEntry) error) func(entry *WindowsHousekeepingEntry) error {
+	return func(entry *WindowsHousekeepingEntry) error {
+		return deliverMaintenance(func() error { return sink(entry) })
+	}
+}
+
 // listAbandonedPublicationTemps lists the stable no-follow regular
 // private publication outputs of one directory in constant memory
 // (Rust list_abandoned_publication_temps). The sink receives every
@@ -198,15 +208,6 @@ func removeAbandonedReservationArtifact(path string, expectedDirectory LocalFile
 	return maintenanceReservationArtifact.remove(path, expectedDirectory, attempt, expectedArtifact, reservationOperationLock, check, func(file *os.File, identity live.FileIdentity) error {
 		return requireReadableReservationBinding(file, attempt, identity)
 	})
-}
-
-// residuePayloadIdentity is the optional exact content evidence of
-// one Windows housekeeping removal (Rust HousekeepingPayloadIdentity;
-// present only so the refused Go arm keeps the Rust surface shape for
-// the later public wire).
-type residuePayloadIdentity struct {
-	tuple  *residueTuple
-	digest residueDigest
 }
 
 // samePublicationOutputEvidence compares one readable evidence pair

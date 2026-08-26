@@ -1,10 +1,10 @@
-//go:build linux || freebsd
+//go:build linux || freebsd || darwin
 
 // Private creation facts (Rust namespace_tests.rs
 // private_creation_is_exclusive_nofollow_and_creator_only). The test
-// runs where the pure-Go creator-only proof exists (linux xattr and
-// freebsd ACL machines); darwin and the remaining platforms have no
-// cgo ACL machine and refuse honestly in the security package.
+// runs where the pure-Go creator-only proof exists (linux xattr,
+// freebsd, and darwin raw-syscall ACL machines); the remaining
+// platforms refuse honestly in the security package.
 
 package publication
 

@@ -49,11 +49,12 @@ func (p *Profile) Commitment() [32]byte {
 }
 
 // CreatorOnlySupported reports whether the secure creator-only
-// artifact policy is implemented on this platform. Pure Go reaches the
-// linux xattr machine and the freebsd ACL syscall machine; the darwin
-// filesec and other-OS libc ACL machines would need cgo (Decision 2A
-// forbids it), so every other target refuses honestly. The predicate
-// drives the platform gates of the live and publication test suites.
+// artifact policy is implemented on this platform. Pure Go reaches
+// the linux xattr machine, the freebsd ACL syscall machine, and the
+// darwin extended-security syscall machine (fchmod_extended /
+// fstat_extended, the syscalls libc filesec wraps); every other
+// target refuses honestly. The predicate drives the platform gates of
+// the live and publication test suites.
 func CreatorOnlySupported() bool { return aclSupported }
 
 // SecureCreatorOnly applies the creator-only policy to one open

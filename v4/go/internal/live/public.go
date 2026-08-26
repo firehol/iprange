@@ -24,7 +24,7 @@ func CheckSupported() error { return requireLiveSupported() }
 // this platform: the live coordination primitives must be proven
 // (CheckSupported) and the creator-only security machine must be
 // available (internal/security; pure Go implements the linux and
-// freebsd machines — the darwin filesec and other-OS libc ACL machines
+// freebsd and darwin machines — the other-OS libc ACL machines
 // are refused honestly). Suite gates and public capability checks use
 // this single authority so a refusal cannot drift from the create
 // path.
@@ -33,7 +33,7 @@ func CreationSupported() error {
 		return err
 	}
 	if !security.CreatorOnlySupported() {
-		return &format.Error{Code: format.CodeOSUnsupported, Detail: "creator-only access policy requires libc ACL APIs unavailable to pure Go on this platform"}
+		return &format.Error{Code: format.CodeOSUnsupported, Detail: "creator-only access policy is not implemented in pure Go on this platform"}
 	}
 	return nil
 }

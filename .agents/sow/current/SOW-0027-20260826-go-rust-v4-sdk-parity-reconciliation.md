@@ -193,6 +193,33 @@ source graph, full Rust livedb/capi suites, and Rust conformance on the
 regenerated fixtures. Slice 2c is complete; slice 2d (platform boundary)
 follows.
 
+Sub-state (2026-08-26): slice 2d (platform boundary) part 1 delivered
+(working tree `8f20e367+`, gate pending): the Windows housekeeping
+surface is public (`ListWindowsHousekeeping` / `RemoveWindowsHousekeeping`
+with `WindowsHousekeepingCandidateKind` / `WindowsHousekeepingEntry` /
+`WindowsHousekeepingList` / `WindowsHousekeepingPayloadIdentity` /
+`WindowsHousekeepingRemoval`, Rust maintenance.rs parity): the internal
+live GC machine is wired through exported internal/publication arms with
+the Rust control surface (sink Stop -> StoppedBySink, sink error ->
+SinkFailed; cancellation-first at every entry like the rest of the
+maintenance surface), the non-Windows arms refuse with the exported
+OS-unsupported class, and the parity ledger flips both housekeeping rows
+to present. The macOS creator-only machine is implemented in pure Go
+(internal/security acl_darwin.go + acl_darwin_algo.go): the darwin arm
+calls the raw fchmod_extended (283) and fstat_extended (281) syscalls the
+libc filesec/fchmodx_np/acl_get_fd_np wrappers use (public XNU
+syscalls.master/kauth.h evidence; no cgo), with the Rust apple.rs outcome
+classes; the classification is unit-tested on every host and the syscall
+glue cross-compiled for darwin amd64/arm64. `CreatorOnlySupported` now
+reports true on darwin so the live and publication platform gates open
+there; the ledger platform row keeps `missing` until the authorized
+native macOS round proves the arm (the remaining slice 2d item is the
+version-matched worker on every supported OS/architecture, which needs a
+user decision because the POSIX SIGBUS containment machine is
+assembly-based on linux/amd64 and each new target requires a new raw
+trampoline or another native mechanism). Full battery green at this
+state.
+
 ## Requirements
 
 ### Purpose

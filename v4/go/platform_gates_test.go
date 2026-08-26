@@ -2,9 +2,8 @@ package iprangedb
 
 // Platform gates for the public root-package test suite (SOW-0025
 // 4-12D and SOW-0026): the pure-Go creator-only security machine is
-// implemented on linux, freebsd, and windows (internal/security; the
-// darwin filesec and other-OS libc ACL machines would need cgo, which
-// the port forbids), and the proven live coordination exists on
+// implemented on linux, freebsd, darwin, and windows (internal/security
+// raw syscall machines), and the proven live coordination exists on
 // linux, darwin, and windows (the exclusive lifetime-lock machine;
 // freebsd keeps only the read-side flock). Every suite test that
 // creates or opens a live pair, or whose terminal publishes a
