@@ -18,7 +18,6 @@ writer-offcontract	LiveWriter::begin_structured_transaction	Writer.BeginStructur
 writer-offcontract	LiveWriter::project_history	Writer.ProjectHistory	remove-planned	Wrong owner: projection driven from the Writer surface (history_projection_public.go:64)
 writer-offcontract	LiveWriter::begin_membership_import		missing	No public membership import anywhere (only the WorkflowMembershipImport enum constant)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
-writer-offcontract	live_writer metadata read-your-writes		missing	Rust LiveWriter::metadata_json_len/metadata_json on the clean writer; Go LiveWriter exposes Info only
 writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
 writer-offcontract	commit_resolution.rs resolve_commit		missing	Same-file/superseded-unknown commit-outcome resolution absent; Go CommitStatus derives from durability only
 live-writer	live_lifecycle.rs CreateLive	CreateLive	present	lifecycle_public.go:160
@@ -39,9 +38,10 @@ live-writer	LiveWriter::project_history	LiveWriter.ProjectHistory	present	histor
 live-writer	LiveWriter::begin_membership_import		missing	Membership import must be implemented
 live-writer	LiveWriter::delete_feed	LiveWriter.DeleteFeed	present	feed_workflow_public.go; sidecar-bound live lifecycle
 live-writer	LiveWriter::rename_feed	LiveWriter.RenameFeed	present	feed_workflow_public.go; sidecar-bound live lifecycle
-live-writer	LiveWriter::reclaim		missing	Bounded reclaim must be implemented
-live-writer	LiveWriter::metadata_json_len		missing	Clean-writer metadata read-your-writes must be implemented
-live-writer	LiveWriter::metadata_json		missing	Clean-writer metadata read-your-writes must be implemented
+live-writer	LiveWriter::reclaim	LiveWriter.Reclaim	present	live_writer_public.go; bounded oldest-safe reclamation with auto-publish
+live-writer	LiveWriter::metadata_json_len	LiveWriter.MetadataJSONLen	present	live_writer_public.go; staged-or-committed current-generation read
+live-writer	LiveWriter::read_metadata_json	LiveWriter.ReadMetadataJSON	present	live_writer_public.go; caller-buffer fill with the buffer-too-small class
+live-writer	LiveWriter::metadata_json	LiveWriter.MetadataJSON	present	live_writer_public.go; staged-or-committed current-generation read
 live-direct	DirectTransaction::assign_v4	LiveDirectTransaction.AssignV4	present	name variant (live_writer_public.go:147)
 live-direct	DirectTransaction::assign_v6	LiveDirectTransaction.AssignV6	present	name variant
 live-direct	DirectTransaction::clear_range_v4	LiveDirectTransaction.ClearV4	present	name variant

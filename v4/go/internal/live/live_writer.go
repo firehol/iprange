@@ -221,6 +221,42 @@ func (w *LiveWriter) AbortAfterSource(cause error) error { return w.abortAfterSo
 // Exported as the workflow no-change teardown terminal.
 func (w *LiveWriter) DiscardDraft() error { return w.discardDraft() }
 
+// MetadataJSONLen returns the exact decompressed metadata length of the
+// current generation (Rust LiveWriter::metadata_json_len): the staged
+// draft metadata when a transaction staged metadata, else the committed
+// base metadata. present is false for absent metadata. The machine's
+// open/healthy state is proven first.
+func (w *LiveWriter) MetadataJSONLen() (uint64, bool, error) {
+	if err := w.requireHealthy(); err != nil {
+		return 0, false, err
+	}
+	length, present := w.core.MetadataJSONLen()
+	return length, present, nil
+}
+
+// ReadMetadataJSON fills caller storage with the exact decompressed
+// metadata bytes of the current generation (Rust
+// LiveWriter::read_metadata_json): absent metadata reports present
+// false; an undersized caller buffer is refused before any bytes are
+// read.
+func (w *LiveWriter) ReadMetadataJSON(output []byte) (int, bool, error) {
+	if err := w.requireHealthy(); err != nil {
+		return 0, false, err
+	}
+	return w.core.ReadMetadataJSON(output)
+}
+
+// MetadataJSON returns the complete decompressed metadata bytes of the
+// current generation (Rust LiveWriter::metadata_json): the staged draft
+// metadata when a transaction staged metadata, else the committed base
+// metadata.
+func (w *LiveWriter) MetadataJSON() ([]byte, bool, error) {
+	if err := w.requireHealthy(); err != nil {
+		return nil, false, err
+	}
+	return w.core.MetadataJSON()
+}
+
 // BeginDirect draws the commit nonce and starts one COW draft over the
 // committed generation (Rust begin_direct_transaction: cancellation
 // check, require_healthy, the direct value-kind gate, then

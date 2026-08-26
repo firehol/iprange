@@ -15,6 +15,7 @@ import (
 	"hash/adler32"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
@@ -345,4 +346,58 @@ func (e *WriterEdit) SetMetadata(input []byte) (bool, error) {
 // WriterEdit::clear_metadata).
 func (e *WriterEdit) ClearMetadata() (bool, error) {
 	return e.store.ClearMetadata()
+}
+
+// MetadataJSONLen returns the exact decompressed metadata length of the
+// current generation (Rust WriterCore::metadata_json_len over
+// current_meta: the staged draft when one exists, else the committed
+// base). present is false for absent metadata (root zero).
+func (c *Core) MetadataJSONLen() (uint64, bool) {
+	meta := c.currentMeta()
+	return meta.MetadataUncompressed, meta.MetadataRoot != 0
+}
+
+// MetadataJSON returns the exact decompressed opaque metadata bytes of
+// the current generation (Rust WriterCore::metadata_json over
+// current_meta). present is false for absent metadata; an empty non-nil
+// slice with present true is the exact empty-payload state.
+func (c *Core) MetadataJSON() ([]byte, bool, error) {
+	meta := c.currentMeta()
+	if meta.MetadataRoot == 0 {
+		return nil, false, nil
+	}
+	value, present, err := reader.NewImmutable(c.m, meta).ReadMetadataJSON()
+	if err != nil {
+		return nil, false, err
+	}
+	return value, present, nil
+}
+
+// ReadMetadataJSON fills caller storage with the exact decompressed
+// metadata bytes of the current generation (Rust
+// WriterCore::read_metadata_json): absent metadata reports present
+// false; an undersized caller buffer is refused with the buffer-too-small
+// class before any bytes are read.
+func (c *Core) ReadMetadataJSON(output []byte) (int, bool, error) {
+	meta := c.currentMeta()
+	if meta.MetadataRoot == 0 {
+		return 0, false, nil
+	}
+	if uint64(len(output)) < meta.MetadataUncompressed {
+		return 0, true, &format.Error{Code: format.CodeBufferTooSmall, Detail: "metadata output buffer is too small"}
+	}
+	value, present, err := reader.NewImmutable(c.m, meta).ReadMetadataJSON()
+	if err != nil {
+		return 0, present, err
+	}
+	return copy(output, value), present, nil
+}
+
+// currentMeta returns the staged draft metadata when a draft exists,
+// else the committed base metadata (Rust WriterCore::current_meta).
+func (c *Core) currentMeta() format.Meta {
+	if c.draft != nil {
+		return c.draft.meta
+	}
+	return c.base.Meta
 }

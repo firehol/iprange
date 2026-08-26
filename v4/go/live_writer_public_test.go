@@ -480,3 +480,171 @@ func TestPublicLiveDirectMetadataObservesCapturedCancellation(t *testing.T) {
 		t.Fatalf("fresh commit: %v (result %+v)", err, result)
 	}
 }
+
+// TestPublicLiveWriterMetadataReadYourWrites pins the clean-writer
+// metadata read surface (Rust LiveWriter::metadata_json_len /
+// read_metadata_json / metadata_json): the current-generation read
+// observes the staged draft metadata before commit and the committed
+// metadata after, absence is reported exactly, and an undersized caller
+// buffer is refused with the buffer-too-small class.
+func TestPublicLiveWriterMetadataReadYourWrites(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	if _, present, err := w.MetadataJSONLen(); err != nil || present {
+		t.Fatalf("initial metadata len: present=%v err=%v, want absent", present, err)
+	}
+	if _, present, err := w.MetadataJSON(); err != nil || present {
+		t.Fatalf("initial metadata: present=%v err=%v, want absent", present, err)
+	}
+
+	// Stage metadata inside a direct transaction and read it back
+	// before commit (Rust current_meta over the staged draft).
+	tx, err := w.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.SetMetadataJSON([]byte(`{"staged":true}`)); err != nil || !changed {
+		t.Fatalf("stage: changed=%v err=%v", changed, err)
+	}
+	length, present, err := w.MetadataJSONLen()
+	if err != nil || !present || length != uint64(len(`{"staged":true}`)) {
+		t.Fatalf("staged length = (%d, %v, %v), want the staged payload length", length, present, err)
+	}
+	value, present, err := w.MetadataJSON()
+	if err != nil || !present || string(value) != `{"staged":true}` {
+		t.Fatalf("staged metadata = %q (present %v, err %v), want the staged payload", value, present, err)
+	}
+	var small [4]byte
+	if _, _, err := w.ReadMetadataJSON(small[:]); !isPubCode(err, ErrorBufferTooSmall) {
+		t.Fatalf("small-buffer read = %v, want buffer too small", err)
+	}
+	output := make([]byte, 64)
+	n, present, err := w.ReadMetadataJSON(output)
+	if err != nil || !present || n != len(`{"staged":true}`) || string(output[:n]) != `{"staged":true}` {
+		t.Fatalf("caller-buffer read = (%d, %v, %v), want the exact staged payload", n, present, err)
+	}
+	if _, err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	value, present, err = w.MetadataJSON()
+	if err != nil || !present || string(value) != `{"staged":true}` {
+		t.Fatalf("committed metadata = %q (present %v, err %v), want the staged payload", value, present, err)
+	}
+
+	// Clear metadata in a fresh transaction and read the absence.
+	fresh, err := w.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fresh.ClearMetadataJSON(); err != nil || !changed {
+		t.Fatalf("clear: changed=%v err=%v", changed, err)
+	}
+	if _, present, err := w.MetadataJSONLen(); err != nil || present {
+		t.Fatalf("staged-clear length: present=%v err=%v, want absent", present, err)
+	}
+	if _, err := fresh.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, present, err := w.MetadataJSON(); err != nil || present {
+		t.Fatalf("post-clear metadata: present=%v err=%v, want absent", present, err)
+	}
+}
+
+// TestPublicLiveReclaimWaitsForReadersThenAutoPublishes ports the Rust
+// reclamation_waits_for_old_readers_then_auto_publishes vector: a
+// pinned live reader blocks reclamation of the retirement its
+// generation needs, closing it releases the safe frontier, and the
+// reclamation then publishes as its own committed transaction while the
+// visible values stay correct.
+func TestPublicLiveReclaimWaitsForReadersThenAutoPublishes(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := w.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := first.AssignV4(IPv4(10), IPv4(20), 1); err != nil || !changed {
+		t.Fatalf("first assign: changed=%v err=%v", changed, err)
+	}
+	if _, err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := pinned.Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.TransactionID != 2 {
+		t.Fatalf("pinned generation = %d, want 2", info.TransactionID)
+	}
+	second, err := w.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := second.AssignV4(IPv4(12), IPv4(18), 2); err != nil || !changed {
+		t.Fatalf("second assign: changed=%v err=%v", changed, err)
+	}
+	if _, err := second.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	blocked, err := w.Reclaim(10, 10_000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Outcome != ReclaimOutcomeNoChange {
+		t.Fatalf("reclaim with a pinned old reader = %+v, want NoChange", blocked)
+	}
+	if _, err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reclaimed, err := w.Reclaim(10, 10_000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed.Outcome != ReclaimOutcomeCommitted {
+		t.Fatalf("reclaim after the reader closed = %+v, want Commit", reclaimed)
+	}
+	if reclaimed.TransactionCount != 1 {
+		t.Fatalf("transaction count = %d, want 1", reclaimed.TransactionCount)
+	}
+	if reclaimed.PageCount == 0 {
+		t.Fatal("page count = 0, want retired pages reclaimed")
+	}
+	if reclaimed.Commit.AttemptedTransactionID != 4 {
+		t.Fatalf("reclamation transaction = %d, want 4", reclaimed.Commit.AttemptedTransactionID)
+	}
+	if reclaimed.Commit.Status != CommitCommitted {
+		t.Fatalf("reclamation status = %v, want committed (cause %v)", reclaimed.Commit.Status, reclaimed.Commit.Cause)
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if value, found, err := reader.LookupDirectV4(IPv4(11)); err != nil || !found || value != 1 {
+		t.Fatalf("value at 11 = (%d, %v, %v), want (1, true, nil)", value, found, err)
+	}
+	if value, found, err := reader.LookupDirectV4(IPv4(15)); err != nil || !found || value != 2 {
+		t.Fatalf("value at 15 = (%d, %v, %v), want (2, true, nil)", value, found, err)
+	}
+}

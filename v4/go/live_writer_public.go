@@ -81,6 +81,88 @@ type mutationHost interface {
 	commitPrepared(cancellation *CancellationToken, markSpent func(), context string) (CommitResult, error)
 }
 
+// ReclaimOutcome classifies one reclamation attempt (Rust
+// ReclaimResult).
+type ReclaimOutcome uint8
+
+const (
+	// ReclaimOutcomeNoChange reports no complete retirement
+	// transaction was safe and within both limits (Rust
+	// ReclaimResult::NoChange).
+	ReclaimOutcomeNoChange ReclaimOutcome = iota
+	// ReclaimOutcomeCommitted reports one selected prefix reached the
+	// normal commit path (Rust ReclaimResult::Commit).
+	ReclaimOutcomeCommitted
+)
+
+// ReclaimResult is the factual outcome of one reclamation (Rust
+// ReclaimResult): the outcome, the selected transaction/page counts,
+// and the full live commit result of the published reclamation.
+type ReclaimResult struct {
+	Outcome          ReclaimOutcome
+	TransactionCount uint64
+	PageCount        uint64
+	Commit           LiveCommitResult
+}
+
+// Reclaim reclaims the oldest safe retirement transactions and
+// auto-publishes (Rust LiveWriter::reclaim): the cancellation is
+// checked first, the live writer must be open, healthy, and clean, both
+// work limits must be nonzero, and the selected prefix publishes
+// through the normal commit terminal under the exclusive reader-table
+// gate. A pinned reader whose generation a retirement would invalidate
+// blocks that reclamation (NoChange) until it closes.
+func (w *LiveWriter) Reclaim(maxTransactions, maxPages uint64, cancellation *CancellationToken) (ReclaimResult, error) {
+	if w.lw == nil {
+		return ReclaimResult{}, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	result, err := w.lw.Reclaim(maxTransactions, maxPages, cancellation.check)
+	if err != nil {
+		return ReclaimResult{}, err
+	}
+	return ReclaimResult{
+		Outcome:          ReclaimOutcome(result.Outcome),
+		TransactionCount: result.TransactionCount,
+		PageCount:        result.PageCount,
+		Commit:           publicCommitResult(result.Commit),
+	}, nil
+}
+
+// MetadataJSONLen returns the exact decompressed metadata length of the
+// current generation (Rust LiveWriter::metadata_json_len): the staged
+// draft metadata when a transaction staged metadata, else the committed
+// base metadata. present is false for absent metadata.
+func (w *LiveWriter) MetadataJSONLen() (uint64, bool, error) {
+	if w.lw == nil {
+		return 0, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	return w.lw.MetadataJSONLen()
+}
+
+// ReadMetadataJSON fills caller storage with the exact decompressed
+// metadata bytes of the current generation (Rust
+// LiveWriter::read_metadata_json): absent metadata reports present
+// false; an undersized caller buffer is refused before any bytes are
+// read.
+func (w *LiveWriter) ReadMetadataJSON(output []byte) (int, bool, error) {
+	if w.lw == nil {
+		return 0, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	return w.lw.ReadMetadataJSON(output)
+}
+
+// MetadataJSON returns the complete decompressed metadata bytes of the
+// current generation (Rust LiveWriter::metadata_json): the staged draft
+// metadata when a transaction staged metadata, else the committed base
+// metadata. present is false for absent metadata; an empty non-nil
+// slice with present true is the exact empty-payload state.
+func (w *LiveWriter) MetadataJSON() ([]byte, bool, error) {
+	if w.lw == nil {
+		return nil, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+	}
+	return w.lw.MetadataJSON()
+}
+
 // coreOf exposes the mapped writer core to the transaction facades
 // (SOW-0027 consolidation host accessor).
 func (w *LiveWriter) coreOf() *writer.Core {

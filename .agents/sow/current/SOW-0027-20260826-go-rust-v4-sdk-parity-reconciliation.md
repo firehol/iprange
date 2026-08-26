@@ -101,6 +101,16 @@ documented in code, not yet a resolved SOW decision): workflow
 (workflow commits omit directory/main identity; workflow abort returns
 `error`), and mixed-language live fixtures stay a recorded slice-2c gap.
 
+Sub-state (2026-08-26): slice 2b part 1 delivered (working tree
+`532fa582+`, gate pending): clean-writer metadata read-your-writes
+(`LiveWriter.MetadataJSONLen` / `ReadMetadataJSON` / `MetadataJSON` over
+the staged-or-committed current generation, with the buffer-too-small
+class; ledger rows flipped to present) and bounded reader-safe
+reclamation (`LiveWriter.Reclaim` auto-publishes the selected oldest
+retirement prefix through the commit terminal; the pinned-reader
+block/release vector is ported from the Rust test). Remaining 2b items:
+commit resolution, live join sources, and membership import.
+
 ## Requirements
 
 ### Purpose
