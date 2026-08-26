@@ -1,0 +1,87 @@
+class	rust_ref	go_symbol	status	note
+writer-offcontract	(spec: no offline mutation API)	Create	remove-planned	binary-format-v4.md:1272-1279 forbids offline in-place mutation; Rust authority is CreateLive
+writer-offcontract	(spec: all public writers live-bound)	OpenWriter	remove-planned	Rust authority is LiveWriter::open with the sidecar lease
+writer-offcontract	(spec: no sidecar-free writer type)	Writer	remove-planned	Public Writer type and its whole surface are off-contract
+writer-offcontract	(spec: writer surface)	Writer.Info	remove-planned	Off-contract writer info owner
+writer-offcontract	(spec: writer surface)	Writer.Close	remove-planned	Off-contract writer close owner
+writer-offcontract	(spec: writer surface)	Writer.Abort	remove-planned	Off-contract writer abort owner
+writer-offcontract	LiveWriter::delete_feed	Writer.DeleteFeed	remove-planned	Wrong owner: feed delete bound to Writer (feed_workflow_public.go:575)
+writer-offcontract	LiveWriter::rename_feed	Writer.RenameFeed	remove-planned	Wrong owner: feed rename bound to Writer (feed_workflow_public.go:520)
+writer-offcontract	LiveWriter::begin_direct_transaction	Writer.BeginDirect	remove-planned	Wrong owner: the transaction is bound to the sidecar-free Writer, not the live writer
+writer-offcontract	LiveWriter::begin_direct_replacement	Writer.BeginDirectReplacement	remove-planned	Wrong owner: workflow bound to Writer
+writer-offcontract	LiveWriter::begin_first_seen_refresh	Writer.BeginFirstSeenRefresh	remove-planned	Wrong owner: workflow bound to Writer
+writer-offcontract	LiveWriter::begin_last_seen_refresh	Writer.BeginLastSeenRefresh	remove-planned	Wrong owner: workflow bound to Writer
+writer-offcontract	LiveWriter::begin_create_feed	Writer.BeginCreateFeed	remove-planned	Wrong owner: workflow bound to Writer
+writer-offcontract	LiveWriter::begin_replace_feed	Writer.BeginReplaceFeed	remove-planned	Wrong owner: workflow bound to Writer
+writer-offcontract	LiveWriter::begin_membership_transaction	Writer.BeginMembershipTransaction	remove-planned	Wrong owner: transaction bound to Writer
+writer-offcontract	LiveWriter::begin_structured_transaction	Writer.BeginStructuredTransaction	remove-planned	Wrong owner: transaction bound to Writer
+writer-offcontract	LiveWriter::project_history	Writer.ProjectHistory	remove-planned	Wrong owner: projection driven from the Writer surface (history_projection_public.go:64)
+writer-offcontract	LiveWriter::begin_membership_import		missing	No public membership import anywhere (only the WorkflowMembershipImport enum constant)
+writer-offcontract	LiveWriter::delete_feed		missing	Live-owner feed delete absent; only the off-contract Writer.DeleteFeed exists (remove-planned)
+writer-offcontract	LiveWriter::rename_feed		missing	Live-owner feed rename absent; only the off-contract Writer.RenameFeed exists (remove-planned)
+writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
+writer-offcontract	live_writer metadata read-your-writes		missing	Rust LiveWriter::metadata_json_len/metadata_json on the clean writer; Go LiveWriter exposes Info only
+writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
+writer-offcontract	commit_resolution.rs resolve_commit		missing	Same-file/superseded-unknown commit-outcome resolution absent; Go CommitStatus derives from durability only
+live-writer	live_lifecycle.rs CreateLive	CreateLive	present	lifecycle_public.go:160
+live-writer	live_lifecycle.rs InitializeLive	InitializeLive	present	lifecycle_public.go:177
+live-writer	live_writer.rs LiveWriter::open	OpenLiveWriter	present	live_writer_public.go:34
+live-writer	LiveWriter::info	LiveWriter.Info	present	live_writer_public.go:45
+live-writer	LiveWriter::close	LiveWriter.Close	present	live_writer_public.go:89
+live-writer	LiveWriter::begin_direct_transaction		missing	Cancellation-bearing live begin absent; only Writer.BeginDirect (off-contract, no token) exists
+live-writer	LiveWriter::begin_membership_transaction		missing	Advanced transaction must move behind the sidecar-bound live writer
+live-writer	LiveWriter::begin_structured_transaction		missing	Advanced transaction must move behind the sidecar-bound live writer
+live-writer	LiveWriter::begin_create_feed		missing	Feed workflow must move behind the live writer
+live-writer	LiveWriter::begin_replace_feed		missing	Feed workflow must move behind the live writer
+live-writer	LiveWriter::begin_first_seen_refresh		missing	Timestamp workflow must move behind the live writer
+live-writer	LiveWriter::begin_last_seen_refresh		missing	Timestamp workflow must move behind the live writer
+live-writer	LiveWriter::project_history		missing	History projection must move behind the live writer
+live-writer	LiveWriter::begin_membership_import		missing	Membership import must be implemented
+live-writer	LiveWriter::delete_feed		missing	Feed lifecycle must be implemented
+live-writer	LiveWriter::rename_feed		missing	Feed lifecycle must be implemented
+live-writer	LiveWriter::reclaim		missing	Bounded reclaim must be implemented
+live-writer	LiveWriter::metadata_json_len		missing	Clean-writer metadata read-your-writes must be implemented
+live-writer	LiveWriter::metadata_json		missing	Clean-writer metadata read-your-writes must be implemented
+live-direct	DirectTransaction::assign_v4	LiveDirectTransaction.AssignV4	present	name variant (live_writer_public.go:147)
+live-direct	DirectTransaction::assign_v6	LiveDirectTransaction.AssignV6	present	name variant
+live-direct	DirectTransaction::clear_range_v4	LiveDirectTransaction.ClearV4	present	name variant
+live-direct	DirectTransaction::clear_range_v6	LiveDirectTransaction.ClearV6	present	name variant
+live-direct	DirectTransaction::set_metadata_json	LiveDirectTransaction.SetMetadataJSON	present	name variant
+live-direct	DirectTransaction::clear_metadata_json	LiveDirectTransaction.ClearMetadataJSON	present	name variant
+live-direct	DirectTransaction::commit		missing	Commit lacks the retained cancellation-window contract (Rust commit takes no token; the begin does - the begin here is missing)
+live-direct	DirectTransaction::abort		missing	Abort exists on the off-contract path only (Writer.BeginDirect); the live-begin is missing
+reader	ImmutableReader::open	OpenImmutable	present	reader_public.go:114
+reader	ImmutableReader::info	ImmutableReader.Info	present	reader_public.go
+reader	ImmutableReader::lookup_direct_v4	ImmutableReader.LookupDirectV4	present	name variant
+reader	ImmutableReader::lookup_direct_v6	ImmutableReader.LookupDirectV6	present	name variant
+reader	ImmutableReader::lookup_membership_v4	Pin.LookupMembershipV4	present	owner variant: Go membership lookup binds a Pin first
+reader	ImmutableReader::lookup_membership_v6	Pin.LookupMembershipV6	present	owner variant
+reader	ImmutableReader::metadata_json	ImmutableReader.MetadataJSON	present	name variant
+reader	ImmutableReader::metadata_json_len		missing	Length accessor absent (MetadataJSON returns bytes)
+live-reader	LiveReader::open	OpenLiveReader	present	live_reader_public.go
+live-reader	LiveReader::metadata_json	LiveReader.MetadataJSON	present	name variant
+live-reader	LiveReader::lookup_membership_v4	Pin.LookupMembershipV4	present	owner variant (pin on live reader)
+live-reader	LiveReader::lookup_membership_v6	Pin.LookupMembershipV6	present	owner variant
+cancellation	CancellationToken::new	NewCancellationToken	present	name variant
+cancellation	CancellationToken::cancel	CancellationToken.Cancel	present	
+cancellation	CancellationToken::is_cancelled	CancellationToken.IsCancelled	present	
+cancellation	CancellationToken::from_poll		missing	Rust async poll integration not ported; Go nil token is the uncancellable form
+join	membership_query/join.rs DirectJoinSource::Live		missing	Go JoinDirect accepts ImmutableReader only (join_public.go:63-89); the live direct source is absent
+publication	publication.rs list_windows_housekeeping		missing	Windows housekeeping is private in Go (internal/publication/maintenance_gc_windows.go)
+publication	publication.rs remove_windows_housekeeping		missing	Windows housekeeping is private in Go
+publication	publication.rs list_abandoned_publication_temps	ListAbandonedPublicationTemps	present	publication_public.go
+publication	publication.rs remove_abandoned_publication_temp	RemoveAbandonedPublicationTemp	present	publication_public.go
+publication	publication.rs list_abandoned_reservation_artifacts	ListAbandonedReservationArtifacts	present	publication_public.go
+publication	publication.rs remove_abandoned_reservation_artifact	RemoveAbandonedReservationArtifact	present	publication_public.go
+publication	scratch_maintenance list_abandoned_scratch	ListAbandonedScratch	present	scratch_maintenance_public.go
+publication	scratch_maintenance remove_abandoned_scratch	RemoveAbandonedScratch	present	scratch_maintenance_public.go
+publication	scratch_maintenance remove_checkpointed_scratch		missing	Internal machine exists (internal/recovery RemoveCheckpointedScratch); the public export is absent
+snapshot	snapshot.rs snapshot_to	SnapshotTo	present	snapshot_public.go:101
+validation	validation.rs validate	Validate	present	validation_public.go
+recovery	recovery.rs inspect_recovery_candidates	InspectRecoveryCandidates	present	recovery_public.go
+recovery	recovery.rs recover_immutable	RecoverImmutable	present	recovery_public.go
+recovery	recovery.rs recover_offline	RecoverOffline	present	recovery_public.go
+recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
+worker	binary-format-v4.md:3155+ version-matched worker		missing	Go routes validation/recovery in-process on every non-linux/amd64 target (routing_other.go); the worker process is linux/amd64-only
+platform	publication/security/apple.rs filesec creator-only		missing	Go refuses macOS creator-only publication (acl_darwin.go aclSupported=false); Rust implements filesec
+cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported

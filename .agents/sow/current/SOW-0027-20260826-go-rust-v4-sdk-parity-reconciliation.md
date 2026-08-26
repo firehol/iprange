@@ -577,6 +577,45 @@ Resolved decisions:
 
 ### 2026-08-26
 
+### Status (2026-08-26) - milestone 1 (parity ledger freeze) delivered
+
+- Delivered in this commit: the parity ledger and its enforcing gate.
+- `v4/go/parity_manifest.tsv` (81 curated rows, tab-separated:
+  class, Rust reference, Go symbol, status, note) records every material
+  Rust public operation and its Go symbol or missing status, organized by
+  class: writer-offcontract (19 rows, remove-planned or missing), live-writer
+  (21 rows), live-direct (7), reader (8), live-reader (4), cancellation (4),
+  join (1), publication/scratch maintenance (7), snapshot (1), validation (1),
+  recovery (4), worker (1), platform (1), cards/types (1). Statuses:
+  present = the Go symbol exists and is the correct owner; remove-planned =
+  the symbol exists but is off-contract and must disappear when the live
+  writer consolidation lands; missing = the operation has no public Go
+  equivalent (or only a wrong-owner off-contract one, recorded in the note).
+- `v4/go/parity_gate_test.go`: the machine-checkable tripwire (SOW-0027
+  acceptance: "fail CI for missing or extra prohibited public writer
+  operations"). It parses the compiled root-package surface (go/parser, no
+  subprocess) and fails when: a present/remove-planned symbol is absent; a
+  missing row's symbol appears; or any public `Writer.*` method exists that
+  is not recorded in the ledger (the off-contract writer surface is closed).
+- `v4/go/parity_rust_public.tsv`: the regenerable raw Rust public export
+  inventory (507 symbols) that the curated manifest maps; the uncurated
+  long-tail rows are explicitly out of the gate's scope until later
+  milestones record them.
+- Ledger facts confirmed by the gate at this revision: 54 present/
+  remove-planned, 32 missing. The gate additionally exposed two acceptance
+  records that did not match reality, now recorded truthfully: the Go public
+  surface has no `RemoveCheckpointedScratch` export (the internal recovery
+  machine exists; SOW-0026's D record claimed the public export), and
+  `Writer.DeleteFeed`/`Writer.RenameFeed` exist on the off-contract writer
+  (live-owner equivalents absent).
+- Battery: root plain and `-tags v4work` suites green (the gate runs in both),
+  `go vet ./...` clean, `gofmt -l` empty for the new files, under `nice`.
+- Next milestone 1 item: extend the ledger to the full 507-row Rust export
+  inventory with name-variant resolution (the long tail), then milestone 2
+  starts the live-writer consolidation with the removal list fixed by this
+  ledger.
+
+
 - User decision: activate SOW-0027 (option A), pause SOW-0017 as blocked on the
   unsigned-SDK prerequisite; recorded in Open Decision 1 and in SOW-0017.
 - Lead re-verification of the static audit: every material claim confirmed
