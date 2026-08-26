@@ -391,3 +391,92 @@ func TestPublicLiveStaleHandleAfterOpFailure(t *testing.T) {
 		t.Fatalf("newer status = %v, want committed (cause %v)", result.Status, result.Cause)
 	}
 }
+
+// TestPublicLiveDirectCommitObservesCapturedCancellation pins the Rust
+// DirectTransaction::commit contract (SOW-0027 slice 2a): the captured
+// cancellation token checkpoints the commit attempt, the
+// prepare-and-lock sequence, and the publication loop. A fired token
+// before Commit publishes nothing, reports CommitNotCommitted with the
+// TransactionAborted class, and leaves the live writer healthy for a
+// fresh transaction.
+func TestPublicLiveDirectCommitObservesCapturedCancellation(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	token := NewCancellationToken()
+	tx, err := w.BeginDirect(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.AssignV4(IPv4(10), IPv4(20), 1); err != nil || !changed {
+		t.Fatalf("assign: changed=%v err=%v", changed, err)
+	}
+	token.Cancel()
+	result, err := tx.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != CommitNotCommitted {
+		t.Fatalf("commit status = %v, want NotCommitted (result %+v)", result.Status, result)
+	}
+	if code := lifecycleCode(result.Cause); code != ErrorTransactionAborted {
+		t.Fatalf("commit cause = %v, want TransactionAborted", result.Cause)
+	}
+	// The writer stayed healthy and clean: a fresh transaction begins
+	// and commits normally.
+	fresh, err := w.BeginDirect(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fresh.AssignV4(IPv4(1), IPv4(5), 2); err != nil || !changed {
+		t.Fatalf("fresh assign: changed=%v err=%v", changed, err)
+	}
+	if result, err := fresh.Commit(); err != nil || result.Status != CommitCommitted {
+		t.Fatalf("fresh commit: %v (result %+v)", err, result)
+	}
+}
+
+// TestPublicLiveDirectMetadataObservesCapturedCancellation pins the
+// missing Rust run_transaction checkpoints on the live direct metadata
+// stages (SOW-0027 slice 2a): a fired token before a metadata stage
+// aborts the transaction through the writer machine and spends the
+// handle, exactly like the range operations.
+func TestPublicLiveDirectMetadataObservesCapturedCancellation(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	token := NewCancellationToken()
+	tx, err := w.BeginDirect(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token.Cancel()
+	if _, err := tx.SetMetadataJSON([]byte(`{"a":1}`)); err == nil {
+		t.Fatal("metadata stage after cancellation succeeded")
+	} else if code := lifecycleCode(err); code != ErrorTransactionAborted {
+		t.Fatalf("metadata stage = %v, want TransactionAborted", err)
+	}
+	// The handle is spent by the aborted stage.
+	if _, err := tx.SetMetadataJSON([]byte(`{"b":2}`)); err == nil {
+		t.Fatal("metadata stage on a spent handle succeeded")
+	}
+	// A fresh transaction stages and commits metadata normally.
+	fresh, err := w.BeginDirect(NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fresh.SetMetadataJSON([]byte(`{"c":3}`)); err != nil || !changed {
+		t.Fatalf("fresh stage: changed=%v err=%v", changed, err)
+	}
+	if result, err := fresh.Commit(); err != nil || result.Status != CommitCommitted {
+		t.Fatalf("fresh commit: %v (result %+v)", err, result)
+	}
+}

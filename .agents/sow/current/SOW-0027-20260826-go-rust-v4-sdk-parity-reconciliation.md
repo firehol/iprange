@@ -67,7 +67,20 @@ live aborts keep the pair proof, unpublished-tail trim, and Unusable branding;
 the timestamp begin order now matches Rust (kind gate, tag gate, then healthy)
 and the begin-feed setup mutation maps its failures through abort_after like
 Rust LiveWriter::mutate. The full battery (plain, v4work, vet, gofmt,
-race+checkptr) passes at the slice commits.
+race+checkptr) passes at the slice commits. Review round 1 (five reviewers:
+Rust parity, Go idioms, performance, wire/integrity, APIs/records) returned
+PASS on idioms/performance/wire with P3 cosmetics (all fixed), and two
+verified parity findings on the live direct transaction, now fixed and
+covered by regression tests:
+
+- F1 (P1): LiveDirectTransaction.Commit passed a nil checkpoint; the
+  captured cancellation token now checkpoints the attempt, the
+  prepare-and-lock sequence, and the publication loop (Rust
+  DirectTransaction::commit -> commit_operation parity).
+- F2 (P2): the live direct range ops lacked the Rust run_transaction
+  post-mutation checkpoint and the metadata stages lacked both
+  checkpoints; pre+post checkpoints are now applied to AssignV4/AssignV6/
+  ClearV4/ClearV6/SetMetadataJSON/ClearMetadataJSON.
 
 ## Requirements
 

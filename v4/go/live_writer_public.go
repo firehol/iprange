@@ -285,6 +285,11 @@ func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, err
 		}
 		return false, err
 	}
+	// Rust run_transaction post-checkpoint: a token that fired during
+	// the mutation aborts the draft and reports the cancellation.
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	return changed, nil
 }
 
@@ -302,6 +307,10 @@ func (t *LiveDirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, err
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
+		return false, err
+	}
+	// Rust run_transaction post-checkpoint (see AssignV4).
+	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
 	return changed, nil
@@ -323,6 +332,10 @@ func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 		}
 		return false, err
 	}
+	// Rust run_transaction post-checkpoint (see AssignV4).
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	return changed, nil
 }
 
@@ -342,6 +355,10 @@ func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 		}
 		return false, err
 	}
+	// Rust run_transaction post-checkpoint (see AssignV4).
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	return changed, nil
 }
 
@@ -349,6 +366,11 @@ func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 // transaction (Rust DirectTransaction::set_metadata_json).
 func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	// Rust run_transaction pre-checkpoint: a fired token aborts the
+	// draft before the stage refusal.
+	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
 	if t.w.lw.Draft().MetadataStaged() {
@@ -364,6 +386,10 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 		}
 		return false, err
 	}
+	// Rust run_transaction post-checkpoint (see AssignV4).
+	if err := t.checkOrAbort(); err != nil {
+		return false, err
+	}
 	return changed, nil
 }
 
@@ -371,6 +397,10 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 // DirectTransaction::clear_metadata_json).
 func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.requireActive(); err != nil {
+		return false, err
+	}
+	// Rust run_transaction pre-checkpoint (see SetMetadataJSON).
+	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
 	if t.w.lw.Draft().MetadataStaged() {
@@ -381,6 +411,10 @@ func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
+		return false, err
+	}
+	// Rust run_transaction post-checkpoint (see AssignV4).
+	if err := t.checkOrAbort(); err != nil {
 		return false, err
 	}
 	return changed, nil
@@ -406,7 +440,10 @@ func (t *LiveDirectTransaction) Commit() (LiveCommitResult, error) {
 	if t.w == nil || t.w.lw == nil {
 		return LiveCommitResult{}, &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
-	result, err := t.w.lw.Commit(nil)
+	// Rust DirectTransaction::commit -> commit_operation with the
+	// captured cancellation: the token checkpoints the attempt, the
+	// prepare-and-lock sequence, and the publication loop.
+	result, err := t.w.lw.Commit(t.cancellation.check)
 	t.active = false
 	if err != nil {
 		return LiveCommitResult{}, err
