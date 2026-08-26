@@ -424,8 +424,8 @@ func TestPublicProjectHistoryMetadataStage(t *testing.T) {
 
 // TestPublicProjectHistoryInvalidRequests pins the request
 // classification order of the Rust feed-workflow and source
-// preconditions, plus the live-source refusal and the empty-window
-// count gate.
+// preconditions, plus the unbound live-source class and the
+// empty-window count gate.
 func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 	requireFileCreation(t)
 	sourcePath := histCreateSource4(t, [][3]uint32{{0, 0, 1}})

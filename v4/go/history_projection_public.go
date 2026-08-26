@@ -27,8 +27,9 @@ import (
 )
 
 // HistoryProjectionSourceKind is the source coordination of one history
-// projection (Rust HistoryProjectionSource). The live mode is refused
-// by the Go SDK with ErrorOSUnsupported until the port is implemented.
+// projection (Rust HistoryProjectionSource): the committed-generation
+// mode over an immutable reader and the live mode over a registered
+// live reader are both implemented.
 type HistoryProjectionSourceKind uint8
 
 const (
@@ -101,7 +102,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 		}
 		core, err := source.Live.lr.Core()
 		if err != nil {
-			return nil, publicError(err)
+			return nil, err
 		}
 		sourceCore = core
 		info, err = source.Live.Info()

@@ -34,8 +34,8 @@ func pubCode(err error) ErrorCode {
 
 // histCreateLiveSource4 writes one fresh last_seen direct live database
 // with the given inclusive IPv4 ranges through the public facade. The
-// writer closes before returning so the live reader can claim the shared
-// lifetime lock.
+// public writer holds the exclusive main lifetime lock, so it closes
+// before returning and the live reader can claim the shared lock.
 func histCreateLiveSource4(t *testing.T, ranges [][3]uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-live-source.iprdb")
