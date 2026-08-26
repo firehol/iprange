@@ -74,16 +74,22 @@ func (w *LiveWriter) Info() (DatabaseInfo, error) {
 // consolidation lands and the ledger flips its rows.
 type mutationHost interface {
 	coreOf() *writer.Core
-	Info() (DatabaseInfo, error)
 	healthy() error
 	abortAfter(cause error) error
+	abortAfterSource(cause error) error
+	discardDraft() error
 	Abort() error
 	commitPrepared(cancellation *CancellationToken, markSpent func(), context string) (CommitResult, error)
 }
 
 // coreOf exposes the mapped writer core to the transaction facades
 // (SOW-0027 consolidation host accessor).
-func (w *LiveWriter) coreOf() *writer.Core { return w.lw.Core() }
+func (w *LiveWriter) coreOf() *writer.Core {
+	if w.lw == nil {
+		return nil
+	}
+	return w.lw.Core()
+}
 
 // healthy proves the live writer is open and usable (Rust
 // LiveWriter::require_healthy; the mutationHost state probe): the
@@ -96,8 +102,22 @@ func (w *LiveWriter) healthy() error {
 }
 
 // abortAfter aborts the draft after a failed mutation or commit
-// preparation (Rust LiveWriter::abort_after; the mutationHost terminal).
+// preparation (Rust LiveWriter::abort_after; the mutationHost terminal):
+// the fatal classes (Io, Format, Corrupt) make the live writer
+// unusable even when the discard succeeds.
 func (w *LiveWriter) abortAfter(cause error) error { return w.lw.AbortAfter(cause) }
+
+// abortAfterSource aborts the draft after a source-driven workflow
+// failure (Rust LiveWriter::abort_after_source; the mutationHost
+// terminal): no fatal branding, and a failed discard makes the live
+// writer unusable.
+func (w *LiveWriter) abortAfterSource(cause error) error { return w.lw.AbortAfterSource(cause) }
+
+// discardDraft aborts the draft under a pair proof (Rust
+// LiveWriter::discard_draft; the mutationHost no-change teardown
+// terminal): the unpublished tail is removed and a failed discard makes
+// the live writer unusable.
+func (w *LiveWriter) discardDraft() error { return w.lw.DiscardDraft() }
 
 // Abort discards any open draft without publishing it (Rust
 // LiveWriter::abort): a clean writer reports ErrorNoPendingTransaction.

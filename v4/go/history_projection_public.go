@@ -196,74 +196,74 @@ func driveHistoryProjection(h mutationHost, src *reader.ImmutableReader, info Da
 	if info.Family == AddressFamilyIPv4 {
 		cursor, err := src.NewDirectCursor4(reader.RangeForward)
 		if err != nil {
-			return nil, abortAfterSource(h, err)
+			return nil, h.abortAfterSource(err)
 		}
 		var previous histPrevious4
 		for {
 			current, ok, err := cursor.Next()
 			if err != nil {
-				return nil, abortAfterSource(h, err)
+				return nil, h.abortAfterSource(err)
 			}
 			if !ok {
 				break
 			}
 			if !canonicalSource4(previous, current) {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
 			if err := projection.Push4(current.From, current.To, current.Value, check); err != nil {
 				return nil, h.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
 			}
 			sourceRangeCount++
 			size, err := format.IPv4Inclusive(current.From, current.To)
 			if err != nil {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			sourceAddresses, err = sourceAddresses.Add(size)
 			if err != nil {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			previous = histPrevious4{set: true, from: current.From, to: current.To, value: current.Value}
 		}
 	} else {
 		cursor, err := src.NewDirectCursor6(reader.RangeForward)
 		if err != nil {
-			return nil, abortAfterSource(h, err)
+			return nil, h.abortAfterSource(err)
 		}
 		var previous histPrevious6
 		for {
 			current, ok, err := cursor.Next()
 			if err != nil {
-				return nil, abortAfterSource(h, err)
+				return nil, h.abortAfterSource(err)
 			}
 			if !ok {
 				break
 			}
 			if !canonicalSource6(previous, current) {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen ranges are not canonical"})
 			}
 			if err := projection.Push6(current.FromHi, current.FromLo, current.ToHi, current.ToLo, current.Value, check); err != nil {
 				return nil, h.abortAfter(err)
 			}
 			if sourceRangeCount == math.MaxUint64 {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source range count"})
 			}
 			sourceRangeCount++
 			size, err := format.IPv6Inclusive(current.FromHi, current.FromLo, current.ToHi, current.ToLo)
 			if err != nil {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			sourceAddresses, err = sourceAddresses.Add(size)
 			if err != nil {
-				return nil, abortAfterSource(h, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
+				return nil, h.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "source address count"})
 			}
 			previous = histPrevious6{set: true, fromHi: current.FromHi, fromLo: current.FromLo, toHi: current.ToHi, toLo: current.ToLo, value: current.Value}
 		}
 	}
 	if sourceRangeCount != info.RangeRecordCount {
-		return nil, abortAfterSource(h, &format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen range count disagrees"})
+		return nil, h.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source last_seen range count disagrees"})
 	}
 	report, err := projection.Finish(sourceRangeCount, sourceAddresses, check)
 	if err != nil {
@@ -346,8 +346,7 @@ type histPrevious6 struct {
 func finishHistoryProjection(h mutationHost, report *writer.HistoryProjectionReport, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
 	public := publicHistoryReport(report)
 	if report.LogicalChange == writer.LogicalNoChange {
-		if err := h.coreOf().DiscardUnpublished(); err != nil {
-			h.coreOf().MarkUnresolved(err)
+		if err := h.discardDraft(); err != nil {
 			return nil, err
 		}
 		return &FinishedHistoryProjection{w: h, report: public, cancellation: cancellation}, nil
@@ -399,11 +398,11 @@ func publicHistoryReport(report *writer.HistoryProjectionReport) HistoryProjecti
 // class; when the discard itself fails, brand the writer unresolved and
 // nest the CleanupInProgress class (Rust CleanupIncomplete) around the
 // cause.
-func abortAfterSource(h mutationHost, cause error) error {
-	discardErr := h.coreOf().DiscardUnpublished()
+func (w *Writer) abortAfterSource(cause error) error {
+	discardErr := w.core.DiscardUnpublished()
 	inner := cause
 	if discardErr != nil {
-		h.coreOf().MarkUnresolved(discardErr)
+		w.core.MarkUnresolved(discardErr)
 		inner = &abortError{
 			class: &format.Error{Code: format.CodeCleanupInProgress, Detail: "workflow discard failed"},
 			cause: cause,
@@ -423,7 +422,7 @@ func abortAfterSource(h mutationHost, cause error) error {
 // then brand the writer unusable when the cause is a fatal class (Rust
 // Io/Format/Corrupt).
 func (w *Writer) abortAfter(cause error) error {
-	result := abortAfterSource(w, cause)
+	result := w.abortAfterSource(cause)
 	var typed *format.Error
 	if errors.As(cause, &typed) && (typed.Code == format.CodeIO || typed.Code == format.CodeFormatInvalid) {
 		w.core.MarkUnresolved(typed)
@@ -567,5 +566,8 @@ func (h *FinishedHistoryProjection) Abort() error {
 	if h.w.coreOf().Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
-	return h.w.coreOf().DiscardUnpublished()
+	// Rust PreparedHistoryProjection::abort -> LiveWriter::abort: the
+	// host machine terminal (pair proof and unpublished-tail trim on the
+	// live path).
+	return h.w.Abort()
 }

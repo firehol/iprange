@@ -177,7 +177,11 @@ func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *Ca
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		// Rust LiveWriter::mutate -> abort_after: every setup failure
+		// discards the draft and classifies as TransactionAborted; the
+		// writer was proven healthy at begin, so a failure here is a
+		// mid-edit cancellation or store failure.
+		return nil, h.abortAfter(err)
 	}
 	edit, err := h.coreOf().BindEdit()
 	if err != nil {
@@ -540,7 +544,10 @@ func (f *FinishedWorkflow) Abort() error {
 	if f.w.coreOf().Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
-	return f.w.coreOf().DiscardUnpublished()
+	// Rust PreparedWorkflow::abort -> LiveWriter::abort: the host
+	// machine terminal (pair proof and unpublished-tail trim on the live
+	// path).
+	return f.w.Abort()
 }
 
 // RenameFeed renames one existing feed without changing its index or
@@ -765,7 +772,10 @@ func (p *PreparedFeedChange) Abort() error {
 	if p.w.coreOf().Draft() == nil {
 		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
-	return p.w.coreOf().DiscardUnpublished()
+	// Rust PreparedFeedChange::abort -> LiveWriter::abort: the host
+	// machine terminal (pair proof and unpublished-tail trim on the live
+	// path).
+	return p.w.Abort()
 }
 
 // Abort discards any open draft without publishing it (Rust
@@ -923,8 +933,7 @@ func classifyComparison(comparison writer.Comparison) LogicalChange {
 // terminal with the captured cancellation.
 func completeFeedWorkflow(h mutationHost, report *WorkflowReport, cancellation *CancellationToken) (finishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
-		if err := h.coreOf().DiscardUnpublished(); err != nil {
-			h.coreOf().MarkUnresolved(err)
+		if err := h.discardDraft(); err != nil {
 			return finishedWorkflow{}, err
 		}
 		return finishedWorkflow{report: report}, nil

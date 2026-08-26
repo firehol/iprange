@@ -102,6 +102,18 @@ func (w *Writer) healthy() error {
 	return w.core.Healthy()
 }
 
+// discardDraft aborts the draft without branding (the mutationHost
+// no-change teardown terminal on the off-contract consolidation
+// holder): a failed discard brands the core unresolved so every later
+// operation refuses.
+func (w *Writer) discardDraft() error {
+	err := w.core.DiscardUnpublished()
+	if err != nil {
+		w.core.MarkUnresolved(err)
+	}
+	return err
+}
+
 // OpenWriter opens path as the single live writer (Rust LiveWriter::open
 // minus the sidecar coordination, an accepted divergence (SOW-0025
 // chunk-6 design record); the mapping owner's exclusive lifetime lock

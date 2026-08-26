@@ -209,6 +209,18 @@ func (w *LiveWriter) Healthy() error { return w.requireHealthy() }
 // succeeds. Exported for the SDK root facade's transaction surfaces.
 func (w *LiveWriter) AbortAfter(cause error) error { return w.abortAfter(cause) }
 
+// AbortAfterSource aborts the draft after a source-driven workflow
+// failure (Rust LiveWriter::abort_after_source): no fatal branding, but
+// a failed discard still makes the writer unusable. Exported for the
+// SDK root facade's workflow surfaces (history projection drive).
+func (w *LiveWriter) AbortAfterSource(cause error) error { return w.abortAfterSource(cause) }
+
+// DiscardDraft aborts the draft under a pair proof without branding
+// (Rust LiveWriter::discard_draft): any open draft and its unpublished
+// tail are removed. On a failed discard the writer becomes unusable.
+// Exported as the workflow no-change teardown terminal.
+func (w *LiveWriter) DiscardDraft() error { return w.discardDraft() }
+
 // BeginDirect draws the commit nonce and starts one COW draft over the
 // committed generation (Rust begin_direct_transaction: cancellation
 // check, require_healthy, the direct value-kind gate, then

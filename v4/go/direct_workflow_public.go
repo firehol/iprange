@@ -133,21 +133,39 @@ func beginLastSeenRefresh(h mutationHost, refreshValue, cutoff uint32, cancellat
 // exact-direct begin (Rust begin_timestamp_state): the database must be
 // direct and carry exactly the requested semantic tag.
 func beginTimestampState(h mutationHost, semantic DirectSemantic, workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
-	if err := h.healthy(); err != nil {
-		return nil, err
+	// Rust begin_timestamp_state reads the committed base directly:
+	// the value-kind gate, then the exact value-tag gate, before any
+	// healthy probe (Rust begin_exact_direct_state runs
+	// require_healthy). The closed state cannot exist in Rust (the
+	// writer is consumed); the nil-core probe preserves the Go closed
+	// class.
+	if h.coreOf() == nil {
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
-	if h.coreOf().BaseInfo().ValueKind != format.ValueKindDirect {
+	core := h.coreOf()
+	if core.BaseInfo().ValueKind != format.ValueKindDirect {
 		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "timestamp refresh requires a direct database"}
 	}
-	info, err := h.Info()
-	if err != nil {
-		return nil, err
-	}
-	actual, ok := info.DirectSemantic()
-	if !ok || actual != semantic {
+	if directTagSemantic(core.BaseInfo().ValueTag) != semantic {
 		return nil, &format.Error{Code: format.CodeWrongValueTag, Detail: "timestamp refresh requires its exact value tag"}
 	}
 	return beginExactDirectState(h, workflow, cancellation)
+}
+
+// directTagSemantic is the committed-base counterpart of
+// DatabaseInfo.DirectSemantic: the same private canonical wire forms,
+// with no reader or machine state involved (Rust
+// ValueTag::direct_semantic over base_info; the caller has already
+// proven the direct value kind).
+func directTagSemantic(wire [16]byte) DirectSemantic {
+	switch wire {
+	case firstSeenWire:
+		return DirectSemanticFirstSeen
+	case lastSeenWire:
+		return DirectSemanticLastSeen
+	default:
+		return DirectSemanticGeneric
+	}
 }
 
 // requireDirectReady is the direct-workflow precondition shared by every
@@ -684,8 +702,7 @@ func (s *directWorkflowState) nextInputRecord() (uint64, error) {
 // finish_direct_workflow and returns the prepared terminal.
 func completeDirectWorkflow(h mutationHost, report *WorkflowReport, cancellation *CancellationToken) (*FinishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
-		if err := h.coreOf().DiscardUnpublished(); err != nil {
-			h.coreOf().MarkUnresolved(err)
+		if err := h.discardDraft(); err != nil {
 			return nil, err
 		}
 		return &FinishedWorkflow{w: h, report: *report, changed: false}, nil

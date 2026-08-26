@@ -59,7 +59,15 @@ abort, and commitPrepared terminals); `LiveWriter.BeginDirect`,
 (CreateLive -> OpenLiveWriter -> BeginCreateFeed -> FinishInput -> Commit ->
 SnapshotTo -> OpenImmutable) plus live lifecycle, direct workflow, structured
 transaction, and live-source history projection tests pass. The ledger flipped
-the twelve implemented rows from missing to present.
+the twelve implemented rows from missing to present. Interim self-review
+(before the review gate) found and fixed the live-machine bypass class: every
+workflow teardown and source failure now routes through the host machine
+terminals (Rust LiveWriter::abort/abort_after_source/discard_draft parity), so
+live aborts keep the pair proof, unpublished-tail trim, and Unusable branding;
+the timestamp begin order now matches Rust (kind gate, tag gate, then healthy)
+and the begin-feed setup mutation maps its failures through abort_after like
+Rust LiveWriter::mutate. The full battery (plain, v4work, vet, gofmt,
+race+checkptr) passes at the slice commits.
 
 ## Requirements
 
