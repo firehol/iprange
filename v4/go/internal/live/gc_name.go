@@ -45,18 +45,23 @@ func gcInertName(attempt [16]byte, ordinal uint32) (string, error) {
 }
 
 // gcName assembles one fixed-width housekeeping name: prefix, 32 hex
-// attempt characters, dash, 8 hex ordinal characters, suffix.
+// attempt characters, dash, 8 hex ordinal characters, suffix. The
+// longest name is the 62-byte scratch name (17-byte prefix; Rust
+// artifact_name::SCRATCH_NAME_SIZE); the envelope and inert names are
+// shorter, so the one buffer covers every prefix.
+const gcNameFixedBytes = 32 + 1 + 8 + len(gcSuffix)
+
 func gcName(prefix string, attempt [16]byte, ordinal uint32) (string, error) {
 	if attempt == [16]byte{} {
 		return "", nsInvalidNameError()
 	}
-	var buf [len(gcEnvelopePrefix) + 32 + 1 + 8 + len(gcSuffix)]byte
+	var buf [len(".iprange-scratch-") + gcNameFixedBytes]byte
 	off := copy(buf[:], prefix)
 	hex.Encode(buf[off:off+32], attempt[:])
 	buf[off+32] = '-'
 	hex.Encode(buf[off+33:off+41], []byte{byte(ordinal >> 24), byte(ordinal >> 16), byte(ordinal >> 8), byte(ordinal)})
 	copy(buf[off+41:], gcSuffix)
-	return string(buf[:off+41+len(gcSuffix)]), nil
+	return string(buf[:off+gcNameFixedBytes]), nil
 }
 
 // gcDecodeEnvelope decodes one envelope name to its attempt/ordinal

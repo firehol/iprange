@@ -34,8 +34,8 @@ func scratchPublicHeader(attempt [16]byte, ordinal uint32) [128]byte {
 	copy(out[40:56], []byte{2})    // commit nonce
 	copy(out[56:72], attempt[:])
 	format.PutU32(out[72:76], ordinal)
-	format.PutU16(out[76:78], 1) // creator-only security kind
-	copy(out[80:112], []byte{9}) // security commitment (nonzero)
+	format.PutU16(out[76:78], scratchPublicSecurityKind()) // creator-only security kind
+	copy(out[80:112], []byte{9})                           // security commitment (nonzero)
 	checksum, ok := format.CRC32CWithZeroed(out[:], 124, 4)
 	if !ok {
 		panic("fixed header CRC range")
