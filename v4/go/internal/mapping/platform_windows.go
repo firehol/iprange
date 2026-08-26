@@ -133,7 +133,7 @@ func munmapShared(data []byte) error {
 }
 
 // msyncShared synchronizes the mapped prefix to the system (Rust
-// flush_range through memmap2: FlushViewOfFile; the durability order
+// mapping.rs flush_prefix: FlushViewOfFile; the durability order
 // stays flush-range then FlushFileBuffers, exactly like the unix arm).
 func msyncShared(data []byte) error {
 	if len(data) == 0 {

@@ -280,7 +280,7 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: resolved for work packages A, B, C, D, and E (A and B in this SOW's status record; C gate-closed at `25bd4ddc`; D delivered in this round with its vectors and parity fixes below; E delivered in its status entry); the remaining tracked items are the Store split-window seam and the Go live history-projection source port.
+Status: resolved for work packages A, B, C, D, and E (A and B in this SOW's status record; C gate-closed at `25bd4ddc`; D delivered in the D status entries; E delivered in its status entry); the remaining tracked items are the Store split-window seam, the Go live history-projection source port, and the Rust windows removal-arm repair (D close record tracked follow-up).
 
 Problem / root-cause model:
 

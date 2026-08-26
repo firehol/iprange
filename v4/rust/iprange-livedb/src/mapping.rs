@@ -678,7 +678,12 @@ mod tests {
     }
 
     /// flush_range refuses requests that reach past the mapped extent
-    /// (Rust checked_range; the same refusal class as the Go port).
+    /// (Rust checked_range -> ArithmeticOverflow("mapped byte range")).
+    /// The Go port refuses the same shape with CodeFormatInvalid ("flush
+    /// range out of mapped extent", the mapping package's documented
+    /// geometry class); no production caller can reach either arm
+    /// because every caller pre-validates in-extent, page-aligned
+    /// ranges.
     #[test]
     fn flush_range_rejects_ranges_beyond_the_mapping() {
         let (_path, file) = TestFile::new();
