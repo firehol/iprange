@@ -30,7 +30,7 @@ func directoryNameMax(f *os.File) (int, error) {
 	var maximum uint32
 	var filesystem [16]uint16
 	if err := windows.GetVolumeInformationByHandle(windows.Handle(f.Fd()), nil, 0, nil, &maximum, nil, &filesystem[0], uint32(len(filesystem))); err != nil {
-		return 0, nsPlainIoError("inspect publication volume", err)
+		return 0, nsIoError("inspect publication volume", err)
 	}
 	length := 0
 	for length < len(filesystem) && filesystem[length] != 0 {

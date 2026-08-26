@@ -3,19 +3,22 @@
 package live
 
 import (
+	"encoding/binary"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 // Windows retained-file identity helpers (Rust namespace/windows.rs
 // regular_identity / retained_regular_identity / regular_link_count):
-// the identity pair is the volume serial and the 64-bit file index of
-// BY_HANDLE_FILE_INFORMATION, the Go surface projection of the live
-// layer (the 128-bit FILE_ID_INFO stays in the publication namespace
-// machine where identity bytes are observable). Every helper checks
-// the regular-file and reparse attributes, and the volume compare
-// proves the cross-filesystem rule.
+// the identity pair is the 64-bit volume serial and the low half of
+// the 128-bit FILE_ID_INFO identifier of the Rust file_identity arm
+// (GetFileInformationByHandleEx(FileIdInfo), windows.rs). NTFS keeps
+// the file index in the low half of the identifier and zeroes the
+// high half, so the portable pair and the encoded tail match the Rust
+// arm byte-exactly. Every helper checks the regular-file and reparse
+// attributes, and the volume compare proves the cross-filesystem rule.
 
 // RegularIdentityAnyLink proves one regular file on the directory
 // volume and returns its identity (Rust regular_identity_any_link).
@@ -27,7 +30,10 @@ func RegularIdentityAnyLink(f *os.File, directoryIdentity FileIdentity) (FileIde
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
 		return FileIdentity{}, nsNotRegularError()
 	}
-	identity := identityFromInfo(info)
+	identity, err := fileIdentity(f)
+	if err != nil {
+		return FileIdentity{}, err
+	}
 	if identity.device != directoryIdentity.device {
 		return FileIdentity{}, nsCrossFilesystemError()
 	}
@@ -44,7 +50,10 @@ func RegularIdentity(f *os.File, directoryIdentity FileIdentity) (FileIdentity, 
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
 		return FileIdentity{}, nsNotRegularError()
 	}
-	identity := identityFromInfo(info)
+	identity, err := fileIdentity(f)
+	if err != nil {
+		return FileIdentity{}, err
+	}
 	if identity.device != directoryIdentity.device {
 		return FileIdentity{}, nsCrossFilesystemError()
 	}
@@ -65,7 +74,7 @@ func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
 		return FileIdentity{}, nsNotRegularError()
 	}
-	return identityFromInfo(info), nil
+	return fileIdentity(f)
 }
 
 // RegularLinkCount returns the hard-link count of one retained file
@@ -84,16 +93,30 @@ func RegularLinkCount(f *os.File) (uint64, error) {
 func handleInfo(f *os.File) (windows.ByHandleFileInformation, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
-		return info, nsPlainIoError("inspect retained Windows handle", err)
+		return info, nsIoError("inspect retained Windows handle", err)
 	}
 	return info, nil
 }
 
-// identityFromInfo projects the volume serial and file index of one
-// handle information block (the live-layer identity pair).
-func identityFromInfo(info windows.ByHandleFileInformation) FileIdentity {
-	return FileIdentity{
-		device: uint64(info.VolumeSerialNumber),
-		inode:  uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow),
+// fileIDInfo is the FILE_ID_INFO structure of the Windows SDK
+// (windows.rs file_identity): 64-bit volume serial plus the 128-bit
+// file identifier.
+type fileIDInfo struct {
+	VolumeSerialNumber uint64
+	FileId             [16]byte
+}
+
+// fileIdentity captures the Rust windows.rs file_identity pair: the
+// 64-bit volume serial and the low half of the 128-bit FILE_ID_INFO
+// identifier. NTFS zeroes the high half, so the encoding matches the
+// Rust arm byte-exactly.
+func fileIdentity(f *os.File) (FileIdentity, error) {
+	var info fileIDInfo
+	if err := windows.GetFileInformationByHandleEx(windows.Handle(f.Fd()), windows.FileIdInfo, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		return FileIdentity{}, nsIoError("read retained Windows file identity", err)
 	}
+	return FileIdentity{
+		device: info.VolumeSerialNumber,
+		inode:  binary.LittleEndian.Uint64(info.FileId[0:8]),
+	}, nil
 }

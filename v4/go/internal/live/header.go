@@ -99,6 +99,42 @@ func readHeaderMapping(page []byte) (sidecarState, header, error) {
 	return state, h, nil
 }
 
+// SidecarHeader is the decoded reader-table header of one
+// coordination file (Rust live_sidecar Header): the database and
+// sidecar identity words.
+type SidecarHeader struct {
+	DatabaseID [16]byte
+	SidecarID  [16]byte
+}
+
+// ReadHeader reads and verifies the reader-table header page of one
+// coordination file (Rust live_sidecar::read_header): shaped,
+// checksummed, valid state, non-zero identities. The exported form
+// feeds the publication residue coordination barrier.
+func ReadHeader(f *os.File) (SidecarHeader, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return SidecarHeader{}, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if st.Size() < int64(sidecarPageSize) {
+		return SidecarHeader{}, &format.Error{Code: format.CodeFormatInvalid, Detail: "reader table header is invalid"}
+	}
+	m, err := mapping.MapFile(f, sidecarPageSize, false)
+	if err != nil {
+		return SidecarHeader{}, err
+	}
+	defer m.Close()
+	page, err := m.Page(0)
+	if err != nil {
+		return SidecarHeader{}, err
+	}
+	_, h, err := readHeaderMapping(page)
+	if err != nil {
+		return SidecarHeader{}, err
+	}
+	return SidecarHeader{DatabaseID: h.databaseID, SidecarID: h.sidecarID}, nil
+}
+
 // HasSelectableHeader reports whether the file's first page carries a
 // shape- and checksum-valid header regardless of state (Rust
 // has_selectable_header); used by the offline transition resolvers to

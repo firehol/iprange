@@ -3,8 +3,9 @@
 package live
 
 import (
-	"strings"
 	"unicode/utf8"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // coordinationNameRule is the platform component-shape rule of the
@@ -33,7 +34,8 @@ func coordinationNameRule(name string) string {
 
 // isWindowsDeviceName matches the exact reserved device stems of Rust
 // path.rs is_windows_device_name: the stem before the first dot,
-// compared ASCII-case-insensitively.
+// compared ASCII-case-insensitively like Rust eq_ignore_ascii_case,
+// is CON/PRN/AUX/NUL or COM1..9/LPT1..9.
 func isWindowsDeviceName(name string) bool {
 	stem := name
 	for i := 0; i < len(stem); i++ {
@@ -42,21 +44,14 @@ func isWindowsDeviceName(name string) bool {
 			break
 		}
 	}
-	if len(stem) == 3 {
-		switch {
-		case strings.EqualFold(stem, "CON"), strings.EqualFold(stem, "PRN"),
-			strings.EqualFold(stem, "AUX"), strings.EqualFold(stem, "NUL"):
-			return true
-		}
-		return false
+	switch len(stem) {
+	case 3:
+		return format.AsciiFoldEqual(stem, "CON") || format.AsciiFoldEqual(stem, "PRN") ||
+			format.AsciiFoldEqual(stem, "AUX") || format.AsciiFoldEqual(stem, "NUL")
+	case 4:
+		head, digit := stem[:3], stem[3]
+		return (format.AsciiFoldEqual(head, "COM") || format.AsciiFoldEqual(head, "LPT")) &&
+			digit >= '1' && digit <= '9'
 	}
-	if len(stem) != 4 {
-		return false
-	}
-	head := stem[:3]
-	digit := stem[3]
-	if !strings.EqualFold(head, "COM") && !strings.EqualFold(head, "LPT") {
-		return false
-	}
-	return digit >= '1' && digit <= '9'
+	return false
 }

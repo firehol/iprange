@@ -73,10 +73,11 @@ type Mapping struct {
 // open.
 // CoordinationSupported reports whether the exclusive lifetime-lock
 // machine (database file creation) is implemented on this platform:
-// linux and darwin implement the OFD exclusive lock; freebsd has only
-// the read-side flock and the other targets refuse before any path
-// access (recorded stance). Test suites that create database files
-// gate on this predicate so the native matrix is honest.
+// linux and darwin implement the OFD exclusive lock; windows
+// implements the LockFileEx byte-range machine; freebsd has only the
+// read-side flock and the other targets refuse before any path access
+// (recorded stance). Test suites that create database files gate on
+// this predicate so the native matrix is honest.
 func CoordinationSupported() bool { return coordinationSupported }
 
 func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(clean string) error) (*Mapping, error) {

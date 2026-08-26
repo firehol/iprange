@@ -635,7 +635,19 @@ func TestPublicLiveReaderPinCloseRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const workers = 8
+	// Every pinPace-th successful pin, the worker sleeps pinPause: the
+	// pause opens a guaranteed zero-pin window for the closer. Without
+	// it the race is pure sampling luck - eight uninterrupted hammers
+	// keep at least one pin registered nearly all the time, and the
+	// closer polls on Windows at >= 15 ms timer granularity, so the
+	// expected completion is minutes on slow hosts (observed 50-600 s).
+	// The paced version still runs millions of adversarial Pin/Close
+	// interleavings and completes in milliseconds.
+	const (
+		workers  = 8
+		pinPace  = 8192
+		pinPause = 200 * time.Microsecond
+	)
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 	var pinned int64
@@ -644,6 +656,7 @@ func TestPublicLiveReaderPinCloseRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			strides := 0
 			for {
 				select {
 				case <-stop:
@@ -663,6 +676,10 @@ func TestPublicLiveReaderPinCloseRace(t *testing.T) {
 				if err := pin.Close(); err != nil {
 					t.Errorf("pin close: %v", err)
 					return
+				}
+				strides++
+				if strides%pinPace == 0 {
+					time.Sleep(pinPause)
 				}
 			}
 		}()

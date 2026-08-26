@@ -3,6 +3,7 @@
 package mapping
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"unsafe"
@@ -207,14 +208,23 @@ func dupFile(f *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(duplicated), f.Name()), nil
 }
 
-// statIdentity returns the volume serial and file index of the
-// retained handle (Rust Windows BY_HANDLE_FILE_INFORMATION projection;
-// the values are the opaque local identity pair of the sidecar
-// surface).
+// fileIDInfo is the FILE_ID_INFO structure of the Windows SDK (Rust
+// namespace/windows.rs file_identity): 64-bit volume serial plus the
+// 128-bit file identifier.
+type fileIDInfo struct {
+	VolumeSerialNumber uint64
+	FileId             [16]byte
+}
+
+// statIdentity returns the 64-bit volume serial and the low half of
+// the 128-bit FILE_ID_INFO identifier of the retained handle (Rust
+// namespace/windows.rs file_identity; NTFS keeps the file index in
+// the low half and zeroes the high half, so the values are the
+// byte-identical local identity pair of the persisted surfaces).
 func statIdentity(f *os.File) (device uint64, inode uint64, err error) {
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+	var info fileIDInfo
+	if err := windows.GetFileInformationByHandleEx(windows.Handle(f.Fd()), windows.FileIdInfo, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		return 0, 0, err
 	}
-	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
+	return info.VolumeSerialNumber, binary.LittleEndian.Uint64(info.FileId[0:8]), nil
 }

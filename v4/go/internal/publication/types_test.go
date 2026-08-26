@@ -182,15 +182,28 @@ func TestLocalIdentityCodec(t *testing.T) {
 	}
 
 	// Rejections (Rust Identity::decode): all-zero payload, nonzero
-	// tail beyond the pair, foreign kind.
+	// tail beyond the platform payload end (16 for unix, 24 for
+	// windows - namespace_identity.rs PAYLOAD_END vs windows.rs
+	// IDENTITY_PAYLOAD_END), foreign kind. Bytes 16..24 of a kind-2
+	// identity are the high half of the 128-bit identifier and decode
+	// like Rust accepts them.
 	zero := LocalFileIdentity{Kind: identityKind}
 	if _, _, ok := zero.DeviceInode(); ok {
 		t.Error("all-zero payload decoded")
 	}
 	tail := id
 	tail.Bytes[16] = 1
+	if _, _, ok := tail.DeviceInode(); ok != (identityKind == 2) {
+		if identityKind == 2 {
+			t.Error("kind-2 identity with nonzero identifier high half rejected")
+		} else {
+			t.Error("nonzero tail decoded")
+		}
+	}
+	tail = id
+	tail.Bytes[24] = 1
 	if _, _, ok := tail.DeviceInode(); ok {
-		t.Error("nonzero tail decoded")
+		t.Error("nonzero payload-end tail decoded")
 	}
 	foreign := id
 	foreign.Kind = identityKind + 1

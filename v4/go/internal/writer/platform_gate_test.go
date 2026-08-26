@@ -3,10 +3,11 @@ package writer
 // Platform gate for the whole writer package (SOW-0025 4-12D, freebsd
 // class): every test in this package creates a database file through
 // mapping.Create, and the exclusive lifetime-lock machine is
-// implemented only on linux and darwin (mapping.CoordinationSupported).
-// On platforms where the machine is absent the entire package is
-// skipped honestly instead of failing every fixture; on linux/darwin
-// nothing changes. The gate mirrors the internal/live package gate.
+// implemented on linux, darwin, and windows
+// (mapping.CoordinationSupported). On platforms where the machine is
+// absent the entire package is skipped honestly instead of failing
+// every fixture; on the supported platforms nothing changes. The gate
+// mirrors the internal/live package gate.
 
 import (
 	"fmt"

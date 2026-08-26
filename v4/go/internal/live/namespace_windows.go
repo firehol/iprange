@@ -7,8 +7,8 @@
 // never follow a reparse point, must be regular files with one link on
 // the same NTFS volume, and every handle retains its opened identity;
 // path re-checks compare the current path entry against the retained
-// identity. The identity pair is the volume serial and file index
-// projection documented in directory_windows.go.
+// identity. The identity pair is the file_identity pair documented in
+// directory_windows.go.
 
 package live
 
@@ -45,7 +45,11 @@ func identityOf(f *os.File) (FileIdentity, error) {
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 || info.NumberOfLinks != 1 {
 		return FileIdentity{}, &format.Error{Code: format.CodeWrongState, Detail: "live file ownership changed"}
 	}
-	return identityFromInfo(info), nil
+	identity, err := fileIdentity(f)
+	if err != nil {
+		return FileIdentity{}, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	return identity, nil
 }
 
 // parentOf mirrors Rust Path::parent: a single-component path has the

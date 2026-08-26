@@ -12,8 +12,10 @@
 package snapshot
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
+	"unsafe"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"golang.org/x/sys/windows"
@@ -53,17 +55,27 @@ func openDestinationNoFollow(path string) (*os.File, error) {
 	return file, nil
 }
 
-// fileIdentityOf captures the volume+index of one open descriptor
-// (Rust namespace/windows.rs file_identity).
-func fileIdentityOf(f *os.File) (uint64, uint64, error) {
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
-		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
-	}
-	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
+// fileIDInfo is the FILE_ID_INFO structure of the Windows SDK (Rust
+// namespace/windows.rs file_identity): 64-bit volume serial plus the
+// 128-bit file identifier.
+type fileIDInfo struct {
+	VolumeSerialNumber uint64
+	FileId             [16]byte
 }
 
-// directoryIdentityOf captures the volume+index of the destination
+// fileIdentityOf captures the 64-bit volume serial and the low half
+// of the 128-bit FILE_ID_INFO identifier of one open descriptor (Rust
+// namespace/windows.rs file_identity; NTFS zeroes the high half).
+func fileIdentityOf(f *os.File) (uint64, uint64, error) {
+	var info fileIDInfo
+	if err := windows.GetFileInformationByHandleEx(windows.Handle(f.Fd()), windows.FileIdInfo, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	return info.VolumeSerialNumber, binary.LittleEndian.Uint64(info.FileId[0:8]), nil
+}
+
+// directoryIdentityOf captures the 64-bit volume serial and the low
+// half of the 128-bit FILE_ID_INFO identifier of the destination
 // parent directory (Rust Destination::bind Directory::open identity;
 // the reject_live_self same-filesystem rule compares the destination
 // file against it; the mutation machine already proved the parent is
@@ -82,11 +94,11 @@ func directoryIdentityOf(path string) (device uint64, inode uint64, err error) {
 		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
 	defer windows.CloseHandle(handle)
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+	var info fileIDInfo
+	if err := windows.GetFileInformationByHandleEx(handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
 	}
-	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
+	return info.VolumeSerialNumber, binary.LittleEndian.Uint64(info.FileId[0:8]), nil
 }
 
 // fileLinksOf reports the hard-link count of one open descriptor

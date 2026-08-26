@@ -1,6 +1,6 @@
 // Platform-neutral security helpers (the POSIX surface lives in
-// security.go; the Windows live surface is a tracked SOW-0026 item and
-// refuses through the same typed class).
+// security.go, the Windows surface in security_windows.go, and the
+// remaining platforms refuse through the same typed class).
 
 package security
 

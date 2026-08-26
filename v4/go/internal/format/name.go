@@ -51,3 +51,19 @@ func AsciiFoldHasSuffix(s, suffix string) bool {
 	}
 	return true
 }
+
+// AsciiFoldEqual reports an exact ASCII-case-insensitive byte equality
+// (Rust eq_ignore_ascii_case); Unicode folding is not applied, so
+// spellings Rust accepts (for example full-width "ＣＯＮ") are accepted
+// here too.
+func AsciiFoldEqual(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range len(left) {
+		if AsciiFoldLower(left[index]) != AsciiFoldLower(right[index]) {
+			return false
+		}
+	}
+	return true
+}

@@ -2,7 +2,11 @@
 
 package publication
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+)
 
 // destinationNameMax is the component-length bound of NTFS (255 UTF-16
 // units; Rust _PC_NAME_MAX on the supported volumes).
@@ -28,8 +32,9 @@ func mainNameComponentRule(name string) bool {
 }
 
 // windowsDeviceName matches the reserved device stems (Rust
-// is_windows_device_name): the stem before the first dot, compared
-// ASCII-case-insensitively, is CON/PRN/AUX/NUL or COM1..9/LPT1..9.
+// is_windows_device_name, path.rs): the stem before the first dot,
+// compared ASCII-case-insensitively like Rust eq_ignore_ascii_case,
+// is CON/PRN/AUX/NUL or COM1..9/LPT1..9.
 func windowsDeviceName(name string) bool {
 	stem := name
 	for i := 0; i < len(stem); i++ {
@@ -38,19 +43,14 @@ func windowsDeviceName(name string) bool {
 			break
 		}
 	}
-	if len(stem) == 3 {
-		switch stem {
-		case "CON", "PRN", "AUX", "NUL":
-			return true
-		}
-		return false
+	switch len(stem) {
+	case 3:
+		return format.AsciiFoldEqual(stem, "CON") || format.AsciiFoldEqual(stem, "PRN") ||
+			format.AsciiFoldEqual(stem, "AUX") || format.AsciiFoldEqual(stem, "NUL")
+	case 4:
+		head, digit := stem[:3], stem[3]
+		return (format.AsciiFoldEqual(head, "COM") || format.AsciiFoldEqual(head, "LPT")) &&
+			digit >= '1' && digit <= '9'
 	}
-	if len(stem) != 4 {
-		return false
-	}
-	head, digit := stem[:3], stem[3]
-	if head != "COM" && head != "LPT" {
-		return false
-	}
-	return digit >= '1' && digit <= '9'
+	return false
 }

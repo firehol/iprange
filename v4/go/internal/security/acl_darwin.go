@@ -7,7 +7,8 @@ import (
 )
 
 // aclSupported reports the creator-only machine availability (false on
-// darwin; the pure-Go ACL machine exists on linux and freebsd).
+// darwin; the pure-Go ACL machine exists on linux, freebsd, and
+// windows).
 const aclSupported = false
 
 // removeInheritedACL on darwin is an honest typed refusal: the Rust

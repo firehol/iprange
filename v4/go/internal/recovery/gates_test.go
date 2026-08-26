@@ -33,7 +33,7 @@ func liveGate(t *testing.T) {
 func publicationGate(t *testing.T) {
 	t.Helper()
 	if !security.CreatorOnlySupported() {
-		t.Skip("creator-only publication security is not available on this platform (pure-Go ACL machine is linux/freebsd only)")
+		t.Skip("creator-only publication security is not available on this platform (pure-Go ACL machine is linux/freebsd/windows)")
 	}
 }
 

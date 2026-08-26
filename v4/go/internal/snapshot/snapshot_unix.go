@@ -1,9 +1,8 @@
 // Device+inode capture for the live snapshot self-replacement probe
 // (Rust publication namespace identity over the open file). This file
 // provides the POSIX variant; the windows variant lives in
-// snapshot_windows.go (the snapshot To machine refuses the live source
-// before path access there, following the mapping package's
-// platform-stub pattern).
+// snapshot_windows.go and is the real probe over the retained
+// destination handle.
 
 //go:build !windows
 

@@ -52,20 +52,11 @@ func inspectMainResidue(destination *destination, check func() error) (*residueM
 		return nil, sdkProblem(err)
 	}
 	var mapped *mapping.Mapping
-	var digest [64]byte
-	if byteLength == 0 {
-		digest = sha512.Sum512(nil)
-	} else {
+	if byteLength != 0 {
 		mapped, err = mapping.MapFile(regular.File, byteLength, false)
 		if err != nil {
 			_ = regular.File.Close()
 			return nil, sdkProblem(err)
-		}
-		digest, err = digestCancellable(mapped, byteLength, check)
-		if err != nil {
-			_ = mapped.Close()
-			_ = regular.File.Close()
-			return nil, outputProblem(err)
 		}
 	}
 	tuple, err := readResidueTuple(mapped, byteLength)
@@ -75,6 +66,29 @@ func inspectMainResidue(destination *destination, check func() error) (*residueM
 		}
 		_ = regular.File.Close()
 		return nil, err
+	}
+	if tuple != nil {
+		// The Windows GC custody barrier runs before the digest when
+		// the main carries a v4 meta pair (Rust residue/main.rs
+		// inspect: ordinal 0, OwnedMain, MainFile role).
+		if err := requireSourceAvailable(destination.directory(), tuple.databaseID, 0, ArtifactOwnedMain, DirectoryRoleMainFile, destination.mainName(), regular.Identity); err != nil {
+			if mapped != nil {
+				_ = mapped.Close()
+			}
+			_ = regular.File.Close()
+			return nil, err
+		}
+	}
+	var digest [64]byte
+	if byteLength == 0 {
+		digest = sha512.Sum512(nil)
+	} else {
+		digest, err = digestCancellable(mapped, byteLength, check)
+		if err != nil {
+			_ = mapped.Close()
+			_ = regular.File.Close()
+			return nil, outputProblem(err)
+		}
 	}
 	accessPolicy := AccessPolicyChangedOrUnproven
 	if _, err := security.CreatorOnlyCommitment(regular.File); err == nil {

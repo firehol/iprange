@@ -11,14 +11,16 @@
 // The byte-range surface (lock / tryLock / unlock / lockCancellable)
 // serves the sidecar itself and is supported only where locks are owned
 // by an open file description and released automatically when its last
-// descriptor closes: Linux and macOS provide F_OFD_SETLK, every other
-// platform is refused before path access (the Windows live surface is a
-// tracked SOW-0026 item and stays an honest refusal here). The artifact
-// surface (LockFile / TryLockFile / UnlockFile / LockFileCancellable)
-// locks one complete publication artifact: Linux and macOS keep the
-// caller-supplied byte-range offset with OFD locks, FreeBSD locks the
-// whole file with flock because it has no OFD locks, and all other
-// platforms refuse.
+// descriptor closes: Linux and macOS provide F_OFD_SETLK, Windows
+// keeps the exact byte-range contract with per-handle LockFileEx
+// ranges (lock_windows.go), and every other platform is refused before
+// path access. The artifact surface (LockFile / TryLockFile /
+// UnlockFile / LockFileCancellable) locks one complete publication
+// artifact: Linux and macOS keep the caller-supplied byte-range offset
+// with OFD locks, FreeBSD locks the whole file with flock because it
+// has no OFD locks, Windows uses per-handle LockFileEx byte-range
+// locks over the caller-supplied offset, and all other platforms
+// refuse.
 package live
 
 import (

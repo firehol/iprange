@@ -9,8 +9,8 @@
 // so the machine is publication-path-only there. The !windows guard
 // keeps the v4work test tree cross-buildable on windows: the machine
 // needs the POSIX Linkat and directory-identity primitives, which
-// have no Windows counterpart (the Windows live surface is a tracked
-// SOW-0026 stub).
+// have no Windows counterpart (the Windows live surface installs its
+// sidecar through NtSetInformationFile renames instead).
 
 package live
 

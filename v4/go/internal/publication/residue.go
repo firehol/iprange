@@ -348,8 +348,13 @@ func classifyCoordinationResidue(destination *destination, regular *live.Regular
 	if header, ok, err := selectedBoundResidueHeader(destination, regular); err != nil {
 		return 0, nil, err
 	} else if ok {
-		// The gc-barrier availability call is Windows-only and
-		// absent here.
+		// The Windows GC custody barrier runs before the reservation
+		// reconstruction (Rust residue/linux.rs classify_coordination
+		// require_coordination_available: ordinal 1, OwnedCoordination,
+		// destination role).
+		if err := requireCoordinationAvailableResidue(destination, header.attemptID, DirectoryRoleDestination, regular.Identity); err != nil {
+			return 0, nil, err
+		}
 		access := reservationAccessResidue(regular, header)
 		publication, err := reconstructResidue(destination, header, access)
 		if err != nil {
@@ -357,8 +362,15 @@ func classifyCoordinationResidue(destination *destination, regular *live.Regular
 		}
 		return residueCoordinationPublicationReservation, &publication, nil
 	}
-	// The live-sidecar header read feeds only the Windows gc barrier
-	// and is omitted here like every other Go publication surface.
+	// A shaped, checksummed, valid-state live sidecar runs the Windows
+	// GC custody barrier with its sidecar identity before the
+	// LiveSidecar class is reported (Rust residue/linux.rs
+	// classify_coordination over live_sidecar::read_header).
+	if header, err := live.ReadHeader(regular.File); err == nil {
+		if err := requireCoordinationAvailableResidue(destination, header.SidecarID, DirectoryRoleMainFile, regular.Identity); err != nil {
+			return 0, nil, err
+		}
+	}
 	selectable, err := live.HasSelectableHeader(regular.File)
 	if err != nil {
 		return 0, nil, sdkProblem(err)
@@ -367,6 +379,14 @@ func classifyCoordinationResidue(destination *destination, regular *live.Regular
 		return residueCoordinationLiveSidecar, nil, nil
 	}
 	return residueCoordinationUnselectable, nil, nil
+}
+
+// requireCoordinationAvailableResidue runs the Windows GC custody
+// barrier of one classified coordination inode (Rust residue/linux.rs
+// require_coordination_available: ordinal 1, OwnedCoordination); the
+// POSIX peer is a no-op.
+func requireCoordinationAvailableResidue(destination *destination, attemptID [16]byte, role DirectoryRole, identity live.FileIdentity) error {
+	return requireSourceAvailable(destination.directory(), attemptID, 1, ArtifactOwnedCoordination, role, destination.coordinationName(), identity)
 }
 
 // selectedBoundResidueHeader selects the reservation record of one

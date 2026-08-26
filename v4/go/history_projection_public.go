@@ -9,8 +9,10 @@
 // The changed terminal is one prepared handle (DirectTransaction
 // precedent) that owns the draft until Commit, Abort, or Writer.Close,
 // with the cancellation token captured at prepare and checked through
-// commit (Rust PreparedState). The live source mode is refused until
-// Milestone 4 exactly like the snapshot live refusal.
+// commit (Rust PreparedState). The live source mode is refused by
+// the Go SDK (the port is not implemented; the Rust authority
+// supports HistoryProjectionSource::Live over the live reader core,
+// history_projection.rs).
 
 package iprangedb
 
@@ -26,7 +28,7 @@ import (
 
 // HistoryProjectionSourceKind is the source coordination of one history
 // projection (Rust HistoryProjectionSource). The live mode is refused
-// until Milestone 4 with ErrorOSUnsupported.
+// by the Go SDK with ErrorOSUnsupported until the port is implemented.
 type HistoryProjectionSourceKind uint8
 
 const (
@@ -35,13 +37,14 @@ const (
 	HistoryProjectionSourceImmutable HistoryProjectionSourceKind = iota
 	// HistoryProjectionSourceLive would project one live database
 	// generation through the sidecar coordination; the Go SDK refuses
-	// it for now (Rust Unsupported; tracked platform surface).
+	// it for now (Rust history_projection.rs implements it over the
+	// live reader core; tracked port surface).
 	HistoryProjectionSourceLive
 )
 
 // HistoryProjectionSource is the source of one history projection
 // (Rust HistoryProjectionSource). Only the immutable mode is accepted;
-// Live reports ErrorOSUnsupported.
+// Live reports ErrorOSUnsupported (not yet ported).
 type HistoryProjectionSource struct {
 	Kind   HistoryProjectionSourceKind
 	Reader *ImmutableReader
@@ -75,7 +78,7 @@ func (w *Writer) ProjectHistory(source HistoryProjectionSource, windows []Histor
 	}
 	// Source::new + require_compatible_source (Rust history_projection.rs).
 	if source.Kind == HistoryProjectionSourceLive {
-		return nil, &Error{Code: ErrorOSUnsupported, Detail: "live history source requires the live sidecar coordination (Milestone 4)"}
+		return nil, &Error{Code: ErrorOSUnsupported, Detail: "live history projection source is not implemented in the Go SDK"}
 	}
 	if source.Kind != HistoryProjectionSourceImmutable || source.Reader == nil {
 		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}

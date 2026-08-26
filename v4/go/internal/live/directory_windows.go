@@ -12,15 +12,18 @@
 // removal uses the POSIX-semantics disposition, and the scan enumerates
 // through one reused FileIdBothDirectoryInfo buffer.
 //
-// The live-layer identity is the (volume serial, 64-bit file index)
-// projection of BY_HANDLE_FILE_INFORMATION: the sidecar never persists
-// identities, so the projection is unobservable outside this process,
-// and the full 128-bit FILE_ID_INFO identity stays in the publication
-// namespace machine where identity bytes are observable.
+// The live-layer identity is the Rust windows.rs file_identity pair
+// (64-bit volume serial plus the 128-bit FILE_ID_INFO identifier,
+// NTFS keeping the file index in its low half): the sidecar never
+// persists identities, so the pair is unobservable outside this
+// process, while the same capture feeds the publication namespace
+// machine where identity bytes are observable and byte-identical to
+// the Rust arm.
 
 package live
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"syscall"
@@ -70,7 +73,7 @@ func OpenDirectory(path string) (*Directory, error) {
 		if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
 			return nil, nsMissingError()
 		}
-		return nil, nsPlainIoError("open directory", err)
+		return nil, nsIoError("open retained Windows path", err)
 	}
 	// One os.File owns the raw handle from here on: a second wrapper
 	// around the same value would let the Go finalizer close the
@@ -97,9 +100,14 @@ func OpenDirectory(path string) (*Directory, error) {
 		f.Close()
 		return nil, nsUnsupportedError()
 	}
+	id, err := fileIdentity(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
 	return &Directory{
 		file:    f,
-		id:      identityFromInfo(info),
+		id:      id,
 		nameMax: nameMax,
 	}, nil
 }
@@ -120,8 +128,12 @@ func (d *Directory) Entry(name string) (Entry, bool, error) {
 	if err != nil {
 		return Entry{}, false, err
 	}
+	identity, err := fileIdentity(file)
+	if err != nil {
+		return Entry{}, false, err
+	}
 	return Entry{
-		Identity: identityFromInfo(info),
+		Identity: identity,
 		Links:    uint64(info.NumberOfLinks),
 		Regular:  info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) == 0,
 	}, true, nil
@@ -187,7 +199,11 @@ func (d *Directory) openRegularWithLinks(name string, writable bool, requireSing
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
 		return fail(nsNotRegularError())
 	}
-	identity := identityFromInfo(info)
+	identity, err := fileIdentity(file)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
 	if identity.device != d.id.device {
 		return fail(nsCrossFilesystemError())
 	}
@@ -256,7 +272,7 @@ func (d *Directory) RenamePlain(source string, destination string) error {
 		return nsMissingError()
 	}
 	defer regular.File.Close()
-	return d.rename(source, regular.File, destination, 0x1|0x2)
+	return d.rename(source, regular.File, destination, renameReplaceIfExists|renamePosixSemantics)
 }
 
 // RenameExchange is unsupported on Windows (Rust windows_mutation
@@ -326,22 +342,9 @@ func windowsRenameBuffer(flags uint32, root uintptr, destination string) ([]byte
 	nameBytes := len(destination) * 2
 	total := 24 + nameBytes
 	buffer := make([]byte, total)
-	buffer[0] = byte(flags)
-	buffer[1] = byte(flags >> 8)
-	buffer[2] = byte(flags >> 16)
-	buffer[3] = byte(flags >> 24)
-	buffer[8] = byte(root)
-	buffer[9] = byte(root >> 8)
-	buffer[10] = byte(root >> 16)
-	buffer[11] = byte(root >> 24)
-	buffer[12] = byte(root >> 32)
-	buffer[13] = byte(root >> 40)
-	buffer[14] = byte(root >> 48)
-	buffer[15] = byte(root >> 56)
-	buffer[16] = byte(nameBytes)
-	buffer[17] = byte(nameBytes >> 8)
-	buffer[18] = byte(nameBytes >> 16)
-	buffer[19] = byte(nameBytes >> 24)
+	binary.LittleEndian.PutUint32(buffer[0:4], flags)
+	binary.LittleEndian.PutUint64(buffer[8:16], uint64(root))
+	binary.LittleEndian.PutUint32(buffer[16:20], uint32(nameBytes))
 	for i := 0; i < len(destination); i++ {
 		letter := destination[i]
 		if letter > 0x7F {
@@ -363,6 +366,15 @@ var (
 // FileRenameInformationEx = 65; 22 would be FileStreamInformation and
 // NtSetInformationFile refuses it with STATUS_INVALID_INFO_CLASS).
 const fileRenameInformationEx = 65
+
+// renameReplaceIfExists and renamePosixSemantics are the
+// FILE_RENAME_FLAG_* bits of FileRenameInformationEx (windows-sys
+// FILE_RENAME_REPLACE_IF_EXISTS = 0x1, FILE_RENAME_POSIX_SEMANTICS =
+// 0x2; Rust replace_discarding_destination passes 0x1|0x2).
+const (
+	renameReplaceIfExists = 0x1
+	renamePosixSemantics  = 0x2
+)
 
 // UnlinkExact removes one name only when it still names the expected
 // identity, using the POSIX-semantics disposition so an open handle
@@ -417,7 +429,14 @@ func (d *Directory) Verify() error {
 	if err != nil {
 		return err
 	}
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || identityFromInfo(info) != d.id {
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return nsIdentityChangedError()
+	}
+	identity, err := fileIdentity(d.file)
+	if err != nil {
+		return err
+	}
+	if identity != d.id {
 		return nsIdentityChangedError()
 	}
 	return requireLocalFilesystem(d.file)
@@ -426,9 +445,11 @@ func (d *Directory) Verify() error {
 // Scan visits every entry of the retained directory in constant
 // memory (Rust Directory::scan over windows_scan.rs): the directory
 // proves before and after the enumeration stream, "." and ".." are
-// skipped, and the visitor receives each raw ASCII name. The final
-// verify runs even when the visitor failed and takes precedence over
-// its error, exactly like Rust.
+// skipped, and the visitor receives each raw ASCII name. A visitor
+// failure returns immediately without the final verify, exactly like
+// the Windows Rust arm (the unix arm, namespace_scan.rs, runs the
+// final verify unconditionally and lets it override the visitor
+// error).
 func (d *Directory) Scan(visitor func([]byte) error) error {
 	if err := d.Verify(); err != nil {
 		return err
@@ -439,11 +460,11 @@ func (d *Directory) Scan(visitor func([]byte) error) error {
 	}
 	defer stream.Close()
 	buffer := make([]byte, 64<<10)
-	visited := scanWindowsStream(stream, buffer, visitor)
-	if err := d.Verify(); err != nil {
+	var projection [255]byte
+	if err := scanWindowsStream(stream, buffer, &projection, visitor); err != nil {
 		return err
 	}
-	return visited
+	return d.Verify()
 }
 
 // stream re-opens the retained directory through its final path and
@@ -522,23 +543,30 @@ func openWindowsPath(path string, access uint32, writeThrough bool) (*os.File, e
 func finalPath(f *os.File) ([]uint16, error) {
 	required, err := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), nil, 0, 0)
 	if err != nil {
-		return nil, nsPlainIoError("size retained Windows directory path", err)
+		return nil, nsIoError("size retained Windows directory path", err)
 	}
 	buffer := make([]uint16, required+1)
 	written, err := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buffer[0], uint32(len(buffer)), 0)
 	if err != nil {
-		return nil, nsPlainIoError("read retained Windows directory path", err)
+		return nil, nsIoError("read retained Windows directory path", err)
 	}
-	if written == 0 {
-		return nil, nsPlainIoError("read retained Windows directory path", windows.ERROR_INVALID_FUNCTION)
+	// Rust refuses when the fill did not fit with room for the null
+	// terminator (windows.rs final_path: written == 0 || written >=
+	// buffer len): a path that grew between the size probe and the
+	// fill would otherwise slice past the buffer.
+	if written == 0 || written >= uint32(len(buffer)) {
+		return nil, nsIoError("read retained Windows directory path", windows.ERROR_INVALID_FUNCTION)
 	}
 	return buffer[:written], nil
 }
 
 // scanWindowsStream walks one enumeration buffer (Rust
 // windows_scan.rs): FILE_ID_BOTH_DIR_INFO records until
-// ERROR_NO_MORE_FILES, ASCII name projection, "." and ".." skipped.
-func scanWindowsStream(stream *os.File, buffer []byte, visitor func([]byte) error) error {
+// ERROR_NO_MORE_FILES, ASCII name projection into the caller-owned
+// projection buffer (zero per-entry allocation, like the Rust stack
+// array), "." and ".." skipped by raw byte compare (windows_scan.rs
+// ascii != b".").
+func scanWindowsStream(stream *os.File, buffer []byte, projection *[255]byte, visitor func([]byte) error) error {
 	for {
 		if err := windows.GetFileInformationByHandleEx(windows.Handle(stream.Fd()), windows.FileIdBothDirectoryInfo, &buffer[0], uint32(len(buffer))); err != nil {
 			if err == windows.ERROR_NO_MORE_FILES {
@@ -563,8 +591,8 @@ func scanWindowsStream(stream *os.File, buffer []byte, visitor func([]byte) erro
 				return nsIdentityChangedError()
 			}
 			units := unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[offset+int(headerSize)])), unitsLen)
-			name, ok := asciiNameFromUnits(units)
-			if ok && string(name) != "." && string(name) != ".." {
+			name, ok := asciiNameFromUnits(units, projection)
+			if ok && !isDotOrDotDot(name) {
 				if err := visitor(name); err != nil {
 					return err
 				}
@@ -581,21 +609,29 @@ func scanWindowsStream(stream *os.File, buffer []byte, visitor func([]byte) erro
 	}
 }
 
+// isDotOrDotDot reports the two skipped enumeration names by raw byte
+// compare (Rust ascii != b"." / ascii != b"..").
+func isDotOrDotDot(name []byte) bool {
+	return (len(name) == 1 && name[0] == '.') || (len(name) == 2 && name[0] == '.' && name[1] == '.')
+}
+
 // asciiNameFromUnits projects one UTF-16 name to ASCII bytes when
 // every unit is an ASCII character (Rust ascii_name), reporting
-// whether the name is representable.
-func asciiNameFromUnits(units []uint16) ([]byte, bool) {
+// whether the name is representable. The projection buffer is owned
+// by the caller and reused across entries (the Rust stack array), so
+// the scan pays no per-entry allocation; the visitor must not retain
+// the returned slice (the same contract as the POSIX scan visitor).
+func asciiNameFromUnits(units []uint16, projection *[255]byte) ([]byte, bool) {
 	if len(units) > 255 {
 		return nil, false
 	}
-	name := make([]byte, len(units))
 	for i, unit := range units {
 		if unit > 0x7F {
 			return nil, false
 		}
-		name[i] = byte(unit)
+		projection[i] = byte(unit)
 	}
-	return name, true
+	return projection[:len(units)], true
 }
 
 // fileDispositionInfoEx is the FILE_DISPOSITION_INFO_EX structure of

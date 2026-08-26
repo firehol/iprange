@@ -181,8 +181,8 @@ const BuildIDDefault = buildIDDefault
 // the retained-identity and creator-only commitment checks (Rust
 // publication/namespace/unix.rs IDENTITY_KIND and CREATION_SECURITY_KIND;
 // the Go publication package keeps both private, so the worker boundary
-// repeats the unix values). The worker surface is linux-only, so no
-// Windows variant exists here.
+// repeats the unix values). The worker control surface is unix-only,
+// so no Windows variant exists here.
 const (
 	identityKind         uint16 = 1
 	creationSecurityKind uint16 = 1
