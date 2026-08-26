@@ -101,6 +101,16 @@ type OutputBuilder struct {
 	// finished records a successful Finish: the publish gate requires
 	// it, so a failed Finish can never be published as if it sealed.
 	finished bool
+	// pageProbe is the armed output region of one in-flight page
+	// mutation (Rust with_output_protection spanning update_page and
+	// copy_page): Update and CopyPage arm it before the page fetch,
+	// RestoreDirty releases it after the caller's mutation, and every
+	// store entry point consumes an aborted window first (Go has no
+	// RAII drop, so the release point of a failed mutation is the next
+	// store operation or Close instead of the Rust closure return).
+	// The zero guard is the inert no-session value, so library writers
+	// never arm and never allocate.
+	pageProbe mapping.ProbeGuard
 }
 
 // MaxOutputPages returns the page budget.
@@ -321,6 +331,35 @@ func (b *OutputBuilder) mutate(operation func() error) error {
 
 // requireActive refuses operations after a failed mutation (Rust
 // require_active).
+// armPageWindow releases any aborted page window and arms the output
+// region for the next mutation (Rust enter_output inside
+// with_output_protection: the region resolves and arms before the page
+// fetch, and the caller's mutation runs with the output probe held).
+// Without a worker session the guard is the inert zero value, so the
+// library writer pays one SessionProbeActive load and no allocation.
+func (b *OutputBuilder) armPageWindow() error {
+	b.pageProbe.Exit()
+	b.pageProbe = mapping.ProbeGuard{}
+	if !mapping.SessionProbeActive() {
+		return nil
+	}
+	guard, err := b.mapping.EnterProbe(mapping.RoleOutput)
+	if err != nil {
+		return err
+	}
+	b.pageProbe = guard
+	return nil
+}
+
+// consumePageWindow releases an in-flight or aborted page window (the
+// Go analog of the Rust probe drop after the update/copy closure; on
+// aborted mutations the release point is the next store operation or
+// Close). The zero guard is the no-session no-op.
+func (b *OutputBuilder) consumePageWindow() {
+	b.pageProbe.Exit()
+	b.pageProbe = mapping.ProbeGuard{}
+}
+
 func (b *OutputBuilder) requireActive() error {
 	if b.failed {
 		return wrongState("immutable output construction failed")
@@ -657,6 +696,7 @@ func requireOutputShape[W membershipWords](words W, feedLimit uint64) error {
 // writes the dual meta, flushes and syncs (Rust finish). Finished
 // builders refuse further mutation.
 func (b *OutputBuilder) Finish() error {
+	b.consumePageWindow()
 	if err := b.requireActive(); err != nil {
 		return err
 	}
@@ -750,7 +790,10 @@ func outputPageOwned(page []byte, txn uint64) bool {
 }
 
 // Close releases the mapping; callers that never finish must close.
+// An in-flight or aborted page window is released before the unmap so
+// the worker control never holds a dangling armed region.
 func (b *OutputBuilder) Close() error {
+	b.consumePageWindow()
 	return b.mapping.Close()
 }
 
@@ -795,6 +838,7 @@ func (b *OutputBuilder) PageLimit() uint64 { return b.meta.PageCount }
 // runs inside the armed Output probe when a worker session is active,
 // and directly otherwise, so the library writer path never allocates).
 func (b *OutputBuilder) Inspect(pageNumber uint32) ([]byte, error) {
+	b.consumePageWindow()
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return nil, err
 	}
@@ -803,6 +847,7 @@ func (b *OutputBuilder) Inspect(pageNumber uint32) ([]byte, error) {
 
 // Allocate reserves the next output page (Rust allocate = reserve_page).
 func (b *OutputBuilder) Allocate() (uint32, error) {
+	b.consumePageWindow()
 	return b.reservePage()
 }
 
@@ -823,36 +868,48 @@ func (b *OutputBuilder) reservePage() (uint32, error) {
 }
 
 // Update returns one data page view for mutation (Rust update_page +
-// require_output_owner; the page fetch runs inside the armed Output
-// probe). The output has no dirty chain, so the captured tag is always
-// zero; the caller mutates the page and then calls RestoreDirty, which
-// re-verifies the output ownership.
+// require_output_owner). The output region is armed before the page
+// fetch and stays armed across the caller's mutation (Rust
+// with_output_protection); the caller mutates the page and then calls
+// RestoreDirty, which re-verifies the output ownership and releases the
+// window. The output has no dirty chain, so the captured tag is always
+// zero.
 func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
+		b.consumePageWindow()
 		return nil, 0, err
 	}
-	page, err := b.outputPage(pageNumber)
+	if err := b.armPageWindow(); err != nil {
+		return nil, 0, err
+	}
+	page, err := b.mapping.Page(pageNumber)
 	if err != nil {
+		b.consumePageWindow()
 		return nil, 0, err
 	}
 	return page, 0, nil
 }
 
 // RestoreDirty re-verifies the output ownership after a successful
-// mutation or copy (Rust require_output_owner inside the armed Output
-// probe). The output has no dirty chain, so the tag is never re-armed;
-// the ownership check mirrors the current Update epilogue.
+// mutation or copy and releases the armed page window (Rust
+// require_output_owner + probe drop inside with_output_protection).
+// The output has no dirty chain, so the tag is never re-armed; the
+// fetch runs inside the still-armed window.
 func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
+		b.consumePageWindow()
 		return err
 	}
-	page, err := b.outputPage(pageNumber)
+	page, err := b.mapping.Page(pageNumber)
 	if err != nil {
+		b.consumePageWindow()
 		return err
 	}
 	if !outputPageOwned(page, b.meta.TxnID) {
+		b.consumePageWindow()
 		return corrupt("immutable output page ownership is invalid")
 	}
+	b.consumePageWindow()
 	return nil
 }
 
@@ -864,17 +921,24 @@ func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
 // work.PageCopied counts the copy.
 func (b *OutputBuilder) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	if err := requireOutputPage(source, b.meta.PageCount); err != nil {
+		b.consumePageWindow()
 		return nil, nil, 0, err
 	}
 	if err := requireOutputPage(destination, b.meta.PageCount); err != nil {
+		b.consumePageWindow()
 		return nil, nil, 0, err
 	}
-	src, err := b.outputPage(source)
-	if err != nil {
+	if err := b.armPageWindow(); err != nil {
 		return nil, nil, 0, err
 	}
-	dst, err := b.outputPage(destination)
+	src, err := b.mapping.Page(source)
 	if err != nil {
+		b.consumePageWindow()
+		return nil, nil, 0, err
+	}
+	dst, err := b.mapping.Page(destination)
+	if err != nil {
+		b.consumePageWindow()
 		return nil, nil, 0, err
 	}
 	work.PageCopied(1)
@@ -884,12 +948,14 @@ func (b *OutputBuilder) CopyPage(source, destination uint32) ([]byte, []byte, ui
 // DiscardPrivate refuses every discard: the output is append-only (Rust
 // discard_private).
 func (b *OutputBuilder) DiscardPrivate(pageNumber uint32) error {
+	b.consumePageWindow()
 	return corrupt("immutable output attempted to discard an append-only page")
 }
 
 // RetirePages refuses every non-empty retirement (Rust RetiringStore for
 // Builder).
 func (b *OutputBuilder) RetirePages(retired tree.RetiredPages) error {
+	b.consumePageWindow()
 	if retired.Len() == 0 {
 		return nil
 	}
