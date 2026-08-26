@@ -13,13 +13,16 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // probeRecorder is the stub session-probe arm (Rust enter_region / Probe
-// drop projection): it records every armed role and counts every release
-// handed to the owner.
+// drop projection): it records every armed role and region and counts
+// every release handed to the owner.
 type probeRecorder struct {
-	arms     []mapping.ProbeRole
+	roles    []mapping.ProbeRole
+	bases    []uintptr
+	lengths  []uint64
 	releases int
 }
 
@@ -31,10 +34,35 @@ func (r *probeRecorder) RestoreProbe(_ mapping.ProbeRegistration, _ bool) { r.re
 func installProbeRecorder(t *testing.T, r *probeRecorder) {
 	t.Helper()
 	mapping.SetSessionProbe(func(role mapping.ProbeRole, base uintptr, length uint64) (mapping.ProbeRelease, error) {
-		r.arms = append(r.arms, role)
+		r.roles = append(r.roles, role)
+		r.bases = append(r.bases, base)
+		r.lengths = append(r.lengths, length)
 		return mapping.ProbeRelease{Owner: r, Armed: false}, nil
 	})
 	t.Cleanup(mapping.ClearSessionProbe)
+}
+
+// wantOutputRegion asserts every armed region is the whole output
+// mapping region with the Output role (Rust protected_region is the
+// mapping region and the role is RoleOutput for every store op).
+func wantOutputRegion(t *testing.T, b *writer.OutputBuilder, rec *probeRecorder) {
+	t.Helper()
+	wantBase, wantLen, err := b.Mapping().Region()
+	if err != nil {
+		t.Fatalf("Region: %v", err)
+	}
+	if len(rec.roles) == 0 {
+		t.Fatalf("no store operation armed the output region")
+	}
+	for index := range rec.roles {
+		if rec.roles[index] != mapping.RoleOutput {
+			t.Fatalf("arm %d used role %v, want RoleOutput", index, rec.roles[index])
+		}
+		if rec.bases[index] != wantBase || rec.lengths[index] != wantLen {
+			t.Fatalf("arm %d used region %#x+%d, want the whole output mapping %#x+%d",
+				index, rec.bases[index], rec.lengths[index], wantBase, wantLen)
+		}
+	}
 }
 
 // stampOutputPage marks one fresh output data page owned by the output
@@ -76,11 +104,7 @@ func TestOutputPageWindowSpansTheMutation(t *testing.T) {
 	if rec.releases != 1 {
 		t.Fatalf("RestoreDirty did not release exactly the one armed window: releases=%d", rec.releases)
 	}
-	for index, role := range rec.arms {
-		if role != mapping.RoleOutput {
-			t.Fatalf("arm %d used role %v, want RoleOutput", index, role)
-		}
-	}
+	wantOutputRegion(t, b, rec)
 }
 
 // TestOutputPageWindowCopyPageSpansTheCopy pins the copy window: one
@@ -118,9 +142,10 @@ func TestOutputPageWindowCopyPageSpansTheCopy(t *testing.T) {
 	if rec.releases != 1 {
 		t.Fatalf("RestoreDirty did not release exactly the one armed window: releases=%d", rec.releases)
 	}
-	if len(rec.arms) != 1 || rec.arms[0] != mapping.RoleOutput {
-		t.Fatalf("CopyPage armed %d probes with roles %v, want exactly one RoleOutput", len(rec.arms), rec.arms)
+	if len(rec.roles) != 1 {
+		t.Fatalf("CopyPage armed %d probes, want exactly one armed window", len(rec.roles))
 	}
+	wantOutputRegion(t, b, rec)
 }
 
 // TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation
@@ -151,6 +176,41 @@ func TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation(t *testi
 	if rec.releases != 1 {
 		t.Fatalf("the aborted window was not released at the next store operation: releases=%d", rec.releases)
 	}
+}
+
+// TestOutputPageWindowInspectSpansTheRead pins the inspection window:
+// Inspect arms the output region before the fetch and holds it while
+// the caller decodes the returned page; the next store operation
+// releases it (Rust inspect_page under with_output_protection).
+func TestOutputPageWindowInspectSpansTheRead(t *testing.T) {
+	b, _ := newOutput(t, directSpec(format.AddressFamilyIPv4), generousBudget())
+	rec := &probeRecorder{}
+	installProbeRecorder(t, rec)
+	defer b.Close()
+
+	pageNumber, err := b.Allocate()
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	page, err := b.Inspect(pageNumber)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if rec.releases != 0 {
+		t.Fatalf("Inspect released the window before the read: releases=%d", rec.releases)
+	}
+	// Decode a value out of the returned page while the window is held.
+	_ = format.U64(page[format.HeaderBorn : format.HeaderBorn+8])
+	if rec.releases != 0 {
+		t.Fatalf("the window released during the read: releases=%d", rec.releases)
+	}
+	if _, err := b.Allocate(); err != nil {
+		t.Fatalf("Allocate after inspect: %v", err)
+	}
+	if rec.releases != 1 {
+		t.Fatalf("the next store operation did not release the made window: releases=%d", rec.releases)
+	}
+	wantOutputRegion(t, b, rec)
 }
 
 // TestOutputPageWindowAbortedMutationReleasesAtClose pins the other

@@ -806,43 +806,32 @@ func (b *OutputBuilder) Mapping() *mapping.Mapping { return b.mapping }
 // TargetTxn returns the output transaction (always 1).
 func (b *OutputBuilder) TargetTxn() uint64 { return b.meta.TxnID }
 
-// outputPage returns one output data page view (Rust with_output_protection
-// inside inspect_page/update_page/copy_page: the fetch runs under the
-// armed Output probe when a worker session is active, and directly
-// otherwise). The library arm keeps the one-load SessionProbeActive
-// gate: the writer is the per-page probe site of the Store hot path,
-// and the direct EnterProbe value return would otherwise cost the
-// library writer a non-inlined 72-byte guard round trip per page
-// (EnterProbe resolves the region before the inert short-circuit,
-// which puts it past the compiler inline budget). The session-active
-// arm builds no probe closure: the EnterProbe guard is a value (Rust
-// Probe is a stack value), so the session path is allocation-free and
-// arming failures surface before the page fetch (Rust enter_region
-// error propagation).
-func (b *OutputBuilder) outputPage(pageNumber uint32) ([]byte, error) {
-	if !mapping.SessionProbeActive() {
-		return b.mapping.Page(pageNumber)
-	}
-	guard, err := b.mapping.EnterProbe(mapping.RoleOutput)
-	if err != nil {
-		return nil, err
-	}
-	defer guard.Exit()
-	return b.mapping.Page(pageNumber)
-}
-
 // PageLimit returns the current page count.
 func (b *OutputBuilder) PageLimit() uint64 { return b.meta.PageCount }
 
 // Inspect returns one data page view (Rust inspect_page: the fetch
 // runs inside the armed Output probe when a worker session is active,
 // and directly otherwise, so the library writer path never allocates).
+// Inspect returns one data page view for reading (Rust inspect_page +
+// with_output_protection: the caller's inspection runs inside the armed
+// output region). The window is armed before the fetch and released at
+// the next store operation or Close, exactly like a mutation window, so
+// a fault while the caller decodes the returned page records with the
+// Output role.
 func (b *OutputBuilder) Inspect(pageNumber uint32) ([]byte, error) {
 	b.consumePageWindow()
 	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
 		return nil, err
 	}
-	return b.outputPage(pageNumber)
+	if err := b.armPageWindow(); err != nil {
+		return nil, err
+	}
+	page, err := b.mapping.Page(pageNumber)
+	if err != nil {
+		b.consumePageWindow()
+		return nil, err
+	}
+	return page, nil
 }
 
 // Allocate reserves the next output page (Rust allocate = reserve_page).
