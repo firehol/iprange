@@ -73,18 +73,21 @@ func (w *LiveWriter) ProjectHistory(source HistoryProjectionSource, windows []Hi
 // changed/no-change terminal.
 func projectHistory(h mutationHost, source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
 	if err := h.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(
+
+			// require_feed_workflow_ready (Rust feed_workflow.rs): healthy, a
+			// membership destination, no pending transaction.
+			err)
 	}
-	// require_feed_workflow_ready (Rust feed_workflow.rs): healthy, a
-	// membership destination, no pending transaction.
+
 	if h.coreOf().BaseInfo().ValueKind != format.ValueKindMembership {
-		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "named-feed workflow requires a membership database"}
+		return nil, &Error{Code: format.CodeWrongValueKind, Detail: "named-feed workflow requires a membership database"}
 	}
 	if h.coreOf().HasDraft() {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
 	}
 	if len(windows) == 0 || uint64(len(windows)) > math.MaxUint32 {
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history window count is invalid"}
+		return nil, &Error{Code: format.CodeInvalidArgument, Detail: "history window count is invalid"}
 	}
 	// Source::new (Rust history_projection.rs): the immutable mode uses
 	// the public reader's inner core; the live mode binds the live
@@ -95,40 +98,40 @@ func projectHistory(h mutationHost, source HistoryProjectionSource, windows []Hi
 	switch source.Kind {
 	case HistoryProjectionSourceImmutable:
 		if source.Reader == nil {
-			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
+			return nil, &Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
 		}
 		sourceCore = source.Reader.inner
 		var err error
 		info, err = source.Reader.Info()
 		if err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 	case HistoryProjectionSourceLive:
 		if source.Live == nil {
-			return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
+			return nil, &Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
 		}
 		core, err := source.Live.lr.Core()
 		if err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 		sourceCore = core
 		info, err = source.Live.Info()
 		if err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 	default:
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
+		return nil, &Error{Code: format.CodeInvalidArgument, Detail: "history projection source is invalid"}
 	}
 	// require_compatible_source (Rust history_projection.rs): the same
 	// four checks run over the bound source regardless of its mode.
 	if info.ValueKind != ValueKindDirect {
-		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "history projection requires a direct source"}
+		return nil, &Error{Code: format.CodeWrongValueKind, Detail: "history projection requires a direct source"}
 	}
 	if semantic, ok := info.DirectSemantic(); !ok || semantic != DirectSemanticLastSeen {
-		return nil, &format.Error{Code: format.CodeWrongValueTag, Detail: "history projection requires a last_seen direct source"}
+		return nil, &Error{Code: format.CodeWrongValueTag, Detail: "history projection requires a last_seen direct source"}
 	}
 	if uint8(info.Family) != h.coreOf().BaseInfo().AddressFamily {
-		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "history projection source family differs"}
+		return nil, &Error{Code: format.CodeWrongAddressFamily, Detail: "history projection source family differs"}
 	}
 	var sourceDevice, sourceInode uint64
 	var err error
@@ -138,20 +141,20 @@ func projectHistory(h mutationHost, source HistoryProjectionSource, windows []Hi
 		sourceDevice, sourceInode, err = source.Live.FileIdentity()
 	}
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	writerDevice, writerInode, err := h.coreOf().FileIdentity()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if sourceDevice == writerDevice && sourceInode == writerInode {
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "history projection source and destination are the same file"}
+		return nil, &Error{Code: format.CodeInvalidArgument, Detail: "history projection source and destination are the same file"}
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := h.coreOf().BeginMembershipWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	internalWindows := make([]writer.HistoryWindow, len(windows))
 	for index, window := range windows {
@@ -163,7 +166,7 @@ func projectHistory(h mutationHost, source HistoryProjectionSource, windows []Hi
 	}
 	report, err := driveHistoryProjection(h, sourceCore, info, projection, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return finishHistoryProjection(h, report, cancellation)
 }
@@ -334,7 +337,7 @@ func finishHistoryProjection(h mutationHost, report *writer.HistoryProjectionRep
 	public := publicHistoryReport(report)
 	if report.LogicalChange == writer.LogicalNoChange {
 		if err := h.discardDraft(); err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 		return &FinishedHistoryProjection{w: h, report: public, cancellation: cancellation}, nil
 	}
@@ -413,16 +416,16 @@ func (h *FinishedHistoryProjection) Report() HistoryProjectionReport {
 // still own the draft.
 func (h *FinishedHistoryProjection) requireChangedActive() error {
 	if !h.changed {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection did not change"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection did not change"}
 	}
 	if h.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	if err := h.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	if h.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	return nil
 }
@@ -433,7 +436,7 @@ func (h *FinishedHistoryProjection) requireChangedActive() error {
 // the captured cancellation checked before and after the stage.
 func (h *FinishedHistoryProjection) SetMetadataJSON(input []byte) (bool, error) {
 	if err := h.requireChangedActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := h.cancellation.check(); err != nil {
 		h.spent = true
@@ -456,7 +459,7 @@ func (h *FinishedHistoryProjection) SetMetadataJSON(input []byte) (bool, error) 
 // already-absent database reports false.
 func (h *FinishedHistoryProjection) ClearMetadataJSON() (bool, error) {
 	if err := h.requireChangedActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := h.cancellation.check(); err != nil {
 		h.spent = true
@@ -484,17 +487,20 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
 		// projection (the draft was discarded by Abort, an op failure,
 		// or a cancellation).
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := h.requireChangedActive(); err != nil {
-		return CommitResult{}, err
+		return CommitResult{}, publicError(
+
+			// One authoritative commit terminal: the host's commitPrepared runs
+			// the exact commit_with sequence (changed-draft check, commit
+			// attempt, prepare with the captured cancellation, prepublication
+			// checks, and the classified outcome). On the live host this also
+			// holds the reader-table gate through publication and retains the
+			// cleanup and coordination evidence (Rust LiveWriter::commit_with).
+			err)
 	}
-	// One authoritative commit terminal: the host's commitPrepared runs
-	// the exact commit_with sequence (changed-draft check, commit
-	// attempt, prepare with the captured cancellation, prepublication
-	// checks, and the classified outcome). On the live host this also
-	// holds the reader-table gate through publication and retains the
-	// cleanup and coordination evidence (Rust LiveWriter::commit_with).
+
 	return h.w.commitPrepared(h.cancellation, func() { h.spent = true }, "history projection")
 }
 
@@ -504,17 +510,17 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 // FinishedHistoryProjection::abort parity).
 func (h *FinishedHistoryProjection) Abort() error {
 	if h.spent {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	h.spent = true
 	if !h.changed {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := h.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	if h.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "history projection is no longer active"}
 	}
 	// Rust PreparedHistoryProjection::abort -> LiveWriter::abort: the
 	// host machine terminal (pair proof and unpublished-tail trim on the

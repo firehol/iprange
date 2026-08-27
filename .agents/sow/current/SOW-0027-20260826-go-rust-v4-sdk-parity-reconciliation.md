@@ -129,6 +129,15 @@ share mode would make the Go unlink fail with a sharing violation. Go
 unlinks so Windows temp-dir controls do not accumulate per spawn;
 whether Rust should adopt the same removal semantics on Windows is a
 cross-SDK decision for the user, not silently adopted here.
+And the public identity-kind encoding (recorded 2026-08-27 in the
+milestone-3 gate round): the Go public `FileIdentity` is the portable
+kind+bytes shape matching Rust `LocalFileIdentity`, but the Go live
+surface hard-codes kind 1 where Rust emits the platform
+`IDENTITY_KIND` (2 on Windows); Go is self-consistent (decode ignores
+the kind) and the cross-language battery is linux/amd64-only, so no
+host failure exists; a Windows cross-SDK fact exchange would see kind 1
+vs Rust's 2 - recorded as an observation in the same family as the
+commit-result-terminal divergence, remedy deferred to the user.
 
 Sub-state (2026-08-26): slice 2b part 1 delivered at `532fa582`
 (clean-writer metadata read-your-writes and bounded reader-safe
@@ -520,6 +529,29 @@ shape observation recorded at 3b stays open for the gate reviewers.
 Milestone 3 gate pending the five-reviewer round at this HEAD. Plan
 steps 7-8 (matched update-ipsets release benchmark matrix; artifacts,
 docs, and full-scope acceptance) remain after the gate.
+
+Review gate round 1 for milestone 3 (2026-08-27, HEAD `58532bfc`):
+gate stayed open. Verdicts: Rust parity PASS (generators and mixed
+battery mirror generate.rs and the canonical live/commit tests
+instruction-for-instruction; one P3 identity-kind observation recorded
+above); Go idioms PASS (one P3 wording label for the IPv6 union range,
+fixed in this commit); performance PASS (delta is test/corpus/records
+only, no production hot-path surface); wire/integrity PASS (13-fixture
+corpus verified by both readers, resolve classes and snapshot
+cross-open proven in both directions; wording P3 fixed here).
+APIs/records FAIL with P1-1: the public live surface (OpenLiveWriter,
+LiveWriter facade, transactions, workflows) returned internal
+`*format.Error` / `classedError` values raw, so external consumers
+could not classify failures through the exported `Error` type - a
+direct acceptance-criterion violation; plus P3-1 (README still said
+eleven fixtures). The fix commit converts the seven live public files
+through the existing `publicError` boundary (bare-error returns and
+`&format.Error{...}` constructions become the exported `Error`), the
+abort helpers return the public error, `publicError` preserves the
+original error as `Cause` (classed wrappers keep their unwrap chain)
+and passes through already-public errors, `isPubCode` classifies both
+shapes, and `abortCauseCode` walks the public-classed-cause chain.
+Gate pending the five-reviewer round 2 at the fix HEAD.
 
 ## Requirements
 

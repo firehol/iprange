@@ -66,8 +66,16 @@ func requireAtomicExchange(t *testing.T) {
 // suite; it previously lived with the removed off-contract writer
 // tests.
 func isPubCode(err error, code ErrorCode) bool {
+	// The public live surface converts internal errors into the
+	// exported Error type; helpers may also surface the internal
+	// format.Error from module-internal call sites (lifecycleCode
+	// convention), so both are classified.
 	var fe *format.Error
-	return errors.As(err, &fe) && ErrorCode(fe.Code) == code
+	if errors.As(err, &fe) {
+		return ErrorCode(fe.Code) == code
+	}
+	var pe *Error
+	return errors.As(err, &pe) && pe.Code == code
 }
 
 // requireFileCreation skips one test that creates a database file

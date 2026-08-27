@@ -55,7 +55,7 @@ type TransactionFeedCursor struct {
 func (c *TransactionFeedCursor) Next() (FeedRef, bool, error) {
 	entry, ok, err := c.cursor.Next()
 	if err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	if !ok {
 		return FeedRef{}, false, nil
@@ -82,7 +82,7 @@ type MembershipTransaction struct {
 // in the Rust order.
 func beginAdvancedTransaction(core *writer.Core, kind uint8, detail string) ([16]byte, error) {
 	if core.BaseInfo().ValueKind != kind {
-		return [16]byte{}, &format.Error{Code: format.CodeWrongValueKind, Detail: detail}
+		return [16]byte{}, &Error{Code: format.CodeWrongValueKind, Detail: detail}
 	}
 	return core.BeginTransaction()
 }
@@ -95,17 +95,17 @@ func beginAdvancedTransaction(core *writer.Core, kind uint8, detail string) ([16
 // reference produced by the transaction.
 func (w *LiveWriter) BeginMembershipTransaction(cancellation *CancellationToken) (*MembershipTransaction, error) {
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if w.lw == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if err := w.lw.Healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	nonce, err := beginAdvancedTransaction(w.coreOf(), uint8(ValueKindMembership), "membership transaction requires a membership database")
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &MembershipTransaction{
 		w:              w,
@@ -119,14 +119,14 @@ func (w *LiveWriter) BeginMembershipTransaction(cancellation *CancellationToken)
 // index (Rust MembershipTransaction::feed_cursor).
 func (t *MembershipTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 	if err := t.requireActive(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	cursor, err := t.w.coreOf().CurrentFeedCursor()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &TransactionFeedCursor{cursor: cursor, databaseID: t.databaseID, operationNonce: t.operationNonce}, nil
 }
@@ -135,10 +135,10 @@ func (t *MembershipTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 // internal id (Rust MembershipTransaction::empty_membership).
 func (t *MembershipTransaction) EmptyMembership() (MembershipRef, error) {
 	if err := t.requireActive(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	return t.membershipReference(writer.EmptyMembershipHandle()), nil
 }
@@ -147,25 +147,25 @@ func (t *MembershipTransaction) EmptyMembership() (MembershipRef, error) {
 // MembershipTransaction::add_feed).
 func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) (MembershipRef, error) {
 	if err := t.requireCurrentMembership(membership); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	var handle writer.MembershipHandle
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		handle, err = edit.AddFeedToMembership(membership.handle, feed.entry)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return MembershipRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	return t.membershipReference(handle), nil
 }
@@ -178,25 +178,25 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 // the mutate, never inside the cell transform.
 func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef, operation MembershipOperation) (bool, error) {
 	if err := t.requireFamily(format.AddressFamilyIPv4, from <= to); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.requireCurrentMembership(membership); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	var changed bool
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -205,25 +205,25 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 // interval (Rust MembershipTransaction::apply_v6).
 func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef, operation MembershipOperation) (bool, error) {
 	if err := t.requireFamily(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.requireCurrentMembership(membership); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	var changed bool
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -232,26 +232,26 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 // MembershipTransaction::lookup_feed).
 func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error) {
 	if !format.FeedNameValidString(string(name)) {
-		return FeedRef{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, false, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireActive(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	var entry writer.FeedEntry
 	var found bool
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, found, err = edit.LookupFeed(string(name))
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return FeedRef{}, false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	if !found {
 		return FeedRef{}, false, nil
@@ -263,25 +263,25 @@ func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 // index if absent (Rust MembershipTransaction::ensure_feed).
 func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	if !format.FeedNameValidString(string(name)) {
-		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireActive(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	var entry writer.FeedEntry
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, _, err = edit.EnsureFeed(string(name))
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	return t.reference(entry), nil
 }
@@ -292,25 +292,25 @@ func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 // current.
 func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (FeedRef, error) {
 	if !format.FeedNameValidString(string(newName)) {
-		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	var entry writer.FeedEntry
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		entry, err = edit.RenameCurrentFeed(feed.entry, string(newName))
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	return t.reference(entry), nil
 }
@@ -320,14 +320,14 @@ func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 // reference produced before this call becomes stale.
 func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return err
+		return publicError(err)
 	}
 	nextEpoch := t.membershipEpoch + 1
 	if nextEpoch == 0 {
-		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
+		return &Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
 	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check)
@@ -336,7 +336,7 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 		return t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return err
+		return publicError(err)
 	}
 	t.membershipEpoch = nextEpoch
 	return nil
@@ -346,10 +346,10 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 // transaction (Rust MembershipTransaction::set_metadata_json).
 func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.coreOf().SetMetadata(input)
 	if err != nil {
@@ -357,12 +357,12 @@ func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
 		// and the 20 MiB cap before mutate; those stay raw. Errors from
 		// inside the edit abort the transaction.
 		if metadataStagePreCheck(err) {
-			return false, err
+			return false, publicError(err)
 		}
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -372,10 +372,10 @@ func (t *MembershipTransaction) SetMetadataJSON(input []byte) (bool, error) {
 // database reports false.
 func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.coreOf().ClearMetadata()
 	if err != nil {
@@ -383,12 +383,12 @@ func (t *MembershipTransaction) ClearMetadataJSON() (bool, error) {
 		// WrongState before mutate; that stays raw. Errors from inside
 		// the edit abort the transaction.
 		if metadataStagePreCheck(err) {
-			return false, err
+			return false, publicError(err)
 		}
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -402,10 +402,10 @@ func (t *MembershipTransaction) Commit() (CommitResult, error) {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
 		// transaction (the draft was discarded by an abort, an op
 		// failure, or a cancellation).
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := t.requireActive(); err != nil {
-		return CommitResult{}, err
+		return CommitResult{}, publicError(err)
 	}
 	return t.w.commitPrepared(t.cancellation, func() { t.spent = true }, "membership transaction")
 }
@@ -440,15 +440,15 @@ func (t *MembershipTransaction) membershipReference(handle writer.MembershipHand
 // healthy.
 func (t *MembershipTransaction) requireActive() error {
 	if t.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	// Rust require_transaction reports the stale transaction before the
 	// closed writer; the core nil check only guards the nonce probe.
 	if core := t.w.coreOf(); core != nil && !core.OperationIs(t.operationNonce) {
-		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	if t.w.coreOf() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	return t.w.coreOf().Healthy()
 }
@@ -458,7 +458,7 @@ func (t *MembershipTransaction) requireActive() error {
 // fired; a fired cancellation aborts the workflow through the writer.
 func (t *MembershipTransaction) checkOrAbort() error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.cancellation.check(); err != nil {
 		t.spent = true
@@ -474,7 +474,7 @@ func (t *MembershipTransaction) checkOrAbort() error {
 // additionally brand the writer unusable).
 func (t *MembershipTransaction) abortEdit(err error) error {
 	t.spent = true
-	return t.w.abortAfter(err)
+	return publicError(t.w.abortAfter(err))
 }
 
 // requireCurrentFeed mirrors Rust MembershipState::require_current_feed:
@@ -482,14 +482,14 @@ func (t *MembershipTransaction) abortEdit(err error) error {
 // currently in the draft catalog.
 func (t *MembershipTransaction) requireCurrentFeed(feed FeedRef) error {
 	if err := t.requireReference(feed); err != nil {
-		return err
+		return publicError(err)
 	}
 	current, found, err := t.w.coreOf().LookupCurrentFeed(feed.entry.Name)
 	if err != nil {
-		return err
+		return publicError(err)
 	}
 	if !found || current != feed.entry {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -499,16 +499,16 @@ func (t *MembershipTransaction) requireCurrentFeed(feed FeedRef) error {
 // must belong to this transaction and the current membership epoch.
 func (t *MembershipTransaction) requireCurrentMembership(membership MembershipRef) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if membership.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
+		return &Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if membership.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	if membership.catalogEpoch != t.membershipEpoch {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -518,13 +518,13 @@ func (t *MembershipTransaction) requireCurrentMembership(membership MembershipRe
 // operation.
 func (t *MembershipTransaction) requireReference(feed FeedRef) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if feed.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
+		return &Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if feed.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -533,13 +533,13 @@ func (t *MembershipTransaction) requireReference(feed FeedRef) error {
 // transaction, the ordered range, and the database address family.
 func (t *MembershipTransaction) requireFamily(family uint8, ordered bool) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if !ordered {
-		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+		return &Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
 	}
 	if t.w.coreOf().BaseInfo().AddressFamily != family {
-		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "membership mutation does not match the database family"}
+		return &Error{Code: format.CodeWrongAddressFamily, Detail: "membership mutation does not match the database family"}
 	}
 	return nil
 }

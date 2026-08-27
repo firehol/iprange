@@ -68,7 +68,7 @@ func (w *LiveWriter) BeginDirectReplacement(cancellation *CancellationToken) (*D
 func beginDirectReplacement(h mutationHost, cancellation *CancellationToken) (*DirectReplacement, error) {
 	state, err := beginExactDirectState(h, WorkflowDirectReplacement, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &DirectReplacement{w: h, state: state}, nil
 }
@@ -87,7 +87,7 @@ func (w *LiveWriter) BeginFirstSeenRefresh(refreshValue uint32, cancellation *Ca
 func beginFirstSeenRefresh(h mutationHost, refreshValue uint32, cancellation *CancellationToken) (*FirstSeenRefresh, error) {
 	state, err := beginTimestampState(h, DirectSemanticFirstSeen, WorkflowFirstSeenRefresh, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &FirstSeenRefresh{w: h, state: state, refreshValue: refreshValue}, nil
 }
@@ -106,7 +106,7 @@ func (w *LiveWriter) BeginLastSeenRefresh(refreshValue, cutoff uint32, cancellat
 func beginLastSeenRefresh(h mutationHost, refreshValue, cutoff uint32, cancellation *CancellationToken) (*LastSeenRefresh, error) {
 	state, err := beginTimestampState(h, DirectSemanticLastSeen, WorkflowLastSeenRefresh, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &LastSeenRefresh{w: h, state: state, refreshValue: refreshValue, cutoff: cutoff}, nil
 }
@@ -123,13 +123,13 @@ func beginTimestampState(h mutationHost, semantic DirectSemantic, workflow Workf
 	// class.
 	core := h.coreOf()
 	if core == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if core.BaseInfo().ValueKind != format.ValueKindDirect {
-		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "timestamp refresh requires a direct database"}
+		return nil, &Error{Code: format.CodeWrongValueKind, Detail: "timestamp refresh requires a direct database"}
 	}
 	if directTagSemantic(core.BaseInfo().ValueTag) != semantic {
-		return nil, &format.Error{Code: format.CodeWrongValueTag, Detail: "timestamp refresh requires its exact value tag"}
+		return nil, &Error{Code: format.CodeWrongValueTag, Detail: "timestamp refresh requires its exact value tag"}
 	}
 	return beginExactDirectState(h, workflow, cancellation)
 }
@@ -156,10 +156,10 @@ func directTagSemantic(wire [16]byte) DirectSemantic {
 // in Core.BeginRangeWorkflow through BeginTransaction).
 func requireDirectReady(h mutationHost) error {
 	if err := h.healthy(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if h.coreOf().BaseInfo().ValueKind != format.ValueKindDirect {
-		return &format.Error{Code: format.CodeWrongValueKind, Detail: "exact direct workflow requires a direct database"}
+		return &Error{Code: format.CodeWrongValueKind, Detail: "exact direct workflow requires a direct database"}
 	}
 	return nil
 }
@@ -169,17 +169,17 @@ func requireDirectReady(h mutationHost) error {
 // workflow draft, and the input state for the workflow kind.
 func beginExactDirectState(h mutationHost, workflow WorkflowKind, cancellation *CancellationToken) (*directWorkflowState, error) {
 	if err := requireDirectReady(h); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := h.coreOf().BeginRangeWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	edit, err := h.coreOf().BindEdit()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	family := h.coreOf().BaseInfo().AddressFamily
 	state := &directWorkflowState{
@@ -215,7 +215,7 @@ func (r *DirectReplacement) AddRangesV6(ranges []DirectRangeV6) error {
 // preparation (Rust DirectReplacement::finish_input).
 func (r *DirectReplacement) FinishInput() (*FinishedWorkflow, error) {
 	if err := r.state.requireReplacement(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	r.state.releaseInput()
 	return r.state.finishReplacement()
@@ -296,7 +296,7 @@ func (l *LastSeenRefresh) FinishInput() (*FinishedWorkflow, error) {
 // drain with the per-record ordering check.
 func (s *directWorkflowState) addDirectV4(ranges []DirectRangeV4) error {
 	if err := s.requireInputFamily(format.AddressFamilyIPv4); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.assignment == nil {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "direct replacement address family changed"})
@@ -343,7 +343,7 @@ func (s *directWorkflowState) addDirectV4(ranges []DirectRangeV4) error {
 // addDirectV6 mirrors Rust ExactDirectState::add_direct_v6 (IPv6).
 func (s *directWorkflowState) addDirectV6(ranges []DirectRangeV6) error {
 	if err := s.requireInputFamily(format.AddressFamilyIPv6); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.assignment == nil {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "direct replacement address family changed"})
@@ -392,7 +392,7 @@ func (s *directWorkflowState) addDirectV6(ranges []DirectRangeV6) error {
 // constant range pushes into the private tree.
 func (s *directWorkflowState) addTimestampV4(ranges []AddressRange4, value uint32) error {
 	if err := s.requireInputFamily(format.AddressFamilyIPv4); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.coverage == nil {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "timestamp workflow address family changed"})
@@ -443,7 +443,7 @@ func (s *directWorkflowState) addTimestampV4(ranges []AddressRange4, value uint3
 // addTimestampV6 mirrors Rust ExactDirectState::add_timestamp_v6 (IPv6).
 func (s *directWorkflowState) addTimestampV6(ranges []AddressRange6, value uint32) error {
 	if err := s.requireInputFamily(format.AddressFamilyIPv6); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.coverage == nil {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "timestamp workflow address family changed"})
@@ -496,7 +496,7 @@ func (s *directWorkflowState) addTimestampV6(ranges []AddressRange6, value uint3
 // workflow through the writer.
 func (s *directWorkflowState) requireInputFamily(family uint8) error {
 	if err := s.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.w.coreOf().BaseInfo().AddressFamily != family {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongAddressFamily, Detail: "range family does not match the database"})
@@ -508,10 +508,10 @@ func (s *directWorkflowState) requireInputFamily(family uint8) error {
 // an open workflow input.
 func (s *directWorkflowState) requireActive() error {
 	if err := s.w.healthy(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if !s.w.coreOf().WorkflowInputOpen() {
-		return &format.Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
+		return &Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
 	}
 	return nil
 }
@@ -520,7 +520,7 @@ func (s *directWorkflowState) requireActive() error {
 // gate: only replacement workflows finish through the replacement path.
 func (s *directWorkflowState) requireReplacement() error {
 	if err := s.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.workflow == WorkflowFirstSeenRefresh || s.workflow == WorkflowLastSeenRefresh {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "timestamp refresh requires its refresh parameters"})
@@ -553,7 +553,7 @@ func (s *directWorkflowState) finishReplacement() (*FinishedWorkflow, error) {
 // constant ranges, merge with the first-seen policy, and complete.
 func (s *directWorkflowState) finishFirstSeen(refreshValue uint32) (*FinishedWorkflow, error) {
 	if err := s.requireFirstSeen(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return s.finishTimestamp(func(edit *writer.WriterEdit) (writer.TimestampMerge, error) {
 		return edit.MergeFirstSeen(refreshValue, s.cancellation.check)
@@ -566,10 +566,10 @@ func (s *directWorkflowState) finishFirstSeen(refreshValue uint32) (*FinishedWor
 // removed interval through the sink.
 func (s *directWorkflowState) finishFirstSeenWithRemovals4(refreshValue uint32, sink writer.FirstSeenRemoval4Sink) (*FinishedWorkflow, error) {
 	if err := s.requireFirstSeen(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := s.requireInputFamily(format.AddressFamilyIPv4); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return s.finishTimestamp(func(edit *writer.WriterEdit) (writer.TimestampMerge, error) {
 		return edit.MergeFirstSeenWithRemovals4(refreshValue, sink, s.cancellation.check)
@@ -580,10 +580,10 @@ func (s *directWorkflowState) finishFirstSeenWithRemovals4(refreshValue uint32, 
 // finish_first_seen_with_removals_v6_state (IPv6).
 func (s *directWorkflowState) finishFirstSeenWithRemovals6(refreshValue uint32, sink writer.FirstSeenRemoval6Sink) (*FinishedWorkflow, error) {
 	if err := s.requireFirstSeen(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := s.requireInputFamily(format.AddressFamilyIPv6); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return s.finishTimestamp(func(edit *writer.WriterEdit) (writer.TimestampMerge, error) {
 		return edit.MergeFirstSeenWithRemovals6(refreshValue, sink, s.cancellation.check)
@@ -594,7 +594,7 @@ func (s *directWorkflowState) finishFirstSeenWithRemovals6(refreshValue uint32, 
 // ranges, merge with the last-seen policy, and complete.
 func (s *directWorkflowState) finishLastSeen(refreshValue, cutoff uint32) (*FinishedWorkflow, error) {
 	if err := s.requireActive(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if s.workflow != WorkflowLastSeenRefresh {
 		return nil, s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "workflow is not a last-seen refresh"})
@@ -607,7 +607,7 @@ func (s *directWorkflowState) finishLastSeen(refreshValue, cutoff uint32) (*Fini
 // requireFirstSeen is the Rust finish_first_seen_state precondition.
 func (s *directWorkflowState) requireFirstSeen() error {
 	if err := s.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if s.workflow != WorkflowFirstSeenRefresh {
 		return s.w.abortAfter(&format.Error{Code: format.CodeWrongState, Detail: "workflow is not a first-seen refresh"})
@@ -623,7 +623,7 @@ func (s *directWorkflowState) requireFirstSeen() error {
 func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit) (writer.TimestampMerge, error)) (*FinishedWorkflow, error) {
 	if err := s.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if s.coverage == nil {
-			return &format.Error{Code: format.CodeWrongState, Detail: "timestamp workflow has direct replacement input"}
+			return &Error{Code: format.CodeWrongState, Detail: "timestamp workflow has direct replacement input"}
 		}
 		return edit.FinishPrivateConstantRanges(s.coverage)
 	}); err != nil {
@@ -633,7 +633,7 @@ func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit
 	err := s.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merged, err = merge(edit)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return nil, s.w.abortAfter(err)
@@ -673,7 +673,7 @@ func (s *directWorkflowState) replacementReport(comparison writer.Comparison, in
 func (s *directWorkflowState) nextInputRecord() (uint64, error) {
 	next := s.inputRecords + 1
 	if next == 0 {
-		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
+		return 0, &Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
 	}
 	return next, nil
 }
@@ -685,7 +685,7 @@ func (s *directWorkflowState) nextInputRecord() (uint64, error) {
 func completeDirectWorkflow(h mutationHost, report *WorkflowReport, cancellation *CancellationToken) (*FinishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
 		if err := h.discardDraft(); err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 		return &FinishedWorkflow{w: h, report: *report, changed: false}, nil
 	}

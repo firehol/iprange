@@ -62,7 +62,7 @@ type exactFeedWorkflow struct {
 func (w *LiveWriter) BeginCreateFeed(name FeedName, cancellation *CancellationToken) (*CreateFeed, error) {
 	state, err := beginExactFeed(w, name, true, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &CreateFeed{state: state}, nil
 }
@@ -74,7 +74,7 @@ func (w *LiveWriter) BeginCreateFeed(name FeedName, cancellation *CancellationTo
 func (w *LiveWriter) BeginReplaceFeed(name FeedName, cancellation *CancellationToken) (*ReplaceFeed, error) {
 	state, err := beginExactFeed(w, name, false, cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &ReplaceFeed{state: state}, nil
 }
@@ -84,13 +84,13 @@ func (w *LiveWriter) BeginReplaceFeed(name FeedName, cancellation *CancellationT
 // pending transaction.
 func requireFeedWorkflowReady(h mutationHost) error {
 	if err := h.healthy(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if h.coreOf().BaseInfo().ValueKind != format.ValueKindMembership {
-		return &format.Error{Code: format.CodeWrongValueKind, Detail: "named-feed workflow requires a membership database"}
+		return &Error{Code: format.CodeWrongValueKind, Detail: "named-feed workflow requires a membership database"}
 	}
 	if h.coreOf().HasDraft() {
-		return &format.Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
+		return &Error{Code: format.CodeWrongState, Detail: "a writer transaction is already pending"}
 	}
 	return nil
 }
@@ -100,34 +100,34 @@ func requireFeedWorkflowReady(h mutationHost) error {
 // the membership workflow draft, and the prepared member on it.
 func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *CancellationToken) (*exactFeedWorkflow, error) {
 	if err := h.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if !format.FeedNameValidString(string(name)) {
-		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return nil, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := requireFeedWorkflowReady(h); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	existing, found, err := h.coreOf().LookupBaseFeed(string(name))
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := requireFeedPrecondition(found, create); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	emptyMapCreate := create && h.coreOf().BaseInfo().RangeRecordCount == 0
 	if err := h.coreOf().BeginMembershipWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	var member writer.MembershipHandle
 	err = h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		// setup_feed (Rust feed_workflow.rs): check, select the feed,
 		// and intern the single-member bitmap on the empty handle.
 		if err := cancellation.check(); err != nil {
-			return err
+			return publicError(err)
 		}
 		var feed writer.FeedEntry
 		if create {
@@ -139,14 +139,14 @@ func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *Ca
 			feed = existing
 		}
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		member, err = edit.AddFeedToMembership(writer.EmptyMembershipHandle(), feed)
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		if err := cancellation.check(); err != nil {
-			return err
+			return publicError(err)
 		}
 		if emptyMapCreate {
 			return edit.BeginEmptyMapFeed()
@@ -162,7 +162,7 @@ func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *Ca
 	}
 	edit, err := h.coreOf().BindEdit()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &exactFeedWorkflow{
 		w:              h,
@@ -189,9 +189,9 @@ func workflowKindFor(create bool) WorkflowKind {
 func requireFeedPrecondition(found, create bool) error {
 	switch {
 	case found && create:
-		return &format.Error{Code: format.CodeNameExists, Detail: "feed name already exists"}
+		return &Error{Code: format.CodeNameExists, Detail: "feed name already exists"}
 	case !found && !create:
-		return &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
+		return &Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
 	return nil
 }
@@ -255,7 +255,7 @@ func (f *ReplaceFeed) FinishInput() (*FinishedWorkflow, error) {
 // parity).
 func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 	if err := in.requireInputFamily(format.AddressFamilyIPv4); err != nil {
-		return err
+		return publicError(err)
 	}
 	work.SourcePass(1)
 	work.InputSourcePass(1)
@@ -312,7 +312,7 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 // as addRanges4.
 func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 	if err := in.requireInputFamily(format.AddressFamilyIPv6); err != nil {
-		return err
+		return publicError(err)
 	}
 	work.SourcePass(1)
 	work.InputSourcePass(1)
@@ -372,7 +372,7 @@ func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 func (in *exactFeedWorkflow) nextInputRecord() (uint64, error) {
 	next := in.inputRecords + 1
 	if next == 0 {
-		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
+		return 0, &Error{Code: format.CodeArithmeticOverflow, Detail: "workflow input record count"}
 	}
 	return next, nil
 }
@@ -382,10 +382,10 @@ func (in *exactFeedWorkflow) nextInputRecord() (uint64, error) {
 // workflow through the writer.
 func (in *exactFeedWorkflow) requireInputFamily(family uint8) error {
 	if err := in.w.healthy(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if !in.w.coreOf().WorkflowInputOpen() {
-		return &format.Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
+		return &Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
 	}
 	if in.w.coreOf().BaseInfo().AddressFamily != family {
 		return in.w.abortAfter(&format.Error{Code: format.CodeWrongAddressFamily, Detail: "range family does not match the database"})
@@ -425,16 +425,16 @@ func (f *FinishedWorkflow) Report() WorkflowReport {
 // still own the draft.
 func (f *FinishedWorkflow) requireChangedActive() error {
 	if !f.changed {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow did not change"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow did not change"}
 	}
 	if f.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
 	if err := f.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
 	if f.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
 	return nil
 }
@@ -445,7 +445,7 @@ func (f *FinishedWorkflow) requireChangedActive() error {
 // cancellation checked before and after the stage.
 func (f *FinishedWorkflow) SetMetadataJSON(input []byte) (bool, error) {
 	if err := f.requireChangedActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := f.cancellation.check(); err != nil {
 		f.spent = true
@@ -468,7 +468,7 @@ func (f *FinishedWorkflow) SetMetadataJSON(input []byte) (bool, error) {
 // database reports false.
 func (f *FinishedWorkflow) ClearMetadataJSON() (bool, error) {
 	if err := f.requireChangedActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := f.cancellation.check(); err != nil {
 		f.spent = true
@@ -495,10 +495,10 @@ func (f *FinishedWorkflow) Commit() (CommitResult, error) {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
 		// workflow (the draft was discarded by Abort, an op failure, or
 		// a cancellation).
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := f.requireChangedActive(); err != nil {
-		return CommitResult{}, err
+		return CommitResult{}, publicError(err)
 	}
 	return f.w.commitPrepared(f.cancellation, func() { f.spent = true }, "feed workflow")
 }
@@ -509,17 +509,17 @@ func (f *FinishedWorkflow) Commit() (CommitResult, error) {
 // FinishedWorkflow::abort parity).
 func (f *FinishedWorkflow) Abort() error {
 	if f.spent {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	f.spent = true
 	if !f.changed {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := f.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
 	if f.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed workflow is no longer active"}
 	}
 	// Rust PreparedWorkflow::abort -> LiveWriter::abort: the host
 	// machine terminal (pair proof and unpublished-tail trim on the live
@@ -541,51 +541,51 @@ func (w *LiveWriter) RenameFeed(old, new FeedName, cancellation *CancellationTok
 // workflow draft, and the prepared change handle.
 func beginRenameFeed(h mutationHost, old, new FeedName, cancellation *CancellationToken) (*PreparedFeedChange, error) {
 	if err := h.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if !format.FeedNameValidString(string(old)) || !format.FeedNameValidString(string(new)) {
-		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return nil, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	// require_existing_feed (Rust feed_lifecycle.rs): workflow ready,
 	// base lookup, missing name refused, cancellation checkpoint.
 	if err := requireFeedWorkflowReady(h); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	feed, found, err := h.coreOf().LookupBaseFeed(string(old))
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if !found {
-		return nil, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
+		return nil, &Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
 	// require_existing_feed (Rust feed_lifecycle.rs): the cancellation
 	// checkpoint runs before the new-name lookup, so a fired token
 	// classifies as Cancelled even when the new name exists.
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if _, found, err := h.coreOf().LookupBaseFeed(string(new)); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	} else if found {
-		return nil, &format.Error{Code: format.CodeNameExists, Detail: "feed name already exists"}
+		return nil, &Error{Code: format.CodeNameExists, Detail: "feed name already exists"}
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := h.coreOf().BeginMembershipWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	err = h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if err := cancellation.check(); err != nil {
-			return err
+			return publicError(err)
 		}
 		if _, err := edit.RenameCurrentFeedKnownAvailable(feed, string(new)); err != nil {
-			return err
+			return publicError(err)
 		}
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	})
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &PreparedFeedChange{w: h, cancellation: cancellation}, nil
 }
@@ -604,35 +604,35 @@ func (w *LiveWriter) DeleteFeed(name FeedName, cancellation *CancellationToken) 
 // change handle.
 func beginDeleteFeed(h mutationHost, name FeedName, cancellation *CancellationToken) (*PreparedFeedChange, error) {
 	if err := h.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if !format.FeedNameValidString(string(name)) {
-		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return nil, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := requireFeedWorkflowReady(h); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	feed, found, err := h.coreOf().LookupBaseFeed(string(name))
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if !found {
-		return nil, &format.Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
+		return nil, &Error{Code: format.CodeNameNotFound, Detail: "feed name does not exist"}
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := h.coreOf().BeginMembershipWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	err = h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if err := edit.DeleteCurrentFeedMembership(feed, cancellation.check); err != nil {
-			return err
+			return publicError(err)
 		}
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	})
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &PreparedFeedChange{w: h, cancellation: cancellation}, nil
 }
@@ -650,13 +650,13 @@ type PreparedFeedChange struct {
 // not be spent and the writer must still own the draft.
 func (p *PreparedFeedChange) requireActive() error {
 	if p.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
 	if err := p.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
 	if p.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
 	return nil
 }
@@ -665,7 +665,7 @@ func (p *PreparedFeedChange) requireActive() error {
 // change (Rust PreparedFeedChange::set_metadata_json).
 func (p *PreparedFeedChange) SetMetadataJSON(input []byte) (bool, error) {
 	if err := p.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := p.cancellation.check(); err != nil {
 		p.spent = true
@@ -687,7 +687,7 @@ func (p *PreparedFeedChange) SetMetadataJSON(input []byte) (bool, error) {
 // (Rust PreparedFeedChange::clear_metadata_json).
 func (p *PreparedFeedChange) ClearMetadataJSON() (bool, error) {
 	if err := p.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := p.cancellation.check(); err != nil {
 		p.spent = true
@@ -712,10 +712,10 @@ func (p *PreparedFeedChange) Commit() (CommitResult, error) {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
 		// prepared change (the draft was discarded by Abort, an op
 		// failure, or a cancellation).
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := p.requireActive(); err != nil {
-		return CommitResult{}, err
+		return CommitResult{}, publicError(err)
 	}
 	return p.w.commitPrepared(p.cancellation, func() { p.spent = true }, "feed change")
 }
@@ -724,14 +724,14 @@ func (p *PreparedFeedChange) Commit() (CommitResult, error) {
 // healthy (Rust PreparedFeedChange::abort).
 func (p *PreparedFeedChange) Abort() error {
 	if p.spent {
-		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	p.spent = true
 	if err := p.w.healthy(); err != nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
 	if p.w.coreOf().Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "feed change is no longer active"}
 	}
 	// Rust PreparedFeedChange::abort -> LiveWriter::abort: the host
 	// machine terminal (pair proof and unpublished-tail trim on the live
@@ -746,7 +746,7 @@ func (p *PreparedFeedChange) Abort() error {
 // terminal.
 func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 	if err := in.requireActive(); err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	if in.emptyMapCreate {
 		return in.finishEmptyMapCreate()
@@ -754,21 +754,21 @@ func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinishFeedCoverage(&in.coverage)
 	}); err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	var merged writer.FeedMerge
 	err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merged, err = edit.MergeFeed(in.member, in.create, in.cancellation.check)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinalizeMembershipWorkflow(in.cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	report := in.prepareReport(merged)
 	return completeFeedWorkflow(in.w, report, in.cancellation)
@@ -778,10 +778,10 @@ func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 // require_input_active): healthy writer with an open workflow input.
 func (in *exactFeedWorkflow) requireActive() error {
 	if err := in.w.healthy(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if !in.w.coreOf().WorkflowInputOpen() {
-		return &format.Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
+		return &Error{Code: format.CodeWrongState, Detail: "workflow input is not active"}
 	}
 	return nil
 }
@@ -796,15 +796,15 @@ func (in *exactFeedWorkflow) finishEmptyMapCreate() (finishedWorkflow, error) {
 	err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		addresses, hasOrdered, err = edit.FinishEmptyMapFeedRanges(in.member, &in.coverage)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinalizeMembershipWorkflow(in.cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	before := in.w.coreOf().BaseInfo()
 	after := in.w.coreOf().Draft().Meta()
@@ -879,14 +879,14 @@ func classifyComparison(comparison writer.Comparison) LogicalChange {
 func completeFeedWorkflow(h mutationHost, report *WorkflowReport, cancellation *CancellationToken) (finishedWorkflow, error) {
 	if report.LogicalChange == LogicalNoChange {
 		if err := h.discardDraft(); err != nil {
-			return finishedWorkflow{}, err
+			return finishedWorkflow{}, publicError(err)
 		}
 		return finishedWorkflow{report: report}, nil
 	}
 	if err := h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, err
+		return finishedWorkflow{}, publicError(err)
 	}
 	return finishedWorkflow{report: report, changed: true, cancellation: cancellation}, nil
 }
@@ -919,7 +919,7 @@ func (out finishedWorkflow) bind(h mutationHost) *FinishedWorkflow {
 func (in *exactFeedWorkflow) finishInput() (*FinishedWorkflow, error) {
 	out, err := in.finishState()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return out.bind(in.w), nil
 }
@@ -928,5 +928,5 @@ func (in *exactFeedWorkflow) finishInput() (*FinishedWorkflow, error) {
 // impossible-but-guarded disappeared-replacement branch (Rust
 // Error::Corrupt("replacement feed disappeared")).
 func corruptError(detail string) error {
-	return &format.Error{Code: format.CodeFormatInvalid, Detail: detail}
+	return &Error{Code: format.CodeFormatInvalid, Detail: detail}
 }

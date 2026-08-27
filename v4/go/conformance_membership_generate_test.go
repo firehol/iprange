@@ -111,8 +111,8 @@ func regenMembershipIPv4(t *testing.T, dir string) {
 // regenMembershipIPv6 writes membership-ipv6.iprdb into dir with the
 // exact op sequence of the Rust membership_ipv6 generator
 // (generate.rs:274): the global feed replaces the whole IPv6 space, the
-// special feed unions over 2001:db8::/64, and the 1 MiB repeated-byte
-// metadata is staged through the public transaction (Rust parity:
+// special feed unions over 2001:db8:: through 2001:db8::ffff (the first
+// 64 KiB of the /64), and the 1 MiB repeated-byte metadata is staged through the public transaction (Rust parity:
 // generate.rs fixtures carry the raw 0x78 byte run).
 func regenMembershipIPv6(t *testing.T, dir string) {
 	t.Helper()

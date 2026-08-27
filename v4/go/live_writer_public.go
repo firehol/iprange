@@ -36,7 +36,7 @@ type LiveWriter struct {
 func OpenLiveWriter(path string, budget PageBudget, cancellation *CancellationToken) (*LiveWriter, error) {
 	lw, err := live.OpenLiveWriter(path, budget.internal(), writerNamespaceCheck, cancellation.check)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &LiveWriter{lw: lw}, nil
 }
@@ -46,11 +46,11 @@ func OpenLiveWriter(path string, budget PageBudget, cancellation *CancellationTo
 // successful open the selection is always ProvenCurrent).
 func (w *LiveWriter) Info() (DatabaseInfo, error) {
 	if w.lw == nil {
-		return DatabaseInfo{}, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return DatabaseInfo{}, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	wi, err := w.lw.BaseInfo()
 	if err != nil {
-		return DatabaseInfo{}, err
+		return DatabaseInfo{}, publicError(err)
 	}
 	return DatabaseInfo{
 		Family:           AddressFamily(wi.AddressFamily),
@@ -115,11 +115,11 @@ type ReclaimResult struct {
 // blocks that reclamation (NoChange) until it closes.
 func (w *LiveWriter) Reclaim(maxTransactions, maxPages uint64, cancellation *CancellationToken) (ReclaimResult, error) {
 	if w.lw == nil {
-		return ReclaimResult{}, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return ReclaimResult{}, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	result, err := w.lw.Reclaim(maxTransactions, maxPages, cancellation.check)
 	if err != nil {
-		return ReclaimResult{}, err
+		return ReclaimResult{}, publicError(err)
 	}
 	return ReclaimResult{
 		Outcome:          ReclaimOutcome(result.Outcome),
@@ -135,7 +135,7 @@ func (w *LiveWriter) Reclaim(maxTransactions, maxPages uint64, cancellation *Can
 // base metadata. present is false for absent metadata.
 func (w *LiveWriter) MetadataJSONLen() (uint64, bool, error) {
 	if w.lw == nil {
-		return 0, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return 0, false, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	return w.lw.MetadataJSONLen()
 }
@@ -147,7 +147,7 @@ func (w *LiveWriter) MetadataJSONLen() (uint64, bool, error) {
 // read.
 func (w *LiveWriter) ReadMetadataJSON(output []byte) (int, bool, error) {
 	if w.lw == nil {
-		return 0, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return 0, false, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	return w.lw.ReadMetadataJSON(output)
 }
@@ -159,7 +159,7 @@ func (w *LiveWriter) ReadMetadataJSON(output []byte) (int, bool, error) {
 // slice with present true is the exact empty-payload state.
 func (w *LiveWriter) MetadataJSON() ([]byte, bool, error) {
 	if w.lw == nil {
-		return nil, false, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, false, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	return w.lw.MetadataJSON()
 }
@@ -178,7 +178,7 @@ func (w *LiveWriter) coreOf() *writer.Core {
 // closed state reports WrongState.
 func (w *LiveWriter) healthy() error {
 	if w.lw == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	return w.lw.Healthy()
 }
@@ -187,13 +187,15 @@ func (w *LiveWriter) healthy() error {
 // preparation (Rust LiveWriter::abort_after; the mutationHost terminal):
 // the fatal classes (Io, Format, Corrupt) make the live writer
 // unusable even when the discard succeeds.
-func (w *LiveWriter) abortAfter(cause error) error { return w.lw.AbortAfter(cause) }
+func (w *LiveWriter) abortAfter(cause error) error { return publicError(w.lw.AbortAfter(cause)) }
 
 // abortAfterSource aborts the draft after a source-driven workflow
 // failure (Rust LiveWriter::abort_after_source; the mutationHost
 // terminal): no fatal branding, and a failed discard makes the live
 // writer unusable.
-func (w *LiveWriter) abortAfterSource(cause error) error { return w.lw.AbortAfterSource(cause) }
+func (w *LiveWriter) abortAfterSource(cause error) error {
+	return publicError(w.lw.AbortAfterSource(cause))
+}
 
 // discardDraft aborts the draft under a pair proof (Rust
 // LiveWriter::discard_draft; the mutationHost no-change teardown
@@ -207,11 +209,11 @@ func (w *LiveWriter) discardDraft() error { return w.lw.DiscardDraft() }
 // writer close-only and reports the factual cause.
 func (w *LiveWriter) Abort() error {
 	if w.lw == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	result, err := w.lw.Abort()
 	if err != nil {
-		return err
+		return publicError(err)
 	}
 	if result.Outcome == live.AbortOutcomeAbortIncomplete {
 		return result.Cause
@@ -232,7 +234,7 @@ func (w *LiveWriter) commitPrepared(cancellation *CancellationToken, markSpent f
 	result, err := w.lw.Commit(cancellation.check)
 	if err != nil {
 		markSpent()
-		return CommitResult{}, err
+		return CommitResult{}, publicError(err)
 	}
 	markSpent()
 	return CommitResult{
@@ -255,13 +257,13 @@ func (w *LiveWriter) commitPrepared(cancellation *CancellationToken, markSpent f
 // and the commit.
 func (w *LiveWriter) BeginDirect(cancellation *CancellationToken) (*LiveDirectTransaction, error) {
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if w.lw == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if err := w.lw.BeginDirect(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &LiveDirectTransaction{w: w, active: true, cancellation: cancellation}, nil
 }
@@ -279,7 +281,7 @@ func (w *LiveWriter) Close() (LiveCloseResult, error) {
 	}
 	result, err := w.lw.Close()
 	if err != nil {
-		return LiveCloseResult{}, err
+		return LiveCloseResult{}, publicError(err)
 	}
 	if result.Outcome == live.CloseOutcomeClosed {
 		w.lw = nil
@@ -303,7 +305,7 @@ type LiveDirectTransaction struct {
 // writer and spends the handle.
 func (t *LiveDirectTransaction) checkOrAbort() error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.cancellation.check(); err != nil {
 		t.active = false
@@ -314,33 +316,33 @@ func (t *LiveDirectTransaction) checkOrAbort() error {
 
 func (t *LiveDirectTransaction) requireActive() error {
 	if !t.active || t.w == nil || t.w.lw == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
 	if t.w.lw.Draft() == nil {
-		return &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
 	return nil
 }
 
 func (t *LiveDirectTransaction) requireMutation(family uint8, ordered bool) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if t.w.lw.Draft().MetadataStaged() {
-		return &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+		return &Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
 	}
 	if !ordered {
-		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+		return &Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
 	}
 	info, err := t.w.lw.BaseInfo()
 	if err != nil {
-		return err
+		return publicError(err)
 	}
 	if info.ValueKind != format.ValueKindDirect {
-		return &format.Error{Code: format.CodeWrongValueKind, Detail: "direct mutation requires a direct database"}
+		return &Error{Code: format.CodeWrongValueKind, Detail: "direct mutation requires a direct database"}
 	}
 	if info.AddressFamily != family {
-		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "direct mutation does not match the database family"}
+		return &Error{Code: format.CodeWrongAddressFamily, Detail: "direct mutation does not match the database family"}
 	}
 	return nil
 }
@@ -349,10 +351,10 @@ func (t *LiveDirectTransaction) requireMutation(family uint8, ordered bool) erro
 // DirectTransaction::assign_v4).
 func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.lw.AssignV4(uint32(from), uint32(to), value)
 	if err != nil {
@@ -366,12 +368,15 @@ func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, err
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint: a token that fired during
+			// the mutation aborts the draft and reports the cancellation.
+			err)
 	}
-	// Rust run_transaction post-checkpoint: a token that fired during
-	// the mutation aborts the draft and reports the cancellation.
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -380,21 +385,24 @@ func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, err
 // DirectTransaction::assign_v6).
 func (t *LiveDirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.lw.AssignV6(from.Hi, from.Lo, to.Hi, to.Lo, value)
 	if err != nil {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint (see AssignV4).
+			err)
 	}
-	// Rust run_transaction post-checkpoint (see AssignV4).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -403,21 +411,24 @@ func (t *LiveDirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, err
 // DirectTransaction::clear_v4).
 func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv4, from <= to); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.lw.ClearV4(uint32(from), uint32(to))
 	if err != nil {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint (see AssignV4).
+			err)
 	}
-	// Rust run_transaction post-checkpoint (see AssignV4).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -426,21 +437,24 @@ func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 // DirectTransaction::clear_v6).
 func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 	if err := t.requireMutation(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.w.lw.ClearV6(from.Hi, from.Lo, to.Hi, to.Lo)
 	if err != nil {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint (see AssignV4).
+			err)
 	}
-	// Rust run_transaction post-checkpoint (see AssignV4).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -449,15 +463,18 @@ func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 // transaction (Rust DirectTransaction::set_metadata_json).
 func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction pre-checkpoint: a fired token aborts the
+			// draft before the stage refusal.
+			err)
 	}
-	// Rust run_transaction pre-checkpoint: a fired token aborts the
-	// draft before the stage refusal.
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if t.w.lw.Draft().MetadataStaged() {
-		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+		return false, &Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
 	}
 	changed, err := t.w.lw.SetMetadata(input)
 	if err != nil {
@@ -467,11 +484,14 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint (see AssignV4).
+			err)
 	}
-	// Rust run_transaction post-checkpoint (see AssignV4).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -480,25 +500,31 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 // DirectTransaction::clear_metadata_json).
 func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction pre-checkpoint (see SetMetadataJSON).
+			err)
 	}
-	// Rust run_transaction pre-checkpoint (see SetMetadataJSON).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if t.w.lw.Draft().MetadataStaged() {
-		return false, &format.Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
+		return false, &Error{Code: format.CodeWrongState, Detail: "this transaction already staged metadata"}
 	}
 	changed, err := t.w.lw.ClearMetadata()
 	if err != nil {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, err
+		return false, publicError(
+
+			// Rust run_transaction post-checkpoint (see AssignV4).
+			err)
 	}
-	// Rust run_transaction post-checkpoint (see AssignV4).
+
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -518,10 +544,10 @@ func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 // ErrorNoPendingTransaction.
 func (t *LiveDirectTransaction) Commit() (LiveCommitResult, error) {
 	if !t.active {
-		return LiveCommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return LiveCommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if t.w == nil || t.w.lw == nil {
-		return LiveCommitResult{}, &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+		return LiveCommitResult{}, &Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
 	// Rust DirectTransaction::commit -> commit_operation with the
 	// captured cancellation: the token checkpoints the attempt, the
@@ -529,7 +555,7 @@ func (t *LiveDirectTransaction) Commit() (LiveCommitResult, error) {
 	result, err := t.w.lw.Commit(t.cancellation.check)
 	t.active = false
 	if err != nil {
-		return LiveCommitResult{}, err
+		return LiveCommitResult{}, publicError(err)
 	}
 	return publicCommitResult(result), nil
 }
@@ -542,15 +568,15 @@ func (t *LiveDirectTransaction) Commit() (LiveCommitResult, error) {
 // ErrorNoPendingTransaction.
 func (t *LiveDirectTransaction) Abort() (LiveAbortResult, error) {
 	if !t.active {
-		return LiveAbortResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return LiveAbortResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if t.w == nil || t.w.lw == nil {
-		return LiveAbortResult{}, &format.Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
+		return LiveAbortResult{}, &Error{Code: format.CodeWrongState, Detail: "direct transaction is no longer active"}
 	}
 	result, err := t.w.lw.Abort()
 	t.active = false
 	if err != nil {
-		return LiveAbortResult{}, err
+		return LiveAbortResult{}, publicError(err)
 	}
 	return publicAbortResult(result), nil
 }

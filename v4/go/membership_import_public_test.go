@@ -741,11 +741,19 @@ func TestImportPreconditionsCancellationSourceFailureAndBudgetFailureAreAtomic(t
 // classedError with the public Unwrap chain, unlike the immutable
 // writer path which used to return the public abortError directly (removed with the Writer surface).
 func abortCauseCode(err error) ErrorCode {
-	cause := errors.Unwrap(err)
-	if cause == nil {
-		return 0
+	// The public Error wraps the internal classedError (outer class
+	// TransactionAborted) and the classedError unwraps once more to the
+	// original failure; pre-conversion callers received the classedError
+	// directly, so the walk tolerates both shapes.
+	first := errors.Unwrap(err)
+	second := errors.Unwrap(first)
+	if second != nil {
+		return causeCode(second)
 	}
-	return causeCode(cause)
+	if first != nil {
+		return causeCode(first)
+	}
+	return causeCode(err)
 }
 
 // corruptImportSelectedRangeRoot corrupts the range-root page of the

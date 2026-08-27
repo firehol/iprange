@@ -40,9 +40,10 @@ like the Rust generator):
   `BeginMembershipTransaction` workflow (feed-005 deleted, its index reused,
   Replace over 10.0.0.0/24 and 10.0.1.0/24 with the 10.0.1.0-127 Union),
   pinning the member-import semantics in both readers;
-- `go/membership-ipv6.iprdb`: the same whole-space global + special /64 union
-  coverage and the 1 MiB repeated-byte metadata packet as the Rust membership
-  IPv6 fixture, produced by the Go `BeginMembershipTransaction` workflow;
+- `go/membership-ipv6.iprdb`: the same whole-space global + special union over
+  `2001:db8::` through `2001:db8::ffff` (the first 64 KiB of the /64) and the
+  1 MiB repeated-byte metadata packet as the Rust membership IPv6 fixture,
+  produced by the Go `BeginMembershipTransaction` workflow;
 - `go/structured-ipv4.iprdb`: the same typed network enrichment, named threat
   feeds, arrival-order overwrites, clearing, lazy membership, and exact
   metadata as the Rust structured fixture, produced by the Go structured
@@ -78,7 +79,7 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 ## Cross-language gate
 
 Both producer sets are now committed, and each reader opens and semantically
-verifies both producer sets (Rust conformance opens all eleven files; the Go
+verifies both producer sets (Rust conformance opens all thirteen files; the Go
 conformance inventory lists each fixture file with its producer and the Go
 reader verifies both sets).
 

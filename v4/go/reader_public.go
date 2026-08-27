@@ -774,6 +774,13 @@ func publicError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// An error that already carries the public type in its chain stays
+	// as-is: reclassifying it would nest a second public wrapper around
+	// the internal classed error.
+	var already *Error
+	if errors.As(err, &already) {
+		return err
+	}
 	var ferr *format.Error
 	if errors.As(err, &ferr) {
 		// A typed-nil internal error (for example a zero-valued
@@ -782,7 +789,10 @@ func publicError(err error) error {
 		if ferr == nil {
 			return nil
 		}
-		return &Error{Code: ferr.Code, Detail: ferr.Detail}
+		// The original error stays reachable as Cause so classed
+		// wrappers (TransactionAborted around the real failure) keep
+		// their unwrap chain at the public boundary.
+		return &Error{Code: ferr.Code, Detail: ferr.Detail, Cause: err}
 	}
 	// Internal header/decode validation failures (fixedsize header errors
 	// and similar) are structural corruption at the public boundary.

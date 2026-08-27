@@ -85,23 +85,23 @@ type membershipImportStats struct {
 // before any draft.
 func (w *LiveWriter) BeginMembershipImport(source MembershipImportSource, cancellation *CancellationToken) (*MembershipImport, error) {
 	if w.lw == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if err := requireFeedWorkflowReady(w); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	src, err := resolveMembershipImportSource(source)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := requireCompatibleImportSource(w, &src); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := w.coreOf().BeginMembershipWorkflow(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &MembershipImport{w: w, source: src, cancellation: cancellation}, nil
 }
@@ -116,20 +116,20 @@ func resolveMembershipImportSource(source MembershipImportSource) (membershipImp
 	switch {
 	case source.immutable != nil:
 		if err := source.immutable.checkOpen(); err != nil {
-			return membershipImportSource{}, err
+			return membershipImportSource{}, publicError(err)
 		}
 		core = source.immutable.inner
 	case source.live != nil:
 		if err := source.live.checkOpen(); err != nil {
-			return membershipImportSource{}, err
+			return membershipImportSource{}, publicError(err)
 		}
 		core = source.live.core()
 	default:
-		return membershipImportSource{}, &format.Error{Code: format.CodeInvalidArgument, Detail: "membership import source is empty"}
+		return membershipImportSource{}, &Error{Code: format.CodeInvalidArgument, Detail: "membership import source is empty"}
 	}
 	device, inode, err := core.FileIdentity()
 	if err != nil {
-		return membershipImportSource{}, err
+		return membershipImportSource{}, publicError(err)
 	}
 	return membershipImportSource{
 		core:                 core,
@@ -145,16 +145,16 @@ func resolveMembershipImportSource(source MembershipImportSource) (membershipImp
 // a different local file.
 func requireCompatibleImportSource(w *LiveWriter, source *membershipImportSource) error {
 	if source.meta.ValueKind != format.ValueKindMembership {
-		return &format.Error{Code: format.CodeWrongValueKind, Detail: "membership import requires a membership source"}
+		return &Error{Code: format.CodeWrongValueKind, Detail: "membership import requires a membership source"}
 	}
 	if source.meta.AddressFamily != w.coreOf().BaseInfo().AddressFamily {
-		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "membership import source family differs"}
+		return &Error{Code: format.CodeWrongAddressFamily, Detail: "membership import source family differs"}
 	}
 	if source.meta.ValueTag != w.coreOf().BaseInfo().ValueTag {
-		return &format.Error{Code: format.CodeWrongValueTag, Detail: "membership import source value tag differs"}
+		return &Error{Code: format.CodeWrongValueTag, Detail: "membership import source value tag differs"}
 	}
 	if source.identity == w.lw.MainIdentity() {
-		return &format.Error{Code: format.CodeInvalidArgument, Detail: "membership import source and destination are the same file"}
+		return &Error{Code: format.CodeInvalidArgument, Detail: "membership import source and destination are the same file"}
 	}
 	return nil
 }
@@ -167,14 +167,14 @@ func requireCompatibleImportSource(w *LiveWriter, source *membershipImportSource
 func (i *MembershipImport) FinishInput() (*FinishedWorkflow, error) {
 	w := i.w
 	if !w.coreOf().WorkflowInputOpen() {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "membership import is not active"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "membership import is not active"}
 	}
 	if err := w.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	stats, err := importAllMembership(w, i.source, i.cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinalizeMembershipWorkflow(i.cancellation.check)
@@ -183,11 +183,11 @@ func (i *MembershipImport) FinishInput() (*FinishedWorkflow, error) {
 	}
 	report, err := prepareMembershipImportReport(w, stats, i.cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	out, err := completeFeedWorkflow(w, report, i.cancellation)
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return out.bind(w), nil
 }
@@ -199,20 +199,20 @@ func importAllMembership(w *LiveWriter, source membershipImportSource, cancellat
 	cache := writer.NewImportCache()
 	stats := &membershipImportStats{}
 	if err := importCatalogMembership(w, source, cache, stats, cancellation); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	switch source.meta.AddressFamily {
 	case format.AddressFamilyIPv4:
 		if err := importRangesMembership4(w, source, cache, stats, cancellation); err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 	case format.AddressFamilyIPv6:
 		if err := importRangesMembership6(w, source, cache, stats, cancellation); err != nil {
-			return nil, err
+			return nil, publicError(err)
 		}
 	}
 	if err := verifyImportSourceCounts(w, source, cache, stats); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	stats.sourceMemberships = cache.SourceCount()
 	stats.translatedMemberships = cache.TranslatedCount()
@@ -245,10 +245,10 @@ func importCatalogMembership(w *LiveWriter, source membershipImportSource, cache
 		}
 		created, err := importFeedMembership(w, source, cache, feed)
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		if err := recordImportFeed(w, stats, created); err != nil {
-			return err
+			return publicError(err)
 		}
 	}
 }
@@ -257,13 +257,13 @@ func importCatalogMembership(w *LiveWriter, source membershipImportSource, cache
 // source-to-destination index mapping (Rust import_feed).
 func importFeedMembership(w *LiveWriter, source membershipImportSource, cache *writer.ImportCache, feed reader.FeedEntry) (bool, error) {
 	if err := requireSourceFeedMembership(w, source, feed); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	var created bool
 	err := w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		destination, isNew, err := edit.EnsureFeed(string(feed.Name))
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		created = isNew
 		return edit.MapImportFeed(cache, writer.FeedEntry{Name: string(feed.Name), Index: feed.FeedIndex}, destination)
@@ -324,7 +324,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merge, err = edit.BeginImportMerge(cancellation.check)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return w.abortAfter(err)
@@ -343,7 +343,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 				var err error
 				comparison, err = edit.FinishImportMerge(merge, cancellation.check)
-				return err
+				return publicError(err)
 			})
 			if err != nil {
 				return w.abortAfter(err)
@@ -352,11 +352,11 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			return nil
 		}
 		if err := requireCanonicalImportRange4(w, previous, record); err != nil {
-			return err
+			return publicError(err)
 		}
 		id, words, err := translateImportMembership(w, source, cache, record.Membership, cancellation)
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 			return edit.PushImportRange(merge, tree.Key{Hi: uint64(record.From)}, tree.Key{Hi: uint64(record.To)}, id, words, cancellation.check)
@@ -369,7 +369,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "IPv4 interval cardinality"})
 		}
 		if err := recordImportInputRange(w, stats, cardinality); err != nil {
-			return err
+			return publicError(err)
 		}
 		work.RangeConsumed(1)
 		previous = &record
@@ -387,7 +387,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merge, err = edit.BeginImportMerge(cancellation.check)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return w.abortAfter(err)
@@ -406,7 +406,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 				var err error
 				comparison, err = edit.FinishImportMerge(merge, cancellation.check)
-				return err
+				return publicError(err)
 			})
 			if err != nil {
 				return w.abortAfter(err)
@@ -415,11 +415,11 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			return nil
 		}
 		if err := requireCanonicalImportRange6(w, previous, record); err != nil {
-			return err
+			return publicError(err)
 		}
 		id, words, err := translateImportMembership(w, source, cache, record.Membership, cancellation)
 		if err != nil {
-			return err
+			return publicError(err)
 		}
 		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 			return edit.PushImportRange(merge, tree.Key{Hi: record.FromHi, Lo: record.FromLo}, tree.Key{Hi: record.ToHi, Lo: record.ToLo}, id, words, cancellation.check)
@@ -432,7 +432,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(&format.Error{Code: format.CodeArithmeticOverflow, Detail: "IPv6 interval cardinality"})
 		}
 		if err := recordImportInputRange(w, stats, cardinality); err != nil {
-			return err
+			return publicError(err)
 		}
 		work.RangeConsumed(1)
 		previous = &record
@@ -454,7 +454,7 @@ func translateImportMembership(w *LiveWriter, source membershipImportSource, cac
 	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		id, words, present, err = edit.CachedImportMembership(cache, sourceMembership)
-		return err
+		return publicError(err)
 	})
 	if err != nil {
 		return 0, 0, w.abortAfter(err)
@@ -486,7 +486,7 @@ func translateImportMembership(w *LiveWriter, source membershipImportSource, cac
 		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 			var err error
 			missing, err = edit.MapImportWordBatch(cache, wordsSet, start, buffer[:expected], cancellation.check)
-			return err
+			return publicError(err)
 		})
 		if err != nil {
 			return 0, 0, w.abortAfter(err)
@@ -507,7 +507,7 @@ func translateImportMembership(w *LiveWriter, source membershipImportSource, cac
 	if err := w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		id, words, err = edit.FinishImportMembership(cache, sourceMembership, wordsSet, cancellation.check)
-		return err
+		return publicError(err)
 	}); err != nil {
 		return 0, 0, w.abortAfter(err)
 	}
@@ -632,7 +632,7 @@ func importNext6(hi, lo uint64) (uint64, uint64, bool) {
 
 func importCheckedIncrement(value uint64, label string) (uint64, error) {
 	if value == ^uint64(0) {
-		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: label}
+		return 0, &Error{Code: format.CodeArithmeticOverflow, Detail: label}
 	}
 	return value + 1, nil
 }
@@ -640,7 +640,7 @@ func importCheckedIncrement(value uint64, label string) (uint64, error) {
 func importCheckedAdd(left, right uint64, label string) (uint64, error) {
 	sum := left + right
 	if sum < left {
-		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: label}
+		return 0, &Error{Code: format.CodeArithmeticOverflow, Detail: label}
 	}
 	return sum, nil
 }
@@ -648,7 +648,7 @@ func importCheckedAdd(left, right uint64, label string) (uint64, error) {
 func importCheckedAdd32(left, right uint32, label string) (uint32, error) {
 	sum := uint64(left) + uint64(right)
 	if sum > uint64(^uint32(0)) {
-		return 0, &format.Error{Code: format.CodeArithmeticOverflow, Detail: label}
+		return 0, &Error{Code: format.CodeArithmeticOverflow, Detail: label}
 	}
 	return uint32(sum), nil
 }

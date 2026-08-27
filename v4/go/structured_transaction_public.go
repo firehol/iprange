@@ -69,27 +69,27 @@ func (w *LiveWriter) BeginStructuredTransaction(cancellation *CancellationToken)
 // locator.
 func beginStructuredTransaction(h mutationHost, cancellation *CancellationToken) (*StructuredTransaction, error) {
 	if h.coreOf() == nil {
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: "writer is closed"}
+		return nil, &Error{Code: format.CodeWrongState, Detail: "writer is closed"}
 	}
 	if h.coreOf().BaseInfo().StructureKind != format.StructureKindNetworkEnrichmentV1 {
-		return nil, &format.Error{Code: format.CodeWrongStructureKind, Detail: "no typed transaction exists for this structure kind"}
+		return nil, &Error{Code: format.CodeWrongStructureKind, Detail: "no typed transaction exists for this structure kind"}
 	}
 	if err := cancellation.check(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := h.healthy(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if h.coreOf().BaseInfo().ValueKind != format.ValueKindStructured {
-		return nil, &format.Error{Code: format.CodeWrongValueKind, Detail: "structured transaction requires a structured database"}
+		return nil, &Error{Code: format.CodeWrongValueKind, Detail: "structured transaction requires a structured database"}
 	}
 	nonce, err := h.coreOf().BeginTransaction()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	edit, err := h.coreOf().BindEdit()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &StructuredTransaction{
 		w:              h,
@@ -106,14 +106,14 @@ func beginStructuredTransaction(h mutationHost, cancellation *CancellationToken)
 // index (Rust StructuredTransaction::feed_cursor).
 func (t *StructuredTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 	if err := t.requireActive(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	cursor, err := t.w.coreOf().CurrentFeedCursor()
 	if err != nil {
-		return nil, err
+		return nil, publicError(err)
 	}
 	return &TransactionFeedCursor{cursor: cursor, databaseID: t.databaseID, operationNonce: t.operationNonce}, nil
 }
@@ -122,20 +122,20 @@ func (t *StructuredTransaction) FeedCursor() (*TransactionFeedCursor, error) {
 // StructuredTransaction::lookup_feed).
 func (t *StructuredTransaction) LookupFeed(name FeedName) (FeedRef, bool, error) {
 	if !format.FeedNameValidString(string(name)) {
-		return FeedRef{}, false, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, false, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireActive(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	entry, found, err := t.edit.LookupFeed(string(name))
 	if err != nil {
 		return FeedRef{}, false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, false, err
+		return FeedRef{}, false, publicError(err)
 	}
 	if !found {
 		return FeedRef{}, false, nil
@@ -147,20 +147,20 @@ func (t *StructuredTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 // index if absent (Rust StructuredTransaction::ensure_feed).
 func (t *StructuredTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	if !format.FeedNameValidString(string(name)) {
-		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireActive(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	entry, _, err := t.edit.EnsureFeed(string(name))
 	if err != nil {
 		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	return t.reference(entry), nil
 }
@@ -169,20 +169,20 @@ func (t *StructuredTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 // membership (Rust StructuredTransaction::rename_feed).
 func (t *StructuredTransaction) RenameFeed(feed FeedRef, newName FeedName) (FeedRef, error) {
 	if !format.FeedNameValidString(string(newName)) {
-		return FeedRef{}, &format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
+		return FeedRef{}, &Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"}
 	}
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	entry, err := t.edit.RenameCurrentFeed(feed.entry, string(newName))
 	if err != nil {
 		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return FeedRef{}, err
+		return FeedRef{}, publicError(err)
 	}
 	return t.reference(entry), nil
 }
@@ -192,20 +192,20 @@ func (t *StructuredTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 // and structure reference produced before this call becomes stale.
 func (t *StructuredTransaction) DeleteFeed(feed FeedRef) error {
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.edit.DeleteCurrentStructuredFeed(feed.entry, t.cancellation.check); err != nil {
 		return t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return err
+		return publicError(err)
 	}
 	nextEpoch := t.membershipEpoch + 1
 	if nextEpoch == 0 {
-		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
+		return &Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
 	t.membershipEpoch = nextEpoch
 	return nil
@@ -215,10 +215,10 @@ func (t *StructuredTransaction) DeleteFeed(feed FeedRef) error {
 // allocating an internal id (Rust StructuredTransaction::empty_membership).
 func (t *StructuredTransaction) EmptyMembership() (MembershipRef, error) {
 	if err := t.requireActive(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	return t.membershipReference(writer.EmptyMembershipHandle()), nil
 }
@@ -227,20 +227,20 @@ func (t *StructuredTransaction) EmptyMembership() (MembershipRef, error) {
 // StructuredTransaction::add_feed).
 func (t *StructuredTransaction) AddFeed(membership MembershipRef, feed FeedRef) (MembershipRef, error) {
 	if err := t.requireCurrentMembership(membership); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.requireCurrentFeed(feed); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	handle, err := t.edit.AddFeedToMembership(membership.handle, feed.entry)
 	if err != nil {
 		return MembershipRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return MembershipRef{}, err
+		return MembershipRef{}, publicError(err)
 	}
 	return t.membershipReference(handle), nil
 }
@@ -251,18 +251,21 @@ func (t *StructuredTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 // payloads deduplicate to the same reference.
 func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmentV1, membership MembershipRef) (StructureRef, error) {
 	if err := t.requireActive(); err != nil {
-		return StructureRef{}, err
+		return StructureRef{}, publicError(
+
+			// Rust: Some(membership) validates the reference and supplies its
+			// handle; None interns with the empty handle. The Go zero
+			// MembershipRef is the None case. Every other value is a reference
+			// some transaction produced (including EmptyMembership, whose handle
+			// is zero but whose database id and nonce are pinned) and validates
+			// exactly like Rust's Some, so a stale or foreign reference is
+			// refused even when it carries the empty handle.
+			err)
 	}
-	// Rust: Some(membership) validates the reference and supplies its
-	// handle; None interns with the empty handle. The Go zero
-	// MembershipRef is the None case. Every other value is a reference
-	// some transaction produced (including EmptyMembership, whose handle
-	// is zero but whose database id and nonce are pinned) and validates
-	// exactly like Rust's Some, so a stale or foreign reference is
-	// refused even when it carries the empty handle.
+
 	if membership != (MembershipRef{}) {
 		if err := t.requireCurrentMembership(membership); err != nil {
-			return StructureRef{}, err
+			return StructureRef{}, publicError(err)
 		}
 	}
 	structure, err := t.edit.InternNetworkEnrichmentV1(value.internal(), membership.handle)
@@ -270,7 +273,7 @@ func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmen
 		return StructureRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return StructureRef{}, err
+		return StructureRef{}, publicError(err)
 	}
 	return t.structureReference(structure), nil
 }
@@ -280,17 +283,17 @@ func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmen
 // structure reference current, and the database family must match.
 func (t *StructuredTransaction) AssignV4(from, to IPv4, structure StructureRef) (bool, error) {
 	if err := t.requireStructureFamily(format.AddressFamilyIPv4, from <= to); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.requireCurrentStructure(structure); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.edit.AssignStructureInputV4(uint32(from), uint32(to), structure.handle, &t.inputV4)
 	if err != nil {
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -299,17 +302,17 @@ func (t *StructuredTransaction) AssignV4(from, to IPv4, structure StructureRef) 
 // StructuredTransaction::assign_v6).
 func (t *StructuredTransaction) AssignV6(from, to IPv6, structure StructureRef) (bool, error) {
 	if err := t.requireStructureFamily(format.AddressFamilyIPv6, from.Hi < to.Hi || (from.Hi == to.Hi && from.Lo <= to.Lo)); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.requireCurrentStructure(structure); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.edit.AssignStructureInputV6(from.Hi, from.Lo, to.Hi, to.Lo, structure.handle, &t.inputV6)
 	if err != nil {
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -332,10 +335,10 @@ func (t *StructuredTransaction) ClearV6(from, to IPv6) (bool, error) {
 // transaction (Rust StructuredTransaction::set_metadata_json).
 func (t *StructuredTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.edit.SetMetadata(input)
 	if err != nil {
@@ -343,12 +346,12 @@ func (t *StructuredTransaction) SetMetadataJSON(input []byte) (bool, error) {
 		// and the 20 MiB cap before mutate; those stay raw. Errors from
 		// inside the edit abort the transaction.
 		if metadataStagePreCheck(err) {
-			return false, err
+			return false, publicError(err)
 		}
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -358,10 +361,10 @@ func (t *StructuredTransaction) SetMetadataJSON(input []byte) (bool, error) {
 // database reports false.
 func (t *StructuredTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	changed, err := t.edit.ClearMetadata()
 	if err != nil {
@@ -369,12 +372,12 @@ func (t *StructuredTransaction) ClearMetadataJSON() (bool, error) {
 		// WrongState before mutate; that stays raw. Errors from inside
 		// the edit abort the transaction.
 		if metadataStagePreCheck(err) {
-			return false, err
+			return false, publicError(err)
 		}
 		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
-		return false, err
+		return false, publicError(err)
 	}
 	return changed, nil
 }
@@ -388,10 +391,10 @@ func (t *StructuredTransaction) Commit() (CommitResult, error) {
 		// Rust commit_attempt reports NoPendingTransaction for a spent
 		// transaction (the draft was discarded by an abort, an op
 		// failure, or a cancellation).
-		return CommitResult{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
+		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := t.requireActive(); err != nil {
-		return CommitResult{}, err
+		return CommitResult{}, publicError(err)
 	}
 	return t.w.commitPrepared(t.cancellation, func() { t.spent = true }, "structured transaction")
 }
@@ -439,12 +442,12 @@ func (t *StructuredTransaction) structureReference(handle writer.StructureHandle
 // therefore reports the membership wording (Rust exact).
 func (t *StructuredTransaction) requireActive() error {
 	if t.spent {
-		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	// Rust require_transaction reports the stale transaction before the
 	// closed writer; the host probe only guards the nonce check.
 	if t.w.coreOf() != nil && !t.w.coreOf().OperationIs(t.operationNonce) {
-		return &format.Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
+		return &Error{Code: format.CodeWrongState, Detail: "membership transaction is no longer active"}
 	}
 	return t.w.healthy()
 }
@@ -454,7 +457,7 @@ func (t *StructuredTransaction) requireActive() error {
 // fired; a fired cancellation aborts the workflow through the writer.
 func (t *StructuredTransaction) checkOrAbort() error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if err := t.cancellation.check(); err != nil {
 		t.spent = true
@@ -491,14 +494,14 @@ func (t *StructuredTransaction) abortEdit(err error) error {
 // requireCurrentFeed mirrors Rust MembershipState::require_current_feed.
 func (t *StructuredTransaction) requireCurrentFeed(feed FeedRef) error {
 	if err := t.requireReference(feed); err != nil {
-		return err
+		return publicError(err)
 	}
 	current, found, err := t.w.coreOf().LookupCurrentFeed(feed.entry.Name)
 	if err != nil {
-		return err
+		return publicError(err)
 	}
 	if !found || current != feed.entry {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -507,16 +510,16 @@ func (t *StructuredTransaction) requireCurrentFeed(feed FeedRef) error {
 // MembershipState::require_current_membership.
 func (t *StructuredTransaction) requireCurrentMembership(membership MembershipRef) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if membership.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
+		return &Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if membership.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	if membership.catalogEpoch != t.membershipEpoch {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -526,16 +529,16 @@ func (t *StructuredTransaction) requireCurrentMembership(membership MembershipRe
 // must belong to this transaction and the current reference epoch.
 func (t *StructuredTransaction) requireCurrentStructure(structure StructureRef) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if structure.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
+		return &Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if structure.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	if structure.catalogEpoch != t.membershipEpoch {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -545,13 +548,13 @@ func (t *StructuredTransaction) requireCurrentStructure(structure StructureRef) 
 // operation.
 func (t *StructuredTransaction) requireReference(feed FeedRef) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if feed.databaseID != t.databaseID {
-		return &format.Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
+		return &Error{Code: format.CodeForeignReference, Detail: "operation reference belongs to another transaction"}
 	}
 	if feed.operationNonce != t.operationNonce {
-		return &format.Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
+		return &Error{Code: format.CodeStaleReference, Detail: "operation reference is stale"}
 	}
 	return nil
 }
@@ -561,13 +564,13 @@ func (t *StructuredTransaction) requireReference(feed FeedRef) error {
 // ordered range, and the database address family.
 func (t *StructuredTransaction) requireStructureFamily(family uint8, ordered bool) error {
 	if err := t.requireActive(); err != nil {
-		return err
+		return publicError(err)
 	}
 	if !ordered {
-		return &format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
+		return &Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"}
 	}
 	if t.w.coreOf().BaseInfo().AddressFamily != family {
-		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "structured mutation does not match the database family"}
+		return &Error{Code: format.CodeWrongAddressFamily, Detail: "structured mutation does not match the database family"}
 	}
 	return nil
 }
