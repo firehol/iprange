@@ -731,6 +731,21 @@ Open decisions:
    wait; no signed-format work builds on a false SDK premise. Options B and C
    recorded but not selected.
 
+2. **Worker port scope — RESOLVED (2026-08-27, user decision 1-Option 1).**
+   Full worker port to every supported OS/architecture: linux amd64+arm64,
+   darwin amd64+arm64, freebsd amd64+arm64, windows amd64+arm64. New
+   assembly is approved for the POSIX SIGBUS containment machines (the
+   SOW stop condition is satisfied by this decision); the Windows arm uses
+   the pure-Go vectored exception handler path (kernel32
+   AddVectoredExceptionHandler through LazyDLL, no assembly).
+
+3. **Native validation hosts — RESOLVED (2026-08-27, user decision 2).**
+   Authorized: `costa-win11` (Windows housekeeping public surface + GC
+   machine + worker in-page-exception containment), `plakam4mini` (darwin
+   creator-only arm + live suites + worker SIGBUS containment),
+   `freebsd` (immutable/offline reads + publication + worker SIGBUS
+   containment). Native rounds run only over pushed commits.
+
 Resolved decisions:
 
 - The user requested a new SOW rather than modifying SOW-0025. SOW-0027 is the
