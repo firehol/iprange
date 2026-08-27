@@ -471,6 +471,37 @@ step 6) started after slice 2d's gate closed. Slice plan:
   carries stale producer-path wording; the Go fixture publisher has
   been SnapshotTo-based since slice 2a).
 
+Sub-state (2026-08-27): milestone 3 slice 3b (mixed live cooperation)
+delivered in this commit, working tree green both directions. Child
+entries and parents follow the same-language subprocess pattern: the Go
+parent builds the Rust `mixed_live` test binary with incremental
+`cargo test --no-run` and spawns `mixed_live_rust_child`; the Rust
+parent builds the Go test binary with incremental `go test -c` and
+spawns `TestMixedLiveGoChild` (cwd set to the Go module root because
+the Go TestMain harness resolves the module from the working
+directory). Each direction covers: generation read-back incl. the
+generation-2 residue (publication inspection + sidecar replacement
+across two commits), writer exclusion while the other language holds
+the writer (Rust `Error::WriterBusy` / Go `ErrorWriterBusy`), and
+pinned-read reclamation (the holding side's `Reclaim` returns NoChange
+while the foreign-language reader is pinned and reclaims after its
+release - stale-slot release and oldest-reader safety across
+languages). The protocol is stdin-held for the pinned reader with a
+READY line, 90 s deadline, unique temp paths, and full cleanup; the
+battery is env-gated (`IPRANGE_V4_MIXED_LIVE=1`, linux/amd64-only,
+both toolchains, documented in the conformance README) so plain suites
+stay green and fast without the other toolchain. Plain Go (incl.
+v4work) and Rust suites stay green at this state.
+
+Observation recorded for the gate (APIs/records scope): the public live
+open surface returns internal `*format.Error` values directly (e.g.
+`OpenLiveWriter`), which external consumers cannot name or classify
+through the exported `Error` type; the test convention `isPubCode`
+works by matching the internal type from inside the module. Whether
+the public surface must wrap live-opening failures into the exported
+`Error` is deferred to the gate reviewers (acceptance criterion: public
+failures must be accessible as the exported error type).
+
 ## Requirements
 
 ### Purpose

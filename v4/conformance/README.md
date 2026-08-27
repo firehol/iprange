@@ -95,6 +95,21 @@ reader verifies both sets).
   The full manifest verdicts (every range, metadata state, cardinality, and
   invalid mutation) are proven in-process by the Go and Rust conformance
   suites.
+- Mixed live cooperation runs the same live database across languages in
+  both directions (registration/release, writer exclusion, reclamation
+  waiting for pinned readers, stale-slot release, sidecar replacement
+  across generations, transition/reservation states, and publication
+  inspection). The children are explicit entry points of the other
+  language's test binary, built at test time; the battery is env-gated
+  and linux/amd64-only so plain suites stay fast:
+  ```bash
+  IPRANGE_V4_MIXED_LIVE=1 nice go -C v4/go test . -run TestMixedLiveRustChild -v
+  IPRANGE_V4_MIXED_LIVE=1 nice cargo test --manifest-path v4/rust/Cargo.toml --test mixed_live -- --nocapture
+  ```
+  Both commands need both toolchains; each skips with a message when the
+  other toolchain is missing. The Go parent builds the Rust test binary
+  with `cargo test --no-run` (incremental), the Rust parent builds the
+  Go test binary with `go test -c` (incremental).
 - Malformed transformations must produce equivalent public errors (the
   invalid-cases checks in both conformance suites cover this).
 - Byte-identical files are not required. Page placement, mutable tree shape,
