@@ -20,6 +20,7 @@ package main
 
 import (
 	"os"
+	"runtime/pprof"
 
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
@@ -47,6 +48,24 @@ func workerBuildID() string {
 }
 
 func main() {
+	// IPRANGE_CPU_PROFILE writes one pprof CPU profile of the worker
+	// process (bench/test tooling for the performance-delta work; the
+	// worker runs one wire mode per process, so one process is one
+	// operation).
+	if profile := os.Getenv("IPRANGE_CPU_PROFILE"); profile != "" {
+		file, err := os.Create(profile)
+		if err != nil {
+			os.Exit(exitUsage)
+		}
+		if err := pprof.StartCPUProfile(file); err != nil {
+			_ = file.Close()
+			os.Exit(exitUsage)
+		}
+		code := run(os.Args[1:])
+		pprof.StopCPUProfile()
+		_ = file.Close()
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:]))
 }
 

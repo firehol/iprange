@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,27 @@ func runCase(arguments []string) error {
 	aux, err := strconv.Atoi(arguments[3])
 	if err != nil {
 		return fmt.Errorf("invalid auxiliary value %q", arguments[3])
+	}
+	// IPRANGE_CPU_PROFILE writes one pprof CPU profile of the measured
+	// scenario for the performance-delta work (bench-only tooling; the
+	// profile runs while the case child performs its own work).
+	if profile := os.Getenv("IPRANGE_CPU_PROFILE"); profile != "" {
+		file, err := os.Create(profile)
+		if err != nil {
+			return err
+		}
+		if err := pprof.StartCPUProfile(file); err != nil {
+			_ = file.Close()
+			return err
+		}
+		result, err := dispatchScenario(arguments[1], size, aux)
+		pprof.StopCPUProfile()
+		_ = file.Close()
+		if err != nil {
+			return err
+		}
+		fmt.Println(result.csvLine())
+		return nil
 	}
 	result, err := dispatchScenario(arguments[1], size, aux)
 	if err != nil {
