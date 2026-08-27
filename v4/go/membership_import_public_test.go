@@ -324,6 +324,142 @@ func TestLiveImportUnionsNamesPreservesDestinationAndReportsExactly(t *testing.T
 	}
 }
 
+// TestLiveImportPreservesWideMembershipBitmap proves the name-based
+// import translates every set bit of a source membership word (Rust
+// ImportCache::map_source_word): the source unions four feeds - three
+// or more set bits in one 64-bit word - and the imported destination
+// must contain all four at every imported address. The old Go bit walk
+// shifted the word while re-counting the bit position from zero, so
+// bits at positions 2 and above collapsed onto the second-lowest bit
+// and the imported membership silently lost feeds.
+func TestLiveImportPreservesWideMembershipBitmap(t *testing.T) {
+	requireLiveCreation(t)
+	requirePublicationSecurity(t)
+	sourcePath := importMembershipPair(t, "wide-source")
+	destinationPath := importMembershipPair(t, "wide-destination")
+
+	sourceWriter, err := OpenLiveWriter(sourcePath, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		transaction, err := sourceWriter.BeginMembershipTransaction(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := []string{"alpha", "beta", "gamma", "delta"}
+		var memberships []MembershipRef
+		empty, err := transaction.EmptyMembership()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			feed, err := transaction.EnsureFeed(feedName(t, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			member, err := transaction.AddFeed(empty, feed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			memberships = append(memberships, member)
+		}
+		// Bit 0..3 of word zero are all set on the whole range.
+		for _, member := range memberships {
+			if _, err := transaction.ApplyV4(IPv4(0), IPv4(9), member, MembershipUnion); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := transaction.Commit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != CommitCommitted {
+			t.Fatalf("source commit status = %v, want Committed", result.Status)
+		}
+	}
+	if _, err := sourceWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	writer, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := OpenLiveReader(sourcePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importHandle, err := writer.BeginMembershipImport(MembershipImportSourceLive(source), NewCancellationToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := importHandle.FinishInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	importChanged(t, finished, nil)
+	if _, err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenLiveReader(destinationPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := reader.Pin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha, _, err := reader.LookupFeed("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, _, err := reader.LookupFeed("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gamma, _, err := reader.LookupFeed("gamma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, _, err := reader.LookupFeed("delta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []uint32{0, 4, 9} {
+		view, found, err := pin.LookupMembershipV4(IPv4(address))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatalf("address %d has no membership after the import", address)
+		}
+		want := []struct {
+			name  string
+			index uint32
+		}{{"alpha", alpha.Index}, {"beta", beta.Index}, {"gamma", gamma.Index}, {"delta", delta.Index}}
+		for _, feed := range want {
+			has, err := view.ContainsIndex(feed.index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !has {
+				t.Fatalf("address %d lost feed %s after the import", address, feed.name)
+			}
+		}
+	}
+	if err := pin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestImmutableEqualImportIsACleanNoChange ports the Rust
 // immutable_equal_import_is_a_clean_no_change test: importing the exact
 // copy of the destination through the immutable source variant is a

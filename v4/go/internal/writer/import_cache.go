@@ -10,6 +10,8 @@
 package writer
 
 import (
+	"math/bits"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
@@ -226,16 +228,12 @@ func (c *ImportCache) mapWordBatch(store *DraftStore, words *ImportWords, start 
 // ImportCache::map_source_word): every set bit names one source feed,
 // which must exist in the feed map.
 func (c *ImportCache) mapSourceWord(store *DraftStore, words *ImportWords, wordIndex uint32, sourceWord uint64, check func() error) (bool, error) {
+	base := uint64(wordIndex) * 64
 	for sourceWord != 0 {
 		if err := check(); err != nil {
 			return false, err
 		}
-		bit := uint32(0)
-		for sourceWord&1 == 0 {
-			bit++
-			sourceWord >>= 1
-		}
-		base := uint64(wordIndex) * 64
+		bit := uint32(bits.TrailingZeros64(sourceWord))
 		sourceIndex64 := base + uint64(bit)
 		if sourceIndex64 > uint64(^uint32(0)) {
 			return false, overflow("source feed index")

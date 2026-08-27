@@ -693,6 +693,35 @@ fix: `structured-build-random 28000 421` validates clean (repro exit
 scale evidence below supersedes the partial 48-case run that stopped
 at this defect.
 
+Milestone-4 semantic probe catch (2026-08-27, after the walker fix):
+cross-language membership probing of the matched scale artifacts found
+a second real defect the validator cannot see: the Go name-based
+membership import translated every source bitmap word with three or
+more set bits wrongly. The Go `mapSourceWord` bit walk re-counted the
+bit position from zero while shifting the word right, so bits at
+positions 2 and above collapsed onto the second-lowest bit; every
+imported membership lost feeds silently while staying internally
+consistent (the Go validator passes the wrong file, because it proves
+dictionary/hash/bitmap consistency, not import semantics). Repro at
+membership-import 10k/421: the source's full 421-feed union imported as
+a 14-bit bitmap ({0,1,64,65,...}) instead of 421 bits; the Rust import
+of the identical source produces the exact 421-feed union. The Rust
+authority (draft_store/import_cache.rs map_source_word) uses
+`word.trailing_zeros()` with `word &= word - 1`; the Go port's shifting
+variant was the only such loop in the codebase. Fix: rewrite the Go
+walk with `math/bits.TrailingZeros64` and the same clear-lowest-bit
+step (`v4/go/internal/writer/import_cache.go`). Regression test
+`TestLiveImportPreservesWideMembershipBitmap` (public import of a
+four-feed one-word union) fails on the old loop exactly at
+"address 0 lost feed gamma" and passes on the fixed loop; the existing
+two-feed import tests sat below the corruption threshold (a two-bit
+word is handled correctly by both loops), which is why the defect
+shipped unnoticed. After the fix, the repro destination reports
+421/421 feeds at every probed address, byte-equivalent to the Rust
+output's membership semantics. The matched scale matrices and their
+fact comparisons were re-run at the fix HEAD and supersede the numbers
+above for the affected membership-import cases.
+
 Accepted-baseline population runs (planned 2026-08-27, linux/amd64,
 release Go build, under `nice`): the Go `ci` gate compares 18 cases
 (1 warmup + 3 samples each, up to 1M records) against the embedded
