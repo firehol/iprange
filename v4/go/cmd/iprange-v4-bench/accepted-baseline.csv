@@ -1,0 +1,5 @@
+# accepted update-ipsets release baseline for iprange-v4 (Go).
+# Records: scenario,size,aux,accepted_median_ns,ci_limit_ns.
+# Populated by the matched Rust/Go release run (SOW-0027 milestone 4);
+# empty means every case reports status untracked.
+scenario,size,aux,accepted_median_ns,ci_limit_ns

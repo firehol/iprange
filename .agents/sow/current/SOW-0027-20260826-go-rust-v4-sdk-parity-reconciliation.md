@@ -632,6 +632,29 @@ sides are green). Plan steps 7-8 (matched update-ipsets release
 benchmark matrix; artifacts, docs, and full-scope acceptance review)
 remain for milestone 4.
 
+Milestone 4 started (plan step 7): the Go `update-ipsets` benchmark
+matrix port. Slice 4a/4b delivered: `v4/go/cmd/iprange-v4-bench/`
+mirrors the Rust harness (v4/rust/iprange-livedb/benches/update_ipsets)
+- CLI modes smoke/scale/local/ci/sample/case/header, subprocess-per-case
+isolation, elapsed + allocation (MemStats Mallocs/TotalAlloc deltas) +
+Linux RSS before/after/peak (VmRSS/VmHWM) + fd counts + logical/physical
+file size + private-artifact refusal, the optional
+IPRANGE_PERF_CONTROL/IPRANGE_PERF_ACK protocol, per-case validation of
+every output database, and the accepted-baseline CI comparison with the
+same CSV contracts. All 57 Rust scenario arms ported
+(scenario_direct.go 6, scenario_membership.go 16, scenario_read.go 11,
+scenario_structured.go 11, scenario_sdk.go 13), registered under the
+exact Rust names. Matched smoke evidence on linux/amd64 (both harnesses,
+same host, release builds): all 55 smoke cases run green on both sides
+and the semantic facts (work units, emitted units, range records, feeds,
+file logical bytes) are identical 55/55 after aligning the one deviating
+scenario (live-membership-validation now ports membership::populated_rotating
+exactly). Go runtimes at smoke scale are 0.4x-9.7x of Rust per scenario
+(read/scan/validation paths slower, none faster than noise); the material
+deltas need profiling at scale and actionable-waste removal before the
+release evidence. Baseline CSV intentionally empty (status untracked)
+until the matched scale run populates it.
+
 ## Requirements
 
 ### Purpose
