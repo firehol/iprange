@@ -20,7 +20,7 @@ type FeedName string
 // FeedName::new; the invalid class is ErrorNameInvalid).
 func NewFeedName(name string) (FeedName, error) {
 	if !format.FeedNameValidString(name) {
-		return "", publicError(&format.Error{Code: format.CodeNameInvalid, Detail: "feed name is invalid"})
+		return "", &Error{Code: ErrorNameInvalid, Detail: "feed name is invalid"}
 	}
 	return FeedName(name), nil
 }

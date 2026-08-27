@@ -607,6 +607,31 @@ race/checkptr, the seven-target cross-build matrix, and the env-gated
 mixed live battery on both sides are green. Gate pending the
 five-reviewer round 4 at the fix HEAD.
 
+Review gate round 4 for milestone 3 (2026-08-27, HEAD `0e70e9b9`):
+all five reviewers PASS. Rust parity: the lifecycle facade exposes
+every failure as the exported `Error` with the Rust `live_lifecycle`
+classes preserved (InvalidArgument, WrongStructureKind, WrongState,
+CleanupConflict, IO, CleanupInProgress), no internal error type
+crosses the public boundary. Go idioms: the boundary convention is
+uniform across the live, lifecycle, workflow, reader, snapshot,
+recovery, and publication surfaces; P3 noted that `NewFeedName`
+blends the cleanest when it constructs the exported `Error` directly -
+applied as the one-line cleanup included in the gate-close commit.
+Performance: failure-path-only conversion on cold lifecycle surfaces,
+no hot-path or success-path cost. Wire/integrity: error-typing only,
+internal calls argument-identical, resolve paths never read `Cause`,
+zero on-disk or coordination change. APIs/records: independent
+same-defect scan of the root package found zero raw internal error
+escapes (the remaining `format.Error` constructors feed the converting
+abort helpers, internal-direction callbacks, or the `publicError`
+machinery itself). Milestone 3 gate: CLOSED at the fix HEAD (after
+the `NewFeedName` cleanup, re-validated: gofmt, vet, `go test ./...`,
+`go test -tags v4work ./...`, race/checkptr, the seven-target
+cross-build matrix, and the env-gated mixed live battery on both
+sides are green). Plan steps 7-8 (matched update-ipsets release
+benchmark matrix; artifacts, docs, and full-scope acceptance review)
+remain for milestone 4.
+
 ## Requirements
 
 ### Purpose
