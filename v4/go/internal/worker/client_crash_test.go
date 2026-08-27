@@ -17,15 +17,30 @@ package worker
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 )
+
+// realWorkerFixtureGate skips the real-worker recovery suites on
+// platforms without live coordination: their fixtures are built with
+// the database writer (a read-write mapped output), which FreeBSD
+// refuses by the recorded platform stance, and the Rust authority
+// scopes the whole source-fault fixture to cfg(target_os = "linux").
+// The suites run everywhere coordination is proven.
+func realWorkerFixtureGate(t *testing.T) {
+	t.Helper()
+	if !mapping.CoordinationSupported() {
+		t.Skip("the real-worker recovery fixtures need the database writer; live coordination is unsupported here")
+	}
+}
 
 // crashSourceFixture builds the hand-encoded 5-page source of the Rust
 // fault_fixture (client_tests.rs:213-260): the dual meta pair (pages
@@ -135,6 +150,7 @@ func crashLeaf(t *testing.T, txn uint64, from, to, value uint32) []byte {
 // the session-2 rerun with page 4 declared unreadable completes
 // deterministically.
 func TestRecoverWithWorkerRealBinarySourceFaultRestartable(t *testing.T) {
+	realWorkerFixtureGate(t)
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
 	t.Cleanup(func() { workerCandidatesHook = nil })
@@ -174,8 +190,19 @@ func TestRecoverWithWorkerRealBinarySourceFaultRestartable(t *testing.T) {
 	if attempt.fault.Role != RoleSource {
 		t.Fatalf("fault role = %d, want %d", attempt.fault.Role, RoleSource)
 	}
-	if attempt.fault.Relative != 4*format.PageSize {
-		t.Fatalf("fault relative = %#x, want %#x", attempt.fault.Relative, 4*format.PageSize)
+	// The kernel-delivered fault address lands inside the faulted page:
+	// linux reports the page start exactly (the Rust linux assertion),
+	// other POSIX kernels may report any accessed byte of the page, and
+	// the record stores the raw si_addr minus the probe base on every
+	// OS. The contract is one fault on page 4 with the full five-page
+	// probe; only linux pins the exact byte (Rust client_tests.rs
+	// cfg(target_os = "linux")).
+	if runtime.GOOS == "linux" {
+		if attempt.fault.Relative != 4*format.PageSize {
+			t.Fatalf("fault relative = %#x, want %#x", attempt.fault.Relative, 4*format.PageSize)
+		}
+	} else if attempt.fault.Relative < 4*format.PageSize || attempt.fault.Relative >= 5*format.PageSize {
+		t.Fatalf("fault relative = %#x, want an address inside page 4 [%#x, %#x)", attempt.fault.Relative, 4*format.PageSize, 5*format.PageSize)
 	}
 	if attempt.fault.MappingLen != 5*format.PageSize {
 		t.Fatalf("fault mapping_len = %#x, want %#x", attempt.fault.MappingLen, 5*format.PageSize)
