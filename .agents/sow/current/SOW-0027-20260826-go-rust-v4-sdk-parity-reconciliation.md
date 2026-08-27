@@ -837,13 +837,15 @@ Accepted CI gate record: final gate run at the fix HEAD with the
 accepted Go baseline identity (baselineID go-v4-local-20260827)
 re-verifies 18/18 within-limit.
 
-Follow-up (tracked, not deferred): (1) specialize the fixed-tree
-search per record codec (inline key comparators, no per-probe
-closure) - the old external-review recommendation that now has
-profile evidence across every remaining delta; (2) batch the
-membership-import mutation seam to cut the per-record closure
-allocations; both are sized as a later SOW slice after milestone 4
-acceptance, so the accepted benchmark evidence stays valid.
+Milestone-4 extension (user decision 2026-08-28, in scope before
+acceptance): (1) slice 4c specializes the fixed-tree search per
+record codec (inline key comparators, no per-probe closure) - the
+old external-review recommendation that now has profile evidence
+across every remaining delta; (2) slice 4d batches the
+membership-import mutation seam to cut the per-record allocation
+class; (3) slice 4e re-measures, re-baselines, and re-gates the
+accepted evidence. The accepted milestone-4 evidence remains valid
+as the pre-optimization baseline for the 4c/4d deltas.
 
 Milestone-4 five-reviewer gate round (2026-08-28, HEAD 81620b63):
 scope reviews were PASS for Go idioms, performance, and wire/integrity,
@@ -889,6 +891,22 @@ P2 harness guard). All findings fixed in the follow-up commit:
   reviewer was already present in the committed fix; scenario_sdk.go
   at 1,668 lines exceeds the soft 500-line guideline but is cohesive
   (one workflow per scenario, clear sections).
+
+Milestone-4 performance mandate (user decision 2026-08-28): the
+recorded 4-9x write-path deltas and 2-4x read-path deltas are NOT
+acceptable as explained designed costs; Go must not be significantly
+inferior to Rust. Both harnesses were re-verified as optimized
+production builds (Rust bench profile opt-level 3, same binary that
+produced the evidence; Go plain go build, gc, GOAMD64=v1; GOAMD64=v3
+changes nothing). Milestone 4 extends with three optimization slices
+before acceptance: 4c specialized key-only fixed-tree search probes
+(no per-probe closure/interface dispatch; the #1 hot symbol in every
+delta), 4d write-seam allocation removal (membership-import 3M
+allocs / 1.5 GB vs Rust 20 / 470 B; batched mutation scopes, reused
+buffers), 4e re-measure + re-baseline + re-gate + evidence refresh.
+Targets: read paths ~1.2-1.6x Rust, validation ~1.5-2x, write paths
+~2-3.5x; absolute parity is not promised (GC and Go generics are
+real), the 4-9x class must be eliminated.
 
 ## Requirements
 
