@@ -34,22 +34,19 @@ func CreateParent() (*Control, error) {
 		return nil, err
 	}
 	path := filepath.Join(os.TempDir(), ".iprange-v4-worker-"+hex.EncodeToString(nonce[:])+".ctl")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "worker control create: " + err.Error()}
-	}
-	// creator-only policy: mode exactly 0600, no inherited access ACL,
-	// and the ownership commitment proof (Rust control.rs create_file +
-	// security::secure_creator_only). A restrictive umask can never make
-	// the control file unopenable by the worker.
+	// The creator identity is captured before creation (Rust
+	// Control::create_parent windows arm order); the per-OS creation arm
+	// applies the creator-only policy at creation (Rust control.rs
+	// create_file: create_new + secure_creator_only on POSIX, the
+	// protected single-user DACL of security::create_private on
+	// windows).
 	profile, err := security.Capture()
 	if err != nil {
 		return nil, workerSecurityFailure(err)
 	}
-	if err := security.SecureCreatorOnly(f, profile); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return nil, workerSecurityFailure(err)
+	f, err := createControlFile(path, profile)
+	if err != nil {
+		return nil, err
 	}
 	fail := func(cause error) (*Control, error) {
 		_ = f.Close()
