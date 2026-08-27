@@ -253,6 +253,7 @@ func realFixtureCandidate(t *testing.T, path string) *recovery.RecoveryCandidate
 // is covered by TestRecoverWithWorkerFaultRetryRecordsUnreadablePage;
 // this test pins the worker-side refusal that the retry lands on.
 func TestRecoverWithWorkerRealBinaryDeclaredPageRefuses(t *testing.T) {
+	realWorkerFixtureGate(t)
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
 	t.Cleanup(func() { workerCandidatesHook = nil })
