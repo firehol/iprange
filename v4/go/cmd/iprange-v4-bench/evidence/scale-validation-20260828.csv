@@ -1,0 +1,4 @@
+scenario,size,aux,elapsed_ns,alloc_calls,alloc_bytes,range_records,feeds
+live-validation,1000000,0,24107576,73,25832,1000000,0
+live-membership-validation,1000000,421,28538179,70,25688,1000000,421
+immutable-validation,1000000,0,22144816,73,25880,1000000,0

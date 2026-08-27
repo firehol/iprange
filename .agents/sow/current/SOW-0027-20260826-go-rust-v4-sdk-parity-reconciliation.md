@@ -908,6 +908,51 @@ Targets: read paths ~1.2-1.6x Rust, validation ~1.5-2x, write paths
 ~2-3.5x; absolute parity is not promised (GC and Go generics are
 real), the 4-9x class must be eliminated.
 
+Slice 4c/4d implementation record (2026-08-28, commits 483fc37f and
+follow-ups): the per-probe closure plus interface ReadKey plus
+materialized 88-byte Key was the top CPU symbol in every remaining
+delta. lowerBound is now closure-free; codecs whose fixed cells carry
+the ordered key as a plain prefix opt into an inline width-specialized
+probe (u32/u64/u128 little-endian or raw digest+suffix words) that
+keeps the persistent slot-table read per probe; every codec implements
+Codec.CompareKey without building a Key. The membership dictionary
+transactions and the membership-import range seams bind one WriterEdit
+per workflow instead of allocating a fresh DraftStore per record
+(Rust borrowed-&mut-WriterEdit parity); the import loop also stores
+the previous canonical range by value, removing the per-record
+escape. fixedPositions writes into a bounded int16 scratch
+([u16; MAX_SLOT_COUNT] parity) and branch cells encode into
+caller-owned CellBufs, removing the truncate and split allocations.
+Bench harness: heap-profile hook for the delta work and reused batch
+buffers in the measured regions. Measured medians at 1M records,
+same host, matched optimized release binaries (Go gc plain build,
+Rust bench profile):
+
+- membership-import: 167 ms vs Rust 47 ms (3.6x; was 421 ms / 9.2x
+  with 3,001,958 allocs / 1,536.7 MB, now 2,311 allocs / 0.7 MB;
+  Rust has 20 allocs / 470 B).
+- nested-overwrite: 1,878 ms vs Rust 302 ms (6.2x; was 2,888 ms).
+- update-ipsets-workflow: 5,034 ms vs Rust 1,112 ms (4.5x; was
+  5,781 ms).
+- live-direct-random-lookup: 457 ms vs Rust 237 ms (1.9x; was
+  597 ms).
+- immutable-direct-random-lookup: 413 ms vs Rust 217 ms (1.9x).
+- live-validation: 25 ms vs Rust 14.1 ms (1.8x; was 24.6 ms).
+
+The 4-9x class is eliminated for the lookup, validation, and import
+families; the remaining write-path outliers are nested-overwrite
+(6.2x) and update-ipsets-workflow (4.5x), both deep in the generic
+gap/replace machinery where the residual cost is Go bounds checks,
+interface indirection, and GC, not structure (verified against the
+Rust range_mutation assign paths). Slice 4e re-baselined and
+re-gated the acceptance evidence at the improved state: the accepted
+baseline identity is now go-v4-local-20260828 (rebuilt
+accepted-baseline.csv from 18 CI cases x 5 samples; the pre-4c
+20260827 samples stay in evidence/ as the improvement baseline), the
+new CI gate run is 18/18 within-limit with ratios 0.933-1.049, and
+the smoke pair range improved to 0.34x-5.92x. pprof head evidence
+before/after is committed at evidence/profiles-4c4d-summary.txt.
+
 ## Requirements
 
 ### Purpose

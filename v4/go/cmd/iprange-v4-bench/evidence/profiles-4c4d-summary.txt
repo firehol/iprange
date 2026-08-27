@@ -1,0 +1,49 @@
+# CPU profile evidence for slices 4c/4d (SOW-0027 milestone 4 mandate)
+
+## Before 4c: membership-import 1M/421 (whole-process, HEAD dc1f7322)
+Showing top 8 nodes out of 141
+      flat  flat%   sum%        cum   cum%
+    2260ms 24.94% 24.94%     2640ms 29.14%  github.com/firehol/iprange/v4/go/internal/tree.lowerBound[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }].func2
+    1980ms 21.85% 46.80%     5070ms 55.96%  github.com/firehol/iprange/v4/go/internal/tree.lowerBoundBy
+     250ms  2.76% 49.56%     4890ms 53.97%  github.com/firehol/iprange/v4/go/internal/tree.cursorLookup[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     230ms  2.54% 52.10%     4990ms 55.08%  github.com/firehol/iprange/v4/go/internal/tree.lowerBound[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     190ms  2.10% 54.19%      250ms  2.76%  github.com/firehol/iprange/v4/go/internal/format.DecodePageHeader
+     180ms  1.99% 56.18%      180ms  1.99%  github.com/firehol/iprange/v4/go/internal/tree.Key.Less
+     170ms  1.88% 58.06%      270ms  2.98%  github.com/firehol/iprange/v4/go/internal/format.SlottedCell
+     160ms  1.77% 59.82%     1390ms 15.34%  github.com/firehol/iprange/v4/go/internal/tree.Insert[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+
+## After 4c+4d: membership-import 1M/421 (same case)
+Showing top 8 nodes out of 166
+      flat  flat%   sum%        cum   cum%
+     330ms  8.51%  8.51%      730ms 18.81%  github.com/firehol/iprange/v4/go/internal/tree.fixedLowerBound
+     310ms  7.99% 16.49%     1700ms 43.81%  github.com/firehol/iprange/v4/go/internal/tree.cursorLookup[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     220ms  5.67% 22.16%      320ms  8.25%  github.com/firehol/iprange/v4/go/internal/format.SlottedCell
+     160ms  4.12% 26.29%      250ms  6.44%  github.com/firehol/iprange/v4/go/internal/format.DecodePageHeader
+     160ms  4.12% 30.41%      400ms 10.31%  github.com/firehol/iprange/v4/go/internal/tree.parse[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     130ms  3.35% 33.76%      880ms 22.68%  github.com/firehol/iprange/v4/go/internal/tree.lowerBound[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     100ms  2.58% 36.34%      540ms 13.92%  github.com/firehol/iprange/v4/go/internal/tree.Insert[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     100ms  2.58% 38.92%     1120ms 28.87%  github.com/firehol/iprange/v4/go/internal/writer.readPredecessor
+
+## After 4c+4d: nested-overwrite 1M
+Showing top 8 nodes out of 111
+      flat  flat%   sum%        cum   cum%
+     200ms 10.47% 10.47%      930ms 48.69%  github.com/firehol/iprange/v4/go/internal/writer.insertPrivateGap
+     180ms  9.42% 19.90%      730ms 38.22%  github.com/firehol/iprange/v4/go/internal/tree.InsertIfLocalGap[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 },go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.family github.com/firehol/iprange/v4/go/internal/writer.rangeFamily; github.com/firehol/iprange/v4/go/internal/writer.r github.com/firehol/iprange/v4/go/internal/writer.rangeRecord }]
+      90ms  4.71% 24.61%      100ms  5.24%  github.com/firehol/iprange/v4/go/internal/tree.(*ForwardCursor[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]).Next
+      80ms  4.19% 28.80%      310ms 16.23%  github.com/firehol/iprange/v4/go/internal/tree.gapSelector[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 },go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.family github.com/firehol/iprange/v4/go/internal/writer.rangeFamily; github.com/firehol/iprange/v4/go/internal/writer.r github.com/firehol/iprange/v4/go/internal/writer.rangeRecord }].selectAt
+      80ms  4.19% 32.98%      570ms 29.84%  github.com/firehol/iprange/v4/go/internal/writer.replaceStrictlyInside
+      70ms  3.66% 36.65%     1010ms 52.88%  github.com/firehol/iprange/v4/go/internal/writer.insertPrivateInputGap
+      60ms  3.14% 39.79%      440ms 23.04%  github.com/firehol/iprange/v4/go/internal/tree.ReplaceLocalPredecessorWith[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+      60ms  3.14% 42.93%      150ms  7.85%  github.com/firehol/iprange/v4/go/internal/tree.RequireReplacement[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+
+## After 4c+4d: update-ipsets-workflow 1M
+Showing top 8 nodes out of 265
+      flat  flat%   sum%        cum   cum%
+     480ms  4.13%  4.13%      780ms  6.71%  github.com/firehol/iprange/v4/go/internal/tree.(*ForwardCursor[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]).Next
+     450ms  3.87%  8.00%     1130ms  9.72%  github.com/firehol/iprange/v4/go/internal/tree.fixedLowerBound
+     320ms  2.75% 10.75%      350ms  3.01%  github.com/firehol/iprange/v4/go/internal/writer.(*rangeBulkBuilder).canAppend
+     280ms  2.41% 13.16%      420ms  3.61%  github.com/firehol/iprange/v4/go/internal/format.DecodePageHeader
+     270ms  2.32% 15.48%      320ms  2.75%  github.com/firehol/iprange/v4/go/internal/writer.observeHistoryWindow
+     250ms  2.15% 17.63%     1030ms  8.86%  github.com/firehol/iprange/v4/go/internal/tree.InsertIfLocalGap[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 },go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.family github.com/firehol/iprange/v4/go/internal/writer.rangeFamily; github.com/firehol/iprange/v4/go/internal/writer.r github.com/firehol/iprange/v4/go/internal/writer.rangeRecord }]
+     210ms  1.81% 19.43%     1410ms 12.12%  github.com/firehol/iprange/v4/go/internal/tree.cursorLookup[go.shape.struct { github.com/firehol/iprange/v4/go/internal/writer.from github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.to github.com/firehol/iprange/v4/go/internal/tree.Key; github.com/firehol/iprange/v4/go/internal/writer.value uint32 }]
+     210ms  1.81% 21.24%      260ms  2.24%  github.com/firehol/iprange/v4/go/internal/writer.privateGap.decode (inline)

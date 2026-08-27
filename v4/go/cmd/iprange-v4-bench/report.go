@@ -16,7 +16,7 @@ import (
 )
 
 const fixtureID = "iprange-v4-update-ipsets-v1"
-const baselineID = "go-v4-local-20260827"
+const baselineID = "go-v4-local-20260828"
 
 const reportHeader = "scenario,size,aux,samples,min_ns,p50_ns,p90_ns,max_ns,median_units_per_second,alloc_calls,alloc_bytes,max_rss_peak_kib,max_fds_after,file_logical_bytes,range_records,feeds,accepted_median_ns,ci_limit_ns,ratio,status"
 
