@@ -148,3 +148,72 @@ func TestKnownDeletionUsesOneTreeLookup(t *testing.T) {
 		t.Fatal("key 451 survived deletion")
 	}
 }
+
+// TestLowerBoundPrefixMatchesReference pins the specialized prefix probe
+// against the reference closure search across a dense key sweep: both
+// paths return the same position and exact flag, and the single
+// final-probe reuse stays (Rust lower_bound reuses the last probe when
+// it landed on the answer).
+func TestLowerBoundPrefixMatchesReference(t *testing.T) {
+	m := newMemoryStore()
+	root := uint32(0)
+	for key := 0; key < 1000; key++ {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := m.pages[root][:]
+	header, err := parse(u32Codec{}, page, m.TargetTxn(), 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for probe := 0; probe <= 1005; probe++ {
+		for _, insertion := range []bool{true, false} {
+			wantIndex, wantExact, err := lowerBoundBy(&header, u32Key(uint32(probe)), insertion, func(index int) (Key, error) {
+				return keyAt(u32Codec{}, page, &header, index)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotIndex, gotExact, err := lowerBound(u32Codec{}, page, &header, u32Key(uint32(probe)), insertion)
+			if err != nil {
+				t.Fatalf("lowerBound(%d, insertion=%v): %v", probe, insertion, err)
+			}
+			if gotIndex != wantIndex || gotExact != wantExact {
+				t.Fatalf("lowerBound(%d, insertion=%v) = (%d, %v), want (%d, %v)",
+					probe, insertion, gotIndex, gotExact, wantIndex, wantExact)
+			}
+		}
+	}
+}
+
+// TestLowerBoundPrefixReusesItsFinalProbe pins the work-counter probe
+// count of the specialized prefix loop: a 16-record leaf search must
+// charge exactly the binary-search probes plus the reuse of the final
+// probe for the exact-match check (Rust lower_bound reuse).
+func TestLowerBoundPrefixReusesItsFinalProbe(t *testing.T) {
+	m := newMemoryStore()
+	root := uint32(0)
+	for key := 0; key < 16; key++ {
+		if _, _, err := Insert(u32Codec{}, m, &root, u32Record(uint32(key), uint32(key)), RetiredPages{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := m.pages[root][:]
+	header, err := parse(u32Codec{}, page, m.TargetTxn(), 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work.Reset()
+	index, exists, err := lowerBound(u32Codec{}, page, &header, u32Key(9), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index != 9 || !exists {
+		t.Fatalf("lower_bound(9) = (%d, %v), want (9, true)", index, exists)
+	}
+	snap := work.Read()
+	if snap.KeyProbes != 4 {
+		t.Fatalf("key probes = %d, want 4 (3 search probes + 1 final probe)", snap.KeyProbes)
+	}
+}

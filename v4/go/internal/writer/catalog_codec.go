@@ -7,6 +7,8 @@
 package writer
 
 import (
+	"bytes"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -133,6 +135,17 @@ func (nameCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.VarKey(name), nil
 }
 
+// CompareKey compares one variable catalog name key without building a
+// Key (Rust NameCodec + byte-string Ord). The name is decoded as a view
+// of the caller's cell, so a probe never allocates.
+func (nameCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	name, _, err := catalogDecodeName(cell)
+	if err != nil {
+		return 0, err
+	}
+	return bytes.Compare(name, target.Bytes()), nil
+}
+
 func (nameCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {
 	name, index, err := catalogDecodeName(cell)
 	if err != nil {
@@ -193,6 +206,23 @@ func (indexCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 		return tree.Key{}, corrupt("feed index branch record is malformed")
 	}
 	return tree.Key{Hi: uint64(format.U32(cell[0:4]))}, nil
+}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// IndexCodec + u32 Ord). The codec has variable leaf records, so the
+// level-0 key lives at catalogIndexOffset inside the record; branch
+// cells carry the u32 key prefix.
+func (indexCodec) CompareKey(cell []byte, level uint16, target tree.Key) (int, error) {
+	if level == 0 {
+		if len(cell) < catalogMinRecord {
+			return 0, corrupt("feed catalog record is malformed")
+		}
+		return cmpU32(format.U32(cell[catalogIndexOffset:catalogIndexOffset+4]), uint32(target.Hi)), nil
+	}
+	if len(cell) < catalogIndexBranch {
+		return 0, corrupt("feed index branch record is malformed")
+	}
+	return cmpU32(format.U32(cell[0:4]), uint32(target.Hi)), nil
 }
 
 func (indexCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {

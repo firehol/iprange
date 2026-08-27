@@ -46,6 +46,20 @@ func (rangeCodec4) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(format.U32(cell))}, nil
 }
 
+// PrefixKeyProbe opts the codec into the tree core's inline prefix
+// probe: fixed cells carry the little-endian u32 key as their prefix.
+func (rangeCodec4) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// Ipv4Key Ord; never called on the hot path, which uses the prefix
+// probe).
+func (rangeCodec4) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if len(cell) < 4 {
+		return 0, corrupt("range key is truncated")
+	}
+	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+}
+
 func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord, error) {
 	if len(cell) != format.RangeRecordV4Size {
 		return rangeRecord{}, corrupt("range leaf has the wrong record size")
@@ -105,6 +119,20 @@ func (rangeCodec6) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	}
 	hi, lo := format.U128(cell)
 	return tree.Key{Hi: hi, Lo: lo}, nil
+}
+
+// PrefixKeyProbe opts the codec into the inline prefix probe (u128 LE).
+func (rangeCodec6) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// Ipv6Key Ord; never called on the hot path, which uses the prefix
+// probe).
+func (rangeCodec6) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if len(cell) < 16 {
+		return 0, corrupt("range key is truncated")
+	}
+	hi, lo := format.U128(cell)
+	return cmpU128(hi, lo, target.Hi, target.Lo), nil
 }
 
 func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord, error) {

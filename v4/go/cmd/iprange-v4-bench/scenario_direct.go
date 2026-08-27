@@ -283,12 +283,13 @@ func applyDirectV6(db *testDatabase, input *directSourceV6, size int) error {
 	if err != nil {
 		return err
 	}
+	var convertedPool [batchCapacity]iprangedb.DirectRangeV6
 	for {
 		batch, more := input.nextBatch()
 		if !more {
 			break
 		}
-		converted := make([]iprangedb.DirectRangeV6, len(batch))
+		converted := convertedPool[:len(batch)]
 		for index, source := range batch {
 			converted[index] = iprangedb.DirectRangeV6{
 				FromHi: 0, FromLo: source.fromLo,

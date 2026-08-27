@@ -320,16 +320,16 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 	if err != nil {
 		return w.abortAfterSource(err)
 	}
-	var merge *writer.ImportMerge
-	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		merge, err = edit.BeginImportMerge(cancellation.check)
-		return publicError(err)
-	})
+	edit, err := w.coreOf().BindEdit()
 	if err != nil {
 		return w.abortAfter(err)
 	}
-	var previous *reader.MembershipRange4
+	merge, err := edit.BeginImportMerge(cancellation.check)
+	if err != nil {
+		return w.abortAfter(publicError(err))
+	}
+	var previous reader.MembershipRange4
+	havePrevious := false
 	for {
 		if err := cancellation.check(); err != nil {
 			return w.abortAfterSource(err)
@@ -339,30 +339,27 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(err)
 		}
 		if !ok {
-			var comparison writer.Comparison
-			err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-				var err error
-				comparison, err = edit.FinishImportMerge(merge, cancellation.check)
-				return publicError(err)
-			})
+			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
 			if err != nil {
-				return w.abortAfter(err)
+				return w.abortAfter(publicError(err))
 			}
 			stats.comparison = comparison
 			return nil
 		}
-		if err := requireCanonicalImportRange4(w, previous, record); err != nil {
-			return publicError(err)
+		if havePrevious {
+			if err := requireCanonicalImportRange4(w, &previous, record); err != nil {
+				return publicError(err)
+			}
 		}
-		id, words, err := translateImportMembership(w, source, cache, record.Membership, cancellation)
+		previous = record
+		havePrevious = true
+		id, words, err := translateImportMembership(edit, w, source, cache, record.Membership, cancellation)
 		if err != nil {
 			return publicError(err)
 		}
-		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-			return edit.PushImportRange(merge, tree.Key{Hi: uint64(record.From)}, tree.Key{Hi: uint64(record.To)}, id, words, cancellation.check)
-		})
+		err = edit.PushImportRange(merge, tree.Key{Hi: uint64(record.From)}, tree.Key{Hi: uint64(record.To)}, id, words, cancellation.check)
 		if err != nil {
-			return w.abortAfter(err)
+			return w.abortAfter(publicError(err))
 		}
 		cardinality, err := format.IPv4Inclusive(record.From, record.To)
 		if err != nil {
@@ -372,7 +369,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			return publicError(err)
 		}
 		work.RangeConsumed(1)
-		previous = &record
+		previous = record
 	}
 }
 
@@ -383,16 +380,16 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 	if err != nil {
 		return w.abortAfterSource(err)
 	}
-	var merge *writer.ImportMerge
-	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		merge, err = edit.BeginImportMerge(cancellation.check)
-		return publicError(err)
-	})
+	edit, err := w.coreOf().BindEdit()
 	if err != nil {
 		return w.abortAfter(err)
 	}
-	var previous *reader.MembershipRange6
+	merge, err := edit.BeginImportMerge(cancellation.check)
+	if err != nil {
+		return w.abortAfter(publicError(err))
+	}
+	var previous reader.MembershipRange6
+	havePrevious := false
 	for {
 		if err := cancellation.check(); err != nil {
 			return w.abortAfterSource(err)
@@ -402,30 +399,27 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(err)
 		}
 		if !ok {
-			var comparison writer.Comparison
-			err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-				var err error
-				comparison, err = edit.FinishImportMerge(merge, cancellation.check)
-				return publicError(err)
-			})
+			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
 			if err != nil {
-				return w.abortAfter(err)
+				return w.abortAfter(publicError(err))
 			}
 			stats.comparison = comparison
 			return nil
 		}
-		if err := requireCanonicalImportRange6(w, previous, record); err != nil {
-			return publicError(err)
+		if havePrevious {
+			if err := requireCanonicalImportRange6(w, &previous, record); err != nil {
+				return publicError(err)
+			}
 		}
-		id, words, err := translateImportMembership(w, source, cache, record.Membership, cancellation)
+		previous = record
+		havePrevious = true
+		id, words, err := translateImportMembership(edit, w, source, cache, record.Membership, cancellation)
 		if err != nil {
 			return publicError(err)
 		}
-		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-			return edit.PushImportRange(merge, tree.Key{Hi: record.FromHi, Lo: record.FromLo}, tree.Key{Hi: record.ToHi, Lo: record.ToLo}, id, words, cancellation.check)
-		})
+		err = edit.PushImportRange(merge, tree.Key{Hi: record.FromHi, Lo: record.FromLo}, tree.Key{Hi: record.ToHi, Lo: record.ToLo}, id, words, cancellation.check)
 		if err != nil {
-			return w.abortAfter(err)
+			return w.abortAfter(publicError(err))
 		}
 		cardinality, err := format.IPv6Inclusive(record.FromHi, record.FromLo, record.ToHi, record.ToLo)
 		if err != nil {
@@ -435,29 +429,27 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			return publicError(err)
 		}
 		work.RangeConsumed(1)
-		previous = &record
+		previous = record
 	}
 }
 
 // translateImportMembership resolves one source membership token into
 // its destination membership pair (Rust translate_membership over
-// TranslatedMembership): the cache fast paths first, then the source
-// bitmap word sweep through the feed map, then the dictionary intern
-// and translation record; the returned pair feeds the import merge
-// exactly like Rust push_import_range, so the merge never re-resolves
-// a translation.
-func translateImportMembership(w *LiveWriter, source membershipImportSource, cache *writer.ImportCache, sourceMembership uint32, cancellation *CancellationToken) (id, words uint32, err error) {
+// TranslatedMembership) over the caller's single edit binding: the
+// cache fast paths first, then the source bitmap word sweep through
+// the feed map, then the dictionary intern and translation record; the
+// returned pair feeds the import merge exactly like Rust
+// push_import_range, so the merge never re-resolves a translation.
+// Binding once per import mirrors the Rust borrowed &mut WriterEdit:
+// per-record Mutate bindings would allocate a fresh draft store for
+// every dictionary step of every record.
+func translateImportMembership(edit *writer.WriterEdit, w *LiveWriter, source membershipImportSource, cache *writer.ImportCache, sourceMembership uint32, cancellation *CancellationToken) (id, words uint32, err error) {
 	if id, words, ok := cache.LastTranslation(sourceMembership); ok {
 		return id, words, nil
 	}
-	var present bool
-	err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		id, words, present, err = edit.CachedImportMembership(cache, sourceMembership)
-		return publicError(err)
-	})
+	id, words, present, err := edit.CachedImportMembership(cache, sourceMembership)
 	if err != nil {
-		return 0, 0, w.abortAfter(err)
+		return 0, 0, w.abortAfter(publicError(err))
 	}
 	if present {
 		return id, words, nil
@@ -482,20 +474,14 @@ func translateImportMembership(w *LiveWriter, source membershipImportSource, cac
 		if read != int(expected) {
 			return 0, 0, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source membership read ended early"})
 		}
-		var missing bool
-		err = w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-			var err error
-			missing, err = edit.MapImportWordBatch(cache, wordsSet, start, buffer[:expected], cancellation.check)
-			return publicError(err)
-		})
+		missing, err := edit.MapImportWordBatch(cache, wordsSet, start, buffer[:expected], cancellation.check)
 		if err != nil {
-			return 0, 0, w.abortAfter(err)
+			return 0, 0, w.abortAfter(publicError(err))
 		}
 		if missing {
 			return 0, 0, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source membership names an inactive feed index"})
 		}
-		var next uint32
-		next, err = importCheckedAdd32(start, expected, "word index")
+		next, err := importCheckedAdd32(start, expected, "word index")
 		if err != nil {
 			return 0, 0, w.abortAfterSource(err)
 		}
@@ -504,12 +490,9 @@ func translateImportMembership(w *LiveWriter, source membershipImportSource, cac
 	if wordsSet.WordCount() == 0 {
 		return 0, 0, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source membership is empty"})
 	}
-	if err := w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		id, words, err = edit.FinishImportMembership(cache, sourceMembership, wordsSet, cancellation.check)
-		return publicError(err)
-	}); err != nil {
-		return 0, 0, w.abortAfter(err)
+	id, words, err = edit.FinishImportMembership(cache, sourceMembership, wordsSet, cancellation.check)
+	if err != nil {
+		return 0, 0, w.abortAfter(publicError(err))
 	}
 	return id, words, nil
 }

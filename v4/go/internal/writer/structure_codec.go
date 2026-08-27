@@ -347,6 +347,29 @@ func (c structureHashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error)
 	return tree.RawKey(probe[:]), nil
 }
 
+// PrefixKeyProbe opts the codec into the inline raw probe (digest plus
+// the little-endian u32 id suffix, 36-byte fixed keys and leaves).
+func (structureHashCodec) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// HashKey Ord; never called on the hot path, which uses the raw prefix
+// probe): the cell keeps the wire layout (little-endian id), so the
+// suffix word compares numerically against the big-endian probe word.
+func (c structureHashCodec) CompareKey(cell []byte, level uint16, target tree.Key) (int, error) {
+	if level != 0 {
+		// Branch cells are keySize+4 bytes; the key is the first
+		// keySize bytes (Rust read_key for branch cells).
+		if len(cell) < structureHashKeySize {
+			return 0, corrupt("structure hash branch record is malformed")
+		}
+		cell = cell[:structureHashKeySize]
+	}
+	if _, err := decodeStructureHash(cell); err != nil {
+		return 0, err
+	}
+	return tree.CompareRawKey(cell, structureHashKeySize, &target.Raw)
+}
+
 func (c structureHashCodec) ReadLeaf(cell []byte) (structureHashRecord, error) {
 	record, err := decodeStructureHash(cell)
 	if err != nil {

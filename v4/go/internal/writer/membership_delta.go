@@ -105,6 +105,19 @@ func (deltaCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(format.U32(cell))}, nil
 }
 
+// PrefixKeyProbe opts the codec into the inline prefix probe: fixed
+// cells carry the little-endian u32 id as their prefix.
+func (deltaCodec) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// u32 Ord; never called on the hot path, which uses the prefix probe).
+func (deltaCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if len(cell) < deltaChangeOffset {
+		return 0, corrupt("refcount delta key is truncated")
+	}
+	return cmpU32(format.U32(cell[deltaIDOffset:deltaChangeOffset]), uint32(target.Hi)), nil
+}
+
 func (deltaCodec) ReadLeaf(cell []byte) (memberDelta, error) {
 	return decodeMemberDelta(cell)
 }

@@ -387,21 +387,24 @@ func TestFixedPositionsRejectsBrokenPayloads(t *testing.T) {
 
 	// Misaligned slot: point slot 0 at upper+1 (not a cell boundary).
 	PutU16(page[SlottedHeaderSize:], uint16(int(header.Upper)+1))
-	if _, err := fixedPositions(page, &header, 4); err == nil {
+	var scratch1 [SlotItemsPerPage]int16
+	if _, err := fixedPositions(page, &header, 4, scratch1[:]); err == nil {
 		t.Fatal("misaligned slot accepted")
 	}
 	page, header = fixedUnorderedPage(t)
 
 	// Gap: move slot 1 below its packed position, leaving a hole.
 	PutU16(page[SlottedHeaderSize+2:], uint16(int(header.Upper)+2*4+8))
-	if _, err := fixedPositions(page, &header, 4); err == nil {
+	var scratch2 [SlotItemsPerPage]int16
+	if _, err := fixedPositions(page, &header, 4, scratch2[:]); err == nil {
 		t.Fatal("gapped payload accepted")
 	}
 	page, header = fixedUnorderedPage(t)
 
 	// Overlap: point the last logical slot at the first cell.
 	PutU16(page[SlottedHeaderSize+9*2:], header.Upper)
-	if _, err := fixedPositions(page, &header, 4); err == nil {
+	var scratch3 [SlotItemsPerPage]int16
+	if _, err := fixedPositions(page, &header, 4, scratch3[:]); err == nil {
 		t.Fatal("overlapping slots accepted")
 	}
 }

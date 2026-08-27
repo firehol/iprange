@@ -78,6 +78,26 @@ func runCase(arguments []string) error {
 		fmt.Println(result.csvLine())
 		return nil
 	}
+	// IPRANGE_MEM_PROFILE writes one pprof heap profile after the
+	// scenario (bench-only tooling; alloc_objects ranks the allocation
+	// sources of the measured region).
+	if profile := os.Getenv("IPRANGE_MEM_PROFILE"); profile != "" {
+		result, err := dispatchScenario(arguments[1], size, aux)
+		if err != nil {
+			return err
+		}
+		file, err := os.Create(profile + "." + strconv.Itoa(os.Getpid()))
+		if err != nil {
+			return err
+		}
+		if err := pprof.Lookup("heap").WriteTo(file, 0); err != nil {
+			_ = file.Close()
+			return err
+		}
+		_ = file.Close()
+		fmt.Println(result.csvLine())
+		return nil
+	}
 	result, err := dispatchScenario(arguments[1], size, aux)
 	if err != nil {
 		return err

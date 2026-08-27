@@ -237,6 +237,23 @@ func (idCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 	return tree.Key{Hi: uint64(binary.LittleEndian.Uint32(cell[0:4]))}, nil
 }
 
+// CompareKey compares one cell key without materializing a Key (Rust
+// IdCodec read_key + u32 Ord). The codec has variable leaf records, so
+// the level-0 key lives at membershipIDOffset inside the record head;
+// branch cells carry the u32 key prefix.
+func (idCodec) CompareKey(cell []byte, level uint16, target tree.Key) (int, error) {
+	if level == 0 {
+		if len(cell) < membershipIDBase {
+			return 0, corrupt("membership dictionary record is malformed")
+		}
+		return cmpU32(binary.LittleEndian.Uint32(cell[membershipIDOffset:]), uint32(target.Hi)), nil
+	}
+	if len(cell) < membershipIDBranchSize {
+		return 0, corrupt("membership ID branch record is malformed")
+	}
+	return cmpU32(binary.LittleEndian.Uint32(cell[0:4]), uint32(target.Hi)), nil
+}
+
 func (idCodec) ReadLeaf(cell []byte) (membershipRecord, error) {
 	return decodeMembershipRecord(cell)
 }
@@ -312,6 +329,21 @@ func (hashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 	}
 	probe := hashProbe(digest, wordCount, id)
 	return tree.RawKey(probe[:]), nil
+}
+
+// PrefixKeyProbe opts the codec into the inline raw probe (digest plus
+// little-endian u32 suffix words, 40-byte fixed keys and leaves).
+func (hashCodec) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// HashKey Ord; never called on the hot path, which uses the raw prefix
+// probe): the cell keeps the wire layout (little-endian suffix), so the
+// suffix words compare numerically against the big-endian probe words.
+func (hashCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if _, _, _, err := decodeHashKey(cell); err != nil {
+		return 0, err
+	}
+	return tree.CompareRawKey(cell, membershipHashKeySize, &target.Raw)
 }
 
 func (hashCodec) ReadLeaf(cell []byte) (membershipHashRecord, error) {

@@ -91,6 +91,12 @@ type Codec[T any] interface {
 	// ReadKey decodes one key from a branch or leaf cell. Branch cells
 	// are keySize+4 bytes; leaf cells are leafSize bytes (level 0).
 	ReadKey(cell []byte, level uint16) (Key, error)
+	// CompareKey compares one cell's key with target without
+	// materializing a Key (Rust key_at plus Ord; used by the
+	// closure-free search fallback). The cell layout is identical to
+	// ReadKey's, and the compare order must match ReadKey plus Key.Less
+	// exactly.
+	CompareKey(cell []byte, level uint16, target Key) (int, error)
 	// ReadLeaf decodes one leaf value (used for validation and run
 	// predicates).
 	ReadLeaf(cell []byte) (T, error)

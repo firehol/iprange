@@ -63,6 +63,18 @@ func (varRecordCodec) ReadKey(cell []byte, level uint16) (Key, error) {
 	}
 	return Key{Hi: uint64(format.U32(cell))}, nil
 }
+func (varRecordCodec) CompareKey(cell []byte, level uint16, target Key) (int, error) {
+	if level == 0 {
+		if len(cell) < 6 {
+			return 0, corrupt("test record is truncated")
+		}
+		return cmpU32(format.U32(cell[2:]), uint32(target.Hi)), nil
+	}
+	if len(cell) < 4 {
+		return 0, corrupt("test branch record is truncated")
+	}
+	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+}
 
 func (varRecordCodec) ReadLeaf(cell []byte) (string, error) {
 	if len(cell) < 7 || int(format.U16(cell)) != len(cell) {
@@ -124,6 +136,15 @@ func (varNameCodec) ReadKey(cell []byte, _ uint16) (Key, error) {
 		return Key{}, corrupt("test name record length is invalid")
 	}
 	return VarKey(append([]byte(nil), cell[6:]...)), nil
+}
+func (varNameCodec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
+	if len(cell) < 7 {
+		return 0, corrupt("test name record is truncated")
+	}
+	if int(format.U16(cell)) != len(cell) {
+		return 0, corrupt("test name record length is invalid")
+	}
+	return bytes.Compare(cell[6:], target.Bytes()), nil
 }
 
 func (varNameCodec) ReadLeaf(cell []byte) (string, error) {

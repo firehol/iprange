@@ -26,6 +26,13 @@ func (u32Codec) ReadKey(cell []byte, _ uint16) (Key, error) {
 	}
 	return Key{Hi: uint64(format.U32(cell))}, nil
 }
+func (u32Codec) PrefixKeyProbe() {}
+func (u32Codec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
+	if len(cell) < 4 {
+		return 0, corrupt("test u32 key is truncated")
+	}
+	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+}
 func (u32Codec) ReadLeaf(cell []byte) (u32Leaf, error) {
 	if len(cell) != 8 {
 		return u32Leaf{}, corrupt("test leaf size is invalid")
@@ -59,6 +66,17 @@ func (wideCodec) ReadKey(cell []byte, _ uint16) (Key, error) {
 		Hi: binary.BigEndian.Uint64(cell),
 		Lo: binary.BigEndian.Uint64(cell[8:]),
 	}, nil
+}
+func (wideCodec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
+	if len(cell) < 16 {
+		return 0, corrupt("test wide key is truncated")
+	}
+	hi := binary.BigEndian.Uint64(cell)
+	lo := binary.BigEndian.Uint64(cell[8:])
+	if compare := cmpU64(hi, target.Hi); compare != 0 {
+		return compare, nil
+	}
+	return cmpU64(lo, target.Lo), nil
 }
 func (wideCodec) ReadLeaf(cell []byte) (wideLeaf, error) {
 	if len(cell) != 64 {

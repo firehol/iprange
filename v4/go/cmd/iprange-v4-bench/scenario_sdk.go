@@ -1482,7 +1482,8 @@ func sdkFeedRangeBatches(reader *iprangedb.ImmutableReader, name string, sink fu
 	if err != nil {
 		return err
 	}
-	batch := make([]iprangedb.AddressRange4, 0, batchCapacity)
+	var batchArray [batchCapacity]iprangedb.AddressRange4
+	batch := batchArray[:0]
 	for {
 		rng, ok, err := cursor.NextRange()
 		if err != nil {

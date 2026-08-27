@@ -74,6 +74,12 @@ type MembershipTransaction struct {
 	membershipEpoch uint64
 	cancellation    *CancellationToken
 	spent           bool
+	// edit is the single draft binding of the transaction (Rust
+	// MembershipTransaction borrows the &mut WriterEdit for its whole
+	// lifetime): per-operation Mutate bindings would allocate a fresh
+	// draft store for every apply, so every record-level operation runs
+	// over this one binding.
+	edit *writer.WriterEdit
 }
 
 // beginAdvancedTransaction starts one advanced transaction draft on the
@@ -107,11 +113,20 @@ func (w *LiveWriter) BeginMembershipTransaction(cancellation *CancellationToken)
 	if err != nil {
 		return nil, publicError(err)
 	}
+	edit, err := w.coreOf().BindEdit()
+	if err != nil {
+		// The draft was just installed; a bind failure here is a
+		// health/precondition violation, so the started draft must not
+		// leak.
+		_ = w.Abort()
+		return nil, publicError(err)
+	}
 	return &MembershipTransaction{
 		w:              w,
 		databaseID:     w.coreOf().BaseInfo().DatabaseID,
 		operationNonce: nonce,
 		cancellation:   cancellation,
+		edit:           edit,
 	}, nil
 }
 
@@ -155,14 +170,9 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, publicError(err)
 	}
-	var handle writer.MembershipHandle
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		handle, err = edit.AddFeedToMembership(membership.handle, feed.entry)
-		return publicError(err)
-	})
+	handle, err := t.edit.AddFeedToMembership(membership.handle, feed.entry)
 	if err != nil {
-		return MembershipRef{}, t.abortEdit(err)
+		return MembershipRef{}, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, publicError(err)
@@ -186,14 +196,9 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
 	}
-	var changed bool
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		changed, err = edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
-		return publicError(err)
-	})
+	changed, err := t.edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 	if err != nil {
-		return false, t.abortEdit(err)
+		return false, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
@@ -213,14 +218,9 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
 	}
-	var changed bool
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		changed, err = edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
-		return publicError(err)
-	})
+	changed, err := t.edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 	if err != nil {
-		return false, t.abortEdit(err)
+		return false, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
@@ -240,15 +240,9 @@ func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, publicError(err)
 	}
-	var entry writer.FeedEntry
-	var found bool
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, found, err = edit.LookupFeed(string(name))
-		return publicError(err)
-	})
+	entry, found, err := t.edit.LookupFeed(string(name))
 	if err != nil {
-		return FeedRef{}, false, t.abortEdit(err)
+		return FeedRef{}, false, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, publicError(err)
@@ -271,14 +265,9 @@ func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
 	}
-	var entry writer.FeedEntry
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, _, err = edit.EnsureFeed(string(name))
-		return publicError(err)
-	})
+	entry, _, err := t.edit.EnsureFeed(string(name))
 	if err != nil {
-		return FeedRef{}, t.abortEdit(err)
+		return FeedRef{}, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
@@ -300,14 +289,9 @@ func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
 	}
-	var entry writer.FeedEntry
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		var err error
-		entry, err = edit.RenameCurrentFeed(feed.entry, string(newName))
-		return publicError(err)
-	})
+	entry, err := t.edit.RenameCurrentFeed(feed.entry, string(newName))
 	if err != nil {
-		return FeedRef{}, t.abortEdit(err)
+		return FeedRef{}, t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
@@ -329,11 +313,8 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 	if nextEpoch == 0 {
 		return &Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
-	err := t.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		return edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check)
-	})
-	if err != nil {
-		return t.abortEdit(err)
+	if err := t.edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check); err != nil {
+		return t.abortEdit(publicError(err))
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return publicError(err)

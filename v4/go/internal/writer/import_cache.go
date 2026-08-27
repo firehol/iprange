@@ -83,6 +83,19 @@ func (importCacheCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.Key{Hi: format.U64(cell[importCacheEntryKeyOffset:])}, nil
 }
 
+// PrefixKeyProbe opts the codec into the inline prefix probe: fixed
+// cells carry the little-endian u64 key as their prefix.
+func (importCacheCodec) PrefixKeyProbe() {}
+
+// CompareKey compares one cell key without materializing a Key (Rust
+// u64 Ord; never called on the hot path, which uses the prefix probe).
+func (importCacheCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if len(cell) < importCacheEntryValueOffset {
+		return 0, corrupt("import cache key truncated")
+	}
+	return cmpU64(format.U64(cell[importCacheEntryKeyOffset:]), target.Hi), nil
+}
+
 func (importCacheCodec) ReadLeaf(cell []byte) (importCacheEntry, error) {
 	return decodeImportCacheEntry(cell)
 }

@@ -77,6 +77,20 @@ func (codec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return Key{Txn: format.U64(cell[txnOffset:]), First: format.U32(cell[firstOffset:])}.ToTree(), nil
 }
 
+// CompareKey compares one cell key without materializing a Key (Rust
+// Key Ord): the retirement key is the composite (transaction, first
+// page), so the compare splits the 12-key bytes into the u64 txn and
+// the u32 first field.
+func (codec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
+	if len(cell) < keySize {
+		return 0, corrupt("retirement key is truncated")
+	}
+	if compare := cmpU64(format.U64(cell[txnOffset:]), target.Hi); compare != 0 {
+		return compare, nil
+	}
+	return cmpU32(format.U32(cell[firstOffset:]), uint32(target.Lo)), nil
+}
+
 func (codec) ReadLeaf(cell []byte) (Extent, error) {
 	if len(cell) != cellSize {
 		return Extent{}, corrupt("retirement leaf has the wrong record size")
@@ -491,4 +505,26 @@ func DecodeRaw(cell []byte) (Extent, bool) {
 		return Extent{}, false
 	}
 	return Extent{Key: key, Count: format.U32(cell[countOffset : countOffset+4])}, true
+}
+
+func cmpU32(a, b uint32) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpU64(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }

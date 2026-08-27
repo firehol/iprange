@@ -72,7 +72,8 @@ func TestShrinkReplaceScansEverySlotExceptTarget(t *testing.T) {
 func TestFixedPositionsScanCost(t *testing.T) {
 	page, header := fixedUnorderedPage(t)
 	work.Reset()
-	positions, err := fixedPositions(page, &header, 4)
+	var scratch [SlotItemsPerPage]int16
+	positions, err := fixedPositions(page, &header, 4, scratch[:])
 	if err != nil {
 		t.Fatal(err)
 	}

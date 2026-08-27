@@ -191,14 +191,15 @@ func SlottedRemoveFixedRange(page []byte, header *PageHeader, start, count, cell
 	if count == 0 || end > int(header.ItemCount) || count >= int(header.ItemCount) || cellLen == 0 {
 		return SlottedShape{}, headerErr("slotted-page removal range is invalid")
 	}
-	positions, err := fixedPositions(page, header, cellLen)
+	var scratch [SlotItemsPerPage]int16
+	positions, err := fixedPositions(page, header, cellLen, scratch[:])
 	if err != nil {
 		return SlottedShape{}, err
 	}
 	remaining := int(header.ItemCount) - count
 	destination := PageSize
 	for physical := len(positions) - 1; physical >= 0; physical-- {
-		logical := positions[physical]
+		logical := int(positions[physical])
 		if logical < start || logical >= end {
 			output := logical
 			if logical >= start {
@@ -280,13 +281,14 @@ func SlottedTruncateFixed(page []byte, header *PageHeader, keep, cellLen int) (S
 	if keep == int(header.ItemCount) {
 		return SlottedShape{ItemCount: int(header.ItemCount), Lower: header.Lower, Upper: header.Upper}, nil
 	}
-	positions, err := fixedPositions(page, header, cellLen)
+	var scratch [SlotItemsPerPage]int16
+	positions, err := fixedPositions(page, header, cellLen, scratch[:])
 	if err != nil {
 		return SlottedShape{}, err
 	}
 	destination := PageSize
 	for physical := len(positions) - 1; physical >= 0; physical-- {
-		logical := positions[physical]
+		logical := int(positions[physical])
 		if logical < keep {
 			source := int(header.Upper) + physical*cellLen
 			destination -= cellLen
@@ -477,17 +479,22 @@ func adjustSlotsBefore(page []byte, header *PageHeader, target, before int, add 
 	return nil
 }
 
-// fixedPositions returns the physical-order logical indexes of every
-// fixed-size record on the page, mirroring slotted_page.rs fixed_positions:
-// the payload must be packed (upper + item_count*cell_len == page size) and
-// every slot must land on a distinct aligned cell.
-func fixedPositions(page []byte, header *PageHeader, cellLen int) ([]int, error) {
+// fixedPositions fills scratch with the physical-order logical indexes of
+// every fixed-size record on the page, mirroring slotted_page.rs
+// fixed_positions over the Rust [u16; MAX_SLOT_COUNT] stack storage: the
+// payload must be packed (upper + item_count*cell_len == page size) and
+// every slot must land on a distinct aligned cell. The caller owns the
+// bounded scratch, so a truncation or removal never allocates.
+func fixedPositions(page []byte, header *PageHeader, cellLen int, scratch []int16) ([]int16, error) {
 	count := int(header.ItemCount)
 	payload := int(header.Upper) + count*cellLen
 	if cellLen == 0 || payload != PageSize {
 		return nil, headerErr("fixed slotted-page payload is not packed")
 	}
-	positions := make([]int, count)
+	if len(scratch) < count {
+		return nil, headerErr("fixed slotted-page scratch is too small")
+	}
+	positions := scratch[:count]
 	for at := range positions {
 		positions[at] = -1
 	}
@@ -511,7 +518,7 @@ func fixedPositions(page []byte, header *PageHeader, cellLen int) ([]int, error)
 		if positions[physical] != -1 {
 			return nil, headerErr("fixed slotted-page records overlap")
 		}
-		positions[physical] = logical
+		positions[physical] = int16(logical)
 	}
 	for _, logical := range positions {
 		if logical == -1 {

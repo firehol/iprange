@@ -3,6 +3,8 @@
 package tree
 
 import (
+	"bytes"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
@@ -67,26 +69,233 @@ func (f FixedSearch) cellAt(index int) ([]byte, error) {
 // fixed_tree/page.rs lower_bound). With insertion true the result is the
 // insertion point; otherwise a nonexact result steps back one record (the
 // greatest key < key).
+//
+// Codecs that carry the ordered key as a plain fixed cell prefix opt in
+// to the inline prefix probe (prefixKeyProbe): those searches read one
+// persistent slot and the key prefix per probe and never materialize a
+// Key, never dispatch through the codec interface, and never call per
+// probe through a closure. Every other codec runs the equivalent
+// closure-free loop through Codec.CompareKey. Both loops keep the
+// persistent slot-table read per probe (Rust slotted_page cell) and
+// reuse the final probe for the exact-match check.
 func lowerBound[T any](codec Codec[T], page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
-	cellLen, ok := FixedCellSize(codec, header.Level)
-	if !ok {
-		return lowerBoundBy(header, key, insertion, func(index int) (Key, error) {
-			return keyAt(codec, page, header, index)
-		})
-	}
-	search, err := newFixedSearch(page, *header, cellLen)
-	if err != nil {
-		return 0, false, err
-	}
-	return lowerBoundBy(header, key, insertion, func(index int) (Key, error) {
-		cell, err := search.cellAt(index)
-		if err != nil {
-			return Key{}, err
+	if _, prefix := codec.(PrefixKeyProbe); prefix {
+		if cellLen, fixed := FixedCellSize(codec, header.Level); fixed {
+			return fixedLowerBound(page, header, cellLen, codec.KeySize(), key, insertion)
 		}
-		return codec.ReadKey(cell, header.Level)
-	})
+	}
+	return lowerBoundCompare(codec, page, header, key, insertion)
 }
 
+// PrefixKeyProbe is the optional plain-prefix probe contract (Rust
+// fixed_tree key_at inlined into lower_bound). A codec implements it
+// exactly when every fixed-size cell of its pages (branch cells and
+// non-variable leaf cells) carries the entire ordered key as the cell
+// prefix in one of the canonical layouts handled by comparePrefixKey.
+// The codec remains the authority for its geometry through KeySize and
+// LeafSize; the marker only selects the inline compare.
+type PrefixKeyProbe interface {
+	PrefixKeyProbe()
+}
+
+// fixedLowerBound is the width-specialized binary search over fixed-size
+// cells (Rust fixed_tree/page.rs lower_bound with an inlined key_at):
+// per probe it reads the persistent slot and compares only the key
+// prefix bytes, so the hot path allocates nothing, builds no Key value,
+// dispatches through no interface, and calls no closure.
+func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key, insertion bool) (int, bool, error) {
+	if len(page) != format.PageSize || !format.SlottedShapeValid(header) ||
+		cellLen == 0 || cellLen > format.PageSize ||
+		keySize == 0 || keySize > cellLen {
+		return 0, false, corrupt("fixed slotted-page search shape is invalid")
+	}
+	lower := 0
+	upper := int(header.ItemCount)
+	lastCompare := 0
+	lastIndex := -1
+	for lower < upper {
+		middle := lower + (upper-lower)/2
+		work.KeyProbe(1)
+		cell, err := format.SlottedCell(page, header, middle, cellLen)
+		if err != nil {
+			return 0, false, corrupt("slotted-page cell is outside the record area")
+		}
+		compare, err := comparePrefixKey(cell, keySize, key)
+		if err != nil {
+			return 0, false, err
+		}
+		lastCompare = compare
+		lastIndex = middle
+		if compare < 0 {
+			lower = middle + 1
+		} else {
+			upper = middle
+		}
+	}
+	exists := false
+	if lower < int(header.ItemCount) {
+		compare := lastCompare
+		if lastIndex != lower {
+			work.KeyProbe(1)
+			cell, err := format.SlottedCell(page, header, lower, cellLen)
+			if err != nil {
+				return 0, false, corrupt("slotted-page cell is outside the record area")
+			}
+			var errCompare error
+			compare, errCompare = comparePrefixKey(cell, keySize, key)
+			if errCompare != nil {
+				return 0, false, errCompare
+			}
+		}
+		exists = compare == 0
+	}
+	if insertion || exists || lower == 0 {
+		return lower, exists, nil
+	}
+	return lower - 1, false, nil
+}
+
+// comparePrefixKey compares one fixed cell's key prefix with the target
+// key without materializing a Key (Rust key_at plus the derived Ord of
+// the key type, inlined). The canonical layouts are: 4-byte and 8-byte
+// little-endian widths compared into Key.Hi, 16-byte little-endian into
+// (Key.Hi, Key.Lo), and 32+ byte raw probe cells whose digest bytes
+// compare byte-for-byte while every little-endian u32 suffix word
+// compares numerically with the probe's big-endian word. Narrower or
+// wider widths are geometry errors; codecs with other key layouts
+// (variable leaves, composite keys) stay on Codec.CompareKey.
+func comparePrefixKey(cell []byte, keySize int, key Key) (int, error) {
+	switch keySize {
+	case 4:
+		if len(cell) < 4 {
+			return 0, corrupt("tree key is truncated")
+		}
+		return cmpU32(format.U32(cell), uint32(key.Hi)), nil
+	case 8:
+		if len(cell) < 8 {
+			return 0, corrupt("tree key is truncated")
+		}
+		return cmpU64(format.U64(cell), key.Hi), nil
+	case 16:
+		if len(cell) < 16 {
+			return 0, corrupt("tree key is truncated")
+		}
+		hi, lo := format.U128(cell)
+		return cmpU128(hi, lo, key.Hi, key.Lo), nil
+	default:
+		return CompareRawKey(cell, keySize, &key.Raw)
+	}
+}
+
+// CompareRawKey compares one raw-key cell with the normalized probe
+// bytes (Rust HashKey derive Ord): the digest bytes compare
+// byte-for-byte and every little-endian u32 suffix word compares
+// numerically with the probe's big-endian word, so wire cells order
+// exactly like the Rust derived Ord without materializing a probe key.
+// Codecs with digest-plus-numeric keys (membership hash, structure
+// hash) share this single ordering authority with the inline prefix
+// probe.
+func CompareRawKey(cell []byte, keySize int, raw *[40]byte) (int, error) {
+	if len(cell) < keySize || keySize > len(raw) || keySize < 32 {
+		return 0, corrupt("tree key is truncated")
+	}
+	if compare := bytes.Compare(cell[:32], raw[:32]); compare != 0 {
+		return compare, nil
+	}
+	for at := 32; at+4 <= keySize; at += 4 {
+		if compare := cmpU32(format.U32(cell[at:at+4]), beU32(raw[at:at+4])); compare != 0 {
+			return compare, nil
+		}
+	}
+	return 0, nil
+}
+
+func beU32(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func cmpU32(a, b uint32) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpU64(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpU128(ahi, alo, bhi, blo uint64) int {
+	if compare := cmpU64(ahi, bhi); compare != 0 {
+		return compare
+	}
+	return cmpU64(alo, blo)
+}
+
+// lowerBoundCompare is the closure-free general search (Rust
+// fixed_tree/page.rs lower_bound_by): per probe it reads one cell
+// through the codec geometry (fixed or variable) and asks the codec to
+// compare the cell key with the target without materializing a Key.
+func lowerBoundCompare[T any](codec Codec[T], page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
+	lower := 0
+	upper := int(header.ItemCount)
+	lastCompare := 0
+	lastIndex := -1
+	for lower < upper {
+		middle := lower + (upper-lower)/2
+		work.KeyProbe(1)
+		cell, err := codecCell(codec, page, header, middle)
+		if err != nil {
+			return 0, false, err
+		}
+		compare, err := codec.CompareKey(cell, header.Level, key)
+		if err != nil {
+			return 0, false, err
+		}
+		lastCompare = compare
+		lastIndex = middle
+		if compare < 0 {
+			lower = middle + 1
+		} else {
+			upper = middle
+		}
+	}
+	exists := false
+	if lower < int(header.ItemCount) {
+		compare := lastCompare
+		if lastIndex != lower {
+			work.KeyProbe(1)
+			cell, err := codecCell(codec, page, header, lower)
+			if err != nil {
+				return 0, false, err
+			}
+			compare, err = codec.CompareKey(cell, header.Level, key)
+			if err != nil {
+				return 0, false, err
+			}
+		}
+		exists = compare == 0
+	}
+	if insertion || exists || lower == 0 {
+		return lower, exists, nil
+	}
+	return lower - 1, false, nil
+}
+
+// lowerBoundBy is the reference closure-driven search kept for the
+// probe-count pinning test and as the textual mirror of the Rust
+// lower_bound_by; production searches use the closure-free loops above.
 func lowerBoundBy(header *Header, key Key, insertion bool, keyAt func(int) (Key, error)) (int, bool, error) {
 	lower := 0
 	upper := int(header.ItemCount)
@@ -207,26 +416,27 @@ type CellBuf struct {
 	len   int
 }
 
-// newBranchCell encodes one branch cell (key + child). Variable branch
+// newBranchCell encodes one branch cell (key + child) into the caller's
+// buffer (Rust CellBuf::branch returns a stack value; the Go caller owns
+// the 512-byte CellBuf so encoding never allocates). Variable branch
 // records (catalog name branches) route through the codec's WriteBranch
 // override, which returns the encoded length.
-func newBranchCell[T any](codec Codec[T], key Key, child uint32) (CellBuf, error) {
-	var cell CellBuf
+func newBranchCell[T any](codec Codec[T], key Key, child uint32, out *CellBuf) error {
 	if variable, ok := codec.(VariableCodec[T]); ok && codec.KeySize() == 0 {
-		length, err := variable.WriteBranch(key, child, cell.bytes[:])
+		length, err := variable.WriteBranch(key, child, out.bytes[:])
 		if err != nil {
-			return cell, err
+			return err
 		}
-		cell.len = length
+		out.len = length
 	} else {
-		cell.len = codec.KeySize() + 4
-		codec.WriteKey(key, cell.bytes[:codec.KeySize()])
-		format.PutU32(cell.bytes[codec.KeySize():cell.len], child)
+		out.len = codec.KeySize() + 4
+		codec.WriteKey(key, out.bytes[:codec.KeySize()])
+		format.PutU32(out.bytes[codec.KeySize():out.len], child)
 	}
-	if cell.len == 0 || cell.len > MaxBranchSize(codec) || cell.len > maxTreeCell {
-		return cell, unsupported("B+tree branch encoding is invalid")
+	if out.len == 0 || out.len > MaxBranchSize(codec) || out.len > maxTreeCell {
+		return unsupported("B+tree branch encoding is invalid")
 	}
-	return cell, nil
+	return nil
 }
 
 // Bytes returns the encoded branch cell.
