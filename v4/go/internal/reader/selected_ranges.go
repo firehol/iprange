@@ -23,7 +23,8 @@ type selectedRanges struct {
 	ops           rangeOps
 	active        *scratch
 	lookahead     *scratch
-	pending       *membershipRange
+	pending       membershipRange
+	hasPending    bool
 	physicalCount uint64
 }
 
@@ -68,29 +69,28 @@ func (s *selectedRanges) enableCache(heap *operationHeap, maxBytes uint64) error
 	return nil
 }
 
-// next returns the next selected run, or none when the physical cursor
-// is exhausted (the active scratch is cleared exactly like Rust).
-func (s *selectedRanges) next(check checkpoint) (*selectedRange, error) {
+// next returns the next selected run by value, or none when the physical
+// cursor is exhausted (the active scratch is cleared exactly like Rust).
+func (s *selectedRanges) next(check checkpoint) (selectedRange, bool, error) {
 	var current *membershipRange
-	if s.pending != nil {
-		p := s.pending
-		s.pending = nil
+	if s.hasPending {
+		s.hasPending = false
 		s.active, s.lookahead = s.lookahead, s.active
-		current = p
+		current = &s.pending
 	} else {
 		for {
 			first, ok, err := s.nextPhysical(check)
 			if err != nil {
-				return nil, err
+				return selectedRange{}, false, err
 			}
 			if !ok {
 				if err := s.active.clear(check); err != nil {
-					return nil, err
+					return selectedRange{}, false, err
 				}
-				return nil, nil
+				return selectedRange{}, false, nil
 			}
 			if err := s.active.load(s.r, first.membershipID, s.scope, check); err != nil {
-				return nil, err
+				return selectedRange{}, false, err
 			}
 			if len(s.active.presentList()) != 0 {
 				current = &first
@@ -100,30 +100,30 @@ func (s *selectedRanges) next(check checkpoint) (*selectedRange, error) {
 	}
 
 	if s.lookahead == nil {
-		return &selectedRange{from: current.from, to: current.to}, nil
+		return selectedRange{from: current.from, to: current.to}, true, nil
 	}
 	for {
 		next, ok, err := s.nextPhysical(check)
 		if err != nil {
-			return nil, err
+			return selectedRange{}, false, err
 		}
 		if !ok {
-			return &selectedRange{from: current.from, to: current.to}, nil
+			return selectedRange{from: current.from, to: current.to}, true, nil
 		}
 		if err := s.lookahead.load(s.r, next.membershipID, s.scope, check); err != nil {
-			return nil, err
+			return selectedRange{}, false, err
 		}
 		if len(s.lookahead.presentList()) == 0 {
-			return &selectedRange{from: current.from, to: current.to}, nil
+			return selectedRange{from: current.from, to: current.to}, true, nil
 		}
 		nextFrom, err := s.ops.next(current.to)
 		if err == nil && nextFrom.Equal(next.from) && samePresent(s.active.presentList(), s.lookahead.presentList()) {
 			current.to = next.to
 			continue
 		}
-		p := next
-		s.pending = &p
-		return &selectedRange{from: current.from, to: current.to}, nil
+		s.pending = next
+		s.hasPending = true
+		return selectedRange{from: current.from, to: current.to}, true, nil
 	}
 }
 

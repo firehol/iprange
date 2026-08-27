@@ -1040,11 +1040,11 @@ func newMembershipIterator(r *ImmutableReader, ipv4 bool) (*membershipIterator, 
 // algebraLoadNext loads the next selected run of one source (Rust
 // load_next).
 func algebraLoadNext(state *algebraSourceState, check checkpoint) error {
-	next, err := state.ranges.next(check)
+	next, ok, err := state.ranges.next(check)
 	if err != nil {
 		return err
 	}
-	if next != nil {
+	if ok {
 		state.rangeFrom, state.rangeTo = next.from, next.to
 		state.hasRange = true
 	} else {

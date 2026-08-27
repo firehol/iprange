@@ -71,8 +71,10 @@ type membershipJoinSweep struct {
 	leftRanges  *selectedRanges
 	rightRanges *selectedRanges
 	ops         rangeOps
-	left        *selectedRange
-	right       *selectedRange
+	left        selectedRange
+	right       selectedRange
+	hasLeft     bool
+	hasRight    bool
 	results     *membershipJoinResults
 	stats       membershipJoinStats
 	rightWidth  int
@@ -204,27 +206,27 @@ func joinMembershipFamily(leftR *ImmutableReader, scope *ScopeData, leftStream *
 
 func newMembershipJoinSweep(rightWidth int, leftRanges, rightRanges *selectedRanges, ops rangeOps, results *membershipJoinResults, check checkpoint) (*membershipJoinSweep, error) {
 	work.InputSourcePass(2)
-	left, err := leftRanges.next(check)
-	if err != nil {
-		return nil, err
-	}
-	right, err := rightRanges.next(check)
-	if err != nil {
-		return nil, err
-	}
-	return &membershipJoinSweep{
+	sweep := &membershipJoinSweep{
 		leftRanges:  leftRanges,
 		rightRanges: rightRanges,
 		ops:         ops,
-		left:        left,
-		right:       right,
 		results:     results,
 		rightWidth:  rightWidth,
-	}, nil
+	}
+	var err error
+	sweep.left, sweep.hasLeft, err = leftRanges.next(check)
+	if err != nil {
+		return nil, err
+	}
+	sweep.right, sweep.hasRight, err = rightRanges.next(check)
+	if err != nil {
+		return nil, err
+	}
+	return sweep, nil
 }
 
 func (s *membershipJoinSweep) run(check checkpoint) (membershipJoinStats, error) {
-	for s.left != nil || s.right != nil {
+	for s.hasLeft || s.hasRight {
 		if err := s.step(check); err != nil {
 			return membershipJoinStats{}, err
 		}
@@ -239,28 +241,28 @@ func (s *membershipJoinSweep) run(check checkpoint) (membershipJoinStats, error)
 
 func (s *membershipJoinSweep) step(check checkpoint) error {
 	switch {
-	case s.left != nil && s.right == nil:
-		return s.consumeLeft(*s.left, s.left.to, check)
-	case s.left == nil && s.right != nil:
-		return s.consumeRight(*s.right, s.right.to, check)
-	case s.left != nil && s.right != nil && s.left.to.Less(s.right.from):
-		return s.consumeLeft(*s.left, s.left.to, check)
-	case s.left != nil && s.right != nil && s.right.to.Less(s.left.from):
-		return s.consumeRight(*s.right, s.right.to, check)
-	case s.left != nil && s.right != nil && s.left.from.Less(s.right.from):
+	case s.hasLeft && !s.hasRight:
+		return s.consumeLeft(s.left, s.left.to, check)
+	case !s.hasLeft && s.hasRight:
+		return s.consumeRight(s.right, s.right.to, check)
+	case s.hasLeft && s.hasRight && s.left.to.Less(s.right.from):
+		return s.consumeLeft(s.left, s.left.to, check)
+	case s.hasLeft && s.hasRight && s.right.to.Less(s.left.from):
+		return s.consumeRight(s.right, s.right.to, check)
+	case s.hasLeft && s.hasRight && s.left.from.Less(s.right.from):
 		end, err := s.ops.previous(s.right.from)
 		if err != nil {
 			return err
 		}
-		return s.consumeLeft(*s.left, end, check)
-	case s.left != nil && s.right != nil && s.right.from.Less(s.left.from):
+		return s.consumeLeft(s.left, end, check)
+	case s.hasLeft && s.hasRight && s.right.from.Less(s.left.from):
 		end, err := s.ops.previous(s.left.from)
 		if err != nil {
 			return err
 		}
-		return s.consumeRight(*s.right, end, check)
-	case s.left != nil && s.right != nil:
-		return s.consumeOverlap(*s.left, *s.right, check)
+		return s.consumeRight(s.right, end, check)
+	case s.hasLeft && s.hasRight:
+		return s.consumeOverlap(s.left, s.right, check)
 	}
 	return nil
 }
@@ -270,18 +272,19 @@ func (s *membershipJoinSweep) consumeLeft(rangeRecord selectedRange, to addrKey,
 		return err
 	}
 	if rangeRecord.to == to {
-		next, err := s.leftRanges.next(check)
+		var err error
+		s.left, s.hasLeft, err = s.leftRanges.next(check)
 		if err != nil {
 			return err
 		}
-		s.left = next
 	} else {
 		next, err := s.ops.next(to)
 		if err != nil {
 			return err
 		}
 		rangeRecord.from = next
-		s.left = &rangeRecord
+		s.left = rangeRecord
+		s.hasLeft = true
 	}
 	return nil
 }
@@ -291,18 +294,19 @@ func (s *membershipJoinSweep) consumeRight(rangeRecord selectedRange, to addrKey
 		return err
 	}
 	if rangeRecord.to == to {
-		next, err := s.rightRanges.next(check)
+		var err error
+		s.right, s.hasRight, err = s.rightRanges.next(check)
 		if err != nil {
 			return err
 		}
-		s.right = next
 	} else {
 		next, err := s.ops.next(to)
 		if err != nil {
 			return err
 		}
 		rangeRecord.from = next
-		s.right = &rangeRecord
+		s.right = rangeRecord
+		s.hasRight = true
 	}
 	return nil
 }
@@ -316,32 +320,34 @@ func (s *membershipJoinSweep) consumeOverlap(left, right selectedRange, check ch
 		return err
 	}
 	if left.to == to {
-		next, err := s.leftRanges.next(check)
+		var err error
+		s.left, s.hasLeft, err = s.leftRanges.next(check)
 		if err != nil {
 			return err
 		}
-		s.left = next
 	} else {
 		next, err := s.ops.next(to)
 		if err != nil {
 			return err
 		}
 		left.from = next
-		s.left = &left
+		s.left = left
+		s.hasLeft = true
 	}
 	if right.to == to {
-		next, err := s.rightRanges.next(check)
+		var err error
+		s.right, s.hasRight, err = s.rightRanges.next(check)
 		if err != nil {
 			return err
 		}
-		s.right = next
 	} else {
 		next, err := s.ops.next(to)
 		if err != nil {
 			return err
 		}
 		right.from = next
-		s.right = &right
+		s.right = right
+		s.hasRight = true
 	}
 	return nil
 }

@@ -140,8 +140,10 @@ type joinDirectSweep struct {
 	membership *selectedRanges
 	direct     *directIterator
 	ops        rangeOps
-	left       *selectedRange
-	right      *directRangeFrame
+	left       selectedRange
+	right      directRangeFrame
+	hasLeft    bool
+	hasRight   bool
 	table      *joinDirectTable
 	stats      joinDirectStats
 }
@@ -248,7 +250,7 @@ func newJoinDirectSweep(membership *selectedRanges, direct *directIterator, ops 
 }
 
 func (s *joinDirectSweep) run(check checkpoint) (joinDirectStats, error) {
-	for s.left != nil {
+	for s.hasLeft {
 		if err := s.step(check); err != nil {
 			return joinDirectStats{}, err
 		}
@@ -262,22 +264,22 @@ func (s *joinDirectSweep) run(check checkpoint) (joinDirectStats, error) {
 }
 
 func (s *joinDirectSweep) step(check checkpoint) error {
-	if s.left == nil {
+	if !s.hasLeft {
 		return corrupt("direct join lost its membership range")
 	}
-	current := *s.left
-	for s.right != nil && s.right.to.Less(current.from) {
+	current := s.left
+	for s.hasRight && s.right.to.Less(current.from) {
 		if err := s.advanceRight(check); err != nil {
 			return err
 		}
 	}
-	if s.right == nil {
+	if !s.hasRight {
 		if err := s.consume(current.from, current.to, nil, check); err != nil {
 			return err
 		}
 		return s.advanceLeft(check)
 	}
-	provider := *s.right
+	provider := s.right
 	if current.to.Less(provider.from) {
 		if err := s.consume(current.from, current.to, nil, check); err != nil {
 			return err
@@ -293,7 +295,7 @@ func (s *joinDirectSweep) step(check checkpoint) error {
 			return err
 		}
 		current.from = provider.from
-		s.left = &current
+		s.left = current
 		return nil
 	}
 
@@ -319,7 +321,7 @@ func (s *joinDirectSweep) step(check checkpoint) error {
 			return err
 		}
 		current.from = next
-		s.left = &current
+		s.left = current
 	}
 	if provider.to == to {
 		if err := s.advanceRight(check); err != nil {
@@ -331,17 +333,18 @@ func (s *joinDirectSweep) step(check checkpoint) error {
 			return err
 		}
 		provider.from = next
-		s.right = &provider
+		s.right = provider
+		s.hasRight = true
 	}
 	return nil
 }
 
 func (s *joinDirectSweep) advanceLeft(check checkpoint) error {
-	left, err := s.membership.next(check)
+	var err error
+	s.left, s.hasLeft, err = s.membership.next(check)
 	if err != nil {
 		return err
 	}
-	s.left = left
 	return nil
 }
 
@@ -359,10 +362,10 @@ func (s *joinDirectSweep) advanceRight(check checkpoint) error {
 		if err != nil {
 			return err
 		}
-		frame := next
-		s.right = &frame
+		s.right = next
+		s.hasRight = true
 	} else {
-		s.right = nil
+		s.hasRight = false
 	}
 	return nil
 }
