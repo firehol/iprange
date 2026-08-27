@@ -218,8 +218,8 @@ func replaceBranchChild[T any](codec Codec[T], store Store, pageNumber uint32, i
 	if _, err := branchChild(codec, page, &header, index, store.PageLimit()); err != nil {
 		return err
 	}
-	replacement, err := newBranchCell(codec, key, child)
-	if err != nil {
+	var replacement CellBuf
+	if err := newBranchCell(codec, key, child, &replacement); err != nil {
 		return err
 	}
 	if len(replacement.Bytes()) != oldLen {

@@ -362,12 +362,11 @@ func insertBranch[T any](codec Codec[T], store Store, frame Frame, leftFirst Key
 	if err != nil {
 		return branchSplit{}, false, err
 	}
-	left, err := newBranchCell(codec, leftFirst, leftChild)
-	if err != nil {
+	var left, right CellBuf
+	if err := newBranchCell(codec, leftFirst, leftChild, &left); err != nil {
 		return branchSplit{}, false, err
 	}
-	right, err := newBranchCell(codec, rightFirst, rightPage)
-	if err != nil {
+	if err := newBranchCell(codec, rightFirst, rightPage, &right); err != nil {
 		return branchSplit{}, false, err
 	}
 	edit := Replacement{index: frame.Index, cells: [][]byte{left.Bytes(), right.Bytes()}}
@@ -509,12 +508,11 @@ func newRoot[T any](codec Codec[T], store Store, leftPage uint32, leftFirst Key,
 	if err != nil {
 		return 0, err
 	}
-	left, err := newBranchCell(codec, leftFirst, leftPage)
-	if err != nil {
+	var left, right CellBuf
+	if err := newBranchCell(codec, leftFirst, leftPage, &left); err != nil {
 		return 0, err
 	}
-	right, err := newBranchCell(codec, rightFirst, rightPage)
-	if err != nil {
+	if err := newBranchCell(codec, rightFirst, rightPage, &right); err != nil {
 		return 0, err
 	}
 	txn := store.TargetTxn()
@@ -573,8 +571,8 @@ func replaceFirstBranch[T any](codec Codec[T], store Store, frame Frame, key Key
 	if err != nil {
 		return branchSplit{}, false, err
 	}
-	replacement, err := newBranchCell(codec, key, child)
-	if err != nil {
+	var replacement CellBuf
+	if err := newBranchCell(codec, key, child, &replacement); err != nil {
 		return branchSplit{}, false, err
 	}
 	edit := Replacement{index: frame.Index, cells: [][]byte{replacement.Bytes()}}
