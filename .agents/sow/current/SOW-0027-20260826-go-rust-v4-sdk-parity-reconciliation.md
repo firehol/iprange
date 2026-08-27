@@ -116,9 +116,9 @@ Rust Windows has never been natively validated (the Rust client suite
 is cfg(all(test, unix))). Go implements the proved-absence terminal so
 the Windows recovery and cleanup machinery is usable; whether the Rust
 client contract should be relaxed on Windows is a cross-SDK decision
-for the user, not silently adopted here.
-And the Windows worker-control unlink/reopen shape (recorded 2026-08-27
-in the slice 2d gate round): Go unlinks the worker control on every
+for the user, not silently adopted here; and the Windows
+worker-control unlink/reopen shape (recorded 2026-08-27 in the slice 2d
+gate round): Go unlinks the worker control on every
 platform (Rust `remove_path` is `#[cfg(unix)]` at both the call site,
 `worker/client.rs`, and the definition, `worker/control.rs`, so Rust
 Windows leaves the control file behind), and Go therefore reopens the
@@ -417,11 +417,31 @@ is the fourth accepted Go-shape divergence (recorded above) and the
 Rust `#[cfg(unix)]` split, plus P3-1 that the fixes-narrative should
 name the unlink as the divergence driver. The fix commit resolves all
 of them: `InstallHandler` now pre-resolves the two kernel32 addresses
-in ordinary context and the callback terminates through raw
-`syscall.SyscallN` only; the control comments and the divergence
+in ordinary context and the callback terminates through pre-resolved
+`syscall.SyscallN` addresses only (runtime-mediated, verified
+allocation-, lock-, and panic-free on this path); the control comments
+and the divergence
 enumeration now disclose the Rust `cfg(unix)` split; the manifest row
-lost the stale clause; the narrative names the unlink. Gate pending
-the five-reviewer round 3 at the fix HEAD.
+lost the stale clause; the narrative names the unlink.
+
+Review gate round 3 (2026-08-27, HEAD `cf07eff2`): all five reviewers
+PASS on the same HEAD; slice 2d gate closed. The round-2 P2-1s and
+record-truth notes are verified fixed: the Windows VEH callback now
+terminates through pre-resolved kernel32 addresses only (performance
+PASS; GetCurrentProcess retained by decision to mirror the Rust
+authority, pseudo-handle substitution explicitly not required); the
+Windows worker-control unlink/reopen is enumerated as the fourth
+accepted divergence with the Rust `#[cfg(unix)]` split disclosed in
+code comments and narrative (Rust-parity PASS); the manifest worker
+row lost the stale clause (Go-idioms PASS); the wire surface is
+untouched (wire/integrity PASS, P3-2 vector provenance carried); the
+records verify against both trees (APIs/records PASS). Carried
+non-blocking P3 notes, no failure scenario: alloc-ceiling sensitivity
+at 450 vs the linux floor 233 (performance P3-1, a per-OS ceiling
+would restore sensitivity), vector provenance resting on the recorded
+generator process (wire P3-2), and the runtime-mediated SyscallN path
+as the absolute terminal floor (performance P3-3, a naked-asm stub
+would only remove the remaining cgocall entry, not required).
 
 ## Requirements
 
