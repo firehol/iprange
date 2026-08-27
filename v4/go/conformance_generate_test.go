@@ -384,8 +384,8 @@ func regenPublish(t *testing.T, livePath, outputPath string) {
 	}
 }
 
-// TestRegenerateGoFixtures regenerates the five Go-produced fixtures with
-// the Rust two-phase contract: generate all files into a staging corpus,
+// TestRegenerateGoFixtures regenerates the seven Go-produced fixtures
+// with the Rust two-phase contract: generate all files into a staging corpus,
 // verify the staging corpus with the exact same conformance suite in a
 // subprocess, and only then publish each file next to its committed
 // target and rename over it. A failed verification leaves the committed
@@ -428,6 +428,8 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	regenDirectIPv4(t, goDir)
 	regenFirstSeenIPv6(t, goDir)
 	regenHistoryMembershipIPv4(t, goDir)
+	regenMembershipIPv4(t, goDir)
+	regenMembershipIPv6(t, goDir)
 	regenStructuredIPv4(t, goDir)
 	regenStructuredIPv4NoThreat(t, goDir)
 
@@ -478,6 +480,8 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	publish("direct-ipv4.iprdb")
 	publish("first-seen-ipv6.iprdb")
 	publish("history-membership-ipv4.iprdb")
+	publish("membership-ipv4.iprdb")
+	publish("membership-ipv6.iprdb")
 	publish("structured-ipv4.iprdb")
 	publish("structured-ipv4-nothreat.iprdb")
 }

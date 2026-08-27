@@ -8,11 +8,12 @@ are not compatibility inputs.
 ## Corpus
 
 `cases.json` is the language-neutral semantic manifest. The corpus contains
-eleven compact immutable snapshots produced through the public writers of both
-implementations. The Rust-produced files come from the public Rust live writer
-and public snapshot operation; the Go-produced files come from the public Go
-writer (`v4/go` `Create`/`OpenWriter`/`BeginDirect`/`ProjectHistory`/`Commit`,
-no snapshot operation yet - Go writes the compact main file directly):
+thirteen compact immutable snapshots produced through the public writers of
+both implementations. The Rust-produced files come from the public Rust live
+writer plus `snapshot_to`; the Go-produced files come from the public Go
+`CreateLive`/`OpenLiveWriter` transactions and the public live `SnapshotTo`
+(the generator stages every fixture and snapshots the closed live pair exactly
+like the Rust generator):
 
 - `rust/direct-ipv4.iprdb`: arrival-order direct assignments and clearing;
 - `rust/first-seen-ipv6.iprdb`: full IPv6 first-seen coverage and empty metadata;
@@ -30,10 +31,18 @@ no snapshot operation yet - Go writes the compact main file directly):
 - `go/first-seen-ipv6.iprdb`: the same first-seen IPv6 coverage produced by the
   Go writer; and
 - `go/history-membership-ipv4.iprdb`: a membership destination produced by the
-  Go public `Writer.ProjectHistory` workflow from 1000 singleton last-seen
+  Go public `LiveWriter.ProjectHistory` workflow from 1000 singleton last-seen
   points, projected through three last-seen feeds (cutoffs 9/10/11 over
   `last_seen = 10 + index % 3`), pinning the Rust `one_source_pass` vector and
   window semantics in both readers;
+- `go/membership-ipv4.iprdb`: the same 70-feed delete-and-reuse membership
+  coverage as the Rust membership IPv4 fixture, produced by the Go
+  `BeginMembershipTransaction` workflow (feed-005 deleted, its index reused,
+  Replace over 10.0.0.0/24 and 10.0.1.0/24 with the 10.0.1.0-127 Union),
+  pinning the member-import semantics in both readers;
+- `go/membership-ipv6.iprdb`: the same whole-space global + special /64 union
+  coverage and the 1 MiB repeated-byte metadata packet as the Rust membership
+  IPv6 fixture, produced by the Go `BeginMembershipTransaction` workflow;
 - `go/structured-ipv4.iprdb`: the same typed network enrichment, named threat
   feeds, arrival-order overwrites, clearing, lazy membership, and exact
   metadata as the Rust structured fixture, produced by the Go structured

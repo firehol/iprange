@@ -397,7 +397,7 @@ func loadManifest(t *testing.T) conformanceManifest {
 		}
 	}
 	// Enforce the exact fixture inventory and producer coverage: the six
-	// committed Rust fixtures plus the five Go-produced fixtures, and
+	// committed Rust fixtures plus the seven Go-produced fixtures, and
 	// no extra fixtures may appear.
 	want := []string{
 		"rust/direct-ipv4.iprdb",
@@ -409,6 +409,8 @@ func loadManifest(t *testing.T) conformanceManifest {
 		"go/direct-ipv4.iprdb",
 		"go/first-seen-ipv6.iprdb",
 		"go/history-membership-ipv4.iprdb",
+		"go/membership-ipv4.iprdb",
+		"go/membership-ipv6.iprdb",
 		"go/structured-ipv4.iprdb",
 		"go/structured-ipv4-nothreat.iprdb",
 	}

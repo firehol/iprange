@@ -443,6 +443,34 @@ generator process (wire P3-2), and the runtime-mediated SyscallN path
 as the absolute terminal floor (performance P3-3, a naked-asm stub
 would only remove the remaining cgocall entry, not required).
 
+Sub-state (2026-08-27): milestone 3 (symmetric conformance proof, plan
+step 6) started after slice 2d's gate closed. Slice plan:
+- 3a symmetric corpus: Go-produced membership-ipv4 and membership-ipv6
+  fixtures through the public `BeginMembershipTransaction` workflows
+  (mirroring generate.rs membership_ipv4/membership_ipv6 op sequences
+  exactly: 70 feeds with delete + feed-index reuse on IPv4, global +
+  special feeds across the whole IPv6 space with the 1 MiB repeated-
+  byte metadata on IPv6), published through the existing public live
+  `SnapshotTo` path (regenPublish), added to cases.json and both
+  reader inventories; both readers re-verify the extended corpus.
+- 3b mixed live cooperation: cross-language subprocess tests cooperate
+  on the same live database in both directions (Go parent spawns the
+  Rust test binary, Rust parent spawns the Go test binary; children are
+  env-gated entries of the other language's test binary, built at test
+  time - `cargo test --no-run` / `go test -c` - exactly like the
+  same-language subprocess pattern and the explicit regeneration
+  entry). Coverage maps the acceptance list: registration/release,
+  writer exclusion, reclamation, stale slots, sidecar replacement,
+  transition/reservation states, publication inspection, and commit
+  resolution. Gate: linux/amd64 with both toolchains available; runs
+  documented in the conformance README (explicit env, like fixture
+  regeneration) so plain suites stay fast.
+- 3c commit-resolution + snapshot cross proofs (same-transaction /
+  different-nonce attempts cross-language, compact-snapshot cross-open)
+  and README/records updates (the v4/conformance README currently
+  carries stale producer-path wording; the Go fixture publisher has
+  been SnapshotTo-based since slice 2a).
+
 ## Requirements
 
 ### Purpose

@@ -8620,6 +8620,380 @@
    ]
   },
   {
+   "file": "go/membership-ipv4.iprdb",
+   "producer": "go",
+   "family": "ipv4",
+   "kind": "membership",
+   "tag": "threat-feeds",
+   "metadata": {
+    "state": "absent"
+   },
+   "address_count": "512",
+   "feeds": [
+    {
+     "name": "feed-000",
+     "index": 0
+    },
+    {
+     "name": "feed-001",
+     "index": 1
+    },
+    {
+     "name": "feed-002",
+     "index": 2
+    },
+    {
+     "name": "feed-003",
+     "index": 3
+    },
+    {
+     "name": "feed-004",
+     "index": 4
+    },
+    {
+     "name": "feed-reused",
+     "index": 5
+    },
+    {
+     "name": "feed-006",
+     "index": 6
+    },
+    {
+     "name": "feed-007",
+     "index": 7
+    },
+    {
+     "name": "feed-008",
+     "index": 8
+    },
+    {
+     "name": "feed-009",
+     "index": 9
+    },
+    {
+     "name": "feed-010",
+     "index": 10
+    },
+    {
+     "name": "feed-011",
+     "index": 11
+    },
+    {
+     "name": "feed-012",
+     "index": 12
+    },
+    {
+     "name": "feed-013",
+     "index": 13
+    },
+    {
+     "name": "feed-014",
+     "index": 14
+    },
+    {
+     "name": "feed-015",
+     "index": 15
+    },
+    {
+     "name": "feed-016",
+     "index": 16
+    },
+    {
+     "name": "feed-017",
+     "index": 17
+    },
+    {
+     "name": "feed-018",
+     "index": 18
+    },
+    {
+     "name": "feed-019",
+     "index": 19
+    },
+    {
+     "name": "feed-020",
+     "index": 20
+    },
+    {
+     "name": "feed-021",
+     "index": 21
+    },
+    {
+     "name": "feed-022",
+     "index": 22
+    },
+    {
+     "name": "feed-023",
+     "index": 23
+    },
+    {
+     "name": "feed-024",
+     "index": 24
+    },
+    {
+     "name": "feed-025",
+     "index": 25
+    },
+    {
+     "name": "feed-026",
+     "index": 26
+    },
+    {
+     "name": "feed-027",
+     "index": 27
+    },
+    {
+     "name": "feed-028",
+     "index": 28
+    },
+    {
+     "name": "feed-029",
+     "index": 29
+    },
+    {
+     "name": "feed-030",
+     "index": 30
+    },
+    {
+     "name": "feed-031",
+     "index": 31
+    },
+    {
+     "name": "feed-032",
+     "index": 32
+    },
+    {
+     "name": "feed-033",
+     "index": 33
+    },
+    {
+     "name": "feed-034",
+     "index": 34
+    },
+    {
+     "name": "feed-035",
+     "index": 35
+    },
+    {
+     "name": "feed-036",
+     "index": 36
+    },
+    {
+     "name": "feed-037",
+     "index": 37
+    },
+    {
+     "name": "feed-038",
+     "index": 38
+    },
+    {
+     "name": "feed-039",
+     "index": 39
+    },
+    {
+     "name": "feed-040",
+     "index": 40
+    },
+    {
+     "name": "feed-041",
+     "index": 41
+    },
+    {
+     "name": "feed-042",
+     "index": 42
+    },
+    {
+     "name": "feed-043",
+     "index": 43
+    },
+    {
+     "name": "feed-044",
+     "index": 44
+    },
+    {
+     "name": "feed-045",
+     "index": 45
+    },
+    {
+     "name": "feed-046",
+     "index": 46
+    },
+    {
+     "name": "feed-047",
+     "index": 47
+    },
+    {
+     "name": "feed-048",
+     "index": 48
+    },
+    {
+     "name": "feed-049",
+     "index": 49
+    },
+    {
+     "name": "feed-050",
+     "index": 50
+    },
+    {
+     "name": "feed-051",
+     "index": 51
+    },
+    {
+     "name": "feed-052",
+     "index": 52
+    },
+    {
+     "name": "feed-053",
+     "index": 53
+    },
+    {
+     "name": "feed-054",
+     "index": 54
+    },
+    {
+     "name": "feed-055",
+     "index": 55
+    },
+    {
+     "name": "feed-056",
+     "index": 56
+    },
+    {
+     "name": "feed-057",
+     "index": 57
+    },
+    {
+     "name": "feed-058",
+     "index": 58
+    },
+    {
+     "name": "feed-059",
+     "index": 59
+    },
+    {
+     "name": "feed-060",
+     "index": 60
+    },
+    {
+     "name": "feed-061",
+     "index": 61
+    },
+    {
+     "name": "feed-062",
+     "index": 62
+    },
+    {
+     "name": "feed-063",
+     "index": 63
+    },
+    {
+     "name": "feed-064",
+     "index": 64
+    },
+    {
+     "name": "feed-065",
+     "index": 65
+    },
+    {
+     "name": "feed-066",
+     "index": 66
+    },
+    {
+     "name": "feed-067",
+     "index": 67
+    },
+    {
+     "name": "feed-068",
+     "index": 68
+    },
+    {
+     "name": "feed-069",
+     "index": 69
+    }
+   ],
+   "membership_ranges": [
+    {
+     "from": "10.0.0.0",
+     "to": "10.0.0.255",
+     "feeds": [
+      "feed-000",
+      "feed-reused",
+      "feed-063",
+      "feed-064",
+      "feed-069"
+     ]
+    },
+    {
+     "from": "10.0.1.0",
+     "to": "10.0.1.127",
+     "feeds": [
+      "feed-000",
+      "feed-001",
+      "feed-reused",
+      "feed-063",
+      "feed-064",
+      "feed-065",
+      "feed-069"
+     ]
+    },
+    {
+     "from": "10.0.1.128",
+     "to": "10.0.1.255",
+     "feeds": [
+      "feed-001",
+      "feed-065"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "go/membership-ipv6.iprdb",
+   "producer": "go",
+   "family": "ipv6",
+   "kind": "membership",
+   "tag": "threat-feeds",
+   "metadata": {
+    "state": "repeat",
+    "byte": 120,
+    "length": 1048576
+   },
+   "address_count": "340282366920938463463374607431768211456",
+   "feeds": [
+    {
+     "name": "global",
+     "index": 0
+    },
+    {
+     "name": "special",
+     "index": 1
+    }
+   ],
+   "membership_ranges": [
+    {
+     "from": "::",
+     "to": "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+     "feeds": [
+      "global"
+     ]
+    },
+    {
+     "from": "2001:db8::",
+     "to": "2001:db8::ffff",
+     "feeds": [
+      "global",
+      "special"
+     ]
+    },
+    {
+     "from": "2001:db8::1:0",
+     "to": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "feeds": [
+      "global"
+     ]
+    }
+   ]
+  },
+  {
    "file": "go/structured-ipv4.iprdb",
    "producer": "go",
    "family": "ipv4",
