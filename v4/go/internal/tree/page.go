@@ -81,7 +81,11 @@ func (f FixedSearch) cellAt(index int) ([]byte, error) {
 func lowerBound[T any](codec Codec[T], page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
 	if _, prefix := codec.(PrefixKeyProbe); prefix {
 		if cellLen, fixed := FixedCellSize(codec, header.Level); fixed {
-			return fixedLowerBound(page, header, cellLen, codec.KeySize(), key, insertion)
+			var validate func(cell []byte) error
+			if v, ok := codec.(ProbeValidator); ok {
+				validate = v.ValidateProbeCell
+			}
+			return fixedLowerBound(page, header, cellLen, codec.KeySize(), key, insertion, validate)
 		}
 	}
 	return lowerBoundCompare(codec, page, header, key, insertion)
@@ -98,12 +102,23 @@ type PrefixKeyProbe interface {
 	PrefixKeyProbe()
 }
 
+// ProbeValidator is the optional per-probe semantic check of the
+// inline fixed-cell probe (Rust read_key decoding inside lower_bound):
+// codecs whose cells carry validated fields beyond the ordered key
+// bytes (the membership and structure hash suffix IDs and word counts)
+// implement it so the probe rejects exactly what the codec's ReadKey
+// rejects, while plain numeric-prefix codecs keep the zero-dispatch
+// probe.
+type ProbeValidator interface {
+	ValidateProbeCell(cell []byte) error
+}
+
 // fixedLowerBound is the width-specialized binary search over fixed-size
 // cells (Rust fixed_tree/page.rs lower_bound with an inlined key_at):
 // per probe it reads the persistent slot and compares only the key
 // prefix bytes, so the hot path allocates nothing, builds no Key value,
 // dispatches through no interface, and calls no closure.
-func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key, insertion bool) (int, bool, error) {
+func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
 	if len(page) != format.PageSize || !format.SlottedShapeValid(header) ||
 		cellLen == 0 || cellLen > format.PageSize ||
 		keySize == 0 || keySize > cellLen {
@@ -119,6 +134,11 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 		cell, err := format.SlottedCell(page, header, middle, cellLen)
 		if err != nil {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
+		}
+		if validate != nil {
+			if err := validate(cell); err != nil {
+				return 0, false, err
+			}
 		}
 		compare, err := comparePrefixKey(cell, keySize, key)
 		if err != nil {
@@ -140,6 +160,11 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 			cell, err := format.SlottedCell(page, header, lower, cellLen)
 			if err != nil {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
+			}
+			if validate != nil {
+				if err := validate(cell); err != nil {
+					return 0, false, err
+				}
 			}
 			var errCompare error
 			compare, errCompare = comparePrefixKey(cell, keySize, key)

@@ -339,6 +339,16 @@ func (hashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 // little-endian u32 suffix words, 40-byte fixed keys and leaves).
 func (hashCodec) PrefixKeyProbe() {}
 
+// ValidateProbeCell rejects the cells the raw probe must not compare
+// blindly (Rust decode_hash inside read_key): the word count must be
+// within bounds and the membership id non-zero, exactly like
+// decodeHashKey, so the inline probe refuses the same corrupt cells
+// the general read path refuses.
+func (hashCodec) ValidateProbeCell(cell []byte) error {
+	_, _, _, err := decodeHashKey(cell)
+	return err
+}
+
 // CompareKey compares one cell key without materializing a Key (Rust
 // HashKey Ord; never called on the hot path, which uses the raw prefix
 // probe): the cell keeps the wire layout (little-endian suffix), so the

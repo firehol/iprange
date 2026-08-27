@@ -351,6 +351,19 @@ func (c structureHashCodec) ReadKey(cell []byte, level uint16) (tree.Key, error)
 // the little-endian u32 id suffix, 36-byte fixed keys and leaves).
 func (structureHashCodec) PrefixKeyProbe() {}
 
+// ValidateProbeCell rejects the cells the raw probe must not compare
+// blindly (Rust decode_hash inside read_key): the key prefix must be
+// complete and the structure id non-zero, exactly like decodeStructureHash.
+// Branch cells carry the child pointer after the key, so the key is
+// validated as its own prefix like Rust read_key slices branch cells.
+func (structureHashCodec) ValidateProbeCell(cell []byte) error {
+	if len(cell) < structureHashKeySize {
+		return corrupt("structure hash record is malformed")
+	}
+	_, err := decodeStructureHash(cell[:structureHashKeySize])
+	return err
+}
+
 // CompareKey compares one cell key without materializing a Key (Rust
 // HashKey Ord; never called on the hot path, which uses the raw prefix
 // probe): the cell keeps the wire layout (little-endian id), so the
