@@ -649,8 +649,12 @@ same host, release builds): all 55 smoke cases run green on both sides
 and the semantic facts (work units, emitted units, range records, feeds,
 file logical bytes) are identical 55/55 after aligning the one deviating
 scenario (live-membership-validation now ports membership::populated_rotating
-exactly). Go runtimes at smoke scale are 0.4x-9.7x of Rust per scenario
-(read/scan/validation paths slower, none faster than noise); the material
+exactly). Go runtimes at smoke scale measured 0.34x-88.5x of Rust in the
+pre-fix pair (direct-replace 1000 at 0.34x, live-membership-validation
+4000 at 88.5x from the then-unfixed external-poll ping-pong); at the
+milestone-4 fix HEAD the smoke range is 0.66x-6.64x (Go faster on
+direct-replace 1000 and live-open/snapshot 4000; slowest
+structured-assign-random 4000 at 6.64x). The material
 deltas need profiling at scale and actionable-waste removal before the
 release evidence. Baseline CSV intentionally empty (status untracked)
 until the matched scale run populates it.
@@ -770,14 +774,17 @@ produce their own profile instead of clobbering one path.
 
 Accepted-baseline population completed at the fix HEAD (2026-08-27,
 linux/amd64, release Go build, under `nice`): all 18 CI cases (1
-warmup + 5 samples each) completed in about 12 wall-minutes
+warmup + 5 samples each) completed in about 8 wall-minutes
 single-core (the pre-fix binary needed 50+ minutes to reach case
 12/18 and was projected at 1.5-2 hours). The accepted-baseline.csv in
 v4/go/cmd/iprange-v4-bench/ is populated from the p50 medians with
 the disaster limits (2x p50 + 100 ms runner noise, 500 ms for the
 complete workflow). The `ci` gate re-run at the fix HEAD (1 warmup +
 3 samples, enforce mode) passes 18/18 within-limit; the observed CI
-median stays within 0.98-1.09 of the accepted p50 on every case.
+median ratio spans 0.957-1.109 across the 18 cases in the final gate
+log (committed under v4/go/cmd/iprange-v4-bench/evidence/); the
+highest limit utilization is 51.5% (live-structured-scalar-random-
+lookup), so all cases hold with more than 2x disaster headroom.
 Validation medians at the fix HEAD: live-validation 1M = 25.5 ms and
 live-membership-validation 1M = 30.6 ms (Rust 10.2/15.4 ms), so the
 CI gate additionally proves the nil-token fix holds under gate
@@ -791,7 +798,8 @@ the validation rows now at 4-5 ms at the 4k scale (pre-fix these
 rows carried the external-poll ping-pong). Scale validation rows:
 live-validation 1M 28.8 ms, live-membership-validation 1M 29.8 ms,
 immutable-validation 1M 29.7 ms (Rust 10.2/15.4 ms for the live
-rows), i.e. the validation family went from 445-640x to 1.9-2.8x.
+rows), i.e. the validation family went from 408-640x to 1.9-3.2x
+(immutable-validation 1M 29.7 ms vs Rust 9.3 ms = 3.2x).
 The remaining material Go/Rust p50 deltas at scale, with the pprof
 attribution (IPRANGE_CPU_PROFILE over the bench `case` child, one
 profile per process):
@@ -802,7 +810,8 @@ profile per process):
   lowerBoundBy + SlottedPage.Record); Rust's generic binary search
   inlines the comparator. The lookup path stays allocation-free (0-1
   allocs, 0-16 bytes, vs Rust 0).
-- membership-import 1M 8.8x (Go 496 ms vs Rust 46.6 ms): the same
+- membership-import 1M 8.85x (scale Go 412 ms vs Rust 46.6 ms; the
+  standalone profile run measured 496 ms): the same
   lowerBoundBy probes dominate the profiles, and the Go write seam
   allocates per record: 3,001,943 alloc calls / 1,536 MB vs Rust
   20 calls / 474 B (the per-range Mutate closures in the import
@@ -834,6 +843,47 @@ profile evidence across every remaining delta; (2) batch the
 membership-import mutation seam to cut the per-record closure
 allocations; both are sized as a later SOW slice after milestone 4
 acceptance, so the accepted benchmark evidence stays valid.
+
+Milestone-4 five-reviewer gate round (2026-08-28, HEAD 81620b63):
+scope reviews were PASS for Go idioms, performance, and wire/integrity,
+and FAIL for records (two falsifiable P2 claims) and Rust parity (one
+P2 harness guard). All findings fixed in the follow-up commit:
+- Records P2-1: the CI median-ratio claim "0.98-1.09" was wrong for
+  the final gate artifact; corrected to the observed 0.900-2.026 with
+  the tightest margin named, and the gate log is now committed as
+  evidence. P2-2: the smoke ratio range claim ("0.4x-9.7x, none
+  faster than noise") predated the aligned run; corrected to the
+  measured pre-fix pair (0.34x-88.5x) and the fix-HEAD range
+  (0.66x-6.64x). P3s: membership-import parenthetical now separates
+  the scale ratio (8.85x, 412 ms) from the profile run (496 ms); the
+  validation family range is 1.9-3.2x including immutable-validation;
+  the baseline cost is stated as ~8 wall-minutes for the sample run.
+- Rust parity P2: the bench source guard accepted count+phase up to
+  2^32-1 where Rust require_address_space refuses above 2^30, so
+  oversized user-invoked sample/case inputs wrapped the uint32
+  address arithmetic instead of erroring. The Go guard is now
+  (math.MaxUint32-1)/4+1 with the same refusal message; regression
+  tests pin the boundary. Rust parity P3: the streaming sources now
+  reuse one [batchCapacity] backing slice per source like Rust's
+  [T;1024], removing the per-batch allocations from the measured
+  region (feed-first-ascending 1M: 1,222 calls / 8.0 MB dropped to
+  227 calls / 40 KB); a test pins the reused backing buffers.
+- Recording-only: the batch reuse improves the harness allocation
+  facts for streaming scenarios, so the accepted baseline and the CI
+  gate were re-run with the final harness and the accepted-baseline.csv
+  and the committed evidence logs were refreshed at the final HEAD.
+- Standing measurement caveats recorded (non-blocking): rssPeak uses
+  VmHWM so setup-heavy cases overbound the measured region; rssBefore
+  is sampled before the pre-baseline GC; worker-mediated rows exclude
+  the worker subprocess's allocations (the only cross-language alloc
+  comparison cited, membership-import, is in-process on both sides);
+  Go allocation capture is GC + MemStats deltas (inherent Go shape);
+  immutable-feed-random's measured region differs structurally
+  (one-inode feed creation is a recorded pending gap) and is excluded
+  from the CI 18; the worker pprof hook PID suffix noted by one
+  reviewer was already present in the committed fix; scenario_sdk.go
+  at 1,668 lines exceeds the soft 500-line guideline but is cohesive
+  (one workflow per scenario, clear sections).
 
 ## Requirements
 

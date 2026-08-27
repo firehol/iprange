@@ -4,6 +4,7 @@
 package main
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/firehol/iprange/v4/go"
@@ -66,7 +67,10 @@ func requireAddressSpace(count int, phase uint32) error {
 	if count <= 0 {
 		return errBenchTooLarge
 	}
-	if uint64(count)+uint64(phase) > uint64(0xffffffff) {
+	// Rust require_address_space: the maximum alone address index is
+	// (u32::MAX-1)/4 (the last range spans index*4..index*4+1); anything
+	// above wraps the uint32 address arithmetic instead of erroring.
+	if uint64(count)+uint64(phase) > (uint64(math.MaxUint32)-1)/4+1 {
 		return errBenchTooLarge
 	}
 	return nil
@@ -87,20 +91,21 @@ type directSource struct {
 	next   int
 	nested bool
 	perm   permutation
+	batch  []iprangedb.DirectRangeV4 // one reusable [batchCapacity] slice (Rust [T;1024])
 }
 
 func newDirectSource(count int) (*directSource, error) {
 	if err := requireAddressSpace(count, 0); err != nil {
 		return nil, err
 	}
-	return &directSource{count: count, perm: newPermutation(count, dispersedSeed)}, nil
+	return &directSource{count: count, perm: newPermutation(count, dispersedSeed), batch: make([]iprangedb.DirectRangeV4, batchCapacity)}, nil
 }
 
 func newNestedSource(count int) (*directSource, error) {
 	if err := requireAddressSpace(count, 0); err != nil {
 		return nil, err
 	}
-	return &directSource{count: count, nested: true}, nil
+	return &directSource{count: count, nested: true, batch: make([]iprangedb.DirectRangeV4, batchCapacity)}, nil
 }
 
 func (s *directSource) nextBatch() ([]iprangedb.DirectRangeV4, bool) {
@@ -108,7 +113,7 @@ func (s *directSource) nextBatch() ([]iprangedb.DirectRangeV4, bool) {
 		return nil, false
 	}
 	length := min(s.count-s.next, batchCapacity)
-	batch := make([]iprangedb.DirectRangeV4, length)
+	batch := s.batch[:length]
 	for offset := 0; offset < length; offset++ {
 		ordinal := s.next + offset
 		if s.nested {
@@ -140,13 +145,14 @@ type directSourceV6 struct {
 	count int
 	next  int
 	perm  permutation
+	batch []directRangeV6 // one reusable [batchCapacity] slice (Rust [T;1024])
 }
 
 func newDirectSourceV6(count int) (*directSourceV6, error) {
 	if err := requireAddressSpace(count, 0); err != nil {
 		return nil, err
 	}
-	return &directSourceV6{count: count, perm: newPermutation(count, dispersedSeed)}, nil
+	return &directSourceV6{count: count, perm: newPermutation(count, dispersedSeed), batch: make([]directRangeV6, batchCapacity)}, nil
 }
 
 // directRangeV6 is one inclusive IPv6 input range with its value
@@ -161,7 +167,7 @@ func (s *directSourceV6) nextBatch() ([]directRangeV6, bool) {
 		return nil, false
 	}
 	length := min(s.count-s.next, batchCapacity)
-	batch := make([]directRangeV6, length)
+	batch := s.batch[:length]
 	for offset := 0; offset < length; offset++ {
 		index := s.perm.at(s.next + offset)
 		start := uint64(index) * 4
@@ -182,6 +188,7 @@ type addressSource struct {
 	next  int
 	phase uint32
 	perm  permutation
+	batch []iprangedb.AddressRange4 // one reusable [batchCapacity] slice (Rust [T;1024])
 }
 
 func newAddressSource(count int, phase uint32) (*addressSource, error) {
@@ -192,6 +199,7 @@ func newAddressSource(count int, phase uint32) (*addressSource, error) {
 		count: count,
 		phase: phase,
 		perm:  newPermutation(count, uint64(phase)+29),
+		batch: make([]iprangedb.AddressRange4, batchCapacity),
 	}, nil
 }
 
@@ -200,7 +208,7 @@ func (s *addressSource) nextBatch() ([]iprangedb.AddressRange4, bool) {
 		return nil, false
 	}
 	length := min(s.count-s.next, batchCapacity)
-	batch := make([]iprangedb.AddressRange4, length)
+	batch := s.batch[:length]
 	for offset := 0; offset < length; offset++ {
 		index := s.perm.at(s.next + offset)
 		start := uint32(index) + s.phase
@@ -232,6 +240,7 @@ type feedShapeSource struct {
 	next  int
 	shape feedShape
 	perm  permutation
+	batch []iprangedb.AddressRange4 // one reusable [batchCapacity] slice (Rust [T;1024])
 }
 
 func newFeedShapeSource(count int, shape feedShape) (*feedShapeSource, error) {
@@ -242,6 +251,7 @@ func newFeedShapeSource(count int, shape feedShape) (*feedShapeSource, error) {
 		count: count,
 		shape: shape,
 		perm:  newPermutation(count, dispersedSeed),
+		batch: make([]iprangedb.AddressRange4, batchCapacity),
 	}, nil
 }
 
@@ -250,7 +260,7 @@ func (s *feedShapeSource) nextBatch() ([]iprangedb.AddressRange4, bool) {
 		return nil, false
 	}
 	length := min(s.count-s.next, batchCapacity)
-	batch := make([]iprangedb.AddressRange4, length)
+	batch := s.batch[:length]
 	for offset := 0; offset < length; offset++ {
 		ordinal := s.next + offset
 		index := ordinal

@@ -1,25 +1,24 @@
 # accepted update-ipsets release baseline for iprange-v4 (Go).
 # Records: scenario,size,aux,accepted_median_ns,ci_limit_ns.
-# Populated from the accepted Go run of 2026-08-27 at SOW-0027
-# milestone-4 fix HEAD (linux/amd64, go1.26.4, i9-12900K, under nice);
-# limits are 2x the accepted p50 plus 100 ms runner noise (500 ms for
-# the complete workflow). Disaster limits, not performance targets.
+# Populated by the matched Rust/Go release run (SOW-0027 milestone 4);
+# limits are 2x the accepted p50 plus 100 ms runner noise (500 ms for the
+# complete workflow). Disaster limits, not performance targets.
 scenario,size,aux,accepted_median_ns,ci_limit_ns
-direct-replace,1000000,0,1481060116,3062120232
-last-seen-refresh,1000000,0,2353938731,4807877462
-feed-first-ascending,1000000,0,145331464,390662928
-feed-first-random,1000000,0,1524670178,3149340356
-live-direct-lookup,100000,0,256660176,613320352
-live-direct-random-lookup,100000,0,305300590,710601180
-live-direct-scan,100000,0,24006346,148012692
-live-membership-lookup,100000,421,382456638,864913276
-live-membership-random-lookup,100000,421,437350117,974700234
-structured-build-random,1000000,421,4683922340,9467844680
-live-structured-scalar-random-lookup,100000,421,5233762266,10567524532
-live-structured-threat-random-lookup,100000,421,5927448304,11954896608
-live-structured-scalar-scan,100000,421,157438773,414877546
-live-feed-scan,100000,421,25635096,151270192
-membership-cardinalities,1000000,64,48512383,197024766
-live-validation,1000000,0,25479301,150958602
-live-membership-validation,1000000,421,30592419,161184838
-update-ipsets-workflow,1000000,7,5802977017,12105954034
+direct-replace,1000000,0,1521868753,3143737506
+last-seen-refresh,1000000,0,2119301945,4338603890
+feed-first-ascending,1000000,0,131003978,362007956
+feed-first-random,1000000,0,1554670893,3209341786
+live-direct-lookup,100000,0,251097897,602195794
+live-direct-random-lookup,100000,0,307209276,714418552
+live-direct-scan,100000,0,23304938,146609876
+live-membership-lookup,100000,421,376411517,852823034
+live-membership-random-lookup,100000,421,431097751,962195502
+structured-build-random,1000000,421,4577556365,9255112730
+live-structured-scalar-random-lookup,100000,421,5161288226,10422576452
+live-structured-threat-random-lookup,100000,421,5819056342,11738112684
+live-structured-scalar-scan,100000,421,156965620,413931240
+live-feed-scan,100000,421,25668738,151337476
+membership-cardinalities,1000000,64,48844469,197688938
+live-validation,1000000,0,25760986,151521972
+live-membership-validation,1000000,421,30656139,161312278
+update-ipsets-workflow,1000000,7,5783351134,12066702268
