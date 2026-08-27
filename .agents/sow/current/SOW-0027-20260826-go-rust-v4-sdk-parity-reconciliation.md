@@ -652,9 +652,10 @@ scenario (live-membership-validation now ports membership::populated_rotating
 exactly). Go runtimes at smoke scale measured 0.34x-88.5x of Rust in the
 pre-fix pair (direct-replace 1000 at 0.34x, live-membership-validation
 4000 at 88.5x from the then-unfixed external-poll ping-pong); at the
-milestone-4 fix HEAD the smoke range is 0.66x-6.64x (Go faster on
-direct-replace 1000 and live-open/snapshot 4000; slowest
-structured-assign-random 4000 at 6.64x). The material
+milestone-4 fix HEAD the smoke range (evidence/smoke-go-final.csv vs
+the Rust reference) is 0.42x-7.59x: Go faster on direct-replace 1000
+(0.42x) and snapshot/live-open-256 4000 (0.76-0.90x), Go slower on
+structured-assign-random 4000 (7.59x) and every other case. The material
 deltas need profiling at scale and actionable-waste removal before the
 release evidence. Baseline CSV intentionally empty (status untracked)
 until the matched scale run populates it.
@@ -849,12 +850,14 @@ scope reviews were PASS for Go idioms, performance, and wire/integrity,
 and FAIL for records (two falsifiable P2 claims) and Rust parity (one
 P2 harness guard). All findings fixed in the follow-up commit:
 - Records P2-1: the CI median-ratio claim "0.98-1.09" was wrong for
-  the final gate artifact; corrected to the observed 0.900-2.026 with
-  the tightest margin named, and the gate log is now committed as
-  evidence. P2-2: the smoke ratio range claim ("0.4x-9.7x, none
-  faster than noise") predated the aligned run; corrected to the
-  measured pre-fix pair (0.34x-88.5x) and the fix-HEAD range
-  (0.66x-6.64x). P3s: membership-import parenthetical now separates
+  the final gate artifact; corrected to the committed final gate log
+  (ratio range 0.957-1.109, highest limit utilization 51.5%), and the
+  gate log is now committed as evidence. P2-2: the smoke ratio range
+  claim ("0.4x-9.7x, none faster than noise") predated the aligned
+  run; corrected to the measured pre-fix pair (0.34x-88.5x) and the
+  fix-HEAD range from the committed final smoke CSV (0.42x-7.59x;
+  earlier 0.66x-6.64x belonged to the 23:29 pre-batch-reuse run and
+  is superseded). P3s: membership-import parenthetical now separates
   the scale ratio (8.85x, 412 ms) from the profile run (496 ms); the
   validation family range is 1.9-3.2x including immutable-validation;
   the baseline cost is stated as ~8 wall-minutes for the sample run.
@@ -866,8 +869,10 @@ P2 harness guard). All findings fixed in the follow-up commit:
   tests pin the boundary. Rust parity P3: the streaming sources now
   reuse one [batchCapacity] backing slice per source like Rust's
   [T;1024], removing the per-batch allocations from the measured
-  region (feed-first-ascending 1M: 1,222 calls / 8.0 MB dropped to
-  227 calls / 40 KB); a test pins the reused backing buffers.
+  region (feed-first-ascending 1M: 1,222 calls / 8,048,152 bytes in the
+  first accepted-run sample artifact dropped to 227 calls / 40,048
+  bytes in the final gate log); a test pins the reused backing
+  buffers.
 - Recording-only: the batch reuse improves the harness allocation
   facts for streaming scenarios, so the accepted baseline and the CI
   gate were re-run with the final harness and the accepted-baseline.csv
