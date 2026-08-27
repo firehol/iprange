@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Cleanup-mode client arm (Rust worker/cleanup.rs discard:31-82): the
 // parent side of one isolated recovery-cleanup session, composed over

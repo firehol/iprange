@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Command iprange-v4-worker is the isolated mapped-fault worker process
 // of the Go v4 SDK (Rust iprange-livedb/src/bin/iprange-v4-worker.rs +
@@ -10,8 +10,8 @@
 // over the domain machines, and writes the result back through the
 // 4-11A wire codecs. Exit codes are the exact Rust values: 64 usage,
 // 65 protocol, 0 clean completion; an owned mapped fault exits 197 from
-// the naked SIGBUS handler (internal/worker sigbus_linux_amd64.s)
-// without unwinding through Go. The worker build identity is pinned by
+// the naked SIGBUS handler (internal/worker sigbus_* asm) or the
+// Windows vectored exception handler, without unwinding through Go. The worker build identity is pinned by
 // SetBuildID before the header verify: IPRANGE_V4_BUILD_ID when set
 // (64 bytes), otherwise the fixed BuildIDDefault; a mismatched worker
 // exits 65 before WorkerReady.
@@ -20,7 +20,6 @@ package main
 
 import (
 	"os"
-	"runtime"
 
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
@@ -79,12 +78,7 @@ func run(args []string) int {
 	if err := control.WaitFor(worker.StateRunning); err != nil {
 		return exitProtocol
 	}
-	// The alternate signal stack is per-thread and Go migrates
-	// goroutines between threads, so the worker pins one OS thread for
-	// the whole session before installing the handler (posix.rs install
-	// runs on the process's single thread).
-	runtime.LockOSThread()
-	handler, err := control.InstallHandler()
+	handler, err := installFaultHandler(control)
 	if err != nil {
 		return exitProtocol
 	}

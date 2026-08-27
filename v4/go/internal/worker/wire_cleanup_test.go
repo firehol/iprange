@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Cleanup-mode wire unit tests (Rust worker/wire_cleanup.rs): the
 // cleanup request and result envelopes, the checkpoint and scratch

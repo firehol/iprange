@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Client drive seam tests (Rust worker/client.rs and client_tests.rs):
 // the handshake failure classes, the drive complete/fault/failed and

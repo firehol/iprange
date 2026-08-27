@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Recovery-mode client arm tests (Rust worker/client/recovery.rs
 // client_tests.rs): the completed and streaming sessions against the

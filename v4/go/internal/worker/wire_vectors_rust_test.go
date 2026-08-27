@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Byte-identical cross-language worker-wire fixtures (SOW-0025
 // milestone-3 gate fix): the four worker-wire envelopes below were

@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Main-flow subprocess tests of the worker binary (Rust worker.rs run
 // + the 4-11A wire-era control): usage and protocol refusals, the

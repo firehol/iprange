@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Real-worker source-fault crash matrix (Rust worker/client_tests.rs
 // source_sigbus_is_classified_cleaned_and_restartable): session 1 runs

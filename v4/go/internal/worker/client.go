@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Worker client drive seam (Rust worker/client.rs): spawning the
 // isolated worker process, the version handshake, the drive loop with
@@ -23,8 +23,6 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -382,7 +380,7 @@ func workerCandidates() ([]string, error) {
 	if workerCandidatesHook != nil {
 		return workerCandidatesHook()
 	}
-	name := "iprange-v4-worker" // Rust EXE_SUFFIX is empty on unix
+	name := workerExecutableName() // Rust EXE_SUFFIX (empty on unix, .exe on windows)
 	current, err := os.Executable()
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "worker executable: " + err.Error()}
@@ -399,15 +397,18 @@ func workerCandidates() ([]string, error) {
 }
 
 // Process wraps one spawned worker child (Rust worker/client.rs
-// Process). The wrapper owns reaping: wait and tryWait may each
-// complete once; a tryWait that observes the exit consumes it (Rust
-// Child::try_wait) and the later wait returns the recorded status. Go
-// has no non-blocking wait, so tryWait uses wait4(WNOHANG) on exactly
-// this child's pid; after the reap the os.Process handle is released
-// and never touched again. Abort and Close kill only this child and
-// then reap it (targeted pid, never a process group or a name match).
+// Process). The wrapper owns reaping through one per-child reaper
+// goroutine: cmd.Wait runs exactly once and delivers the status to a
+// buffered channel; wait blocks on it and tryWait polls it
+// non-blockingly, so both may complete on every platform (the POSIX
+// wait4(WNOHANG) and Windows GetExitCodeProcess arms are equivalent
+// to this single portable form). After the reap the os.Process
+// handle is released by cmd.Wait and never touched again. Abort and
+// Close kill only this child and then reap it (targeted pid, never a
+// process group or a name match).
 type Process struct {
 	cmd    *exec.Cmd
+	done   chan exitStatus
 	status *exitStatus
 }
 
@@ -425,8 +426,24 @@ func (s *exitStatus) success() bool { return s.exited && s.code == 0 }
 // for a normal exit.
 func (s *exitStatus) exitCode() (int, bool) { return s.code, s.exited }
 
-// newProcess wraps the successfully started child.
-func newProcess(cmd *exec.Cmd) *Process { return &Process{cmd: cmd} }
+// newProcess wraps the successfully started child and starts its
+// one-shot reaper (Rust Child spawn + the Go non-blocking-wait
+// equivalent): cmd.Wait completes exactly once, the status is
+// delivered to the buffered channel, and every later wait/tryWait
+// path consumes the recorded status without another syscall.
+func newProcess(cmd *exec.Cmd) *Process {
+	p := &Process{cmd: cmd, done: make(chan exitStatus, 1)}
+	go func() {
+		_ = cmd.Wait()
+		ps := cmd.ProcessState
+		var status exitStatus
+		if ps != nil {
+			status = exitStatus{code: ps.ExitCode(), exited: ps.Exited()}
+		}
+		p.done <- status
+	}()
+	return p
+}
 
 // ID returns the child pid (Rust Process::id; 0 once the child was
 // reaped, exactly like the Rust Option<Child>).
@@ -451,52 +468,10 @@ func (p *Process) wait() (*exitStatus, error) {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return nil, &format.Error{Code: format.CodeConflict, Detail: "worker process is not active"}
 	}
-	err := p.cmd.Wait()
-	ps := p.cmd.ProcessState
+	status := <-p.done
 	p.cmd = nil
-	if ps == nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "worker wait failed"}
-	}
-	p.status = &exitStatus{code: ps.ExitCode(), exited: ps.Exited()}
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) {
-		return p.status, &format.Error{Code: format.CodeIO, Detail: "worker wait: " + err.Error()}
-	}
+	p.status = &status
 	return p.status, nil
-}
-
-// tryWait reports whether the child exited without blocking (Rust
-// Process::try_wait): a reap consumes the child and records the
-// status; a child that was already reaped keeps returning its
-// recorded status.
-func (p *Process) tryWait() (*exitStatus, bool, error) {
-	if p.status != nil {
-		return p.status, true, nil
-	}
-	if p.cmd == nil || p.cmd.Process == nil {
-		return nil, false, nil
-	}
-	var ws unix.WaitStatus
-	for {
-		pid, err := unix.Wait4(p.cmd.Process.Pid, &ws, unix.WNOHANG, nil)
-		if err == unix.EINTR {
-			continue
-		}
-		if err != nil {
-			return nil, false, &format.Error{Code: format.CodeIO, Detail: "worker try-wait: " + err.Error()}
-		}
-		if pid == 0 {
-			return nil, false, nil
-		}
-		cmd := p.cmd
-		p.cmd = nil
-		_ = cmd.Process.Release()
-		p.status = &exitStatus{code: -1, exited: ws.Exited()}
-		if ws.Exited() {
-			p.status.code = ws.ExitStatus()
-		}
-		return p.status, true, nil
-	}
 }
 
 // Abort kills and reaps the child (Rust Process::abort): only the

@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Cleanup-mode wire codecs (Rust worker/wire_cleanup.rs): the
 // cleanup-guard request (destination path, private output attempt,

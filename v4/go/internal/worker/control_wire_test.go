@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Wire-era control-page unit tests (no signals, no subprocesses): the
 // extended header identity, the session fields, the payload and
@@ -15,7 +15,6 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
-	"golang.org/x/sys/unix"
 )
 
 // testIdentity builds one portable unix identity from a device+inode
@@ -498,7 +497,7 @@ func TestParentAlive(t *testing.T) {
 	}
 	// The worker side records its real parent; simulate it by recording
 	// getppid, which is this process's OS parent.
-	format.PutU32(c.data[offParentPID:], uint32(unix.Getppid()))
+	format.PutU32(c.data[offParentPID:], uint32(os.Getppid()))
 	if !c.ParentAlive() {
 		t.Fatal("recorded OS parent not recognized")
 	}

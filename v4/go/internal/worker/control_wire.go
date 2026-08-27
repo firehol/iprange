@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Full worker control-page surface (Rust worker/control.rs, wire-era
 // methods): the header identity, the session fields (pid, opcode, poll
@@ -14,11 +14,11 @@
 package worker
 
 import (
+	"os"
 	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
-	"golang.org/x/sys/unix"
 )
 
 // VerifyRequest proves the header of a freshly opened worker control
@@ -66,7 +66,7 @@ func (c *Control) ParentPID() uint32 {
 // reparented by a crash of its launcher).
 func (c *Control) ParentAlive() bool {
 	expected := c.ParentPID()
-	return expected != 0 && uint32(unix.Getppid()) == expected
+	return expected != 0 && uint32(os.Getppid()) == expected
 }
 
 // SetOpcode records the session opcode (Rust Control::set_opcode).

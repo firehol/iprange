@@ -220,6 +220,55 @@ assembly-based on linux/amd64 and each new target requires a new raw
 trampoline or another native mechanism). Full battery green at this
 state.
 
+Sub-state (2026-08-27): slice 2d (platform boundary) part 2 - the portable
+worker - delivered (working tree `1ac7dcdf+`, gate pending): every worker
+file is retagged to the four supported OSes (`linux || darwin || freebsd ||
+windows`); the package and cmd platform negations are updated to
+`!linux && !darwin && !freebsd && !windows`. The mapped-control atomics
+became per-target raw assembly (`atomic_{os}_{arch}.s`: plain aligned
+32-bit ops on amd64, LDAR/STLR acquire/release plus LDAXR/STLXR CAS on
+arm64) so the parent and the naked handler share one authority on every
+target. Process reaping is portable (one-shot reaper goroutine + buffered
+channel replacing wait4/GetExitCodeProcess), and the worker executable
+candidates gained the darwin/freebsd `.exe`-suffix arm (exe_posix.go /
+exe_windows.go).
+
+The POSIX SIGBUS containment machine is now implemented on all six POSIX
+targets with raw per-ABI syscalls in the naked handler, mirroring posix.rs
+exactly: linux amd64 (existing) plus new linux arm64 (SVC, x8, generic
+numbers; SA_RESTORER stub), darwin amd64/arm64 (SYSCALL plain numbers /
+SVC #0x80 with the number in X16 - the macOS ABI proven on the M4 host;
+4-byte sigset, si_addr@24, SA flags 0x40/0x1/0x10/0x4, SS_DISABLE 0x4, no
+SA_RESTORER - the kernel sigtramp returns), and freebsd amd64/arm64 (SVC,
+x8, FreeBSD 14 numbers 416/417/340/341/53; 128-bit sigset, sigaction
+layout handler@0 flags@8 mask@12, si_addr@24, BSD SA flags). The Go-side
+install surface (sigaltstack, sigaction query/set, handler address) is a
+per-OS twin of the linux machine with the ABI-verified struct layouts
+(macOS sigaction is 16 bytes with a 4-byte mask; FreeBSD sigaction is 32
+bytes with a 16-byte mask at offset 12; both stack_t are sp@0 size@8
+flags@16). Windows uses the pure-Go VEH machine (kernel32
+AddVectoredExceptionHandler via system DLL, EXCEPTION_IN_PAGE_ERROR with
+the documented parameter layout, same control record, TerminateProcess
+with ownedFaultExit). The Linux/Windows amd64+arm64 and darwin/freebsd
+amd64+arm64 worker binaries all cross-build; `go vet` passes on all eight
+targets including the test files. The handler subprocess proofs
+(owned-fault record + runtime chaining) are portable (sigbus_posix_test.go
+for linux/darwin/freebsd, sigbus_windows_test.go for the VEH path); the
+15-case previous-disposition matrix stays linux/amd64 v4work (its naked
+symbols are linux/amd64-specific by design). Full battery green at this
+state: plain and v4work Go suites, vet, gofmt, race+checkptr, eight-target
+cross-builds and vets, mmap trace gate, Rust conformance on the generated
+fixtures. Native rounds on the three authorized hosts follow this commit;
+their results and any fixups are recorded here before the slice gate.
+Evidence posture for the remaining targets: linux/amd64 is proven by the
+committed suite; darwin/arm64, freebsd/amd64, and windows/amd64 are
+proven by the authorized native rounds; linux/arm64, darwin/amd64,
+freebsd/arm64, and windows/arm64 are cross-compile and vet proven only
+(the authorized darwin host is arm64 and has no Rosetta, and no
+authorized hosts exist for the remaining three; the darwin amd64 raw
+`syscall` convention is the same classless ABI the macOS kernel accepts
+from libc `syscall()`).
+
 ## Requirements
 
 ### Purpose

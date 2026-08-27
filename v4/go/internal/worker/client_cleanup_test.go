@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Cleanup-mode wire and arm tests (Rust worker/cleanup.rs + wire_
 // cleanup.rs): the publication seam's three discard arms run against
@@ -20,7 +20,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -219,27 +218,21 @@ func createScratchCheckpointFixture(t *testing.T, directory string, alias bool) 
 			t.Fatal("link alias:", err)
 		}
 	}
-	st, err := file.Stat()
+	dir, err := os.Open(directory)
 	if err != nil {
 		file.Close()
-		t.Fatal("stat scratch file:", err)
+		t.Fatal("open directory:", err)
 	}
+	artifactDevice, artifactInode := testFileIdentity(t, file)
+	dirDevice, dirInode := testFileIdentity(t, dir)
 	file.Close()
-	dirStat, err := os.Stat(directory)
-	if err != nil {
-		t.Fatal("stat directory:", err)
-	}
-	sys, ok := dirStat.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Fatal("directory stat is not a unix stat")
-	}
-	artifactSys := st.Sys().(*syscall.Stat_t)
+	dir.Close()
 	return &ScratchCheckpoint{
 		AttemptID:         attemptID,
-		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(uint64(sys.Dev), uint64(sys.Ino)),
+		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(dirDevice, dirInode),
 		CreationSecurity:  publication.CreationSecurity{Kind: 1, Commitment: [32]byte{0x6b}},
 		Entries: []ScratchCheckpointEntry{
-			{Ordinal: ordinal, Identity: publication.LocalFileIdentityFromDeviceInode(uint64(artifactSys.Dev), uint64(artifactSys.Ino))},
+			{Ordinal: ordinal, Identity: publication.LocalFileIdentityFromDeviceInode(artifactDevice, artifactInode)},
 		},
 	}
 }
@@ -372,15 +365,13 @@ func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 // directory for the wire scratch checkpoint fixture.
 func scratchDirectoryIdentity(t *testing.T, path string) publication.LocalFileIdentity {
 	t.Helper()
-	stat, err := os.Stat(path)
+	dir, err := os.Open(path)
 	if err != nil {
-		t.Fatal("stat scratch directory:", err)
+		t.Fatal("open scratch directory:", err)
 	}
-	sys, ok := stat.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Fatal("directory stat is not a unix stat")
-	}
-	return publication.LocalFileIdentityFromDeviceInode(uint64(sys.Dev), uint64(sys.Ino))
+	defer dir.Close()
+	device, inode := testFileIdentity(t, dir)
+	return publication.LocalFileIdentityFromDeviceInode(device, inode)
 }
 
 // TestDiscardRecoveryAttemptGuardPending runs the cleanup arm against

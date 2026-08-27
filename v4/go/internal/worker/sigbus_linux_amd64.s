@@ -374,19 +374,3 @@ TEXT ·rtSigreturnStubAddr(SB), NOSPLIT, $0-8
 	MOVQ AX, ret+0(FP)
 	RET
 
-// Mapped-control atomics over the control mapping (base + offset). The
-// naked handler uses the same primitives inline; the LOCK prefix makes
-// the CAS unconditional, and aligned 32-bit loads/stores are atomic on
-// x86-64 without a prefix.
-TEXT ·mapAtomicLoad32(SB), NOSPLIT, $0-20
-	MOVQ base+0(FP), AX
-	MOVL off+8(FP), CX
-	MOVL (AX)(CX*1), DX
-	MOVL DX, ret+16(FP)
-	RET
-TEXT ·mapAtomicStore32(SB), NOSPLIT, $0-16
-	MOVQ base+0(FP), AX
-	MOVL off+8(FP), CX
-	MOVL value+12(FP), DX
-	MOVL DX, (AX)(CX*1)
-	RET

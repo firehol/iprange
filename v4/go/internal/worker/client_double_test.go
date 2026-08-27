@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // In-process worker double for the client drive tests. The Rust
 // client_tests.rs drives the real worker binary, which the Go slice

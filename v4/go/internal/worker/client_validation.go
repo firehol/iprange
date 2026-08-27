@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Validation-mode client arms (Rust worker/client/validation.rs): the
 // parent side of one worker validation or recovery-candidate

@@ -14,7 +14,18 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
+
+// raiseSigbus delivers SIGBUS to the current thread exactly like libc
+// raise() (tgkill against the calling thread's tid; linux-only, the
+// matrix never runs elsewhere).
+func raiseSigbus() {
+	if err := unix.Tgkill(unix.Getpid(), unix.Gettid(), unix.SIGBUS); err != nil {
+		os.Exit(85)
+	}
+}
 
 // installPrevious installs the case's previous SIGBUS disposition with
 // the project rt_sigreturn stub wherever a handler may return through the

@@ -1,10 +1,11 @@
-//go:build !linux || !amd64
+//go:build !linux && !darwin && !freebsd && !windows
 
-// Platform-refusal entry (internal/worker control_other.go parity): the SIGBUS isolation proof is
-// linux/amd64-only, so the worker refuses to start anywhere else with
-// the honest recorded stance. The refusal exits with the Rust protocol
-// code 65, the same class the parent maps to "worker version or
-// protocol does not match".
+// Platform-refusal entry (internal/worker control_other.go parity): the
+// mapped-fault worker handler exists for linux, darwin, freebsd, and
+// windows; anywhere else the worker refuses to start with the honest
+// recorded stance. The refusal exits with the Rust protocol code 65,
+// the same class the parent maps to "worker version or protocol does
+// not match".
 
 package main
 

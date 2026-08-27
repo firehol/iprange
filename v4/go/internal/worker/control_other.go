@@ -1,4 +1,4 @@
-//go:build !linux || !amd64
+//go:build !linux && !darwin && !freebsd && !windows
 
 package worker
 
@@ -6,19 +6,19 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// Control is the platform stub: the SIGBUS isolation machinery is proven
-// for linux/amd64 only (Rust worker/posix.rs is cfg(unix) and the Go
-// port targets the same host proof; darwin and freebsd keep the typed
-// refusal stance recorded in the 4-12D native proof).
-// Every constructor refuses before path access, exactly like the mapping
-// owner's platform refusals, so the package cross-compiles while the
-// worker surface stays typed and honest.
+// Control is the platform stub: the mapped-fault worker surface is
+// implemented for linux, darwin, freebsd, and windows (the raw-syscall
+// POSIX machines and the Windows VEH machine); any other platform keeps
+// this typed refusal stance. Every constructor refuses before path
+// access, exactly like the mapping owner's platform refusals, so the
+// package cross-compiles while the worker surface stays typed and
+// honest.
 type Control struct{}
 
 // workerRefusal is the single typed refusal for the whole worker surface
 // on platforms without a proven implementation.
 func workerRefusal() error {
-	return &format.Error{Code: format.CodeOSUnsupported, Detail: "worker SIGBUS isolation is not implemented on this platform"}
+	return &format.Error{Code: format.CodeOSUnsupported, Detail: "worker mapped-fault isolation is not implemented on this platform"}
 }
 
 // CreateParent refuses worker creation on unsupported platforms.

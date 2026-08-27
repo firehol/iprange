@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Control-page unit tests (no signals, no subprocesses): header layout,
 // exact-extent open, arm/disarm, and the fault-record rejection state.
@@ -12,8 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -49,27 +47,6 @@ func TestCreateParentWritesHeader(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("control file %s missing: %v", path, err)
-	}
-}
-
-// TestCreateParentModeIndependentOfUmask proves the secure_creator_only
-// core: the control file is exactly 0600 even under a restrictive umask
-// (Rust control.rs create_file + security::secure_creator_only), so the
-// worker can always reopen it read-write.
-func TestCreateParentModeIndependentOfUmask(t *testing.T) {
-	previous := unix.Umask(0o077)
-	defer unix.Umask(previous)
-	c, err := CreateParent()
-	if err != nil {
-		t.Fatal("create parent:", err)
-	}
-	defer c.Close()
-	st, err := os.Stat(c.path)
-	if err != nil {
-		t.Fatal("stat control:", err)
-	}
-	if mode := st.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("control mode = %#o, want 0600", mode)
 	}
 }
 

@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Recovery-mode wire codecs (Rust worker/wire_recovery.rs): the
 // recovery request (source/destination paths, candidate, worker mode,

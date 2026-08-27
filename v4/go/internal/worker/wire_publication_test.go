@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux || darwin || freebsd || windows
 
 // Publication-fact wire unit tests (Rust worker/wire_publication.rs and
 // the problem arms of worker/client_tests.rs): the problem codec with
