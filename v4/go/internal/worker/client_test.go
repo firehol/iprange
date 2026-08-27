@@ -76,7 +76,7 @@ func TestWorkerCandidatesDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal("executable:", err)
 	}
-	want := filepath.Join(filepath.Dir(current), "iprange-v4-worker")
+	want := filepath.Join(filepath.Dir(current), workerExecutableName())
 	if len(candidates) != 1 || candidates[0] != want {
 		t.Fatalf("candidates = %v, want [%s]", candidates, want)
 	}

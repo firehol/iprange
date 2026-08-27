@@ -139,6 +139,13 @@ func newFakeParent(t *testing.T) *fakeParent {
 	if err != nil {
 		t.Fatal("fixture observation map:", err)
 	}
+	// The observation handle is a plain stdlib open that cannot block a
+	// later TempDir removal on Windows only if it is closed (the stdlib
+	// share mode lacks FILE_SHARE_DELETE); the mapping duplicated the
+	// handle and never needs the original again.
+	if err := observed.Close(); err != nil {
+		t.Fatal("fixture observation close:", err)
+	}
 	view, err := om.View(0, fixtureControlLen)
 	if err != nil {
 		t.Fatal("fixture observation view:", err)

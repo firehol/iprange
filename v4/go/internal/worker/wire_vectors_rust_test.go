@@ -1,21 +1,32 @@
 //go:build linux || darwin || freebsd || windows
 
 // Byte-identical cross-language worker-wire fixtures (SOW-0025
-// milestone-3 gate fix): the four worker-wire envelopes below were
-// produced by the ACTUAL Rust codec (v4/rust/iprange-livedb/src/worker
-// wire.rs, wire_validation.rs, wire_recovery.rs, wire_publication.rs,
-// wire_cleanup.rs) and are asserted byte-identical by the Go reader
-// AND the Go writer. The in-process Go doubles share the Go codecs, so
-// in-language round trips could hide a symmetric field-order/width bug
-// that breaks the Rust byte contract; these Rust-produced vectors close
-// that proof gap.
+// milestone-3 gate fix, SOW-0027 slice 2d native round): the worker-wire
+// envelopes below were produced by the ACTUAL Rust codec
+// (v4/rust/iprange-livedb/src/worker wire.rs, wire_validation.rs,
+// wire_recovery.rs, wire_publication.rs, wire_cleanup.rs) and are
+// asserted byte-identical by the Go reader AND the Go writer. The
+// in-process Go doubles share the Go codecs, so in-language round trips
+// could hide a symmetric field-order/width bug that breaks the Rust byte
+// contract; these Rust-produced vectors close that proof gap.
 //
-// Rust commit (v4/rust tree at generation time): 304d99a2350f
-// (repo HEAD `git rev-parse --short=12 HEAD` when the temporary Rust
-// generator file was present in the working tree; it was never
-// committed; generation ran `nice cargo test
-// --manifest-path v4/rust/Cargo.toml -p iprange-livedb --lib
-// wire_vector_gen -- --nocapture`).
+// The worker wire is same-host and same-OS (a live writer spawns the
+// isolated worker on the same machine), and the Rust wire kinds are
+// platform constants (publication/namespace unix.rs vs windows.rs), so
+// there is one vector pair per OS family: the POSIX pair (identity,
+// basename-encoding, and creation-security kinds 1) proves the
+// linux/darwin/freebsd codecs and the Windows pair (kinds 2) proves the
+// windows codecs. A Windows Rust worker emits kind 2; a POSIX fixture
+// must never be asserted against it.
+//
+// POSIX vectors: Rust tree at generation time 304d99a2350f (repo HEAD
+// when the temporary Rust generator file was present; the generator was
+// never committed; generation ran `nice cargo test --manifest-path
+// v4/rust/Cargo.toml -p iprange-livedb --lib wire_vector_gen --
+// --nocapture`). Windows vectors: the same generator ran unmodified on
+// the authorized Windows 11 host (rustc 1.97.1) against the current
+// Rust tree on 2026-08-27, and its POSIX output was verified identical
+// to the committed POSIX vectors first, so the codecs did not drift.
 //
 // Representative values (identical in the Rust generator and here):
 //
@@ -100,6 +111,7 @@ package worker
 import (
 	"bytes"
 	"encoding/hex"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -114,7 +126,15 @@ const rustVectorRecoveryOutcomeHex = "010600000000000000050000000000000000000000
 
 const rustVectorPublicationResultHex = "111111111111111111111111111111110500000000000000222222222222222222222222222222223333333333333333333333333333333301000b000000000000000c00000000000000000000000000000000000000000000000100060000006f75742e7634010015000000000000001600000000000000000000000000000000000000000000000010000000000000444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444440201010029000000000000002a000000000000000000000000000000000000000000000000100000000000008888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888801001f00000000000000200000000000000000000000000000000000000000000000010055555555555555555555555555555555555555555555555555555555555555550102010101010166666666666666666666666666666666010700000000000000017777777777777777777777777777777702010001010000"
 
+// rustVectorPublicationResultHexWindows is the same envelope produced by
+// the Rust codec on Windows (publication/namespace windows.rs kinds 2).
+const rustVectorPublicationResultHexWindows = "111111111111111111111111111111110500000000000000222222222222222222222222222222223333333333333333333333333333333302000b000000000000000c00000000000000000000000000000000000000000000000200060000006f75742e7634020015000000000000001600000000000000000000000000000000000000000000000010000000000000444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444440201020029000000000000002a000000000000000000000000000000000000000000000000100000000000008888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888802001f00000000000000200000000000000000000000000000000000000000000000020055555555555555555555555555555555555555555555555555555555555555550102010101010166666666666666666666666666666666010700000000000000017777777777777777777777777777777702010001010000"
+
 const rustVectorCleanupResultHex = "393939393939393939393939393939390100330000000000000034000000000000000000000000000000000000000000000001001b0000002e697072616e67652d7075626c6973682d766563746f722e746d70010100350000000000000036000000000000000000000000000000000000000000000001005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a0101010100330000000000000034000000000000000000000000000000000000000000000001001b0000002e697072616e67652d7075626c6973682d766563746f722e746d7001010035000000000000003600000000000000000000000000000000000000000000000101005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a001f000000001a00000064656c6962657261746520636c65616e75702072657369647565010000"
+
+// rustVectorCleanupResultHexWindows is the same envelope produced by the
+// Rust codec on Windows (kinds 2).
+const rustVectorCleanupResultHexWindows = "393939393939393939393939393939390200330000000000000034000000000000000000000000000000000000000000000002001b0000002e697072616e67652d7075626c6973682d766563746f722e746d70010200350000000000000036000000000000000000000000000000000000000000000002005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a0101010200330000000000000034000000000000000000000000000000000000000000000002001b0000002e697072616e67652d7075626c6973682d766563746f722e746d7001020035000000000000003600000000000000000000000000000000000000000000000102005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a001f000000001a00000064656c6962657261746520636c65616e75702072657369647565010000"
 
 // rustVectorControl creates a fresh control whose payload is the exact
 // fixture bytes with the sealed payload length, the shape a Rust
@@ -144,6 +164,26 @@ func rustVectorPayload(t *testing.T, c *Control) []byte {
 		t.Fatal("payload len:", err)
 	}
 	return c.data[offPayload : offPayload+length]
+}
+
+// rustVectorPublicationResultFixture selects the envelope produced by
+// the Rust codec for this OS family (POSIX kinds 1 or Windows kinds 2).
+func rustVectorPublicationResultFixture(t *testing.T) []byte {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return rustVectorFixture(t, rustVectorPublicationResultHexWindows)
+	}
+	return rustVectorFixture(t, rustVectorPublicationResultHex)
+}
+
+// rustVectorCleanupResultFixture selects the envelope produced by the
+// Rust codec for this OS family.
+func rustVectorCleanupResultFixture(t *testing.T) []byte {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return rustVectorFixture(t, rustVectorCleanupResultHexWindows)
+	}
+	return rustVectorFixture(t, rustVectorCleanupResultHex)
 }
 
 func rustVectorFixture(t *testing.T, hexValue string) []byte {
@@ -179,9 +219,21 @@ func rustVector64(value byte) (out [64]byte) {
 }
 
 // rustVectorIdentity is identity(device, inode) from the fixture
-// table: kind 1 with the little-endian device/inode pair.
+// table: kind 1 with the little-endian device/inode pair on POSIX,
+// kind 2 (volume + file reference) on Windows; the constructor is the
+// platform arm of the live machine.
 func rustVectorIdentity(device, inode uint64) publication.LocalFileIdentity {
 	return publication.LocalFileIdentityFromDeviceInode(device, inode)
+}
+
+// workerWireKind is the platform worker-wire kind constant of the Rust
+// namespace machine (unix.rs = 1, windows.rs = 2); basename-encoding
+// and creation-security kinds share the same per-OS value.
+func workerWireKind() uint16 {
+	if runtime.GOOS == "windows" {
+		return 2
+	}
+	return 1
 }
 
 // rustVectorI32 returns a pointer to one int32 fixture value.
@@ -344,7 +396,7 @@ func rustVectorPublicationResultValue() publication.PublicationResult {
 			CommitNonce:                 rustVector16(0x22),
 			PublicationAttemptID:        rustVector16(0x33),
 			DirectoryIdentity:           rustVectorIdentity(11, 12),
-			DestinationBasenameEncoding: 1,
+			DestinationBasenameEncoding: workerWireKind(),
 			DestinationBasename:         []byte("out.v4"),
 			OutputIdentity:              rustVectorIdentity(21, 22),
 			OutputByteLength:            4096,
@@ -357,7 +409,7 @@ func rustVectorPublicationResultValue() publication.PublicationResult {
 			},
 			ReservationIdentity: rustVectorIdentity(31, 32),
 			CreationSecurity: publication.CreationSecurity{
-				Kind:       1,
+				Kind:       workerWireKind(),
 				Commitment: rustVector32(0x55),
 			},
 		},
@@ -380,12 +432,12 @@ func rustVectorPublicationResultValue() publication.PublicationResult {
 // rustVectorCleanupDiscardValue is the CLEANUP RESULT fixture.
 func rustVectorCleanupDiscardValue() *EarlyDiscard {
 	outputIdentity := rustVectorIdentity(53, 54)
-	security := publication.CreationSecurity{Kind: 1, Commitment: rustVector32(0x5a)}
+	security := publication.CreationSecurity{Kind: workerWireKind(), Commitment: rustVector32(0x5a)}
 	return &EarlyDiscard{
 		Output: publication.PrivateOutputAttempt{
 			PublicationAttemptID: rustVector16(0x39),
 			DirectoryIdentity:    rustVectorIdentity(51, 52),
-			BasenameEncoding:     1,
+			BasenameEncoding:     workerWireKind(),
 			Basename:             []byte(".iprange-publish-vector.tmp"),
 			Identity:             outputIdentity,
 			IdentityPresent:      true,
@@ -395,7 +447,7 @@ func rustVectorCleanupDiscardValue() *EarlyDiscard {
 			Kind:              publication.ArtifactPrivateOutput,
 			DirectoryRole:     publication.DirectoryRoleDestination,
 			DirectoryIdentity: rustVectorIdentity(51, 52),
-			BasenameEncoding:  1,
+			BasenameEncoding:  workerWireKind(),
 			Basename:          []byte(".iprange-publish-vector.tmp"),
 			Identity:          &outputIdentity,
 			CreationSecurity:  &security,
@@ -470,7 +522,7 @@ func TestRustVectorRecoveryOutcomeDecode(t *testing.T) {
 // result reader decodes the Rust-produced PUBLICATION RESULT envelope
 // to the fixture values.
 func TestRustVectorPublicationResultDecode(t *testing.T) {
-	c := rustVectorControl(t, rustVectorFixture(t, rustVectorPublicationResultHex))
+	c := rustVectorControl(t, rustVectorPublicationResultFixture(t))
 	r, err := NewWireReader(c)
 	if err != nil {
 		t.Fatal("open reader:", err)
@@ -492,7 +544,7 @@ func TestRustVectorPublicationResultDecode(t *testing.T) {
 // reader decodes the Rust-produced CLEANUP RESULT envelope to the
 // fixture values.
 func TestRustVectorCleanupResultDecode(t *testing.T) {
-	c := rustVectorControl(t, rustVectorFixture(t, rustVectorCleanupResultHex))
+	c := rustVectorControl(t, rustVectorCleanupResultFixture(t))
 	discarded, scratch, err := ReadCleanupResult(c)
 	if err != nil {
 		t.Fatal("decode cleanup result:", err)
@@ -573,7 +625,7 @@ func TestRustVectorPublicationResultEncode(t *testing.T) {
 	if err := w.Finish(); err != nil {
 		t.Fatal("seal:", err)
 	}
-	want := rustVectorFixture(t, rustVectorPublicationResultHex)
+	want := rustVectorPublicationResultFixture(t)
 	if got := rustVectorPayload(t, c); !bytes.Equal(got, want) {
 		t.Fatalf("encoded publication result differs from the Rust vector:\n got %x\nwant %x", got, want)
 	}
@@ -590,7 +642,7 @@ func TestRustVectorCleanupResultEncode(t *testing.T) {
 	if err := WriteCleanupResult(c, rustVectorCleanupDiscardValue(), nil); err != nil {
 		t.Fatal("write cleanup result:", err)
 	}
-	want := rustVectorFixture(t, rustVectorCleanupResultHex)
+	want := rustVectorCleanupResultFixture(t)
 	if got := rustVectorPayload(t, c); !bytes.Equal(got, want) {
 		t.Fatalf("encoded cleanup result differs from the Rust vector:\n got %x\nwant %x", got, want)
 	}

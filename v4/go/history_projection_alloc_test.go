@@ -62,11 +62,14 @@ func TestProjectHistoryAllocCeiling(t *testing.T) {
 // path (reader-table gate, base re-read, meta stamping, sync, sidecar
 // coordination and cleanup evidence) on top of the abort path; like the
 // abort path its cost is per projection, never per record. Measured
-// live floor at 1,000 source records: 233 per run (375 under
-// race+checkptr instrumentation). The ceiling gives headroom for Go
-// release and instrumentation differences while still failing on any
-// new per-record or per-insert allocation (a per-record allocation
-// would add at least 1,000 objects at this input size).
+// floor at 1,000 source records: 233 per run on linux/amd64 (375 under
+// race+checkptr instrumentation) and 407 per run on windows/amd64 with
+// Go 1.26.5 (the Windows profile differs in GC metadata, file identity
+// capture, and security-probe allocations, none of which scale with
+// the record count). The ceiling gives headroom for Go release and
+// instrumentation differences while still failing on any new
+// per-record or per-insert allocation (a per-record allocation would
+// add at least 1,000 objects at this input size).
 func TestProjectHistoryCommitAllocCeiling(t *testing.T) {
 	requireLiveCreation(t)
 	sourcePath := histCreateSource4(t, ranges1000())
@@ -106,7 +109,7 @@ func TestProjectHistoryCommitAllocCeiling(t *testing.T) {
 		run()
 	})
 	t.Logf("create+project+commit allocations per run: %.0f", allocs)
-	const ceiling = 400
+	const ceiling = 450
 	if allocs > ceiling {
 		t.Fatalf("create+project+commit allocates %.0f objects per run, ceiling is %d: a new per-record or per-insert allocation was introduced", allocs, ceiling)
 	}

@@ -88,7 +88,7 @@ func workerSecurityFailure(cause error) error {
 // OpenWorker opens an existing control file by path and maps its exact
 // 1 MiB extent read-write (Rust Control::open_worker).
 func OpenWorker(path string) (*Control, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := openControlFile(path)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "worker control open: " + err.Error()}
 	}
@@ -187,7 +187,7 @@ func (c *Control) FaultRecord() (FaultRecord, error) {
 	if generation == 0 ||
 		generation != faultGeneration ||
 		!roleOK || !faultRoleOK || role != faultRole ||
-		code <= 0 ||
+		!faultCodeValid(code) ||
 		mappingLen == 0 || relative >= mappingLen ||
 		mappingBase > ^uint64(0)-relative || // Rust base.checked_add(relative) rejects overflow
 		mappingBase+relative != address {

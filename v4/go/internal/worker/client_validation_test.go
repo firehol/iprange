@@ -214,7 +214,7 @@ func moduleRootOf(t *testing.T) string {
 func buildRealWorker(t *testing.T) string {
 	t.Helper()
 	directory := t.TempDir()
-	destination := filepath.Join(directory, "iprange-v4-worker")
+	destination := filepath.Join(directory, workerExecutableName())
 	command := exec.Command("go", "-C", moduleRootOf(t), "build", "-o", destination, "./cmd/iprange-v4-worker")
 	output, err := command.CombinedOutput()
 	if err != nil {

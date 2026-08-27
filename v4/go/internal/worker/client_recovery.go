@@ -464,7 +464,7 @@ func discardedRecoveryFailureOf(cause error, report recovery.RecoveryReport, dis
 				Kind:              publication.ArtifactAuthorizedScratch,
 				DirectoryRole:     publication.DirectoryRoleScratchDirectory,
 				DirectoryIdentity: residue.DirectoryIdentity,
-				BasenameEncoding:  1,
+				BasenameEncoding:  basenameEncodingKind,
 				Basename:          append([]byte(nil), residue.Basename...),
 				Identity:          &identity,
 				CreationSecurity: &publication.CreationSecurity{

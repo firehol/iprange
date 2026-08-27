@@ -296,7 +296,12 @@ func SpawnWorker(control *Control) (*Process, error) {
 		// nil stdin/stdout/stderr connect to the null device
 		// (os/exec), exactly the Rust Stdio::null() triple.
 		if err := cmd.Start(); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			// Candidate fallthrough on a missing executable (Rust
+			// spawn ErrorKind::NotFound): os/exec reports the missing
+			// path as os.ErrNotExist on unix and as exec.ErrNotFound on
+			// Windows (CreateProcess ERROR_FILE_NOT_FOUND), so both
+			// sentinels must fall through to the next candidate.
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
 				lastNotFound = err
 				continue
 			}

@@ -698,6 +698,13 @@ func TestImportPreconditionsCancellationSourceFailureAndBudgetFailureAreAtomic(t
 	if _, err := tinyImport.FinishInput(); abortCauseCode(err) != ErrorInsufficientResourceBudget {
 		t.Fatalf("tiny-budget finish = %v, want transaction aborted wrapping insufficient budget", err)
 	}
+	// The aborted import released the tiny-budget transaction; the
+	// writer is closed explicitly like every other arm of this test
+	// (Rust drops the writer at scope end; the live mapping would
+	// otherwise block TempDir cleanup on Windows).
+	if _, err := tinyWriter.Close(); err != nil {
+		t.Fatalf("tiny-budget close: %v", err)
+	}
 
 	// The source read failure aborts the import and leaves the writer
 	// reusable for a normal workflow (Rust corrupt_selected_range_root).

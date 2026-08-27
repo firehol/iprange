@@ -91,9 +91,20 @@ type EarlyDiscard struct {
 }
 
 // Clean reports whether the discard left no residue at all (Rust
-// client discard_clean).
+// client discard_clean). The Rust check requires HousekeepingNone;
+// the Go machine accepts HousekeepingCrashReappearancePossible as
+// well when every residue is absent: the POSIX discard arms produce
+// only None, while the Windows GC arm (Rust
+// resolver::finish_housekeeping, mirrored in live/gc_resolver.go)
+// reports CrashReappearancePossible on a fully-absent terminal
+// because the unlink is not power-loss durable. An absent artifact
+// with no visible housekeeping is proved gone right now either way;
+// the crash-possible class is the platform honesty of that proof.
 func (d *EarlyDiscard) Clean() bool {
-	return d.Artifact == nil && d.Housekeeping == publication.HousekeepingNone && len(d.VisibleHousekeeping) == 0
+	if d.Artifact != nil || len(d.VisibleHousekeeping) != 0 {
+		return false
+	}
+	return d.Housekeeping == publication.HousekeepingNone || d.Housekeeping == publication.HousekeepingCrashReappearancePossible
 }
 
 // WriteCleanupResult writes one cleanup result (Rust
@@ -300,11 +311,19 @@ type ScratchCleanup struct {
 
 // Clean reports whether the scratch cleanup proved every artifact
 // absent (Rust ScratchCleanup::clean plus the client scratch_clean
-// housekeeping check).
+// housekeeping check). Like EarlyDiscard.Clean, the housekeeping
+// check accepts the Windows CrashReappearancePossible terminal when
+// no residue and no visible artifact exist: the POSIX scratch and
+// discard arms always report HousekeepingNone on a clean terminal,
+// while the Windows GC retirement (live/gc_resolver.go
+// gcFinishHousekeeping) classifies a fully-absent removal as
+// crash-reappearance-possible because Windows unlinking is not
+// power-loss durable.
 func (s *ScratchCleanup) Clean() bool {
-	return len(s.Residues) == 0 &&
-		s.Housekeeping == publication.HousekeepingNone &&
-		len(s.VisibleHousekeeping) == 0
+	if len(s.Residues) != 0 || len(s.VisibleHousekeeping) != 0 {
+		return false
+	}
+	return s.Housekeeping == publication.HousekeepingNone || s.Housekeeping == publication.HousekeepingCrashReappearancePossible
 }
 
 // writeScratchCleanup writes one optional scratch cleanup (Rust

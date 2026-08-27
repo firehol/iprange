@@ -44,18 +44,12 @@ func cleanupAttemptFixture(t *testing.T, directory string) (string, *publication
 	copy(attemptID[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
 	name := ".iprange-publish-" + hex.EncodeToString(attemptID[:]) + ".tmp"
 	privatePath := filepath.Join(directory, name)
-	file, err := os.OpenFile(privatePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatalf("fixture create attempt: %v", err)
-	}
-	defer file.Close()
 	profile, err := security.Capture()
 	if err != nil {
 		t.Fatalf("fixture security capture: %v", err)
 	}
-	if err := security.SecureCreatorOnly(file, profile); err != nil {
-		t.Fatalf("fixture secure attempt: %v", err)
-	}
+	file := createSecuredAttemptFile(t, privatePath, profile)
+	defer file.Close()
 	directoryHandle, err := live.OpenDirectory(directory)
 	if err != nil {
 		t.Fatalf("fixture open directory: %v", err)
@@ -71,12 +65,12 @@ func cleanupAttemptFixture(t *testing.T, directory string) (string, *publication
 	facts := &publication.PrivateOutputAttempt{
 		PublicationAttemptID: attemptID,
 		DirectoryIdentity:    publication.LocalFileIdentityFromDeviceInode(dirDevice, dirInode),
-		BasenameEncoding:     1,
+		BasenameEncoding:     workerWireKind(),
 		Basename:             []byte(name),
 		Identity:             publication.LocalFileIdentityFromDeviceInode(fileDevice, fileInode),
 		IdentityPresent:      true,
 		CreationSecurity: publication.CreationSecurity{
-			Kind:       1,
+			Kind:       workerWireKind(),
 			Commitment: profile.Commitment(),
 		},
 	}
@@ -148,8 +142,12 @@ func TestCleanupCheckpointWithoutDirectoryReportsConflict(t *testing.T) {
 // TestCleanupCheckpointRemovesHeaderlessExactScratch runs the real
 // checkpointed removal (Rust client_tests
 // checkpoint_cleanup_removes_headerless_exact_scratch): the
-// checkpointed machine does not re-read the ownership header, so a
-// bare 0600 exact-name file is removed and the cleanup is clean.
+// checkpointed machine does not re-read the ownership header, so the
+// exact-name artifact is removed and the cleanup is clean. The fixture
+// artifact is created through the creator-only authority because the
+// Windows removal retires it through the GC machine, whose observe
+// proof requires the live creator-only commitment (Rust
+// resolver::observe).
 func TestCleanupCheckpointRemovesHeaderlessExactScratch(t *testing.T) {
 	directory := t.TempDir()
 	checkpoint := createScratchCheckpointFixture(t, directory, false)
@@ -200,18 +198,26 @@ func TestCleanupCheckpointReportsChangedLinkCountWithoutUnlinking(t *testing.T) 
 
 // createScratchCheckpointFixture builds one checkpoint over one real
 // exact-name scratch file (Rust client_tests create_checkpoint: a
-// fresh 0600 file named by the checkpoint basename, optionally
+// fresh creator-only file named by the checkpoint basename, optionally
 // aliased, with the directory and artifact identities captured live).
 func createScratchCheckpointFixture(t *testing.T, directory string, alias bool) *ScratchCheckpoint {
 	t.Helper()
 	attemptID := [16]byte{0x32}
 	ordinal := uint32(9)
+	profile, err := security.Capture()
+	if err != nil {
+		t.Fatal("fixture security capture:", err)
+	}
 	name := string(checkpointBasename(attemptID, ordinal))
 	path := filepath.Join(directory, name)
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatal("create scratch file:", err)
-	}
+	// The scratch artifact is created through the platform creator-only
+	// authority: the Windows checkpointed removal retires the artifact
+	// through the GC machine, whose observe proof compares the live
+	// creator-only commitment against the envelope header (Rust
+	// resolver::observe), so a bare OS-created file would classify as a
+	// names-or-identities conflict. The POSIX arm creates the same 0600
+	// exact-name file and strips any inherited ACL.
+	file := createSecuredAttemptFile(t, path, profile)
 	if alias {
 		if err := os.Link(path, filepath.Join(directory, "alias")); err != nil {
 			file.Close()
@@ -230,7 +236,7 @@ func createScratchCheckpointFixture(t *testing.T, directory string, alias bool) 
 	return &ScratchCheckpoint{
 		AttemptID:         attemptID,
 		DirectoryIdentity: publication.LocalFileIdentityFromDeviceInode(dirDevice, dirInode),
-		CreationSecurity:  publication.CreationSecurity{Kind: 1, Commitment: [32]byte{0x6b}},
+		CreationSecurity:  publication.CreationSecurity{Kind: workerWireKind(), Commitment: profile.Commitment()},
 		Entries: []ScratchCheckpointEntry{
 			{Ordinal: ordinal, Identity: publication.LocalFileIdentityFromDeviceInode(artifactDevice, artifactInode)},
 		},
@@ -337,10 +343,14 @@ func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
 	if err := os.Mkdir(scratchDirectory, 0o700); err != nil {
 		t.Fatal("create scratch directory:", err)
 	}
+	profile, err := security.Capture()
+	if err != nil {
+		t.Fatal("fixture security capture:", err)
+	}
 	checkpoint := &ScratchCheckpoint{
 		AttemptID:         [16]byte{0x30},
 		DirectoryIdentity: scratchDirectoryIdentity(t, scratchDirectory),
-		CreationSecurity:  publication.CreationSecurity{Kind: 1, Commitment: [32]byte{0x40}},
+		CreationSecurity:  publication.CreationSecurity{Kind: workerWireKind(), Commitment: profile.Commitment()},
 		Entries: []ScratchCheckpointEntry{
 			{Ordinal: 0, Identity: publication.LocalFileIdentityFromDeviceInode(9, 10)},
 			{Ordinal: 1, Identity: publication.LocalFileIdentityFromDeviceInode(11, 12)},

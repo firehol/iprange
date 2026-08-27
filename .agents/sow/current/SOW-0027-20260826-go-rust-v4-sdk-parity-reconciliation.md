@@ -269,6 +269,105 @@ authorized hosts exist for the remaining three; the darwin amd64 raw
 `syscall` convention is the same classless ABI the macOS kernel accepts
 from libc `syscall()`).
 
+Sub-state (2026-08-27): slice 2d native round delivered (commits
+`76765f21`, `87140582`, `42bee736`, `c162ad34`, `b444712b`, plus the
+signed slice commit recorded at the end of this entry; gate pending the
+five-reviewer round): the authorized native rounds on the approved hosts
+(Option 1: costa-win11 windows/amd64 Go 1.26.5, plakam4mini darwin/arm64
+Go 1.26.3, freebsd/amd64) are complete and green, with the following
+correctness defects the rounds exposed and the lead fixed:
+
+- Darwin SIGBUS delivery: the kernel stores the installed sigaction's
+  `sa_tramp` and jumps every real-handler delivery through it (sendsig
+  sets PC to SIGTRAMP), so zero/garbage tramp was fatal at delivery. The
+  darwin install/restore arms now supply a 24-byte `__sigaction` input
+  (handler@0, tramp@8, mask@16, flags@20; output 16 bytes handler@0
+  mask@8 flags@12) with the worker's own sigtramp that calls the catcher
+  and sigreturns the interrupted context; proven on the M4.
+- Windows worker control sharing: the creator-only control handle grants
+  FILE_ALL_ACCESS, and Windows requires every later handle to advertise
+  DELETE sharing while such a handle exists; `OpenWorker` now reopens the
+  control through the platform arm (`openControlFile`) with
+  read/write/delete share, and the executable-candidate fallthrough also
+  accepts `exec.ErrNotFound` (CreateProcess ERROR_FILE_NOT_FOUND).
+- Windows delete-blockers in tests: the cmd fixture leaked a plain
+  `os.Open` observation handle (no FILE_SHARE_DELETE) that blocked
+  TempDir removal, and the import-precondition test leaked a live writer
+  (Rust drops it; the Go port now closes it) whose mapped main file
+  blocked deletion with ACCESS_DENIED.
+- Windows GC/wire kinds: the worker cleanup codecs validated the
+  checkpoint security against the hardcoded unix kind (1), rejecting
+  the Windows kind-2 wire facts with FormatInvalid; the kinds are now
+  platform arms (kind_posix.go / kind_windows.go), the scratch-checkpoint
+  fixture creates the artifact through the platform creator-only
+  authority (the Windows GC observe proof compares the live
+  creator-only commitment, so a bare OS file classified as a
+  names-or-identities conflict), and the retained-residue fold uses the
+  platform basename-encoding kind.
+- Windows fault-record validation: the parent fault-record check
+  hardcoded the POSIX rule (si_code > 0); Windows NTSTATUS codes are
+  negative int32, so the check is now the Rust platform split
+  (unix `code > 0`, windows `code != 0`).
+- Windows amd64 mapped-CAS assembly: `mapAtomicCas32` loaded `old` into
+  EDX while CMPXCHG compares EAX (left holding the base pointer), so the
+  CAS always failed and the vectored handler never claimed an owned
+  fault; all four amd64 atomic files were corrected (old into EAX, new
+  into EDX, base into SI). The arm64 LDAR/STLXR arms were already
+  correct.
+- Windows in-page fault arming: hardware EXCEPTION_IN_PAGE_ERROR cannot
+  be armed deterministically on Windows (CreateFileMapping refuses a
+  maximum size above the file extent with ERROR_COMMITMENT_LIMIT,
+  MapViewOfFile cannot exceed the section, and SetEndOfFile refuses
+  while a section is open with ERROR_USER_MAPPED_FILE), so the Windows
+  subprocess proofs deliver the in-page error synthetically
+  (kernel32 RaiseException with the documented parameter layout:
+  access type, the accessed page-2 address inside the armed region, and
+  the NTSTATUS), exercising the real vectored dispatch, the real
+  EXCEPTION_POINTERS record, the record write, and the owned-fault
+  termination. The real-binary source-fault fixture truncates the
+  source under the worker's open mapping, which Windows refuses by
+  design, so that fixture stays POSIX-only exactly like the Rust
+  authority (client_tests.rs is cfg(all(test, unix))); Windows proves
+  the same record machinery through the synthetic subprocess proofs and
+  the declared-page restart through the real-binary refusal test.
+- Windows cleanup terminal: the POSIX discard arms always produce
+  HousekeepingNone, while the Windows GC machine classifies a fully
+  absent removal as CrashReappearancePossible (Rust
+  resolver::finish_housekeeping does the same, because Windows
+  unlinking is not power-loss durable); `EarlyDiscard.Clean()` and
+  `ScratchCleanup.Clean()` now accept the crash-possible terminal when
+  every residue and visible artifact is absent, which is the proved-
+  absence class. This unblocked the checkpointed-scratch, real-binary
+  discard, and fault-retry terminals on Windows.
+- FreeBSD race zeroalloc: the FreeBSD -race runtime bills its
+  shadow-arena growth through the Go GC (exactly 31 x 4KiB Go-heap
+  blocks per publish/count iteration, deterministic on Go 1.26.5), so
+  the publish-set page-copy evidence window skips under
+  `raceEnabled && GOOS == freebsd`, with the plain FreeBSD build
+  proving the SDK path; the same window stays green under race on
+  linux and darwin.
+- Windows alloc ceiling: the ProjectHistory commit floor is 407
+  objects per run on windows/amd64 Go 1.26.5 (vs 233 on linux/amd64),
+  so the pinned ceiling moved 400 -> 450 with the platform floors
+  recorded; no per-record or per-insert allocation was introduced.
+- Windows wire vectors: the worker wire is same-host and same-OS and
+  the Rust wire kinds are platform constants (unix.rs 1, windows.rs 2),
+  so the Rust-produced vector fixtures are now a per-OS pair; the
+  Windows pair was generated on the authorized host with the unchanged
+  Rust generator (its POSIX output verified byte-identical to the
+  committed POSIX vectors first).
+
+Native proof record at the slice commit: linux/amd64 full battery
+(plain, v4work, vet, gofmt, race+checkptr) green; darwin/arm64 (M4,
+Go 1.26.3) plain, v4work, and race+checkptr green; freebsd/amd64 plain,
+v4work, and race+checkptr green; windows/amd64 (Go 1.26.5) plain,
+v4work, and vet green, with race+checkptr on the Windows host blocked by
+the host's broken mingw toolchain (mingw-w64-x86_64-gcc 16.1.0-5 exits 1
+silently on trivial inputs; no clang present; Go -race on Windows needs a
+working cgo CC; the code-level race/checkptr gate remains the committed
+Linux battery). Rust suite green at the same tree; all eight targets
+cross-build and vet clean including the final tree.
+
 ## Requirements
 
 ### Purpose

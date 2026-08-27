@@ -20,12 +20,12 @@ TEXT ·mapAtomicStore32(SB), NOSPLIT, $0-16
 	RET
 
 TEXT ·mapAtomicCas32(SB), NOSPLIT, $0-28
-	MOVQ base+0(FP), AX
+	MOVQ base+0(FP), SI
 	MOVL off+8(FP), CX
-	MOVL old+12(FP), DX
-	MOVL new+16(FP), BX
+	MOVL old+12(FP), AX
+	MOVL new+16(FP), DX
 	LOCK
-	CMPXCHGL BX, (AX)(CX*1)
+	CMPXCHGL DX, (SI)(CX*1)
 	JE cas_ok
 	MOVL $0, ret+24(FP)
 	RET

@@ -177,17 +177,6 @@ const buildIDDefault = "iprange-v4-go-worker-00000000000000000000000000000000000
 // from BuildIDDefault or the environment and pins it with SetBuildID.
 const BuildIDDefault = buildIDDefault
 
-// identityKind and creationSecurityKind are the unix namespace kinds of
-// the retained-identity and creator-only commitment checks (Rust
-// publication/namespace/unix.rs IDENTITY_KIND and CREATION_SECURITY_KIND;
-// the Go publication package keeps both private, so the worker boundary
-// repeats the unix values). The worker control surface is unix-only,
-// so no Windows variant exists here.
-const (
-	identityKind         uint16 = 1
-	creationSecurityKind uint16 = 1
-)
-
 // scratch artifact-name grammar (Rust artifact_name.rs scratch_name):
 // ".iprange-scratch-" + 32 hex attempt chars + "-" + 8 hex ordinal
 // chars + ".tmp" = 62 bytes total (SCRATCH_NAME_SIZE). checkpointBasename
@@ -279,9 +268,9 @@ func scratchIdentityValid(identity publication.LocalFileIdentity) bool {
 	return ok
 }
 
-// scratchSecurityValid reports whether one creator-only commitment is a
-// plausible unix commitment (Rust wire_cleanup.rs::valid_security: the
-// unix kind and a nonzero commitment).
+// scratchSecurityValid reports whether one creator-only commitment is
+// plausible for this platform (Rust wire_cleanup.rs::valid_security:
+// the platform creator-only kind and a nonzero commitment).
 func scratchSecurityValid(kind uint16, commitment [32]byte) bool {
 	return kind == creationSecurityKind && commitment != [32]byte{}
 }

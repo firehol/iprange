@@ -148,8 +148,19 @@ func crashLeaf(t *testing.T, txn uint64, from, to, value uint32) []byte {
 // the exact relative offset and mapping length (the DriveLoop already
 // proved the child exited 197 before the record was read back), and
 // the session-2 rerun with page 4 declared unreadable completes
-// deterministically.
+// deterministically. Session 1 truncates the source under the
+// worker's open mapping, which Windows refuses by design
+// (ERROR_USER_MAPPED_FILE) and which even a fresh section cannot
+// recreate (beyond-extent sections and views are refused on this
+// build), so the fault arm is POSIX-only, exactly like the Rust
+// authority (client_tests.rs is cfg(all(test, unix))). Windows proves
+// the same record machinery through the synthetic in-page-error
+// subprocess proofs (sigbus_windows_test.go) and the declared-page
+// restart through TestRecoverWithWorkerRealBinaryDeclaredPageRefuses.
 func TestRecoverWithWorkerRealBinarySourceFaultRestartable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the source-fault fixture truncates the file under the worker mapping; Windows refuses truncating a mapped file, so this arm is POSIX-only (Rust cfg(unix) authority)")
+	}
 	realWorkerFixtureGate(t)
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }

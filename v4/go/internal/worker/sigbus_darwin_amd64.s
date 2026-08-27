@@ -8,6 +8,7 @@
 #define SYS_sigprocmask 48
 #define SYS_sigsuspend 111
 #define SYS_sigaltstack 53
+#define SYS_sigreturn 184
 #define SYS_getpid 20
 #define SYS_kill 37
 #define SYS_exit 1
@@ -42,9 +43,28 @@
 #define CTL_FAULT_ADDRESS 168
 #define CTL_FAULT_MARKER 176
 
-// darwinSigaction offsets (handler@0, mask@8, flags@12).
+// darwinSigaction (kernel output) offsets: handler@0, mask@8, flags@12.
 #define SACT_MASK 8
 #define SACT_FLAGS 12
+// darwinSigactionInput (kernel input) offsets: handler@0, tramp@8,
+// mask@16, flags@20.
+#define SACTIN_TRAMP 8
+#define SACTIN_MASK 16
+
+// sigtramp frame: catcher@0, infostyle@8, ucontext@16, token@24, 8
+// bytes alignment slack; 40 bytes keeps the ABI alignment (see
+// ·sigtramp below). The kernel signal frame stays above RSP.
+#define TRAMP_CATCHER 0
+#define TRAMP_INFOSTYLE 8
+#define TRAMP_UCTX 16
+#define TRAMP_TOKEN 24
+#define TRAMP_FRAME 40
+
+// chain scratch frame: 24-byte kernel sigaction input at 0(SP),
+// chain_mask slot at 32(SP); 96 bytes total.
+#define CHAIN_FRAME 96
+#define CHAIN_ACTION 0
+#define CHAIN_MASK_SLOT 32
 
 // kernelStack offsets (sp@0, size@8, flags@16).
 #define STACK_FLAGS 16
@@ -53,6 +73,7 @@
 #define FAULT_MARKER 0x42555346
 #define OWNED_FAULT_EXIT 197
 #define UNOWNED_REDISPATCH_FAILED 198
+#define SIGRETURN_FAILED 199
 
 // The kernel enters sigbusHandler with the C ABI: DI=signal, SI=siginfo,
 // DX=ucontext. It never calls Go. Register contract (macOS preserves
@@ -144,42 +165,19 @@ chain:
 	TESTQ $SA_RESETHAND, BX
 	JNZ chain_reset
 
-	// Ordinary chain: restore the previous action, apply its kernel-
-	// equivalent mask, then TAIL-JUMP to the previous handler with the
-	// original C ABI registers. The kernel frame stays intact: the
-	// chained handler returns to the thread sigtramp and the kernel
-	// sigreturn resumes the interrupted context.
-	SUBQ $64, SP
-	MOVQ $SYS_sigaction, AX
-	MOVQ $SIGBUS, DI
-	LEAQ ·previousAction(SB), SI
-	MOVQ $0, DX
-	SYSCALL
-	CMPQ AX, $0
-	JNE chain_fail_restore
-	CALL ·chain_mask(SB)
-	CMPQ AX, $0
-	JNE chain_fail_restore
-	ADDQ $64, SP
-	MOVQ R12, DI
-	MOVQ R13, SI
-	MOVQ R14, DX
-	MOVQ ·previousAction+0(SB), BX
-	JMP BX
-
-chain_reset:
-	// SA_RESETHAND: the disposition is cleared to SIG_DFL before the
-	// previous handler runs (posix.rs chain reset arm).
-	SUBQ $64, SP
-	MOVQ $0, AX
-	MOVQ AX, 0(SP)
-	MOVQ AX, 8(SP)
-	MOVQ AX, 16(SP)
-	MOVQ AX, 24(SP)
-	MOVQ AX, 32(SP)
-	MOVQ AX, 40(SP)
-	MOVQ AX, 48(SP)
-	MOVQ AX, 56(SP)
+	// Ordinary chain: rebuild the previous action as a 24-byte kernel
+	// input with our sigtramp, apply its kernel-equivalent mask, then
+	// TAIL-JUMP to the previous handler with the original C ABI
+	// registers. The kernel frame stays intact: the chained handler
+	// returns into our sigtramp and the kernel sigreturn resumes the
+	// interrupted context.
+	SUBQ $CHAIN_FRAME, SP
+	MOVQ ·previousAction+0(SB), AX
+	MOVQ AX, CHAIN_ACTION+0(SP)
+	LEAQ ·sigtramp(SB), AX
+	MOVQ AX, CHAIN_ACTION+SACTIN_TRAMP(SP)
+	MOVQ ·previousAction+SACT_MASK(SB), AX // mask@8 | flags@12 as one pair
+	MOVQ AX, CHAIN_ACTION+SACTIN_MASK(SP)
 	MOVQ $SYS_sigaction, AX
 	MOVQ $SIGBUS, DI
 	MOVQ SP, SI
@@ -190,7 +188,34 @@ chain_reset:
 	CALL ·chain_mask(SB)
 	CMPQ AX, $0
 	JNE chain_fail_restore
-	ADDQ $64, SP
+	ADDQ $CHAIN_FRAME, SP
+	MOVQ R12, DI
+	MOVQ R13, SI
+	MOVQ R14, DX
+	MOVQ ·previousAction+0(SB), BX
+	JMP BX
+
+chain_reset:
+	// SA_RESETHAND: the disposition is cleared to SIG_DFL before the
+	// previous handler runs (posix.rs chain reset arm). The zeroed
+	// 24-byte input is a plain SIG_DFL (handler and tramp both null; the
+	// kernel never consults the tramp for SIG_DFL).
+	SUBQ $CHAIN_FRAME, SP
+	MOVQ $0, AX
+	MOVQ AX, CHAIN_ACTION+0(SP)
+	MOVQ AX, CHAIN_ACTION+SACTIN_TRAMP(SP)
+	MOVQ AX, CHAIN_ACTION+SACTIN_MASK(SP)
+	MOVQ $SYS_sigaction, AX
+	MOVQ $SIGBUS, DI
+	MOVQ SP, SI
+	MOVQ $0, DX
+	SYSCALL
+	CMPQ AX, $0
+	JNE chain_fail_restore
+	CALL ·chain_mask(SB)
+	CMPQ AX, $0
+	JNE chain_fail_restore
+	ADDQ $CHAIN_FRAME, SP
 	MOVQ R12, DI
 	MOVQ R13, SI
 	MOVQ R14, DX
@@ -198,17 +223,26 @@ chain_reset:
 	JMP BX
 
 chain_dfl:
-	// Restore SIG_DFL. A synchronous kernel bus fault re-executes the
+	// Restore SIG_DFL (previousAction.Handler is 0; the tramp is never
+	// consulted). A synchronous kernel bus fault re-executes the
 	// faulting instruction on return and dies with SIGBUS; asynchronous
 	// deliveries redispatch through kill + sigsuspend (posix.rs chain
 	// SIG_DFL arm + redispatch_default).
+	SUBQ $CHAIN_FRAME, SP
+	MOVQ ·previousAction+0(SB), AX
+	MOVQ AX, CHAIN_ACTION+0(SP)
+	LEAQ ·sigtramp(SB), AX
+	MOVQ AX, CHAIN_ACTION+SACTIN_TRAMP(SP)
+	MOVQ ·previousAction+SACT_MASK(SB), AX
+	MOVQ AX, CHAIN_ACTION+SACTIN_MASK(SP)
 	MOVQ $SYS_sigaction, AX
 	MOVQ $SIGBUS, DI
-	LEAQ ·previousAction(SB), SI
+	MOVQ SP, SI
 	MOVQ $0, DX
 	SYSCALL
 	CMPQ AX, $0
-	JNE chain_fail
+	JNE chain_fail_restore
+	ADDQ $CHAIN_FRAME, SP
 	TESTQ R13, R13
 	JZ chain_redispatch
 	MOVQ SI_ADDR_OFF(R13), AX // si_addr
@@ -222,14 +256,24 @@ chain_dfl:
 	RET // re-executed instruction faults under SIG_DFL
 
 chain_ign:
-	// Restore SIG_IGN and return (posix.rs chain SIG_IGN arm).
+	// Restore SIG_IGN and return (posix.rs chain SIG_IGN arm); RET
+	// lands in our sigtramp, which sigreturns to the interrupted
+	// context.
+	SUBQ $CHAIN_FRAME, SP
+	MOVQ ·previousAction+0(SB), AX
+	MOVQ AX, CHAIN_ACTION+0(SP)
+	LEAQ ·sigtramp(SB), AX
+	MOVQ AX, CHAIN_ACTION+SACTIN_TRAMP(SP)
+	MOVQ ·previousAction+SACT_MASK(SB), AX
+	MOVQ AX, CHAIN_ACTION+SACTIN_MASK(SP)
 	MOVQ $SYS_sigaction, AX
 	MOVQ $SIGBUS, DI
-	LEAQ ·previousAction(SB), SI
+	MOVQ SP, SI
 	MOVQ $0, DX
 	SYSCALL
 	CMPQ AX, $0
-	JNE chain_fail
+	JNE chain_fail_restore
+	ADDQ $CHAIN_FRAME, SP
 	RET
 
 chain_redispatch:
@@ -259,7 +303,7 @@ chain_suspend:
 	JMP chain_suspend
 
 chain_fail_restore:
-	ADDQ $64, SP
+	ADDQ $CHAIN_FRAME, SP
 chain_fail:
 	MOVQ $SYS_exit, AX
 	MOVQ $UNOWNED_REDISPATCH_FAILED, DI
@@ -349,5 +393,47 @@ sigactionQuery_ret:
 // Address getters for the naked symbols.
 TEXT ·sigbusHandlerAddr(SB), NOSPLIT, $0-8
 	LEAQ ·sigbusHandler(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
+// sigtramp is the kernel trampoline stored in sa_tramp for the worker
+// action (Darwin has no SA_RESTORER): sendsig sets RIP to the stored
+// tramp for every real-handler delivery and enters it with the sigtramp
+// ABI below. It calls the catcher with the SA_SIGINFO handler ABI, then
+// resumes the interrupted context with sigreturn(184); the kernel
+// signal frame above RSP is restored by that syscall. The ucontext,
+// infostyle, and token are saved on a private 40-byte frame (RSP is
+// 8 mod 16 at entry because the kernel accounts for a return address,
+// so 40 bytes keeps the handler entry 16-byte aligned as the C ABI
+// requires) under the kernel frame because the catcher (and any
+// chained handler) may clobber them. Like the kernel's own sigtramp,
+// the token is passed through verbatim: the process-wide sigreturn
+// validation the kernel derives from SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP
+// compares it against the delivery token. This function is never
+// entered by Go code.
+TEXT ·sigtramp(SB), NOSPLIT|NOFRAME, $0-0
+	SUBQ $TRAMP_FRAME, SP
+	MOVQ DI, TRAMP_CATCHER(SP)
+	MOVQ SI, TRAMP_INFOSTYLE(SP)
+	MOVQ R8, TRAMP_UCTX(SP)
+	MOVQ R9, TRAMP_TOKEN(SP)
+	MOVQ DX, DI // sig
+	MOVQ CX, SI // siginfo
+	MOVQ R8, DX // ucontext
+	MOVQ TRAMP_CATCHER(SP), AX
+	CALL AX
+	MOVQ TRAMP_UCTX(SP), DI // ucontext
+	MOVQ TRAMP_INFOSTYLE(SP), SI // infostyle
+	MOVQ TRAMP_TOKEN(SP), DX // token
+	MOVQ $SYS_sigreturn, AX
+	SYSCALL
+	MOVQ $SIGRETURN_FAILED, DI
+	MOVQ $SYS_exit, AX
+	SYSCALL
+	RET // unreachable
+
+// Address getters for the naked symbols.
+TEXT ·sigtrampAddr(SB), NOSPLIT, $0-8
+	LEAQ ·sigtramp(SB), AX
 	MOVQ AX, ret+0(FP)
 	RET

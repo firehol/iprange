@@ -22,8 +22,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -40,6 +42,19 @@ type sigbusStatus struct {
 	signal   syscall.Signal
 	timedOut bool
 }
+
+// Synthetic in-page error delivery (kernel32 RaiseException): all
+// three parameters are the documented EXCEPTION_IN_PAGE_ERROR record
+// fields (access flags, the accessed virtual address, and the
+// NTSTATUS), and the address selects the second page of the armed
+// probe so the handler records relative == native exactly like the
+// POSIX arm.
+var (
+	kernel32Test       = windows.NewLazySystemDLL("kernel32.dll")
+	procRaiseException = kernel32Test.NewProc("RaiseException")
+)
+
+const ntStatusEndOfFile = 0xC0000011
 
 func spawnSigbusChild(t *testing.T, run string, env ...string) sigbusStatus {
 	t.Helper()
@@ -80,14 +95,44 @@ func spawnSigbusChild(t *testing.T, run string, env ...string) sigbusStatus {
 	return sigbusStatus{}
 }
 
-// signalMapping creates a private two-page file, maps it read-only, and
-// truncates the file to the first native page so the second page raises
-// EXCEPTION_IN_PAGE_ERROR on access (the Windows twin of the POSIX
-// SIGBUS fault; Rust tests::mapping).
-func signalMapping(t *testing.T, label string, truncate bool) (*mapping.Mapping, uintptr, uint64) {
+// createSignalMappingFile creates the signal-mapping file with a
+// DELETE-sharing handle: the mapping is unlinked while the handle stays
+// open (the windows anonymous-file pattern), and Windows refuses the
+// unlink unless every open handle advertises FILE_SHARE_DELETE (the
+// stdlib os.OpenFile share mode lacks it).
+func createSignalMappingFile(path string) (*os.File, error) {
+	ptr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(
+		ptr,
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.CREATE_NEW,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}
+
+// signalMapping creates a private two-page section over a two-page
+// file and maps it read-only. A hardware EXCEPTION_IN_PAGE_ERROR
+// cannot be armed deterministically on Windows: CreateFileMapping
+// refuses a maximum size above the file extent with
+// ERROR_COMMITMENT_LIMIT, MapViewOfFile cannot exceed the section,
+// and SetEndOfFile refuses while a section is open (ERROR_USER_MAPPED_
+// FILE). The subprocess proofs therefore deliver the in-page error
+// synthetically (signalFault) with the real vectored dispatch, record
+// layout, and accessed-address parameters; POSIX arms the real SIGBUS.
+func signalMapping(t *testing.T, label string) (*mapping.Mapping, uintptr, uint64) {
 	t.Helper()
 	path := filepath.Join(os.TempDir(), fmt.Sprintf(".iprange-v4-signal-%s-%d", label, os.Getpid()))
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := createSignalMappingFile(path)
 	if err != nil {
 		t.Fatal("signal mapping create:", err)
 	}
@@ -102,11 +147,6 @@ func signalMapping(t *testing.T, label string, truncate bool) (*mapping.Mapping,
 	if err != nil {
 		t.Fatal("signal mapping map:", err)
 	}
-	if truncate {
-		if err := f.Truncate(int64(native)); err != nil {
-			t.Fatal("signal mapping fault truncate:", err)
-		}
-	}
 	if err := f.Close(); err != nil {
 		t.Fatal("signal mapping close:", err)
 	}
@@ -117,20 +157,22 @@ func signalMapping(t *testing.T, label string, truncate bool) (*mapping.Mapping,
 	return m, baseOf(view), native
 }
 
-// signalFault reads the first byte of the truncated second page; the
-// load raises the in-page error on the calling thread (Rust
-// tests::fault). The byte must feed a branch the compiler cannot fold: a
-// dead load would be eliminated and the fault would never fire. If the
-// read survives, the child exits 86/87 to prove the fault did not fire.
+// signalFault raises one synthetically delivered in-page error on the
+// second page of the armed probe (the Windows twin of the POSIX SIGBUS
+// fault): kernel32 RaiseException with the EXCEPTION_IN_PAGE_ERROR code
+// and the three documented parameters (access type, the accessed
+// page-2 address inside the armed region, and the NTSTATUS). The
+// vectored handler receives the real EXCEPTION_POINTERS record and
+// claims it exactly like a hardware delivery. If the raise returns, the
+// fault was not claimed and the child exits 87 to prove it.
 func signalFault(t *testing.T, m *mapping.Mapping, native uint64) {
 	t.Helper()
-	view, err := m.View(native, native)
+	view, err := m.View(0, native)
 	if err != nil {
 		t.Fatal("fault view:", err)
 	}
-	if view[0] != 0 {
-		os.Exit(86)
-	}
+	args := [3]uintptr{0, baseOf(view) + uintptr(native), ntStatusEndOfFile}
+	procRaiseException.Call(exceptionInPageError, 0, 3, uintptr(unsafe.Pointer(&args[0])))
 	os.Exit(87)
 }
 
@@ -192,7 +234,7 @@ func TestSigbusOwnedChild(t *testing.T) {
 		t.Fatal("install handler:", err)
 	}
 	defer handler.Close()
-	mapping, base, native := signalMapping(t, "record", true)
+	mapping, base, native := signalMapping(t, "record")
 	if err := control.Arm(41, RoleScratch, base, 2*native); err != nil {
 		t.Fatal("arm:", err)
 	}
@@ -232,6 +274,6 @@ func TestSigbusChainChild(t *testing.T) {
 		t.Fatal("install handler:", err)
 	}
 	defer handler.Close()
-	mapping, _, native := signalMapping(t, "chain", true)
+	mapping, _, native := signalMapping(t, "chain")
 	signalFault(t, mapping, native)
 }
