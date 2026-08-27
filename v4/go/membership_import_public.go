@@ -326,7 +326,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 	}
 	merge, err := edit.BeginImportMerge(cancellation.check)
 	if err != nil {
-		return w.abortAfter(publicError(err))
+		return w.abortAfter(err)
 	}
 	var previous reader.MembershipRange4
 	havePrevious := false
@@ -341,7 +341,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 		if !ok {
 			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
 			if err != nil {
-				return w.abortAfter(publicError(err))
+				return w.abortAfter(err)
 			}
 			stats.comparison = comparison
 			return nil
@@ -359,7 +359,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 		}
 		err = edit.PushImportRange(merge, tree.Key{Hi: uint64(record.From)}, tree.Key{Hi: uint64(record.To)}, id, words, cancellation.check)
 		if err != nil {
-			return w.abortAfter(publicError(err))
+			return w.abortAfter(err)
 		}
 		cardinality, err := format.IPv4Inclusive(record.From, record.To)
 		if err != nil {
@@ -386,7 +386,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 	}
 	merge, err := edit.BeginImportMerge(cancellation.check)
 	if err != nil {
-		return w.abortAfter(publicError(err))
+		return w.abortAfter(err)
 	}
 	var previous reader.MembershipRange6
 	havePrevious := false
@@ -401,7 +401,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 		if !ok {
 			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
 			if err != nil {
-				return w.abortAfter(publicError(err))
+				return w.abortAfter(err)
 			}
 			stats.comparison = comparison
 			return nil
@@ -419,7 +419,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 		}
 		err = edit.PushImportRange(merge, tree.Key{Hi: record.FromHi, Lo: record.FromLo}, tree.Key{Hi: record.ToHi, Lo: record.ToLo}, id, words, cancellation.check)
 		if err != nil {
-			return w.abortAfter(publicError(err))
+			return w.abortAfter(err)
 		}
 		cardinality, err := format.IPv6Inclusive(record.FromHi, record.FromLo, record.ToHi, record.ToLo)
 		if err != nil {
@@ -449,7 +449,7 @@ func translateImportMembership(edit *writer.WriterEdit, w *LiveWriter, source me
 	}
 	id, words, present, err := edit.CachedImportMembership(cache, sourceMembership)
 	if err != nil {
-		return 0, 0, w.abortAfter(publicError(err))
+		return 0, 0, w.abortAfter(err)
 	}
 	if present {
 		return id, words, nil
@@ -476,7 +476,7 @@ func translateImportMembership(edit *writer.WriterEdit, w *LiveWriter, source me
 		}
 		missing, err := edit.MapImportWordBatch(cache, wordsSet, start, buffer[:expected], cancellation.check)
 		if err != nil {
-			return 0, 0, w.abortAfter(publicError(err))
+			return 0, 0, w.abortAfter(err)
 		}
 		if missing {
 			return 0, 0, w.abortAfterSource(&format.Error{Code: format.CodeFormatInvalid, Detail: "source membership names an inactive feed index"})
@@ -492,7 +492,7 @@ func translateImportMembership(edit *writer.WriterEdit, w *LiveWriter, source me
 	}
 	id, words, err = edit.FinishImportMembership(cache, sourceMembership, wordsSet, cancellation.check)
 	if err != nil {
-		return 0, 0, w.abortAfter(publicError(err))
+		return 0, 0, w.abortAfter(err)
 	}
 	return id, words, nil
 }

@@ -6,6 +6,7 @@
 package writer
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -276,6 +277,13 @@ func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member
 // bitmap is interned, subtracted from the whole family range through the
 // authoritative transform, and only then is the catalog entry removed.
 func (s *DraftStore) deleteCurrentFeedMembership(feed FeedEntry, check func() error) error {
+	// The fault point arms a mid-edit fatal corruption exactly where a
+	// malformed draft cell would surface (v4work-only; no-op in
+	// production builds), pinning the Rust abort_after branding
+	// contract of the public transaction.
+	if err := fault.Fail("membership.delete_feed_fatal"); err != nil {
+		return corrupt("injected draft corruption: " + err.Error())
+	}
 	if err := check(); err != nil {
 		return err
 	}

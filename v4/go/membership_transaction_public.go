@@ -172,7 +172,7 @@ func (t *MembershipTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 	}
 	handle, err := t.edit.AddFeedToMembership(membership.handle, feed.entry)
 	if err != nil {
-		return MembershipRef{}, t.abortEdit(publicError(err))
+		return MembershipRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return MembershipRef{}, publicError(err)
@@ -198,7 +198,7 @@ func (t *MembershipTransaction) ApplyV4(from, to IPv4, membership MembershipRef,
 	}
 	changed, err := t.edit.ApplyMembershipV4(uint32(from), uint32(to), membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 	if err != nil {
-		return false, t.abortEdit(publicError(err))
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
@@ -220,7 +220,7 @@ func (t *MembershipTransaction) ApplyV6(from, to IPv6, membership MembershipRef,
 	}
 	changed, err := t.edit.ApplyMembershipV6(from.Hi, from.Lo, to.Hi, to.Lo, membership.handle, writer.MembershipOperation(operation), noopCheckpoint)
 	if err != nil {
-		return false, t.abortEdit(publicError(err))
+		return false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return false, publicError(err)
@@ -242,7 +242,7 @@ func (t *MembershipTransaction) LookupFeed(name FeedName) (FeedRef, bool, error)
 	}
 	entry, found, err := t.edit.LookupFeed(string(name))
 	if err != nil {
-		return FeedRef{}, false, t.abortEdit(publicError(err))
+		return FeedRef{}, false, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, false, publicError(err)
@@ -267,7 +267,7 @@ func (t *MembershipTransaction) EnsureFeed(name FeedName) (FeedRef, error) {
 	}
 	entry, _, err := t.edit.EnsureFeed(string(name))
 	if err != nil {
-		return FeedRef{}, t.abortEdit(publicError(err))
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
@@ -291,7 +291,7 @@ func (t *MembershipTransaction) RenameFeed(feed FeedRef, newName FeedName) (Feed
 	}
 	entry, err := t.edit.RenameCurrentFeed(feed.entry, string(newName))
 	if err != nil {
-		return FeedRef{}, t.abortEdit(publicError(err))
+		return FeedRef{}, t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return FeedRef{}, publicError(err)
@@ -314,7 +314,7 @@ func (t *MembershipTransaction) DeleteFeed(feed FeedRef) error {
 		return &Error{Code: format.CodeArithmeticOverflow, Detail: "membership reference epoch"}
 	}
 	if err := t.edit.DeleteCurrentFeedMembership(feed.entry, t.cancellation.check); err != nil {
-		return t.abortEdit(publicError(err))
+		return t.abortEdit(err)
 	}
 	if err := t.checkOrAbort(); err != nil {
 		return publicError(err)
