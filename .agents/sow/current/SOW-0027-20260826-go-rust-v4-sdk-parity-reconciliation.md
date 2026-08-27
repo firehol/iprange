@@ -95,11 +95,28 @@ wire/integrity, APIs/records) found and the lead fixed:
 - P3 (Go idioms): dangling doc fragment, double coreOf probe, and
   plan-narrative sentences fixed in the slice commits.
 
-Two outcomes remain recorded as accepted Go-shape divergences (P3,
-documented in code, not yet a resolved SOW decision): workflow
+Three outcomes remain recorded as accepted Go-shape divergences
+(documented in code, not yet resolved SOW decisions): workflow
 `CommitResult`/`AbortResult` terminals carry fewer fields than Rust
 (workflow commits omit directory/main identity; workflow abort returns
-`error`), and mixed-language live fixtures stay a recorded slice-2c gap.
+`error`); mixed-language live fixtures stay a recorded slice-2c gap; and
+the Windows cleanup-result classification (recorded 2026-08-27 during
+the slice 2d native round): Go `EarlyDiscard.Clean` and
+`ScratchCleanup.Clean` (`internal/worker/wire_cleanup.go`) accept
+`HousekeepingCrashReappearancePossible` as clean when every artifact is
+proved absent, where the Rust client predicates
+(`worker/client/recovery.rs` discard_clean / scratch_clean) require
+`Housekeeping::None` strictly. The divergence is Windows-only (the
+POSIX discard and scratch arms emit None on both hosts) and exists
+because the Rust Windows machine is self-inconsistent: Rust
+`resolver::finish_housekeeping` itself emits the crash-possible class
+on a fully absent removal, which the strict Rust client predicates
+would then reject, turning every clean Windows discard into a failure;
+Rust Windows has never been natively validated (the Rust client suite
+is cfg(all(test, unix))). Go implements the proved-absence terminal so
+the Windows recovery and cleanup machinery is usable; whether the Rust
+client contract should be relaxed on Windows is a cross-SDK decision
+for the user, not silently adopted here.
 
 Sub-state (2026-08-26): slice 2b part 1 delivered at `532fa582`
 (clean-writer metadata read-your-writes and bounded reader-safe

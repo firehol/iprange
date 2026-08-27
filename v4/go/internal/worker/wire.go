@@ -8,8 +8,10 @@
 // inspection requests and results, budget and unreadable-page lists).
 // The field order and every overflow/truncation class mirror the Rust
 // authority exactly; the error detail strings are verbatim Rust. The
-// worker and its client both live on linux/amd64 (the fault isolation
-// proof), so only the unix path codec exists here.
+// codecs are shared across the supported worker platforms (linux,
+// darwin, freebsd, and windows, amd64 and arm64); the platform
+// splits (identity and creation-security kinds, fault-code validity)
+// live in their own per-OS files.
 
 package worker
 
