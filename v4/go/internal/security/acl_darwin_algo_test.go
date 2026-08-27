@@ -28,12 +28,14 @@ func TestDarwinACLAppliedClassification(t *testing.T) {
 
 func TestDarwinTrivialProbeClassification(t *testing.T) {
 	cases := []struct {
-		name     string
-		errno    error
-		aclBytes uintptr
-		wantCode format.ErrorCode // 0 = nil outcome
+		name       string
+		errno      error
+		aclEntries uint32
+		wantCode   format.ErrorCode // 0 = nil outcome
 	}{
-		{"no acl zero size", nil, 0, 0},
+		{"no filesec", nil, 0, 0},
+		{"empty acl", nil, 0, 0},
+		{"kauth noacl sentinel", nil, 0xFFFFFFFF, 0},
 		{"enoent", syscall.ENOENT, 0, 0},
 		{"acl present", nil, 1, format.CodeAccessPolicyUnsupported},
 		{"unsupported filesystem", syscall.EOPNOTSUPP, 0, format.CodeDurabilityUnsupported},
@@ -41,7 +43,7 @@ func TestDarwinTrivialProbeClassification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := darwinTrivialProbe(tc.errno, tc.aclBytes)
+			err := darwinTrivialProbe(tc.errno, tc.aclEntries)
 			if tc.wantCode == 0 {
 				if err != nil {
 					t.Fatalf("probe = %v, want nil", err)

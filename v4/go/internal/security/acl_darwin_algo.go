@@ -24,8 +24,10 @@ import (
 // kernel can fill, and grows with the kernel-returned size like libc
 // statx1.
 const (
-	headerBeforeACEs = 44
-	aceSize          = 24
+	headerBeforeACEs    = 44
+	aceSize             = 24
+	aclEntryCountOffset = 36 // struct kauth_filesec acl_entrycount
+	aclEntryCountNoACL  = 0xFFFFFFFF
 )
 
 // kauthFilesecSize returns KAUTH_FILESEC_SIZE(entries): the header
@@ -67,9 +69,10 @@ func darwinACLAppliedAt(operation string, errno error) error {
 // failure maps ENOENT to clean (no ACL), EOPNOTSUPP to the
 // durability-unsupported class (filesystem without the required ACL
 // operations), and any other errno to the Io class; a successful
-// probe with a retrieved ACL fails the creator-only proof, and a
-// zero-length ACL is the clean state.
-func darwinTrivialProbe(errno error, aclBytes uintptr) error {
+// probe with the KAUTH_FILESEC_NOACL sentinel or a zero ACE entry
+// count is the clean state, and one or more ACE entries fails the
+// creator-only proof.
+func darwinTrivialProbe(errno error, aclEntries uint32) error {
 	if errno != nil {
 		if errors.Is(errno, syscall.ENOENT) {
 			return nil
@@ -79,7 +82,7 @@ func darwinTrivialProbe(errno error, aclBytes uintptr) error {
 		}
 		return &format.Error{Code: format.CodeIO, Detail: "verify absent access ACL: " + errno.Error()}
 	}
-	if aclBytes > 0 {
+	if aclEntries != 0 && aclEntries != aclEntryCountNoACL {
 		return accessPolicy()
 	}
 	return nil

@@ -14,6 +14,7 @@
 package security
 
 import (
+	"encoding/binary"
 	"os"
 	"syscall"
 	"unsafe"
@@ -31,9 +32,10 @@ const darwinACLBufferACE = 16
 
 // removeInheritedACL removes one inherited extended access ACL with
 // the raw fchmod_extended syscall and the libc remove-ACL sentinel
-// (Rust apple.rs remove_inherited over filesec + fchmodx_np): the
-// owner, group, and mode stay untouched and the XNU handler clears
-// the ACL (vfs_syscalls.c fchmod_extended case _FILESEC_REMOVE_ACL).
+// (Rust apple.rs remove_inherited over filesec + fchmodx_np): XNU
+// vfs_syscalls.c chmod_extended_init treats the xsecurity value 1 as
+// _FILESEC_REMOVE_ACL and sets the vnode ACL to NULL; the owner,
+// group, and mode stay untouched.
 func removeInheritedACL(f *os.File) error {
 	_, _, errno := syscall.Syscall6(darwinSysFchmodExtended,
 		uintptr(f.Fd()), darwinUIDNone, darwinGIDNone, darwinModeUnchanged, darwinRemoveACL, 0)
@@ -42,14 +44,15 @@ func removeInheritedACL(f *os.File) error {
 
 // requireTrivialACL proves the artifact carries no extended access
 // ACL with the raw fstat_extended syscall (Rust apple.rs
-// require_trivial over acl_get_fd_np): a zero-length ACL, ENOENT, or
-// an unsupported filesystem is the clean or classed state exactly
-// like the classification in acl_darwin_algo.go.
+// require_trivial over acl_get_fd_np). The XNU fill contract
+// (fstatat_internal): a vnode without a kauth_filesec returns the
+// size 0; a vnode with one returns KAUTH_FILESEC_COPYSIZE and copies
+// the filesec only when the caller's buffer is large enough, always
+// with errno 0. A zero entry count or the KAUTH_FILESEC_NOACL
+// sentinel is the clean state; one or more ACE entries fails the
+// creator-only proof.
 func requireTrivialACL(f *os.File) error {
 	var stat unix.Stat_t
-	// libc statx1 starts at 16 entries and grows with the caller
-	// returned size; the probe only needs presence, so the loop is
-	// bounded by the kernel's required size with one growth step.
 	size := darwinACLBufferACE
 	buf := make([]byte, kauthFilesecSize(size))
 	for {
@@ -64,15 +67,26 @@ func requireTrivialACL(f *os.File) error {
 		if errno != 0 {
 			return darwinTrivialProbe(errnoToError(errno), 0)
 		}
-		if got <= uintptr(len(buf)) {
-			return darwinTrivialProbe(nil, got)
+		if got == 0 {
+			// No kauth_filesec on the vnode at all: the clean state
+			// (fstatat_internal writes the size 0 for KAUTH_FILESEC_NONE).
+			return darwinTrivialProbe(nil, 0)
 		}
-		// The kernel needs more room: grow to the requested size
-		// (libc statx1 growth arm) and re-probe once.
-		if got > 1<<20 {
-			return darwinTrivialProbe(syscall.EIO, 0)
+		if got > uintptr(len(buf)) {
+			// The kernel needs more room: it wrote the required size
+			// without copying (fstatat_internal), so grow to the
+			// requested size (libc statx1 growth arm) and re-probe once.
+			if got > 1<<20 {
+				return darwinTrivialProbe(syscall.EIO, 0)
+			}
+			buf = make([]byte, got)
+			continue
 		}
-		buf = make([]byte, got)
+		// The filesec was copied: classify on the ACE entry count
+		// (kauth.h struct kauth_filesec: magic@0, owner@4, group@20,
+		// acl_entrycount@36, acl_flags@40, acl_ace@44).
+		entries := binary.LittleEndian.Uint32(buf[aclEntryCountOffset : aclEntryCountOffset+4])
+		return darwinTrivialProbe(nil, entries)
 	}
 }
 
