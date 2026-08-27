@@ -329,7 +329,7 @@ func scanStructureLeaf(m *mapping.Mapping, meta format.Meta, page []byte, header
 // fixed child array, the coverage-scaled child base, and the
 // item-count proof).
 func scanStructureBranch(m *mapping.Mapping, meta format.Meta, page []byte, header format.PageHeader, pageNumber uint32, base uint64, path *[format.StructureTableMaxLevel + 1]uint32, depth int, pages *pageSet, check func() error, events structureTableEvents) error {
-	span, ok := format.StructureSpanOfLevel(uint32(header.Level) - 1)
+	span, ok := format.StructureSpanOfLevel(uint32(header.Level))
 	if !ok {
 		return overflowError("recovery structure coverage")
 	}

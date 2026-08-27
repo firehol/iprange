@@ -364,3 +364,164 @@ func TestStructuredRecoveryConstructBranchPointer(t *testing.T) {
 	}
 	validateClean(t, outputPath)
 }
+
+// structureLevelTwoFile builds the synthetic three-level structure
+// generation of the validator regression: a level-2 directory root
+// whose children span 25600 ids each (Rust coverage(level-1)), two
+// level-1 directories, and record leaves at ids 1 and 25600. The
+// count-only scan needs no range, hash, or used roots; the unused
+// roots stay zero.
+func structureLevelTwoFile(t *testing.T) string {
+	t.Helper()
+	meta := make([]byte, format.PageSize)
+	copy(meta[0:8], format.MainMagic[:])
+	format.PutU16(meta[8:10], format.MetaSize)
+	meta[10] = format.PageShift
+	meta[11] = format.AddressFamilyIPv4
+	meta[12] = format.ValueKindStructured
+	meta[13] = format.StructureKindNetworkEnrichmentV1
+	copy(meta[16:32], "valid-tag")
+	format.PutU64(meta[32:40], 1)   // database id
+	format.PutU64(meta[48:56], 2)   // transaction
+	format.PutU64(meta[72:80], 7)   // page count
+	format.PutU64(meta[112:120], 1) // MembershipIDLimit
+	format.PutU64(meta[200:208], 2) // StructureEntryCount
+	format.PutU64(meta[208:216], 25_601)
+	format.PutU32(meta[216:220], 2) // StructureIDRoot
+	format.PutU32(meta[252:256], format.MetaCRC32C(meta))
+
+	payloadA := make([]byte, format.NetworkEnrichmentV1PayloadSize)
+	format.EncodeNetworkEnrichmentV1(payloadA, format.NetworkEnrichmentV1{ASN: 64_000})
+	payloadB := make([]byte, format.NetworkEnrichmentV1PayloadSize)
+	format.EncodeNetworkEnrichmentV1(payloadB, format.NetworkEnrichmentV1{ASN: 64_001})
+	digestA, err := format.StructurePayloadDigest(format.StructureKindNetworkEnrichmentV1, payloadA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestB, err := format.StructurePayloadDigest(format.StructureKindNetworkEnrichmentV1, payloadB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := recoveryStructureDirectory(t, 2, [2]uint32{0, 3}, [2]uint32{1, 4})
+	dirA := recoveryStructureDirectory(t, 1, [2]uint32{0, 5})
+	dirB := recoveryStructureDirectory(t, 1, [2]uint32{0, 6})
+	leafA := recoveryStructureLeaf(t, map[uint64][]byte{1: recoveryStructureRecord(1, payloadA, digestA)})
+	leafB := recoveryStructureLeaf(t, map[uint64][]byte{0: recoveryStructureRecord(25_600, payloadB, digestB)})
+
+	path := filepath.Join(t.TempDir(), "source.iprdb")
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Write(meta); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(make([]byte, format.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range [][]byte{root, dirA, dirB, leafA, leafB} {
+		if _, err := file.Write(page); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
+}
+
+// recoveryStructureDirectory builds one structure directory page of
+// the given level (Rust table::initialize).
+func recoveryStructureDirectory(t *testing.T, level uint16, children ...[2]uint32) []byte {
+	t.Helper()
+	page := make([]byte, format.PageSize)
+	copy(page[:4], format.PageMagic[:])
+	page[4] = byte(format.PageTypeStructureIDDirectory)
+	format.PutU16(page[6:8], 32)
+	format.PutU64(page[8:16], 2)
+	format.PutU16(page[16:18], uint16(len(children)))
+	format.PutU16(page[18:20], level)
+	format.PutU16(page[20:22], format.StructureBranchEnd)
+	format.PutU16(page[22:24], format.PageSize)
+	format.PutU32(page[24:28], uint32(format.StructureKindNetworkEnrichmentV1))
+	for _, child := range children {
+		format.PutU32(page[32+child[0]*4:36+child[0]*4], child[1])
+	}
+	if err := format.SealPageChecksum(page); err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+// recoveryStructureLeaf builds one level-0 structure record page over
+// the given dense slots (Rust table::initialize).
+func recoveryStructureLeaf(t *testing.T, slots map[uint64][]byte) []byte {
+	t.Helper()
+	page := make([]byte, format.PageSize)
+	copy(page[:4], format.PageMagic[:])
+	page[4] = byte(format.PageTypeStructureIDRecord)
+	format.PutU16(page[6:8], 32)
+	format.PutU64(page[8:16], 2)
+	format.PutU16(page[16:18], uint16(len(slots)))
+	format.PutU16(page[18:20], 0) // level
+	format.PutU16(page[20:22], format.StructureLeafEnd)
+	format.PutU16(page[22:24], format.PageSize)
+	format.PutU32(page[24:28], uint32(format.StructureKindNetworkEnrichmentV1))
+	for slot, cell := range slots {
+		copy(page[32+slot*format.StructureRecordSize:], cell)
+	}
+	if err := format.SealPageChecksum(page); err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+// recoveryStructureRecord builds one fixed 80-byte dictionary record.
+func recoveryStructureRecord(id uint32, payload []byte, digest [32]byte) []byte {
+	cell := make([]byte, format.StructureRecordSize)
+	format.PutU16(cell[0:2], format.StructureRecordSize)
+	format.PutU32(cell[4:8], id)
+	format.PutU64(cell[8:16], 1)
+	copy(cell[16:48], digest[:])
+	copy(cell[48:80], payload)
+	return cell
+}
+
+// TestRecoveryStructureCountLevelTwoRoot proves the recovery table
+// scan scales the child base by the full coverage of the level below
+// (25600 ids per level-2 child): both records of the three-level
+// generation count, and neither implied-slot id is misattributed to a
+// 50-id child span.
+func TestRecoveryStructureCountLevelTwoRoot(t *testing.T) {
+	path := structureLevelTwoFile(t)
+	source := mapSource(t, path)
+	defer source.Close()
+	meta, ok := format.ParseIdentity(mustReadPage(t, path, 0))
+	if !ok {
+		t.Fatal("meta identity failed")
+	}
+	pages, err := newPageSet(1<<20, 7, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := countStructureRecords(source, meta, pages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("structure count %d, want 2", count)
+	}
+}
+
+// mustReadPage reads one page of a synthetic test file.
+func mustReadPage(t *testing.T, path string, pageNumber uint64) []byte {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	buf := make([]byte, format.PageSize)
+	if _, err := file.ReadAt(buf, int64(pageNumber*format.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+	return buf
+}

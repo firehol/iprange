@@ -126,12 +126,18 @@ func validateOutput(path string, live bool) error {
 	if live {
 		mode = iprangedb.ValidationModeLiveCurrent
 	}
-	result, failure := iprangedb.Validate(path, mode, iprangedb.HeapOnly(64*1024*1024, 2), nil, nil)
+	var firstFinding string
+	result, failure := iprangedb.Validate(path, mode, iprangedb.HeapOnly(64*1024*1024, 2), nil, iprangedb.SinkFunc(func(f *iprangedb.ValidationFinding) (iprangedb.ValidationSinkControl, error) {
+		if firstFinding == "" {
+			firstFinding = fmt.Sprintf("reason=%d object=%v", f.Reason, f.Object)
+		}
+		return iprangedb.SinkContinue, nil
+	}))
 	if failure != nil {
 		return fmt.Errorf("benchmark output validation failed: %v", failure)
 	}
 	if !result.Valid {
-		return fmt.Errorf("benchmark output has validation findings")
+		return fmt.Errorf("benchmark output has %d validation findings (first: %s)", result.Progress.FindingCount, firstFinding)
 	}
 	return nil
 }

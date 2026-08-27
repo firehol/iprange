@@ -132,7 +132,7 @@ func walkStructureTableLeaf(ctx *context, pageNumber uint32, page []byte, base u
 // walk_branch): the child span at the level below, the child base
 // arithmetic, and the recursion with the next lower level.
 func walkStructureTableBranch(ctx *context, pageNumber uint32, page []byte, base uint64, header format.PageHeader, path *[structureTableMaxDepth]uint32, depth int, records *uint64, leaf func(*context, uint32, uint64, []byte) error) error {
-	span, ok := format.StructureSpanOfLevel(uint32(header.Level) - 1)
+	span, ok := format.StructureSpanOfLevel(uint32(header.Level))
 	if !ok {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "validation structure coverage"}
 	}

@@ -24,7 +24,10 @@ func newPermutation(count int, seed uint64) permutation {
 	if count <= 1 {
 		return permutation{count: count, step: 1, offset: 0}
 	}
-	step := int(seed) % count
+	// Rust uses usize arithmetic on the u64 seed (identity cast), so the
+	// modulo runs in uint64 before the conversion to int; a direct
+	// int(seed) would go negative for seeds >= 2^63.
+	step := int(seed % uint64(count))
 	if step == 0 {
 		step = 1
 	}
@@ -37,7 +40,7 @@ func newPermutation(count int, seed uint64) permutation {
 	return permutation{
 		count:  count,
 		step:   step,
-		offset: int(rotl64(seed, 17)) % count,
+		offset: int(rotl64(seed, 17) % uint64(count)),
 	}
 }
 

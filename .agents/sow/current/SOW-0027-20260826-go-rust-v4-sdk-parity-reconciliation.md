@@ -655,6 +655,54 @@ deltas need profiling at scale and actionable-waste removal before the
 release evidence. Baseline CSV intentionally empty (status untracked)
 until the matched scale run populates it.
 
+Scale measurement runs (2026-08-27, linux/amd64, release builds, both
+harnesses, under `nice`): the full scale matrix is about 90
+subprocess-isolated cases at 10k-1M records per language; expected cost
+is roughly 15-30 wall-minutes and 15-30 core-minutes per language
+(single-core harness design, same as Rust). The runs produce the
+matched release evidence: semantic facts, elapsed, allocations, RSS,
+fds, file sizes. Material per-scenario deltas then get profiled with
+pprof/cargo flamegraphs to separate actionable Go waste from designed
+costs (for example the isolation-worker spawn in validation).
+
+Milestone-4 scale catch (2026-08-27): the Go scale matrix exposed a
+real structured-table defect that smoke never reaches (smoke caps
+structured-build-random at 4,000 ids; the corruption starts at ids
+>= 25,600). `structured-build-random` at 28k/421 validated with 2,401
+ReasonStructureInvalid findings on the structure dictionary; Rust
+passes the same case at 1M. Root cause (fixed): the Go validation and
+recovery table walkers scaled a directory's child bases by
+`StructureSpanOfLevel(level-1)` (the 50-id level-0 span) where the Rust
+authority uses `table::coverage(level-1)` - the full 25,600-id span of
+a level-2 child. The writer and reader already used the correct span;
+the stored tables were always correct, and the two walkers mis-derived
+every implied id above the first level-1 coverage. The bug was a
+permanent-regression gate gap: level-2 roots (ID limits above 25,600)
+were never walked by any Go test. Fix: validation
+`structure_table.go` and recovery `structure_index.go` now scale
+branch bases with `StructureSpanOfLevel(header.Level)`, the test
+descender in validation/structure_test.go aligns to the same rule, and
+two new regression tests pin the boundary:
+`TestValidateStructureLevelTwoRootClean` and
+`TestRecoveryStructureCountLevelTwoRoot` (synthetic three-level
+generations with records at ids 1 and 25,600; both fail on the old
+span and pass on the fixed span). The temporary validator
+instrumentation used to localize the mismatch was removed. After the
+fix: `structured-build-random 28000 421` validates clean (repro exit
+0), and the full Go suite (`go test ./...`) is green. The complete
+scale evidence below supersedes the partial 48-case run that stopped
+at this defect.
+
+Accepted-baseline population runs (planned 2026-08-27, linux/amd64,
+release Go build, under `nice`): the Go `ci` gate compares 18 cases
+(1 warmup + 3 samples each, up to 1M records) against the embedded
+accepted-baseline.csv; populating the baseline runs the same 18 cases
+with 1 warmup + 5 samples via the `sample` mode and takes the median
+per case. Expected cost: roughly 5-10 wall-minutes single-core
+(dominated by the 1M-record builds and the worker-mediated
+validations); the rust-v4-local-20260811 reference remains the
+baseline ID until the Go numbers are accepted on this host.
+
 ## Requirements
 
 ### Purpose

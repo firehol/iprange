@@ -28,7 +28,7 @@ func structureRecordCell(t *testing.T, raw []byte, pages int, slot uint64) ([]by
 		if h.Level == 0 {
 			break
 		}
-		span, ok := format.StructureSpanOfLevel(uint32(h.Level) - 1)
+		span, ok := format.StructureSpanOfLevel(uint32(h.Level))
 		if !ok {
 			t.Fatal("structure span overflow")
 		}
@@ -498,9 +498,10 @@ func structureBranchMeta() []byte {
 	return meta
 }
 
-// structureDirectory builds one level-1 structure directory page over
-// the given (child index, page) entries.
-func structureDirectory(t *testing.T, children ...[2]uint32) []byte {
+// structureDirectoryAt builds one structure directory page of the
+// given level over the (child index, page) entries: a level-1 node
+// covers R*512^(L-1) IDs per child (table.rs coverage(level-1)).
+func structureDirectoryAt(t *testing.T, level uint16, children ...[2]uint32) []byte {
 	t.Helper()
 	page := make([]byte, format.PageSize)
 	copy(page[:4], format.PageMagic[:])
@@ -508,7 +509,7 @@ func structureDirectory(t *testing.T, children ...[2]uint32) []byte {
 	format.PutU16(page[6:8], 32)
 	format.PutU64(page[8:16], 2)
 	format.PutU16(page[16:18], uint16(len(children)))
-	format.PutU16(page[18:20], 1) // level
+	format.PutU16(page[18:20], level)
 	format.PutU16(page[20:22], format.StructureBranchEnd)
 	format.PutU16(page[22:24], format.PageSize)
 	format.PutU32(page[24:28], uint32(format.StructureKindNetworkEnrichmentV1))
@@ -519,6 +520,13 @@ func structureDirectory(t *testing.T, children ...[2]uint32) []byte {
 		t.Fatal(err)
 	}
 	return page
+}
+
+// structureDirectory builds one level-1 structure directory page over
+// the given (child index, page) entries.
+func structureDirectory(t *testing.T, children ...[2]uint32) []byte {
+	t.Helper()
+	return structureDirectoryAt(t, 1, children...)
 }
 
 // structureRecordLeaf builds one level-0 structure record page over the
@@ -630,6 +638,81 @@ func structureBranchDB(t *testing.T, mutate func(dir, leafA, leafB []byte)) stri
 		t.Fatal(err)
 	}
 	return path
+}
+
+// structureLevelTwoMeta builds the meta of a synthetic three-level
+// structure database: structure ids 1 and 25600 under a level-2 root
+// (the smallest limit above one level-1 coverage, 50*512 = 25600), the
+// level-1 directory child indexes 0 of both root child spans, their
+// used bits, their hash records, and the two ranges that own them.
+func structureLevelTwoMeta() []byte {
+	meta := metaPage(2, 10)
+	meta[12] = format.ValueKindStructured
+	meta[13] = format.StructureKindNetworkEnrichmentV1
+	format.PutU64(meta[80:88], 2)   // RangeRecordCount
+	format.PutU64(meta[96:104], 0)  // FeedIndexLimit
+	format.PutU64(meta[104:112], 0) // MembershipEntryCount
+	format.PutU64(meta[112:120], 1) // MembershipIDLimit
+	format.PutU32(meta[144:148], 9) // RangeRoot
+	format.PutU64(meta[200:208], 2) // StructureEntryCount
+	format.PutU64(meta[208:216], 25_601)
+	format.PutU32(meta[216:220], 2) // StructureIDRoot
+	format.PutU32(meta[220:224], 8) // StructureHashRoot
+	format.PutU32(meta[224:228], 7) // StructureUsedRoot
+	format.PutU32(meta[252:256], format.MetaCRC32C(meta))
+	return meta
+}
+
+// structureLevelTwoDB builds the synthetic three-level generation: meta
+// pair, the level-2 directory root at page 2 (child spans 0 and 1 over
+// 25600 ids each), its two level-1 directories at pages 3 and 4, the
+// record leaves at pages 5 and 6, the used leaf at page 7, the hash
+// leaf at page 8, and the range leaf at page 9.
+func structureLevelTwoDB(t *testing.T, mutate func(root, dirA, dirB, leafA, leafB []byte)) string {
+	t.Helper()
+	payloadA := structurePayloadOne()
+	payloadB := structurePayloadOne()
+	payloadB[0] = 0x01 // distinct ASN low byte
+	digestA := structureDigest(t, payloadA)
+	digestB := structureDigest(t, payloadB)
+	recordA := structureRecordBytes(1, 1, payloadA, digestA)
+	recordB := structureRecordBytes(25_600, 1, payloadB, digestB)
+	root := structureDirectoryAt(t, 2, [2]uint32{0, 3}, [2]uint32{1, 4})
+	dirA := structureDirectoryAt(t, 1, [2]uint32{0, 5})
+	dirB := structureDirectoryAt(t, 1, [2]uint32{0, 6})
+	leafA := structureRecordLeaf(t, map[uint64][]byte{1: recordA})
+	leafB := structureRecordLeaf(t, map[uint64][]byte{0: recordB})
+	hash := structureHashLeafPage(t,
+		structureHashEntry{digest: digestA, id: 1},
+		structureHashEntry{digest: digestB, id: 25_600})
+	used := make([]uint64, 401)
+	used[0] = uint64(1) << 1
+	used[400] = 1 // bit 25600
+	usedLeaf := structureUsedLeaf(t, used...)
+	rangeLeaf := rangeTreeLeaf(t, 2, []format.RangeRecordV4{
+		{From: 1, To: 1, Value: 1},
+		{From: 2, To: 2, Value: 25_600},
+	}, 4056)
+	if mutate != nil {
+		mutate(root, dirA, dirB, leafA, leafB)
+	}
+	path := filepath.Join(t.TempDir(), "database.iprdb")
+	if err := writePages(path, structureLevelTwoMeta(), root, dirA, dirB, leafA, leafB, usedLeaf, hash, rangeLeaf); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestValidateStructureLevelTwoRootClean proves the dense directory
+// walk scales the child base by the full coverage of the level below
+// (25600 ids per level-2 child, Rust coverage(level-1)): record id
+// 25600 resolves only when the root's second child spans 25600, not
+// the 50-id level-0 span.
+func TestValidateStructureLevelTwoRootClean(t *testing.T) {
+	path := structureLevelTwoDB(t, nil)
+	if findings := collectFindingsHeap(t, path, 2<<20); len(findings) != 0 {
+		t.Fatalf("findings %+v", findings)
+	}
 }
 
 func TestValidateStructureBranchClean(t *testing.T) {
