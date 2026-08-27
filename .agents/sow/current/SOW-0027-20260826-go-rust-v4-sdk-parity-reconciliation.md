@@ -95,7 +95,7 @@ wire/integrity, APIs/records) found and the lead fixed:
 - P3 (Go idioms): dangling doc fragment, double coreOf probe, and
   plan-narrative sentences fixed in the slice commits.
 
-Three outcomes remain recorded as accepted Go-shape divergences
+Four outcomes remain recorded as accepted Go-shape divergences
 (documented in code, not yet resolved SOW decisions): workflow
 `CommitResult`/`AbortResult` terminals carry fewer fields than Rust
 (workflow commits omit directory/main identity; workflow abort returns
@@ -117,6 +117,18 @@ is cfg(all(test, unix))). Go implements the proved-absence terminal so
 the Windows recovery and cleanup machinery is usable; whether the Rust
 client contract should be relaxed on Windows is a cross-SDK decision
 for the user, not silently adopted here.
+And the Windows worker-control unlink/reopen shape (recorded 2026-08-27
+in the slice 2d gate round): Go unlinks the worker control on every
+platform (Rust `remove_path` is `#[cfg(unix)]` at both the call site,
+`worker/client.rs`, and the definition, `worker/control.rs`, so Rust
+Windows leaves the control file behind), and Go therefore reopens the
+control with FILE_SHARE_DELETE in `openControlFile`
+(`worker/control_open_windows.go`), where Rust `open_worker`
+(`worker/control.rs`) uses stdlib `OpenOptions`, whose read+write-only
+share mode would make the Go unlink fail with a sharing violation. Go
+unlinks so Windows temp-dir controls do not accumulate per spawn;
+whether Rust should adopt the same removal semantics on Windows is a
+cross-SDK decision for the user, not silently adopted here.
 
 Sub-state (2026-08-26): slice 2b part 1 delivered at `532fa582`
 (clean-writer metadata read-your-writes and bounded reader-safe
@@ -301,10 +313,12 @@ correctness defects the rounds exposed and the lead fixed:
   (handler@0, tramp@8, mask@16, flags@20; output 16 bytes handler@0
   mask@8 flags@12) with the worker's own sigtramp that calls the catcher
   and sigreturns the interrupted context; proven on the M4.
-- Windows worker control sharing: the creator-only control handle grants
-  FILE_ALL_ACCESS, and Windows requires every later handle to advertise
-  DELETE sharing while such a handle exists; `OpenWorker` now reopens the
-  control through the platform arm (`openControlFile`) with
+- Windows worker control sharing: Go unlinks the worker control on every
+  platform (Rust's `remove_path` is `#[cfg(unix)]`, so this is a Go-side
+  cleanup obligation), and Windows DeleteFileW therefore requires every
+  later handle to advertise DELETE sharing while the creator-only
+  FILE_ALL_ACCESS handle exists; `OpenWorker` now reopens the control
+  through the platform arm (`openControlFile`) with
   read/write/delete share, and the executable-candidate fallthrough also
   accepts `exec.ErrNotFound` (CreateProcess ERROR_FILE_NOT_FOUND).
 - Windows delete-blockers in tests: the cmd fixture leaked a plain
@@ -384,6 +398,30 @@ silently on trivial inputs; no clang present; Go -race on Windows needs a
 working cgo CC; the code-level race/checkptr gate remains the committed
 Linux battery). Rust suite green at the same tree; all eight targets
 cross-build and vet clean including the final tree.
+
+Review gate round 2 (2026-08-27, HEAD `82e022f1`): gate stayed open.
+Verdicts: Go-idioms PASS (one P3 record-truth note: the worker row in
+`parity_manifest.tsv` still carried the stale `linux/amd64-only`
+clause, contradicting the round's own comment fixes); wire/integrity
+PASS (P3-2 vector provenance carried); APIs/records PASS (round-1 P2-1
+cleanup classification now recorded, comments restored); performance
+FAIL with P2-1: the Windows VEH callback first-ever fault executed
+`LazyProc.Call` for GetCurrentProcess/TerminateProcess, which inside
+`golang.org/x/sys v0.35.0` takes the per-proc mutex, allocates, and
+calls GetProcAddress on first resolve - contradicting the handler's
+own allocation-free invariant and the Rust import-table authority (the
+handler is only ever run once per process, on the terminal fault);
+Rust-parity FAIL with P2-1: the Windows worker-control unlink/reopen
+is the fourth accepted Go-shape divergence (recorded above) and the
+`control_open_windows.go` / `control.go` parity comments omitted the
+Rust `#[cfg(unix)]` split, plus P3-1 that the fixes-narrative should
+name the unlink as the divergence driver. The fix commit resolves all
+of them: `InstallHandler` now pre-resolves the two kernel32 addresses
+in ordinary context and the callback terminates through raw
+`syscall.SyscallN` only; the control comments and the divergence
+enumeration now disclose the Rust `cfg(unix)` split; the manifest row
+lost the stale clause; the narrative names the unlink. Gate pending
+the five-reviewer round 3 at the fix HEAD.
 
 ## Requirements
 

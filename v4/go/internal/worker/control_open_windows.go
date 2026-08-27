@@ -8,15 +8,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// openControlFile opens an existing control file read-write (Rust
-// Control::open_worker). The creator-only control file is created with
-// a protected FILE_ALL_ACCESS DACL and a FILE_SHARE_DELETE handle
-// (security.create_private), and Windows requires every later handle
-// to keep advertising DELETE sharing while such a handle exists; the
-// stdlib os.OpenFile share mode (read+write only) cannot reopen it, so
-// the raw create arm is mirrored here (same access, share, and
-// no-inheritance shape as mapping/openNoFollow and the live source
-// open arm).
+// openControlFile opens an existing control file read-write. This is
+// the Go side of Rust Control::open_worker with one deliberate
+// platform divergence: Go unlinks the worker control on every platform
+// (Rust's remove_path is #[cfg(unix)] and leaves the file on Windows),
+// and Windows DeleteFileW requires every open handle to advertise
+// FILE_SHARE_DELETE while the parent still holds the creator handle.
+// The stdlib os.OpenFile share mode (read+write only) would make the
+// parent's unlink fail with a sharing violation, so the raw create arm
+// is mirrored here (same access, share, and no-inheritance shape as
+// mapping/openNoFollow and the live source open arm). The creator-only
+// control file is created with a protected FILE_ALL_ACCESS DACL and a
+// FILE_SHARE_DELETE handle (security.create_private).
 func openControlFile(path string) (*os.File, error) {
 	ptr, err := windows.UTF16PtrFromString(path)
 	if err != nil {

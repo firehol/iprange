@@ -8,13 +8,15 @@
 // mapped control record, and terminates the worker with the owned-fault
 // exit code. Every other exception returns EXCEPTION_CONTINUE_SEARCH.
 // The handler body is deliberately allocation-free: plain mapped
-// accesses plus the release/acquire primitives and one TerminateProcess
-// syscall.
+// accesses plus the release/acquire primitives and the two terminal
+// kernel32 syscalls (GetCurrentProcess, TerminateProcess) through
+// pre-resolved raw addresses.
 
 package worker
 
 import (
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -55,9 +57,37 @@ var (
 	kernel32                 = windows.NewLazySystemDLL("kernel32.dll")
 	procAddVectoredHandler   = kernel32.NewProc("AddVectoredExceptionHandler")
 	procRemoveVectoredHandle = kernel32.NewProc("RemoveVectoredExceptionHandler")
-	procGetCurrentProcess    = kernel32.NewProc("GetCurrentProcess")
-	procTerminateProcess     = kernel32.NewProc("TerminateProcess")
+
+	// getCurrentProcessAddr and terminateProcessAddr are the raw
+	// GetCurrentProcess / TerminateProcess addresses, resolved by
+	// InstallHandler in ordinary context. The exception callback calls
+	// them through SyscallN only: LazyProc.Call can still take the
+	// per-proc mutex, allocate, and call GetProcAddress on its first
+	// use, which must never happen inside a vectored handler (Rust
+	// windows.rs uses import-table addresses compiled in).
+	getCurrentProcessAddr uintptr
+	terminateProcessAddr  uintptr
 )
+
+// resolveHandlerProcs resolves the two kernel32 addresses the
+// exception callback needs, in ordinary (non-fault) context.
+func resolveHandlerProcs() error {
+	k32, err := windows.LoadDLL("kernel32.dll")
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "LoadDLL(kernel32): " + err.Error()}
+	}
+	getCurrentProcess, err := k32.FindProc("GetCurrentProcess")
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "GetCurrentProcess: " + err.Error()}
+	}
+	terminateProcess, err := k32.FindProc("TerminateProcess")
+	if err != nil {
+		return &format.Error{Code: format.CodeIO, Detail: "TerminateProcess: " + err.Error()}
+	}
+	getCurrentProcessAddr = getCurrentProcess.Addr()
+	terminateProcessAddr = terminateProcess.Addr()
+	return nil
+}
 
 // activeData is the byte view of the armed control mapping published
 // next to activeControl (the raw-base uintptr the session probe
@@ -79,6 +109,9 @@ type Handler struct {
 // taken, ACTIVE_CONTROL is published, and the ownership is verified.
 // Every failure path removes the registration it took.
 func (c *Control) InstallHandler() (*Handler, error) {
+	if err := resolveHandlerProcs(); err != nil {
+		return nil, err
+	}
 	if atomic.LoadUintptr(&activeControl) != 0 {
 		return nil, &format.Error{Code: format.CodeConflict, Detail: "mapped-fault worker handler is already installed"}
 	}
@@ -173,7 +206,7 @@ func exceptionHandler(pointers unsafe.Pointer) uintptr {
 	format.PutU32(data[offFaultMarker:offFaultMarker+4], faultMarker)
 	mapAtomicStore32(control, offState, stateFault)
 
-	current, _, _ := procGetCurrentProcess.Call()
-	procTerminateProcess.Call(current, ownedFaultExit)
+	current, _, _ := syscall.SyscallN(getCurrentProcessAddr)
+	syscall.SyscallN(terminateProcessAddr, current, ownedFaultExit)
 	return exceptionContinueSearch // unreachable
 }

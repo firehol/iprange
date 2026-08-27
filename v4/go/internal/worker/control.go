@@ -115,8 +115,13 @@ func OpenWorker(path string) (*Control, error) {
 	return &Control{mapping: m, file: f, data: data}, nil
 }
 
-// RemovePath unlinks the control file when this Control created it (Rust
-// Control::remove_path). The mapping stays valid after the unlink.
+// RemovePath unlinks the control file when this Control created it.
+// Go-side of Rust Control::remove_path with a deliberate platform
+// split: Rust gates the call and definition to #[cfg(unix)] and leaves
+// the control file behind on Windows, while Go unlinks on every
+// platform so Windows temp-dir controls do not accumulate (the Windows
+// worker therefore reopens the control with FILE_SHARE_DELETE,
+// control_open_windows.go). The mapping stays valid after the unlink.
 func (c *Control) RemovePath() error {
 	if c.path == "" {
 		return nil
