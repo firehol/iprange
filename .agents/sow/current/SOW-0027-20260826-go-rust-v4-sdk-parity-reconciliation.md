@@ -553,6 +553,33 @@ and passes through already-public errors, `isPubCode` classifies both
 shapes, and `abortCauseCode` walks the public-classed-cause chain.
 Gate pending the five-reviewer round 2 at the fix HEAD.
 
+Review gate round 2 for milestone 3 (2026-08-27, HEAD `25ec4c84`):
+gate stayed open. Verdicts: Rust parity FAIL P1 (the live result
+surface still exposed internal error types: the `Abort()` incomplete
+path returned `result.Cause` raw and `commitPrepared`'s `Err` plus
+`publicCommitResult`/`publicAbortResult`/`publicCloseResult` `Cause`
+fields carried unclassified `*format.Error`/`classedError` values,
+`live_writer_public.go:219/245/727/738/749`, so external consumers
+still could not classify those failures through the exported `Error`);
+Go idioms FAIL P1 and APIs/records FAIL P2-1 with the same five sites;
+performance PASS (remaining work is failure-path-only; P3: the
+`Abort()` incomplete path returned the raw cause); wire/integrity PASS
+(error typing only, zero on-disk or coordination change). The fix
+converts all five sites through `publicError`, and `publicError` now
+consumes the outermost classed class into the exported `Error` and
+converts the rest of the chain recursively, so no internal error type
+crosses the public boundary (the previous preserve-Cause passthrough
+also let a `classedError` wrapping a public cancellation cause escape
+unchanged). The test classifiers (`lifecycleCode`, `isPubCode`,
+`pubCode`) classify only the top of the chain, so an inner class
+never shadows the outer one (Rust abort_after_source nesting:
+TransactionAborted -> CleanupInProgress -> original cause). Validation
+at the fix HEAD: gofmt, vet, `go test ./...`, `go test -tags v4work
+./...` (including the outcome-unknown fail-closed nested-class
+chain), race/checkptr, the seven-target cross-build matrix, and the
+env-gated mixed live battery on both sides are green. Gate pending
+the five-reviewer round 3 at the fix HEAD.
+
 ## Requirements
 
 ### Purpose

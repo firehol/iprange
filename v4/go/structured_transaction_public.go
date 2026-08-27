@@ -251,16 +251,14 @@ func (t *StructuredTransaction) AddFeed(membership MembershipRef, feed FeedRef) 
 // payloads deduplicate to the same reference.
 func (t *StructuredTransaction) InternNetworkEnrichmentV1(value NetworkEnrichmentV1, membership MembershipRef) (StructureRef, error) {
 	if err := t.requireActive(); err != nil {
-		return StructureRef{}, publicError(
-
-			// Rust: Some(membership) validates the reference and supplies its
-			// handle; None interns with the empty handle. The Go zero
-			// MembershipRef is the None case. Every other value is a reference
-			// some transaction produced (including EmptyMembership, whose handle
-			// is zero but whose database id and nonce are pinned) and validates
-			// exactly like Rust's Some, so a stale or foreign reference is
-			// refused even when it carries the empty handle.
-			err)
+		// Rust: Some(membership) validates the reference and supplies its
+		// handle; None interns with the empty handle. The Go zero
+		// MembershipRef is the None case. Every other value is a reference
+		// some transaction produced (including EmptyMembership, whose handle
+		// is zero but whose database id and nonce are pinned) and validates
+		// exactly like Rust's Some, so a stale or foreign reference is
+		// refused even when it carries the empty handle.
+		return StructureRef{}, publicError(err)
 	}
 
 	if membership != (MembershipRef{}) {

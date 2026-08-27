@@ -73,11 +73,9 @@ func (w *LiveWriter) ProjectHistory(source HistoryProjectionSource, windows []Hi
 // changed/no-change terminal.
 func projectHistory(h mutationHost, source HistoryProjectionSource, windows []HistoryWindow, cancellation *CancellationToken) (*FinishedHistoryProjection, error) {
 	if err := h.healthy(); err != nil {
-		return nil, publicError(
-
-			// require_feed_workflow_ready (Rust feed_workflow.rs): healthy, a
-			// membership destination, no pending transaction.
-			err)
+		// require_feed_workflow_ready (Rust feed_workflow.rs): healthy, a
+		// membership destination, no pending transaction.
+		return nil, publicError(err)
 	}
 
 	if h.coreOf().BaseInfo().ValueKind != format.ValueKindMembership {
@@ -490,15 +488,13 @@ func (h *FinishedHistoryProjection) Commit() (CommitResult, error) {
 		return CommitResult{}, &Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	if err := h.requireChangedActive(); err != nil {
-		return CommitResult{}, publicError(
-
-			// One authoritative commit terminal: the host's commitPrepared runs
-			// the exact commit_with sequence (changed-draft check, commit
-			// attempt, prepare with the captured cancellation, prepublication
-			// checks, and the classified outcome). On the live host this also
-			// holds the reader-table gate through publication and retains the
-			// cleanup and coordination evidence (Rust LiveWriter::commit_with).
-			err)
+		// One authoritative commit terminal: the host's commitPrepared runs
+		// the exact commit_with sequence (changed-draft check, commit
+		// attempt, prepare with the captured cancellation, prepublication
+		// checks, and the classified outcome). On the live host this also
+		// holds the reader-table gate through publication and retains the
+		// cleanup and coordination evidence (Rust LiveWriter::commit_with).
+		return CommitResult{}, publicError(err)
 	}
 
 	return h.w.commitPrepared(h.cancellation, func() { h.spent = true }, "history projection")

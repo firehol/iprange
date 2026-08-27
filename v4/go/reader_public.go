@@ -774,11 +774,10 @@ func publicError(err error) error {
 	if err == nil {
 		return nil
 	}
-	// An error that already carries the public type in its chain stays
-	// as-is: reclassifying it would nest a second public wrapper around
-	// the internal classed error.
-	var already *Error
-	if errors.As(err, &already) {
+	// An error whose outermost type is already the exported Error is
+	// already at the public boundary: converting again would nest a
+	// second public layer around itself.
+	if _, ok := err.(*Error); ok {
 		return err
 	}
 	var ferr *format.Error
@@ -789,10 +788,12 @@ func publicError(err error) error {
 		if ferr == nil {
 			return nil
 		}
-		// The original error stays reachable as Cause so classed
-		// wrappers (TransactionAborted around the real failure) keep
-		// their unwrap chain at the public boundary.
-		return &Error{Code: ferr.Code, Detail: ferr.Detail, Cause: err}
+		// The public wrapper consumes the outermost class
+		// (TransactionAborted -> CleanupInProgress -> original cause,
+		// Rust abort_after_source) and converts the rest of the chain
+		// the same way, so no internal error type crosses the public
+		// boundary even when a classed wrapper nests a public cause.
+		return &Error{Code: ferr.Code, Detail: ferr.Detail, Cause: publicError(errors.Unwrap(err))}
 	}
 	// Internal header/decode validation failures (fixedsize header errors
 	// and similar) are structural corruption at the public boundary.

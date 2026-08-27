@@ -17,17 +17,17 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// pubCode resolves the public error code from either the public Error
-// type (publicError conversion) or the internal format error, matching
-// the lifecycle test helper.
+// pubCode resolves one error's own class from either the public Error
+// type (publicError conversion, the boundary authority) or the internal
+// format error, matching the lifecycle test helper: only the top of the
+// chain is classified, so an inner class never shadows the outer one.
 func pubCode(err error) ErrorCode {
+	if pe, ok := err.(*Error); ok {
+		return pe.Code
+	}
 	var fe *format.Error
 	if errors.As(err, &fe) {
 		return ErrorCode(fe.Code)
-	}
-	var pe *Error
-	if errors.As(err, &pe) {
-		return pe.Code
 	}
 	return 0
 }

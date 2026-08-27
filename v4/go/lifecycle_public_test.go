@@ -15,17 +15,21 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
-// lifecycleCode extracts the public error code from either the public
-// Error type (cancellation checkpoints) or the internal format error
-// (lifecycle internals); 0 for other errors or nil.
+// lifecycleCode extracts one error's own class: the exported Error
+// type when it is the outermost type (the boundary authority for the
+// converted live surface), otherwise the internal format error class
+// (lifecycle internals); 0 for other errors or nil. Only the top of
+// the chain is classified: the converted surface nests the inner
+// classes beneath the outer one (TransactionAborted -> CleanupInProgress
+// -> original cause, Rust abort_after_source), so an inner class must
+// never shadow the class of the error actually handed out.
 func lifecycleCode(err error) ErrorCode {
+	if pe, ok := err.(*Error); ok {
+		return pe.Code
+	}
 	var fe *format.Error
 	if errors.As(err, &fe) {
 		return ErrorCode(fe.Code)
-	}
-	var pe *Error
-	if errors.As(err, &pe) {
-		return pe.Code
 	}
 	return 0
 }

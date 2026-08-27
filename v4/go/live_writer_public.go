@@ -216,7 +216,7 @@ func (w *LiveWriter) Abort() error {
 		return publicError(err)
 	}
 	if result.Outcome == live.AbortOutcomeAbortIncomplete {
-		return result.Cause
+		return publicError(result.Cause)
 	}
 	return nil
 }
@@ -242,7 +242,7 @@ func (w *LiveWriter) commitPrepared(cancellation *CancellationToken, markSpent f
 		DatabaseID:          result.AttemptedDatabaseID,
 		TransactionID:       result.AttemptedTransactionID,
 		CommitNonce:         result.AttemptedCommitNonce,
-		Err:                 result.Cause,
+		Err:                 publicError(result.Cause),
 		Cleanup:             publicCleanupArtifacts(result.Cleanup),
 		CoordinationCleanup: publicCoordinationCleanup(result.CoordinationCleanup),
 	}, nil
@@ -368,11 +368,9 @@ func (t *LiveDirectTransaction) AssignV4(from, to IPv4, value uint32) (bool, err
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint: a token that fired during
-			// the mutation aborts the draft and reports the cancellation.
-			err)
+		// Rust run_transaction post-checkpoint: a token that fired during
+		// the mutation aborts the draft and reports the cancellation.
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -395,10 +393,8 @@ func (t *LiveDirectTransaction) AssignV6(from, to IPv6, value uint32) (bool, err
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint (see AssignV4).
-			err)
+		// Rust run_transaction post-checkpoint (see AssignV4).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -421,10 +417,8 @@ func (t *LiveDirectTransaction) ClearV4(from, to IPv4) (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint (see AssignV4).
-			err)
+		// Rust run_transaction post-checkpoint (see AssignV4).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -447,10 +441,8 @@ func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint (see AssignV4).
-			err)
+		// Rust run_transaction post-checkpoint (see AssignV4).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -463,11 +455,9 @@ func (t *LiveDirectTransaction) ClearV6(from, to IPv6) (bool, error) {
 // transaction (Rust DirectTransaction::set_metadata_json).
 func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, publicError(
-
-			// Rust run_transaction pre-checkpoint: a fired token aborts the
-			// draft before the stage refusal.
-			err)
+		// Rust run_transaction pre-checkpoint: a fired token aborts the
+		// draft before the stage refusal.
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -484,10 +474,8 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint (see AssignV4).
-			err)
+		// Rust run_transaction post-checkpoint (see AssignV4).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -500,10 +488,8 @@ func (t *LiveDirectTransaction) SetMetadataJSON(input []byte) (bool, error) {
 // DirectTransaction::clear_metadata_json).
 func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 	if err := t.requireActive(); err != nil {
-		return false, publicError(
-
-			// Rust run_transaction pre-checkpoint (see SetMetadataJSON).
-			err)
+		// Rust run_transaction pre-checkpoint (see SetMetadataJSON).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -517,10 +503,8 @@ func (t *LiveDirectTransaction) ClearMetadataJSON() (bool, error) {
 		if t.w.lw.Draft() == nil {
 			t.active = false
 		}
-		return false, publicError(
-
-			// Rust run_transaction post-checkpoint (see AssignV4).
-			err)
+		// Rust run_transaction post-checkpoint (see AssignV4).
+		return false, publicError(err)
 	}
 
 	if err := t.checkOrAbort(); err != nil {
@@ -724,7 +708,7 @@ func publicCommitResult(result live.LiveCommitResult) LiveCommitResult {
 		Status:                 CommitStatus(result.Durability),
 		Cleanup:                publicCleanupArtifacts(result.Cleanup),
 		CoordinationCleanup:    publicCoordinationCleanup(result.CoordinationCleanup),
-		Cause:                  result.Cause,
+		Cause:                  publicError(result.Cause),
 	}
 }
 
@@ -735,7 +719,7 @@ func publicAbortResult(result live.LiveAbortResult) LiveAbortResult {
 		Outcome:             publicAbortOutcome(result.Outcome),
 		Cleanup:             publicCleanupArtifacts(result.Cleanup),
 		CoordinationCleanup: publicCoordinationCleanup(result.CoordinationCleanup),
-		Cause:               result.Cause,
+		Cause:               publicError(result.Cause),
 	}
 }
 
@@ -746,7 +730,7 @@ func publicCloseResult(result live.LiveCloseResult) LiveCloseResult {
 		Outcome:             publicCloseOutcome(result.Outcome),
 		Cleanup:             publicCleanupArtifacts(result.Cleanup),
 		CoordinationCleanup: publicCoordinationCleanup(result.CoordinationCleanup),
-		Cause:               result.Cause,
+		Cause:               publicError(result.Cause),
 	}
 	if result.AbortOutcome != nil {
 		value := publicAbortOutcome(*result.AbortOutcome)

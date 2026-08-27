@@ -69,13 +69,16 @@ func isPubCode(err error, code ErrorCode) bool {
 	// The public live surface converts internal errors into the
 	// exported Error type; helpers may also surface the internal
 	// format.Error from module-internal call sites (lifecycleCode
-	// convention), so both are classified.
-	var fe *format.Error
-	if errors.As(err, &fe) {
-		return ErrorCode(fe.Code) == code
+	// convention), so both are classified. Only the top of the chain
+	// is classified: the converted surface nests the inner classes
+	// beneath the outer one, so an inner class must never shadow the
+	// class of the error actually handed out (Rust
+	// abort_after_source nesting).
+	if pe, ok := err.(*Error); ok {
+		return pe.Code == code
 	}
-	var pe *Error
-	return errors.As(err, &pe) && pe.Code == code
+	var fe *format.Error
+	return errors.As(err, &fe) && ErrorCode(fe.Code) == code
 }
 
 // requireFileCreation skips one test that creates a database file
