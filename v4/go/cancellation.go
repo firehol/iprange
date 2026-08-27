@@ -40,3 +40,18 @@ func (t *CancellationToken) check() error {
 	}
 	return nil
 }
+
+// hook returns the checkpoint hook of t, or nil for a nil token. A nil
+// token must yield a nil hook: a method value over a nil receiver is
+// itself non-nil, and worker sessions treat any non-nil hook as an
+// external cancellation poll (Rust CancellationToken::
+// requires_external_poll), turning every validation checkpoint into a
+// parent round trip for an uncancellable session. Rust's fresh token
+// has no poll hook and disables external polling; this accessor keeps
+// the Go nil token equivalent.
+func (t *CancellationToken) hook() func() error {
+	if t == nil {
+		return nil
+	}
+	return t.check
+}

@@ -21,6 +21,7 @@ package main
 import (
 	"os"
 	"runtime/pprof"
+	"strconv"
 
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
@@ -53,7 +54,7 @@ func main() {
 	// worker runs one wire mode per process, so one process is one
 	// operation).
 	if profile := os.Getenv("IPRANGE_CPU_PROFILE"); profile != "" {
-		file, err := os.Create(profile)
+		file, err := os.Create(profile + "." + strconv.Itoa(os.Getpid()))
 		if err != nil {
 			os.Exit(exitUsage)
 		}

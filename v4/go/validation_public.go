@@ -196,7 +196,7 @@ type ValidationFailure = validation.ValidationFailure
 // checked between bounded steps. Exactly one of the result and the
 // failure is non-nil.
 func Validate(path string, mode ValidationMode, budget *ValidationBudget, cancellation *CancellationToken, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
-	result, failure := routing.Validate(path, mode, budget, cancellation.check, sink)
+	result, failure := routing.Validate(path, mode, budget, cancellation.hook(), sink)
 	if failure != nil {
 		converted := *failure
 		converted.Cause = publicError(failure.Cause)

@@ -722,15 +722,86 @@ output's membership semantics. The matched scale matrices and their
 fact comparisons were re-run at the fix HEAD and supersede the numbers
 above for the affected membership-import cases.
 
-Accepted-baseline population runs (planned 2026-08-27, linux/amd64,
-release Go build, under `nice`): the Go `ci` gate compares 18 cases
-(1 warmup + 3 samples each, up to 1M records) against the embedded
+Matched scale evidence at the fix HEAD (2026-08-27, linux/amd64,
+release builds, both harnesses, under `nice`): the full Go scale
+matrix is green 90/90 after the two fixes above (the earlier 48-case
+partial run stopped at the structure-table defect). Go and Rust agree
+on every semantic fact (work units, emitted units, range records,
+feeds, file logical bytes) in all 90 cases; the remaining 29
+differences are physical-only (unpublished tail granularity), matching
+the authoritative commitment granularity difference already recorded.
+Elapsed ratios Go/Rust (p50, same host, release, verified against the
+matched CSVs): direct and membership lookups 1.9-4.0x (live-direct
+100k=3.96x, live-membership 100k=3.41x, random variants 1.9-2.4x),
+structured random lookups 1.6-2.0x (scalar 1M=1.98x, threat 1M=1.65x),
+structured scan 3.6x, membership-import 8.8x, update-ipsets-workflow
+5.4x, feed-replace 6.8x, nested-overwrite 8.9x, membership-cardinalities
+1.9x, and the worker-mediated validation paths 445-640x
+(live-validation 1M: Go 4.54 s for 4,113 checked pages vs Rust 10.2 ms;
+live-membership-validation 1M: Go 9.88 s vs Rust 15.4 ms).
+Milestone-4 perf root cause found and fixed (2026-08-27): the
+445-640x validation ratios were not Go engine cost at all. The gdb
+goroutine dump of a mid-validation isolation worker proved the real
+cause: the worker's main goroutine was sleeping in
+`Control.RequestExternalPoll`'s CancelPoll spin (control_wire.go:298)
+from the checkpoint hook, called once per checked page (direct) and
+once per structure slot (structured). External polling was enabled
+because the public entries passed `cancellation.check` for a nil
+token: `CancellationToken.check` is a nil-receiver method, and the
+method value `(*CancellationToken)(nil).check` is non-nil, so
+`RequiresExternalPoll` returned true and every checkpoint became a
+~1-2 ms parent round trip (the "hang" was this ping-pong: 100k
+structure slots x ~2 ms = minutes). Rust's fresh token has no poll
+hook (`cancellation.rs requires_external_poll` = poll.is_some(), false)
+and disables external polling. Fix: `CancellationToken.hook()` returns
+nil for a nil token and the three worker-routed public entries
+(`Validate`, `InspectRecoveryCandidates`,
+`ValidateOfflineCandidate`) use it; the Recover arms already used
+`internalCheck`, which handles nil correctly. Regression test
+`TestNilCancellationHookIsNil`. Measured impact (release, same host,
+under `nice`): live-validation 1M 4.54 s -> 24.2 ms (188x; Rust
+10.2 ms, now 2.4x), live-membership-validation 1M 9.88 s -> 28.9 ms
+(342x; Rust 15.4 ms, now 1.9x), live-structured-threat-random-lookup
+100k case wall ~3.5 min -> 6.6 s total (measured op 5.88 s for 10M
+lookups, ~1.25x Rust). The full Go suite is green at the fix. Profile
+tooling note: IPRANGE_CPU_PROFILE now writes one pprof file per
+process (PID-suffixed), so the bench case process and its worker each
+produce their own profile instead of clobbering one path.
+
+Accepted-baseline population runs (2026-08-27, linux/amd64, release Go
+build, under `nice`): the Go `ci` gate compares 18 cases (1 warmup +
+3 samples each, up to 1M records) against the embedded
 accepted-baseline.csv; populating the baseline runs the same 18 cases
 with 1 warmup + 5 samples via the `sample` mode and takes the median
-per case. Expected cost: roughly 5-10 wall-minutes single-core
-(dominated by the 1M-record builds and the worker-mediated
-validations); the rust-v4-local-20260811 reference remains the
-baseline ID until the Go numbers are accepted on this host.
+per case. The 1.5-2 hour estimate from the pre-fix binary is
+obsolete: at the fix HEAD the baseline is dominated by the measured
+work itself (1M cases) and by the per-case builds, expected
+15-35 wall-minutes single-core (the earlier observed "hang" was the
+external-poll ping-pong above). The baseline re-runs at the fix HEAD;
+the accepted-baseline.csv is populated from the p50 medians only
+after all 18 rows complete. The
+
+Accepted-baseline population runs (2026-08-27, linux/amd64, release Go
+build, under `nice`): the Go `ci` gate compares 18 cases (1 warmup +
+3 samples each, up to 1M records) against the embedded
+accepted-baseline.csv; populating the baseline runs the same 18 cases
+with 1 warmup + 5 samples via the `sample` mode and takes the median
+per case. The earlier 5-10 wall-minute estimate was wrong: measured
+wall cost is about 1.5-2 hours single-core (18 cases x 6
+subprocess-isolated runs; the three 100k structured lookup cases take
+about 3-4 minutes per run and the 1M validation cases about 2-4
+minutes per run, all dominated by the worker-mediated validation of
+the output database after the measured region). The observed
+"structured-validation hang" is slow-but-alive work, not a deadlock:
+both processes advance CPU time while alternately sleeping in the
+1 ms control poll; each case run eventually completes (verified 12/18
+cases completing without intervention). The CI gate itself (1 warmup +
+3 samples) costs about two-thirds of the baseline run. Progress and
+per-case rows are recorded in /tmp/bench-run3/baseline-samples.csv
+(scratch, not committed); the accepted-baseline.csv is populated from
+the p50 medians only after all 18 rows complete. The
+rust-v4-local-20260811 reference remains the baseline ID until the Go
+numbers are accepted on this host.
 
 ## Requirements
 

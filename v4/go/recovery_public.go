@@ -157,7 +157,7 @@ type CreationSecurity = publication.CreationSecurity
 // cancellation, when non-nil, is checked between bounded steps; the
 // inspection never scans a page graph.
 func InspectRecoveryCandidates(path string, mode RecoveryInspectionMode, budget *ValidationBudget, cancellation *CancellationToken) (*RecoveryCandidateInspection, error) {
-	result, err := routing.InspectRecoveryCandidates(path, mode, budget, cancellation.check)
+	result, err := routing.InspectRecoveryCandidates(path, mode, budget, cancellation.hook())
 	if err != nil {
 		return nil, publicError(err)
 	}
@@ -175,7 +175,7 @@ func InspectRecoveryCandidates(path string, mode RecoveryInspectionMode, budget 
 // path access; cancellation, when non-nil, is checked between bounded
 // steps. Exactly one of the result and the failure is non-nil.
 func ValidateOfflineCandidate(path string, candidate *RecoveryCandidate, budget *ValidationBudget, cancellation *CancellationToken, sink ValidationSink) (*ValidationResult, *ValidationFailure) {
-	result, failure := routing.ValidateOfflineCandidate(path, candidate, budget, cancellation.check, sink)
+	result, failure := routing.ValidateOfflineCandidate(path, candidate, budget, cancellation.hook(), sink)
 	if failure != nil {
 		converted := *failure
 		converted.Cause = publicError(failure.Cause)

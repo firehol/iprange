@@ -61,7 +61,7 @@ func runCase(arguments []string) error {
 	// scenario for the performance-delta work (bench-only tooling; the
 	// profile runs while the case child performs its own work).
 	if profile := os.Getenv("IPRANGE_CPU_PROFILE"); profile != "" {
-		file, err := os.Create(profile)
+		file, err := os.Create(profile + "." + strconv.Itoa(os.Getpid()))
 		if err != nil {
 			return err
 		}
