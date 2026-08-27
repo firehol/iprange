@@ -83,5 +83,5 @@ recovery	recovery.rs recover_immutable	RecoverImmutable	present	recovery_public.
 recovery	recovery.rs recover_offline	RecoverOffline	present	recovery_public.go
 recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
 worker	binary-format-v4.md:3155+ version-matched worker		missing	Go routes validation/recovery in-process on every non-linux/amd64 target (routing_other.go); the worker process is linux/amd64-only
-platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended); no root symbol; native macOS proof pending in the authorized platform round
+platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended) and proven in the authorized macOS arm64 round (plain, v4work, race+checkptr green at 631d83c8); no root symbol (internal machine, like remove_checkpointed_scratch)
 cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported
