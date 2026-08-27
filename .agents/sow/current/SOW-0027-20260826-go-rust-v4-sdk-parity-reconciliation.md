@@ -926,22 +926,28 @@ caller-owned CellBufs, removing the truncate and split allocations.
 Bench harness: heap-profile hook for the delta work and reused batch
 buffers in the measured regions. Measured medians at 1M records,
 same host, matched optimized release binaries (Go gc plain build,
-Rust bench profile):
+Rust bench profile); every quoted median is reproducible from the
+committed evidence rows (evidence/case-runs-4c4d-20260828.csv for
+the headline case runs, evidence/ci-go-v4-local-20260828b.log for
+the final gate):
 
-- membership-import: 167 ms vs Rust 47 ms (3.6x; was 421 ms / 9.2x
-  with 3,001,958 allocs / 1,536.7 MB, now 2,311 allocs / 0.7 MB;
-  Rust has 20 allocs / 470 B).
-- nested-overwrite: 1,878 ms vs Rust 302 ms (6.2x; was 2,888 ms).
-- update-ipsets-workflow: 5,034 ms vs Rust 1,112 ms (4.5x; was
-  5,781 ms).
-- live-direct-random-lookup: 457 ms vs Rust 237 ms (1.9x; was
-  597 ms).
-- immutable-direct-random-lookup: 413 ms vs Rust 217 ms (1.9x).
-- live-validation: 25 ms vs Rust 14.1 ms (1.8x; was 24.6 ms).
+- membership-import: 170.5 ms vs Rust 47.1 ms (3.6x; was 430.8 ms /
+  9.1x with 3,001,958 allocs / 1,536.7 MB, now 2,311 allocs /
+  0.7 MB; Rust has 20 allocs / 470 B).
+- nested-overwrite: 1,932.9 ms vs Rust 301.7 ms (6.4x; was
+  2,887.6 ms).
+- update-ipsets-workflow: 4,878 ms vs Rust 1,112 ms (4.4x; was
+  5,780.7 ms, then 5,038 ms at the 4c/4d commits; the delta-review
+  value-return of the selected-ranges feed cut the run allocation
+  volume from 21.2M calls / 752 MB to 10.7M calls / 369 MB).
+- live-direct-random-lookup: 492.1 ms vs Rust 236.8 ms (2.1x; was
+  596.5 ms).
+- immutable-direct-random-lookup: 420.2 ms vs Rust 217 ms (1.9x).
+- live-validation: 25.6 ms vs Rust 14.1 ms (1.8x; was 24.6 ms).
 
 The 4-9x class is eliminated for the lookup, validation, and import
 families; the remaining write-path outliers are nested-overwrite
-(6.2x) and update-ipsets-workflow (4.5x), both deep in the generic
+(6.4x) and update-ipsets-workflow (4.4x), both deep in the generic
 gap/replace machinery where the residual cost is Go bounds checks,
 interface indirection, and GC, not structure (verified against the
 Rust range_mutation assign paths). Slice 4e re-baselined and
@@ -949,9 +955,54 @@ re-gated the acceptance evidence at the improved state: the accepted
 baseline identity is now go-v4-local-20260828 (rebuilt
 accepted-baseline.csv from 18 CI cases x 5 samples; the pre-4c
 20260827 samples stay in evidence/ as the improvement baseline), the
-new CI gate run is 18/18 within-limit with ratios 0.933-1.049, and
-the smoke pair range improved to 0.34x-5.92x. pprof head evidence
-before/after is committed at evidence/profiles-4c4d-summary.txt.
+final CI gate run is 18/18 within-limit with ratios 0.940-1.106
+(update-ipsets-workflow ratio 0.964 against the accepted 5,058 ms),
+and the smoke pair range improved to 0.34x-5.92x. pprof head
+evidence before/after is committed at
+evidence/profiles-4c4d-summary.txt.
+
+Milestone-4 delta review (2026-08-28, five level-1 reviewers of the
+lead model, adversarial mode; scopes: Rust parity Linnaeus, Go idioms
+Darwin, performance Hooke, wire/integrity McClintock, APIs/records
+Plato). Verdicts: Darwin PASS (P3: keycmp.go hand-rolled compares
+vs cmp.Compare; optional probe-set enumeration test), Hooke PASS
+(P3-1: the u32 prefix codecs fell back to the record-decode compare
+path - fixed by declaring PrefixKeyProbe on idCodec/indexCodec,
+commit dbcf0008; P3-2 per-width probe specialization noted as
+moderate optional; P3-3 workflow seam - fixed by the value-return
+sweep, commit 6f66e32c). Three FAILs with actionable findings, all
+fixed and re-tested:
+
+- Linnaeus P2 (Rust parity): the raw prefix probe dropped the
+  per-probe cell validation of the membership and structure hash
+  codecs; corrupt cells (zero id, out of range word count) were
+  compared blindly where Rust decode_hash refuses them. Fixed with
+  an optional tree.ProbeValidator applied per probe only on the two
+  hash codecs (nil for the plain numeric probes, keeping the hot
+  u32/u64/u128 paths dispatch-free), commit 93f81997; regression
+  tests corrupt the root page middle cell and require
+  CodeFormatInvalid with healthy controls.
+- McClintock P2 (wire/integrity): the 4c sweep wrapped the edit
+  cause in publicError before abortEdit/abortAfter, hiding the
+  internal class from isFatalClass; a CodeFormatInvalid mid-edit
+  left the writer falsely healthy (Rust abort_after brands the
+  writer unusable on Io/Format). The abort paths pass the raw
+  internal error again with the public conversion at the boundary
+  (the structured transaction already did), commit 90b4d885;
+  regression test drives a v4work fault point inside
+  deleteCurrentFeedMembership and asserts the writer fails closed.
+- Plato P2-1 (records): the committed 20260828 CI log header still
+  named the 20260827 identity. Fixed by committing the final gate
+  log at the final identity as ci-go-v4-local-20260828b.log (the
+  old file stays with an explanatory README note).
+- Plato P2-2 (records): six quoted before/after medians were not
+  reproducible from the preserved case runs. Fixed by correcting
+  the table to the preserved artifact rows and committing them as
+  evidence/case-runs-4c4d-20260828.csv.
+
+The re-gate after the four fix commits is 18/18 within-limit at
+ratios 0.940-1.106; all local tests, v4work, race, vet, and gofmt
+pass at commits 6f66e32c..93f81997.
 
 ## Requirements
 

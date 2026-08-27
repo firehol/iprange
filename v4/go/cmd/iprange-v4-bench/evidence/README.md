@@ -16,9 +16,20 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
 - `baseline-samples-final.csv`: the pre-4c accepted Go run (the
   20260827 baseline), kept as historical evidence of the improvement.
 - `ci-go-v4-local-20260827.log`: the pre-4c CI gate run.
-- `ci-go-v4-local-20260828.log`: the 4c/4d CI gate run against the new
-  baseline (1 warmup + 3 samples, enforce mode), 18/18 within-limit,
-  ratios 0.933-1.049.
+- `ci-go-v4-local-20260828.log`: the first 4c/4d CI gate run against the
+  new baseline (1 warmup + 3 samples, enforce mode), 18/18 within-limit,
+  ratios 0.933-1.049. Its header predates the baseline-identity constant
+  update (labels go-v4-local-20260827); the values enforce the new
+  accepted medians.
+- `ci-go-v4-local-20260828b.log`: the final gate run at the same
+  identity after the delta-review fixes (selected-ranges by value, u32
+  prefix probes, abort branding, probe suffix validation), 18/18
+  within-limit, ratios 0.940-1.106. update-ipsets-workflow 1M median
+  4,878 ms (ratio 0.964 against the accepted 5,058 ms).
+- `case-runs-4c4d-20260828.csv`: the preserved 1M single-case rows for
+  the six milestone-4 headline cases (before 4c with the 3M-alloc
+  import, after 4c/4d, and the post-review workflow runs), source of
+  every median quoted in SOW-0027.
 - `profiles-4c4d-summary.txt`: before/after CPU profile head evidence
   for the slice wins (lowerBound closure dispatch removed; write-seam
   allocations removed).
