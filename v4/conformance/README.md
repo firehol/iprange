@@ -96,10 +96,13 @@ reader verifies both sets).
   invalid mutation) are proven in-process by the Go and Rust conformance
   suites.
 - Mixed live cooperation runs the same live database across languages in
-  both directions (registration/release, writer exclusion, reclamation
-  waiting for pinned readers, stale-slot release, sidecar replacement
-  across generations, transition/reservation states, and publication
-  inspection). The children are explicit entry points of the other
+  both directions: generation read-back (registration/release, sidecar
+  replacement across generations, transition/reservation states, and
+  publication inspection), writer exclusion, reclamation waiting for
+  pinned readers plus stale-slot release (oldest-reader safety), the
+  canonical commit-resolution attempt set (committed, same-transaction
+  different-nonce, superseded-unknown), and compact-snapshot cross-open
+  through each reader. The children are explicit entry points of the other
   language's test binary, built at test time; the battery is env-gated
   and linux/amd64-only so plain suites stay fast:
   ```bash

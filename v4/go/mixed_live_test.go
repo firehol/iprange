@@ -201,6 +201,72 @@ func TestMixedLiveRustChild(t *testing.T) {
 		}
 		closeWriter(t, w)
 	})
+	t.Run("resolve", func(t *testing.T) {
+		main := liveGenPath(t, "go-parent-resolve")
+		createDirectLive(t, main)
+		w := openWriter(t, main)
+		commitOneLive(t, w, 7)              // generation 2
+		committed := commitOneLive(t, w, 8) // generation 3
+		closeWriter(t, w)
+		// Classify the canonical attempt set with this SDK first; the
+		// Rust child commits its own generation on the same database and
+		// must classify the identical set.
+		resolved, err := ResolveCommit(main, committed, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionCommitted || resolved.LocalFileRelation != LocalFileRelationSameLocalFile {
+			t.Fatalf("correct resolution = %+v, want Committed/SameLocalFile", resolved)
+		}
+		wrongNonce := alteredCommitAttempt(committed, committed.AttemptedTransactionID, [16]byte{0x55})
+		resolved, err = ResolveCommit(main, wrongNonce, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionNotCommitted {
+			t.Fatalf("wrong-nonce resolution = %v, want NotCommitted", resolved.Resolution)
+		}
+		oldUnknown := alteredCommitAttempt(committed, 1, [16]byte{0x66})
+		resolved, err = ResolveCommit(main, oldUnknown, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionSupersededUnknown {
+			t.Fatalf("old-unknown resolution = %v, want SupersededUnknown", resolved.Resolution)
+		}
+		cmd := runRustChild(binary, main, "resolve")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust resolve child failed: %v", err)
+		}
+	})
+	t.Run("snapshot", func(t *testing.T) {
+		main := liveGenPath(t, "go-parent-snap")
+		createDirectLive(t, main)
+		w := openWriter(t, main)
+		commitDirect(t, w, 10, 20, 7) // generation 2
+		closeWriter(t, w)
+		dest := filepath.Join(t.TempDir(), "cross-snapshot.iprdb")
+		result, err := SnapshotTo(main, SnapshotSourceLive, dest, PolicyFailIfExists, &SnapshotBudget{
+			MaxHeapBytes:   32 << 20,
+			MaxOutputPages: 200_000,
+			MaxOpenFiles:   3,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Publication.Publication != PublicationPublished {
+			t.Fatalf("snapshot status = %v, want published", result.Publication.Publication)
+		}
+		cmd := exec.Command(binary, "--ignored", "--exact", mixedRustChildTest, "--test-threads=1", "--nocapture", "--quiet")
+		cmd.Env = append(os.Environ(), mixedLiveDBEnv+"="+main, mixedLiveModeEnv+"=snapshot", "IPRANGE_V4_MIXED_LIVE_SNAPSHOT="+dest)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust snapshot child failed: %v", err)
+		}
+	})
 }
 
 // TestMixedLiveGoChild is the child entry the Rust parent spawns
@@ -282,6 +348,63 @@ func TestMixedLiveGoChild(t *testing.T) {
 			}
 		}
 		if _, err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case "resolve":
+		// The parent committed generation 2 on this live database and
+		// resolved the canonical attempt set with its SDK. Commit our
+		// own generation 3 on the same database and classify the
+		// identical set: the two SDKs must agree.
+		w := openWriter(t, dbPath)
+		commitOneLive(t, w, 5)
+		committed := commitOneLive(t, w, 6)
+		closeWriter(t, w)
+		resolved, err := ResolveCommit(dbPath, committed, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionCommitted || resolved.LocalFileRelation != LocalFileRelationSameLocalFile {
+			t.Fatalf("correct resolution = %+v, want Committed/SameLocalFile", resolved)
+		}
+		wrongNonce := alteredCommitAttempt(committed, committed.AttemptedTransactionID, [16]byte{0x55})
+		resolved, err = ResolveCommit(dbPath, wrongNonce, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionNotCommitted {
+			t.Fatalf("wrong-nonce resolution = %v, want NotCommitted", resolved.Resolution)
+		}
+		oldUnknown := alteredCommitAttempt(committed, 1, [16]byte{0x66})
+		resolved, err = ResolveCommit(dbPath, oldUnknown, CommitResolutionModeLive, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Resolution != CommitResolutionSupersededUnknown {
+			t.Fatalf("old-unknown resolution = %v, want SupersededUnknown", resolved.Resolution)
+		}
+	case "snapshot":
+		// The parent snapshotted a live database through its public
+		// snapshot path; open the compact output with our reader.
+		snapshotPath := os.Getenv("IPRANGE_V4_MIXED_LIVE_SNAPSHOT")
+		if snapshotPath == "" {
+			t.Fatal("mixed_live snapshot child: missing snapshot env")
+		}
+		r, err := OpenImmutable(snapshotPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := r.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.TransactionID != 2 {
+			t.Fatalf("snapshot transaction id = %d, want 2", info.TransactionID)
+		}
+		got, ok, err := r.LookupDirectV4(IPv4(15))
+		if err != nil || !ok || got != 7 {
+			t.Fatalf("snapshot lookup 15 = %d ok %v err %v, want 7", got, ok, err)
+		}
+		if err := r.Close(); err != nil {
 			t.Fatal(err)
 		}
 	default:

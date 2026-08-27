@@ -18,8 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use iprange_livedb::{
-    create_live, AddressFamily, CancellationToken, Error, Ipv4Key, LiveReader, LiveWriter,
-    ReclaimResult, StructureKind, TransactionBudget, ValueKind, ValueTag,
+    create_live, resolve_commit, snapshot_to, AddressFamily, CancellationToken, CommitResolution,
+    CommitResolutionMode, CommitResult, Error, ImmutableReader, Ipv4Key, LiveReader, LiveWriter,
+    LocalFileRelation, ReclaimResult, SnapshotBudget, SnapshotPublicationPolicy,
+    SnapshotSourceMode, StructureKind, TransactionBudget, ValueKind, ValueTag,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -66,12 +68,16 @@ fn create(main: &Path) {
 }
 
 fn commit_gen(writer: &mut LiveWriter, from: u32, to: u32, value: u32) {
+    let _ = commit_gen_result(writer, from, to, value);
+}
+
+fn commit_gen_result(writer: &mut LiveWriter, from: u32, to: u32, value: u32) -> CommitResult {
     let cancellation = CancellationToken::new();
     let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
     transaction
         .assign_v4(Ipv4Key(from), Ipv4Key(to), value)
         .unwrap();
-    transaction.commit().unwrap();
+    transaction.commit().unwrap()
 }
 
 // ---------------------------------------------------------------------
@@ -116,6 +122,30 @@ fn run_go_child(binary: &Path, main: &Path, mode: &str) -> GoChildRun {
         .env("IPRANGE_V4_GO_MIXED_CHILD", "1")
         .env("IPRANGE_V4_MIXED_LIVE_DB", main)
         .env("IPRANGE_V4_MIXED_LIVE_MODE", mode)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take();
+    GoChildRun {
+        child,
+        stdin: Some(stdin),
+        stdout: Some(BufReader::new(stdout)),
+        stderr,
+    }
+}
+
+fn run_go_child_with_snapshot(binary: &Path, main: &Path, snapshot: &Path) -> GoChildRun {
+    let mut child = Command::new(binary)
+        .current_dir(env!("CARGO_MANIFEST_DIR").to_string() + "/../../go")
+        .args(["-test.run=^TestMixedLiveGoChild$"])
+        .env("IPRANGE_V4_GO_MIXED_CHILD", "1")
+        .env("IPRANGE_V4_MIXED_LIVE_DB", main)
+        .env("IPRANGE_V4_MIXED_LIVE_MODE", "snapshot")
+        .env("IPRANGE_V4_MIXED_LIVE_SNAPSHOT", snapshot)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -268,6 +298,102 @@ fn go_child_pins_reclamation_across_languages() {
     drop(std::fs::remove_file(&binary));
 }
 
+fn altered_attempt(source: &CommitResult, transaction_id: u64, nonce: [u8; 16]) -> CommitResult {
+    // The norm only records outcome-unknown durability with empty
+    // cleanup for a replayed attempt (commit_lifecycle parity).
+    CommitResult {
+        attempted_database_id: source.attempted_database_id,
+        directory_identity: source.directory_identity,
+        main_identity: source.main_identity,
+        attempted_transaction_id: transaction_id,
+        attempted_commit_nonce: nonce,
+        durability: iprange_livedb::CommitDurability::OutcomeUnknown,
+        cleanup: iprange_livedb::CommitCleanupArtifacts::default(),
+        coordination_cleanup: iprange_livedb::publication::CoordinationCleanup::None,
+        cause: None,
+    }
+}
+
+#[test]
+fn go_child_resolves_cross_language() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(binary) = go_test_binary() else {
+        return;
+    };
+    let main = unique_path("resolve");
+    create(&main);
+    let mut writer = LiveWriter::open(&main, budget(), &CancellationToken::new()).unwrap();
+    commit_gen_result(&mut writer, 10, 20, 7); // generation 2
+    let committed = commit_gen_result(&mut writer, 10, 20, 8); // generation 3
+    writer.close().unwrap();
+    // Classify the canonical attempt set with this SDK first.
+    let token = CancellationToken::new();
+    let correct = resolve_commit(&main, &committed, CommitResolutionMode::Live, &token).unwrap();
+    assert_eq!(correct.resolution, CommitResolution::Committed);
+    assert_eq!(
+        correct.local_file_relation,
+        LocalFileRelation::SameLocalFile
+    );
+    let wrong_nonce = altered_attempt(&committed, committed.attempted_transaction_id, [0x55; 16]);
+    assert_eq!(
+        resolve_commit(&main, &wrong_nonce, CommitResolutionMode::Live, &token)
+            .unwrap()
+            .resolution,
+        CommitResolution::NotCommitted
+    );
+    let old_unknown = altered_attempt(&committed, 1, [0x66; 16]);
+    assert_eq!(
+        resolve_commit(&main, &old_unknown, CommitResolutionMode::Live, &token)
+            .unwrap()
+            .resolution,
+        CommitResolution::SupersededUnknown
+    );
+    // The Go child commits its own generation on the same live database
+    // and must classify the identical set with the Go SDK.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child(&binary, &main, "resolve");
+    finish_go_child(&mut run, deadline, "resolve");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&binary));
+}
+
+#[test]
+fn go_child_reads_cross_language_snapshot() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(binary) = go_test_binary() else {
+        return;
+    };
+    let main = unique_path("snap-main");
+    let snapshot = unique_path("snap-out");
+    create(&main);
+    let mut writer = LiveWriter::open(&main, budget(), &CancellationToken::new()).unwrap();
+    commit_gen(&mut writer, 10, 20, 7); // generation 2
+    writer.close().unwrap();
+    snapshot_to(
+        &main,
+        SnapshotSourceMode::Live,
+        &snapshot,
+        SnapshotPublicationPolicy::FailIfExists,
+        &SnapshotBudget::new(32 * 1024 * 1024, 200_000, 3),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child_with_snapshot(&binary, &main, &snapshot);
+    finish_go_child(&mut run, deadline, "snapshot");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&snapshot));
+    drop(std::fs::remove_file(&binary));
+}
+
 // ---------------------------------------------------------------------
 // Rust child entry (spawned by the Go parent, mode via env).
 
@@ -308,6 +434,48 @@ fn mixed_live_rust_child() {
             assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(1));
             assert_eq!(reader.lookup_direct_v4(Ipv4Key(19)).unwrap(), Some(1));
             reader.close().unwrap();
+        }
+        Ok("resolve") => {
+            // The parent committed generation 2 on this live database
+            // and resolved the canonical attempt set with its SDK.
+            // Commit our own generation 3 on the same database and
+            // classify the identical set: the two SDKs must agree.
+            let mut writer = LiveWriter::open(&main, budget(), &CancellationToken::new()).unwrap();
+            commit_gen_result(&mut writer, 15, 19, 5);
+            let committed = commit_gen_result(&mut writer, 15, 19, 6);
+            writer.close().unwrap();
+            let token = CancellationToken::new();
+            let correct =
+                resolve_commit(&main, &committed, CommitResolutionMode::Live, &token).unwrap();
+            assert_eq!(correct.resolution, CommitResolution::Committed);
+            assert_eq!(
+                correct.local_file_relation,
+                LocalFileRelation::SameLocalFile
+            );
+            let wrong_nonce =
+                altered_attempt(&committed, committed.attempted_transaction_id, [0x55; 16]);
+            assert_eq!(
+                resolve_commit(&main, &wrong_nonce, CommitResolutionMode::Live, &token)
+                    .unwrap()
+                    .resolution,
+                CommitResolution::NotCommitted
+            );
+            let old_unknown = altered_attempt(&committed, 1, [0x66; 16]);
+            assert_eq!(
+                resolve_commit(&main, &old_unknown, CommitResolutionMode::Live, &token)
+                    .unwrap()
+                    .resolution,
+                CommitResolution::SupersededUnknown
+            );
+        }
+        Ok("snapshot") => {
+            // The parent snapshotted a live database through its public
+            // SnapshotTo; open the compact output with our reader.
+            let snapshot =
+                PathBuf::from(env::var("IPRANGE_V4_MIXED_LIVE_SNAPSHOT").expect("snapshot env"));
+            let reader = ImmutableReader::open(&snapshot).unwrap();
+            assert_eq!(reader.info().transaction_id, 2);
+            assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(7));
         }
         other => panic!("unknown mixed_live mode {other:?}"),
     }

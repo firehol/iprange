@@ -502,6 +502,25 @@ the public surface must wrap live-opening failures into the exported
 `Error` is deferred to the gate reviewers (acceptance criterion: public
 failures must be accessible as the exported error type).
 
+Sub-state (2026-08-27): milestone 3 (symmetric conformance proof, plan
+step 6) delivered in this commit, slice by slice: 3a added the
+Go-produced membership-ipv4/ipv6 fixtures through the public
+membership transactions and the live SnapshotTo publish (13-fixture
+corpus, both readers re-verify); 3b added the mixed live cooperation
+battery in both directions (read-back, writer exclusion, pinned-read
+reclamation); 3c added the cross-language commit-resolution attempt set
+(committed / same-transaction different-nonce / superseded-unknown,
+each SDK committing its own generation on the same live database and
+classifying identically) and the compact-snapshot cross-open (each SDK
+snapshots through its public snapshot path, the other reader opens and
+verifies). Five modes per direction, all green with
+IPRANGE_V4_MIXED_LIVE=1 on linux/amd64; plain suites stay green
+without the env or the other toolchain. The public live-open error
+shape observation recorded at 3b stays open for the gate reviewers.
+Milestone 3 gate pending the five-reviewer round at this HEAD. Plan
+steps 7-8 (matched update-ipsets release benchmark matrix; artifacts,
+docs, and full-scope acceptance) remain after the gate.
+
 ## Requirements
 
 ### Purpose
