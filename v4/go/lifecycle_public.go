@@ -160,7 +160,7 @@ type LiveTransitionResult struct {
 func CreateLive(path string, family AddressFamily, kind ValueKind, structure StructureKind, tag ValueTag, readerCapacity uint32, cancellation *CancellationToken) (CreateResult, error) {
 	created, err := live.CreateLive(path, uint8(family), uint8(kind), uint8(structure), tag.Wire(), readerCapacity, cancellation.check)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, publicError(err)
 	}
 	return publicCreateResult(*created), nil
 }
@@ -177,7 +177,7 @@ func CreateLive(path string, family AddressFamily, kind ValueKind, structure Str
 func InitializeLive(path string, readerCapacity uint32, cancellation *CancellationToken) (LiveTransitionResult, error) {
 	transitioned, err := live.InitializeLive(path, readerCapacity, cancellation.check)
 	if err != nil {
-		return LiveTransitionResult{}, err
+		return LiveTransitionResult{}, publicError(err)
 	}
 	return publicTransitionResult(*transitioned), nil
 }
@@ -202,7 +202,7 @@ func publicCreateResult(created live.CreateResult) CreateResult {
 		ResiduePossible:     created.ResiduePossible,
 		Housekeeping:        Housekeeping(live.HousekeepingValue(created.Housekeeping)),
 		VisibleHousekeeping: publicHousekeeping(created.VisibleHousekeeping),
-		Cause:               created.Cause,
+		Cause:               publicError(created.Cause),
 	}
 }
 
@@ -231,7 +231,7 @@ func publicTransitionResult(result live.LiveTransitionResult) LiveTransitionResu
 		ResiduePossible:         result.ResiduePossible,
 		Housekeeping:            Housekeeping(live.HousekeepingValue(result.Housekeeping)),
 		VisibleHousekeeping:     publicHousekeeping(result.VisibleHousekeeping),
-		Cause:                   result.Cause,
+		Cause:                   publicError(result.Cause),
 	}
 }
 
@@ -348,7 +348,7 @@ type LiveResidueResult struct {
 func ResetLiveCoordination(path string, readerCapacity uint32, policy LiveResetPolicy, cancellation *CancellationToken) (LiveTransitionResult, error) {
 	transitioned, err := live.ResetLiveCoordination(path, readerCapacity, live.LiveResetPolicy(policy), cancellation.check)
 	if err != nil {
-		return LiveTransitionResult{}, err
+		return LiveTransitionResult{}, publicError(err)
 	}
 	return publicTransitionResult(*transitioned), nil
 }
@@ -363,7 +363,7 @@ func ResetLiveCoordination(path string, readerCapacity uint32, policy LiveResetP
 func ResolveLiveTransition(path string, supplied LiveTransitionResult, mode LiveTransitionResolutionMode, cancellation *CancellationToken) (LiveTransitionResult, error) {
 	internal, err := live.ResolveLiveTransition(path, internalTransitionResult(supplied), live.LiveTransitionResolutionMode(mode), cancellation.check)
 	if err != nil {
-		return LiveTransitionResult{}, err
+		return LiveTransitionResult{}, publicError(err)
 	}
 	return publicTransitionResult(*internal), nil
 }
@@ -379,7 +379,7 @@ func ResolveLiveTransition(path string, supplied LiveTransitionResult, mode Live
 func ResolveCreateLive(path string, supplied CreateResult, mode LiveTransitionResolutionMode, cancellation *CancellationToken) (CreateResult, error) {
 	resolved, err := live.ResolveCreateLive(path, internalCreateResult(supplied), live.LiveTransitionResolutionMode(mode), cancellation.check)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, publicError(err)
 	}
 	return publicCreateResult(*resolved), nil
 }
@@ -394,7 +394,7 @@ func ResolveCreateLive(path string, supplied CreateResult, mode LiveTransitionRe
 func ResolveInterruptedLiveTransition(path string, mode LiveTransitionResolutionMode, cancellation *CancellationToken) (LiveResidueResult, error) {
 	resolved, err := live.ResolveInterruptedLiveTransition(path, live.LiveTransitionResolutionMode(mode), cancellation.check)
 	if err != nil {
-		return LiveResidueResult{}, err
+		return LiveResidueResult{}, publicError(err)
 	}
 	return publicResidueResult(*resolved), nil
 }
@@ -414,7 +414,7 @@ func publicResidueResult(result live.LiveResidueResult) LiveResidueResult {
 		ResiduePossible:     result.ResiduePossible,
 		Housekeeping:        Housekeeping(live.HousekeepingValue(result.Housekeeping)),
 		VisibleHousekeeping: publicHousekeeping(result.VisibleHousekeeping),
-		Cause:               result.Cause,
+		Cause:               publicError(result.Cause),
 	}
 }
 

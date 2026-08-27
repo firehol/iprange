@@ -580,6 +580,33 @@ chain), race/checkptr, the seven-target cross-build matrix, and the
 env-gated mixed live battery on both sides are green. Gate pending
 the five-reviewer round 3 at the fix HEAD.
 
+Review gate round 3 for milestone 3 (2026-08-27, HEAD `085edea9`):
+gate stayed open. Verdicts: Rust parity PASS (all-public chain mirrors
+`abort_after_source` nesting, verified against sdk_error.rs), Go
+idioms PASS (classifiers now document the boundary-authority
+convention), performance PASS (failure-path-only conversion, bounded
+recursion), wire/integrity PASS (zero on-disk or coordination change,
+13-fixture corpus re-verified). APIs/records FAIL with P1-1 + P2-1:
+the live-coordination lifecycle facade never used `publicError` -
+`CreateLive`, `InitializeLive`, `ResetLiveCoordination`,
+`ResolveLiveTransition`, `ResolveCreateLive`, and
+`ResolveInterruptedLiveTransition` returned hard failures raw, and
+`publicCreateResult`/`publicTransitionResult`/`publicResidueResult`
+copied internal `*format.Error`/`classedError` values into the public
+`Cause` fields (`lifecycle_public.go:163/180/351/366/382/397/205/234/
+417`), so external consumers could not classify lifecycle failures
+through the exported `Error`; the same scan also found the exported
+`NewFeedName` returning a raw internal `*format.Error`
+(`feed_name.go:23`). The round-2 closing claim that no internal error
+type crosses the public boundary was scoped to the live-writer surface
+and missed the lifecycle facade; this entry supersedes it. The fix
+routes all nine lifecycle sites and `NewFeedName` through `publicError`
+(the same boundary rule as the live-writer surface). Validation at the
+fix HEAD: gofmt, vet, `go test ./...`, `go test -tags v4work ./...`,
+race/checkptr, the seven-target cross-build matrix, and the env-gated
+mixed live battery on both sides are green. Gate pending the
+five-reviewer round 4 at the fix HEAD.
+
 ## Requirements
 
 ### Purpose
