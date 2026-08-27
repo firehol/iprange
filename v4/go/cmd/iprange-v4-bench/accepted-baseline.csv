@@ -1,5 +1,25 @@
 # accepted update-ipsets release baseline for iprange-v4 (Go).
 # Records: scenario,size,aux,accepted_median_ns,ci_limit_ns.
-# Populated by the matched Rust/Go release run (SOW-0027 milestone 4);
-# empty means every case reports status untracked.
+# Populated from the accepted Go run of 2026-08-27 at SOW-0027
+# milestone-4 fix HEAD (linux/amd64, go1.26.4, i9-12900K, under nice);
+# limits are 2x the accepted p50 plus 100 ms runner noise (500 ms for
+# the complete workflow). Disaster limits, not performance targets.
 scenario,size,aux,accepted_median_ns,ci_limit_ns
+direct-replace,1000000,0,1481060116,3062120232
+last-seen-refresh,1000000,0,2353938731,4807877462
+feed-first-ascending,1000000,0,145331464,390662928
+feed-first-random,1000000,0,1524670178,3149340356
+live-direct-lookup,100000,0,256660176,613320352
+live-direct-random-lookup,100000,0,305300590,710601180
+live-direct-scan,100000,0,24006346,148012692
+live-membership-lookup,100000,421,382456638,864913276
+live-membership-random-lookup,100000,421,437350117,974700234
+structured-build-random,1000000,421,4683922340,9467844680
+live-structured-scalar-random-lookup,100000,421,5233762266,10567524532
+live-structured-threat-random-lookup,100000,421,5927448304,11954896608
+live-structured-scalar-scan,100000,421,157438773,414877546
+live-feed-scan,100000,421,25635096,151270192
+membership-cardinalities,1000000,64,48512383,197024766
+live-validation,1000000,0,25479301,150958602
+live-membership-validation,1000000,421,30592419,161184838
+update-ipsets-workflow,1000000,7,5802977017,12105954034

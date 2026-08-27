@@ -768,40 +768,72 @@ tooling note: IPRANGE_CPU_PROFILE now writes one pprof file per
 process (PID-suffixed), so the bench case process and its worker each
 produce their own profile instead of clobbering one path.
 
-Accepted-baseline population runs (2026-08-27, linux/amd64, release Go
-build, under `nice`): the Go `ci` gate compares 18 cases (1 warmup +
-3 samples each, up to 1M records) against the embedded
-accepted-baseline.csv; populating the baseline runs the same 18 cases
-with 1 warmup + 5 samples via the `sample` mode and takes the median
-per case. The 1.5-2 hour estimate from the pre-fix binary is
-obsolete: at the fix HEAD the baseline is dominated by the measured
-work itself (1M cases) and by the per-case builds, expected
-15-35 wall-minutes single-core (the earlier observed "hang" was the
-external-poll ping-pong above). The baseline re-runs at the fix HEAD;
-the accepted-baseline.csv is populated from the p50 medians only
-after all 18 rows complete. The
+Accepted-baseline population completed at the fix HEAD (2026-08-27,
+linux/amd64, release Go build, under `nice`): all 18 CI cases (1
+warmup + 5 samples each) completed in about 12 wall-minutes
+single-core (the pre-fix binary needed 50+ minutes to reach case
+12/18 and was projected at 1.5-2 hours). The accepted-baseline.csv in
+v4/go/cmd/iprange-v4-bench/ is populated from the p50 medians with
+the disaster limits (2x p50 + 100 ms runner noise, 500 ms for the
+complete workflow). The `ci` gate re-run at the fix HEAD (1 warmup +
+3 samples, enforce mode) passes 18/18 within-limit; the observed CI
+median stays within 0.98-1.09 of the accepted p50 on every case.
+Validation medians at the fix HEAD: live-validation 1M = 25.5 ms and
+live-membership-validation 1M = 30.6 ms (Rust 10.2/15.4 ms), so the
+CI gate additionally proves the nil-token fix holds under gate
+conditions.
 
-Accepted-baseline population runs (2026-08-27, linux/amd64, release Go
-build, under `nice`): the Go `ci` gate compares 18 cases (1 warmup +
-3 samples each, up to 1M records) against the embedded
-accepted-baseline.csv; populating the baseline runs the same 18 cases
-with 1 warmup + 5 samples via the `sample` mode and takes the median
-per case. The earlier 5-10 wall-minute estimate was wrong: measured
-wall cost is about 1.5-2 hours single-core (18 cases x 6
-subprocess-isolated runs; the three 100k structured lookup cases take
-about 3-4 minutes per run and the 1M validation cases about 2-4
-minutes per run, all dominated by the worker-mediated validation of
-the output database after the measured region). The observed
-"structured-validation hang" is slow-but-alive work, not a deadlock:
-both processes advance CPU time while alternately sleeping in the
-1 ms control poll; each case run eventually completes (verified 12/18
-cases completing without intervention). The CI gate itself (1 warmup +
-3 samples) costs about two-thirds of the baseline run. Progress and
-per-case rows are recorded in /tmp/bench-run3/baseline-samples.csv
-(scratch, not committed); the accepted-baseline.csv is populated from
-the p50 medians only after all 18 rows complete. The
-rust-v4-local-20260811 reference remains the baseline ID until the Go
-numbers are accepted on this host.
+Final milestone-4 evidence at the fix HEAD (2026-08-27, linux/amd64,
+release builds, under `nice`): re-run after the nil-token fix. Smoke
+matrix: 55/55 semantic facts identical to the pre-fix run (work
+units, emitted units, range records, feeds, logical file bytes), with
+the validation rows now at 4-5 ms at the 4k scale (pre-fix these
+rows carried the external-poll ping-pong). Scale validation rows:
+live-validation 1M 28.8 ms, live-membership-validation 1M 29.8 ms,
+immutable-validation 1M 29.7 ms (Rust 10.2/15.4 ms for the live
+rows), i.e. the validation family went from 445-640x to 1.9-2.8x.
+The remaining material Go/Rust p50 deltas at scale, with the pprof
+attribution (IPRANGE_CPU_PROFILE over the bench `case` child, one
+profile per process):
+- live direct/membership lookups 1.9-4.0x and structured random
+  lookups 1.25-2.0x: fixed-tree probe cost. The shared
+  `internal/tree.lowerBoundBy` calls a keyAt closure per probe with
+  bounds-checked codec cell decodes (profiles: lookupRange4 +
+  lowerBoundBy + SlottedPage.Record); Rust's generic binary search
+  inlines the comparator. The lookup path stays allocation-free (0-1
+  allocs, 0-16 bytes, vs Rust 0).
+- membership-import 1M 8.8x (Go 496 ms vs Rust 46.6 ms): the same
+  lowerBoundBy probes dominate the profiles, and the Go write seam
+  allocates per record: 3,001,943 alloc calls / 1,536 MB vs Rust
+  20 calls / 474 B (the per-range Mutate closures in the import
+  loop; the import cache itself is draft-page backed like Rust).
+- nested-overwrite 1M 8.9x, feed-replace 1M 6.8x,
+  update-ipsets-workflow 1M 5.4x: profiles show the same two causes
+  (lowerBoundBy/InsertIfLocalGap probes + per-operation mutation
+  seam); the workflow additionally runs the full user pipeline
+  (feeds, imports, publishes) so the delta is the sum of the same
+  unit costs.
+The single recurring hot symbol across all five profiled deltas is
+the probe path of the one shared fixed-tree search (lowerBoundBy +
+its generic comparator closure); the second is the per-record write
+seam allocation. Both are explained designed costs of the Go
+abstraction layer (one shared tree codec over four record layouts;
+one lock-scoped Mutate per record like the Rust mutable brace, but
+a closure escape per call). They are tracked as follow-up
+optimizations below, not silent debt: the reader hot paths ship at
+1.25-4.0x with zero allocations, and the write paths ship
+subsecond-to-low-seconds at the 1M scale.
+Accepted CI gate record: final gate run at the fix HEAD with the
+accepted Go baseline identity (baselineID go-v4-local-20260827)
+re-verifies 18/18 within-limit.
+
+Follow-up (tracked, not deferred): (1) specialize the fixed-tree
+search per record codec (inline key comparators, no per-probe
+closure) - the old external-review recommendation that now has
+profile evidence across every remaining delta; (2) batch the
+membership-import mutation seam to cut the per-record closure
+allocations; both are sized as a later SOW slice after milestone 4
+acceptance, so the accepted benchmark evidence stays valid.
 
 ## Requirements
 
