@@ -197,8 +197,12 @@ func (idCodec) LeafType() format.PageType   { return format.PageTypeMembershipID
 func (idCodec) Aux() uint32                 { return 0 }
 func (idCodec) KeySize() int                { return 4 }
 func (idCodec) LeafSize() int               { return 0 }
-func (idCodec) MaxBranchCell() int          { return membershipIDBranchSize }
-func (idCodec) MaxLeafCell() int            { return membershipMaxIDRecord }
+
+// PrefixKeyProbe opts the codec into the inline raw u32 probe
+// (fixed 8-byte branch cells; see tree/page.go comparePrefixKey).
+func (idCodec) PrefixKeyProbe()    {}
+func (idCodec) MaxBranchCell() int { return membershipIDBranchSize }
+func (idCodec) MaxLeafCell() int   { return membershipMaxIDRecord }
 
 func (idCodec) LeafRecordBounds() (int, int) {
 	return membershipIDBase, membershipMaxIDRecord

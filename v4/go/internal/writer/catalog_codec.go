@@ -167,8 +167,12 @@ func (indexCodec) LeafType() format.PageType   { return format.PageTypeCatalogIn
 func (indexCodec) Aux() uint32                 { return 0 }
 func (indexCodec) KeySize() int                { return 4 }
 func (indexCodec) LeafSize() int               { return 0 }
-func (indexCodec) MaxBranchCell() int          { return catalogIndexBranch }
-func (indexCodec) MaxLeafCell() int            { return catalogMaxRecord }
+
+// PrefixKeyProbe opts the codec into the inline raw u32 probe
+// (fixed 8-byte branch cells; see tree/page.go comparePrefixKey).
+func (indexCodec) PrefixKeyProbe()    {}
+func (indexCodec) MaxBranchCell() int { return catalogIndexBranch }
+func (indexCodec) MaxLeafCell() int   { return catalogMaxRecord }
 
 func (indexCodec) LeafRecordBounds() (int, int) {
 	return catalogMinRecord, catalogMaxRecord
