@@ -11,7 +11,6 @@ package iprangedb
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -286,10 +285,10 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
 			if in.emptyMapCreate {
-				if err := edit.AddEmptyMapFeedRange(tree.KeyOfU32(r.From), tree.KeyOfU32(r.To), in.member, &in.coverage); err != nil {
+				if err := edit.AddEmptyMapFeedRange4(uint32(r.From), uint32(r.To), in.member, &in.coverage); err != nil {
 					return in.w.abortAfter(err)
 				}
-			} else if err := edit.AddFeedCoverage(tree.KeyOfU32(r.From), tree.KeyOfU32(r.To), &in.coverage); err != nil {
+			} else if err := edit.AddFeedCoverage4(uint32(r.From), uint32(r.To), &in.coverage); err != nil {
 				return in.w.abortAfter(err)
 			}
 			work.RangeConsumed(1)
@@ -342,13 +341,11 @@ func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 			if r.FromHi > r.ToHi || (r.FromHi == r.ToHi && r.FromLo > r.ToLo) {
 				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
-			from := tree.KeyOfU128(r.FromHi, r.FromLo)
-			to := tree.KeyOfU128(r.ToHi, r.ToLo)
 			if in.emptyMapCreate {
-				if err := edit.AddEmptyMapFeedRange(from, to, in.member, &in.coverage); err != nil {
+				if err := edit.AddEmptyMapFeedRange6(r.FromHi, r.FromLo, r.ToHi, r.ToLo, in.member, &in.coverage); err != nil {
 					return in.w.abortAfter(err)
 				}
-			} else if err := edit.AddFeedCoverage(from, to, &in.coverage); err != nil {
+			} else if err := edit.AddFeedCoverage6(r.FromHi, r.FromLo, r.ToHi, r.ToLo, &in.coverage); err != nil {
 				return in.w.abortAfter(err)
 			}
 			work.RangeConsumed(1)
@@ -752,7 +749,10 @@ func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 		return in.finishEmptyMapCreate()
 	}
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
-		return edit.FinishFeedCoverage(&in.coverage)
+		if in.w.coreOf().BaseInfo().AddressFamily == format.AddressFamilyIPv4 {
+			return edit.FinishFeedCoverage4(&in.coverage)
+		}
+		return edit.FinishFeedCoverage6(&in.coverage)
 	}); err != nil {
 		return finishedWorkflow{}, publicError(err)
 	}
@@ -795,7 +795,11 @@ func (in *exactFeedWorkflow) finishEmptyMapCreate() (finishedWorkflow, error) {
 	var hasOrdered bool
 	err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
-		addresses, hasOrdered, err = edit.FinishEmptyMapFeedRanges(in.member, &in.coverage)
+		if in.w.coreOf().BaseInfo().AddressFamily == format.AddressFamilyIPv4 {
+			addresses, hasOrdered, err = edit.FinishEmptyMapFeedRanges4(in.member, &in.coverage)
+		} else {
+			addresses, hasOrdered, err = edit.FinishEmptyMapFeedRanges6(in.member, &in.coverage)
+		}
 		return publicError(err)
 	})
 	if err != nil {

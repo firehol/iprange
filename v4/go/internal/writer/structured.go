@@ -8,7 +8,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // structureReferenceBatch is the fixed-memory recurring-reference table of
@@ -33,11 +32,7 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V4(from, to uint32, value format.
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.KeyOfU32(from),
-			to:    tree.KeyOfU32(to),
-			value: structure,
-		}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: structure}); err != nil {
 			return err
 		}
 		return b.addStructureReference(structure)
@@ -65,11 +60,7 @@ func pushNetworkEnrichmentV1WordsV4[W membershipWords](b *OutputBuilder, from, t
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.KeyOfU32(from),
-			to:    tree.KeyOfU32(to),
-			value: structure,
-		}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: structure}); err != nil {
 			return err
 		}
 		return b.addStructureReference(structure)
@@ -88,11 +79,7 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V6(fromHi, fromLo, toHi, toLo uin
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.KeyOfU128(fromHi, fromLo),
-			to:    tree.KeyOfU128(toHi, toLo),
-			value: structure,
-		}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: structure}); err != nil {
 			return err
 		}
 		return b.addStructureReference(structure)
@@ -117,11 +104,7 @@ func pushNetworkEnrichmentV1WordsV6[W membershipWords](b *OutputBuilder, fromHi,
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.KeyOfU128(fromHi, fromLo),
-			to:    tree.KeyOfU128(toHi, toLo),
-			value: structure,
-		}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: structure}); err != nil {
 			return err
 		}
 		return b.addStructureReference(structure)

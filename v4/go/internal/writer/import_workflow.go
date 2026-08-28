@@ -7,10 +7,6 @@
 
 package writer
 
-import (
-	"github.com/firehol/iprange/v4/go/internal/tree"
-)
-
 // BeginImportMerge opens the import merge over the committed destination
 // generation (Rust WriterEdit::begin_import_merge).
 func (e *WriterEdit) BeginImportMerge(check func() error) (*ImportMerge, error) {
@@ -61,15 +57,26 @@ func (e *WriterEdit) ReleaseImportCache(cache *ImportCache, check func() error) 
 	return cache.release(e.store, check)
 }
 
-// PushImportRange streams one translated membership interval into the
-// import merge (Rust WriterEdit::push_import_range over
-// TranslatedMembership).
-func (e *WriterEdit) PushImportRange(merge *ImportMerge, from, to tree.Key, id, words uint32, check func() error) error {
-	return merge.push(e.store, from, to, translatedMembership{id: id, words: words}, check)
+// PushImportRange4 streams one translated IPv4 membership interval
+// into the import merge (Rust WriterEdit::push_import_range over
+// TranslatedMembership and Ipv4Key).
+func (e *WriterEdit) PushImportRange4(merge *ImportMerge, from, to uint32, id, words uint32, check func() error) error {
+	return merge.push4(e.store, key4(from), key4(to), translatedMembership{id: id, words: words}, check)
 }
 
-// FinishImportMerge completes the import merge and returns the exact
-// before/after classification (Rust WriterEdit::finish_import_merge).
-func (e *WriterEdit) FinishImportMerge(merge *ImportMerge, check func() error) (Comparison, error) {
-	return merge.finish(e.store, check)
+// PushImportRange6 is the IPv6 form of PushImportRange4.
+func (e *WriterEdit) PushImportRange6(merge *ImportMerge, fromHi, fromLo, toHi, toLo uint64, id, words uint32, check func() error) error {
+	return merge.push6(e.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, translatedMembership{id: id, words: words}, check)
+}
+
+// FinishImportMerge4 completes the IPv4 import merge and returns the
+// exact before/after classification (Rust
+// WriterEdit::finish_import_merge over Ipv4Key).
+func (e *WriterEdit) FinishImportMerge4(merge *ImportMerge, check func() error) (Comparison, error) {
+	return merge.finish4(e.store, check)
+}
+
+// FinishImportMerge6 is the IPv6 form of FinishImportMerge4.
+func (e *WriterEdit) FinishImportMerge6(merge *ImportMerge, check func() error) (Comparison, error) {
+	return merge.finish6(e.store, check)
 }

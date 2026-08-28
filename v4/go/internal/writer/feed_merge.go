@@ -9,7 +9,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // FeedMerge is the per-feed outcome of one coverage merge (Rust
@@ -32,19 +31,25 @@ func (s *DraftStore) beginEmptyMapFeed() error {
 	return nil
 }
 
-// addEmptyMapFeedRange pushes one constant member-valued range into the
-// private draft tree (Rust DraftStore::add_empty_map_feed_range).
-func (s *DraftStore) addEmptyMapFeedRange(from, to tree.Key, member MembershipHandle, input *UnionInput) error {
+// addEmptyMapFeedRange4 pushes one constant member-valued IPv4 range
+// into the private draft tree (Rust DraftStore::add_empty_map_feed_range).
+func (s *DraftStore) addEmptyMapFeedRange4(from, to key4, member MembershipHandle, input *unionInput[key4]) error {
 	memberID, _ := member.stored()
-	return s.addPrivateConstantRange(from, to, memberID, input)
+	return s.addPrivateConstantRange4(from, to, memberID, input)
 }
 
-// finishEmptyMapFeedRanges seals the constant ranges, accounts the
+// addEmptyMapFeedRange6 is the IPv6 form of addEmptyMapFeedRange4.
+func (s *DraftStore) addEmptyMapFeedRange6(from, to key6, member MembershipHandle, input *unionInput[key6]) error {
+	memberID, _ := member.stored()
+	return s.addPrivateConstantRange6(from, to, memberID, input)
+}
+
+// finishEmptyMapFeedRanges4 seals the constant IPv4 ranges, accounts the
 // member refcount for every record of the sealed tree, and returns the
 // ordered-prefix address count when one was built (Rust
 // DraftStore::finish_empty_map_feed_ranges).
-func (s *DraftStore) finishEmptyMapFeedRanges(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
-	if err := s.finishPrivateConstantRanges(input); err != nil {
+func (s *DraftStore) finishEmptyMapFeedRanges4(member MembershipHandle, input *unionInput[key4]) (format.Cardinality129, bool, error) {
+	if err := s.finishPrivateConstantRanges4(input); err != nil {
 		return format.Cardinality129{}, false, err
 	}
 	ordered, hasOrdered := input.orderedAddresses()
@@ -61,16 +66,32 @@ func (s *DraftStore) finishEmptyMapFeedRanges(member MembershipHandle, input *Un
 	return ordered, hasOrdered, nil
 }
 
-// addFeedCoverage pushes one value-1 range into the private workflow
-// coverage tree, untracked (Rust DraftStore::add_feed_coverage: the
-// coverage tree is the input of the upcoming merge, never part of the
-// published range tree).
-func (s *DraftStore) addFeedCoverage(from, to tree.Key, input *UnionInput) error {
-	family, err := s.rangeFamily()
-	if err != nil {
-		return err
+// finishEmptyMapFeedRanges6 is the IPv6 form of
+// finishEmptyMapFeedRanges4.
+func (s *DraftStore) finishEmptyMapFeedRanges6(member MembershipHandle, input *unionInput[key6]) (format.Cardinality129, bool, error) {
+	if err := s.finishPrivateConstantRanges6(input); err != nil {
+		return format.Cardinality129{}, false, err
 	}
-	ctx := s.beginRangeEdit(family, s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
+	ordered, hasOrdered := input.orderedAddresses()
+	value, _ := member.stored()
+	count := int64(s.draft.meta.RangeRecordCount)
+	if count < 0 {
+		return format.Cardinality129{}, false, overflow("membership range refcount")
+	}
+	if count != 0 {
+		if err := s.trackMembershipRefcount(value, count); err != nil {
+			return format.Cardinality129{}, false, err
+		}
+	}
+	return ordered, hasOrdered, nil
+}
+
+// addFeedCoverage4 pushes one value-1 IPv4 range into the private
+// workflow coverage tree, untracked (Rust DraftStore::add_feed_coverage:
+// the coverage tree is the input of the upcoming merge, never part of
+// the published range tree).
+func (s *DraftStore) addFeedCoverage4(from, to key4, input *unionInput[key4]) error {
+	ctx := s.beginRangeEdit4(s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
 	if _, err := pushPrivateUntracked(ctx, from, to, 1, input); err != nil {
 		return err
 	}
@@ -78,14 +99,30 @@ func (s *DraftStore) addFeedCoverage(from, to tree.Key, input *UnionInput) error
 	return nil
 }
 
-// finishFeedCoverage seals the pending coverage input (Rust
-// DraftStore::finish_feed_coverage).
-func (s *DraftStore) finishFeedCoverage(input *UnionInput) error {
-	family, err := s.rangeFamily()
-	if err != nil {
+// addFeedCoverage6 is the IPv6 form of addFeedCoverage4.
+func (s *DraftStore) addFeedCoverage6(from, to key6, input *unionInput[key6]) error {
+	ctx := s.beginRangeEdit6(s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
+	if _, err := pushPrivateUntracked(ctx, from, to, 1, input); err != nil {
 		return err
 	}
-	ctx := s.beginRangeEdit(family, s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
+	s.commitRangeEdit(&s.draft.workflowRangeRoot, &s.draft.workflowRangeCount, false)
+	return nil
+}
+
+// finishFeedCoverage4 seals the pending IPv4 coverage input (Rust
+// DraftStore::finish_feed_coverage).
+func (s *DraftStore) finishFeedCoverage4(input *unionInput[key4]) error {
+	ctx := s.beginRangeEdit4(s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
+	if _, err := finishInputUntracked(ctx, input); err != nil {
+		return err
+	}
+	s.commitRangeEdit(&s.draft.workflowRangeRoot, &s.draft.workflowRangeCount, false)
+	return nil
+}
+
+// finishFeedCoverage6 is the IPv6 form of finishFeedCoverage4.
+func (s *DraftStore) finishFeedCoverage6(input *unionInput[key6]) error {
+	ctx := s.beginRangeEdit6(s.draft.workflowRangeRoot, s.draft.workflowRangeCount)
 	if _, err := finishInputUntracked(ctx, input); err != nil {
 		return err
 	}
@@ -109,17 +146,42 @@ func (s *DraftStore) mergeFeed(base format.Meta, member MembershipHandle, create
 // meta with the workflow range roots substituted, and the policy output
 // is the scanned before/after Comparison.
 func (s *DraftStore) mergeFeedFamily(base format.Meta, member MembershipHandle, check func() error) (FeedMerge, error) {
+	if base.AddressFamily == format.AddressFamilyIPv4 {
+		return s.mergeFeedCoverage4(base, member, check)
+	}
+	return s.mergeFeedCoverage6(base, member, check)
+}
+
+// mergeFeedCoverage4 runs one IPv4 coverage merge (Rust
+// merge_feed_family over Ipv4Key).
+func (s *DraftStore) mergeFeedCoverage4(base format.Meta, member MembershipHandle, check func() error) (FeedMerge, error) {
 	coverageMeta := s.draft.meta
 	coverageMeta.RangeRoot = s.draft.workflowRangeRoot
 	coverageMeta.RangeRecordCount = s.draft.workflowRangeCount
-	var codec rangeFamily
-	if base.AddressFamily == format.AddressFamilyIPv4 {
-		codec = rangeCodec4{}
-	} else {
-		codec = rangeCodec6{}
+	var codec rangeFamily[key4] = rangeCodec4{}
+	policy := newFeedPolicy(member, base.AddressFamily, rangeCodec4{})
+	inputIntervals, finished, err := mergeCoverage[ScannedComparison, key4](s, coverageMeta, base, codec, &policy, check, "feed input intervals")
+	if err != nil {
+		return FeedMerge{}, err
 	}
-	policy := newFeedPolicy(member, base.AddressFamily)
-	inputIntervals, finished, err := mergeCoverage[ScannedComparison](s, coverageMeta, base, codec, &policy, check, "feed input intervals")
+	s.draft.workflowRangeRoot = 0
+	s.draft.workflowRangeCount = 0
+	return FeedMerge{
+		InputIntervals: inputIntervals,
+		InputAddresses: finished.Comparison.After,
+		Comparison:     finished,
+	}, nil
+}
+
+// mergeFeedCoverage6 runs one IPv6 coverage merge (Rust
+// merge_feed_family over Ipv6Key).
+func (s *DraftStore) mergeFeedCoverage6(base format.Meta, member MembershipHandle, check func() error) (FeedMerge, error) {
+	coverageMeta := s.draft.meta
+	coverageMeta.RangeRoot = s.draft.workflowRangeRoot
+	coverageMeta.RangeRecordCount = s.draft.workflowRangeCount
+	var codec rangeFamily[key6] = rangeCodec6{}
+	policy := newFeedPolicy(member, base.AddressFamily, rangeCodec6{})
+	inputIntervals, finished, err := mergeCoverage[ScannedComparison, key6](s, coverageMeta, base, codec, &policy, check, "feed input intervals")
 	if err != nil {
 		return FeedMerge{}, err
 	}
@@ -150,26 +212,26 @@ type cachedMembership struct {
 // feedPolicy is the per-feed merge policy (Rust FeedPolicy): the member
 // bitmap is unioned into covered segments and differenced out of
 // uncovered segments, with one cache slot and the running projection.
-type feedPolicy struct {
+type feedPolicy[K any] struct {
 	member     MembershipHandle
 	cached     cachedMembership
 	hasCached  bool
-	projection feedProjection
+	projection feedProjection[K]
 	family     uint8
 }
 
 // newFeedPolicy starts one feed policy over the member handle and the
 // merge address family (Rust FeedPolicy::new; the projection fixes its
 // family at plan time like HistoryPolicy<K>).
-func newFeedPolicy(member MembershipHandle, family uint8) feedPolicy {
-	return feedPolicy{member: member, family: family, projection: feedProjection{family: family}}
+func newFeedPolicy[K any](member MembershipHandle, family uint8, codec rangeFamily[K]) feedPolicy[K] {
+	return feedPolicy[K]{member: member, family: family, projection: feedProjection[K]{family: family, codec: codec}}
 }
 
 // transform returns the merged membership of one segment (Rust
 // FeedPolicy::transform): no old bitmap adopts the member when covered
 // and stays absent otherwise; an old bitmap combines with the member
 // through the cached union/difference.
-func (p *feedPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
+func (p *feedPolicy[K]) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	covered := incoming.present
 	memberID, memberWords := p.member.stored()
 	if !old.present {
@@ -197,7 +259,7 @@ func (p *feedPolicy) transform(store *DraftStore, old optionalValue, incoming in
 // observe projects one transformed segment into the before/after counts
 // (Rust FeedPolicy::observe: the before classification compares the new
 // bitmap with the old one around the coverage).
-func (p *feedPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
+func (p *feedPolicy[K]) observe(from, to K, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
 	after := incoming.present
 	var before bool
 	if after {
@@ -210,40 +272,41 @@ func (p *feedPolicy) observe(from, to tree.Key, old optionalValue, incoming inco
 
 // finish balances and returns the projection (Rust FeedPolicy::finish
 // over Projection::finish).
-func (p *feedPolicy) finish() (ScannedComparison, error) {
+func (p *feedPolicy[K]) finish() (ScannedComparison, error) {
 	return p.projection.finish()
 }
 
 // preserveWithoutInput is false like every Rust policy except the
 // explicit preserving ones; the feed policies always consume their
 // coverage input (Rust Policy::PRESERVE_WITHOUT_INPUT default).
-func (p *feedPolicy) preserveWithoutInput() bool { return false }
+func (p *feedPolicy[K]) preserveWithoutInput() bool { return false }
 
 // feedProjection is the scanned before/after projection of one feed
 // policy (Rust Projection<K>): the exact Comparison counts plus the
 // interval counters, with the adjacency state embedded by value so one
 // observe never allocates.
-type feedProjection struct {
+type feedProjection[K any] struct {
 	result          Comparison
 	beforeIntervals uint64
 	afterIntervals  uint64
-	lastTo          tree.Key
+	lastTo          K
 	hasLastTo       bool
 	lastBefore      bool
 	lastAfter       bool
 	family          uint8
+	codec           rangeFamily[K]
 }
 
 // observe folds one transformed segment into the projection (Rust
 // Projection::observe): adjacent same-class segments share one interval
 // count, and every address count is exact.
-func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
+func (p *feedProjection[K]) observe(from, to K, before, after bool) error {
 	adjacent := false
 	if p.hasLastTo {
-		next, ok := nextKey(p.family, p.lastTo)
-		adjacent = ok && next.Equal(from)
+		next, ok := p.codec.Next(p.lastTo)
+		adjacent = ok && p.codec.Equal(next, from)
 	}
-	count, err := familyInclusiveCardinality(p.family, from, to)
+	count, err := familyInclusiveCardinalityOf(p.codec, from, to)
 	if err != nil {
 		return err
 	}
@@ -300,7 +363,7 @@ func (p *feedProjection) observe(from, to tree.Key, before, after bool) error {
 // unchanged/removed and unchanged/added sums, the changed class must be
 // empty, and the interval counter must agree with the address count
 // emptiness.
-func (p *feedProjection) finish() (ScannedComparison, error) {
+func (p *feedProjection[K]) finish() (ScannedComparison, error) {
 	unchangedRemoved, err := p.result.Unchanged.Add(p.result.Removed)
 	if err != nil {
 		return ScannedComparison{}, overflow("ordered merge address count")

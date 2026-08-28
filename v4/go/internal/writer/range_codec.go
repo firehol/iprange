@@ -1,5 +1,8 @@
 // Per-family range codecs over the generic tree core (Rust range_tree.rs
-// RangeCodec + key.rs IpKey checked arithmetic).
+// RangeCodec + key.rs IpKey checked arithmetic). The decoded records are
+// family-typed like Rust Record<K>: an IPv4 record is 12 bytes and an
+// IPv6 record 36 bytes, so the mutation machinery never materializes the
+// general tree key.
 
 package writer
 
@@ -8,26 +11,44 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// rangeRecord is one decoded range leaf record in generic tree-key space
+// key4 is the IPv4 range key: one numeric address (Rust Ipv4Key). The
+// key lives in the value only; wire cells stay little-endian.
+type key4 uint32
+
+// key6 is the IPv6 range key: the numeric high and low limbs (Rust
+// Ipv6Key, high limb most significant).
+type key6 struct {
+	hi uint64
+	lo uint64
+}
+
+// rangeRecord is one decoded range leaf record in the family key space
 // (Rust range_tree::Record<K>).
-type rangeRecord struct {
-	from  tree.Key
-	to    tree.Key
+type rangeRecord[K any] struct {
+	from  K
+	to    K
 	value uint32
 }
 
-// rangeFamily is one address-family range contract over the generic tree
-// key (Rust IpKey: width, record size, checked next/previous).
-type rangeFamily interface {
-	tree.Codec[rangeRecord]
+// rangeFamily is one address-family range contract over its typed key
+// (Rust IpKey: width, record size, checked next/previous, Ord).
+type rangeFamily[K any] interface {
+	tree.Codec[rangeRecord[K]]
+	// Less reports a < b in the family address space (Rust Ord).
+	Less(a, b K) bool
+	// Equal reports a == b (Rust PartialEq).
+	Equal(a, b K) bool
 	// Next returns key+1 in the family address space, when it exists.
-	Next(key tree.Key) (tree.Key, bool)
+	Next(key K) (K, bool)
 	// Previous returns key-1 in the family address space, when it exists.
-	Previous(key tree.Key) (tree.Key, bool)
+	Previous(key K) (K, bool)
+	// KeyOf converts one typed key to the tree comparison primitive
+	// (the canonical compare bytes) for the tree core entry points.
+	KeyOf(key K) tree.Key
 	// EncodeRecord writes one range record into output (record size bytes)
 	// (Rust RangeCodec::encode; the Go method takes an owned output buffer
 	// so no record write can ever target a mapped view).
-	EncodeRecord(r rangeRecord, output []byte) (int, error)
+	EncodeRecord(r rangeRecord[K], output []byte) (int, error)
 }
 
 // rangeCodec4 is the IPv4 range tree codec (Rust RangeCodec<Ipv4Key>).
@@ -60,17 +81,17 @@ func (rangeCodec4) CompareKey(cell []byte, _ uint16, target tree.Key) (int, erro
 	return cmpU32(format.U32(cell), target.U32()), nil
 }
 
-func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord, error) {
+func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord[key4], error) {
 	if len(cell) != format.RangeRecordV4Size {
-		return rangeRecord{}, corrupt("range leaf has the wrong record size")
+		return rangeRecord[key4]{}, corrupt("range leaf has the wrong record size")
 	}
 	r, err := format.DecodeRangeRecordV4(cell)
 	if err != nil {
-		return rangeRecord{}, corrupt("range leaf is invalid")
+		return rangeRecord[key4]{}, corrupt("range leaf is invalid")
 	}
-	return rangeRecord{
-		from:  tree.KeyOfU32(r.From),
-		to:    tree.KeyOfU32(r.To),
+	return rangeRecord[key4]{
+		from:  key4(r.From),
+		to:    key4(r.To),
 		value: r.Value,
 	}, nil
 }
@@ -79,24 +100,29 @@ func (rangeCodec4) WriteKey(key tree.Key, output []byte) {
 	format.PutU32(output, key.U32())
 }
 
-func (rangeCodec4) Next(key tree.Key) (tree.Key, bool) {
-	if key.U32() == 0xFFFFFFFF {
-		return tree.Key{}, false
+func (rangeCodec4) Less(a, b key4) bool  { return a < b }
+func (rangeCodec4) Equal(a, b key4) bool { return a == b }
+
+func (rangeCodec4) Next(key key4) (key4, bool) {
+	if key == key4(0xFFFFFFFF) {
+		return 0, false
 	}
-	return tree.KeyOfU32(key.U32() + 1), true
+	return key + 1, true
 }
 
-func (rangeCodec4) Previous(key tree.Key) (tree.Key, bool) {
-	if key.U32() == 0 {
-		return tree.Key{}, false
+func (rangeCodec4) Previous(key key4) (key4, bool) {
+	if key == 0 {
+		return 0, false
 	}
-	return tree.KeyOfU32(key.U32() - 1), true
+	return key - 1, true
 }
 
-func (rangeCodec4) EncodeRecord(r rangeRecord, output []byte) (int, error) {
+func (rangeCodec4) KeyOf(key key4) tree.Key { return tree.KeyOfU32(uint32(key)) }
+
+func (rangeCodec4) EncodeRecord(r rangeRecord[key4], output []byte) (int, error) {
 	if err := format.EncodeRangeRecordV4(format.RangeRecordV4{
-		From:  r.from.U32(),
-		To:    r.to.U32(),
+		From:  uint32(r.from),
+		To:    uint32(r.to),
 		Value: r.value,
 	}, output); err != nil {
 		return 0, err
@@ -136,17 +162,17 @@ func (rangeCodec6) CompareKey(cell []byte, _ uint16, target tree.Key) (int, erro
 	return cmpU128(hi, lo, thi, tlo), nil
 }
 
-func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord, error) {
+func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord[key6], error) {
 	if len(cell) != format.RangeRecordV6Size {
-		return rangeRecord{}, corrupt("range leaf has the wrong record size")
+		return rangeRecord[key6]{}, corrupt("range leaf has the wrong record size")
 	}
 	r, err := format.DecodeRangeRecordV6(cell)
 	if err != nil {
-		return rangeRecord{}, corrupt("range leaf is invalid")
+		return rangeRecord[key6]{}, corrupt("range leaf is invalid")
 	}
-	return rangeRecord{
-		from:  tree.KeyOfU128(r.FromHi, r.FromLo),
-		to:    tree.KeyOfU128(r.ToHi, r.ToLo),
+	return rangeRecord[key6]{
+		from:  key6{hi: r.FromHi, lo: r.FromLo},
+		to:    key6{hi: r.ToHi, lo: r.ToLo},
 		value: r.Value,
 	}, nil
 }
@@ -156,36 +182,41 @@ func (rangeCodec6) WriteKey(key tree.Key, output []byte) {
 	format.PutU128(output, hi, lo)
 }
 
-func (rangeCodec6) Next(key tree.Key) (tree.Key, bool) {
-	hi, lo := key.U128()
-	lo++
+func (rangeCodec6) Less(a, b key6) bool {
+	return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo)
+}
+func (rangeCodec6) Equal(a, b key6) bool { return a == b }
+
+func (rangeCodec6) Next(key key6) (key6, bool) {
+	lo := key.lo + 1
+	hi := key.hi
 	if lo == 0 {
 		hi++
 		if hi == 0 {
-			return tree.Key{}, false
+			return key6{}, false
 		}
 	}
-	return tree.KeyOfU128(hi, lo), true
+	return key6{hi: hi, lo: lo}, true
 }
 
-func (rangeCodec6) Previous(key tree.Key) (tree.Key, bool) {
-	hi, lo := key.U128()
-	if hi == 0 && lo == 0 {
-		return tree.Key{}, false
+func (rangeCodec6) Previous(key key6) (key6, bool) {
+	if key.hi == 0 && key.lo == 0 {
+		return key6{}, false
 	}
-	lo--
+	lo := key.lo - 1
+	hi := key.hi
 	if lo == ^uint64(0) {
 		hi--
 	}
-	return tree.KeyOfU128(hi, lo), true
+	return key6{hi: hi, lo: lo}, true
 }
 
-func (rangeCodec6) EncodeRecord(r rangeRecord, output []byte) (int, error) {
-	fromHi, fromLo := r.from.U128()
-	toHi, toLo := r.to.U128()
+func (rangeCodec6) KeyOf(key key6) tree.Key { return tree.KeyOfU128(key.hi, key.lo) }
+
+func (rangeCodec6) EncodeRecord(r rangeRecord[key6], output []byte) (int, error) {
 	if err := format.EncodeRangeRecordV6(format.RangeRecordV6{
-		FromHi: fromHi, FromLo: fromLo,
-		ToHi: toHi, ToLo: toLo,
+		FromHi: r.from.hi, FromLo: r.from.lo,
+		ToHi: r.to.hi, ToLo: r.to.lo,
 		Value: r.value,
 	}, output); err != nil {
 		return 0, err

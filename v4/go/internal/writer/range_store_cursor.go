@@ -71,9 +71,9 @@ func (s selectedStore) CopyPage(source, destination uint32) ([]byte, []byte, uin
 
 // rangeCursor is one forward cursor over a base generation range tree
 // through the draft mapping (Rust Cursor<K> with SelectedStore).
-type rangeCursor struct {
-	cursor *tree.ForwardCursor[rangeRecord]
-	family uint8
+type rangeCursor[K any] struct {
+	cursor *tree.ForwardCursor[rangeRecord[K]]
+	family rangeFamily[K]
 }
 
 // newRangeCursor opens the forward cursor over the source range tree
@@ -82,10 +82,7 @@ type rangeCursor struct {
 // consuming cursor reads a draft-private tree directly and proves every
 // page was born in the draft transaction (Rust release_private), which
 // the coverage merge of the feed workflows uses.
-func newRangeCursor(store *DraftStore, base format.Meta, consume bool) (*rangeCursor, error) {
-	if base.AddressFamily != format.AddressFamilyIPv4 && base.AddressFamily != format.AddressFamilyIPv6 {
-		return nil, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "stored range cursor has the wrong address family"}
-	}
+func newRangeCursor[K any](store *DraftStore, base format.Meta, codec rangeFamily[K], consume bool) (*rangeCursor[K], error) {
 	var source tree.ForwardStore
 	if consume {
 		if base.TxnID != store.draft.meta.TxnID || base.PageCount != store.draft.meta.PageCount {
@@ -95,28 +92,22 @@ func newRangeCursor(store *DraftStore, base format.Meta, consume bool) (*rangeCu
 	} else {
 		source = selectedStore{store: store, meta: base}
 	}
-	var codec tree.Codec[rangeRecord]
-	if base.AddressFamily == format.AddressFamilyIPv4 {
-		codec = rangeCodec4{}
-	} else {
-		codec = rangeCodec6{}
-	}
-	cursor, err := tree.NewForwardCursor[rangeRecord](codec, source, base.RangeRoot, consume)
+	cursor, err := tree.NewForwardCursor[rangeRecord[K]](codec, source, base.RangeRoot, consume)
 	if err != nil {
 		return nil, err
 	}
-	return &rangeCursor{cursor: cursor, family: base.AddressFamily}, nil
+	return &rangeCursor[K]{cursor: cursor, family: codec}, nil
 }
 
 // next returns the next range record in ascending key order, or ok=false
 // at the end (Rust Cursor::next + RangeItem; one record by value).
-func (c *rangeCursor) next() (record rangeRecord, ok bool, err error) {
+func (c *rangeCursor[K]) next() (record rangeRecord[K], ok bool, err error) {
 	record, ok, err = c.cursor.Next()
 	if err != nil {
-		return rangeRecord{}, false, err
+		return rangeRecord[K]{}, false, err
 	}
 	if !ok {
-		return rangeRecord{}, false, nil
+		return rangeRecord[K]{}, false, nil
 	}
 	work.RangeConsumed(1)
 	return record, true, nil

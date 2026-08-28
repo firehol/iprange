@@ -10,7 +10,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // HistoryProjection is one running projection over the open membership
@@ -22,9 +21,10 @@ import (
 // live, so one instance serves the whole projection without per-record
 // allocation (Rust DraftStore is one handle per projection).
 type HistoryProjection struct {
-	core  *Core
-	store *DraftStore
-	merge *historyMerge
+	core   *Core
+	store  *DraftStore
+	merge4 *historyMerge[key4]
+	merge6 *historyMerge[key6]
 }
 
 // BeginHistoryProjection prepares the destination feeds and starts the
@@ -45,11 +45,11 @@ func (c *Core) BeginHistoryProjection(windows []HistoryWindow, check func() erro
 	if err != nil {
 		return nil, err
 	}
-	merge, err := plan.begin(store, c.base.Meta, check)
+	merge4, merge6, err := plan.begin(store, c.base.Meta, check)
 	if err != nil {
 		return nil, err
 	}
-	return &HistoryProjection{core: c, store: store, merge: merge}, nil
+	return &HistoryProjection{core: c, store: store, merge4: merge4, merge6: merge6}, nil
 }
 
 // Push4 feeds one inclusive IPv4 source range into the projection merge
@@ -62,7 +62,7 @@ func (p *HistoryProjection) Push4(from, to uint32, lastSeen uint32, check func()
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge.push(p.store, tree.KeyOfU32(from), tree.KeyOfU32(to), lastSeen, check)
+	return p.merge4.push(p.store, key4(from), key4(to), lastSeen, check)
 }
 
 // Push6 feeds one inclusive IPv6 source range into the projection merge
@@ -75,7 +75,7 @@ func (p *HistoryProjection) Push6(fromHi, fromLo, toHi, toLo uint64, lastSeen ui
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge.push(p.store, tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), lastSeen, check)
+	return p.merge6.push(p.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, lastSeen, check)
 }
 
 // Finish ends the projection merge and assembles the projection report
@@ -89,5 +89,8 @@ func (p *HistoryProjection) Finish(sourceRangeCount uint64, sourceAddresses form
 	if p.core.draft == nil {
 		return nil, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge.finish(p.store, check, sourceRangeCount, sourceAddresses)
+	if p.merge4 != nil {
+		return p.merge4.finish(p.store, check, sourceRangeCount, sourceAddresses)
+	}
+	return p.merge6.finish(p.store, check, sourceRangeCount, sourceAddresses)
 }

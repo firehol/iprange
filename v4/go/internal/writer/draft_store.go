@@ -72,15 +72,16 @@ type DraftStore struct {
 	// field instead of allocating per combine; the scratch is only live
 	// for one nested combine at a time.
 	combineScratch combinedWords
-	// rangeCtx is the mutable range-tree state of one draft operation
-	// (Rust range_mutation function parameters: store, root,
-	// record_count). The range context carries interface fields whose
-	// method calls escape a stack context, so the draft owns one
-	// context and every entry point resets it before the operation;
-	// root/count live in the rangeRoot/rangeCount snapshot fields
-	// below, mirroring the Rust locals written back after the edit
-	// succeeds.
-	rangeCtx rangeCtx
+	// rangeCtx4 and rangeCtx6 are the mutable range-tree states of one
+	// draft operation per address family (Rust range_mutation function
+	// parameters: store, root, record_count). The range contexts carry
+	// interface fields whose method calls escape a stack context, so the
+	// draft owns one context per family and every entry point resets it
+	// before the operation; root/count live in the rangeRoot/rangeCount
+	// snapshot fields below, mirroring the Rust locals written back
+	// after the edit succeeds.
+	rangeCtx4 rangeCtx[key4]
+	rangeCtx6 rangeCtx[key6]
 	// rangeRoot and rangeCount are the operation-local root and record
 	// count snapshots of one range edit (Rust draft_store.rs assign/
 	// clear locals). The range context points at them; entry points
@@ -97,18 +98,33 @@ func NewDraftStore(m *mapping.Mapping, committedPageCount uint64, budget PageBud
 	return &DraftStore{mapping: m, committedPageCount: committedPageCount, budget: budget, draft: draft}
 }
 
-// beginRangeEdit snaps the range root/count locals from one draft
-// source and resets the draft-owned range context for one range edit
-// (Rust range_mutation function parameters). Every range entry point
-// must pair beginRangeEdit with commitRangeEdit, so the untracked flag,
-// the scratch target, and the root/count pointers are always reset
+// beginRangeEdit4 snaps the range root/count locals from one draft
+// source and resets the draft-owned IPv4 range context for one range
+// edit (Rust range_mutation function parameters). Every range entry
+// point must pair beginRangeEdit with commitRangeEdit, so the untracked
+// flag, the scratch target, and the root/count pointers are always reset
 // before an operation: the missed-reset class that silently skipped
 // membership accounting is impossible by construction.
-func (s *DraftStore) beginRangeEdit(family rangeFamily, root uint32, count uint64) *rangeCtx {
+func (s *DraftStore) beginRangeEdit4(root uint32, count uint64) *rangeCtx[key4] {
 	s.rangeRoot = root
 	s.rangeCount = count
-	ctx := &s.rangeCtx
-	ctx.family = family
+	ctx := &s.rangeCtx4
+	ctx.family = rangeCodec4{}
+	ctx.store = s
+	ctx.storeView = s
+	ctx.untracked = false
+	ctx.root = &s.rangeRoot
+	ctx.count = &s.rangeCount
+	ctx.scratch = &s.rangeScratch
+	return ctx
+}
+
+// beginRangeEdit6 is the IPv6 form of beginRangeEdit4.
+func (s *DraftStore) beginRangeEdit6(root uint32, count uint64) *rangeCtx[key6] {
+	s.rangeRoot = root
+	s.rangeCount = count
+	ctx := &s.rangeCtx6
+	ctx.family = rangeCodec6{}
 	ctx.store = s
 	ctx.storeView = s
 	ctx.untracked = false

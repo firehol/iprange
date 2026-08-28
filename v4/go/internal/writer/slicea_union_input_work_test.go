@@ -23,14 +23,10 @@ import (
 // without the buffered input, untracked, and reports whether the tree
 // changed (Rust union_private over the MemoryStore; the value
 // accounting is a no-op exactly like the Rust memory store).
-func directUnionRange(store *DraftStore, state *unionState, from, to tree.Key, value uint32) (bool, error) {
-	family, err := store.rangeFamily()
-	if err != nil {
-		return false, err
-	}
-	ctx := store.beginRangeEdit(family, store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
+func directUnionRange(store *DraftStore, state *unionState[key4], from, to key4, value uint32) (bool, error) {
+	ctx := store.beginRangeEdit4(store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
 	ctx.markUntracked()
-	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
+	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord[key4]{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
 	if err != nil {
 		return false, err
 	}
@@ -110,7 +106,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 	for _, descending := range []bool{false, true} {
 		path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-		var state unionState
+		var state unionState[key4]
 		work.Reset()
 		for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 			key := uint32(0)
@@ -124,7 +120,7 @@ func TestWorkUnionInputMonotonicEdges(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := finishPrivateUntracked(&rangeCtx{family: rangeCodec4{}, store: store, storeView: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount, scratch: &store.rangeScratch}, &state); err != nil {
+		if err := finishPrivateUntracked(&rangeCtx[key4]{family: rangeCodec4{}, store: store, storeView: store, root: &store.draft.meta.RangeRoot, count: &store.draft.meta.RangeRecordCount, scratch: &store.rangeScratch}, &state); err != nil {
 			t.Fatal(err)
 		}
 		snapshot := work.Read()
@@ -161,7 +157,7 @@ func TestWorkUnionInputRandomOrderBounds(t *testing.T) {
 	const inputs = 2000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	var state unionState
+	var state unionState[key4]
 	work.Reset()
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := (ordinal * 1597 % inputs) * 4
@@ -226,17 +222,23 @@ func TestWorkUnionAssignmentLocatorV4V6(t *testing.T) {
 		if err := store.beginEmptyMapFeed(); err != nil {
 			t.Fatal(err)
 		}
-		input := newAssignmentInput(family, 256*1024)
+		var input privateInput[key4]
+		var input6 privateInput[key6]
+		if family == format.AddressFamilyIPv4 {
+			input = newAssignmentInput(rangeCodec4{}, family, 256*1024)
+		} else {
+			input6 = newAssignmentInput(rangeCodec6{}, family, 256*1024)
+		}
 		work.Reset()
 		for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 			key := uint64((ordinal * 1597 % inputs) * 4)
-			var from, to tree.Key
+			var err error
 			if family == format.AddressFamilyIPv4 {
-				from, to = key4(uint32(key)), key4(uint32(key+1))
+				_, err = store.assignInput4(key4(uint32(key)), key4(uint32(key+1)), ordinal, &input)
 			} else {
-				from, to = key6(key), key6(key+1)
+				_, err = store.assignInput6(key6{hi: 0, lo: key}, key6{hi: 0, lo: key + 1}, ordinal, &input6)
 			}
-			if _, err := store.assignInput(from, to, ordinal, &input); err != nil {
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -244,10 +246,10 @@ func TestWorkUnionAssignmentLocatorV4V6(t *testing.T) {
 		if store.draft.meta.RangeRecordCount != inputs {
 			t.Fatalf("%v count = %d, want %d", family, store.draft.meta.RangeRecordCount, inputs)
 		}
-		if len(readDraftRangeTree(t, store, store.draft.meta)) != inputs {
-			t.Fatal("assignment build lost records")
-		}
 		if family == format.AddressFamilyIPv4 {
+			if len(readDraftRangeTree(t, store, rangeCodec4{}, store.draft.meta)) != inputs {
+				t.Fatal("assignment build lost records")
+			}
 			if snapshot.LeafLocatorHits <= inputs/3 {
 				t.Fatalf("IPv4 locator hits %d <= %d", snapshot.LeafLocatorHits, inputs/3)
 			}
@@ -258,6 +260,9 @@ func TestWorkUnionAssignmentLocatorV4V6(t *testing.T) {
 				t.Fatalf("IPv4 fallback repeated descent: lookups %d fallbacks %d", snapshot.TreeLookups, snapshot.LeafLocatorFallbacks)
 			}
 		} else {
+			if len(readDraftRangeTree(t, store, rangeCodec6{}, store.draft.meta)) != inputs {
+				t.Fatal("assignment build lost records")
+			}
 			if snapshot.LeafLocatorHits != 0 || snapshot.LeafLocatorMisses != 0 || snapshot.LeafLocatorFallbacks != 0 {
 				t.Fatalf("IPv6 charged locator work: %+v", snapshot)
 			}
@@ -278,7 +283,7 @@ func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
 	const inputs = 2000
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	var state unionState
+	var state unionState[key4]
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := ordinal * 4
 		if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 42); err != nil {
@@ -297,8 +302,8 @@ func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
 	if store.draft.meta.RangeRecordCount != 1 {
 		t.Fatalf("spliced count = %d, want 1", store.draft.meta.RangeRecordCount)
 	}
-	records := readDraftRangeTree(t, store, store.draft.meta)
-	if len(records) != 1 || records[0].from.U32() != 0 || records[0].to.U32() != 8000 || records[0].value != 42 {
+	records := readDraftRangeTree(t, store, rangeCodec4{}, store.draft.meta)
+	if len(records) != 1 || uint32(records[0].from) != 0 || uint32(records[0].to) != 8000 || records[0].value != 42 {
 		t.Fatalf("spliced tree = %+v, want the single covering record [0,8000] value 42", records)
 	}
 	if snapshot.RangesCoalesced != inputs {
@@ -320,18 +325,14 @@ func TestWorkUnionInputFlushKeepsEdge(t *testing.T) {
 	const inputs = 100
 	path := createValueDB(t, format.AddressFamilyIPv4, format.ValueKindMembership, 0, feedsTag)
 	_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
-	var state unionState
+	var state unionState[key4]
 	for ordinal := uint32(0); ordinal < inputs; ordinal++ {
 		key := ordinal * 4
 		if _, err := directUnionRange(store, &state, key4(key), key4(key+1), 42); err != nil {
 			t.Fatal(err)
 		}
 	}
-	family, err := store.rangeFamily()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := store.beginRangeEdit(family, store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
+	ctx := store.beginRangeEdit4(store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
 	ctx.markUntracked()
 	if err := finishPrivateUntracked(ctx, &state); err != nil {
 		t.Fatal(err)

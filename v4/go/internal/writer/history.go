@@ -86,8 +86,8 @@ const (
 // historyRun is the adjacency state of one window's observation sweep
 // (Rust Run<K>). lastTo is embedded by value: the observation hot path
 // must not allocate per segment.
-type historyRun struct {
-	lastTo    tree.Key
+type historyRun[K any] struct {
+	lastTo    K
 	hasLastTo bool
 	before    bool
 	after     bool
@@ -104,13 +104,15 @@ type historyCached struct {
 // historyPlan is the prepared projection state before the merge starts
 // (Rust HistoryPlan).
 type historyPlan struct {
-	policy           historyPolicy
+	family           uint8
+	policy4          historyPolicy[key4]
+	policy6          historyPolicy[key6]
 	createdFeedCount uint64
 }
 
 // historyMerge is one running projection merge (Rust HistoryMerge).
-type historyMerge struct {
-	inner            *orderedMerge[uint32, historyPolicy]
+type historyMerge[K any] struct {
+	inner            *orderedMerge[uint32, historyPolicy[K], K]
 	createdFeedCount uint64
 }
 
@@ -118,9 +120,9 @@ type historyMerge struct {
 // (Rust HistoryPolicy; the transform observes decode through
 // selectedMembershipBits and interns prefix bitmaps through the
 // dictionary).
-type historyPolicy struct {
+type historyPolicy[K any] struct {
 	reports       []HistoryWindowReport
-	runs          []historyRun
+	runs          []historyRun[K]
 	cutoffOrder   []uint32
 	rank          []uint32
 	feedIndexes   []uint32
@@ -130,8 +132,9 @@ type historyPolicy struct {
 	prefixes      []MembershipHandle
 	currentPrefix int
 	family        uint8 // address family of the projection (Rust HistoryPolicy<K> fixes K at plan time)
+	codec         rangeFamily[K]
 	aggregate     HistoryWindowReport
-	aggregateRun  historyRun
+	aggregateRun  historyRun[K]
 	decodedOld    optionalValue
 	decodedOldSet bool
 	cache         historyCached
@@ -156,7 +159,7 @@ func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func()
 		return nil, invalid("history window count exceeds u32")
 	}
 	heap := newHeapBudget(store.budget.MaxHeapBytes)
-	reports, runs, cutoffOrder, feedOrder, err := collectHistoryWindows(store, windows, heap, check)
+	reports, runs4, runs6, cutoffOrder, feedOrder, err := collectHistoryWindows(store, windows, heap, check)
 	if err != nil {
 		return nil, err
 	}
@@ -190,82 +193,110 @@ func prepareHistoryPlan(store *DraftStore, windows []HistoryWindow, check func()
 		return nil, err
 	}
 	prefixes := make([]MembershipHandle, windowCount+1)
-	policy := historyPolicy{
-		reports:       reports,
-		runs:          runs,
-		cutoffOrder:   cutoffOrder,
-		rank:          rank,
-		feedIndexes:   feedIndexes,
-		feedToWindow:  feedToWindow,
-		beforeSorted:  beforeSorted,
-		before:        before,
-		prefixes:      prefixes,
-		currentPrefix: 0,
-		family:        store.draft.meta.AddressFamily,
-		aggregate:     emptyHistoryReport(HistoryWindow{FeedName: "aggregate"}, false),
-		aggregateRun:  historyRun{},
-		decodedOld:    optionalValue{},
-		decodedOldSet: false,
-		cache:         historyCached{},
-		hasCache:      false,
-		check:         check,
+	policy4 := historyPolicy[key4]{}
+	policy6 := historyPolicy[key6]{}
+	if store.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
+		policy4 = historyPolicy[key4]{
+			reports:       reports,
+			runs:          runs4,
+			cutoffOrder:   cutoffOrder,
+			rank:          rank,
+			feedIndexes:   feedIndexes,
+			feedToWindow:  feedToWindow,
+			beforeSorted:  beforeSorted,
+			before:        before,
+			prefixes:      prefixes,
+			currentPrefix: 0,
+			family:        store.draft.meta.AddressFamily,
+			codec:         rangeCodec4{},
+			aggregate:     emptyHistoryReport(HistoryWindow{FeedName: "aggregate"}, false),
+			decodedOld:    optionalValue{},
+			decodedOldSet: false,
+			cache:         historyCached{},
+			hasCache:      false,
+			check:         check,
+		}
+	} else {
+		policy6 = historyPolicy[key6]{
+			reports:       reports,
+			runs:          runs6,
+			cutoffOrder:   cutoffOrder,
+			rank:          rank,
+			feedIndexes:   feedIndexes,
+			feedToWindow:  feedToWindow,
+			beforeSorted:  beforeSorted,
+			before:        before,
+			prefixes:      prefixes,
+			currentPrefix: 0,
+			family:        store.draft.meta.AddressFamily,
+			codec:         rangeCodec6{},
+			aggregate:     emptyHistoryReport(HistoryWindow{FeedName: "aggregate"}, false),
+			decodedOld:    optionalValue{},
+			decodedOldSet: false,
+			cache:         historyCached{},
+			hasCache:      false,
+			check:         check,
+		}
 	}
-	return &historyPlan{policy: policy, createdFeedCount: createdFeedCount}, nil
+	return &historyPlan{family: store.draft.meta.AddressFamily, policy4: policy4, policy6: policy6, createdFeedCount: createdFeedCount}, nil
 }
 
 // begin starts the projection merge over the committed destination (Rust
 // HistoryPlan::begin).
-func (p *historyPlan) begin(store *DraftStore, base format.Meta, check func() error) (*historyMerge, error) {
-	var codec rangeFamily
+func (p *historyPlan) begin(store *DraftStore, base format.Meta, check func() error) (*historyMerge[key4], *historyMerge[key6], error) {
 	if base.AddressFamily == format.AddressFamilyIPv4 {
-		codec = rangeCodec4{}
-	} else {
-		codec = rangeCodec6{}
+		inner, err := newOrderedMerge[uint32, historyPolicy[key4], key4](store, base, rangeCodec4{}, &p.policy4, check)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &historyMerge[key4]{inner: inner, createdFeedCount: p.createdFeedCount}, nil, nil
 	}
-	inner, err := newOrderedMerge[uint32, historyPolicy](store, base, codec, &p.policy, check)
+	inner, err := newOrderedMerge[uint32, historyPolicy[key6], key6](store, base, rangeCodec6{}, &p.policy6, check)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &historyMerge{inner: inner, createdFeedCount: p.createdFeedCount}, nil
+	return nil, &historyMerge[key6]{inner: inner, createdFeedCount: p.createdFeedCount}, nil
 }
 
 // collectHistoryWindows copies the window requests into the charged plan
 // vectors (Rust collect_windows).
-func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *heapBudget, check func() error) ([]HistoryWindowReport, []historyRun, []uint32, []uint32, error) {
+func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *heapBudget, check func() error) ([]HistoryWindowReport, []historyRun[key4], []historyRun[key6], []uint32, []uint32, error) {
 	windowCount := uint64(len(windows))
 	if err := heap.vector(windowCount, historyReportBytes, "history projection heap"); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	runBytes := uint64(historyRunV4Bytes)
 	if store.draft.meta.AddressFamily == format.AddressFamilyIPv6 {
 		runBytes = historyRunV6Bytes
 	}
 	if err := heap.vector(windowCount, runBytes, "history projection heap"); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if err := heap.vector(windowCount, historyWordBytes, "history projection heap"); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if err := heap.vector(windowCount, historyWordBytes, "history projection heap"); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	reports := make([]HistoryWindowReport, windowCount)
-	runs := make([]historyRun, windowCount)
+	runs4 := make([]historyRun[key4], windowCount)
+	runs6 := make([]historyRun[key6], windowCount)
 	cutoffOrder := make([]uint32, windowCount)
 	feedOrder := make([]uint32, windowCount)
 	for index, request := range windows {
 		if err := checkEvery(uint32(index), check); err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		if !format.FeedNameValidString(request.FeedName) {
-			return nil, nil, nil, nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
+			return nil, nil, nil, nil, nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 		}
 		reports[index] = emptyHistoryReport(request, false)
-		runs[index] = historyRun{}
+		runs4[index] = historyRun[key4]{}
+		runs6[index] = historyRun[key6]{}
 		cutoffOrder[index] = uint32(index)
 		feedOrder[index] = uint32(index)
 	}
-	return reports, runs, cutoffOrder, feedOrder, nil
+	return reports, runs4, runs6, cutoffOrder, feedOrder, nil
 }
 
 // requireUniqueHistoryNames rejects duplicate destination feed names
@@ -385,13 +416,13 @@ func orderHistoryFeedIndexes(original []uint32, feedToWindow []uint32, heap *hea
 
 // push feeds one source range into the projection merge (Rust
 // HistoryMerge::push).
-func (m *historyMerge) push(store *DraftStore, from, to tree.Key, lastSeen uint32, check func() error) error {
-	return m.inner.push(store, incomingRange[uint32]{from: from, to: to, value: lastSeen}, check)
+func (m *historyMerge[K]) push(store *DraftStore, from, to K, lastSeen uint32, check func() error) error {
+	return m.inner.push(store, incomingRange[uint32, K]{from: from, to: to, value: lastSeen}, check)
 }
 
 // finish ends the merge and produces the projection report (Rust
 // HistoryMerge::finish).
-func (m *historyMerge) finish(store *DraftStore, check func() error, sourceRangeCount uint64, sourceAddresses format.Cardinality129) (*HistoryProjectionReport, error) {
+func (m *historyMerge[K]) finish(store *DraftStore, check func() error, sourceRangeCount uint64, sourceAddresses format.Cardinality129) (*HistoryProjectionReport, error) {
 	policy, err := m.inner.finish(store, check)
 	if err != nil {
 		return nil, err
@@ -399,13 +430,13 @@ func (m *historyMerge) finish(store *DraftStore, check func() error, sourceRange
 	return policy.finishReport(sourceRangeCount, sourceAddresses, m.createdFeedCount)
 }
 
-func (p *historyPolicy) preserveWithoutInput() bool { return false }
+func (p *historyPolicy[K]) preserveWithoutInput() bool { return false }
 
 // transform computes the new membership of one segment (Rust
 // HistoryPolicy::transform): the destination bitmap loses every feed
 // whose cutoff is below the incoming last-seen, then gains exactly the
 // feeds ranked below the current prefix.
-func (p *historyPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
+func (p *historyPolicy[K]) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	p.currentPrefix = 0
 	if incoming.present {
 		p.currentPrefix = sort.Search(len(p.cutoffOrder), func(index int) bool {
@@ -485,8 +516,8 @@ func (p *historyPolicy) transform(store *DraftStore, old optionalValue, incoming
 
 // observe folds one segment into every window and the aggregate (Rust
 // HistoryPolicy::observe).
-func (p *historyPolicy) observe(from, to tree.Key, _old optionalValue, _incoming incomingValue[uint32], _new optionalValue) error {
-	count, err := familyInclusiveCardinality(p.family, from, to)
+func (p *historyPolicy[K]) observe(from, to K, _old optionalValue, _incoming incomingValue[uint32], _new optionalValue) error {
+	count, err := familyInclusiveCardinalityOf(p.codec, from, to)
 	if err != nil {
 		return err
 	}
@@ -498,21 +529,21 @@ func (p *historyPolicy) observe(from, to tree.Key, _old optionalValue, _incoming
 		before := p.before[index] != 0
 		after := p.rank[index] < uint32(p.currentPrefix)
 		beforeAny = beforeAny || before
-		if err := observeHistoryWindow(&p.reports[index], &p.runs[index], p.family, from, to, count, before, after); err != nil {
+		if err := observeHistoryWindow(&p.reports[index], &p.runs[index], p.codec, from, to, count, before, after); err != nil {
 			return err
 		}
 		work.HistoryWindowTest(1)
 	}
-	return observeHistoryWindow(&p.aggregate, &p.aggregateRun, p.family, from, to, count, beforeAny, p.currentPrefix != 0)
+	return observeHistoryWindow(&p.aggregate, &p.aggregateRun, p.codec, from, to, count, beforeAny, p.currentPrefix != 0)
 }
 
 // finish returns the policy (Rust HistoryPolicy::finish: the policy IS
 // the merge output).
-func (p *historyPolicy) finish() (historyPolicy, error) { return *p, nil }
+func (p *historyPolicy[K]) finish() (historyPolicy[K], error) { return *p, nil }
 
 // prefix returns the interned prefix bitmap of the first length feeds in
 // cutoff rank, caching it in the plan (Rust HistoryPolicy::prefix).
-func (p *historyPolicy) prefix(store *DraftStore, length int) (MembershipHandle, error) {
+func (p *historyPolicy[K]) prefix(store *DraftStore, length int) (MembershipHandle, error) {
 	if length < 0 || length >= len(p.prefixes) {
 		return MembershipHandle{}, corrupt("history prefix is outside the window set")
 	}
@@ -544,7 +575,7 @@ func (p *historyPolicy) prefix(store *DraftStore, length int) (MembershipHandle,
 
 // matchesPrefix reports whether the decoded old bitmap already equals
 // the current prefix bitmap (Rust HistoryPolicy::matches_prefix).
-func (p *historyPolicy) matchesPrefix() (bool, error) {
+func (p *historyPolicy[K]) matchesPrefix() (bool, error) {
 	for window, before := range p.before {
 		if err := checkEvery(uint32(window), p.check); err != nil {
 			return false, err
@@ -558,7 +589,7 @@ func (p *historyPolicy) matchesPrefix() (bool, error) {
 
 // finishReport balances and assembles the projection report (Rust
 // HistoryPolicy::finish_report).
-func (p *historyPolicy) finishReport(sourceRangeCount uint64, sourceAddresses format.Cardinality129, createdFeedCount uint64) (*HistoryProjectionReport, error) {
+func (p *historyPolicy[K]) finishReport(sourceRangeCount uint64, sourceAddresses format.Cardinality129, createdFeedCount uint64) (*HistoryProjectionReport, error) {
 	changed := createdFeedCount != 0
 	for work := range p.reports {
 		if err := checkEvery(uint32(work), p.check); err != nil {
@@ -677,11 +708,11 @@ func (w *prefixWords) ReadChunk(start uint32) (words [membershipChunkWords]uint6
 
 // observeHistoryWindow folds one segment into one window report (Rust
 // observe).
-func observeHistoryWindow(report *HistoryWindowReport, run *historyRun, family uint8, from, to tree.Key, count format.Cardinality129, before, after bool) error {
+func observeHistoryWindow[K any](report *HistoryWindowReport, run *historyRun[K], codec rangeFamily[K], from, to K, count format.Cardinality129, before, after bool) error {
 	adjacent := false
 	if run.hasLastTo {
-		next, ok := nextKey(family, run.lastTo)
-		adjacent = ok && next.Equal(from)
+		next, ok := codec.Next(run.lastTo)
+		adjacent = ok && codec.Equal(next, from)
 	}
 	if before {
 		next, err := addHistoryCount(report.BeforeAddresses, count)
@@ -796,6 +827,28 @@ func familyInclusiveCardinality(family uint8, from, to tree.Key) (format.Cardina
 	fromHi, fromLo := from.U128()
 	toHi, toLo := to.U128()
 	size, err := format.IPv6Inclusive(fromHi, fromLo, toHi, toLo)
+	if err != nil {
+		return format.CardinalityZero(), overflow("IPv6 interval cardinality")
+	}
+	return size, nil
+}
+
+// familyInclusiveCardinalityOf returns the exact inclusive size of one
+// typed interval in its address family (Rust IpKey::inclusive_cardinality
+// over the family codec).
+func familyInclusiveCardinalityOf[K any](codec rangeFamily[K], from, to K) (format.Cardinality129, error) {
+	if _, ok := any(codec).(rangeCodec4); ok {
+		from4 := any(from).(key4)
+		to4 := any(to).(key4)
+		size, err := format.IPv4Inclusive(uint32(from4), uint32(to4))
+		if err != nil {
+			return format.CardinalityZero(), overflow("IPv4 interval cardinality")
+		}
+		return size, nil
+	}
+	from6 := any(from).(key6)
+	to6 := any(to).(key6)
+	size, err := format.IPv6Inclusive(from6.hi, from6.lo, to6.hi, to6.lo)
 	if err != nil {
 		return format.CardinalityZero(), overflow("IPv6 interval cardinality")
 	}

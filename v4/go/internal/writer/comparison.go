@@ -8,7 +8,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // Comparison is the exact six-way before/after classification of one
@@ -44,22 +43,32 @@ type ScannedComparison struct {
 	AfterIntervals  uint64
 }
 
-// compareMaps sweeps two canonical range maps of one store and returns
-// the exact six-way address classification (Rust workflow/compare.rs
-// maps): the base generation versus the draft generation. Both streams
-// charge their fixed-tree range consumption like every other map scan
-// (Rust Cursor::next charges range_consumed), and the checkpoint runs
-// between every sweep step and inside every cell pair.
-func compareMaps(store *DraftStore, base format.Meta, check func() error) (Comparison, error) {
-	rfamily, err := store.rangeFamily()
+// compareMaps4 sweeps two canonical IPv4 range maps of one store and
+// returns the exact six-way address classification (Rust workflow/
+// compare.rs maps over Ipv4Key).
+func compareMaps4(store *DraftStore, base format.Meta, check func() error) (Comparison, error) {
+	return compareMapsTyped(store, base, rangeCodec4{}, check)
+}
+
+// compareMaps6 sweeps two canonical IPv6 range maps of one store and
+// returns the exact six-way address classification (Rust workflow/
+// compare.rs maps over Ipv6Key).
+func compareMaps6(store *DraftStore, base format.Meta, check func() error) (Comparison, error) {
+	return compareMapsTyped(store, base, rangeCodec6{}, check)
+}
+
+// compareMapsTyped sweeps two canonical range maps of one store and
+// returns the exact six-way address classification (Rust workflow/
+// compare.rs maps): the base generation versus the draft generation.
+// Both streams charge their fixed-tree range consumption like every
+// other map scan (Rust Cursor::next charges range_consumed), and the
+// checkpoint runs between every sweep step and inside every cell pair.
+func compareMapsTyped[K any](store *DraftStore, base format.Meta, codec rangeFamily[K], check func() error) (Comparison, error) {
+	oldCursor, err := newRangeCursor(store, base, codec, false)
 	if err != nil {
 		return Comparison{}, err
 	}
-	oldCursor, err := newRangeCursor(store, base, false)
-	if err != nil {
-		return Comparison{}, err
-	}
-	newCursor, err := newRangeCursor(store, store.draft.meta, false)
+	newCursor, err := newRangeCursor(store, store.draft.meta, codec, false)
 	if err != nil {
 		return Comparison{}, err
 	}
@@ -87,7 +96,7 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 		}
 		switch {
 		case oldOK && newOK:
-			step, err := compareRangePair(rfamily, family, old, newValue, &result, check)
+			step, err := compareRangePair(codec, family, old, newValue, &result, check)
 			if err != nil {
 				return Comparison{}, err
 			}
@@ -97,7 +106,7 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 					return Comparison{}, err
 				}
 			case compareAfter:
-				next, ok := rfamily.Next(step.leftEnd)
+				next, ok := codec.Next(step.leftEnd)
 				if !ok {
 					return Comparison{}, overflow("range comparison cursor")
 				}
@@ -109,14 +118,14 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 					return Comparison{}, err
 				}
 			case compareAfter:
-				next, ok := rfamily.Next(step.rightEnd)
+				next, ok := codec.Next(step.rightEnd)
 				if !ok {
 					return Comparison{}, overflow("range comparison cursor")
 				}
 				newValue.from = next
 			}
 		case oldOK:
-			count, err := familyInclusiveCardinality(family, old.from, old.to)
+			count, err := familyInclusiveCardinalityOf(codec, old.from, old.to)
 			if err != nil {
 				return Comparison{}, err
 			}
@@ -132,7 +141,7 @@ func compareMaps(store *DraftStore, base format.Meta, check func() error) (Compa
 				return Comparison{}, err
 			}
 		default:
-			count, err := familyInclusiveCardinality(family, newValue.from, newValue.to)
+			count, err := familyInclusiveCardinalityOf(codec, newValue.from, newValue.to)
 			if err != nil {
 				return Comparison{}, err
 			}
@@ -166,78 +175,78 @@ const (
 )
 
 // compareStep is the disposition of one overlap step (Rust Step).
-type compareStep struct {
+type compareStep[K any] struct {
 	left     compareStepKind
 	right    compareStepKind
-	leftEnd  tree.Key
-	rightEnd tree.Key
+	leftEnd  K
+	rightEnd K
 }
 
 // compareRangePair classifies one overlapping or separated pair of
 // sweep records (Rust compare_pair / compare_overlap): the classification
 // runs on inclusive key intervals, and the returned step describes how
 // each side advances.
-func compareRangePair(rfamily rangeFamily, family uint8, left, right rangeRecord, result *Comparison, check func() error) (compareStep, error) {
-	if left.to.Less(right.from) {
-		return stepLeftOnly(family, left, result)
+func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right rangeRecord[K], result *Comparison, check func() error) (compareStep[K], error) {
+	if rfamily.Less(left.to, right.from) {
+		return stepLeftOnly(rfamily, family, left, result)
 	}
-	if right.to.Less(left.from) {
-		return stepRightOnly(family, right, result)
+	if rfamily.Less(right.to, left.from) {
+		return stepRightOnly(rfamily, family, right, result)
 	}
 	leftValue, rightValue := left, right
-	step := compareStep{left: compareKeep, right: compareKeep}
-	if leftValue.from.Less(rightValue.from) {
+	step := compareStep[K]{left: compareKeep, right: compareKeep}
+	if rfamily.Less(leftValue.from, rightValue.from) {
 		end, ok := rfamily.Previous(rightValue.from)
 		if !ok {
-			return compareStep{}, overflow("range comparison prefix")
+			return compareStep[K]{}, overflow("range comparison prefix")
 		}
-		count, err := familyInclusiveCardinality(family, leftValue.from, end)
+		count, err := familyInclusiveCardinalityOf(rfamily, leftValue.from, end)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		result.Before, err = addComparisonCount(result.Before, count)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		result.Removed, err = addComparisonCount(result.Removed, count)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		leftValue.from = rightValue.from
-	} else if rightValue.from.Less(leftValue.from) {
+	} else if rfamily.Less(rightValue.from, leftValue.from) {
 		end, ok := rfamily.Previous(leftValue.from)
 		if !ok {
-			return compareStep{}, overflow("range comparison prefix")
+			return compareStep[K]{}, overflow("range comparison prefix")
 		}
-		count, err := familyInclusiveCardinality(family, rightValue.from, end)
+		count, err := familyInclusiveCardinalityOf(rfamily, rightValue.from, end)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		result.After, err = addComparisonCount(result.After, count)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		result.Added, err = addComparisonCount(result.Added, count)
 		if err != nil {
-			return compareStep{}, err
+			return compareStep[K]{}, err
 		}
 		rightValue.from = leftValue.from
 	}
 	end := leftValue.to
-	if rightValue.to.Less(end) {
+	if rfamily.Less(rightValue.to, end) {
 		end = rightValue.to
 	}
-	count, err := familyInclusiveCardinality(family, leftValue.from, end)
+	count, err := familyInclusiveCardinalityOf(rfamily, leftValue.from, end)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.Before, err = addComparisonCount(result.Before, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.After, err = addComparisonCount(result.After, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	if leftValue.value == rightValue.value {
 		result.Unchanged, err = addComparisonCount(result.Unchanged, count)
@@ -245,18 +254,18 @@ func compareRangePair(rfamily rangeFamily, family uint8, left, right rangeRecord
 		result.Changed, err = addComparisonCount(result.Changed, count)
 	}
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	if err := check(); err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
-	if leftValue.to.Equal(end) {
+	if rfamily.Equal(leftValue.to, end) {
 		step.left = compareConsume
 	} else {
 		step.left = compareAfter
 		step.leftEnd = end
 	}
-	if rightValue.to.Equal(end) {
+	if rfamily.Equal(rightValue.to, end) {
 		step.right = compareConsume
 	} else {
 		step.right = compareAfter
@@ -267,38 +276,38 @@ func compareRangePair(rfamily rangeFamily, family uint8, left, right rangeRecord
 
 // stepLeftOnly classifies one left-only record (Rust
 // left_before_right: removed).
-func stepLeftOnly(family uint8, left rangeRecord, result *Comparison) (compareStep, error) {
-	count, err := familyInclusiveCardinality(family, left.from, left.to)
+func stepLeftOnly[K any](rfamily rangeFamily[K], family uint8, left rangeRecord[K], result *Comparison) (compareStep[K], error) {
+	count, err := familyInclusiveCardinalityOf(rfamily, left.from, left.to)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.Before, err = addComparisonCount(result.Before, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.Removed, err = addComparisonCount(result.Removed, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
-	return compareStep{left: compareConsume, right: compareKeep}, nil
+	return compareStep[K]{left: compareConsume, right: compareKeep}, nil
 }
 
 // stepRightOnly classifies one right-only record (Rust
 // right_before_left: added).
-func stepRightOnly(family uint8, right rangeRecord, result *Comparison) (compareStep, error) {
-	count, err := familyInclusiveCardinality(family, right.from, right.to)
+func stepRightOnly[K any](rfamily rangeFamily[K], family uint8, right rangeRecord[K], result *Comparison) (compareStep[K], error) {
+	count, err := familyInclusiveCardinalityOf(rfamily, right.from, right.to)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.After, err = addComparisonCount(result.After, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
 	result.Added, err = addComparisonCount(result.Added, count)
 	if err != nil {
-		return compareStep{}, err
+		return compareStep[K]{}, err
 	}
-	return compareStep{left: compareKeep, right: compareConsume}, nil
+	return compareStep[K]{left: compareKeep, right: compareConsume}, nil
 }
 
 // addComparisonCount adds one address count with overflow check (Rust

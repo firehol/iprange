@@ -8,7 +8,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // StructureHandle is one draft-owned structure reference (Rust
@@ -118,26 +117,26 @@ func (s *DraftStore) internStructurePayload(payload structurePayload) (Structure
 // DraftStore::assign_structure_input_v4): the empty structure clears,
 // a private range tree assigns through the leaf-locator input, and a
 // shared committed tree assigns directly.
-func (s *DraftStore) assignStructureInputV4(from, to uint32, structure StructureHandle, input *privateInput) (bool, error) {
+func (s *DraftStore) assignStructureInputV4(from, to uint32, structure StructureHandle, input *privateInput[key4]) (bool, error) {
 	if structure.id == 0 {
 		return s.ClearV4(from, to)
 	}
 	if s.draft.rangeTreePrivate {
-		return s.assignInput(tree.KeyOfU32(from), tree.KeyOfU32(to), structure.id, input)
+		return s.assignInput4(key4(from), key4(to), structure.id, input)
 	}
-	return s.assign(tree.KeyOfU32(from), tree.KeyOfU32(to), structure.id)
+	return s.assign4(key4(from), key4(to), structure.id)
 }
 
 // assignStructureInputV6 assigns one structured IPv6 range (Rust
 // DraftStore::assign_structure_input_v6).
-func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *privateInput) (bool, error) {
+func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *privateInput[key6]) (bool, error) {
 	if structure.id == 0 {
 		return s.ClearV6(fromHi, fromLo, toHi, toLo)
 	}
 	if s.draft.rangeTreePrivate {
-		return s.assignInput(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), structure.id, input)
+		return s.assignInput6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, structure.id, input)
 	}
-	return s.assign(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), structure.id)
+	return s.assign6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, structure.id)
 }
 
 // deleteCurrentStructuredFeed deletes one feed and removes it from every
@@ -156,29 +155,34 @@ func (s *DraftStore) deleteCurrentStructuredFeed(feed FeedEntry, check func() er
 	if err != nil {
 		return err
 	}
-	family, err := s.rangeFamily()
-	if err != nil {
-		return err
-	}
-	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	var minimum, maximum tree.Key
+	var changed bool
 	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
-		minimum = tree.KeyOfU32(uint32(0))
-		maximum = tree.KeyOfU32(uint32(1<<32 - 1))
-	} else {
-		minimum = tree.KeyOfU128(uint64(0), uint64(0))
-		maximum = tree.KeyOfU128(^uint64(0), ^uint64(0))
-	}
-	changed, err := rangeTransform(ctx, minimum, maximum, func(store RangeStore, value optionalValue) (optionalValue, error) {
-		if !value.present {
-			return optionalValue{}, nil
+		ctx := s.beginRangeEdit4(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
+		changed, err = rangeTransform(ctx, key4(0), key4(0xFFFFFFFF), func(store RangeStore, value optionalValue) (optionalValue, error) {
+			if !value.present {
+				return optionalValue{}, nil
+			}
+			return s.removeFeedFromStructure(store, value.value, member, check)
+		})
+		if err == nil {
+			s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 		}
-		return s.removeFeedFromStructure(store, value.value, member, check)
-	})
+	} else {
+		max6 := key6{hi: ^uint64(0), lo: ^uint64(0)}
+		ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
+		changed, err = rangeTransform(ctx, key6{}, max6, func(store RangeStore, value optionalValue) (optionalValue, error) {
+			if !value.present {
+				return optionalValue{}, nil
+			}
+			return s.removeFeedFromStructure(store, value.value, member, check)
+		})
+		if err == nil {
+			s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
+		}
+	}
 	if err != nil {
 		return err
 	}
-	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 	if err := check(); err != nil {
 		return err
 	}

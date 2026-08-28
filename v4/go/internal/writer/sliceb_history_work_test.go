@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -56,10 +55,10 @@ func TestWorkHistoryProjectionMergePins(t *testing.T) {
 	}
 
 	work.Reset()
-	var merge *historyMerge
+	var merge *historyMerge[key4]
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error
-		merge, err = edit.BeginHistory(plan, nilCheck)
+		merge, err = edit.BeginHistory4(plan, nilCheck)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -68,10 +67,8 @@ func TestWorkHistoryProjectionMergePins(t *testing.T) {
 	var rangeCount uint64
 	addresses := format.CardinalityZero()
 	for _, r := range ranges {
-		from := tree.KeyOfU32(r[0])
-		to := tree.KeyOfU32(r[1])
 		if err := c.Mutate(func(edit *WriterEdit) error {
-			return edit.PushHistory(merge, from, to, r[2], nilCheck)
+			return edit.PushHistory4(merge, r[0], r[1], r[2], nilCheck)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +83,7 @@ func TestWorkHistoryProjectionMergePins(t *testing.T) {
 		}
 	}
 	if err := c.Mutate(func(edit *WriterEdit) error {
-		_, err := edit.FinishHistory(merge, rangeCount, addresses, nilCheck)
+		_, err := edit.FinishHistory4(merge, rangeCount, addresses, nilCheck)
 		return err
 	}); err != nil {
 		t.Fatal(err)

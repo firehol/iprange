@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // pushOrderedAllocs measures one fresh draft plus count ascending
@@ -30,14 +29,10 @@ func pushOrderedAllocs(t *testing.T, count int) float64 {
 		}
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
 		input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
-		family, err := store.rangeFamily()
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+		ctx := store.beginRangeEdit4(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
-			if _, err := pushPrivateUntracked(ctx, tree.KeyOfU32(uint32(from)), tree.KeyOfU32(uint32(from+1)), 1, &input); err != nil {
+			if _, err := pushPrivateUntracked(ctx, key4(uint32(from)), key4(uint32(from+1)), 1, &input.v4); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -57,14 +52,10 @@ func pushGeneralAllocs(t *testing.T, count int) float64 {
 		_, store, _ := openDraftStore(t, path, historyBudget(), [16]byte{3})
 		input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 256*1024)
 		input.startGeneral()
-		family, err := store.rangeFamily()
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+		ctx := store.beginRangeEdit4(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
-			if _, err := pushPrivateUntracked(ctx, tree.KeyOfU32(uint32(from)), tree.KeyOfU32(uint32(from+1)), 1, &input); err != nil {
+			if _, err := pushPrivateUntracked(ctx, key4(uint32(from)), key4(uint32(from+1)), 1, &input.v4); err != nil {
 				t.Fatal(err)
 			}
 		}

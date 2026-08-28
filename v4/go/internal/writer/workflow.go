@@ -137,21 +137,41 @@ func (e *WriterEdit) PrepareHistoryFrom(windows []HistoryWindow, check func() er
 	return prepareHistoryPlan(e.store, windows, check)
 }
 
-// BeginHistory starts the projection merge over the committed
-// destination (Rust WriterEdit::begin_history).
-func (e *WriterEdit) BeginHistory(plan *historyPlan, check func() error) (*historyMerge, error) {
-	return plan.begin(e.store, e.base, check)
+// BeginHistory4 starts the IPv4 projection merge over the committed
+// destination (Rust WriterEdit::begin_history over Ipv4Key).
+func (e *WriterEdit) BeginHistory4(plan *historyPlan, check func() error) (*historyMerge[key4], error) {
+	merge4, _, err := plan.begin(e.store, e.base, check)
+	return merge4, err
 }
 
-// PushHistory feeds one source range into the projection merge (Rust
-// WriterEdit::push_history).
-func (e *WriterEdit) PushHistory(merge *historyMerge, from, to tree.Key, lastSeen uint32, check func() error) error {
-	return merge.push(e.store, from, to, lastSeen, check)
+// BeginHistory6 starts the IPv6 projection merge over the committed
+// destination (Rust WriterEdit::begin_history over Ipv6Key).
+func (e *WriterEdit) BeginHistory6(plan *historyPlan, check func() error) (*historyMerge[key6], error) {
+	_, merge6, err := plan.begin(e.store, e.base, check)
+	return merge6, err
 }
 
-// FinishHistory ends the projection merge and assembles the projection
-// report (Rust WriterEdit::finish_history).
-func (e *WriterEdit) FinishHistory(merge *historyMerge, sourceRangeCount uint64, sourceAddresses format.Cardinality129, check func() error) (*HistoryProjectionReport, error) {
+// PushHistory4 feeds one inclusive IPv4 source range into the
+// projection merge (Rust WriterEdit::push_history over Ipv4Key).
+func (e *WriterEdit) PushHistory4(merge *historyMerge[key4], from, to uint32, lastSeen uint32, check func() error) error {
+	return merge.push(e.store, key4(from), key4(to), lastSeen, check)
+}
+
+// PushHistory6 feeds one inclusive IPv6 source range into the
+// projection merge (Rust WriterEdit::push_history over Ipv6Key).
+func (e *WriterEdit) PushHistory6(merge *historyMerge[key6], fromHi, fromLo, toHi, toLo uint64, lastSeen uint32, check func() error) error {
+	return merge.push(e.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, lastSeen, check)
+}
+
+// FinishHistory4 ends the IPv4 projection merge and assembles the
+// projection report (Rust WriterEdit::finish_history over Ipv4Key).
+func (e *WriterEdit) FinishHistory4(merge *historyMerge[key4], sourceRangeCount uint64, sourceAddresses format.Cardinality129, check func() error) (*HistoryProjectionReport, error) {
+	return merge.finish(e.store, check, sourceRangeCount, sourceAddresses)
+}
+
+// FinishHistory6 ends the IPv6 projection merge and assembles the
+// projection report (Rust WriterEdit::finish_history over Ipv6Key).
+func (e *WriterEdit) FinishHistory6(merge *historyMerge[key6], sourceRangeCount uint64, sourceAddresses format.Cardinality129, check func() error) (*HistoryProjectionReport, error) {
 	return merge.finish(e.store, check, sourceRangeCount, sourceAddresses)
 }
 
@@ -186,14 +206,14 @@ func (e *WriterEdit) InternNetworkEnrichmentV1(value format.NetworkEnrichmentV1,
 // transaction assignment input (Rust
 // WriterEdit::assign_structure_input_v4).
 func (e *WriterEdit) AssignStructureInputV4(from, to uint32, structure StructureHandle, input *AssignmentInput) (bool, error) {
-	return e.store.assignStructureInputV4(from, to, structure, (*privateInput)(input))
+	return e.store.assignStructureInputV4(from, to, structure, &input.v4)
 }
 
 // AssignStructureInputV6 assigns one structured IPv6 range through the
 // transaction assignment input (Rust
 // WriterEdit::assign_structure_input_v6).
 func (e *WriterEdit) AssignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, structure StructureHandle, input *AssignmentInput) (bool, error) {
-	return e.store.assignStructureInputV6(fromHi, fromLo, toHi, toLo, structure, (*privateInput)(input))
+	return e.store.assignStructureInputV6(fromHi, fromLo, toHi, toLo, structure, &input.v6)
 }
 
 // DeleteCurrentStructuredFeed deletes one feed and removes it from every
@@ -212,14 +232,14 @@ func (s *DraftStore) finishDirectWorkflow(base format.Meta, check func() error) 
 		return err
 	}
 	if !s.draft.baseRangeTreeRetired {
-		var codec rangeFamily
 		if base.AddressFamily == format.AddressFamilyIPv4 {
-			codec = rangeCodec4{}
+			if err := tree.RetireTree(rangeCodec4{}, s, base.RangeRoot, check); err != nil {
+				return err
+			}
 		} else {
-			codec = rangeCodec6{}
-		}
-		if err := tree.RetireTree(codec, s, base.RangeRoot, check); err != nil {
-			return err
+			if err := tree.RetireTree(rangeCodec6{}, s, base.RangeRoot, check); err != nil {
+				return err
+			}
 		}
 	}
 	s.draft.finishWorkflow()
@@ -302,7 +322,10 @@ func (c *Core) CompareMaps(check func() error) (Comparison, error) {
 		return Comparison{}, &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
 	store := NewDraftStore(c.m, c.base.Meta.PageCount, c.budget, c.draft)
-	return compareMaps(store, c.base.Meta, check)
+	if c.base.Meta.AddressFamily == format.AddressFamilyIPv4 {
+		return compareMaps4(store, c.base.Meta, check)
+	}
+	return compareMaps6(store, c.base.Meta, check)
 }
 
 // LookupFeed resolves one exact feed name in the draft catalog (Rust
@@ -367,28 +390,52 @@ func (e *WriterEdit) BeginEmptyMapFeed() error {
 	return e.store.beginEmptyMapFeed()
 }
 
-// AddEmptyMapFeedRange pushes one constant member-valued range into the
-// private draft tree (Rust WriterEdit::add_empty_map_feed_range).
-func (e *WriterEdit) AddEmptyMapFeedRange(from, to tree.Key, member MembershipHandle, input *UnionInput) error {
-	return e.store.addEmptyMapFeedRange(from, to, member, input)
+// AddEmptyMapFeedRange4 pushes one constant member-valued IPv4 range
+// into the private draft tree (Rust
+// WriterEdit::add_empty_map_feed_range over Ipv4Key).
+func (e *WriterEdit) AddEmptyMapFeedRange4(from, to uint32, member MembershipHandle, input *UnionInput) error {
+	return e.store.addEmptyMapFeedRange4(key4(from), key4(to), member, &input.v4)
 }
 
-// FinishEmptyMapFeedRanges seals the constant ranges and accounts the
-// member refcount (Rust WriterEdit::finish_empty_map_feed_ranges).
-func (e *WriterEdit) FinishEmptyMapFeedRanges(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
-	return e.store.finishEmptyMapFeedRanges(member, input)
+// AddEmptyMapFeedRange6 is the IPv6 form of AddEmptyMapFeedRange4.
+func (e *WriterEdit) AddEmptyMapFeedRange6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, input *UnionInput) error {
+	return e.store.addEmptyMapFeedRange6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, member, &input.v6)
 }
 
-// AddFeedCoverage pushes one value-1 range into the private workflow
-// coverage tree (Rust WriterEdit::add_feed_coverage).
-func (e *WriterEdit) AddFeedCoverage(from, to tree.Key, input *UnionInput) error {
-	return e.store.addFeedCoverage(from, to, input)
+// FinishEmptyMapFeedRanges4 seals the constant IPv4 ranges and accounts
+// the member refcount (Rust
+// WriterEdit::finish_empty_map_feed_ranges over Ipv4Key).
+func (e *WriterEdit) FinishEmptyMapFeedRanges4(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
+	return e.store.finishEmptyMapFeedRanges4(member, &input.v4)
 }
 
-// FinishFeedCoverage seals the pending coverage input (Rust
-// WriterEdit::finish_feed_coverage).
-func (e *WriterEdit) FinishFeedCoverage(input *UnionInput) error {
-	return e.store.finishFeedCoverage(input)
+// FinishEmptyMapFeedRanges6 is the IPv6 form of
+// FinishEmptyMapFeedRanges4.
+func (e *WriterEdit) FinishEmptyMapFeedRanges6(member MembershipHandle, input *UnionInput) (format.Cardinality129, bool, error) {
+	return e.store.finishEmptyMapFeedRanges6(member, &input.v6)
+}
+
+// AddFeedCoverage4 pushes one value-1 IPv4 range into the private
+// workflow coverage tree (Rust WriterEdit::add_feed_coverage over
+// Ipv4Key).
+func (e *WriterEdit) AddFeedCoverage4(from, to uint32, input *UnionInput) error {
+	return e.store.addFeedCoverage4(key4(from), key4(to), &input.v4)
+}
+
+// AddFeedCoverage6 is the IPv6 form of AddFeedCoverage4.
+func (e *WriterEdit) AddFeedCoverage6(fromHi, fromLo, toHi, toLo uint64, input *UnionInput) error {
+	return e.store.addFeedCoverage6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, &input.v6)
+}
+
+// FinishFeedCoverage4 seals the pending IPv4 coverage input (Rust
+// WriterEdit::finish_feed_coverage over Ipv4Key).
+func (e *WriterEdit) FinishFeedCoverage4(input *UnionInput) error {
+	return e.store.finishFeedCoverage4(&input.v4)
+}
+
+// FinishFeedCoverage6 is the IPv6 form of FinishFeedCoverage4.
+func (e *WriterEdit) FinishFeedCoverage6(input *UnionInput) error {
+	return e.store.finishFeedCoverage6(&input.v6)
 }
 
 // MergeFeed merges the workflow coverage tree over the committed base
@@ -400,33 +447,37 @@ func (e *WriterEdit) MergeFeed(member MembershipHandle, create bool, check func(
 // AssignInputV4 assigns one IPv4 range through the direct replacement
 // assignment input (Rust WriterEdit::assign_input_v4).
 func (e *WriterEdit) AssignInputV4(from, to uint32, value uint32, input *AssignmentInput) (bool, error) {
-	return e.store.assignInput(tree.KeyOfU32(from), tree.KeyOfU32(to), value, (*privateInput)(input))
+	return e.store.assignInput4(key4(from), key4(to), value, &input.v4)
 }
 
 // AssignInputV6 assigns one IPv6 range through the direct replacement
 // assignment input (Rust WriterEdit::assign_input_v6).
 func (e *WriterEdit) AssignInputV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *AssignmentInput) (bool, error) {
-	return e.store.assignInput(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), value, (*privateInput)(input))
+	return e.store.assignInput6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value, &input.v6)
 }
 
 // AddPrivateConstantRangeV4 pushes one untracked constant IPv4 range
 // into the draft range tree (Rust WriterEdit::add_private_constant_range
 // for IPv4; timestamp refresh inputs).
 func (e *WriterEdit) AddPrivateConstantRangeV4(from, to uint32, value uint32, input *UnionInput) error {
-	return e.store.addPrivateConstantRange(tree.KeyOfU32(from), tree.KeyOfU32(to), value, input)
+	return e.store.addPrivateConstantRange4(key4(from), key4(to), value, &input.v4)
 }
 
 // AddPrivateConstantRangeV6 pushes one untracked constant IPv6 range
 // into the draft range tree (Rust WriterEdit::add_private_constant_range
 // for IPv6; timestamp refresh inputs).
 func (e *WriterEdit) AddPrivateConstantRangeV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *UnionInput) error {
-	return e.store.addPrivateConstantRange(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), value, input)
+	return e.store.addPrivateConstantRange6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value, &input.v6)
 }
 
 // FinishPrivateConstantRanges seals one untracked constant-range input
-// (Rust WriterEdit::finish_private_constant_ranges).
+// (Rust WriterEdit::finish_private_constant_ranges; the facade routes
+// to the family side selected at input construction).
 func (e *WriterEdit) FinishPrivateConstantRanges(input *UnionInput) error {
-	return e.store.finishPrivateConstantRanges(input)
+	if input.family == format.AddressFamilyIPv4 {
+		return e.store.finishPrivateConstantRanges4(&input.v4)
+	}
+	return e.store.finishPrivateConstantRanges6(&input.v6)
 }
 
 // MergeFirstSeen merges the timestamp coverage tree over the committed

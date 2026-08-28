@@ -12,7 +12,6 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // lastSeenTag and feedsTag are the value tags of the Rust history test
@@ -212,10 +211,10 @@ func runProjection(t *testing.T, c *Core, windows []HistoryWindow, ranges [][3]u
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var merge *historyMerge
+	var merge *historyMerge[key4]
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error
-		merge, err = edit.BeginHistory(plan, nilCheck)
+		merge, err = edit.BeginHistory4(plan, nilCheck)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -223,10 +222,8 @@ func runProjection(t *testing.T, c *Core, windows []HistoryWindow, ranges [][3]u
 	var rangeCount uint64
 	addresses := format.CardinalityZero()
 	for _, r := range ranges {
-		from := tree.KeyOfU32(r[0])
-		to := tree.KeyOfU32(r[1])
 		if err := c.Mutate(func(edit *WriterEdit) error {
-			return edit.PushHistory(merge, from, to, r[2], nilCheck)
+			return edit.PushHistory4(merge, r[0], r[1], r[2], nilCheck)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +240,7 @@ func runProjection(t *testing.T, c *Core, windows []HistoryWindow, ranges [][3]u
 	var report *HistoryProjectionReport
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error
-		report, err = edit.FinishHistory(merge, rangeCount, addresses, nilCheck)
+		report, err = edit.FinishHistory4(merge, rangeCount, addresses, nilCheck)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -618,17 +615,17 @@ func TestOrderedMergeRequiresCanonicalInput(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var merge *historyMerge
+	var merge *historyMerge[key4]
 	if err := c.Mutate(func(edit *WriterEdit) error {
 		var err error
-		merge, err = edit.BeginHistory(plan, nilCheck)
+		merge, err = edit.BeginHistory4(plan, nilCheck)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	push := func(from, to, value uint32) error {
 		return c.Mutate(func(edit *WriterEdit) error {
-			return edit.PushHistory(merge, tree.KeyOfU32(from), tree.KeyOfU32(to), value, nilCheck)
+			return edit.PushHistory4(merge, from, to, value, nilCheck)
 		})
 	}
 	if err := push(10, 20, 1); err != nil {

@@ -8,7 +8,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // TimestampMerge is the outcome of one first-seen or last-seen refresh
@@ -30,14 +29,14 @@ type timestampOutput struct {
 // before/after value classification of one timestamp merge (Rust
 // TimestampCounters over MapComparison). The comparison balances at
 // finish exactly like the Rust MapComparison::finish.
-type timestampCounters struct {
+type timestampCounters[K any] struct {
 	inputAddresses format.Cardinality129
 	comparison     Comparison
-	family         uint8
+	codec          rangeFamily[K]
 }
 
-func (c *timestampCounters) observe(from, to tree.Key, old, incoming, new optionalValue) (format.Cardinality129, error) {
-	count, err := familyInclusiveCardinality(c.family, from, to)
+func (c *timestampCounters[K]) observe(from, to K, old, incoming, new optionalValue) (format.Cardinality129, error) {
+	count, err := familyInclusiveCardinalityOf(c.codec, from, to)
 	if err != nil {
 		return format.CardinalityZero(), err
 	}
@@ -78,7 +77,7 @@ func (c *timestampCounters) observe(from, to tree.Key, old, incoming, new option
 // finish balances the classification like Rust MapComparison::finish:
 // the before and after totals recomputed from the classes must equal the
 // directly counted totals.
-func (c *timestampCounters) finish() (timestampOutput, error) {
+func (c *timestampCounters[K]) finish() (timestampOutput, error) {
 	before, err := c.comparison.Unchanged.Add(c.comparison.Changed)
 	if err != nil {
 		return timestampOutput{}, overflow("ordered merge address count")
@@ -105,21 +104,21 @@ func (c *timestampCounters) finish() (timestampOutput, error) {
 // the refresh value on newly covered ones; uncovered addresses are
 // removed and streamed through the removal observer (Rust
 // FirstSeenPolicy over RemovalObserver).
-type firstSeenPolicy struct {
+type firstSeenPolicy[K any] struct {
 	refreshValue uint32
-	counters     timestampCounters
-	removals     removalObserver
+	counters     timestampCounters[K]
+	removals     removalObserver[K]
 }
 
-func newFirstSeenPolicy(refreshValue uint32, family uint8) *firstSeenPolicy {
-	return &firstSeenPolicy{refreshValue: refreshValue, counters: timestampCounters{family: family}, removals: noRemovals{}}
+func newFirstSeenPolicy[K any](refreshValue uint32, codec rangeFamily[K]) *firstSeenPolicy[K] {
+	return &firstSeenPolicy[K]{refreshValue: refreshValue, counters: timestampCounters[K]{codec: codec}, removals: noRemovals[K]{}}
 }
 
-func newFirstSeenPolicyWithRemovals(refreshValue uint32, family uint8, removals removalObserver) *firstSeenPolicy {
-	return &firstSeenPolicy{refreshValue: refreshValue, counters: timestampCounters{family: family}, removals: removals}
+func newFirstSeenPolicyWithRemovals[K any](refreshValue uint32, codec rangeFamily[K], removals removalObserver[K]) *firstSeenPolicy[K] {
+	return &firstSeenPolicy[K]{refreshValue: refreshValue, counters: timestampCounters[K]{codec: codec}, removals: removals}
 }
 
-func (p *firstSeenPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
+func (p *firstSeenPolicy[K]) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	switch {
 	case old.present && incoming.present:
 		return old, nil
@@ -130,30 +129,30 @@ func (p *firstSeenPolicy) transform(store *DraftStore, old optionalValue, incomi
 	}
 }
 
-func (p *firstSeenPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
+func (p *firstSeenPolicy[K]) observe(from, to K, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
 	addresses, err := p.counters.observe(from, to, old, optionalValue{value: incoming.value, present: incoming.present}, new)
 	if err != nil {
 		return err
 	}
 	if old.present && !incoming.present {
-		return p.removals.push(firstSeenRemoval{from: from, to: to, firstSeen: old.value, addresses: addresses})
+		return p.removals.push(firstSeenRemoval[K]{from: from, to: to, firstSeen: old.value, addresses: addresses})
 	}
 	return nil
 }
 
-func (p *firstSeenPolicy) finish() (timestampOutput, error) {
+func (p *firstSeenPolicy[K]) finish() (timestampOutput, error) {
 	if err := p.removals.finish(); err != nil {
 		return timestampOutput{}, err
 	}
 	return p.counters.finish()
 }
 
-func (p *firstSeenPolicy) preserveWithoutInput() bool { return false }
+func (p *firstSeenPolicy[K]) preserveWithoutInput() bool { return false }
 
 // firstSeenRemoval is one first-seen interval removed by a refresh
 // (Rust FirstSeenRemoval<K>).
-type firstSeenRemoval struct {
-	from, to  tree.Key
+type firstSeenRemoval[K any] struct {
+	from, to  K
 	firstSeen uint32
 	addresses format.Cardinality129
 }
@@ -161,16 +160,16 @@ type firstSeenRemoval struct {
 // removalObserver consumes first-seen removals as the merge produces
 // them (Rust RemovalObserver): push receives each removal, finish
 // flushes the tail.
-type removalObserver interface {
-	push(removal firstSeenRemoval) error
+type removalObserver[K any] interface {
+	push(removal firstSeenRemoval[K]) error
 	finish() error
 }
 
 // noRemovals discards removals (Rust NoRemovals).
-type noRemovals struct{}
+type noRemovals[K any] struct{}
 
-func (noRemovals) push(firstSeenRemoval) error { return nil }
-func (noRemovals) finish() error               { return nil }
+func (noRemovals[K]) push(firstSeenRemoval[K]) error { return nil }
+func (noRemovals[K]) finish() error                  { return nil }
 
 // firstSeenRemovalBatch is the bounded removal batch size (Rust
 // REMOVAL_BATCH_CAPACITY).
@@ -186,8 +185,8 @@ type batchedRemovals4 struct {
 	length  int
 }
 
-func (b *batchedRemovals4) push(removal firstSeenRemoval) error {
-	b.records[b.length] = FirstSeenRemoval4{From: removal.from.U32(), To: removal.to.U32(), FirstSeen: removal.firstSeen, Addresses: removal.addresses}
+func (b *batchedRemovals4) push(removal firstSeenRemoval[key4]) error {
+	b.records[b.length] = FirstSeenRemoval4{From: uint32(removal.from), To: uint32(removal.to), FirstSeen: removal.firstSeen, Addresses: removal.addresses}
 	b.length++
 	if b.length == firstSeenRemovalBatch {
 		return b.flush()
@@ -216,10 +215,8 @@ type batchedRemovals6 struct {
 	length  int
 }
 
-func (b *batchedRemovals6) push(removal firstSeenRemoval) error {
-	fromHi, fromLo := removal.from.U128()
-	toHi, toLo := removal.to.U128()
-	b.records[b.length] = FirstSeenRemoval6{FromHi: fromHi, FromLo: fromLo, ToHi: toHi, ToLo: toLo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
+func (b *batchedRemovals6) push(removal firstSeenRemoval[key6]) error {
+	b.records[b.length] = FirstSeenRemoval6{FromHi: removal.from.hi, FromLo: removal.from.lo, ToHi: removal.to.hi, ToLo: removal.to.lo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
 	b.length++
 	if b.length == firstSeenRemovalBatch {
 		return b.flush()
@@ -243,21 +240,21 @@ func (b *batchedRemovals6) finish() error { return b.flush() }
 // lastSeenPolicy refreshes covered values to at least the refresh value,
 // keeps recent absence, and expires absence at or below the cutoff (Rust
 // LastSeenPolicy).
-type lastSeenPolicy struct {
+type lastSeenPolicy[K any] struct {
 	refreshValue uint32
 	cutoff       uint32
-	counters     timestampCounters
+	counters     timestampCounters[K]
 }
 
-func newLastSeenPolicy(refreshValue, cutoff uint32, family uint8) *lastSeenPolicy {
-	return &lastSeenPolicy{
+func newLastSeenPolicy[K any](refreshValue, cutoff uint32, codec rangeFamily[K]) *lastSeenPolicy[K] {
+	return &lastSeenPolicy[K]{
 		refreshValue: refreshValue,
 		cutoff:       cutoff,
-		counters:     timestampCounters{family: family},
+		counters:     timestampCounters[K]{codec: codec},
 	}
 }
 
-func (p *lastSeenPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
+func (p *lastSeenPolicy[K]) transform(store *DraftStore, old optionalValue, incoming incomingValue[uint32]) (optionalValue, error) {
 	switch {
 	case old.present && incoming.present:
 		if old.value >= p.refreshValue {
@@ -273,21 +270,24 @@ func (p *lastSeenPolicy) transform(store *DraftStore, old optionalValue, incomin
 	}
 }
 
-func (p *lastSeenPolicy) observe(from, to tree.Key, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
+func (p *lastSeenPolicy[K]) observe(from, to K, old optionalValue, incoming incomingValue[uint32], new optionalValue) error {
 	_, err := p.counters.observe(from, to, old, optionalValue{value: incoming.value, present: incoming.present}, new)
 	return err
 }
 
-func (p *lastSeenPolicy) finish() (timestampOutput, error) {
+func (p *lastSeenPolicy[K]) finish() (timestampOutput, error) {
 	return p.counters.finish()
 }
 
-func (p *lastSeenPolicy) preserveWithoutInput() bool { return false }
+func (p *lastSeenPolicy[K]) preserveWithoutInput() bool { return false }
 
 // mergeFirstSeen merges the workflow coverage tree over the committed
 // base with the first-seen policy (Rust DraftStore::merge_first_seen).
 func (s *DraftStore) mergeFirstSeen(base format.Meta, refreshValue uint32, check func() error) (TimestampMerge, error) {
-	return s.mergeTimestamp(base, newFirstSeenPolicy(refreshValue, base.AddressFamily), check)
+	if base.AddressFamily == format.AddressFamilyIPv4 {
+		return mergeTimestamp(s, rangeCodec4{}, base, newFirstSeenPolicy(refreshValue, rangeCodec4{}), check)
+	}
+	return mergeTimestamp(s, rangeCodec6{}, base, newFirstSeenPolicy(refreshValue, rangeCodec6{}), check)
 }
 
 // mergeFirstSeenWithRemovals4 merges with the first-seen policy and
@@ -300,7 +300,7 @@ func (s *DraftStore) mergeFirstSeenWithRemovals4(base format.Meta, refreshValue 
 	if base.AddressFamily != format.AddressFamilyIPv4 {
 		return TimestampMerge{}, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "removal sink family does not match the database"}
 	}
-	return s.mergeTimestamp(base, newFirstSeenPolicyWithRemovals(refreshValue, base.AddressFamily, &batchedRemovals4{sink: sink}), check)
+	return mergeTimestamp(s, rangeCodec4{}, base, newFirstSeenPolicyWithRemovals(refreshValue, rangeCodec4{}, &batchedRemovals4{sink: sink}), check)
 }
 
 // mergeFirstSeenWithRemovals6 merges with the first-seen policy and
@@ -311,13 +311,16 @@ func (s *DraftStore) mergeFirstSeenWithRemovals6(base format.Meta, refreshValue 
 	if base.AddressFamily != format.AddressFamilyIPv6 {
 		return TimestampMerge{}, &format.Error{Code: format.CodeWrongAddressFamily, Detail: "removal sink family does not match the database"}
 	}
-	return s.mergeTimestamp(base, newFirstSeenPolicyWithRemovals(refreshValue, base.AddressFamily, &batchedRemovals6{sink: sink}), check)
+	return mergeTimestamp(s, rangeCodec6{}, base, newFirstSeenPolicyWithRemovals(refreshValue, rangeCodec6{}, &batchedRemovals6{sink: sink}), check)
 }
 
 // mergeLastSeen merges the workflow coverage tree over the committed
 // base with the last-seen policy (Rust DraftStore::merge_last_seen).
 func (s *DraftStore) mergeLastSeen(base format.Meta, refreshValue, cutoff uint32, check func() error) (TimestampMerge, error) {
-	return s.mergeTimestamp(base, newLastSeenPolicy(refreshValue, cutoff, base.AddressFamily), check)
+	if base.AddressFamily == format.AddressFamilyIPv4 {
+		return mergeTimestamp(s, rangeCodec4{}, base, newLastSeenPolicy(refreshValue, cutoff, rangeCodec4{}), check)
+	}
+	return mergeTimestamp(s, rangeCodec6{}, base, newLastSeenPolicy(refreshValue, cutoff, rangeCodec6{}), check)
 }
 
 // mergeTimestamp drives the timestamp policy through the coverage merge
@@ -325,14 +328,8 @@ func (s *DraftStore) mergeLastSeen(base format.Meta, refreshValue, cutoff uint32
 // merge_timestamp_family): the draft meta is the input, the merge output
 // replaces the draft range root, and the base tree retires inside the
 // merge finish.
-func (s *DraftStore) mergeTimestamp(base format.Meta, policy mergePolicy[uint32, timestampOutput], check func() error) (TimestampMerge, error) {
-	var codec rangeFamily
-	if base.AddressFamily == format.AddressFamilyIPv4 {
-		codec = rangeCodec4{}
-	} else {
-		codec = rangeCodec6{}
-	}
-	inputIntervals, finished, err := mergeCoverage[timestampOutput](s, s.draft.meta, base, codec, policy, check, "timestamp input intervals")
+func mergeTimestamp[K any](s *DraftStore, codec rangeFamily[K], base format.Meta, policy mergePolicy[uint32, timestampOutput, K], check func() error) (TimestampMerge, error) {
+	inputIntervals, finished, err := mergeCoverage[timestampOutput, K](s, s.draft.meta, base, codec, policy, check, "timestamp input intervals")
 	if err != nil {
 		return TimestampMerge{}, err
 	}

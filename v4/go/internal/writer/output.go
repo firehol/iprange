@@ -68,7 +68,11 @@ type OutputBuilder struct {
 	path    string
 	meta    format.Meta
 	budget  OutputBudget
-	ranges  *rangeBulkBuilder
+	// ranges4 and ranges6 are the per-family range bulk builders of
+	// this output (Rust Builder<K>); the family is fixed by the output
+	// spec and only the matching builder is used.
+	ranges4 *rangeBulkBuilder[key4]
+	ranges6 *rangeBulkBuilder[key6]
 	// Encode targets for the catalog and dictionary records of one
 	// output. The build loop is single-threaded and every tree insert
 	// copies its record into the mapped page before the next encode
@@ -263,7 +267,8 @@ func assembleOutputBuilder(m *mapping.Mapping, path string, spec OutputSpec, bud
 		path:           path,
 		meta:           meta,
 		budget:         budget,
-		ranges:         newRangeBulkBuilder(meta.TxnID, meta.ValueKind, meta.AddressFamily),
+		ranges4:        newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec4{}),
+		ranges6:        newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec6{}),
 		membershipRefs: newMembershipReferenceBatch(batchCapacity),
 		structureRefs:  newMembershipReferenceBatch(structureCapacity),
 	}
@@ -418,7 +423,7 @@ func (b *OutputBuilder) PushDirectV4(from, to, value uint32) error {
 		if err := b.requireMode(format.ValueKindDirect, format.AddressFamilyIPv4); err != nil {
 			return err
 		}
-		return b.ranges.push(b, rangeRecord{from: tree.KeyOfU32(from), to: tree.KeyOfU32(to), value: value})
+		return b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value})
 	})
 }
 
@@ -428,7 +433,7 @@ func (b *OutputBuilder) PushDirectV6(fromHi, fromLo, toHi, toLo uint64, value ui
 		if err := b.requireMode(format.ValueKindDirect, format.AddressFamilyIPv6); err != nil {
 			return err
 		}
-		return b.ranges.push(b, rangeRecord{from: tree.KeyOfU128(fromHi, fromLo), to: tree.KeyOfU128(toHi, toLo), value: value})
+		return b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value})
 	})
 }
 
@@ -457,7 +462,7 @@ func pushMembershipWordsV4[W membershipWords](b *OutputBuilder, from, to uint32,
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{from: tree.KeyOfU32(from), to: tree.KeyOfU32(to), value: value}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -488,7 +493,7 @@ func pushMembershipWordsV6[W membershipWords](b *OutputBuilder, fromHi, fromLo, 
 		if err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{from: tree.KeyOfU128(fromHi, fromLo), to: tree.KeyOfU128(toHi, toLo), value: value}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -502,7 +507,7 @@ func (b *OutputBuilder) PushInternedMembershipV4(from, to, value uint32) error {
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv4); err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{from: tree.KeyOfU32(from), to: tree.KeyOfU32(to), value: value}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -516,7 +521,7 @@ func (b *OutputBuilder) PushInternedMembershipV6(fromHi, fromLo, toHi, toLo uint
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv6); err != nil {
 			return err
 		}
-		if err := b.ranges.push(b, rangeRecord{from: tree.KeyOfU128(fromHi, fromLo), to: tree.KeyOfU128(toHi, toLo), value: value}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -710,7 +715,14 @@ func (b *OutputBuilder) Finish() error {
 		b.failed = true
 		return err
 	}
-	root, count, err := b.ranges.finish(b)
+	var root uint32
+	var count uint64
+	var err error
+	if b.meta.AddressFamily == format.AddressFamilyIPv4 {
+		root, count, err = b.ranges4.finish(b)
+	} else {
+		root, count, err = b.ranges6.finish(b)
+	}
 	if err != nil {
 		b.failed = true
 		return err

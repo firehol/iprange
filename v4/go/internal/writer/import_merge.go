@@ -8,7 +8,6 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // translatedMembership is one destination dictionary membership plus
@@ -36,26 +35,27 @@ type importCachedUnion struct {
 // cached combine slot. The merge record carries the already-translated
 // membership exactly like Rust Incoming<TranslatedMembership>; no
 // translation lookup happens inside the merge.
-type importPolicy struct {
+type importPolicy[K any] struct {
 	comparison Comparison
 	cached     importCachedUnion
 	hasCached  bool
 	family     uint8
+	codec      rangeFamily[K]
 }
 
-func newImportPolicy(family uint8) importPolicy {
-	return importPolicy{family: family}
+func newImportPolicy[K any](family uint8, codec rangeFamily[K]) importPolicy[K] {
+	return importPolicy[K]{family: family, codec: codec}
 }
 
 // preserveWithoutInput preserves the untouched base generation (Rust
 // ImportPolicy PRESERVE_WITHOUT_INPUT).
-func (p *importPolicy) preserveWithoutInput() bool { return true }
+func (p *importPolicy[K]) preserveWithoutInput() bool { return true }
 
 // transform returns the merged membership of one segment (Rust
 // ImportPolicy::transform): no incoming value keeps the old bitmap, no
 // old bitmap adopts the incoming one, and an overlap unions the two
 // through the cached combine.
-func (p *importPolicy) transform(store *DraftStore, old optionalValue, incoming incomingValue[translatedMembership]) (optionalValue, error) {
+func (p *importPolicy[K]) transform(store *DraftStore, old optionalValue, incoming incomingValue[translatedMembership]) (optionalValue, error) {
 	if !incoming.present {
 		return old, nil
 	}
@@ -76,8 +76,8 @@ func (p *importPolicy) transform(store *DraftStore, old optionalValue, incoming 
 
 // observe folds one segment into the exact before/after classification
 // (Rust ImportPolicy::observe over MapComparison).
-func (p *importPolicy) observe(from, to tree.Key, old optionalValue, _incoming incomingValue[translatedMembership], new optionalValue) error {
-	count, err := familyInclusiveCardinality(p.family, from, to)
+func (p *importPolicy[K]) observe(from, to K, old optionalValue, _incoming incomingValue[translatedMembership], new optionalValue) error {
+	count, err := familyInclusiveCardinalityOf(p.codec, from, to)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (p *importPolicy) observe(from, to tree.Key, old optionalValue, _incoming i
 
 // finish returns the policy (Rust ImportPolicy::finish over
 // MapComparison; the classification is exposed by the merge finish).
-func (p *importPolicy) finish() (importPolicy, error) {
+func (p *importPolicy[K]) finish() (importPolicy[K], error) {
 	return *p, nil
 }
 
@@ -142,40 +142,58 @@ func importComparisonBalance(c Comparison) (Comparison, error) {
 }
 
 // ImportMerge is one running import merge over the committed
-// destination (Rust ImportMerge). The root facade holds the opaque
-// merge handle between WordEdit arms.
+// destination (Rust ImportMerge). The facade holds exactly the family
+// side selected by the destination address family; the edit arms route
+// the per-family methods to that side.
 type ImportMerge struct {
-	inner *orderedMerge[translatedMembership, importPolicy]
+	inner4 *orderedMerge[translatedMembership, importPolicy[key4], key4]
+	inner6 *orderedMerge[translatedMembership, importPolicy[key6], key6]
 }
 
 // beginImportMerge opens the import merge over the committed
 // destination generation (Rust ImportMerge::new).
 func beginImportMerge(store *DraftStore, base format.Meta, check func() error) (*ImportMerge, error) {
-	var codec rangeFamily
 	if base.AddressFamily == format.AddressFamilyIPv4 {
-		codec = rangeCodec4{}
-	} else {
-		codec = rangeCodec6{}
+		policy := newImportPolicy(base.AddressFamily, rangeCodec4{})
+		inner, err := newOrderedMerge[translatedMembership, importPolicy[key4], key4](store, base, rangeCodec4{}, &policy, check)
+		if err != nil {
+			return nil, err
+		}
+		return &ImportMerge{inner4: inner}, nil
 	}
-	policy := newImportPolicy(base.AddressFamily)
-	inner, err := newOrderedMerge[translatedMembership, importPolicy](store, base, codec, &policy, check)
+	policy := newImportPolicy(base.AddressFamily, rangeCodec6{})
+	inner, err := newOrderedMerge[translatedMembership, importPolicy[key6], key6](store, base, rangeCodec6{}, &policy, check)
 	if err != nil {
 		return nil, err
 	}
-	return &ImportMerge{inner: inner}, nil
+	return &ImportMerge{inner6: inner}, nil
 }
 
-// push streams one translated membership interval into the merge (Rust
-// ImportMerge::push over TranslatedMembership; the words arrive with
-// the record, so the policy never re-resolves a translation).
-func (m *ImportMerge) push(store *DraftStore, from, to tree.Key, membership translatedMembership, check func() error) error {
-	return m.inner.push(store, incomingRange[translatedMembership]{from: from, to: to, value: membership}, check)
+// push4 streams one translated IPv4 membership interval into the merge
+// (Rust ImportMerge::push over TranslatedMembership; the words arrive
+// with the record, so the policy never re-resolves a translation).
+func (m *ImportMerge) push4(store *DraftStore, from, to key4, membership translatedMembership, check func() error) error {
+	return m.inner4.push(store, incomingRange[translatedMembership, key4]{from: from, to: to, value: membership}, check)
 }
 
-// finish completes the merge and returns the classification (Rust
+// push6 is the IPv6 form of push4.
+func (m *ImportMerge) push6(store *DraftStore, from, to key6, membership translatedMembership, check func() error) error {
+	return m.inner6.push(store, incomingRange[translatedMembership, key6]{from: from, to: to, value: membership}, check)
+}
+
+// finish4 completes the IPv4 merge and returns the classification (Rust
 // ImportMerge::finish over ImportPolicy::finish).
-func (m *ImportMerge) finish(store *DraftStore, check func() error) (Comparison, error) {
-	policy, err := m.inner.finish(store, check)
+func (m *ImportMerge) finish4(store *DraftStore, check func() error) (Comparison, error) {
+	policy, err := m.inner4.finish(store, check)
+	if err != nil {
+		return Comparison{}, err
+	}
+	return importComparisonBalance(policy.comparison)
+}
+
+// finish6 is the IPv6 form of finish4.
+func (m *ImportMerge) finish6(store *DraftStore, check func() error) (Comparison, error) {
+	policy, err := m.inner6.finish(store, check)
 	if err != nil {
 		return Comparison{}, err
 	}

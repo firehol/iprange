@@ -8,7 +8,6 @@ package writer
 import (
 	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -231,12 +230,8 @@ func (s *DraftStore) addFeedToMembership(base MembershipHandle, feed FeedEntry) 
 // range root/count commit only after the walk succeeds. The checkpoint
 // runs before every cell combination (Rust apply_membership calls the
 // checkpoint inside the transform closure).
-func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	family, err := s.rangeFamily()
-	if err != nil {
-		return false, err
-	}
-	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
+func (s *DraftStore) applyMembership4(from, to key4, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
+	ctx := s.beginRangeEdit4(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 	memberID, memberWords := member.stored()
 	changed, err := rangeTransform(ctx, from, to, func(store RangeStore, value optionalValue) (optionalValue, error) {
 		if err := check(); err != nil {
@@ -259,16 +254,52 @@ func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle,
 	return changed, nil
 }
 
+// applyMembership6 is the IPv6 form of applyMembership4.
+func (s *DraftStore) applyMembership6(from, to key6, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
+	ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
+	memberID, memberWords := member.stored()
+	changed, err := rangeTransform(ctx, from, to, func(store RangeStore, value optionalValue) (optionalValue, error) {
+		if err := check(); err != nil {
+			return optionalValue{}, err
+		}
+		current := uint32(0)
+		if value.present {
+			current = value.value
+		}
+		id, present, err := s.combineMemberships(current, memberID, memberWords, operation)
+		if err != nil {
+			return optionalValue{}, err
+		}
+		return optionalValue{value: id, present: present}, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
+	return changed, nil
+}
+
+// deleteFeedMembershipDifference subtracts one feed member from the
+// whole family range of the draft (Rust delete_current_feed_membership):
+// the transform runs over the full typed family interval.
+func (s *DraftStore) deleteFeedMembershipDifference(member MembershipHandle, check func() error) (bool, error) {
+	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
+		return s.applyMembership4(key4(0), key4(0xFFFFFFFF), member, MembershipDifference, check)
+	}
+	max6 := key6{hi: ^uint64(0), lo: ^uint64(0)}
+	return s.applyMembership6(key6{}, max6, member, MembershipDifference, check)
+}
+
 // applyMembershipV4 applies one membership operation over an inclusive
 // IPv4 interval (Rust DraftStore::apply_membership_v4).
 func (s *DraftStore) applyMembershipV4(from, to uint32, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	return s.applyMembership(tree.KeyOfU32(from), tree.KeyOfU32(to), member, operation, check)
+	return s.applyMembership4(key4(from), key4(to), member, operation, check)
 }
 
 // applyMembershipV6 applies one membership operation over an inclusive
 // IPv6 interval (Rust DraftStore::apply_membership_v6).
 func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	return s.applyMembership(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), member, operation, check)
+	return s.applyMembership6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, member, operation, check)
 }
 
 // deleteCurrentFeedMembership deletes one feed and clears its bit from
@@ -291,15 +322,7 @@ func (s *DraftStore) deleteCurrentFeedMembership(feed FeedEntry, check func() er
 	if err != nil {
 		return err
 	}
-	var minimum, maximum tree.Key
-	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
-		minimum = tree.KeyOfU32(uint32(0))
-		maximum = tree.KeyOfU32(uint32(1<<32 - 1))
-	} else {
-		minimum = tree.KeyOfU128(uint64(0), uint64(0))
-		maximum = tree.KeyOfU128(^uint64(0), ^uint64(0))
-	}
-	if _, err := s.applyMembership(minimum, maximum, member, MembershipDifference, check); err != nil {
+	if _, err := s.deleteFeedMembershipDifference(member, check); err != nil {
 		return err
 	}
 	if err := check(); err != nil {

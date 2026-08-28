@@ -65,9 +65,9 @@ func noneIncoming[V any]() incomingValue[V] {
 // draft_store/range_merge.rs Incoming<V>; the value is the last-seen
 // timestamp for the history projection and the translated membership
 // for the name-based import).
-type incomingRange[V any] struct {
-	from  tree.Key
-	to    tree.Key
+type incomingRange[V any, K any] struct {
+	from  K
+	to    K
 	value V
 }
 
@@ -75,9 +75,9 @@ type incomingRange[V any] struct {
 // Policy trait). preserveWithoutInput mirrors the trait constant: the
 // history projection never preserves an untouched base, the feed merges
 // (which do) reuse this merge later.
-type mergePolicy[V any, P any] interface {
+type mergePolicy[V any, P any, K any] interface {
 	transform(store *DraftStore, old optionalValue, incoming incomingValue[V]) (optionalValue, error)
-	observe(from, to tree.Key, old optionalValue, incoming incomingValue[V], new optionalValue) error
+	observe(from, to K, old optionalValue, incoming incomingValue[V], new optionalValue) error
 	finish() (P, error)
 	preserveWithoutInput() bool
 }
@@ -87,16 +87,16 @@ type mergePolicy[V any, P any] interface {
 // record is charged through the membership refcount run, and the bulk
 // builder seals the new tree at finish. pending is embedded by value so
 // emitting one record never allocates.
-type mergeOutput struct {
-	builder     *rangeBulkBuilder
-	pending     rangeRecord
+type mergeOutput[K any] struct {
+	builder     *rangeBulkBuilder[K]
+	pending     rangeRecord[K]
 	hasPending  bool
 	refcounts   refcountRun
 	hasRefcount bool
 }
 
-func newMergeOutput(transaction uint64, valueKind, family uint8) mergeOutput {
-	output := mergeOutput{builder: newRangeBulkBuilder(transaction, valueKind, family)}
+func newMergeOutput[K any](transaction uint64, valueKind uint8, family rangeFamily[K]) mergeOutput[K] {
+	output := mergeOutput[K]{builder: newRangeBulkBuilder(transaction, valueKind, family)}
 	if valueKind == format.ValueKindMembership {
 		output.hasRefcount = true
 	}
@@ -105,9 +105,9 @@ func newMergeOutput(transaction uint64, valueKind, family uint8) mergeOutput {
 
 // emit appends one output record, coalescing it into the pending record
 // when the values match and the ranges are adjacent (Rust Output::emit).
-func (o *mergeOutput) emit(store *DraftStore, record rangeRecord) error {
+func (o *mergeOutput[K]) emit(store *DraftStore, record rangeRecord[K]) error {
 	if o.hasPending && o.pending.value == record.value {
-		if next, ok := nextKey(store.draft.meta.AddressFamily, o.pending.to); ok && next.Equal(record.from) {
+		if next, ok := o.builder.family.Next(o.pending.to); ok && o.builder.family.Equal(next, record.from) {
 			o.pending.to = record.to
 			work.RangeCoalesced(1)
 			return nil
@@ -126,7 +126,7 @@ func (o *mergeOutput) emit(store *DraftStore, record rangeRecord) error {
 
 // finish seals the output tree and returns its root and record count
 // (Rust Output::finish).
-func (o *mergeOutput) finish(store *DraftStore) (uint32, uint64, error) {
+func (o *mergeOutput[K]) finish(store *DraftStore) (uint32, uint64, error) {
 	if o.hasPending {
 		if err := o.push(store, o.pending); err != nil {
 			return 0, 0, err
@@ -143,7 +143,7 @@ func (o *mergeOutput) finish(store *DraftStore) (uint32, uint64, error) {
 
 // push charges one distinct output record and appends it (Rust
 // Output::push).
-func (o *mergeOutput) push(store *DraftStore, record rangeRecord) error {
+func (o *mergeOutput[K]) push(store *DraftStore, record rangeRecord[K]) error {
 	if o.hasRefcount {
 		if err := o.refcounts.add(store, record.value, 1); err != nil {
 			return err
@@ -222,17 +222,16 @@ func (r *refcountRun) flushSigned(store *DraftStore, sign int64) error {
 // lockstep, emitting the policy result per segment (Rust OrderedMerge).
 // old and previousInputEnd are embedded by value; the cursor hands back
 // one record at a time without allocating.
-type orderedMerge[V any, P any] struct {
-	codec               rangeFamily
-	family              uint8
-	oldCursor           *rangeCursor
-	old                 rangeRecord
+type orderedMerge[V any, P any, K any] struct {
+	family              rangeFamily[K]
+	oldCursor           *rangeCursor[K]
+	old                 rangeRecord[K]
 	hasOld              bool
 	oldAccounted        bool
-	previousInputEnd    tree.Key
+	previousInputEnd    K
 	hasPreviousInputEnd bool
-	output              mergeOutput
-	policy              mergePolicy[V, P]
+	output              mergeOutput[K]
+	policy              mergePolicy[V, P, K]
 	baseRoot            uint32
 	baseCount           uint64
 	inputSeen           bool
@@ -244,19 +243,18 @@ type orderedMerge[V any, P any] struct {
 // newOrderedMerge opens the base cursor and the output builder (Rust
 // OrderedMerge::new). The old cursor reads the committed base generation
 // with base-meta selection, never the draft.
-func newOrderedMerge[V any, P any](store *DraftStore, base format.Meta, codec rangeFamily, policy mergePolicy[V, P], check func() error) (*orderedMerge[V, P], error) {
+func newOrderedMerge[V any, P any, K any](store *DraftStore, base format.Meta, codec rangeFamily[K], policy mergePolicy[V, P, K], check func() error) (*orderedMerge[V, P, K], error) {
 	if err := check(); err != nil {
 		return nil, err
 	}
-	oldCursor, err := newRangeCursor(store, base, false)
+	oldCursor, err := newRangeCursor[K](store, base, codec, false)
 	if err != nil {
 		return nil, err
 	}
-	merge := &orderedMerge[V, P]{
-		codec:     codec,
-		family:    base.AddressFamily,
+	merge := &orderedMerge[V, P, K]{
+		family:    codec,
 		oldCursor: oldCursor,
-		output:    newMergeOutput(store.draft.meta.TxnID, base.ValueKind, base.AddressFamily),
+		output:    newMergeOutput(store.draft.meta.TxnID, base.ValueKind, codec),
 		policy:    policy,
 		baseRoot:  base.RangeRoot,
 		baseCount: base.RangeRecordCount,
@@ -275,7 +273,7 @@ func newOrderedMerge[V any, P any](store *DraftStore, base format.Meta, codec ra
 
 // push merges one incoming interval, emitting every segment before it
 // (Rust OrderedMerge::push).
-func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], check func() error) error {
+func (m *orderedMerge[V, P, K]) push(store *DraftStore, incoming incomingRange[V, K], check func() error) error {
 	if err := m.requireInput(incoming); err != nil {
 		return err
 	}
@@ -290,7 +288,7 @@ func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], 
 		if !m.hasOld {
 			return m.emit(store, copy.from, copy.to, noneValue(), someIncoming(copy.value))
 		}
-		if m.old.to.Less(copy.from) {
+		if m.family.Less(m.old.to, copy.from) {
 			if err := m.accountOld(store); err != nil {
 				return err
 			}
@@ -303,14 +301,14 @@ func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], 
 			}
 			continue
 		}
-		if copy.to.Less(m.old.from) {
+		if m.family.Less(copy.to, m.old.from) {
 			return m.emit(store, copy.from, copy.to, noneValue(), someIncoming(copy.value))
 		}
 		if err := m.accountOld(store); err != nil {
 			return err
 		}
-		if m.old.from.Less(copy.from) {
-			end, err := orderedPrevious(m.codec, copy.from, "ordered merge old prefix")
+		if m.family.Less(m.old.from, copy.from) {
+			end, err := orderedPrevious(m.family, copy.from, "ordered merge old prefix")
 			if err != nil {
 				return err
 			}
@@ -321,8 +319,8 @@ func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], 
 			m.old.from = copy.from
 			continue
 		}
-		if copy.from.Less(m.old.from) {
-			end, err := orderedPrevious(m.codec, m.old.from, "ordered merge input prefix")
+		if m.family.Less(copy.from, m.old.from) {
+			end, err := orderedPrevious(m.family, m.old.from, "ordered merge input prefix")
 			if err != nil {
 				return err
 			}
@@ -333,28 +331,28 @@ func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], 
 			continue
 		}
 		end := m.old.to
-		if copy.to.Less(end) {
+		if m.family.Less(copy.to, end) {
 			end = copy.to
 		}
 		old := m.old
 		if err := m.emit(store, old.from, end, someValue(old.value), someIncoming(copy.value)); err != nil {
 			return err
 		}
-		if m.old.to.Equal(end) {
+		if m.family.Equal(m.old.to, end) {
 			if err := m.advanceOld(store); err != nil {
 				return err
 			}
 		} else {
-			next, err := orderedNext(m.codec, end, "ordered merge old remainder")
+			next, err := orderedNext(m.family, end, "ordered merge old remainder")
 			if err != nil {
 				return err
 			}
 			m.old.from = next
 		}
-		if copy.to.Equal(end) {
+		if m.family.Equal(copy.to, end) {
 			return nil
 		}
-		next, err := orderedNext(m.codec, end, "ordered merge input remainder")
+		next, err := orderedNext(m.family, end, "ordered merge input remainder")
 		if err != nil {
 			return err
 		}
@@ -365,7 +363,7 @@ func (m *orderedMerge[V, P]) push(store *DraftStore, incoming incomingRange[V], 
 // finish drains the remaining base records, retires the base tree, and
 // publishes the merge output into the draft meta (Rust
 // OrderedMerge::finish).
-func (m *orderedMerge[V, P]) finish(store *DraftStore, check func() error) (P, error) {
+func (m *orderedMerge[V, P, K]) finish(store *DraftStore, check func() error) (P, error) {
 	var zero P
 	if !m.inputSeen && m.policy.preserveWithoutInput() {
 		return m.finishPreserved(store, check)
@@ -395,7 +393,7 @@ func (m *orderedMerge[V, P]) finish(store *DraftStore, check func() error) (P, e
 		return zero, err
 	}
 	retirementWork := 0
-	if err := tree.RetireTree(m.codec, store, m.baseRoot, func() error {
+	if err := tree.RetireTree(m.family, store, m.baseRoot, func() error {
 		retirementWork++
 		if retirementWork == 4096 {
 			retirementWork = 0
@@ -417,7 +415,7 @@ func (m *orderedMerge[V, P]) finish(store *DraftStore, check func() error) (P, e
 // finishPreserved keeps the untouched base tree when the policy
 // preserves without input, observing each base record (Rust
 // OrderedMerge::finish_preserved).
-func (m *orderedMerge[V, P]) finishPreserved(store *DraftStore, check func() error) (P, error) {
+func (m *orderedMerge[V, P, K]) finishPreserved(store *DraftStore, check func() error) (P, error) {
 	var zero P
 	for m.hasOld {
 		if err := m.checkpoint(check); err != nil {
@@ -439,7 +437,7 @@ func (m *orderedMerge[V, P]) finishPreserved(store *DraftStore, check func() err
 
 // checkpoint runs the caller's cancellation every 4096 merge steps
 // (Rust OrderedMerge::checkpoint).
-func (m *orderedMerge[V, P]) checkpoint(check func() error) error {
+func (m *orderedMerge[V, P, K]) checkpoint(check func() error) error {
 	m.cancellationWork++
 	if m.cancellationWork == 4096 {
 		m.cancellationWork = 0
@@ -450,7 +448,7 @@ func (m *orderedMerge[V, P]) checkpoint(check func() error) error {
 
 // emit transforms one segment through the policy and appends the new
 // value (Rust OrderedMerge::emit).
-func (m *orderedMerge[V, P]) emit(store *DraftStore, from, to tree.Key, old optionalValue, incoming incomingValue[V]) error {
+func (m *orderedMerge[V, P, K]) emit(store *DraftStore, from, to K, old optionalValue, incoming incomingValue[V]) error {
 	new, err := m.policy.transform(store, old, incoming)
 	if err != nil {
 		return err
@@ -459,14 +457,14 @@ func (m *orderedMerge[V, P]) emit(store *DraftStore, from, to tree.Key, old opti
 		return err
 	}
 	if new.present {
-		return m.output.emit(store, rangeRecord{from: from, to: to, value: new.value})
+		return m.output.emit(store, rangeRecord[K]{from: from, to: to, value: new.value})
 	}
 	return nil
 }
 
 // accountOld charges the current base record into the old refcount run
 // exactly once (Rust OrderedMerge::account_old).
-func (m *orderedMerge[V, P]) accountOld(store *DraftStore) error {
+func (m *orderedMerge[V, P, K]) accountOld(store *DraftStore) error {
 	if !m.oldAccounted {
 		if !m.hasOld {
 			return corrupt("ordered merge lost its old range")
@@ -483,7 +481,7 @@ func (m *orderedMerge[V, P]) accountOld(store *DraftStore) error {
 
 // advanceOld moves the base cursor to the next record (Rust
 // OrderedMerge::advance_old).
-func (m *orderedMerge[V, P]) advanceOld(store *DraftStore) error {
+func (m *orderedMerge[V, P, K]) advanceOld(store *DraftStore) error {
 	next, has, err := m.oldCursor.next()
 	if err != nil {
 		return err
@@ -496,11 +494,11 @@ func (m *orderedMerge[V, P]) advanceOld(store *DraftStore) error {
 
 // requireInput rejects reversed or overlapping input ranges (Rust
 // OrderedMerge::require_input).
-func (m *orderedMerge[V, P]) requireInput(incoming incomingRange[V]) error {
-	if incoming.to.Less(incoming.from) {
+func (m *orderedMerge[V, P, K]) requireInput(incoming incomingRange[V, K]) error {
+	if m.family.Less(incoming.to, incoming.from) {
 		return corrupt("ordered merge input range is reversed")
 	}
-	if m.hasPreviousInputEnd && !m.previousInputEnd.Less(incoming.from) {
+	if m.hasPreviousInputEnd && !m.family.Less(m.previousInputEnd, incoming.from) {
 		return corrupt("ordered merge input ranges overlap or are out of order")
 	}
 	return nil
@@ -513,13 +511,13 @@ func (m *orderedMerge[V, P]) requireInput(incoming incomingRange[V]) error {
 // count plus the finished policy output. The coverage records are the
 // timestamp refresh input values (uint32), so the merge input type is
 // fixed at uint32 exactly like the Rust timestamp policies.
-func mergeCoverage[P any](store *DraftStore, source format.Meta, base format.Meta, codec rangeFamily, policy mergePolicy[uint32, P], check func() error, countContext string) (uint64, P, error) {
+func mergeCoverage[P any, K any](store *DraftStore, source format.Meta, base format.Meta, codec rangeFamily[K], policy mergePolicy[uint32, P, K], check func() error, countContext string) (uint64, P, error) {
 	var zero P
-	coverage, err := newRangeCursor(store, source, true)
+	coverage, err := newRangeCursor[K](store, source, codec, true)
 	if err != nil {
 		return 0, zero, err
 	}
-	merge, err := newOrderedMerge[uint32, P](store, base, codec, policy, check)
+	merge, err := newOrderedMerge[uint32, P, K](store, base, codec, policy, check)
 	if err != nil {
 		return 0, zero, err
 	}
@@ -536,7 +534,7 @@ func mergeCoverage[P any](store *DraftStore, source format.Meta, base format.Met
 		if err != nil {
 			return 0, zero, err
 		}
-		if err := merge.push(store, incomingRange[uint32]{from: record.from, to: record.to, value: record.value}, check); err != nil {
+		if err := merge.push(store, incomingRange[uint32, K]{from: record.from, to: record.to, value: record.value}, check); err != nil {
 			return 0, zero, err
 		}
 	}
@@ -547,18 +545,20 @@ func mergeCoverage[P any](store *DraftStore, source format.Meta, base format.Met
 	return inputIntervals, finished, nil
 }
 
-func orderedPrevious(codec rangeFamily, key tree.Key, context string) (tree.Key, error) {
+func orderedPrevious[K any](codec rangeFamily[K], key K, context string) (K, error) {
 	previous, ok := codec.Previous(key)
 	if !ok {
-		return tree.Key{}, overflow(context)
+		var zero K
+		return zero, overflow(context)
 	}
 	return previous, nil
 }
 
-func orderedNext(codec rangeFamily, key tree.Key, context string) (tree.Key, error) {
+func orderedNext[K any](codec rangeFamily[K], key K, context string) (K, error) {
 	next, ok := codec.Next(key)
 	if !ok {
-		return tree.Key{}, overflow(context)
+		var zero K
+		return zero, overflow(context)
 	}
 	return next, nil
 }

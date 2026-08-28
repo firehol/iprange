@@ -15,7 +15,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/reader"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 	"github.com/firehol/iprange/v4/go/internal/work"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
@@ -339,7 +338,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(err)
 		}
 		if !ok {
-			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
+			comparison, err := edit.FinishImportMerge4(merge, cancellation.check)
 			if err != nil {
 				return w.abortAfter(err)
 			}
@@ -357,7 +356,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 		if err != nil {
 			return publicError(err)
 		}
-		err = edit.PushImportRange(merge, tree.KeyOfU32(record.From), tree.KeyOfU32(record.To), id, words, cancellation.check)
+		err = edit.PushImportRange4(merge, record.From, record.To, id, words, cancellation.check)
 		if err != nil {
 			return w.abortAfter(err)
 		}
@@ -399,7 +398,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 			return w.abortAfterSource(err)
 		}
 		if !ok {
-			comparison, err := edit.FinishImportMerge(merge, cancellation.check)
+			comparison, err := edit.FinishImportMerge6(merge, cancellation.check)
 			if err != nil {
 				return w.abortAfter(err)
 			}
@@ -417,7 +416,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 		if err != nil {
 			return publicError(err)
 		}
-		err = edit.PushImportRange(merge, tree.KeyOfU128(record.FromHi, record.FromLo), tree.KeyOfU128(record.ToHi, record.ToLo), id, words, cancellation.check)
+		err = edit.PushImportRange6(merge, record.FromHi, record.FromLo, record.ToHi, record.ToLo, id, words, cancellation.check)
 		if err != nil {
 			return w.abortAfter(err)
 		}

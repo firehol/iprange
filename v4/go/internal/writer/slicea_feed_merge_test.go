@@ -11,19 +11,18 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
 // readDraftRangeTree decodes every record of one draft range tree
 // through the mapping (the white-box cursor is used to assert the merge
 // output without preparing a publication).
-func readDraftRangeTree(t *testing.T, store *DraftStore, meta format.Meta) []rangeRecord {
+func readDraftRangeTree[K any](t *testing.T, store *DraftStore, codec rangeFamily[K], meta format.Meta) []rangeRecord[K] {
 	t.Helper()
-	cursor, err := newRangeCursor(store, meta, false)
+	cursor, err := newRangeCursor(store, meta, codec, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var records []rangeRecord
+	var records []rangeRecord[K]
 	for {
 		record, ok, err := cursor.next()
 		if err != nil {
@@ -234,14 +233,14 @@ func TestFeedMergeEmptyMapSpliceStaysUntracked(t *testing.T) {
 	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	for ordinal := 0; ordinal < 2000; ordinal++ {
 		key := uint32(ordinal) * 4
-		if err := store.addEmptyMapFeedRange(key4(key), key4(key+1), member, &input); err != nil {
+		if err := store.addEmptyMapFeedRange4(key4(key), key4(key+1), member, &input.v4); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.addEmptyMapFeedRange(key4(0), key4(8000), member, &input); err != nil {
+	if err := store.addEmptyMapFeedRange4(key4(0), key4(8000), member, &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.finishEmptyMapFeedRanges(member, &input); err != nil {
+	if _, _, err := store.finishEmptyMapFeedRanges4(member, &input.v4); err != nil {
 		t.Fatal(err)
 	}
 	if draft.meta.RangeRecordCount != 1 {
@@ -279,13 +278,13 @@ func TestFeedMergeEmptyMapCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
-	if err := store.addEmptyMapFeedRange(key4(0), key4(9), member, &input); err != nil {
+	if err := store.addEmptyMapFeedRange4(key4(0), key4(9), member, &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.addEmptyMapFeedRange(key4(20), key4(29), member, &input); err != nil {
+	if err := store.addEmptyMapFeedRange4(key4(20), key4(29), member, &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	ordered, hasOrdered, err := store.finishEmptyMapFeedRanges(member, &input)
+	ordered, hasOrdered, err := store.finishEmptyMapFeedRanges4(member, &input.v4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,12 +297,12 @@ func TestFeedMergeEmptyMapCreate(t *testing.T) {
 	if draft.meta.RangeRoot == 0 || draft.meta.RangeRecordCount != 2 {
 		t.Fatalf("sealed empty-map tree root=%d count=%d, want two records", draft.meta.RangeRoot, draft.meta.RangeRecordCount)
 	}
-	records := readDraftRangeTree(t, store, draft.meta)
+	records := readDraftRangeTree(t, store, rangeCodec4{}, draft.meta)
 	if len(records) != 2 {
 		t.Fatalf("sealed records = %d, want 2", len(records))
 	}
-	if records[0].from.U32() != 0 || records[0].to.U32() != 9 || records[0].value != member.id ||
-		records[1].from.U32() != 20 || records[1].to.U32() != 29 || records[1].value != member.id {
+	if uint32(records[0].from) != 0 || uint32(records[0].to) != 9 || records[0].value != member.id ||
+		uint32(records[1].from) != 20 || uint32(records[1].to) != 29 || records[1].value != member.id {
 		t.Fatalf("sealed records = %+v, want member@[0,9] and member@[20,29]", records)
 	}
 }
@@ -384,13 +383,13 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 	}
 
 	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
-	if err := store.addFeedCoverage(key4(4), key4(12), &input); err != nil {
+	if err := store.addFeedCoverage4(key4(4), key4(12), &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.addFeedCoverage(key4(20), key4(22), &input); err != nil {
+	if err := store.addFeedCoverage4(key4(20), key4(22), &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.finishFeedCoverage(&input); err != nil {
+	if err := store.finishFeedCoverage4(&input.v4); err != nil {
 		t.Fatal(err)
 	}
 	if store.draft.membershipDeltaRoot != 0 {
@@ -423,7 +422,7 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 	if merged.Comparison.BeforeIntervals != 0 || merged.Comparison.AfterIntervals != 2 {
 		t.Fatalf("before/after intervals = %d/%d, want 0/2", merged.Comparison.BeforeIntervals, merged.Comparison.AfterIntervals)
 	}
-	records := readDraftRangeTree(t, store, store.draft.meta)
+	records := readDraftRangeTree(t, store, rangeCodec4{}, store.draft.meta)
 	if len(records) != 7 {
 		t.Fatalf("merged records = %d, want 7", len(records))
 	}
@@ -436,7 +435,7 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		{0, 3}, {4, 4}, {5, 12}, {13, 15}, {16, 19}, {20, 22}, {25, 35},
 	}
 	for index, record := range records {
-		if record.from.U32() != uint32(want[index][0]) || record.to.U32() != uint32(want[index][1]) {
+		if uint32(record.from) != uint32(want[index][0]) || uint32(record.to) != uint32(want[index][1]) {
 			t.Fatalf("merged record %d = %+v, want range %v", index, record, want[index])
 		}
 	}
@@ -471,9 +470,3 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		t.Fatalf("[5,12] bits = %v %v %v, want recent+member+unrelated", probe[0], probe[1], probe[2])
 	}
 }
-
-func key4(value uint32) treeKey {
-	return tree.KeyOfU32(value)
-}
-
-type treeKey = tree.Key

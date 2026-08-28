@@ -13,31 +13,26 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/tree"
 )
 
-// readWorkflowTree decodes every record of the private workflow
+// readWorkflowTree decodes every record of the private IPv4 workflow
 // coverage tree through the mapping (the white-box cursor with the
 // workflow roots substituted into the draft meta).
-func readWorkflowTree(t *testing.T, store *DraftStore) []rangeRecord {
+func readWorkflowTree(t *testing.T, store *DraftStore) []rangeRecord[key4] {
 	t.Helper()
 	meta := store.draft.meta
 	meta.RangeRoot = store.draft.workflowRangeRoot
 	meta.RangeRecordCount = store.draft.workflowRangeCount
-	return readDraftRangeTree(t, store, meta)
+	return readDraftRangeTree(t, store, rangeCodec4{}, meta)
 }
 
 // pushWorkflowCoverage pushes one value-bearing range into the private
-// workflow coverage tree, untracked (Rust push_private_untracked with
-// an explicit value; DraftStore::add_feed_coverage hardcodes value 1,
-// the coverage tests need the Rust vectors' values).
-func pushWorkflowCoverage(store *DraftStore, input *UnionInput, from, to tree.Key, value uint32) error {
-	family, err := store.rangeFamily()
-	if err != nil {
-		return err
-	}
-	ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
-	if _, err := pushPrivateUntracked(ctx, from, to, value, input); err != nil {
+// IPv4 workflow coverage tree, untracked (Rust push_private_untracked
+// with an explicit value; DraftStore::add_feed_coverage hardcodes value
+// 1, the coverage tests need the Rust vectors' values).
+func pushWorkflowCoverage(store *DraftStore, input *UnionInput, from, to key4, value uint32) error {
+	ctx := store.beginRangeEdit4(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+	if _, err := pushPrivateUntracked(ctx, from, to, value, &input.v4); err != nil {
 		return err
 	}
 	store.draft.workflowRangeRoot = store.rangeRoot
@@ -45,23 +40,17 @@ func pushWorkflowCoverage(store *DraftStore, input *UnionInput, from, to tree.Ke
 	return nil
 }
 
-// finishWorkflowInput seals the pending coverage input (Rust
+// finishWorkflowInput seals the pending IPv4 coverage input (Rust
 // finish_input_untracked / DraftStore::finish_feed_coverage).
 func finishWorkflowInput(store *DraftStore, input *UnionInput) error {
-	family, err := store.rangeFamily()
-	if err != nil {
-		return err
-	}
-	ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
-	if _, err := finishInputUntracked(ctx, input); err != nil {
+	ctx := store.beginRangeEdit4(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+	if _, err := finishInputUntracked(ctx, &input.v4); err != nil {
 		return err
 	}
 	store.draft.workflowRangeRoot = store.rangeRoot
 	store.draft.workflowRangeCount = store.rangeCount
 	return nil
 }
-
-func key6(value uint64) tree.Key { return tree.KeyOfU128(uint64(0), value) }
 
 // TestUnionInputRandomBufferedMatchesScalarReference is the Go mirror of
 // the Rust buffered_coverage_union_matches_a_scalar_reference LCG
@@ -101,7 +90,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 	for address, wanted := range expected {
 		found := false
 		for _, record := range records {
-			if record.from.U32() <= uint32(address) && uint32(address) <= record.to.U32() {
+			if uint32(record.from) <= uint32(address) && uint32(address) <= uint32(record.to) {
 				found = true
 				break
 			}
@@ -116,7 +105,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 		}
 	}
 	for index := 1; index < len(records); index++ {
-		if !(records[index-1].to.U32()+1 < records[index].from.U32()) {
+		if !(uint32(records[index-1].to)+1 < uint32(records[index].from)) {
 			t.Fatalf("records %+v and %+v overlap or touch", records[index-1], records[index])
 		}
 	}
@@ -142,7 +131,7 @@ func TestUnionInputRebridgesGap(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if records[0].from.U32() != 15 || records[0].to.U32() != 45 || records[0].value != 1 {
+	if uint32(records[0].from) != 15 || uint32(records[0].to) != 45 || records[0].value != 1 {
 		t.Fatalf("sealed record = %+v, want [15,45] value 1", records[0])
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -171,7 +160,7 @@ func TestUnionInputOrderedNormalizesToSingleInterval(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if records[0].from.U32() != 0 || records[0].to.U32() != inputs-1 || records[0].value != 42 {
+	if uint32(records[0].from) != 0 || uint32(records[0].to) != inputs-1 || records[0].value != 42 {
 		t.Fatalf("sealed record = %+v, want [0,%d] value 42", records[0], inputs-1)
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -199,45 +188,62 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 		input := NewUnionInput(family, format.ValueKindMembership, 256*1024)
 		intervals := [][2]uint64{{0, 1}, {4, 5}, {8, 9}, {2, 10}, {20, 21}}
 		for _, interval := range intervals {
-			var from, to tree.Key
 			if family == format.AddressFamilyIPv4 {
-				from, to = key4(uint32(interval[0])), key4(uint32(interval[1]))
+				if err := pushWorkflowCoverage(store, &input, key4(uint32(interval[0])), key4(uint32(interval[1])), 7); err != nil {
+					t.Fatal(err)
+				}
 			} else {
-				from, to = key6(interval[0]), key6(interval[1])
+				ctx := store.beginRangeEdit6(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+				if _, err := pushPrivateUntracked(ctx, key6{hi: 0, lo: interval[0]}, key6{hi: 0, lo: interval[1]}, 7, &input.v6); err != nil {
+					t.Fatal(err)
+				}
+				store.draft.workflowRangeRoot = store.rangeRoot
+				store.draft.workflowRangeCount = store.rangeCount
 			}
-			if err := pushWorkflowCoverage(store, &input, from, to, 7); err != nil {
+		}
+		if family == format.AddressFamilyIPv4 {
+			if err := finishWorkflowInput(store, &input); err != nil {
 				t.Fatal(err)
 			}
+		} else {
+			ctx := store.beginRangeEdit6(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
+			if _, err := finishInputUntracked(ctx, &input.v6); err != nil {
+				t.Fatal(err)
+			}
+			store.draft.workflowRangeRoot = store.rangeRoot
+			store.draft.workflowRangeCount = store.rangeCount
 		}
-		if err := finishWorkflowInput(store, &input); err != nil {
-			t.Fatal(err)
-		}
-		if !input.isGeneral() {
+		if !input.IsGeneral() {
 			t.Fatal("late overlap did not flip the input general")
 		}
 		if _, has := input.orderedAddresses(); has {
 			t.Fatal("general input still reports an ordered address count")
 		}
-		records := readWorkflowTree(t, store)
-		if len(records) != 2 {
-			t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
-		}
-		// IPv4 keys are 4-byte keys; IPv6 keys are 16-byte keys.
-		var from0, to0, from1, to1 uint64
-		if family == format.AddressFamilyIPv6 {
-			_, from0 = records[0].from.U128()
-			_, to0 = records[0].to.U128()
-			_, from1 = records[1].from.U128()
-			_, to1 = records[1].to.U128()
+		if family == format.AddressFamilyIPv4 {
+			records := readWorkflowTree(t, store)
+			if len(records) != 2 {
+				t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
+			}
+			from0, to0 := uint64(records[0].from), uint64(records[0].to)
+			from1, to1 := uint64(records[1].from), uint64(records[1].to)
+			if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
+				records[0].value != 7 || records[1].value != 7 {
+				t.Fatalf("%v sealed records = %+v, want [0,10] and [20,21] value 7", family, records)
+			}
 		} else {
-			from0 = uint64(records[0].from.U32())
-			to0 = uint64(records[0].to.U32())
-			from1 = uint64(records[1].from.U32())
-			to1 = uint64(records[1].to.U32())
-		}
-		if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
-			records[0].value != 7 || records[1].value != 7 {
-			t.Fatalf("%v sealed records = %+v, want [0,10] and [20,21] value 7", family, records)
+			meta := store.draft.meta
+			meta.RangeRoot = store.draft.workflowRangeRoot
+			meta.RangeRecordCount = store.draft.workflowRangeCount
+			records := readDraftRangeTree(t, store, rangeCodec6{}, meta)
+			if len(records) != 2 {
+				t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
+			}
+			from0, to0 := records[0].from.lo, records[0].to.lo
+			from1, to1 := records[1].from.lo, records[1].to.lo
+			if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
+				records[0].value != 7 || records[1].value != 7 {
+				t.Fatalf("%v sealed records = %+v, want [0,10] and [20,21] value 7", family, records)
+			}
 		}
 	}
 }
@@ -265,18 +271,18 @@ func TestUnionInputEmptyMapUnorderedRanges(t *testing.T) {
 	}
 	input := NewUnionInput(format.AddressFamilyIPv4, format.ValueKindMembership, 1<<20)
 	for _, interval := range [][2]uint32{{35, 45}, {15, 32}, {30, 38}} {
-		if err := store.addEmptyMapFeedRange(key4(interval[0]), key4(interval[1]), member, &input); err != nil {
+		if err := store.addEmptyMapFeedRange4(key4(interval[0]), key4(interval[1]), member, &input.v4); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := store.finishEmptyMapFeedRanges(member, &input); err != nil {
+	if _, _, err := store.finishEmptyMapFeedRanges4(member, &input.v4); err != nil {
 		t.Fatal(err)
 	}
-	records := readDraftRangeTree(t, store, draft.meta)
+	records := readDraftRangeTree(t, store, rangeCodec4{}, draft.meta)
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical member record", records)
 	}
-	if records[0].from.U32() != 15 || records[0].to.U32() != 45 || records[0].value != member.id {
+	if uint32(records[0].from) != 15 || uint32(records[0].to) != 45 || records[0].value != member.id {
 		t.Fatalf("sealed record = %+v, want [15,45] member %d", records[0], member.id)
 	}
 	if draft.meta.RangeRecordCount != 1 {
