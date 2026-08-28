@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -128,7 +129,13 @@ func TestRoutedRecoverImmutablePublishesReadableOutput(t *testing.T) {
 // tests do.
 func TestRoutedRecoverImmutableGuardPendingRetainsCleanup(t *testing.T) {
 	directory := t.TempDir()
+	// go test -c writes the host's executable name: Windows appends the
+	// .exe suffix to the -o path, so the spawn candidate must carry it
+	// (the real worker harness uses the same rule).
 	double := filepath.Join(directory, "worker-tests")
+	if runtime.GOOS == "windows" {
+		double += ".exe"
+	}
 	command := exec.Command("go", "-C", workerModuleRoot(), "test", "-c", "-o", double, "./internal/worker")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build worker double: %v\n%s", err, output)
