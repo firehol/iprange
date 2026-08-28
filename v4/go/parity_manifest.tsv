@@ -17,7 +17,7 @@ writer-offcontract	LiveWriter::begin_membership_transaction		removed	removed sli
 writer-offcontract	LiveWriter::begin_structured_transaction		removed	removed slice 2c; owned by LiveWriter.BeginStructuredTransaction
 writer-offcontract	LiveWriter::project_history		removed	removed slice 2c; owned by LiveWriter.ProjectHistory
 writer-offcontract	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Complete name-based import from a pinned membership reader (membership_import_public.go)
-writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
+writer-offcontract	LiveWriter::reclaim		removed	removed slice 2c; owned by LiveWriter.Reclaim (present row in class live-writer)
 immutable-output	immutable_feed.rs create_immutable_feed_v4	CreateImmutableFeedV4	present	immutable_feed_public.go; one-inode unordered feed construction through RangeSource4
 immutable-output	immutable_feed.rs create_immutable_feed_v6	CreateImmutableFeedV6	present	immutable_feed_public.go; one-inode unordered feed construction through RangeSource6
 live-writer	commit_resolution.rs resolve_commit	ResolveCommit	present	commit_resolution_public.go; two-meta classify with sync and sidecar proof; public CommitResolutionMode/CommitResolution/CommitResolutionResult/LocalFileRelation types
@@ -86,7 +86,7 @@ recovery	recovery.rs inspect_recovery_candidates	InspectRecoveryCandidates	prese
 recovery	recovery.rs recover_immutable	RecoverImmutable	present	recovery_public.go
 recovery	recovery.rs recover_offline	RecoverOffline	present	recovery_public.go
 recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
-worker	binary-format-v4.md:3155+ version-matched worker		missing	Go routes validation/recovery in-process on every non-linux/amd64 target (routing_other.go); the routing facade passes through the isolated worker only on linux/amd64
+worker	binary-format-v4.md:3155+ version-matched worker		missing	Implemented (m5 slice E): the routed facade (internal/routing/routing_worker.go) calls the version-matched worker on every worker cross-build platform (linux/darwin/freebsd/windows x amd64/arm64) with no silent in-process fallback; platforms without a worker build keep the recorded in-process machines (routing_other.go). Internal mechanism, no root symbol; the public Validate/Recover* rows are present.
 platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended) and proven in the authorized macOS arm64 round (plain, v4work, race+checkptr green at 631d83c8); no root symbol (internal machine, like remove_checkpointed_scratch)
 cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported
 go-surface	-	AlgebraFeedSelectionAll	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart

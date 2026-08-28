@@ -635,11 +635,6 @@ func (c LiveCommitCleanupArtifacts) CleanupState() CleanupState {
 	return CleanupStateResiduePossible
 }
 
-// LiveCommitResult is the exact identity, durability, and cleanup facts
-// of one live commit attempt (Rust live_writer::CommitResult). The
-// immutable-mode CommitResult carries the pre-sidecar shape of the
-// accepted coordination divergence; the live result carries the full
-// sidecar and coordination surface.
 // LiveCommitResult is the commit outcome alias of CommitResult (Rust
 // live_writer/result.rs CommitResult): the live-direct surface returns
 // it under this name, and code that previously received a

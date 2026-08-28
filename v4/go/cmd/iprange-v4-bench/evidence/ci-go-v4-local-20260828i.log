@@ -1,4 +1,3 @@
-> nice > /tmp/bench-run6/iprange-v4-bench-f > ci 
 # benchmark=update_ipsets
 # fixture=iprange-v4-update-ipsets-v1
 # baseline=go-v4-local-20260828

@@ -7,8 +7,9 @@
 // the Rust preflight and then routes through the isolated worker
 // client arms; the in-process machines stay the worker-side engines
 // and the remaining platforms (routing_other.go) have no worker build
-// and keep the recorded in-process stance. The worker arms return the 4-11A wire shapes,
-// so this package converts them back to the domain types the
+// and keep the recorded in-process stance. The worker arms return the
+// worker-boundary wire records of internal/worker (wire.go codecs), so this
+// package converts them back to the domain types the
 // in-process machines return; the exported additions to the
 // validation and recovery packages are the worker-entry seams
 // (Preflight, ValidateWorkerBudget, PreflightInspection,

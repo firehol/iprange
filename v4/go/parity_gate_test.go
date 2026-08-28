@@ -198,10 +198,9 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 	// Implementing an item flips its row to present and shrinks the
 	// list in the same commit.
 	requiredMissing := map[string]string{
-		"LiveWriter::reclaim":                                "live_writer/reclaim.rs bounded reader-safe reclamation (SOW-0027 closure ledger item 4)",
 		"CancellationToken::from_poll":                       "Rust async poll integration is not portable to Go; the nil token is the uncancellable form (recorded divergence)",
 		"scratch_maintenance remove_checkpointed_scratch":    "public scratch-removal export; the internal machine exists in internal/recovery",
-		"binary-format-v4.md:3155+ version-matched worker":   "worker containment on every supported platform (SOW-0027 closure ledger item 1, m5 slice E)",
+		"binary-format-v4.md:3155+ version-matched worker":   "worker containment implemented (m5 slice E) as an internal routing mechanism with no root symbol; the row stays missing-by-symbol with the implementation evidence in its note",
 		"publication/security/apple.rs filesec creator-only": "darwin creator-only publication machine is internal (implemented and proven in the authorized arm64 round)",
 		"lib-reexport Cardinality129":                        "public typed cardinality re-export; Go keeps Cardinality129 internal",
 	}

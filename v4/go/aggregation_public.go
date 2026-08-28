@@ -81,6 +81,9 @@ func MembershipAggregationSelectedPairs(pairs []FeedPair) MembershipAggregationM
 // operation and passes through unchanged. The operation heap is the
 // scope budget minus its construction charge (Rust operation_heap).
 func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield func([]FeedCardinality) error, overlapYield func([]FeedOverlap) error, cancellation *CancellationToken) (MembershipAggregationReport, error) {
+	if s == nil {
+		return MembershipAggregationReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership scope is required"}
+	}
 	if err := s.r.checkOpen(); err != nil {
 		return MembershipAggregationReport{}, err
 	}

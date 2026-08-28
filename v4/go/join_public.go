@@ -117,6 +117,9 @@ type DirectJoinBudget struct {
 // database of the scope's address family; the live variant resolves
 // the join through the reader's pinned generation.
 func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinBudget, cellYield func([]DirectJoinCell) error, cancellation *CancellationToken) (DirectJoinReport, error) {
+	if s == nil {
+		return DirectJoinReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership scope is required"}
+	}
 	if err := s.r.checkOpen(); err != nil {
 		return DirectJoinReport{}, err
 	}
@@ -177,6 +180,9 @@ func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinB
 // steady-state conversion allocates nothing (the per-distinct-name
 // string cache is the only retained allocation).
 func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func([]MembershipCrossCell) error, uncoveredYield func([]UncoveredFeed) error, cancellation *CancellationToken) (MembershipJoinReport, error) {
+	if s == nil {
+		return MembershipJoinReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership scope is required"}
+	}
 	if right == nil {
 		return MembershipJoinReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership join requires a right scope"}
 	}

@@ -121,6 +121,12 @@ func CreateImmutableFeedV4(destination string, valueTag ValueTag, feedName FeedN
 			Cleanup: CleanupStateClean,
 		}
 	}
+	if !format.FeedNameValidString(string(feedName)) {
+		return zero, &ImmutableFeedPreparationFailure{
+			Cause:   &Error{Code: ErrorNameInvalid, Detail: "feed name is invalid"},
+			Cleanup: CleanupStateClean,
+		}
+	}
 	var buffer []writer.FeedRange4
 	nextBatch := func() ([]writer.FeedRange4, error) {
 		batch, err := source.NextBatch()
@@ -172,6 +178,12 @@ func CreateImmutableFeedV6(destination string, valueTag ValueTag, feedName FeedN
 	if source == nil {
 		return zero, &ImmutableFeedPreparationFailure{
 			Cause:   &Error{Code: ErrorInvalidArgument, Detail: "immutable feed source is required"},
+			Cleanup: CleanupStateClean,
+		}
+	}
+	if !format.FeedNameValidString(string(feedName)) {
+		return zero, &ImmutableFeedPreparationFailure{
+			Cause:   &Error{Code: ErrorNameInvalid, Detail: "feed name is invalid"},
 			Cleanup: CleanupStateClean,
 		}
 	}

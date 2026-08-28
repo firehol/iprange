@@ -114,6 +114,9 @@ type MembershipScope struct {
 
 // FeedCount returns the number of feeds resolved into this scope.
 func (s *MembershipScope) FeedCount() int {
+	if s == nil {
+		return 0
+	}
 	return s.data.FeedCount()
 }
 
@@ -122,6 +125,9 @@ func (s *MembershipScope) FeedCount() int {
 // a copy of the catalog entry name (the root boundary never hands out
 // views that alias the mapping), so Feeds allocates once per entry.
 func (s *MembershipScope) Feeds() []FeedEntry {
+	if s == nil {
+		return nil
+	}
 	entries := s.data.Entries()
 	output := make([]FeedEntry, len(entries))
 	for i, entry := range entries {

@@ -116,8 +116,6 @@ func TestImmutableFeedV4PublishesAndReadsBack(t *testing.T) {
 			break
 		}
 		got = append(got, rng)
-		work := t
-		_ = work
 	}
 	wantRanges := []AddressRange4{
 		{From: 0x0a000001, To: 0x0a00000a},
