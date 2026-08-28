@@ -157,10 +157,11 @@ objects), the algebra boundary position no longer escapes per event
 reflection swapper (1.2M objects), and the snapshot copy streams
 membership words through the writer word-source seam without per-record
 materialization (1.9M objects). The update-ipsets workflow allocation
-count dropped from 10,727,434 to 27,406 objects (369MB to 138MB), with
-wall-time ratios unchanged within noise (3.21x) because the tiny-object
-allocations were not the CPU bottleneck; the write-path ratio remains
-nested-overwrite ~4.45x pending the C2 typed tree core.
+count dropped from 10,727,434 to 27,414 objects (369MB to 9.8MB) per
+the ci-f gate row (27,409 / 9.8MB at ci-g), with wall-time ratios
+unchanged within noise (3.21x) because the tiny-object allocations were
+not the CPU bottleneck; the write-path ratio remains nested-overwrite
+~4.45x pending the C2 typed tree core.
 C2 delivered (pushed with this status): the tree replacement validation
 runs through a numeric limb seam (NumericKeyCodec.ReadKeyLimbs on the
 range codecs; tree.RequireReplacement no longer materializes a general
@@ -173,6 +174,78 @@ dispatch and cannot monomorphize these calls statically, so closing the
 last ~20% requires either duplicating the tree gap machinery per family
 (a trade-off against the one-authoritative-core principle) or code
 generation. Recorded as an open decision for the milestone close.
+
+Sub-state (2026-08-28): five-reviewer level-1 round on the B/C delta
+(7f34d161..ff0c4fe5) complete. Verdicts: Rust parity PASS,
+Go idioms PASS, performance PASS, wire/integrity PASS,
+APIs/records FAIL (two P2 record defects, both verified against the
+committed files and fixed in this round). Verified fixes applied:
+
+- P2-1 (APIs/records): the evidence README quoted wrong ratio ranges
+  for the ci-e/f/g gate logs (0.682-1.072, 0.691-1.050, 0.407-1.050)
+  while the committed logs measure 0.417-1.072, 0.525-1.210,
+  0.467-1.012; the README entries now quote the measured ranges.
+- P2-2 (APIs/records): the workflow allocation claim "27,406 objects
+  (369MB to 138MB)" matched no committed artifact; the ci-f/ci-g rows
+  show 27,414/27,409 objects and 9.8MB (not 138MB). The SOW and README
+  now quote the committed gate rows.
+- P3 (performance, verified): the tree fixed probe called the
+  non-inlinable fixedCellAt wrapper per probe; fixedLowerBound now
+  calls format.FixedSearch.Cell directly (one call layer removed,
+  identical behavior and counters).
+- P3 (verified): dead havePrevious flag removed from
+  requireReplacementLimbs (the index==0 branch already guards the first
+  cell; the 2-3 cell length check makes the flag always true).
+- P3 (verified): tree.Key.U32 restored its documented leading-32-bits
+  semantics for wider keys (uint32(k.hi >> 32), matching the pre-B2
+  beU32(data[:4]) contract; no current caller uses wider keys, the doc
+  is now accurate).
+- P3 (verified): snapshot copyStructuredV4/V6 no longer shadow the
+  immutable-reader source parameter with the membership word source.
+- P3 (verified): collectHistoryWindows and assembleOutputBuilder now
+  allocate only the address-family-selected runs slice and range bulk
+  builder instead of both siblings.
+- P3-1 (APIs/records, false positive): the "was" pre-B ratios
+  (3.506/6.655/4.434) do match the committed
+  rust-ratio-acceptance-20260828.csv table (the 4c/4d state); the
+  README now names that table as their source.
+
+Re-validation after the fixes: gofmt/vet clean, plain + v4work suites
+green, full race/checkptr suite green, conformance cross-open 13/13
+plus invalid-mutation cases pass. Gate ci-go-v4-local-20260828h.log:
+18/18 within-limit, ratios 0.416-0.993, workflow 3,446 ms (ratio
+0.681), 27,406 objects / 9.8MB (the six P3 fixes removed 8 objects
+against the ci-f row). Fresh interleaved matched ratios
+(rust-ratio-acceptance-20260828f.csv):
+membership-import 1.636 (was 1.666), nested-overwrite 4.044 (was
+4.184), update-ipsets-workflow 3.209 (was 3.231),
+live-direct-random-lookup 1.835 (was 1.863),
+immutable-direct-random-lookup 1.830 (was 1.863), live-validation
+2.235 (was 2.301). No case regressed; nested-overwrite and validation
+improved in the same interleaved window.
+
+Recorded opportunities (not implemented in this round; all P3,
+non-blocking, verified): (1) range_bulk finishLevel returns an untyped
+any with a caller type-switch; a typed (node, isRoot, err) return would
+remove the switch (Go-idiom polish, moderate churn in the bulk
+builder); (2) the locator/bulk/history concrete-type family switches
+could invert into a Family()/DecodeKey interface on rangeFamily
+(Go-idiom polish across four files); (3) ValidateProbeCell still copies
+the 32-byte hash digest that the probe discards and the ProbeValidator
+method value is an indirect call per probe on membership/structure
+trees (micro-optimization on the hash-probe path only, deferred to
+avoid touching parity-verified validation code at the gate);
+(4) tree.Key grew 16 bytes with the limb cache; all hot-path copies
+stay on the stack, no heap escape, net win from B1 already measured.
+
+Open decision for the milestone close (user decision requested): the
+nested-overwrite residual is 4.044x Rust after all slices and the
+review fixes. Closing the last ~20% requires per-family duplication of
+the tree gap/replace machinery (against the one-authoritative-core
+principle) or code generation; both contradict the standing working
+principles, so the recommendation is to accept the current ratios and
+record the trade-off as a follow-up. The user is deciding between
+accept (recommended), per-family duplication now, or codegen.
 
 
 

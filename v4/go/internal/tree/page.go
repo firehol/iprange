@@ -39,19 +39,6 @@ func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel
 	return h, nil
 }
 
-// fixedCellAt reads one fixed cell through the shared format view
-// (format.FixedSearch, Rust slotted_page::FixedSearch::cell_at): the
-// page shape was validated once and the caller bounds index below
-// ItemCount, so the probe re-checks only the untrusted persistent slot
-// value and the complete cell extent.
-func fixedCellAt(search format.FixedSearch, index int) ([]byte, error) {
-	cell, err := search.Cell(index)
-	if err != nil {
-		return nil, corrupt("slotted-page cell is outside the record area")
-	}
-	return cell, nil
-}
-
 // lowerBound locates the first index whose key is >= key (Rust
 // fixed_tree/page.rs lower_bound). With insertion true the result is the
 // insertion point; otherwise a nonexact result steps back one record (the
@@ -129,7 +116,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := fixedCellAt(search, middle)
+		cell, err := search.Cell(middle)
 		if err != nil {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
@@ -155,7 +142,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := fixedCellAt(search, lower)
+			cell, err := search.Cell(lower)
 			if err != nil {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}

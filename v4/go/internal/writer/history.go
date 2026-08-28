@@ -279,8 +279,13 @@ func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *hea
 		return nil, nil, nil, nil, nil, err
 	}
 	reports := make([]HistoryWindowReport, windowCount)
-	runs4 := make([]historyRun[key4], windowCount)
-	runs6 := make([]historyRun[key6], windowCount)
+	var runs4 []historyRun[key4]
+	var runs6 []historyRun[key6]
+	if store.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
+		runs4 = make([]historyRun[key4], windowCount)
+	} else {
+		runs6 = make([]historyRun[key6], windowCount)
+	}
 	cutoffOrder := make([]uint32, windowCount)
 	feedOrder := make([]uint32, windowCount)
 	for index, request := range windows {
@@ -291,8 +296,8 @@ func collectHistoryWindows(store *DraftStore, windows []HistoryWindow, heap *hea
 			return nil, nil, nil, nil, nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid feed name"}
 		}
 		reports[index] = emptyHistoryReport(request, false)
-		runs4[index] = historyRun[key4]{}
-		runs6[index] = historyRun[key6]{}
+		// make zero-initialized the selected family's runs; the other
+		// family is not allocated (the plan uses only one family).
 		cutoffOrder[index] = uint32(index)
 		feedOrder[index] = uint32(index)
 	}

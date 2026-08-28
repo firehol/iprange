@@ -75,7 +75,7 @@ func (k Key) U32() uint32 {
 	if k.Size == 4 {
 		return uint32(k.lo)
 	}
-	return uint32(k.hi)
+	return uint32(k.hi >> 32)
 }
 
 // U64 returns the numeric value of an 8-byte fixed key (a 4-byte key

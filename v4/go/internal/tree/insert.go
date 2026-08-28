@@ -77,7 +77,6 @@ func requireReplacementLimbs[T any](codec Codec[T], numeric NumericKeyCodec, key
 	}
 	var firstHi, firstLo uint64
 	var previousHi, previousLo uint64
-	havePrevious := false
 	for index, cell := range cells {
 		if err := RequireLeaf(codec, cell); err != nil {
 			return err
@@ -92,9 +91,8 @@ func requireReplacementLimbs[T any](codec Codec[T], numeric NumericKeyCodec, key
 			return invalid("B+tree replacement keys are not increasing")
 		}
 		previousHi, previousLo = hi, lo
-		havePrevious = true
 	}
-	if havePrevious && (firstHi != key.hi || firstLo != key.lo) {
+	if firstHi != key.hi || firstLo != key.lo {
 		return invalid("B+tree replacement changed its first key")
 	}
 	return nil

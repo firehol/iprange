@@ -262,16 +262,20 @@ func assembleOutputBuilder(m *mapping.Mapping, path string, spec OutputSpec, bud
 		}
 		structureCapacity = structureBatchEntries
 	}
-	return &OutputBuilder{
+	builder := &OutputBuilder{
 		mapping:        m,
 		path:           path,
 		meta:           meta,
 		budget:         budget,
-		ranges4:        newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec4{}),
-		ranges6:        newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec6{}),
 		membershipRefs: newMembershipReferenceBatch(batchCapacity),
 		structureRefs:  newMembershipReferenceBatch(structureCapacity),
 	}
+	if spec.AddressFamily == format.AddressFamilyIPv4 {
+		builder.ranges4 = newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec4{})
+	} else {
+		builder.ranges6 = newRangeBulkBuilder(meta.TxnID, meta.ValueKind, rangeCodec6{})
+	}
+	return builder
 }
 
 // outputEmptyMeta mirrors database_file.rs empty_meta for the output spec.

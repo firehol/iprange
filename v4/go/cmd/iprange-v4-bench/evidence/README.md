@@ -41,7 +41,8 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   `rust-ratio-rust-samples-20260828.csv` hold the raw rows). This is
   the separate Rust-ratio report the delta review required: the
   Go-baseline CI gate proves regression stability only, the ratio table
-  is the parity evidence.
+  is the parity evidence. It is also the source of the pre-B "was"
+  values quoted in the b-f entries below.
 - `profiles-4c4d-summary.txt`: before/after CPU profile head evidence
   for the slice wins (lowerBound closure dispatch removed; write-seam
   allocations removed).
@@ -77,7 +78,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
 - `ci-go-v4-local-20260828e.log`: the gate run at the B3 state
   (Rust-parity once-validated fixed search probes, limb-first tree-key
   ordering, typed per-leaf validation order), 18/18 within-limit,
-  ratios 0.682-1.072. Live-validation dropped to 0.928 against the
+  ratios 0.417-1.072. Live-validation dropped to 0.928 against the
   accepted Go baseline.
 - `rust-ratio-acceptance-20260828c.csv`: the post-B3 Go-vs-Rust ratio
   table for the six milestone-4 headline cases from interleaved matched
@@ -95,7 +96,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   (closure-free family-typed reader probes over the shared once-validated
   format.FixedSearch, value-semantics selected-runs scan, allocation-free
   algebra boundary tracking, slices.Sort output, view-backed snapshot
-  membership words), 18/18 within-limit, ratios 0.691-1.050.
+  membership words), 18/18 within-limit, ratios 0.525-1.210.
 - `rust-ratio-acceptance-20260828d.csv`: the post-C1 Go-vs-Rust ratio
   table from interleaved matched 5-sample runs (raw rows in
   `rust-ratio-go-samples-20260828d.csv` /
@@ -104,8 +105,9 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   update-ipsets-workflow 3.209, live-direct-random-lookup 1.821 (was
   1.964), immutable-direct-random-lookup 1.855 (was 1.999),
   live-validation 2.353. The update-ipsets workflow allocations dropped
-  from 10.7M to 27K objects (369MB to 138MB): the ratio table is
-  wall-time bound, the allocation parity shows in the raw rows.
+  from 10,727,434 to 27,414 objects (369MB to 9.8MB) per the ci-f gate
+  row (27,409 objects / 9.8MB in ci-g); the gate rows carry the
+  allocation totals, the sample files are wall-time rows.
 - `selected_ranges_test.go` (reader package): regression test pinning
   exact run-scan coverage for the all-catalog and named scope forms.
   The 4c "by value" refactor had aliased the pending field on the
@@ -114,7 +116,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   replaced the pointer with value semantics.
 - `ci-go-v4-local-20260828g.log`: the gate run at the C2 state
   (limb-based numeric replacement validation over the NumericKeyCodec
-  seam), 18/18 within-limit, ratios 0.407-1.050.
+  seam), 18/18 within-limit, ratios 0.467-1.012.
 - `rust-ratio-acceptance-20260828e.csv`: the post-C2 Go-vs-Rust ratio
   table from interleaved matched 5-sample runs (raw rows in
   `rust-ratio-go-samples-20260828e.csv` /
@@ -127,3 +129,21 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   gap/replace machinery dispatching through interfaces per probe, which
   Go generics cannot monomorphize without duplicating the tree core per
   family (recorded in SOW-0027 as the remaining C2 trade-off).
+- `ci-go-v4-local-20260828h.log`: the gate run after the five-reviewer
+  round on the B/C delta (direct FixedSearch.Cell probes in the tree,
+  dead-flag removal in the limb replacement validation, wider-key U32
+  leading-bit semantics, snapshot shadowing rename, one-family runs and
+  range-builder allocation), 18/18 within-limit, ratios 0.416-0.993,
+  update-ipsets-workflow 3,446 ms (ratio 0.681), 27,406 objects
+  (9.8MB).
+- `rust-ratio-acceptance-20260828f.csv`: the post-review-round Go-vs-Rust
+  ratio table from interleaved matched 5-sample runs (raw rows in
+  `rust-ratio-go-samples-20260828f.csv` /
+  `rust-ratio-rust-samples-20260828f.csv`). Ratios:
+  membership-import 1.636 (was 1.666), nested-overwrite 4.044 (was
+  4.184), update-ipsets-workflow 3.209 (was 3.231),
+  live-direct-random-lookup 1.835 (was 1.863),
+  immutable-direct-random-lookup 1.830 (was 1.863), live-validation
+  2.235 (was 2.301). The six P3 fixes did not regress any measured
+  case; nested-overwrite improved 4.184 -> 4.044 and validation 2.301
+  -> 2.235 in the same interleaved window.

@@ -248,11 +248,11 @@ func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if err != nil {
 			return err
 		}
-		source, err := threatWords(range_.Value, &words)
+		membership, err := threatWords(range_.Value, &words)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushNetworkEnrichmentV1V4Words(range_.From, range_.To, value, source); err != nil {
+		if err := builder.PushNetworkEnrichmentV1V4Words(range_.From, range_.To, value, membership); err != nil {
 			return err
 		}
 	}
@@ -281,11 +281,11 @@ func copyStructuredV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if err != nil {
 			return err
 		}
-		source, err := threatWords(range_.Value, &words)
+		membership, err := threatWords(range_.Value, &words)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushNetworkEnrichmentV1V6Words(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, value, source); err != nil {
+		if err := builder.PushNetworkEnrichmentV1V6Words(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, value, membership); err != nil {
 			return err
 		}
 	}
