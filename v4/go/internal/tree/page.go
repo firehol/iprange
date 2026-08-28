@@ -56,13 +56,19 @@ func newFixedSearch(page []byte, header Header, cellLen int) (FixedSearch, error
 }
 
 // cellAt reads the fixed cell at an index already bounded by the search
-// algorithm (Rust FixedSearch::cell_at).
+// algorithm (Rust FixedSearch::cell_at): the page shape was validated
+// once by newFixedSearch and the caller guarantees index < ItemCount, so
+// the slot-table read needs no per-probe index re-check. The persistent
+// slot value stays untrusted and its complete extent is validated on
+// every probe; the returned slice is a view of the caller's page.
 func (f FixedSearch) cellAt(index int) ([]byte, error) {
-	cell, err := format.SlottedCell(f.page, &f.header, index, f.cellLen)
-	if err != nil {
+	work.CellProbe(1)
+	work.SlotRead(1)
+	start := int(format.U16(f.page[format.SlottedHeaderSize+index*2:]))
+	if start < int(f.header.Upper) || start > format.PageSize-f.cellLen {
 		return nil, corrupt("slotted-page cell is outside the record area")
 	}
-	return cell, nil
+	return f.page[start : start+f.cellLen], nil
 }
 
 // lowerBound locates the first index whose key is >= key (Rust
@@ -119,10 +125,12 @@ type ProbeValidator interface {
 // prefix bytes, so the hot path allocates nothing, builds no Key value,
 // dispatches through no interface, and calls no closure.
 func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
-	if len(page) != format.PageSize || !format.SlottedShapeValid(header) ||
-		cellLen == 0 || cellLen > format.PageSize ||
-		keySize == 0 || keySize > cellLen {
+	if keySize == 0 || keySize > cellLen {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
+	}
+	search, err := newFixedSearch(page, *header, cellLen)
+	if err != nil {
+		return 0, false, err
 	}
 	lower := 0
 	upper := int(header.ItemCount)
@@ -131,7 +139,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := format.SlottedCell(page, header, middle, cellLen)
+		cell, err := search.cellAt(middle)
 		if err != nil {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
@@ -157,7 +165,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := format.SlottedCell(page, header, lower, cellLen)
+			cell, err := search.cellAt(lower)
 			if err != nil {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}

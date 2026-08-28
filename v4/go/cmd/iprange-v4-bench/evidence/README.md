@@ -74,3 +74,20 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   (membership-import 3.506 -> 1.648, nested-overwrite 6.655 -> 4.152,
   update-ipsets-workflow 4.434 -> 3.141); read paths are unchanged
   (1.872/1.850/2.560 vs 1.929/2.058/2.631).
+- `ci-go-v4-local-20260828e.log`: the gate run at the B3 state
+  (Rust-parity once-validated fixed search probes, limb-first tree-key
+  ordering, typed per-leaf validation order), 18/18 within-limit,
+  ratios 0.682-1.072. Live-validation dropped to 0.928 against the
+  accepted Go baseline.
+- `rust-ratio-acceptance-20260828c.csv`: the post-B3 Go-vs-Rust ratio
+  table for the six milestone-4 headline cases from interleaved matched
+  5-sample runs (Go and Rust samples alternate per scenario on the same
+  host; raw rows in `rust-ratio-go-samples-20260828c.csv` /
+  `rust-ratio-rust-samples-20260828c.csv`). Ratios:
+  membership-import 1.622, nested-overwrite 4.412,
+  update-ipsets-workflow 3.212, live-direct-random-lookup 1.964,
+  immutable-direct-random-lookup 1.999, live-validation 2.183
+  (interleaved windows on a loaded host; the quiet-window runs measured
+  reads 1.78-1.81 and validation 2.18-2.48, so the true deltas versus
+  the pre-B baseline are: validation -12%, reads unchanged, write
+  scenarios within run-to-run noise).

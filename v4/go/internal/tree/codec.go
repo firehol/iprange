@@ -27,6 +27,10 @@ import (
 // into lo). Every fixed-key probe compares one cell key against the
 // numeric value, so the limbs turn the per-probe big-endian byte
 // assembly of U32/U64/U128 into a single load.
+// keyLimbMax is the largest fixed key width whose numeric compare bytes
+// fit the cached hi/lo limbs (Rust fixed key widths 4/8/12/16).
+const keyLimbMax = 16
+
 type Key struct {
 	data [40]byte
 	Size uint8
@@ -99,7 +103,21 @@ func (k Key) Less(other Key) bool {
 	if k.Size == 0 || other.Size == 0 {
 		return bytes.Compare(k.Var, other.Var) < 0
 	}
+	if k.Size == other.Size && k.Size <= keyLimbMax {
+		return k.limbsLess(other)
+	}
 	return bytes.Compare(k.data[:k.Size], other.data[:other.Size]) < 0
+}
+
+// limbsLess compares two same-size fixed keys through their cached
+// numeric limbs (big-endian canonical bytes; narrower keys zero-extend,
+// so the limb pair compares exactly like the byte form). Hash keys
+// (32-40 bytes) never take this path: their limb fields are unset.
+func (k Key) limbsLess(other Key) bool {
+	if k.hi != other.hi {
+		return k.hi < other.hi
+	}
+	return k.lo < other.lo
 }
 
 // Equal reports k == other.
@@ -107,7 +125,13 @@ func (k Key) Equal(other Key) bool {
 	if k.Size == 0 || other.Size == 0 {
 		return bytes.Equal(k.Var, other.Var)
 	}
-	return k.Size == other.Size && bytes.Equal(k.data[:k.Size], other.data[:other.Size])
+	if k.Size != other.Size {
+		return false
+	}
+	if k.Size <= keyLimbMax {
+		return k.hi == other.hi && k.lo == other.lo
+	}
+	return bytes.Equal(k.data[:k.Size], other.data[:other.Size])
 }
 
 // KeyOfU32 builds a 4-byte fixed key from its numeric value. The

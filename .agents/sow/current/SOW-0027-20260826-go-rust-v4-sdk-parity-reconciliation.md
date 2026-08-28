@@ -111,9 +111,26 @@ Go/Rust ratios (rust-ratio-acceptance-20260828b.csv): membership-import
 1.648 (was 3.506), nested-overwrite 4.152 (was 6.655),
 update-ipsets-workflow 3.141 (was 4.434), live-direct-random-lookup
 1.872, immutable-direct-random-lookup 1.850, live-validation 2.560.
-Remaining before acceptance: single sol external review of the ratio
-evidence (user directive), verify/fix findings, five-reviewer level-1
-round, then milestone-4 acceptance and SOW close.
+B3 (uncommitted in the working tree at this point; committed with the
+next evidence refresh) applied the sol-review verified fixes: the tree
+fixed search validates the page shape once and probes through the
+Rust-style index-bounded cell view (no per-probe index re-checks), tree
+Key ordering compares numeric keys through their cached limbs, and the
+range validation leaf ordering works in the family key space (no
+per-record general-key materialization). Measured effects (interleaved
+matched samples): validation ratio 2.56 -> 2.18, membership-import
+1.65 -> 1.62, reads 1.85-1.87 -> 1.96-2.00 (run noise band), write
+scenarios unchanged within noise. Sol review verdict: NEEDS CHANGES;
+verified P1/P2 findings remaining: (1) the writer still crosses the
+tree-core boundary through per-op tree.Key conversions and the gap
+machinery dispatches through the frozen interface-shaped signatures
+(nested-overwrite 4.15-4.41x; fixing requires a design change to the
+frozen core), (2) the reader search still dispatches through closures
+per probe and re-checks slot geometry (lookups 1.85-2.0x; reader scope,
+outside extension B), (3) the update-ipsets workflow still allocates
+10.7M objects (reader algebra: selectedRanges.next 5.5M, sort.Swapper
+1.2M, snapshot.membershipWords 1.0M; outside extension B).
+
 
 Sub-state (2026-08-26): activated by user decision (Open Decision 1, option A);
 SOW-0017 is paused as blocked on this SOW's prerequisite. The static gap

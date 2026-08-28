@@ -172,7 +172,7 @@ func rangeCellLen6(level uint16) int {
 // findings, and the value-kind reverse-count arms (Rust validate_leaf +
 // validate_leaf_cells).
 func walkRangeLeaf4(ctx *context, pageNumber uint32, cells *format.LayoutInspection, state *rangeState) (tree.Key, bool, error) {
-	var order leafOrder
+	var order leafOrder4
 	iterator := cells.Cells()
 	for {
 		cell, ok := iterator.Next()
@@ -185,7 +185,7 @@ func walkRangeLeaf4(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 			// failure here is the Rust Corrupt propagation.
 			return tree.Key{}, false, formatError(err)
 		}
-		if order.observe(tree.KeyOfU32(record.From)) {
+		if order.observe(record.From) {
 			if err := emitRangeFinding(ctx, pageNumber, ReasonTreeOrderInvalid); err != nil {
 				return tree.Key{}, false, err
 			}
@@ -214,12 +214,15 @@ func walkRangeLeaf4(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 		state.previous = record
 		state.hasPrevious = true
 	}
-	return order.first, order.hasFirst, nil
+	if !order.hasFirst {
+		return tree.Key{}, false, nil
+	}
+	return tree.KeyOfU32(order.first), true, nil
 }
 
 // walkRangeLeaf6 is the IPv6 form of walkRangeLeaf4.
 func walkRangeLeaf6(ctx *context, pageNumber uint32, cells *format.LayoutInspection, state *rangeState) (tree.Key, bool, error) {
-	var order leafOrder
+	var order leafOrder6
 	iterator := cells.Cells()
 	for {
 		cell, ok := iterator.Next()
@@ -230,7 +233,7 @@ func walkRangeLeaf6(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 		if err != nil {
 			return tree.Key{}, false, formatError(err)
 		}
-		if order.observe(tree.KeyOfU128(record.FromHi, record.FromLo)) {
+		if order.observe(record.FromHi, record.FromLo) {
 			if err := emitRangeFinding(ctx, pageNumber, ReasonTreeOrderInvalid); err != nil {
 				return tree.Key{}, false, err
 			}
@@ -261,25 +264,56 @@ func walkRangeLeaf6(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 		state.hasPrev6 = true
 		state.hasPrevious = false
 	}
-	return order.first, order.hasFirst, nil
+	if !order.hasFirst {
+		return tree.Key{}, false, nil
+	}
+	return tree.KeyOfU128(order.firstHi, order.firstLo), true, nil
 }
 
-// leafOrder is the per-leaf first/previous key cursor (Rust LeafOrder).
-type leafOrder struct {
-	first       tree.Key
+// leafOrder4 is the per-leaf first/previous key cursor for IPv4 range
+// leaves (Rust LeafOrder<Ipv4Key>): keys stay in the family numeric
+// space, so each ordering check is one u32 compare and no general tree
+// key is materialized per record; the leaf first key converts to the
+// general key once per leaf for the branch fence.
+type leafOrder4 struct {
+	first       uint32
 	hasFirst    bool
-	previous    tree.Key
+	previous    uint32
 	hasPrevious bool
 }
 
 // observe records one key and reports a non-increasing key.
-func (o *leafOrder) observe(key tree.Key) bool {
+func (o *leafOrder4) observe(key uint32) bool {
 	if !o.hasFirst {
 		o.first = key
 		o.hasFirst = true
 	}
-	invalid := o.hasPrevious && !o.previous.Less(key)
+	invalid := o.hasPrevious && !(o.previous < key)
 	o.previous = key
+	o.hasPrevious = true
+	return invalid
+}
+
+// leafOrder6 is the IPv6 form of leafOrder4 (Rust LeafOrder<Ipv6Key>).
+type leafOrder6 struct {
+	firstHi     uint64
+	firstLo     uint64
+	hasFirst    bool
+	previousHi  uint64
+	previousLo  uint64
+	hasPrevious bool
+}
+
+// observe records one key and reports a non-increasing key.
+func (o *leafOrder6) observe(hi, lo uint64) bool {
+	if !o.hasFirst {
+		o.firstHi = hi
+		o.firstLo = lo
+		o.hasFirst = true
+	}
+	invalid := o.hasPrevious && (o.previousHi > hi || (o.previousHi == hi && o.previousLo >= lo))
+	o.previousHi = hi
+	o.previousLo = lo
 	o.hasPrevious = true
 	return invalid
 }
