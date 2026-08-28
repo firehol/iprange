@@ -30,6 +30,73 @@ live here at the top of the SOW, not in SWARM.md.
 
 Status: in-progress
 
+Sub-state (2026-08-28): milestone-4 extension B (universal-key
+elimination) authorized by user decision and recorded below. The accepted
+milestone-4 evidence (rust-ratio-acceptance-20260828.csv) stays valid as the
+pre-optimization baseline for the extension.
+
+### Milestone-4 extension B (user decision 2026-08-28): universal-key elimination
+
+User decision: option B from the 2026-08-28 discussion (the single sol
+review's P1 "universal keys" finding) - make the Go engine structurally
+optimal like Rust: eliminate the universal 88-byte `tree.Key` from the hot
+paths so decoded IPv4 range records shrink from 184 bytes to 12 bytes and the
+per-record interface dispatch disappears. Wire format, public APIs, and
+cross-open compatibility must NOT change. Long-term-best, minimal-complete,
+absolute-performance, clean code, one authoritative implementation.
+
+Requirement model (evidence): the Go range writer carries every decoded leaf
+as `rangeRecord` with two 88-byte `tree.Key` values (184-byte records) and
+dispatches per record through `rangeFamily` / `tree.Codec` /
+`RangeStore` / `tree.Store`. Rust carries `Record<K>` with `K = Ipv4Key`
+(12-byte IPv4 records, 36-byte IPv6) and monomorphized static code
+(`v4/rust/iprange-livedb/src/range_tree.rs` Record/Codec,
+`range_mutation.rs` PrivateGap). Result: clamping per-record value copies
+from 3 cache lines to 1, eliminating the per-record key construction
+conversions, and removing the 88-byte values from the mutation machinery.
+The measured deltas this targets (1M medians, rust-ratio-acceptance-
+20260828.csv): nested-overwrite 6.7x, update-ipsets-workflow 4.4x,
+membership-import 3.5x, lookups 1.9-2.1x.
+
+Design (decided, implementation authority):
+
+1. `tree.Key` is redefined as the canonical-compare-bytes key: fixed
+   numeric keys hold their compare bytes big-endian in a `[40]byte` value
+   with a size tag (4/8/12/16), hash keys hold digest bytes plus each
+   suffix word big-endian (same order as Rust `HashKey` derived Ord), and
+   variable keys (catalog names) keep a byte slice. All key compares in
+   the tree core become static bytewise compares (no fields to
+   materialize, no per-probe conversion; the width-specialized
+   `fixedLowerBound` probe keeps its existing static form, reading the
+   canonical bytes instead of `Key.Hi`/`Key.Lo`/`Key.Raw`).
+2. The writer's range family becomes generic over the key type exactly
+   like Rust: `rangeRecord[K]`, `rangeFamily[K]`, `rangeCtx[K]`, and the
+   mutation machinery (`range_edit`, `range_merge`, `range_locator`,
+   `range_coverage`, `range_draft`, `range_bulk`, comparison, feed merge,
+   import paths) parameterized by K with `K = uint32` for IPv4
+   (12-byte records) and the IPv6 pair for IPv6 (36-byte records).
+3. One authoritative tree core stays; no per-family core copies. The
+   core's public shape (`Codec[T]`, gap/insert/delete/read/cursor/walk)
+   keeps its function signatures; only the value representation of `Key`
+   changes inside.
+4. The reader (0 `tree.Key` uses), the on-disk layout, the codec cell
+   encodings, and the public surfaces are unchanged; validation, retire,
+   and the public entry points mechanically adapt to the compact key.
+
+Validation plan (recorded before implementation):
+
+- Every slice commit: `nice go -C v4/go test ./...`, `go vet`,
+  `gofmt -l`, the v4work suite, race/checkptr on the final slice, and the
+  cross-open conformance battery.
+- Re-measure the matched Rust-ratio evidence with the final release
+  binaries (same host, both sides): rerun the 18-case CI gate and refresh
+  the committed evidence CSVs. Targets: read paths ~1.2-1.6x Rust,
+  write paths ~2-3.5x, validation ~1.5-2x (the accepted milestone-4
+  mandate).
+- Five-reviewer level-1 round on the delta (scopes: Rust parity, Go
+  idioms, performance, wire/integrity, APIs/records), then SOW-0027
+  milestone-4 acceptance and SOW close.
+
 Sub-state (2026-08-26): activated by user decision (Open Decision 1, option A);
 SOW-0017 is paused as blocked on this SOW's prerequisite. The static gap
 analysis at repository revision `07c0147bf18b4d1e976f460fc2624e90e91be8cc` was
