@@ -201,9 +201,14 @@ func RecoverImmutable(sourcePath string, candidate *RecoveryCandidate, destinati
 // RecoverOffline runs one bounded recovery of the exact candidate
 // under caller-certified exclusive quiescence (Rust recover_offline):
 // the source opens read-write under an exclusive lifetime lock. The
-// certification is accepted at the boundary like the Rust arm.
+// certification enum has one defined variant (CallerCertified); Go's
+// numeric form can name undefined values, so the boundary rejects them
+// before any path access (Rust's single-variant enum cannot express
+// them in safe code).
 func RecoverOffline(sourcePath string, candidate *RecoveryCandidate, destinationPath string, certification OfflineQuiescenceCertification, budget *RecoveryBudget, sink RecoverySink, cancellation *CancellationToken) (*RecoveryResult, *RecoveryPreparationFailure) {
-	_ = certification
+	if certification != CallerCertified {
+		return nil, &RecoveryPreparationFailure{Cause: &Error{Code: ErrorInvalidArgument, Detail: "undefined offline quiescence certification"}}
+	}
 	if budget == nil {
 		return nil, recoveryBudgetFailure()
 	}

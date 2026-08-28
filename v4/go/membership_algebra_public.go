@@ -79,6 +79,9 @@ type MembershipAlgebra struct {
 func NewMembershipAlgebra(scopes []*MembershipScope, budget MembershipAlgebraBudget, cancellation *CancellationToken) (*MembershipAlgebra, error) {
 	sources := make([]reader.AlgebraSource, len(scopes))
 	for i, sc := range scopes {
+		if sc == nil {
+			return nil, &Error{Code: ErrorInvalidArgument, Detail: "membership algebra source is empty"}
+		}
 		if err := sc.r.checkOpen(); err != nil {
 			return nil, err
 		}

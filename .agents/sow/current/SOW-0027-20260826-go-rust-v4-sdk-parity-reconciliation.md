@@ -247,6 +247,88 @@ principles, so the recommendation is to accept the current ratios and
 record the trade-off as a follow-up. The user is deciding between
 accept (recommended), per-family duplication now, or codegen.
 
+### Milestone-5 (2026-08-28): closure-parity work package
+
+External sol audit at HEAD 093ddb64 verified against the code and this
+SOW's own closure contract (lines above): every reported P1/P2 item is
+real and maps to a recorded closure requirement. SOW-0027 stays
+in-progress; milestone-4 acceptance is deferred to the end of this
+package. Verified item ledger (evidence -> closure contract -> fix):
+
+1. Worker containment (P1, sol): routing_other.go routes validation/
+   recovery in-process on every non-linux/amd64 platform; the closure
+   contract requires a version-matched worker on every supported
+   OS/architecture (routing_other.go:1, binary-format-v4.md:3155).
+   Fix (milestone-5 slice E): widen the worker-routed build-tag matrix
+   to every platform the worker binary cross-builds on (darwin,
+   freebsd, windows, linux/arm64, amd64+arm64) and keep the no-silent-
+   fallback semantics; validate natively on the authorized hosts.
+2. Immutable-feed builder (P1, sol): Go has no one-inode immutable
+   feed construction (parity_manifest.tsv immutable_feed row missing;
+   scenario_sdk.go substitutes live+snapshot; Rust lib.rs exports
+   create_immutable_feed_v4/v6). The update-ipsets-workflow benchmark
+   is therefore not apples-to-apples. Fix (slice F): public
+   CreateImmutableFeedV4/V6 mirroring Rust immutable_feed.rs, then
+   swap the benchmark source and re-measure.
+3. Commit outcome resolution (P1, sol): CommitResult (writer_public.go:
+   61) lacks DirectoryIdentity/MainIdentity that Rust CommitResult
+   carries (live_writer/result.rs:129) and ResolveCommit accepts only
+   LiveCommitResult, so advanced workflows cannot resolve an unknown
+   outcome. Fix (slice B): add the two identities to CommitResult,
+   populate them at the commit terminal, and let ResolveCommit accept
+   the unified attempt shape.
+4. Invalid inputs (P2, sol): nil MembershipScope entries and nil
+   DirectJoinSource dereference without a typed error
+   (membership_algebra_public.go:79, join_public.go:116) and undefined
+   OfflineQuiescenceCertification values are accepted (recovery_public
+   .go:201) although the closure contract requires typed errors and
+   certification rejection. Fix (slice A): guards at the public
+   boundaries with tests.
+5. Metadata buffer APIs (P2, sol): ImmutableReader exposes only the
+   allocating MetadataJSON; Rust also provides metadata_json_len and
+   read_metadata_json (reader_public.go:527, database.rs:165). The
+   live surfaces already have the pair. Fix (slice C): mirror the two
+   methods on ImmutableReader.
+6. Streaming facade allocations (P2, sol): aggregation/join docs
+   promise reusable zero-allocation buffers but the facades allocate
+   a fresh output slice per callback batch and the zeroalloc tests
+   permit it (aggregation_public.go:95, join_public.go:135,
+   streaming_facades_zeroalloc_test.go:85). Fix (slice C): reuse one
+   growable output slice across batches, tighten the allocation pins,
+   and correct the docs.
+7. Parity gate completeness (P2, sol): the manifest holds 86 curated
+   rows (61 present, 25 informational missing) against 507 Rust
+   exports; missing rows with an empty Go symbol never fail
+   (parity_gate_test.go:147). Fix (slice D): required-missing rows
+   fail unless recorded as planned with evidence, and a surface
+   coverage tripwire closes the Rust export list.
+8. Closure records (P2, sol): validation, real-use evidence, final
+   documentation, the mandatory full-codebase mmap/page-copy/file-I/O
+   adversarial reviews, outcome, and lessons are pending; superseded
+   milestone sub-states still read as active at the top of Status.
+   Fix (slice G + close): status rewrite, mandatory four-reviewer
+   full-codebase gates, final 5-reviewer round, and the close-out
+   sections.
+9. Performance mandate (sol): committed ratios show nested-overwrite
+   4.044x (target 2-3.5x), lookups 1.835/1.830x (target 1.2-1.6x),
+   validation 2.235x (target 1.5-2x), and the workflow comparison is
+   not comparable until slice F lands. Fix (slice F measurement +
+   slice G): apples-to-apples re-measurement, then close the residuals
+   that remain cost-effective (the nested-overwrite 1/2/3 decision is
+   superseded: the milestone stays open, so the duplication/codegen
+   option re-opens only if measurements show it is the cheapest
+   remaining win).
+
+Slice plan and validation: A input guards (tests), B commit
+identities (gate + cross-open), C metadata + streaming (allocation
+pins), D parity gate (gate test), E worker matrix (native hosts:
+costa-win11, plakam4mini, freebsd), F immutable feed builder + bench
+swap (conformance fixture + apples-to-apples ratios), G mmap/file-I/O
+adversarial reviews + final 5-reviewer round + closure records.
+Every slice: gofmt/vet, plain + v4work tests under nice, race/checkptr
+on the touched packages, gate/ratio evidence refresh when behavior or
+hot paths change.
+
 
 
 Sub-state (2026-08-26): activated by user decision (Open Decision 1, option A);

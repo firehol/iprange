@@ -164,6 +164,9 @@ func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinB
 // side first). crossYield and uncoveredYield receive bounded batches
 // from one reusable per-operation buffer each; nil yields discard.
 func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func([]MembershipCrossCell) error, uncoveredYield func([]UncoveredFeed) error, cancellation *CancellationToken) (MembershipJoinReport, error) {
+	if right == nil {
+		return MembershipJoinReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership join requires a right scope"}
+	}
 	if err := s.r.checkOpen(); err != nil {
 		return MembershipJoinReport{}, err
 	}
