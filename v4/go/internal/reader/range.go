@@ -148,57 +148,46 @@ func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint
 }
 
 // rangeBranchChild4 finds the greatest branch entry with first_from <= addr
-// through the shared search primitive: every probe reads only the key
-// (first_from); the selected entry is decoded once and its child validated.
+// through the family-typed fixed probe (Rust fixed_tree lower_bound with
+// the RangeCodec read_key inlined): the page shape is validated once and
+// every probe reads only the from key; the selected entry is decoded once
+// and its child validated.
 func rangeBranchChild4(sl format.SlottedPage, addr uint32, pageCount uint64) (uint32, error) {
-	cmp := func(i int) (int, error) {
-		b, err := sl.Record(i)
-		if err != nil {
-			return 0, err
-		}
-		first, err := format.RangeEntryKeyV4(b)
-		if err != nil {
-			return 0, err
-		}
-		return cmpU32(first, addr), nil
-	}
-	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
-	if err != nil || best < 0 {
-		return 0, err
-	}
-	b, err := sl.Record(best)
+	search, err := format.NewFixedSearch(sl.Page, sl.Header, format.RangeEntryV4Size)
 	if err != nil {
 		return 0, err
 	}
-	_, child, err := format.DecodeRangeEntryV4(b)
+	best, err := greatestFixedV4(search, int(sl.Header.ItemCount), addr)
+	if err != nil || best < 0 {
+		return 0, err
+	}
+	cell, err := search.Cell(best)
+	if err != nil {
+		return 0, err
+	}
+	_, child, err := format.DecodeRangeEntryV4(cell)
 	if err != nil || !format.PageNumberValid(child, pageCount) {
 		return 0, corrupt("range child out of range")
 	}
 	return child, nil
 }
 
-// rangeBranchChild6 finds the greatest branch entry with first_from <= addr.
+// rangeBranchChild6 finds the greatest branch entry with first_from <= addr
+// (the IPv6 form of rangeBranchChild4).
 func rangeBranchChild6(sl format.SlottedPage, addrHi, addrLo uint64, pageCount uint64) (uint32, error) {
-	cmp := func(i int) (int, error) {
-		b, err := sl.Record(i)
-		if err != nil {
-			return 0, err
-		}
-		hi, lo, err := format.RangeEntryKeyV6(b)
-		if err != nil {
-			return 0, err
-		}
-		return cmpU128(hi, lo, addrHi, addrLo), nil
-	}
-	best, err := greatestLE(int(sl.Header.ItemCount), cmp)
-	if err != nil || best < 0 {
-		return 0, err
-	}
-	b, err := sl.Record(best)
+	search, err := format.NewFixedSearch(sl.Page, sl.Header, format.RangeEntryV6Size)
 	if err != nil {
 		return 0, err
 	}
-	_, _, child, err := format.DecodeRangeEntryV6(b)
+	best, err := greatestFixedV6(search, int(sl.Header.ItemCount), addrHi, addrLo)
+	if err != nil || best < 0 {
+		return 0, err
+	}
+	cell, err := search.Cell(best)
+	if err != nil {
+		return 0, err
+	}
+	_, _, child, err := format.DecodeRangeEntryV6(cell)
 	if err != nil || !format.PageNumberValid(child, pageCount) {
 		return 0, corrupt("range child out of range")
 	}
@@ -209,31 +198,20 @@ func rangeBranchChild6(sl format.SlottedPage, addrHi, addrLo uint64, pageCount u
 // search and tests the inclusive upper bound. Probes read the from key
 // only; the selected record is decoded once.
 func rangeLeafLookup4(leaf format.SlottedPage, addr uint32) (format.RangeRecordV4, bool, error) {
-	cmp := func(i int) (int, error) {
-		b, err := leaf.Record(i)
-		if err != nil {
-			return 0, err
-		}
-		from, err := format.RangeRecordKeyV4(b)
-		if err != nil {
-			return 0, err
-		}
-		return cmpU32(from, addr), nil
+	search, err := format.NewFixedSearch(leaf.Page, leaf.Header, format.RangeRecordV4Size)
+	if err != nil {
+		return format.RangeRecordV4{}, false, err
 	}
-	best, err := greatestLE(int(leaf.Header.ItemCount), cmp)
+	best, err := greatestFixedV4(search, int(leaf.Header.ItemCount), addr)
 	if err != nil || best < 0 {
 		return format.RangeRecordV4{}, false, err
 	}
 	work.LeafValidation(1)
-	b, err := leaf.Record(best)
+	cell, err := search.Cell(best)
 	if err != nil {
 		return format.RangeRecordV4{}, false, err
 	}
-	b, err = exactRecordView(b, format.RangeRecordV4Size)
-	if err != nil {
-		return format.RangeRecordV4{}, false, err
-	}
-	rec, err := format.DecodeRangeRecordV4(b)
+	rec, err := format.DecodeRangeRecordV4(cell)
 	if err != nil {
 		return format.RangeRecordV4{}, false, err
 	}
@@ -244,34 +222,23 @@ func rangeLeafLookup4(leaf format.SlottedPage, addr uint32) (format.RangeRecordV
 }
 
 // rangeLeafLookup6 finds the greatest record with from <= addr by binary
-// search and tests the inclusive upper bound. Probes read the from key
-// only; the selected record is decoded once.
+// search and tests the inclusive upper bound (the IPv6 form of
+// rangeLeafLookup4).
 func rangeLeafLookup6(leaf format.SlottedPage, addrHi, addrLo uint64) (format.RangeRecordV6, bool, error) {
-	cmp := func(i int) (int, error) {
-		b, err := leaf.Record(i)
-		if err != nil {
-			return 0, err
-		}
-		hi, lo, err := format.RangeRecordKeyV6(b)
-		if err != nil {
-			return 0, err
-		}
-		return cmpU128(hi, lo, addrHi, addrLo), nil
+	search, err := format.NewFixedSearch(leaf.Page, leaf.Header, format.RangeRecordV6Size)
+	if err != nil {
+		return format.RangeRecordV6{}, false, err
 	}
-	best, err := greatestLE(int(leaf.Header.ItemCount), cmp)
+	best, err := greatestFixedV6(search, int(leaf.Header.ItemCount), addrHi, addrLo)
 	if err != nil || best < 0 {
 		return format.RangeRecordV6{}, false, err
 	}
 	work.LeafValidation(1)
-	b, err := leaf.Record(best)
+	cell, err := search.Cell(best)
 	if err != nil {
 		return format.RangeRecordV6{}, false, err
 	}
-	b, err = exactRecordView(b, format.RangeRecordV6Size)
-	if err != nil {
-		return format.RangeRecordV6{}, false, err
-	}
-	rec, err := format.DecodeRangeRecordV6(b)
+	rec, err := format.DecodeRangeRecordV6(cell)
 	if err != nil {
 		return format.RangeRecordV6{}, false, err
 	}

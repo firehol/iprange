@@ -11,7 +11,7 @@
 package reader
 
 import (
-	"sort"
+	"slices"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -187,7 +187,11 @@ func (p *algebraOutputPlan) fillOutput(present, counts []uint32, globalToOutput 
 		return false, err
 	}
 	if !sorted {
-		sort.Slice(*output, func(i, j int) bool { return (*output)[i] < (*output)[j] })
+		// slices.Sort is the allocation-free analogue of Rust
+		// sort_unstable for the near-sorted position vector; the
+		// reflection-based sort.Slice would allocate one swapper object
+		// per call.
+		slices.Sort(*output)
 	}
 	return true, nil
 }

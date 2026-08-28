@@ -933,7 +933,8 @@ func algebraScan(a *MembershipAlgebra, ops rangeOps, heap *operationHeap, sink *
 	}
 
 	report := scanReport{}
-	var position *addrKey
+	var position addrKey
+	var hasPosition bool
 	eventWork := 0
 	for {
 		event, ok := events.pop()
@@ -949,16 +950,16 @@ func algebraScan(a *MembershipAlgebra, ops rangeOps, heap *operationHeap, sink *
 				}
 			}
 		}
-		if err := emitAlgebraBefore(position, event.at, ops, global, sink, &report, check); err != nil {
+		if err := emitAlgebraBefore(position, hasPosition, event.at, ops, global, sink, &report, check); err != nil {
 			return scanReport{}, err
 		}
-		at := event.at
+		position = event.at
+		hasPosition = true
 		if err := applyAlgebraBoundary(event, states, events, global, &eventWork, ops, check); err != nil {
 			return scanReport{}, err
 		}
-		position = &at
 	}
-	if err := emitAlgebraTerminal(position, states, ops, global, sink, &report, check); err != nil {
+	if err := emitAlgebraTerminal(position, hasPosition, states, ops, global, sink, &report, check); err != nil {
 		return scanReport{}, err
 	}
 	if err := finishAlgebraSources(states, ops, &report, check); err != nil {
@@ -1058,15 +1059,15 @@ func algebraLoadNext(state *algebraSourceState, check checkpoint) error {
 
 // emitAlgebraBefore delivers the maximal segment before one boundary
 // (Rust emit_before).
-func emitAlgebraBefore(from *addrKey, boundary addrKey, ops rangeOps, global *algebraGlobalState, sink *algebraSink, report *scanReport, check checkpoint) error {
-	if from == nil || !from.Less(boundary) || len(global.present) == 0 {
+func emitAlgebraBefore(from addrKey, hasFrom bool, boundary addrKey, ops rangeOps, global *algebraGlobalState, sink *algebraSink, report *scanReport, check checkpoint) error {
+	if !hasFrom || !from.Less(boundary) || len(global.present) == 0 {
 		return nil
 	}
 	to, err := ops.previous(boundary)
 	if err != nil {
 		return &format.Error{Code: format.CodeArithmeticOverflow, Detail: "membership algebra boundary"}
 	}
-	if err := sink.segment(*from, to, global.present, global.counts, ops, check); err != nil {
+	if err := sink.segment(from, to, global.present, global.counts, ops, check); err != nil {
 		return err
 	}
 	segments, err := increment64(report.segments, "membership algebra segments")
@@ -1153,8 +1154,8 @@ func applyAlgebraEvent(event algebraEvent, states []*algebraSourceState, events 
 
 // emitAlgebraTerminal delivers the final segment to the maximum
 // address (Rust emit_terminal).
-func emitAlgebraTerminal(from *addrKey, states []*algebraSourceState, ops rangeOps, global *algebraGlobalState, sink *algebraSink, report *scanReport, check checkpoint) error {
-	if from == nil || len(global.present) == 0 {
+func emitAlgebraTerminal(from addrKey, hasFrom bool, states []*algebraSourceState, ops rangeOps, global *algebraGlobalState, sink *algebraSink, report *scanReport, check checkpoint) error {
+	if !hasFrom || len(global.present) == 0 {
 		return nil
 	}
 	var to addrKey
@@ -1176,7 +1177,7 @@ func emitAlgebraTerminal(from *addrKey, states []*algebraSourceState, ops rangeO
 	if _, err := ops.next(to); err == nil {
 		return corrupt("membership algebra event queue ended early")
 	}
-	if err := sink.segment(*from, to, global.present, global.counts, ops, check); err != nil {
+	if err := sink.segment(from, to, global.present, global.counts, ops, check); err != nil {
 		return err
 	}
 	next, err := increment64(report.segments, "membership algebra segments")

@@ -45,6 +45,10 @@ func TestWorkRangeLookupMultiLevel(t *testing.T) {
 		TreeLookups: 1, TreeDescents: 1,
 		PagesVisited: 2, PagesParsed: 2,
 		KeyProbes: 2 + 9, LeafValidations: 1,
+		// The family-typed fixed probe charges the shared cell and
+		// slot-read counters per probe plus the two selected-record
+		// cells (Rust FixedSearch accounting).
+		CellProbes: 2 + 9 + 2, SlotReads: 2 + 9 + 2,
 	})
 
 	// A miss below every key walks only the branch (3 probes, no descent).
@@ -55,7 +59,8 @@ func TestWorkRangeLookupMultiLevel(t *testing.T) {
 	expectCounters(t, work.Snapshot{
 		TreeLookups:  1,
 		PagesVisited: 1, PagesParsed: 1,
-		KeyProbes: 3,
+		KeyProbes:  3,
+		CellProbes: 3, SlotReads: 3,
 	})
 }
 
@@ -84,7 +89,8 @@ func TestWorkMembershipBlobWords(t *testing.T) {
 		TreeLookups: 3, TreeDescents: 1,
 		PagesVisited: 4, PagesParsed: 4,
 		KeyProbes: 1 + 1 + 2, LeafValidations: 3,
-		WordReads: 1,
+		WordReads:  1,
+		CellProbes: 2, SlotReads: 2,
 	})
 }
 

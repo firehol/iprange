@@ -39,36 +39,17 @@ func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel
 	return h, nil
 }
 
-// FixedSearch is one fixed-cell page whose shape was checked once; every
-// probe re-checks the persistent slot value (Rust FixedSearch).
-type FixedSearch struct {
-	page    []byte
-	header  Header
-	cellLen int
-}
-
-func newFixedSearch(page []byte, header Header, cellLen int) (FixedSearch, error) {
-	if len(page) != format.PageSize || !format.SlottedShapeValid(&header) ||
-		cellLen == 0 || cellLen > format.PageSize {
-		return FixedSearch{}, corrupt("fixed slotted-page search shape is invalid")
-	}
-	return FixedSearch{page: page, header: header, cellLen: cellLen}, nil
-}
-
-// cellAt reads the fixed cell at an index already bounded by the search
-// algorithm (Rust FixedSearch::cell_at): the page shape was validated
-// once by newFixedSearch and the caller guarantees index < ItemCount, so
-// the slot-table read needs no per-probe index re-check. The persistent
-// slot value stays untrusted and its complete extent is validated on
-// every probe; the returned slice is a view of the caller's page.
-func (f FixedSearch) cellAt(index int) ([]byte, error) {
-	work.CellProbe(1)
-	work.SlotRead(1)
-	start := int(format.U16(f.page[format.SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > format.PageSize-f.cellLen {
+// fixedCellAt reads one fixed cell through the shared format view
+// (format.FixedSearch, Rust slotted_page::FixedSearch::cell_at): the
+// page shape was validated once and the caller bounds index below
+// ItemCount, so the probe re-checks only the untrusted persistent slot
+// value and the complete cell extent.
+func fixedCellAt(search format.FixedSearch, index int) ([]byte, error) {
+	cell, err := search.Cell(index)
+	if err != nil {
 		return nil, corrupt("slotted-page cell is outside the record area")
 	}
-	return f.page[start : start+f.cellLen], nil
+	return cell, nil
 }
 
 // lowerBound locates the first index whose key is >= key (Rust
@@ -128,9 +109,9 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 	if keySize == 0 || keySize > cellLen {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
-	search, err := newFixedSearch(page, *header, cellLen)
+	search, err := format.NewFixedSearch(page, *header, cellLen)
 	if err != nil {
-		return 0, false, err
+		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
 	lower := 0
 	upper := int(header.ItemCount)
@@ -139,7 +120,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.cellAt(middle)
+		cell, err := fixedCellAt(search, middle)
 		if err != nil {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
@@ -165,7 +146,7 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.cellAt(lower)
+			cell, err := fixedCellAt(search, lower)
 			if err != nil {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}

@@ -171,6 +171,7 @@ func copyMembershipV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 	if err != nil {
 		return err
 	}
+	var words viewWords
 	for {
 		if err := checkCancellation(check); err != nil {
 			return err
@@ -182,11 +183,12 @@ func copyMembershipV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if !ok {
 			return nil
 		}
-		words, err := snapshotWords(source, range_.Membership)
+		view, err := source.LookupMembershipID(range_.Membership)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushMembershipV4(range_.From, range_.To, words); err != nil {
+		words.view = view
+		if err := builder.PushMembershipV4Words(range_.From, range_.To, &words); err != nil {
 			return err
 		}
 	}
@@ -199,6 +201,7 @@ func copyMembershipV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 	if err != nil {
 		return err
 	}
+	var words viewWords
 	for {
 		if err := checkCancellation(check); err != nil {
 			return err
@@ -210,11 +213,12 @@ func copyMembershipV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if !ok {
 			return nil
 		}
-		words, err := snapshotWords(source, range_.Membership)
+		view, err := source.LookupMembershipID(range_.Membership)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushMembershipV6(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, words); err != nil {
+		words.view = view
+		if err := builder.PushMembershipV6Words(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, &words); err != nil {
 			return err
 		}
 	}
@@ -224,6 +228,7 @@ func copyMembershipV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 // copy_structured_v4): the payload and the optional threat membership are
 // decoded from the visited view and pushed with the structure batch.
 func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuilder, check func() error) error {
+	var words viewWords
 	cursor, err := source.NewNetworkEnrichmentV1Cursor4(reader.RangeForward)
 	if err != nil {
 		return err
@@ -243,11 +248,11 @@ func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if err != nil {
 			return err
 		}
-		words, err := threatWords(range_.Value)
+		source, err := threatWords(range_.Value, &words)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushNetworkEnrichmentV1V4(range_.From, range_.To, value, words); err != nil {
+		if err := builder.PushNetworkEnrichmentV1V4Words(range_.From, range_.To, value, source); err != nil {
 			return err
 		}
 	}
@@ -256,6 +261,7 @@ func copyStructuredV4(source *reader.ImmutableReader, builder *writer.OutputBuil
 // copyStructuredV6 copies the IPv6 network_enrichment_v1 ranges (Rust
 // copy_structured_v6).
 func copyStructuredV6(source *reader.ImmutableReader, builder *writer.OutputBuilder, check func() error) error {
+	var words viewWords
 	cursor, err := source.NewNetworkEnrichmentV1Cursor6(reader.RangeForward)
 	if err != nil {
 		return err
@@ -275,21 +281,21 @@ func copyStructuredV6(source *reader.ImmutableReader, builder *writer.OutputBuil
 		if err != nil {
 			return err
 		}
-		words, err := threatWords(range_.Value)
+		source, err := threatWords(range_.Value, &words)
 		if err != nil {
 			return err
 		}
-		if err := builder.PushNetworkEnrichmentV1V6(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, value, words); err != nil {
+		if err := builder.PushNetworkEnrichmentV1V6Words(range_.FromHi, range_.FromLo, range_.ToHi, range_.ToLo, value, source); err != nil {
 			return err
 		}
 	}
 }
 
 // threatWords resolves one view's optional threat membership into the
-// writer's concrete word type (Rust copy_structured_v4/v6 match on
+// writer's word source (Rust copy_structured_v4/v6 match on
 // threat_membership): an absent membership passes nil and the writer
 // interns the payload without a bitmap.
-func threatWords(view reader.NetworkEnrichmentV1View) (writer.OutputWords, error) {
+func threatWords(view reader.NetworkEnrichmentV1View, words *viewWords) (writer.MembershipWordSource, error) {
 	view2, err := view.ThreatMembership()
 	if err != nil {
 		return nil, err
@@ -297,36 +303,43 @@ func threatWords(view reader.NetworkEnrichmentV1View) (writer.OutputWords, error
 	if view2.ID() == 0 {
 		return nil, nil
 	}
-	return membershipWords(view2)
+	words.view = view2
+	return words, nil
 }
 
-// membershipWords materializes one checked membership view (Rust
-// SnapshotWords + MembershipWords::read_words): the writer's concrete
-// OutputWords contract requires one caller-owned copy per bitmap, and the
-// exact-count verify proves the bitmap length survived the read
-// (Corrupt "membership length changed while copying").
-func membershipWords(view reader.MembershipView) (writer.OutputWords, error) {
-	wordCount := view.WordCount()
-	words := make([]uint64, int(wordCount))
-	copied, err := view.ReadWords(0, words)
-	if err != nil {
-		return nil, err
-	}
-	if copied != len(words) {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "membership length changed while copying"}
-	}
-	return writer.OutputWords(words), nil
+// viewWords adapts one checked membership view to the writer's
+// by-value word-source seam (Rust SnapshotWords + MembershipWords::
+// read_words): every chunk is a copy of the mapped words, so snapshot
+// copies never materialize an owned bitmap per record and never hand
+// the writer a mapped view.
+type viewWords struct {
+	view reader.MembershipView
 }
 
-// snapshotWords resolves one membership dictionary ID to the checked
-// bitmap view and materializes it (Rust builder.push_membership_v4/6 over
-// reader.membership).
-func snapshotWords(source *reader.ImmutableReader, id uint32) (writer.OutputWords, error) {
-	view, err := source.LookupMembershipID(id)
-	if err != nil {
-		return nil, err
+func (w viewWords) WordCount() uint32 { return w.view.WordCount() }
+
+// ReadChunk copies the up-to-64 words starting at start (the seam chunk
+// read; the exact-count verify proves the bitmap length survived the
+// read, Corrupt "membership length changed while copying").
+func (w viewWords) ReadChunk(start uint32) ([64]uint64, uint32, error) {
+	var words [64]uint64
+	wordCount := w.view.WordCount()
+	if start > wordCount {
+		return words, 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "membership length changed while copying"}
 	}
-	return membershipWords(view)
+	remaining := wordCount - start
+	count := uint32(64)
+	if remaining < count {
+		count = remaining
+	}
+	copied, err := w.view.ReadWords(start, words[:count])
+	if err != nil {
+		return words, 0, err
+	}
+	if uint32(copied) != count {
+		return words, 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "membership length changed while copying"}
+	}
+	return words, count, nil
 }
 
 // checkCancellation runs one per-item checkpoint; a nil checkpoint never

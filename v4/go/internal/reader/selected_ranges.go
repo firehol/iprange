@@ -72,11 +72,15 @@ func (s *selectedRanges) enableCache(heap *operationHeap, maxBytes uint64) error
 // next returns the next selected run by value, or none when the physical
 // cursor is exhausted (the active scratch is cleared exactly like Rust).
 func (s *selectedRanges) next(check checkpoint) (selectedRange, bool, error) {
-	var current *membershipRange
+	// The current run is carried by value (Rust MembershipRange value
+	// semantics): a pointer into s.pending would alias the field that
+	// the lookahead stop path overwrites before returning, and a pointer
+	// into a loop local would escape to the heap per call.
+	var current membershipRange
 	if s.hasPending {
 		s.hasPending = false
 		s.active, s.lookahead = s.lookahead, s.active
-		current = &s.pending
+		current = s.pending
 	} else {
 		for {
 			first, ok, err := s.nextPhysical(check)
@@ -93,7 +97,7 @@ func (s *selectedRanges) next(check checkpoint) (selectedRange, bool, error) {
 				return selectedRange{}, false, err
 			}
 			if len(s.active.presentList()) != 0 {
-				current = &first
+				current = first
 				break
 			}
 		}

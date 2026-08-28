@@ -91,3 +91,24 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   reads 1.78-1.81 and validation 2.18-2.48, so the true deltas versus
   the pre-B baseline are: validation -12%, reads unchanged, write
   scenarios within run-to-run noise).
+- `ci-go-v4-local-20260828f.log`: the gate run at the C1 state
+  (closure-free family-typed reader probes over the shared once-validated
+  format.FixedSearch, value-semantics selected-runs scan, allocation-free
+  algebra boundary tracking, slices.Sort output, view-backed snapshot
+  membership words), 18/18 within-limit, ratios 0.691-1.050.
+- `rust-ratio-acceptance-20260828d.csv`: the post-C1 Go-vs-Rust ratio
+  table from interleaved matched 5-sample runs (raw rows in
+  `rust-ratio-go-samples-20260828d.csv` /
+  `rust-ratio-rust-samples-20260828d.csv`). Ratios:
+  membership-import 1.531 (was 1.622), nested-overwrite 4.451,
+  update-ipsets-workflow 3.209, live-direct-random-lookup 1.821 (was
+  1.964), immutable-direct-random-lookup 1.855 (was 1.999),
+  live-validation 2.353. The update-ipsets workflow allocations dropped
+  from 10.7M to 27K objects (369MB to 138MB): the ratio table is
+  wall-time bound, the allocation parity shows in the raw rows.
+- `selected_ranges_test.go` (reader package): regression test pinning
+  exact run-scan coverage for the all-catalog and named scope forms.
+  The 4c "by value" refactor had aliased the pending field on the
+  lookahead stop path (dropped and duplicated runs with three or more
+  physical ranges) and allocated one heap object per emitted run; C1
+  replaced the pointer with value semantics.

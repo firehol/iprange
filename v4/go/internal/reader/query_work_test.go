@@ -146,7 +146,8 @@ func TestWorkMatchingFeeds(t *testing.T) {
 	want := work.Snapshot{
 		TreeLookups: 7, PagesVisited: 7, PagesParsed: 7, KeyProbes: 4,
 		LeafValidations: 7, WordReads: 2, MembershipDecodes: 1,
-		CatalogLookups: 5, // one per matched feed (Rust matching -> lookup_feed_index)
+		CatalogLookups: 5,               // one per matched feed (Rust matching -> lookup_feed_index)
+		CellProbes:     3, SlotReads: 3, // the matched range probes and selected cells
 	}
 	if got := work.Read(); got != want {
 		t.Fatalf("matching counters = %+v, want %+v", got, want)
@@ -160,7 +161,7 @@ func TestWorkMatchingFeeds(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("absent matching count = %d, want 0", n)
 	}
-	want = work.Snapshot{TreeLookups: 1, PagesVisited: 1, PagesParsed: 1, KeyProbes: 2, LeafValidations: 1}
+	want = work.Snapshot{TreeLookups: 1, PagesVisited: 1, PagesParsed: 1, KeyProbes: 2, LeafValidations: 1, CellProbes: 3, SlotReads: 3}
 	if got := work.Read(); got != want {
 		t.Fatalf("absent matching counters = %+v, want %+v", got, want)
 	}

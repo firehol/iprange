@@ -131,6 +131,38 @@ outside extension B), (3) the update-ipsets workflow still allocates
 10.7M objects (reader algebra: selectedRanges.next 5.5M, sort.Swapper
 1.2M, snapshot.membershipWords 1.0M; outside extension B).
 
+User decision (2026-08-28, "1B"): continue optimization to maximum
+performance within the current milestone. Two reviewed slices: C1 =
+reader + workflow (closure-free typed read probes with once-validated
+page views; eliminate the top workflow allocation sources
+selectedRanges.next / sort.Slice reflection swapper /
+snapshot.membershipWords), C2 = tree-core typed fixed-key entry points
+(a deliberate refinement of the frozen core design: the core keeps one
+authoritative implementation and its Codec/T/cycle semantics, but its
+entry points accept the family-typed fixed key instead of constructing
+tree.Key per operation, and the gap/replace machinery dispatches
+without the per-record interface hops). C2 explicitly supersedes the
+2026-08-28 design item 3 "the core's public shape keeps its function
+signatures" for fixed-key codecs, to the extent needed to remove the
+per-op key construction and interface dispatch; wire format, public
+APIs, work counters, and corruption semantics stay identical. After C1
+and C2: 5-reviewer level-1 round, milestone-4 acceptance, SOW close.
+C1 delivered (pushed as part of this status write): the reader range
+searches are closure-free family-typed probes over the shared
+once-validated format.FixedSearch (lookups 1.96-2.00 -> 1.82-1.86),
+the 4c selected-runs scan aliasing defect was found by a new coverage
+regression test and fixed with value semantics (5.5M -> 0 per-run heap
+objects), the algebra boundary position no longer escapes per event
+(1.8M objects), the output sort uses slices.Sort instead of the
+reflection swapper (1.2M objects), and the snapshot copy streams
+membership words through the writer word-source seam without per-record
+materialization (1.9M objects). The update-ipsets workflow allocation
+count dropped from 10,727,434 to 27,406 objects (369MB to 138MB), with
+wall-time ratios unchanged within noise (3.21x) because the tiny-object
+allocations were not the CPU bottleneck; the write-path ratio remains
+nested-overwrite ~4.45x pending the C2 typed tree core.
+
+
 
 Sub-state (2026-08-26): activated by user decision (Open Decision 1, option A);
 SOW-0017 is paused as blocked on this SOW's prerequisite. The static gap

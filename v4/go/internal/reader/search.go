@@ -1,6 +1,9 @@
 package reader
 
-import "github.com/firehol/iprange/v4/go/internal/work"
+import (
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
+)
 
 // search.go holds the single authoritative lower-bound search over the
 // sorted key slots of one slotted page, mirroring fixed_tree/page.rs
@@ -62,4 +65,52 @@ func cmpU128(ahi, alo, bhi, blo uint64) int {
 		return c
 	}
 	return cmpU64(alo, blo)
+}
+
+// greatestFixedV4 is the v4 family-typed greatest-LE search over one
+// fixed-cell page (the closure-free form of greatestLE; Rust
+// fixed_tree/page.rs lower_bound_by with the RangeCodec read_key
+// inlined). The page shape was validated once by the caller's fixed
+// search view; every probe reads the persistent slot and the 4-byte
+// from key only.
+func greatestFixedV4(search format.FixedSearch, n int, addr uint32) (int, error) {
+	lo, hi := 0, n
+	best := -1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		work.KeyProbe(1)
+		cell, err := search.Cell(mid)
+		if err != nil {
+			return -1, err
+		}
+		if format.U32(cell[:4]) <= addr {
+			best = mid
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return best, nil
+}
+
+// greatestFixedV6 is the v6 form of greatestFixedV4 (16-byte from key).
+func greatestFixedV6(search format.FixedSearch, n int, addrHi, addrLo uint64) (int, error) {
+	lo, hi := 0, n
+	best := -1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		work.KeyProbe(1)
+		cell, err := search.Cell(mid)
+		if err != nil {
+			return -1, err
+		}
+		keyHi, keyLo := format.U128(cell[:16])
+		if keyHi < addrHi || (keyHi == addrHi && keyLo <= addrLo) {
+			best = mid
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return best, nil
 }
