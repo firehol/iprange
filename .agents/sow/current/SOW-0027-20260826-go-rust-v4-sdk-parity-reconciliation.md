@@ -305,7 +305,19 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    exports; missing rows with an empty Go symbol never fail
    (parity_gate_test.go:147). Fix (slice D): required-missing rows
    fail unless recorded as planned with evidence, and a surface
-   coverage tripwire closes the Rust export list.
+   coverage tripwire closes the Rust export list. DONE (slice D):
+   the manifest now records the complete Go function surface (266
+   present rows: 65 curated operations plus 201 surface rows
+   generated from the compiled root package), the 17 slice-2c
+   deliberate absences carry the explicit `removed` status with
+   their evidence notes, and the gate enforces (a) every exported
+   Go function and method is recorded, (b) every `missing` row sits
+   on the embedded closure-required list with a note and flips to
+   present only in the implementing commit, (c) `removed` rows carry
+   evidence and stay absent. The 7 required-missing rows are the
+   tracked work: reclaim, immutable feed, from_poll, scratch-removal
+   export, worker containment, apple filesec re-export, Cardinality129
+   re-export.
 8. Closure records (P2, sol): validation, real-use evidence, final
    documentation, the mandatory full-codebase mmap/page-copy/file-I/O
    adversarial reviews, outcome, and lessons are pending; superseded

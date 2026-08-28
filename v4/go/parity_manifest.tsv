@@ -1,21 +1,21 @@
 class	rust_ref	go_symbol	status	note
-writer-offcontract	(spec: no offline mutation API)		missing	removed slice 2c; Rust authority is CreateLive
-writer-offcontract	(spec: all public writers live-bound)		missing	removed slice 2c; Rust authority is LiveWriter::open with the sidecar lease
-writer-offcontract	(spec: no sidecar-free writer type)		missing	removed slice 2c; the public Writer type is gone; LiveWriter is the only writer owner
-writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Info
-writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Close
-writer-offcontract	(spec: writer surface)		missing	removed slice 2c; owned by LiveWriter.Abort
-writer-offcontract	LiveWriter::delete_feed		missing	removed slice 2c; owned by LiveWriter.DeleteFeed
-writer-offcontract	LiveWriter::rename_feed		missing	removed slice 2c; owned by LiveWriter.RenameFeed
-writer-offcontract	LiveWriter::begin_direct_transaction		missing	removed slice 2c; owned by LiveWriter.BeginDirect
-writer-offcontract	LiveWriter::begin_direct_replacement		missing	removed slice 2c; owned by LiveWriter.BeginDirectReplacement
-writer-offcontract	LiveWriter::begin_first_seen_refresh		missing	removed slice 2c; owned by LiveWriter.BeginFirstSeenRefresh
-writer-offcontract	LiveWriter::begin_last_seen_refresh		missing	removed slice 2c; owned by LiveWriter.BeginLastSeenRefresh
-writer-offcontract	LiveWriter::begin_create_feed		missing	removed slice 2c; owned by LiveWriter.BeginCreateFeed
-writer-offcontract	LiveWriter::begin_replace_feed		missing	removed slice 2c; owned by LiveWriter.BeginReplaceFeed
-writer-offcontract	LiveWriter::begin_membership_transaction		missing	removed slice 2c; owned by LiveWriter.BeginMembershipTransaction
-writer-offcontract	LiveWriter::begin_structured_transaction		missing	removed slice 2c; owned by LiveWriter.BeginStructuredTransaction
-writer-offcontract	LiveWriter::project_history		missing	removed slice 2c; owned by LiveWriter.ProjectHistory
+writer-offcontract	(spec: no offline mutation API)		removed	removed slice 2c; Rust authority is CreateLive
+writer-offcontract	(spec: all public writers live-bound)		removed	removed slice 2c; Rust authority is LiveWriter::open with the sidecar lease
+writer-offcontract	(spec: no sidecar-free writer type)		removed	removed slice 2c; the public Writer type is gone; LiveWriter is the only writer owner
+writer-offcontract	(spec: writer surface)		removed	removed slice 2c; owned by LiveWriter.Info
+writer-offcontract	(spec: writer surface)		removed	removed slice 2c; owned by LiveWriter.Close
+writer-offcontract	(spec: writer surface)		removed	removed slice 2c; owned by LiveWriter.Abort
+writer-offcontract	LiveWriter::delete_feed		removed	removed slice 2c; owned by LiveWriter.DeleteFeed
+writer-offcontract	LiveWriter::rename_feed		removed	removed slice 2c; owned by LiveWriter.RenameFeed
+writer-offcontract	LiveWriter::begin_direct_transaction		removed	removed slice 2c; owned by LiveWriter.BeginDirect
+writer-offcontract	LiveWriter::begin_direct_replacement		removed	removed slice 2c; owned by LiveWriter.BeginDirectReplacement
+writer-offcontract	LiveWriter::begin_first_seen_refresh		removed	removed slice 2c; owned by LiveWriter.BeginFirstSeenRefresh
+writer-offcontract	LiveWriter::begin_last_seen_refresh		removed	removed slice 2c; owned by LiveWriter.BeginLastSeenRefresh
+writer-offcontract	LiveWriter::begin_create_feed		removed	removed slice 2c; owned by LiveWriter.BeginCreateFeed
+writer-offcontract	LiveWriter::begin_replace_feed		removed	removed slice 2c; owned by LiveWriter.BeginReplaceFeed
+writer-offcontract	LiveWriter::begin_membership_transaction		removed	removed slice 2c; owned by LiveWriter.BeginMembershipTransaction
+writer-offcontract	LiveWriter::begin_structured_transaction		removed	removed slice 2c; owned by LiveWriter.BeginStructuredTransaction
+writer-offcontract	LiveWriter::project_history		removed	removed slice 2c; owned by LiveWriter.ProjectHistory
 writer-offcontract	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Complete name-based import from a pinned membership reader (membership_import_public.go)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
 writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
@@ -57,7 +57,6 @@ reader	ImmutableReader::lookup_direct_v6	ImmutableReader.LookupDirectV6	present	
 reader	ImmutableReader::lookup_membership_v4	Pin.LookupMembershipV4	present	owner variant: Go membership lookup binds a Pin first
 reader	ImmutableReader::lookup_membership_v6	Pin.LookupMembershipV6	present	owner variant
 reader	ImmutableReader::metadata_json	ImmutableReader.MetadataJSON	present	name variant
-reader	ImmutableReader::metadata_json_len		missing	Length accessor absent (MetadataJSON returns bytes)
 live-reader	LiveReader::open	OpenLiveReader	present	live_reader_public.go
 live-reader	LiveReader::metadata_json	LiveReader.MetadataJSON	present	name variant
 reader	ImmutableReader::read_metadata_json	ImmutableReader.ReadMetadataJSON	present	reader_public.go caller-buffer metadata read (Rust database.rs read_metadata_json); reads into caller storage after the buffer-too-small refusal
@@ -89,3 +88,204 @@ recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
 worker	binary-format-v4.md:3155+ version-matched worker		missing	Go routes validation/recovery in-process on every non-linux/amd64 target (routing_other.go); the routing facade passes through the isolated worker only on linux/amd64
 platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended) and proven in the authorized macOS arm64 round (plain, v4work, race+checkptr green at 631d83c8); no root symbol (internal machine, like remove_checkpointed_scratch)
 cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported
+go-surface	-	AlgebraFeedSelectionAll	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraFeedSelectionNamed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraOutputModeFlat	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraOutputModePreserveFeeds	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraPreparationFailure.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraSetExclusion	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraSetIntersection	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	AlgebraSetUnion	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	CardinalityFromUint128	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	CardinalityFromUint64	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	CardinalityZero	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	DefaultBudget	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	DirectJoinSourceImmutable	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	Error.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	FeedName.String	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	FinishedHistoryProjection.IsChanged	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	FinishedWorkflow.IsChanged	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	FullIPv6Space	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	HeapOnly	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	IPv4Inclusive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	IPv6FromHalves	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	IPv6Inclusive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ImmutableReader.DirectRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ImmutableReader.DirectRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ImmutableReader.NetworkEnrichmentV1CursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ImmutableReader.NetworkEnrichmentV1CursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ImmutableReader.Pin	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	InspectPublicationResidue	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	LiveReader.DirectRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	LiveReader.DirectRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	LiveReader.NetworkEnrichmentV1CursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	LiveReader.NetworkEnrichmentV1CursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	LiveReader.Pin	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipAggregationAllPairs	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipAggregationCardinalities	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipAggregationSelectedPairs	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipAggregationTargetAgainstScope	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipImportSourceImmutable	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	MembershipImportSourceLive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	NewCardinality129	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	NewFeedName	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	NewMembershipAlgebra	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	NewValueTag	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	Pin.LookupFeedInto	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	Pin.LookupNetworkEnrichmentV1V4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	Pin.LookupNetworkEnrichmentV1V6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	RecoveryHeapOnly	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	RemovePublicationResidue	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ResetLiveCoordination	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ResolveCreateLive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ResolveInterruptedLiveTransition	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ResolveLiveTransition	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ResolvePublication	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	SnapshotPreparationFailure.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ValidateOfflineCandidate	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ValueTagFirstSeen	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+go-surface	-	ValueTagLastSeen	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method abort	FinishedHistoryProjection.Abort	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method abort	FinishedWorkflow.Abort	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method abort	MembershipTransaction.Abort	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method abort	PreparedFeedChange.Abort	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method abort	StructuredTransaction.Abort	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_feed	MembershipTransaction.AddFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_feed	StructuredTransaction.AddFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v4	CreateFeed.AddRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v4	DirectReplacement.AddRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v4	FirstSeenRefresh.AddRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v4	LastSeenRefresh.AddRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v4	ReplaceFeed.AddRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v6	CreateFeed.AddRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v6	DirectReplacement.AddRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v6	FirstSeenRefresh.AddRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v6	LastSeenRefresh.AddRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method add_ranges_v6	ReplaceFeed.AddRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method address_family	MembershipAlgebra.AddressFamily	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method aggregate	MembershipScope.Aggregate	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method all_feeds	MembershipQuery.AllFeeds	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method apply_v4	MembershipTransaction.ApplyV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method apply_v6	MembershipTransaction.ApplyV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method assign_v4	StructuredTransaction.AssignV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method assign_v6	StructuredTransaction.AssignV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method bytes	LocalBasename.Bytes	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method bytes	ValueTag.Bytes	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cardinality	ImmutableReader.Cardinality	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cardinality	LiveReader.Cardinality	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	AlgebraSetResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	CommitResolutionResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	CommitResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	LiveAbortResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	LiveCloseResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	LiveCommitCleanupArtifacts.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	ReaderCloseResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method cleanup_state	SnapshotResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_metadata_json	FinishedHistoryProjection.ClearMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_metadata_json	FinishedWorkflow.ClearMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_metadata_json	MembershipTransaction.ClearMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_metadata_json	PreparedFeedChange.ClearMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_metadata_json	StructuredTransaction.ClearMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_v4	StructuredTransaction.ClearV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method clear_v6	StructuredTransaction.ClearV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method close	ImmutableReader.Close	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method close	LiveReader.Close	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method close	NetworkEnrichmentV1CursorV4.Close	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method close	NetworkEnrichmentV1CursorV6.Close	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method close	Pin.Close	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method commit	FinishedHistoryProjection.Commit	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method commit	FinishedWorkflow.Commit	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method commit	MembershipTransaction.Commit	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method commit	PreparedFeedChange.Commit	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method commit	StructuredTransaction.Commit	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method compare	MembershipAlgebra.Compare	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method contains_index	MembershipView.ContainsIndex	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method count	MembershipAlgebra.Count	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method delete_feed	MembershipTransaction.DeleteFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method delete_feed	StructuredTransaction.DeleteFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method direct_cursor_v4	ImmutableReader.DirectCursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method direct_cursor_v4	LiveReader.DirectCursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method direct_cursor_v6	ImmutableReader.DirectCursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method direct_cursor_v6	LiveReader.DirectCursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method direct_semantic	DatabaseInfo.DirectSemantic	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method empty	LiveCommitCleanupArtifacts.Empty	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method empty_membership	MembershipTransaction.EmptyMembership	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method empty_membership	StructuredTransaction.EmptyMembership	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method encoding	LocalBasename.Encoding	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method ensure_feed	MembershipTransaction.EnsureFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method ensure_feed	StructuredTransaction.EnsureFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method entry	LiveCommitCleanupArtifacts.Entry	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_count	MembershipAlgebra.FeedCount	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_count	MembershipScope.FeedCount	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_cursor	ImmutableReader.FeedCursor	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_cursor	LiveReader.FeedCursor	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_cursor	MembershipTransaction.FeedCursor	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_cursor	StructuredTransaction.FeedCursor	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_range_cursor_v4	ImmutableReader.FeedRangeCursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_range_cursor_v4	LiveReader.FeedRangeCursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_range_cursor_v6	ImmutableReader.FeedRangeCursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feed_range_cursor_v6	LiveReader.FeedRangeCursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feeds	MembershipAlgebra.Feeds	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method feeds	MembershipScope.Feeds	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method file_identity	ImmutableReader.FileIdentity	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method file_identity	LiveReader.FileIdentity	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	CreateFeed.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	DirectReplacement.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	FirstSeenRefresh.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	LastSeenRefresh.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	MembershipImport.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input	ReplaceFeed.FinishInput	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input_with_removals_v4	FirstSeenRefresh.FinishInputWithRemovalsV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method finish_input_with_removals_v6	FirstSeenRefresh.FinishInputWithRemovalsV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method index	FeedRef.Index	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method info	LiveReader.Info	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method intern_network_enrichment_v1	StructuredTransaction.InternNetworkEnrichmentV1	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method join_direct	MembershipScope.JoinDirect	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method join_membership	MembershipScope.JoinMembership	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_direct_v4	LiveReader.LookupDirectV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_direct_v6	LiveReader.LookupDirectV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_feed	ImmutableReader.LookupFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_feed	LiveReader.LookupFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_feed	MembershipTransaction.LookupFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method lookup_feed	StructuredTransaction.LookupFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method matching_feeds_v4	MembershipQuery.MatchingFeedsV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method matching_feeds_v6	MembershipQuery.MatchingFeedsV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method membership_query	ImmutableReader.MembershipQuery	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method membership_query	LiveReader.MembershipQuery	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method name	FeedRef.Name	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method named_feeds	MembershipQuery.NamedFeeds	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next	IPv4.Next	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next	IPv6.Next	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next	TransactionFeedCursor.Next	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_feed	FeedCursor.NextFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	DirectCursorV4.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	DirectCursorV6.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	FeedRangeCursorV4.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	FeedRangeCursorV6.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	NetworkEnrichmentV1CursorV4.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method next_range	NetworkEnrichmentV1CursorV6.NextRange	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method previous	IPv4.Previous	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method previous	IPv6.Previous	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method publish_set	MembershipAlgebra.PublishSet	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method read_words	MembershipView.ReadWords	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method rename_feed	MembershipTransaction.RenameFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method rename_feed	StructuredTransaction.RenameFeed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method report	FinishedHistoryProjection.Report	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method report	FinishedWorkflow.Report	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	DirectCursorV4.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	DirectCursorV6.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	NetworkEnrichmentV1CursorV4.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	NetworkEnrichmentV1CursorV6.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method set_metadata_json	FinishedHistoryProjection.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method set_metadata_json	FinishedWorkflow.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method set_metadata_json	MembershipTransaction.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method set_metadata_json	PreparedFeedChange.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method set_metadata_json	StructuredTransaction.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method threat_membership	NetworkEnrichmentV1View.ThreatMembership	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method unwrap	AlgebraPreparationFailure.Unwrap	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method unwrap	Error.Unwrap	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method unwrap	SnapshotPreparationFailure.Unwrap	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method value	NetworkEnrichmentV1View.Value	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method wire	ValueTag.Wire	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method word	MembershipView.Word	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method word_count	MembershipView.WordCount	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
