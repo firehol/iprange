@@ -59,16 +59,24 @@ const (
 )
 
 // CommitResult is the factual outcome of one commit attempt (Rust
-// CommitResult): the durability status, the pinned attempt identity, the
-// cause, and the retained cleanup and coordination evidence.
+// live_writer/result.rs CommitResult): the pinned attempt identities
+// (database, directory inode, main inode, transaction, nonce), the
+// durability status, the cause, and the retained cleanup and
+// coordination evidence. Every commit terminal (live direct,
+// membership, feed, structured, and history projection) returns this
+// shape, and ResolveCommit accepts it, so an interrupted commit can
+// always be resolved afterwards. LiveCommitResult is an alias kept for
+// source compatibility with the live-direct surface.
 type CommitResult struct {
-	Status              CommitStatus
-	DatabaseID          [16]byte
-	TransactionID       uint64
-	CommitNonce         [16]byte
-	Err                 error
-	Cleanup             LiveCommitCleanupArtifacts
-	CoordinationCleanup CoordinationCleanup
+	AttemptedDatabaseID    [16]byte
+	DirectoryIdentity      *FileIdentity
+	MainIdentity           *FileIdentity
+	AttemptedTransactionID uint64
+	AttemptedCommitNonce   [16]byte
+	Status                 CommitStatus
+	Cleanup                LiveCommitCleanupArtifacts
+	CoordinationCleanup    CoordinationCleanup
+	Cause                  error
 }
 
 // CleanupState reports whether the commit left coordination residue

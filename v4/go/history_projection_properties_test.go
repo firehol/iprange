@@ -273,7 +273,7 @@ func TestRandomizedProjectionMatchesIndependentScalarModel(t *testing.T) {
 				t.Fatal(err)
 			}
 			if result.Status != CommitCommitted {
-				t.Fatalf("round %d: projection commit status = %v (%v), want committed", round, result.Status, result.Err)
+				t.Fatalf("round %d: projection commit status = %v (%v), want committed", round, result.Status, result.Cause)
 			}
 		}
 		if _, err := destinationWriter.Close(); err != nil {

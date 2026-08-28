@@ -238,13 +238,15 @@ func (w *LiveWriter) commitPrepared(cancellation *CancellationToken, markSpent f
 	}
 	markSpent()
 	return CommitResult{
-		Status:              CommitStatus(result.Durability),
-		DatabaseID:          result.AttemptedDatabaseID,
-		TransactionID:       result.AttemptedTransactionID,
-		CommitNonce:         result.AttemptedCommitNonce,
-		Err:                 publicError(result.Cause),
-		Cleanup:             publicCleanupArtifacts(result.Cleanup),
-		CoordinationCleanup: publicCoordinationCleanup(result.CoordinationCleanup),
+		AttemptedDatabaseID:    result.AttemptedDatabaseID,
+		DirectoryIdentity:      publicIdentity(&result.DirectoryIdentity),
+		MainIdentity:           publicIdentity(&result.MainIdentity),
+		AttemptedTransactionID: result.AttemptedTransactionID,
+		AttemptedCommitNonce:   result.AttemptedCommitNonce,
+		Status:                 CommitStatus(result.Durability),
+		Cause:                  publicError(result.Cause),
+		Cleanup:                publicCleanupArtifacts(result.Cleanup),
+		CoordinationCleanup:    publicCoordinationCleanup(result.CoordinationCleanup),
 	}, nil
 }
 
@@ -638,26 +640,12 @@ func (c LiveCommitCleanupArtifacts) CleanupState() CleanupState {
 // immutable-mode CommitResult carries the pre-sidecar shape of the
 // accepted coordination divergence; the live result carries the full
 // sidecar and coordination surface.
-type LiveCommitResult struct {
-	AttemptedDatabaseID    [16]byte
-	DirectoryIdentity      *FileIdentity
-	MainIdentity           *FileIdentity
-	AttemptedTransactionID uint64
-	AttemptedCommitNonce   [16]byte
-	Status                 CommitStatus
-	Cleanup                LiveCommitCleanupArtifacts
-	CoordinationCleanup    CoordinationCleanup
-	Cause                  error
-}
-
-// CleanupState reports whether the commit left coordination residue
-// (Rust CommitResult::cleanup_state).
-func (r LiveCommitResult) CleanupState() CleanupState {
-	if r.Cleanup.Empty() && r.CoordinationCleanup == CoordinationCleanupNone {
-		return CleanupStateClean
-	}
-	return CleanupStateResiduePossible
-}
+// LiveCommitResult is the commit outcome alias of CommitResult (Rust
+// live_writer/result.rs CommitResult): the live-direct surface returns
+// it under this name, and code that previously received a
+// LiveCommitResult keeps compiling and can pass the value to
+// ResolveCommit directly.
+type LiveCommitResult = CommitResult
 
 // LiveAbortResult is the factual live abort result; a cleanup failure
 // retains a close-only writer (Rust live_writer::AbortResult).

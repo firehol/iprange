@@ -475,7 +475,7 @@ func runStructuredSeed(t *testing.T, seedIndex int, seed uint64) {
 				t.Fatal(err)
 			}
 			if result.Status != CommitCommitted {
-				t.Fatalf("%s: commit = %v (%v), want committed", structuredContext(seed, round), result.Status, result.Err)
+				t.Fatalf("%s: commit = %v (%v), want committed", structuredContext(seed, round), result.Status, result.Cause)
 			}
 			committed = draft
 		}

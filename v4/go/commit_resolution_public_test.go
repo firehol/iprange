@@ -288,3 +288,68 @@ func TestResolveCommitRefusesAnIncompleteAttempt(t *testing.T) {
 		t.Fatalf("incomplete attempt = %v, want InvalidArgument", err)
 	}
 }
+
+// TestAdvancedCommitOutcomeIsResolvable pins the unified CommitResult
+// shape (Rust live_writer/result.rs CommitResult): an advanced
+// membership-transaction commit carries the attempted database id and
+// the directory and main inode identities, and ResolveCommit accepts
+// that outcome exactly like a live-direct one, so an interrupted
+// advanced commit can always be resolved afterwards.
+func TestAdvancedCommitOutcomeIsResolvable(t *testing.T) {
+	requireLiveCreation(t)
+	path := memberTxDB(t)
+	cancellation := NewCancellationToken()
+	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := w.BeginMembershipTransaction(cancellation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed, err := tx.EnsureFeed(feedName(t, "gamma"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := tx.EmptyMembership()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withGamma, err := tx.AddFeed(empty, feed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tx.ApplyV4(IPv4(4), IPv4(12), withGamma, MembershipUnion); err != nil {
+		t.Fatal(err)
+	} else if !changed {
+		t.Fatal("union with gamma over committed segments is not a change")
+	}
+	result, err := tx.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != CommitCommitted {
+		t.Fatalf("advanced commit status = %v, want committed", result.Status)
+	}
+	if result.AttemptedDatabaseID == [16]byte{} {
+		t.Fatal("advanced commit drops the attempted database id")
+	}
+	if result.DirectoryIdentity == nil || result.MainIdentity == nil {
+		t.Fatal("advanced commit drops the directory or main inode identity")
+	}
+	if result.AttemptedTransactionID == 0 || result.AttemptedCommitNonce == [16]byte{} {
+		t.Fatal("advanced commit drops the attempted transaction identity")
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := ResolveCommit(path, result, CommitResolutionModeLive, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Resolution != CommitResolutionCommitted {
+		t.Fatalf("advanced outcome resolution = %v, want Committed", resolved.Resolution)
+	}
+}

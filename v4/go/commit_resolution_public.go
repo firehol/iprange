@@ -87,11 +87,14 @@ func (r CommitResolutionResult) CleanupState() CleanupState {
 // twice around a file sync, the selected generation must be stable,
 // and in Live mode the ready reader table of the attempted database is
 // gated, the writer lease is claimed, and the reader slots are scanned
-// against the selected generation. An Unresolvable outcome is a
-// successful return carrying the classification, cause, and cleanup
-// facts; only coordination failures return an error. cancellation,
-// when non-nil, is checked between every bounded step.
-func ResolveCommit(path string, attempt LiveCommitResult, mode CommitResolutionMode, cancellation *CancellationToken) (*CommitResolutionResult, error) {
+// against the selected generation. attempt is any CommitResult value
+// (live direct, membership, feed, structured, or history projection
+// commit), so an interrupted advanced commit can be resolved exactly
+// like a live-direct one. An Unresolvable outcome is a successful
+// return carrying the classification, cause, and cleanup facts; only
+// coordination failures return an error. cancellation, when non-nil,
+// is checked between every bounded step.
+func ResolveCommit(path string, attempt CommitResult, mode CommitResolutionMode, cancellation *CancellationToken) (*CommitResolutionResult, error) {
 	internalAttempt := live.LiveCommitResult{
 		AttemptedDatabaseID:    attempt.AttemptedDatabaseID,
 		DirectoryIdentity:      internalIdentityOrZero(attempt.DirectoryIdentity),

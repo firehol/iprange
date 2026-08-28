@@ -78,7 +78,7 @@ func TestPublicLiveFeedWorkflowEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Status != CommitCommitted {
-		t.Fatalf("commit status = %v, want committed (result %+v, err %v)", result.Status, result, result.Err)
+		t.Fatalf("commit status = %v, want committed (result %+v, err %v)", result.Status, result, result.Cause)
 	}
 	// The live commit retained the cleanup surface (Rust CommitResult):
 	// a clean live commit leaves no residue.

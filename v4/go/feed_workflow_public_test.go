@@ -643,8 +643,8 @@ func TestPublicPreparedFeedChangeAbortAndCancelledCommit(t *testing.T) {
 	if result.Status != CommitNotCommitted {
 		t.Fatalf("cancelled delete commit = %v, want not committed", result.Status)
 	}
-	if abortCauseCode(result.Err) != ErrorCancelled {
-		t.Fatalf("cancelled delete cause = %v, want transaction aborted wrapping cancelled", result.Err)
+	if abortCauseCode(result.Cause) != ErrorCancelled {
+		t.Fatalf("cancelled delete cause = %v, want transaction aborted wrapping cancelled", result.Cause)
 	}
 	if _, err := w.Close(); err != nil {
 		t.Fatal(err)

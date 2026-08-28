@@ -419,7 +419,7 @@ func TestEnrichmentCursorLifetimeAndSeek(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Status != CommitCommitted {
-		t.Fatalf("commit status = %v (%v)", result.Status, result.Err)
+		t.Fatalf("commit status = %v (%v)", result.Status, result.Cause)
 	}
 	if _, err := w.Close(); err != nil {
 		t.Fatal(err)

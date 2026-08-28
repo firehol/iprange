@@ -216,7 +216,7 @@ func TestPublicProjectHistoryCreatesFeedsAndCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != CommitCommitted || res.TransactionID != 2 || res.Err != nil {
+	if res.Status != CommitCommitted || res.AttemptedTransactionID != 2 || res.Cause != nil {
 		t.Fatalf("commit = %+v err %v, want committed txn 2", res, err)
 	}
 
@@ -353,7 +353,7 @@ func TestPublicProjectHistoryAbortedDraftRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Status != CommitCommitted {
-		t.Fatalf("commit status = %v, want committed (err %v)", res.Status, res.Err)
+		t.Fatalf("commit status = %v, want committed (err %v)", res.Status, res.Cause)
 	}
 }
 

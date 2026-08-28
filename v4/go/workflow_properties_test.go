@@ -232,7 +232,7 @@ func finishWorkflowCommit(t *testing.T, finished *FinishedWorkflow, context stri
 		t.Fatal(err)
 	}
 	if result.Status != CommitCommitted {
-		t.Fatalf("%s: commit status = %v (%v), want committed", context, result.Status, result.Err)
+		t.Fatalf("%s: commit status = %v (%v), want committed", context, result.Status, result.Cause)
 	}
 }
 
