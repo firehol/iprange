@@ -1004,6 +1004,64 @@ The re-gate after the four fix commits is 18/18 within-limit at
 ratios 0.940-1.106; all local tests, v4work, race, vet, and gofmt
 pass at commits 6f66e32c..93f81997.
 
+Independent external review (2026-08-28, single sol reviewer, read-only,
+session 7ade436af6fb434ea2e25b78a806b02e): verdict NEEDS CHANGES with
+four P1, three P2, and one P3 finding. Adjudication:
+
+- P1 records: the Go-baseline CI gate (2x Go p50 limits) proves
+  regression stability only, not Rust parity; milestone 4's mandate
+  compares Go against Rust. Fixed by committing the separate
+  Rust-ratio acceptance report: evidence/rust-ratio-acceptance-
+  20260828.csv with matched fresh medians of the final release
+  binaries (same host, both sides; raw samples committed alongside).
+  Measured ratios: membership-import 3.5x (165.3 ms vs 47.1 ms),
+  nested-overwrite 6.7x (1,931.5 ms vs 290.2 ms),
+  update-ipsets-workflow 4.4x (4,895.1 ms vs 1,104.1 ms),
+  live-direct-random-lookup 1.9x (466.3 ms vs 241.7 ms),
+  immutable-direct-random-lookup 2.1x (436.0 ms vs 211.9 ms),
+  live-validation 2.6x (28.9 ms vs 11.0 ms). Write-path ratios
+  remain above the mandate's 2-3.5x target.
+- P1 gap machinery copies: the 752-byte descent Path was passed by
+  value into every gap probe, and the selector used value receivers.
+  Fixed with pointer receivers and a *Path (nil keeps the vacuous
+  edge semantics of the cached-leaf probe), commit fc9df1ea.
+- P1 universal keys: verified - Go range records carry two 88-byte
+  universal tree.Key values (184-byte decoded records) where Rust
+  uses a u32 IPv4Key (12-byte records), plus interface dispatch per
+  assignment. Structural fix (key-typed tree core or generated
+  specializations) is high effort and high integration risk under
+  the one-authoritative-implementation rule; NOT implemented -
+  recorded for a user design decision.
+- P1 transform segments: segmentAt returned pointer segments; fixed
+  by value (compiler escape analysis had already kept them on the
+  stack; measured impact noise-level, escape hazard removed).
+- P2 rejected-neighbor decodes: the RequireReplacement validation
+  volume is exact Rust parity (3 ReadLeaf + 4 ReadKey per 3-cell
+  replacement); the selector's third neighbor decode is a real but
+  ~2-4% upper-bound inefficiency that needs a generic LocalGap
+  interface refactor - recorded, not implemented.
+- P2 probe-width switch: implemented as monomorphized width compares,
+  measured 1-3% REGRESSION (the generic-interface method call per
+  probe is not inlined), reverted; the per-probe switch stays.
+- P2 streaming facades: verified. The per-record string conversions
+  measure at most one object per distinct delivered name (Go escape
+  analysis stack-allocates the short-lived conversions under the
+  current toolchain); the join direct-value pointers allocated one
+  heap scalar per mapped cell. Fixed: one owned string per distinct
+  feed name shared across batches, a per-batch value arena for the
+  optional direct values (documented batch-lifetime contract), and
+  slices.SortFunc in the join emitter (no reflect). Two allocation
+  gates pin the classes (real-sink aggregate test with a names+96
+  bound; internal emit test at one allocation per 300-cell run),
+  commit fc9df1ea.
+- P3 heap optionals: PrivateEdge pending first-key and RemovedRun
+  following are inline values now (commit fc9df1ea).
+
+Measured impact of the adjudicated fix set: all headline cases within
+run noise of the pre-review state (the remaining ratio class is the
+structural universal-key design). All tests, v4work, race, vet, and
+gofmt pass at fc9df1ea.
+
 ## Requirements
 
 ### Purpose

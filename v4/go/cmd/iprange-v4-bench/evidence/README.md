@@ -21,15 +21,27 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   ratios 0.933-1.049. Its header predates the baseline-identity constant
   update (labels go-v4-local-20260827); the values enforce the new
   accepted medians.
-- `ci-go-v4-local-20260828b.log`: the final gate run at the same
-  identity after the delta-review fixes (selected-ranges by value, u32
-  prefix probes, abort branding, probe suffix validation), 18/18
-  within-limit, ratios 0.940-1.106. update-ipsets-workflow 1M median
-  4,878 ms (ratio 0.964 against the accepted 5,058 ms).
+- `ci-go-v4-local-20260828b.log`: the gate run at the same identity
+  after the delta-review fixes (selected-ranges by value, u32 prefix
+  probes, abort branding, probe suffix validation), 18/18 within-limit,
+  ratios 0.940-1.106. update-ipsets-workflow 1M median 4,878 ms (ratio
+  0.964 against the accepted 5,058 ms).
+- `ci-go-v4-local-20260828c.log`: the gate run after the external-review
+  fixes (value-return segments, pointer-free gap probes, facade name
+  cache and value arena), 18/18 within-limit, ratios 0.943-1.105,
+  workflow 4,873 ms (ratio 0.964).
 - `case-runs-4c4d-20260828.csv`: the preserved 1M single-case rows for
   the six milestone-4 headline cases (before 4c with the 3M-alloc
   import, after 4c/4d, and the post-review workflow runs), source of
   every median quoted in SOW-0027.
+- `rust-ratio-acceptance-20260828.csv`: the Go-vs-Rust ratio acceptance
+  table for the milestone-4 headline cases, medians of fresh matched
+  samples of the final release binaries on the same host
+  (`rust-ratio-go-samples-20260828.csv` /
+  `rust-ratio-rust-samples-20260828.csv` hold the raw rows). This is
+  the separate Rust-ratio report the delta review required: the
+  Go-baseline CI gate proves regression stability only, the ratio table
+  is the parity evidence.
 - `profiles-4c4d-summary.txt`: before/after CPU profile head evidence
   for the slice wins (lowerBound closure dispatch removed; write-seam
   allocations removed).
