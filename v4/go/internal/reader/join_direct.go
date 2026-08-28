@@ -8,7 +8,7 @@ package reader
 // batches at the end.
 
 import (
-	"sort"
+	"slices"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -423,18 +423,31 @@ func (t *joinDirectTable) emit(scope *ScopeData, check checkpoint, emit func([]D
 	if len(t.cells) == 0 {
 		return nil
 	}
-	sort.Slice(t.cells, func(i, j int) bool {
-		if t.cells[i].feed != t.cells[j].feed {
-			return t.cells[i].feed < t.cells[j].feed
+	slices.SortFunc(t.cells, func(a, b joinDirectCell) int {
+		if a.feed != b.feed {
+			if a.feed < b.feed {
+				return -1
+			}
+			return 1
 		}
-		return t.cells[i].direct < t.cells[j].direct
+		if a.direct < b.direct {
+			return -1
+		}
+		if a.direct > b.direct {
+			return 1
+		}
+		return 0
 	})
 	batch := make([]DirectJoinCell, 0, joinResultBatch)
+	// One bounded arena per batch backs the optional direct values: the
+	// pointers stay valid until the next batch is delivered (Rust emits
+	// Option<u32> by value under the same batch-lifetime contract).
+	var values [joinResultBatch]uint32
 	for _, cell := range t.cells {
 		var value *uint32
 		if cell.direct != 0 {
-			v := uint32(cell.direct - 1)
-			value = &v
+			values[len(batch)] = uint32(cell.direct - 1)
+			value = &values[len(batch)]
 		}
 		batch = append(batch, DirectJoinCell{
 			Feed:        scope.entries[cell.feed].Name,

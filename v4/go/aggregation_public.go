@@ -81,6 +81,11 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 	if err := s.r.checkOpen(); err != nil {
 		return MembershipAggregationReport{}, err
 	}
+	// Feed names repeat across batches and are views of the pinned
+	// catalog records, so one owned string per distinct feed is shared
+	// by every delivered record (the byte-keyed lookup converts on the
+	// stack; only the cached string is retained).
+	names := make(map[string]string)
 	report, err := s.r.core().AggregateScope(
 		s.data, s.family(), mode.kind, mode.target, mode.pairs, cancellation.check,
 		func(batch []reader.FeedCardinality) error {
@@ -89,7 +94,12 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 			}
 			out := make([]FeedCardinality, len(batch))
 			for i, record := range batch {
-				out[i] = FeedCardinality{Feed: string(record.Feed), Addresses: record.Addresses}
+				name, ok := names[string(record.Feed)]
+				if !ok {
+					name = string(record.Feed)
+					names[name] = name
+				}
+				out[i] = FeedCardinality{Feed: name, Addresses: record.Addresses}
 			}
 			return feedYield(out)
 		},
@@ -99,11 +109,17 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 			}
 			out := make([]FeedOverlap, len(batch))
 			for i, record := range batch {
-				out[i] = FeedOverlap{
-					Left:      string(record.Left),
-					Right:     string(record.Right),
-					Addresses: record.Addresses,
+				left, ok := names[string(record.Left)]
+				if !ok {
+					left = string(record.Left)
+					names[left] = left
 				}
+				right, ok := names[string(record.Right)]
+				if !ok {
+					right = string(record.Right)
+					names[right] = right
+				}
+				out[i] = FeedOverlap{Left: left, Right: right, Addresses: record.Addresses}
 			}
 			return overlapYield(out)
 		},

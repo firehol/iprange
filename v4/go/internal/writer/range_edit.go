@@ -162,26 +162,26 @@ type segment struct {
 	value optionalValue
 }
 
-func segmentAt(ctx *rangeCtx, from, to tree.Key) (*segment, error) {
+func segmentAt(ctx *rangeCtx, from, to tree.Key) (segment, error) {
 	if predecessor, hasPredecessor, err := readPredecessor(ctx, *ctx.root, from); err != nil {
-		return nil, err
+		return segment{}, err
 	} else if hasPredecessor && !predecessor.to.Less(from) {
 		end := predecessor.to
 		if to.Less(end) {
 			end = to
 		}
-		return &segment{to: end, value: someValue(predecessor.value)}, nil
+		return segment{to: end, value: someValue(predecessor.value)}, nil
 	}
 	if next, hasNext, err := readAtOrAfter(ctx, *ctx.root, from); err != nil {
-		return nil, err
+		return segment{}, err
 	} else if hasNext && !to.Less(next.from) {
 		previous, ok := ctx.family.Previous(next.from)
 		if !ok {
-			return nil, corrupt("range gap does not advance")
+			return segment{}, corrupt("range gap does not advance")
 		}
-		return &segment{to: previous}, nil
+		return segment{to: previous}, nil
 	}
-	return &segment{to: to}, nil
+	return segment{to: to}, nil
 }
 
 func rangeReplaceWithHint(ctx *rangeCtx, change change, hint tree.LocalReject[rangeRecord], hasHint bool) (bool, error) {

@@ -720,7 +720,7 @@ func unionRun(ctx *rangeCtx, incoming rangeRecord, rejected tree.LocalReject[ran
 			return false, tree.PrivatePosition{}, false, overflow("range record count")
 		}
 		*ctx.count -= result.Removed
-		if result.Following == nil {
+		if !result.HasFollowing {
 			break
 		}
 		if !touchesCodec(ctx.family, merged.to, result.Following.Leaf.from) {

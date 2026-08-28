@@ -577,8 +577,8 @@ func TestRemoveLeafRunMidRunRejection(t *testing.T) {
 	if run.Removed != 1 {
 		t.Fatalf("Removed = %d, want 1", run.Removed)
 	}
-	if run.Following == nil {
-		t.Fatal("Following is nil, want the rejected record at key 1")
+	if !run.HasFollowing {
+		t.Fatal("Following is absent, want the rejected record at key 1")
 	}
 	if !run.Following.Key.Equal(u32Key(1)) || run.Following.Leaf.key != 1 || run.Following.Leaf.value != 11 {
 		t.Fatalf("Following = %#v, want key 1 value 11", run.Following)
@@ -621,8 +621,8 @@ func TestRemoveLeafRunWholeLeafAndImmediateRejection(t *testing.T) {
 	if run.Removed != 3 {
 		t.Fatalf("whole-leaf Removed = %d, want 3", run.Removed)
 	}
-	if run.Following != nil {
-		t.Fatalf("whole-leaf Following = %#v, want nil", run.Following)
+	if run.HasFollowing {
+		t.Fatalf("whole-leaf Following = %#v, want absent", run.Following)
 	}
 	if root != 0 {
 		t.Fatalf("whole-leaf removal left root %d, want empty root", root)
@@ -646,7 +646,7 @@ func TestRemoveLeafRunWholeLeafAndImmediateRejection(t *testing.T) {
 	if run.Removed != 0 {
 		t.Fatalf("immediate-rejection Removed = %d, want 0", run.Removed)
 	}
-	if run.Following == nil || !run.Following.Key.Equal(u32Key(0)) {
+	if !run.HasFollowing || !run.Following.Key.Equal(u32Key(0)) {
 		t.Fatalf("immediate-rejection Following = %#v, want key 0", run.Following)
 	}
 	for _, key := range []uint32{0, 1, 2} {

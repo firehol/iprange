@@ -58,7 +58,9 @@ func (s DirectJoinSource) core() (*reader.ImmutableReader, error) {
 
 // DirectJoinCell is one exact mapped or unmapped direct-provider result.
 // DirectValue is nil for the single unmapped cell of every feed and
-// points at the direct value otherwise.
+// points at the direct value otherwise. The pointed value is owned by
+// the batch's reusable buffer: it stays valid until the next batch is
+// delivered to the callback (Rust Option<u32> batch-lifetime parity).
 type DirectJoinCell struct {
 	Feed        string
 	DirectValue *uint32
@@ -130,14 +132,20 @@ func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinB
 	if err != nil {
 		return DirectJoinReport{}, err
 	}
+	names := make(map[string]string)
 	report, err := s.r.core().JoinDirect(s.data, s.family(), sourceReader, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
 		if cellYield == nil {
 			return nil
 		}
 		out := make([]DirectJoinCell, len(batch))
 		for i, record := range batch {
+			name, ok := names[string(record.Feed)]
+			if !ok {
+				name = string(record.Feed)
+				names[name] = name
+			}
 			out[i] = DirectJoinCell{
-				Feed:        string(record.Feed),
+				Feed:        name,
 				DirectValue: record.DirectValue,
 				Addresses:   record.Addresses,
 			}
@@ -165,6 +173,7 @@ func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func
 	if s.family() != right.family() {
 		return MembershipJoinReport{}, &Error{Code: ErrorWrongAddressFamily, Detail: "membership join source families differ"}
 	}
+	names := make(map[string]string)
 	report, err := s.r.core().JoinMembership(
 		s.data, right.data, s.family(), right.r.core(), cancellation.check,
 		func(batch []reader.MembershipCrossCell) error {
@@ -173,11 +182,17 @@ func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func
 			}
 			out := make([]MembershipCrossCell, len(batch))
 			for i, record := range batch {
-				out[i] = MembershipCrossCell{
-					Left:      string(record.Left),
-					Right:     string(record.Right),
-					Addresses: record.Addresses,
+				left, ok := names[string(record.Left)]
+				if !ok {
+					left = string(record.Left)
+					names[left] = left
 				}
+				right, ok := names[string(record.Right)]
+				if !ok {
+					right = string(record.Right)
+					names[right] = right
+				}
+				out[i] = MembershipCrossCell{Left: left, Right: right, Addresses: record.Addresses}
 			}
 			return crossYield(out)
 		},

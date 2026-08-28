@@ -15,8 +15,9 @@ type Following[T any] struct {
 
 // RemovedRun reports the outcome of one leaf-run removal.
 type RemovedRun[T any] struct {
-	Removed   uint64
-	Following *Following[T]
+	Removed      uint64
+	Following    Following[T]
+	HasFollowing bool
 }
 
 // Target identifies one deletion position in a private leaf.
@@ -56,7 +57,8 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 		return RemovedRun[T]{}, corrupt("B+tree run start key is missing")
 	}
 	index := leaf.Index
-	var following *Following[T]
+	var following Following[T]
+	hasFollowing := false
 	end := index
 	for end < int(leaf.Header.ItemCount) {
 		cell, err := codecCell(codec, leaf.Page, &leaf.Header, end)
@@ -76,19 +78,21 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 			if err != nil {
 				return RemovedRun[T]{}, err
 			}
-			following = &Following[T]{Key: key, Leaf: item}
+			following = Following[T]{Key: key, Leaf: item}
+			hasFollowing = true
 			break
 		}
 		end++
 	}
 	if end == index {
-		return RemovedRun[T]{Removed: 0, Following: following}, nil
+		return RemovedRun[T]{Removed: 0, Following: following, HasFollowing: hasFollowing}, nil
 	}
-	if following == nil {
+	if !hasFollowing {
 		if adjacent, found, err := adjacentLeaf(codec, store, leaf.Path, AdjacentAfter); err != nil {
 			return RemovedRun[T]{}, err
 		} else if found {
-			following = &Following[T]{Key: adjacent.key, Leaf: adjacent.leaf}
+			following = Following[T]{Key: adjacent.key, Leaf: adjacent.leaf}
+			hasFollowing = true
 		}
 	}
 	removed := uint64(end - index)
@@ -124,7 +128,7 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 			}
 		}
 	}
-	return RemovedRun[T]{Removed: removed, Following: following}, nil
+	return RemovedRun[T]{Removed: removed, Following: following, HasFollowing: hasFollowing}, nil
 }
 
 // DeleteTarget deletes one record from a private leaf, collapsing the tree

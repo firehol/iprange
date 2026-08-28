@@ -100,10 +100,11 @@ type PrivatePosition struct {
 // PrivateEdge caches one private leaf at the first or last tree edge for
 // monotonic insertions (Rust PrivateEdge).
 type PrivateEdge struct {
-	position     PrivatePosition
-	direction    Edge
-	directionSet bool
-	pendingFirst *Key
+	position        PrivatePosition
+	direction       Edge
+	directionSet    bool
+	pendingFirst    Key
+	hasPendingFirst bool
 }
 
 // ConsistentEdge builds a direction-less edge over one private position
@@ -120,11 +121,11 @@ func RootEdge(pageNumber uint32) PrivateEdge {
 // FlushEdge propagates a pending first-key fence update and forgets it
 // (Rust flush_edge).
 func FlushEdge[T any](codec Codec[T], store Store, root *uint32, edge *PrivateEdge) error {
-	if edge.pendingFirst != nil {
-		if err := PropagateFirst(codec, store, root, &edge.position.Path, *edge.pendingFirst); err != nil {
+	if edge.hasPendingFirst {
+		if err := PropagateFirst(codec, store, root, &edge.position.Path, edge.pendingFirst); err != nil {
 			return err
 		}
-		edge.pendingFirst = nil
+		edge.hasPendingFirst = false
 	}
 	return nil
 }
@@ -222,7 +223,7 @@ func InsertIfLocalGap[T any, G LocalGap](codec Codec[T], store Store, root *uint
 	if err != nil {
 		return RetiredPages{}, LocalInsert[T]{}, err
 	}
-	decision, err := selector.selectAt(leaf.Page, header, leaf.Path, index, exists)
+	decision, err := selector.selectAt(leaf.Page, header, &leaf.Path, index, exists)
 	if err != nil {
 		return RetiredPages{}, LocalInsert[T]{}, err
 	}
@@ -276,7 +277,7 @@ func InsertIfCachedInteriorGap[T any, G LocalGap](codec Codec[T], store Store, p
 		return CachedInsertMiss, nil
 	}
 	selector := gapSelector[T, G]{codec: codec, key: key, cellLen: len(leafCell), gap: gap}
-	decision, err := selector.selectAt(page, header, Path{}, probeIndex, false)
+	decision, err := selector.selectAt(page, header, nil, probeIndex, false)
 	if err != nil {
 		return CachedInsertMiss, err
 	}
@@ -387,7 +388,7 @@ func InsertIfEdgeGap[T any, G LocalGap](codec Codec[T], store Store, root *uint3
 		decision = gapDecision[T]{insert: true, index: index, fits: format.SlottedInsertFits(&header, len(leafCell))}
 	} else {
 		selector := gapSelector[T, G]{codec: codec, key: key, cellLen: len(leafCell), gap: gap}
-		decision, err = selector.selectAt(page, header, cached.position.Path, index, exists)
+		decision, err = selector.selectAt(page, header, &cached.position.Path, index, exists)
 		if err != nil {
 			return EdgeInsert[T]{}, err
 		}
@@ -404,24 +405,28 @@ func InsertIfEdgeGap[T any, G LocalGap](codec Codec[T], store Store, root *uint3
 	}
 	target := LeafTarget{Path: cached.position.Path, PageNumber: cached.position.PageNumber, Header: header, Index: decision.index, Exists: false}
 	if decision.fits {
-		var pendingFirst *Key
+		var pendingFirst Key
+		hasPendingFirst := false
 		if target.Index == 0 && target.Path.Depth() != 0 {
-			k := key
-			pendingFirst = &k
+			pendingFirst = key
+			hasPendingFirst = true
 		}
 		position, err := applyFittingEdgeInsert(codec, store, target, leafCell)
 		if err != nil {
 			return EdgeInsert[T]{}, err
 		}
 		cached.position = position
-		if pendingFirst != nil {
+		if hasPendingFirst {
 			cached.pendingFirst = pendingFirst
+			cached.hasPendingFirst = true
+		} else {
+			cached.hasPendingFirst = false
 		}
 	} else {
 		if err := SplitLeafAtEdge(codec, store, root, &target, leafCell, edge); err != nil {
 			return EdgeInsert[T]{}, err
 		}
-		cached.pendingFirst = nil
+		cached.hasPendingFirst = false
 		position, err := locatePrivatePosition(codec, store, root, key)
 		if err != nil {
 			return EdgeInsert[T]{}, err
@@ -439,7 +444,7 @@ func verifyCachedEdge(cached *PrivateEdge, root uint32, edge Edge) error {
 		return nil
 	}
 	work.EdgePathCheck(1)
-	if !pathIsEdge(cached.position.Path, edge) ||
+	if !pathIsEdge(&cached.position.Path, edge) ||
 		(cached.position.Path.Depth() == 0 && cached.position.PageNumber != root) {
 		return corrupt("cached B+tree position is not its claimed edge")
 	}
@@ -499,7 +504,7 @@ type gapSelector[T any, G LocalGap] struct {
 // selectLeaf is the leafSelector interface entry of one gap probe
 // (Rust GapSelector::select_leaf): the value receiver keeps the box on
 // the stack so a probe never allocates.
-func (g gapSelector[T, G]) selectLeaf(page []byte, header Header, path Path) (gapDecision[T], error) {
+func (g *gapSelector[T, G]) selectLeaf(page []byte, header Header, path *Path) (gapDecision[T], error) {
 	index, exists, err := lowerBound(g.codec, page, &header, g.key, true)
 	if err != nil {
 		return gapDecision[T]{}, err
@@ -509,7 +514,7 @@ func (g gapSelector[T, G]) selectLeaf(page []byte, header Header, path Path) (ga
 
 // selectAt decides the gap at one already-located position (Rust
 // GapSelector::select_at).
-func (g gapSelector[T, G]) selectAt(page []byte, header Header, path Path, index int, exists bool) (gapDecision[T], error) {
+func (g *gapSelector[T, G]) selectAt(page []byte, header Header, path *Path, index int, exists bool) (gapDecision[T], error) {
 	predecessor, predecessorComplete, err := g.probePredecessor(page, header, path, index, exists)
 	if err != nil {
 		return gapDecision[T]{}, err
@@ -531,7 +536,7 @@ func (g gapSelector[T, G]) selectAt(page []byte, header Header, path Path, index
 	return gapDecision[T]{insert: true, index: index, fits: format.SlottedInsertFits(&header, g.cellLen)}, nil
 }
 
-func (g gapSelector[T, G]) probePredecessor(page []byte, header Header, path Path, index int, exists bool) (rejectCell[T], bool, error) {
+func (g *gapSelector[T, G]) probePredecessor(page []byte, header Header, path *Path, index int, exists bool) (rejectCell[T], bool, error) {
 	if exists {
 		cell, err := g.validLeaf(page, header, index)
 		if err != nil {
@@ -581,7 +586,7 @@ func (g gapSelector[T, G]) probePredecessor(page []byte, header Header, path Pat
 	return rejectCell[T]{}, false, nil
 }
 
-func (g gapSelector[T, G]) probeSuccessor(page []byte, header Header, path Path, index int, exists bool) (rejectCell[T], bool, error) {
+func (g *gapSelector[T, G]) probeSuccessor(page []byte, header Header, path *Path, index int, exists bool) (rejectCell[T], bool, error) {
 	successorIndex := index
 	if exists {
 		successorIndex++
@@ -617,7 +622,10 @@ func (g gapSelector[T, G]) probeSuccessor(page []byte, header Header, path Path,
 	return rejectCell[T]{}, false, nil
 }
 
-func allFirst(path Path) bool {
+func allFirst(path *Path) bool {
+	if path == nil {
+		return true
+	}
 	for _, frame := range path.Slice() {
 		if frame.Index != 0 {
 			return false
@@ -626,7 +634,10 @@ func allFirst(path Path) bool {
 	return true
 }
 
-func allLast(path Path) bool {
+func allLast(path *Path) bool {
+	if path == nil {
+		return true
+	}
 	for _, frame := range path.Slice() {
 		if frame.Index+1 != frame.ItemCount {
 			return false
@@ -635,7 +646,7 @@ func allLast(path Path) bool {
 	return true
 }
 
-func pathIsEdge(path Path, edge Edge) bool {
+func pathIsEdge(path *Path, edge Edge) bool {
 	if edge == EdgeFirst {
 		return allFirst(path)
 	}
