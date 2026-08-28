@@ -1,8 +1,8 @@
-//go:build linux && amd64
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 package iprangedb
 
-// Routed validation facade tests (slice 4-12B): on linux/amd64 the
+// Routed validation facade tests (slice 4-12B): on every worker-supported platform the
 // public Validate and ValidateOfflineCandidate entries route through
 // the isolated worker client after the preflight. These tests pin the
 // worker equivalence (byte-identical domain shapes), the offline

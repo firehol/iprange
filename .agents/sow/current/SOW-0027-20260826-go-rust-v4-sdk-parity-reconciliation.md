@@ -259,10 +259,15 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    recovery in-process on every non-linux/amd64 platform; the closure
    contract requires a version-matched worker on every supported
    OS/architecture (routing_other.go:1, binary-format-v4.md:3155).
-   Fix (milestone-5 slice E): widen the worker-routed build-tag matrix
-   to every platform the worker binary cross-builds on (darwin,
-   freebsd, windows, linux/arm64, amd64+arm64) and keep the no-silent-
-   fallback semantics; validate natively on the authorized hosts.
+   FIXED (slice E): the worker-routed surface (routing_worker.go) now
+   covers every platform the worker binary cross-builds on (linux,
+   darwin, freebsd, windows on amd64 and arm64) with the same
+   no-silent-fallback semantics; routing_other.go keeps only the
+   platforms without a worker build. The routed facade tests and the
+   worker harness follow the same matrix (worker_harness_build_test.go
+   builds the real worker natively, .exe suffix on windows). Local
+   linux/amd64 validation green; native rounds follow on the
+   authorized hosts (darwin, freebsd, windows).
 2. Immutable-feed builder (P1, sol): Go has no one-inode immutable
    feed construction (parity_manifest.tsv immutable_feed row missing;
    scenario_sdk.go substitutes live+snapshot; Rust lib.rs exports

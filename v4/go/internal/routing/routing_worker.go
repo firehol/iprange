@@ -1,11 +1,13 @@
-//go:build linux && amd64
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
-// Facade routing on the worker-supported platform (Rust validation.rs
+// Facade routing on every worker-supported platform (Rust validation.rs
 // validate -> worker::validate and recovery/api.rs recover_* ->
-// worker::recover): every public entry runs the Rust preflight and
-// then routes through the isolated worker client arms; the in-process
-// machines stay the worker-side engines and the non-linux path
-// (routing_other.go). The worker arms return the 4-11A wire shapes,
+// worker::recover; the worker binary cross-builds on linux, darwin,
+// freebsd, and windows for amd64 and arm64): every public entry runs
+// the Rust preflight and then routes through the isolated worker
+// client arms; the in-process machines stay the worker-side engines
+// and the remaining platforms (routing_other.go) have no worker build
+// and keep the recorded in-process stance. The worker arms return the 4-11A wire shapes,
 // so this package converts them back to the domain types the
 // in-process machines return; the exported additions to the
 // validation and recovery packages are the worker-entry seams

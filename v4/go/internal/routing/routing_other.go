@@ -1,13 +1,11 @@
-//go:build !linux || !amd64
+//go:build !((linux || darwin || freebsd || windows) && (amd64 || arm64))
 
-// Facade routing on every platform without the routed worker facade
-// (the worker binary cross-builds on linux, darwin, freebsd, and
-// windows, amd64 and arm64; the routing surface routes through the
-// isolated worker only on linux/amd64, the recorded stance): each
-// public entry runs the in-process machine directly, the same
-// machines the worker facade routes to on linux/amd64. The six
-// signatures are the same shapes the in-process machines return on
-// every platform.
+// Facade routing on every platform without a worker build (the worker
+// binary cross-builds on linux, darwin, freebsd, and windows for
+// amd64 and arm64; the worker-routed surface lives in routing_
+// worker.go for exactly those combinations). Every other platform
+// runs the in-process machines directly, the same machines the worker
+// routes to; no worker binary exists there to spawn.
 
 package routing
 

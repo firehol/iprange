@@ -1,11 +1,13 @@
-//go:build linux && amd64
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 package iprangedb
 
 // Worker harness: builds the real cmd/iprange-v4-worker binary once
 // per test run and installs it through the exported test-only
 // candidate seam, so the facade tests route through the isolated
-// worker exactly like production. A build failure stops the run: the
+// worker exactly like production on every worker-supported platform
+// (the worker binary cross-builds on linux, darwin, freebsd, and
+// windows for amd64 and arm64). A build failure stops the run: the
 // routed tests must never fall back silently to the in-process
 // machines.
 
@@ -14,18 +16,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
 
 // workerHarnessDir is the per-run harness directory holding the built
-// worker binary (workerHarnessDir/iprange-v4-worker).
+// worker binary (workerHarnessDir/iprange-v4-worker[.exe]).
 var workerHarnessDir string
 
 // TestMain builds the real worker binary once per test run and removes
 // the harness directory afterwards (the facade routes through the
-// worker client on linux/amd64).
+// worker client on every worker-supported platform).
 func TestMain(m *testing.M) {
 	directory, err := os.MkdirTemp("", "iprange-v4-worker-harness-")
 	if err != nil {
@@ -43,11 +46,21 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// workerHarnessBinary is the built worker path (the Windows arm keeps
+// the platform's normal executable suffix).
+func workerHarnessBinary() string {
+	name := "iprange-v4-worker"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(workerHarnessDir, name)
+}
+
 // buildWorkerHarness builds cmd/iprange-v4-worker into the harness
 // directory (the same go -C module-root build the internal worker
 // tests use).
 func buildWorkerHarness(directory string) error {
-	command := exec.Command("go", "-C", workerModuleRoot(), "build", "-o", filepath.Join(directory, "iprange-v4-worker"), "./cmd/iprange-v4-worker")
+	command := exec.Command("go", "-C", workerModuleRoot(), "build", "-o", workerHarnessBinary(), "./cmd/iprange-v4-worker")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("build worker: %v\n%s", err, output)
@@ -81,6 +94,6 @@ func installWorkerForTestPlatform(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() { worker.SetWorkerCandidatesForTest(nil) })
 	worker.SetWorkerCandidatesForTest(func() ([]string, error) {
-		return []string{filepath.Join(workerHarnessDir, "iprange-v4-worker")}, nil
+		return []string{workerHarnessBinary()}, nil
 	})
 }

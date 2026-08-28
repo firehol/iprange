@@ -1,8 +1,8 @@
-//go:build linux && amd64
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 package iprangedb
 
-// Routed recovery facade tests (slice 4-12B): on linux/amd64 the
+// Routed recovery facade tests (slice 4-12B): on every worker-supported platform the
 // public inspection and recovery entries route through the isolated
 // worker client after the preflight. These tests pin the worker
 // equivalence of the candidate inspection, a published recovery
