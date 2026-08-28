@@ -97,6 +97,24 @@ Validation plan (recorded before implementation):
   idioms, performance, wire/integrity, APIs/records), then SOW-0027
   milestone-4 acceptance and SOW close.
 
+Sub-state (2026-08-28): extension-B slices B1 and B2 delivered.
+B1 (7f34d161) compacted tree.Key to 48-byte canonical compare bytes; B2
+(affacd57 + 17914dbc) made the range writer family-typed (12/36-byte
+rangeRecord[K], no universal key and no per-record interface dispatch on
+the hot paths), cached the fixed-key numeric limbs (17914dbc), and
+restored the draft-private single-descent assign gap path so the private
+assign arms match Rust assign_private. Validation: gofmt/vet clean,
+plain + v4work + race/checkptr suites green, 18-case CI gate 18/18
+within-limit (ci-go-v4-local-20260828d.log, ratios 0.395-1.071;
+workflow 3,465 ms vs accepted 5,058 ms = 0.685). Fresh matched 5-sample
+Go/Rust ratios (rust-ratio-acceptance-20260828b.csv): membership-import
+1.648 (was 3.506), nested-overwrite 4.152 (was 6.655),
+update-ipsets-workflow 3.141 (was 4.434), live-direct-random-lookup
+1.872, immutable-direct-random-lookup 1.850, live-validation 2.560.
+Remaining before acceptance: single sol external review of the ratio
+evidence (user directive), verify/fix findings, five-reviewer level-1
+round, then milestone-4 acceptance and SOW close.
+
 Sub-state (2026-08-26): activated by user decision (Open Decision 1, option A);
 SOW-0017 is paused as blocked on this SOW's prerequisite. The static gap
 analysis at repository revision `07c0147bf18b4d1e976f460fc2624e90e91be8cc` was

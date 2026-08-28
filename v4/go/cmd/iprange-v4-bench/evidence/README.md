@@ -60,3 +60,17 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
 - `scale-validation-20260828.csv`: the 4c/4d scale validation rows
   (live-validation 1M 24.1 ms, live-membership-validation 1M 28.5 ms,
   immutable-validation 1M 22.1 ms).
+- `ci-go-v4-local-20260828d.log`: the gate run at the B2 state
+  (family-typed range records, no universal tree key on the writer hot
+  paths, cached tree-key limbs, draft-private assign gap path), 18/18
+  within-limit, ratios 0.395-1.071. update-ipsets-workflow 1M median
+  3,465 ms (ratio 0.685), last-seen-refresh 1,048 ms (ratio 0.713).
+- `rust-ratio-acceptance-20260828b.csv`: the post-B2 Go-vs-Rust ratio
+  table for the same six milestone-4 headline cases, medians of fresh
+  matched 5-sample runs of the final release binaries on the same host
+  (`rust-ratio-go-samples-20260828b.csv` /
+  `rust-ratio-rust-samples-20260828b.csv` hold the raw rows). The
+  writer-side ratios dropped sharply versus the pre-B table
+  (membership-import 3.506 -> 1.648, nested-overwrite 6.655 -> 4.152,
+  update-ipsets-workflow 4.434 -> 3.141); read paths are unchanged
+  (1.872/1.850/2.560 vs 1.929/2.058/2.631).
