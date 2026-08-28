@@ -33,6 +33,9 @@ func RequireLeaf[T any](codec Codec[T], leafCell []byte) error {
 // RequireReplacement validates a 2-3 cell replacement (Rust
 // require_replacement).
 func RequireReplacement[T any](codec Codec[T], key Key, cells [][]byte) error {
+	if numeric, ok := codec.(NumericKeyCodec); ok {
+		return requireReplacementLimbs(codec, numeric, key, cells)
+	}
 	if len(cells) < 2 || len(cells) > 3 {
 		return invalid("B+tree leaf replacement requires two or three cells")
 	}
@@ -57,6 +60,41 @@ func RequireReplacement[T any](codec Codec[T], key Key, cells [][]byte) error {
 		return err
 	}
 	if !first.Equal(key) {
+		return invalid("B+tree replacement changed its first key")
+	}
+	return nil
+}
+
+// requireReplacementLimbs is the numeric-key form of
+// RequireReplacement (Rust fixed C::Key validation): the cells of one
+// fixed-width family all carry same-width numeric order keys, so the
+// limb pairs compare exactly like the canonical bytes and no general
+// tree key is materialized and no codec interface call happens per
+// cell. The full codec still owns the leaf-shape validation.
+func requireReplacementLimbs[T any](codec Codec[T], numeric NumericKeyCodec, key Key, cells [][]byte) error {
+	if len(cells) < 2 || len(cells) > 3 {
+		return invalid("B+tree leaf replacement requires two or three cells")
+	}
+	var firstHi, firstLo uint64
+	var previousHi, previousLo uint64
+	havePrevious := false
+	for index, cell := range cells {
+		if err := RequireLeaf(codec, cell); err != nil {
+			return err
+		}
+		hi, lo, err := numeric.ReadKeyLimbs(cell)
+		if err != nil {
+			return err
+		}
+		if index == 0 {
+			firstHi, firstLo = hi, lo
+		} else if previousHi > hi || (previousHi == hi && previousLo >= lo) {
+			return invalid("B+tree replacement keys are not increasing")
+		}
+		previousHi, previousLo = hi, lo
+		havePrevious = true
+	}
+	if havePrevious && (firstHi != key.hi || firstLo != key.lo) {
 		return invalid("B+tree replacement changed its first key")
 	}
 	return nil

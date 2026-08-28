@@ -112,3 +112,18 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   lookahead stop path (dropped and duplicated runs with three or more
   physical ranges) and allocated one heap object per emitted run; C1
   replaced the pointer with value semantics.
+- `ci-go-v4-local-20260828g.log`: the gate run at the C2 state
+  (limb-based numeric replacement validation over the NumericKeyCodec
+  seam), 18/18 within-limit, ratios 0.407-1.050.
+- `rust-ratio-acceptance-20260828e.csv`: the post-C2 Go-vs-Rust ratio
+  table from interleaved matched 5-sample runs (raw rows in
+  `rust-ratio-go-samples-20260828e.csv` /
+  `rust-ratio-rust-samples-20260828e.csv`). Ratios:
+  membership-import 1.666, nested-overwrite 4.184 (was 4.451),
+  update-ipsets-workflow 3.231, live-direct-random-lookup 1.863,
+  immutable-direct-random-lookup 1.863, live-validation 2.301.
+  The C2 head-to-head measured nested-overwrite 1334ms -> 1247ms
+  (-6.5%) in the same window; the residual write gap is the generic
+  gap/replace machinery dispatching through interfaces per probe, which
+  Go generics cannot monomorphize without duplicating the tree core per
+  family (recorded in SOW-0027 as the remaining C2 trade-off).

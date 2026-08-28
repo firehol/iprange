@@ -89,6 +89,15 @@ type PrefixKeyProbe interface {
 	PrefixKeyProbe()
 }
 
+// NumericKeyCodec is implemented by codecs whose ordered key is one
+// fixed numeric value (Rust fixed key types): the limbs decode every
+// fixed-size cell's order key, so replacement validation compares
+// limb pairs and never materializes the general tree key.
+type NumericKeyCodec interface {
+	// ReadKeyLimbs decodes the ordered key of one fixed-size cell.
+	ReadKeyLimbs(cell []byte) (hi, lo uint64, err error)
+}
+
 // ProbeValidator is the optional per-probe semantic check of the
 // inline fixed-cell probe (Rust read_key decoding inside lower_bound):
 // codecs whose cells carry validated fields beyond the ordered key

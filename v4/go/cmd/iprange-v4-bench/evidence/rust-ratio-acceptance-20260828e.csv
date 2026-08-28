@@ -1,0 +1,7 @@
+scenario,go_median_ns,rust_median_ns,ratio,go_samples,rust_samples
+membership-import,78147311,46895941,1.666,5,5
+nested-overwrite,1234177574,294989766,4.184,5,5
+update-ipsets-workflow,3515313428,1087847832,3.231,5,5
+live-direct-random-lookup,407909417,219000657,1.863,5,5
+immutable-direct-random-lookup,374888793,201192644,1.863,5,5
+live-validation,23739394,10316770,2.301,5,5

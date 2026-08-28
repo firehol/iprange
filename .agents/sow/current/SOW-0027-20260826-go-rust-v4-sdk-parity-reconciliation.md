@@ -161,6 +161,18 @@ count dropped from 10,727,434 to 27,406 objects (369MB to 138MB), with
 wall-time ratios unchanged within noise (3.21x) because the tiny-object
 allocations were not the CPU bottleneck; the write-path ratio remains
 nested-overwrite ~4.45x pending the C2 typed tree core.
+C2 delivered (pushed with this status): the tree replacement validation
+runs through a numeric limb seam (NumericKeyCodec.ReadKeyLimbs on the
+range codecs; tree.RequireReplacement no longer materializes a general
+tree key per cell). Interleaved head-to-head on the same window:
+nested-overwrite 1334ms -> 1247ms (-6.5%), final matched ratio 4.184
+(was 4.451). The remaining write-path gap is the generic gap/replace
+machinery dispatching through interfaces per probe (codec.ReadLeaf +
+LocalGap + rangeFamily calls); Go generics compile to dictionary-based
+dispatch and cannot monomorphize these calls statically, so closing the
+last ~20% requires either duplicating the tree gap machinery per family
+(a trade-off against the one-authoritative-core principle) or code
+generation. Recorded as an open decision for the milestone close.
 
 
 

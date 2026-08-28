@@ -67,6 +67,15 @@ func (rangeCodec4) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	return tree.KeyOfU32(format.U32(cell)), nil
 }
 
+// ReadKeyLimbs decodes the u32 order key of one fixed-size cell (the
+// NumericKeyCodec seam; a 4-byte key zero-extends into the low limb).
+func (rangeCodec4) ReadKeyLimbs(cell []byte) (uint64, uint64, error) {
+	if len(cell) < 4 {
+		return 0, 0, corrupt("range key is truncated")
+	}
+	return 0, uint64(format.U32(cell)), nil
+}
+
 // PrefixKeyProbe opts the codec into the tree core's inline prefix
 // probe: fixed cells carry the little-endian u32 key as their prefix.
 func (rangeCodec4) PrefixKeyProbe() {}
@@ -145,6 +154,16 @@ func (rangeCodec6) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	}
 	hi, lo := format.U128(cell)
 	return tree.KeyOfU128(hi, lo), nil
+}
+
+// ReadKeyLimbs decodes the u128 order key of one fixed-size cell (the
+// NumericKeyCodec seam).
+func (rangeCodec6) ReadKeyLimbs(cell []byte) (uint64, uint64, error) {
+	if len(cell) < 16 {
+		return 0, 0, corrupt("range key is truncated")
+	}
+	hi, lo := format.U128(cell)
+	return hi, lo, nil
 }
 
 // PrefixKeyProbe opts the codec into the inline prefix probe (u128 LE).
