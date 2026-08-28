@@ -787,13 +787,15 @@ func incrementHistoryCount(value uint64) (uint64, error) {
 // interval in its address family (Rust IpKey::inclusive_cardinality).
 func familyInclusiveCardinality(family uint8, from, to tree.Key) (format.Cardinality129, error) {
 	if family == format.AddressFamilyIPv4 {
-		size, err := format.IPv4Inclusive(uint32(from.Hi), uint32(to.Hi))
+		size, err := format.IPv4Inclusive(from.U32(), to.U32())
 		if err != nil {
 			return format.CardinalityZero(), overflow("IPv4 interval cardinality")
 		}
 		return size, nil
 	}
-	size, err := format.IPv6Inclusive(from.Hi, from.Lo, to.Hi, to.Lo)
+	fromHi, fromLo := from.U128()
+	toHi, toLo := to.U128()
+	size, err := format.IPv6Inclusive(fromHi, fromLo, toHi, toLo)
 	if err != nil {
 		return format.CardinalityZero(), overflow("IPv6 interval cardinality")
 	}

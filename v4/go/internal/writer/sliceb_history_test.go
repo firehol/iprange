@@ -223,8 +223,8 @@ func runProjection(t *testing.T, c *Core, windows []HistoryWindow, ranges [][3]u
 	var rangeCount uint64
 	addresses := format.CardinalityZero()
 	for _, r := range ranges {
-		from := tree.Key{Hi: uint64(r[0])}
-		to := tree.Key{Hi: uint64(r[1])}
+		from := tree.KeyOfU32(r[0])
+		to := tree.KeyOfU32(r[1])
 		if err := c.Mutate(func(edit *WriterEdit) error {
 			return edit.PushHistory(merge, from, to, r[2], nilCheck)
 		}); err != nil {
@@ -628,7 +628,7 @@ func TestOrderedMergeRequiresCanonicalInput(t *testing.T) {
 	}
 	push := func(from, to, value uint32) error {
 		return c.Mutate(func(edit *WriterEdit) error {
-			return edit.PushHistory(merge, tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value, nilCheck)
+			return edit.PushHistory(merge, tree.KeyOfU32(from), tree.KeyOfU32(to), value, nilCheck)
 		})
 	}
 	if err := push(10, 20, 1); err != nil {

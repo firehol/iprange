@@ -24,14 +24,14 @@ func (u32Codec) ReadKey(cell []byte, _ uint16) (Key, error) {
 	if len(cell) < 4 {
 		return Key{}, corrupt("test u32 key is truncated")
 	}
-	return Key{Hi: uint64(format.U32(cell))}, nil
+	return KeyOfU32(format.U32(cell)), nil
 }
 func (u32Codec) PrefixKeyProbe() {}
 func (u32Codec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
 	if len(cell) < 4 {
 		return 0, corrupt("test u32 key is truncated")
 	}
-	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+	return cmpU32(format.U32(cell), target.U32()), nil
 }
 func (u32Codec) ReadLeaf(cell []byte) (u32Leaf, error) {
 	if len(cell) != 8 {
@@ -40,7 +40,7 @@ func (u32Codec) ReadLeaf(cell []byte) (u32Leaf, error) {
 	return u32Leaf{key: format.U32(cell), value: format.U32(cell[4:])}, nil
 }
 func (u32Codec) WriteKey(key Key, output []byte) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 }
 
 type u32Leaf struct {
@@ -62,10 +62,7 @@ func (wideCodec) ReadKey(cell []byte, _ uint16) (Key, error) {
 	if len(cell) < 16 {
 		return Key{}, corrupt("test wide key is truncated")
 	}
-	return Key{
-		Hi: binary.BigEndian.Uint64(cell),
-		Lo: binary.BigEndian.Uint64(cell[8:]),
-	}, nil
+	return KeyOfU128(binary.BigEndian.Uint64(cell), binary.BigEndian.Uint64(cell[8:])), nil
 }
 func (wideCodec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
 	if len(cell) < 16 {
@@ -73,10 +70,11 @@ func (wideCodec) CompareKey(cell []byte, _ uint16, target Key) (int, error) {
 	}
 	hi := binary.BigEndian.Uint64(cell)
 	lo := binary.BigEndian.Uint64(cell[8:])
-	if compare := cmpU64(hi, target.Hi); compare != 0 {
+	if compare := cmpU64(hi, target.U64()); compare != 0 {
 		return compare, nil
 	}
-	return cmpU64(lo, target.Lo), nil
+	_, tlo := target.U128()
+	return cmpU64(lo, tlo), nil
 }
 func (wideCodec) ReadLeaf(cell []byte) (wideLeaf, error) {
 	if len(cell) != 64 {
@@ -85,8 +83,9 @@ func (wideCodec) ReadLeaf(cell []byte) (wideLeaf, error) {
 	return wideLeaf{key: binary.BigEndian.Uint32(cell), value: binary.LittleEndian.Uint64(cell[56:])}, nil
 }
 func (wideCodec) WriteKey(key Key, output []byte) {
-	binary.BigEndian.PutUint64(output, key.Hi)
-	binary.BigEndian.PutUint64(output[8:], key.Lo)
+	hi, lo := key.U128()
+	binary.BigEndian.PutUint64(output, hi)
+	binary.BigEndian.PutUint64(output[8:], lo)
 }
 
 type wideLeaf struct {
@@ -108,9 +107,9 @@ func wideRecord(key uint32) []byte {
 	return cell
 }
 
-func u32Key(key uint32) Key { return Key{Hi: uint64(key)} }
+func u32Key(key uint32) Key { return KeyOfU32(key) }
 
-func wideKey(key uint32) Key { return Key{Hi: uint64(key) << 32} }
+func wideKey(key uint32) Key { return KeyOfU128(uint64(key)<<32, 0) }
 
 // memoryStore is the MemoryStore of the Rust tests: owned pages, counters,
 // and a discard log. Tests own complete pages; production stores never do.

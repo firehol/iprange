@@ -187,7 +187,7 @@ func (indexCodec) BranchRecordBounds() (int, int) {
 }
 
 func (indexCodec) WriteBranch(key tree.Key, child uint32, output []byte) (int, error) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 	format.PutU32(output[4:], child)
 	return catalogIndexBranch, nil
 }
@@ -204,12 +204,12 @@ func (indexCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 		if len(cell) < catalogMinRecord {
 			return tree.Key{}, corrupt("feed catalog record is malformed")
 		}
-		return tree.Key{Hi: uint64(format.U32(cell[catalogIndexOffset : catalogIndexOffset+4]))}, nil
+		return tree.KeyOfU32(format.U32(cell[catalogIndexOffset : catalogIndexOffset+4])), nil
 	}
 	if len(cell) < catalogIndexBranch {
 		return tree.Key{}, corrupt("feed index branch record is malformed")
 	}
-	return tree.Key{Hi: uint64(format.U32(cell[0:4]))}, nil
+	return tree.KeyOfU32(format.U32(cell[0:4])), nil
 }
 
 // CompareKey compares one cell key without materializing a Key (Rust
@@ -221,12 +221,12 @@ func (indexCodec) CompareKey(cell []byte, level uint16, target tree.Key) (int, e
 		if len(cell) < catalogMinRecord {
 			return 0, corrupt("feed catalog record is malformed")
 		}
-		return cmpU32(format.U32(cell[catalogIndexOffset:catalogIndexOffset+4]), uint32(target.Hi)), nil
+		return cmpU32(format.U32(cell[catalogIndexOffset:catalogIndexOffset+4]), target.U32()), nil
 	}
 	if len(cell) < catalogIndexBranch {
 		return 0, corrupt("feed index branch record is malformed")
 	}
-	return cmpU32(format.U32(cell[0:4]), uint32(target.Hi)), nil
+	return cmpU32(format.U32(cell[0:4]), target.U32()), nil
 }
 
 func (indexCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {
@@ -238,7 +238,7 @@ func (indexCodec) ReadLeaf(cell []byte) (format.CatalogNameRecord, error) {
 }
 
 func (indexCodec) WriteKey(key tree.Key, output []byte) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 }
 
 // insertCatalogEntry inserts one entry into both catalog indexes, name
@@ -294,7 +294,7 @@ func deleteCatalogEntry(store tree.RetiringStore, nameRoot, indexRoot *uint32, e
 		return err
 	}
 	retired = tree.RetiredPages{}
-	retired, err = tree.DeleteExisting(indexCodec{}, store, indexRoot, tree.Key{Hi: uint64(entry.Index)}, retired)
+	retired, err = tree.DeleteExisting(indexCodec{}, store, indexRoot, tree.KeyOfU32(entry.Index), retired)
 	if err != nil {
 		return err
 	}

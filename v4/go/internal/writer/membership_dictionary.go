@@ -317,7 +317,7 @@ func findMembership(store tree.Store, root uint32, id uint32) (membershipFound, 
 	if id == 0 || root == 0 {
 		return membershipFound{}, nil
 	}
-	value, location, ok, err := tree.PredecessorLocated(idCodec{}, store, root, tree.Key{Hi: uint64(id)})
+	value, location, ok, err := tree.PredecessorLocated(idCodec{}, store, root, tree.KeyOfU32(id))
 	if err != nil {
 		return membershipFound{}, err
 	}
@@ -387,7 +387,7 @@ func readFoundMembershipWords(store tree.Store, found membershipFound, start uin
 func applyMembershipDelta(store tree.RetiringStore, state *membershipState, id uint32, change int64) error {
 	work.MembershipLookup(1)
 	var nextRefcount uint64
-	retired, value, err := tree.MutateLeafU64(idCodec{}, store, &state.idRoot, tree.Key{Hi: uint64(id)},
+	retired, value, err := tree.MutateLeafU64(idCodec{}, store, &state.idRoot, tree.KeyOfU32(id),
 		membershipRefcountOffset, tree.RetiredPages{}, func(record membershipRecord) (tree.LeafU64Mutation, error) {
 			next, err := changedRefcount(record.refcount, change)
 			if err != nil {

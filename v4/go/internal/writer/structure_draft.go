@@ -123,9 +123,9 @@ func (s *DraftStore) assignStructureInputV4(from, to uint32, structure Structure
 		return s.ClearV4(from, to)
 	}
 	if s.draft.rangeTreePrivate {
-		return s.assignInput(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, structure.id, input)
+		return s.assignInput(tree.KeyOfU32(from), tree.KeyOfU32(to), structure.id, input)
 	}
-	return s.assign(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, structure.id)
+	return s.assign(tree.KeyOfU32(from), tree.KeyOfU32(to), structure.id)
 }
 
 // assignStructureInputV6 assigns one structured IPv6 range (Rust
@@ -135,9 +135,9 @@ func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, s
 		return s.ClearV6(fromHi, fromLo, toHi, toLo)
 	}
 	if s.draft.rangeTreePrivate {
-		return s.assignInput(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, structure.id, input)
+		return s.assignInput(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), structure.id, input)
 	}
-	return s.assign(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, structure.id)
+	return s.assign(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), structure.id)
 }
 
 // deleteCurrentStructuredFeed deletes one feed and removes it from every
@@ -161,13 +161,13 @@ func (s *DraftStore) deleteCurrentStructuredFeed(feed FeedEntry, check func() er
 		return err
 	}
 	ctx := s.beginRangeEdit(family, s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	minimum := tree.Key{}
-	maximum := tree.Key{}
+	var minimum, maximum tree.Key
 	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
-		maximum.Hi = 1<<32 - 1
+		minimum = tree.KeyOfU32(uint32(0))
+		maximum = tree.KeyOfU32(uint32(1<<32 - 1))
 	} else {
-		maximum.Hi = ^uint64(0)
-		maximum.Lo = ^uint64(0)
+		minimum = tree.KeyOfU128(uint64(0), uint64(0))
+		maximum = tree.KeyOfU128(^uint64(0), ^uint64(0))
 	}
 	changed, err := rangeTransform(ctx, minimum, maximum, func(store RangeStore, value optionalValue) (optionalValue, error) {
 		if !value.present {

@@ -99,7 +99,7 @@ func (l *leafLocator) enabled() bool { return cap(l.hints4)+cap(l.hints6) != 0 }
 func (l *leafLocator) candidate(key tree.Key) (locatorCandidate, bool) {
 	if l.family == format.AddressFamilyIPv4 {
 		index := sort.Search(len(l.hints4), func(i int) bool {
-			return uint64(l.hints4[i].first) > key.Hi
+			return l.hints4[i].first > key.U32()
 		})
 		if index == 0 {
 			return locatorCandidate{}, false
@@ -122,7 +122,7 @@ func (l *leafLocator) candidate(key tree.Key) (locatorCandidate, bool) {
 // LeafLocator::learn).
 func (l *leafLocator) learn(first tree.Key, pageNumber uint32, c locatorCandidate, hasCandidate bool) {
 	if l.family == format.AddressFamilyIPv4 {
-		l.learn4(uint32(first.Hi), pageNumber, c, hasCandidate)
+		l.learn4(first.U32(), pageNumber, c, hasCandidate)
 		return
 	}
 	l.learn6(first, pageNumber, c, hasCandidate)

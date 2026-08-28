@@ -302,8 +302,8 @@ func TestFeedMergeEmptyMapCreate(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("sealed records = %d, want 2", len(records))
 	}
-	if records[0].from.Hi != 0 || records[0].to.Hi != 9 || records[0].value != member.id ||
-		records[1].from.Hi != 20 || records[1].to.Hi != 29 || records[1].value != member.id {
+	if records[0].from.U32() != 0 || records[0].to.U32() != 9 || records[0].value != member.id ||
+		records[1].from.U32() != 20 || records[1].to.U32() != 29 || records[1].value != member.id {
 		t.Fatalf("sealed records = %+v, want member@[0,9] and member@[20,29]", records)
 	}
 }
@@ -436,7 +436,7 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		{0, 3}, {4, 4}, {5, 12}, {13, 15}, {16, 19}, {20, 22}, {25, 35},
 	}
 	for index, record := range records {
-		if record.from.Hi != want[index][0] || record.to.Hi != want[index][1] {
+		if record.from.U32() != uint32(want[index][0]) || record.to.U32() != uint32(want[index][1]) {
 			t.Fatalf("merged record %d = %+v, want range %v", index, record, want[index])
 		}
 	}
@@ -473,7 +473,7 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 }
 
 func key4(value uint32) treeKey {
-	return treeKey{Hi: uint64(value)}
+	return tree.KeyOfU32(value)
 }
 
 type treeKey = tree.Key

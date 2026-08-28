@@ -59,22 +59,22 @@ func (s *DraftStore) clear(from, to tree.Key) (bool, error) {
 
 // AssignV4 assigns one IPv4 range (Rust DraftStore::assign_v4).
 func (s *DraftStore) AssignV4(from, to uint32, value uint32) (bool, error) {
-	return s.assign(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value)
+	return s.assign(tree.KeyOfU32(from), tree.KeyOfU32(to), value)
 }
 
 // AssignV6 assigns one IPv6 range (Rust DraftStore::assign_v6).
 func (s *DraftStore) AssignV6(fromHi, fromLo, toHi, toLo uint64, value uint32) (bool, error) {
-	return s.assign(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, value)
+	return s.assign(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), value)
 }
 
 // ClearV4 clears one IPv4 range (Rust DraftStore::clear_v4).
 func (s *DraftStore) ClearV4(from, to uint32) (bool, error) {
-	return s.clear(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)})
+	return s.clear(tree.KeyOfU32(from), tree.KeyOfU32(to))
 }
 
 // ClearV6 clears one IPv6 range (Rust DraftStore::clear_v6).
 func (s *DraftStore) ClearV6(fromHi, fromLo, toHi, toLo uint64) (bool, error) {
-	return s.clear(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo})
+	return s.clear(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo))
 }
 
 // RangeRecordAdded accounts one range record with value (Rust

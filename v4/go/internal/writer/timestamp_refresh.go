@@ -187,7 +187,7 @@ type batchedRemovals4 struct {
 }
 
 func (b *batchedRemovals4) push(removal firstSeenRemoval) error {
-	b.records[b.length] = FirstSeenRemoval4{From: uint32(removal.from.Hi), To: uint32(removal.to.Hi), FirstSeen: removal.firstSeen, Addresses: removal.addresses}
+	b.records[b.length] = FirstSeenRemoval4{From: removal.from.U32(), To: removal.to.U32(), FirstSeen: removal.firstSeen, Addresses: removal.addresses}
 	b.length++
 	if b.length == firstSeenRemovalBatch {
 		return b.flush()
@@ -217,7 +217,9 @@ type batchedRemovals6 struct {
 }
 
 func (b *batchedRemovals6) push(removal firstSeenRemoval) error {
-	b.records[b.length] = FirstSeenRemoval6{FromHi: removal.from.Hi, FromLo: removal.from.Lo, ToHi: removal.to.Hi, ToLo: removal.to.Lo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
+	fromHi, fromLo := removal.from.U128()
+	toHi, toLo := removal.to.U128()
+	b.records[b.length] = FirstSeenRemoval6{FromHi: fromHi, FromLo: fromLo, ToHi: toHi, ToLo: toLo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
 	b.length++
 	if b.length == firstSeenRemovalBatch {
 		return b.flush()

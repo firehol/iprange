@@ -39,7 +39,7 @@ func (varRecordCodec) BranchRecordBounds() (int, int) {
 }
 
 func (varRecordCodec) WriteBranch(key Key, child uint32, output []byte) (int, error) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 	format.PutU32(output[4:], child)
 	return 8, nil
 }
@@ -56,24 +56,24 @@ func (varRecordCodec) ReadKey(cell []byte, level uint16) (Key, error) {
 		if len(cell) < 6 {
 			return Key{}, corrupt("test record is truncated")
 		}
-		return Key{Hi: uint64(format.U32(cell[2:]))}, nil
+		return KeyOfU32(format.U32(cell[2:])), nil
 	}
 	if len(cell) < 4 {
 		return Key{}, corrupt("test branch record is truncated")
 	}
-	return Key{Hi: uint64(format.U32(cell))}, nil
+	return KeyOfU32(format.U32(cell)), nil
 }
 func (varRecordCodec) CompareKey(cell []byte, level uint16, target Key) (int, error) {
 	if level == 0 {
 		if len(cell) < 6 {
 			return 0, corrupt("test record is truncated")
 		}
-		return cmpU32(format.U32(cell[2:]), uint32(target.Hi)), nil
+		return cmpU32(format.U32(cell[2:]), target.U32()), nil
 	}
 	if len(cell) < 4 {
 		return 0, corrupt("test branch record is truncated")
 	}
-	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+	return cmpU32(format.U32(cell), target.U32()), nil
 }
 
 func (varRecordCodec) ReadLeaf(cell []byte) (string, error) {
@@ -84,7 +84,7 @@ func (varRecordCodec) ReadLeaf(cell []byte) (string, error) {
 }
 
 func (varRecordCodec) WriteKey(key Key, output []byte) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 }
 
 // varNameCodec is a variable-key variable-record codec (catalog name tree
@@ -379,7 +379,7 @@ func TestVariableRecordReplacement(t *testing.T) {
 	// The replacement keeps the target key in its first cell (Rust
 	// require_replacement: the first cell's key must equal the replaced
 	// key) and adds a second, later key.
-	if _, err := ReplaceLeafWith(codec, m, &root, Key{Hi: 7}, [][]byte{varRecord(7, 3), varRecord(9, 5)}, retired); err != nil {
+	if _, err := ReplaceLeafWith(codec, m, &root, KeyOfU32(uint32(7)), [][]byte{varRecord(7, 3), varRecord(9, 5)}, retired); err != nil {
 		t.Fatal(err)
 	}
 	keys := []uint32{}

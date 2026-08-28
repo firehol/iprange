@@ -380,7 +380,7 @@ func (c structureHashCodec) CompareKey(cell []byte, level uint16, target tree.Ke
 	if _, err := decodeStructureHash(cell); err != nil {
 		return 0, err
 	}
-	return tree.CompareRawKey(cell, structureHashKeySize, &target.Raw)
+	return tree.CompareRawKey(cell, structureHashKeySize, &target)
 }
 
 func (c structureHashCodec) ReadLeaf(cell []byte) (structureHashRecord, error) {
@@ -396,7 +396,7 @@ func (structureHashCodec) WriteKey(key tree.Key, output []byte) {
 	// the tree Key is the numeric orientation, so the id bytes reverse.
 	// The probe bytes are the key's raw inline field, never a slice of
 	// a local.
-	raw := key.Raw
+	raw := key.FixedBytes()
 	copy(output[structureHashDigestOffset:structureHashIDOffset], raw[:structureHashIDOffset])
 	output[32] = raw[35]
 	output[33] = raw[34]

@@ -80,7 +80,7 @@ func (importCacheCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	if len(cell) < importCacheEntryValueOffset {
 		return tree.Key{}, corrupt("import cache key truncated")
 	}
-	return tree.Key{Hi: format.U64(cell[importCacheEntryKeyOffset:])}, nil
+	return tree.KeyOfU64(format.U64(cell[importCacheEntryKeyOffset:])), nil
 }
 
 // PrefixKeyProbe opts the codec into the inline prefix probe: fixed
@@ -93,7 +93,7 @@ func (importCacheCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int,
 	if len(cell) < importCacheEntryValueOffset {
 		return 0, corrupt("import cache key truncated")
 	}
-	return cmpU64(format.U64(cell[importCacheEntryKeyOffset:]), target.Hi), nil
+	return cmpU64(format.U64(cell[importCacheEntryKeyOffset:]), target.U64()), nil
 }
 
 func (importCacheCodec) ReadLeaf(cell []byte) (importCacheEntry, error) {
@@ -101,7 +101,7 @@ func (importCacheCodec) ReadLeaf(cell []byte) (importCacheEntry, error) {
 }
 
 func (importCacheCodec) WriteKey(key tree.Key, output []byte) {
-	format.PutU64(output, key.Hi)
+	format.PutU64(output, key.U64())
 }
 
 // ImportCache is one import operation's private translation state
@@ -394,7 +394,7 @@ func lookupImportCacheEntry(store tree.Store, root uint32, key uint64) (importCa
 	if root == 0 {
 		return importCacheEntry{}, false, nil
 	}
-	found, ok, err := tree.AtOrAfter(importCacheCodec{}, store, root, tree.Key{Hi: key})
+	found, ok, err := tree.AtOrAfter(importCacheCodec{}, store, root, tree.KeyOfU64(key))
 	if err != nil {
 		return importCacheEntry{}, false, err
 	}

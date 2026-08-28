@@ -43,7 +43,7 @@ func (rangeCodec4) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	if len(cell) < 4 {
 		return tree.Key{}, corrupt("range key is truncated")
 	}
-	return tree.Key{Hi: uint64(format.U32(cell))}, nil
+	return tree.KeyOfU32(format.U32(cell)), nil
 }
 
 // PrefixKeyProbe opts the codec into the tree core's inline prefix
@@ -57,7 +57,7 @@ func (rangeCodec4) CompareKey(cell []byte, _ uint16, target tree.Key) (int, erro
 	if len(cell) < 4 {
 		return 0, corrupt("range key is truncated")
 	}
-	return cmpU32(format.U32(cell), uint32(target.Hi)), nil
+	return cmpU32(format.U32(cell), target.U32()), nil
 }
 
 func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord, error) {
@@ -69,34 +69,34 @@ func (rangeCodec4) ReadLeaf(cell []byte) (rangeRecord, error) {
 		return rangeRecord{}, corrupt("range leaf is invalid")
 	}
 	return rangeRecord{
-		from:  tree.Key{Hi: uint64(r.From)},
-		to:    tree.Key{Hi: uint64(r.To)},
+		from:  tree.KeyOfU32(r.From),
+		to:    tree.KeyOfU32(r.To),
 		value: r.Value,
 	}, nil
 }
 
 func (rangeCodec4) WriteKey(key tree.Key, output []byte) {
-	format.PutU32(output, uint32(key.Hi))
+	format.PutU32(output, key.U32())
 }
 
 func (rangeCodec4) Next(key tree.Key) (tree.Key, bool) {
-	if key.Hi == 0xFFFFFFFF {
+	if key.U32() == 0xFFFFFFFF {
 		return tree.Key{}, false
 	}
-	return tree.Key{Hi: key.Hi + 1}, true
+	return tree.KeyOfU32(key.U32() + 1), true
 }
 
 func (rangeCodec4) Previous(key tree.Key) (tree.Key, bool) {
-	if key.Hi == 0 {
+	if key.U32() == 0 {
 		return tree.Key{}, false
 	}
-	return tree.Key{Hi: key.Hi - 1}, true
+	return tree.KeyOfU32(key.U32() - 1), true
 }
 
 func (rangeCodec4) EncodeRecord(r rangeRecord, output []byte) (int, error) {
 	if err := format.EncodeRangeRecordV4(format.RangeRecordV4{
-		From:  uint32(r.from.Hi),
-		To:    uint32(r.to.Hi),
+		From:  r.from.U32(),
+		To:    r.to.U32(),
 		Value: r.value,
 	}, output); err != nil {
 		return 0, err
@@ -118,7 +118,7 @@ func (rangeCodec6) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 		return tree.Key{}, corrupt("range key is truncated")
 	}
 	hi, lo := format.U128(cell)
-	return tree.Key{Hi: hi, Lo: lo}, nil
+	return tree.KeyOfU128(hi, lo), nil
 }
 
 // PrefixKeyProbe opts the codec into the inline prefix probe (u128 LE).
@@ -132,7 +132,8 @@ func (rangeCodec6) CompareKey(cell []byte, _ uint16, target tree.Key) (int, erro
 		return 0, corrupt("range key is truncated")
 	}
 	hi, lo := format.U128(cell)
-	return cmpU128(hi, lo, target.Hi, target.Lo), nil
+	thi, tlo := target.U128()
+	return cmpU128(hi, lo, thi, tlo), nil
 }
 
 func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord, error) {
@@ -144,18 +145,19 @@ func (rangeCodec6) ReadLeaf(cell []byte) (rangeRecord, error) {
 		return rangeRecord{}, corrupt("range leaf is invalid")
 	}
 	return rangeRecord{
-		from:  tree.Key{Hi: r.FromHi, Lo: r.FromLo},
-		to:    tree.Key{Hi: r.ToHi, Lo: r.ToLo},
+		from:  tree.KeyOfU128(r.FromHi, r.FromLo),
+		to:    tree.KeyOfU128(r.ToHi, r.ToLo),
 		value: r.Value,
 	}, nil
 }
 
 func (rangeCodec6) WriteKey(key tree.Key, output []byte) {
-	format.PutU128(output, key.Hi, key.Lo)
+	hi, lo := key.U128()
+	format.PutU128(output, hi, lo)
 }
 
 func (rangeCodec6) Next(key tree.Key) (tree.Key, bool) {
-	hi, lo := key.Hi, key.Lo
+	hi, lo := key.U128()
 	lo++
 	if lo == 0 {
 		hi++
@@ -163,11 +165,11 @@ func (rangeCodec6) Next(key tree.Key) (tree.Key, bool) {
 			return tree.Key{}, false
 		}
 	}
-	return tree.Key{Hi: hi, Lo: lo}, true
+	return tree.KeyOfU128(hi, lo), true
 }
 
 func (rangeCodec6) Previous(key tree.Key) (tree.Key, bool) {
-	hi, lo := key.Hi, key.Lo
+	hi, lo := key.U128()
 	if hi == 0 && lo == 0 {
 		return tree.Key{}, false
 	}
@@ -175,13 +177,15 @@ func (rangeCodec6) Previous(key tree.Key) (tree.Key, bool) {
 	if lo == ^uint64(0) {
 		hi--
 	}
-	return tree.Key{Hi: hi, Lo: lo}, true
+	return tree.KeyOfU128(hi, lo), true
 }
 
 func (rangeCodec6) EncodeRecord(r rangeRecord, output []byte) (int, error) {
+	fromHi, fromLo := r.from.U128()
+	toHi, toLo := r.to.U128()
 	if err := format.EncodeRangeRecordV6(format.RangeRecordV6{
-		FromHi: r.from.Hi, FromLo: r.from.Lo,
-		ToHi: r.to.Hi, ToLo: r.to.Lo,
+		FromHi: fromHi, FromLo: fromLo,
+		ToHi: toHi, ToLo: toLo,
 		Value: r.value,
 	}, output); err != nil {
 		return 0, err

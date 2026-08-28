@@ -400,27 +400,27 @@ func (e *WriterEdit) MergeFeed(member MembershipHandle, create bool, check func(
 // AssignInputV4 assigns one IPv4 range through the direct replacement
 // assignment input (Rust WriterEdit::assign_input_v4).
 func (e *WriterEdit) AssignInputV4(from, to uint32, value uint32, input *AssignmentInput) (bool, error) {
-	return e.store.assignInput(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value, (*privateInput)(input))
+	return e.store.assignInput(tree.KeyOfU32(from), tree.KeyOfU32(to), value, (*privateInput)(input))
 }
 
 // AssignInputV6 assigns one IPv6 range through the direct replacement
 // assignment input (Rust WriterEdit::assign_input_v6).
 func (e *WriterEdit) AssignInputV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *AssignmentInput) (bool, error) {
-	return e.store.assignInput(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, value, (*privateInput)(input))
+	return e.store.assignInput(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), value, (*privateInput)(input))
 }
 
 // AddPrivateConstantRangeV4 pushes one untracked constant IPv4 range
 // into the draft range tree (Rust WriterEdit::add_private_constant_range
 // for IPv4; timestamp refresh inputs).
 func (e *WriterEdit) AddPrivateConstantRangeV4(from, to uint32, value uint32, input *UnionInput) error {
-	return e.store.addPrivateConstantRange(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, value, input)
+	return e.store.addPrivateConstantRange(tree.KeyOfU32(from), tree.KeyOfU32(to), value, input)
 }
 
 // AddPrivateConstantRangeV6 pushes one untracked constant IPv6 range
 // into the draft range tree (Rust WriterEdit::add_private_constant_range
 // for IPv6; timestamp refresh inputs).
 func (e *WriterEdit) AddPrivateConstantRangeV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *UnionInput) error {
-	return e.store.addPrivateConstantRange(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, value, input)
+	return e.store.addPrivateConstantRange(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), value, input)
 }
 
 // FinishPrivateConstantRanges seals one untracked constant-range input

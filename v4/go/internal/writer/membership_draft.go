@@ -262,13 +262,13 @@ func (s *DraftStore) applyMembership(from, to tree.Key, member MembershipHandle,
 // applyMembershipV4 applies one membership operation over an inclusive
 // IPv4 interval (Rust DraftStore::apply_membership_v4).
 func (s *DraftStore) applyMembershipV4(from, to uint32, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	return s.applyMembership(tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, member, operation, check)
+	return s.applyMembership(tree.KeyOfU32(from), tree.KeyOfU32(to), member, operation, check)
 }
 
 // applyMembershipV6 applies one membership operation over an inclusive
 // IPv6 interval (Rust DraftStore::apply_membership_v6).
 func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	return s.applyMembership(tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, member, operation, check)
+	return s.applyMembership(tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), member, operation, check)
 }
 
 // deleteCurrentFeedMembership deletes one feed and clears its bit from
@@ -291,13 +291,13 @@ func (s *DraftStore) deleteCurrentFeedMembership(feed FeedEntry, check func() er
 	if err != nil {
 		return err
 	}
-	minimum := tree.Key{}
-	maximum := tree.Key{}
+	var minimum, maximum tree.Key
 	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
-		maximum.Hi = 1<<32 - 1
+		minimum = tree.KeyOfU32(uint32(0))
+		maximum = tree.KeyOfU32(uint32(1<<32 - 1))
 	} else {
-		maximum.Hi = ^uint64(0)
-		maximum.Lo = ^uint64(0)
+		minimum = tree.KeyOfU128(uint64(0), uint64(0))
+		maximum = tree.KeyOfU128(^uint64(0), ^uint64(0))
 	}
 	if _, err := s.applyMembership(minimum, maximum, member, MembershipDifference, check); err != nil {
 		return err

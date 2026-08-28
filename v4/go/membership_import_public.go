@@ -357,7 +357,7 @@ func importRangesMembership4(w *LiveWriter, source membershipImportSource, cache
 		if err != nil {
 			return publicError(err)
 		}
-		err = edit.PushImportRange(merge, tree.Key{Hi: uint64(record.From)}, tree.Key{Hi: uint64(record.To)}, id, words, cancellation.check)
+		err = edit.PushImportRange(merge, tree.KeyOfU32(record.From), tree.KeyOfU32(record.To), id, words, cancellation.check)
 		if err != nil {
 			return w.abortAfter(err)
 		}
@@ -417,7 +417,7 @@ func importRangesMembership6(w *LiveWriter, source membershipImportSource, cache
 		if err != nil {
 			return publicError(err)
 		}
-		err = edit.PushImportRange(merge, tree.Key{Hi: record.FromHi, Lo: record.FromLo}, tree.Key{Hi: record.ToHi, Lo: record.ToLo}, id, words, cancellation.check)
+		err = edit.PushImportRange(merge, tree.KeyOfU128(record.FromHi, record.FromLo), tree.KeyOfU128(record.ToHi, record.ToLo), id, words, cancellation.check)
 		if err != nil {
 			return w.abortAfter(err)
 		}

@@ -13,69 +13,150 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
-// Key is one ordered tree key (Rust Key: Copy + Ord). Fixed keys compare
-// numerically as (Hi, Lo) and cover the v4 ordered keys (retirement
-// transaction extents, IPv4/IPv6 range bounds). Variable keys compare
-// lexicographically: catalog names view the caller's record (bytes), and
-// hash keys (Rust HashKey, Copy) carry their up-to-40 ordered probe bytes
-// inline (raw) so decoding one probe never allocates. bytes views the
-// caller's or the live page's record and is only read within the
-// operation that produced it; raw is a value.
+// Key is one ordered tree key. Fixed keys (numeric and hash) carry their
+// canonical compare bytes in data[:Size]: numeric keys are big-endian
+// (the wire cells are little-endian) and hash keys are the digest bytes
+// followed by each suffix word big-endian, so bytewise comparison of the
+// canonical bytes equals the Rust Ord of the key type (Ipv4Key, Ipv6Key,
+// HashKey). Variable keys (catalog names) keep their ordered bytes in
+// Var with Size zero. Codecs never mix the two forms. The value carries
+// no heap reference for fixed keys, so hot-path copies stay on the stack.
 type Key struct {
-	Hi    uint64
-	Lo    uint64
-	bytes []byte
-	// Raw holds the up-to-40 ordered probe bytes of a hash key (Rust
-	// HashKey value), zero-padded past its length; meaningful only for
-	// keys built by RawKey. Codecs read it as a plain value field: a
-	// method returning a slice of the receiver would allocate a copy.
-	Raw   [40]byte
-	isRaw bool
+	data [40]byte
+	Size uint8
+	Var  []byte
 }
 
 // IsVar reports whether the key is a variable-size byte key.
-func (k Key) IsVar() bool { return k.bytes != nil || k.isRaw }
+func (k Key) IsVar() bool { return k.Size == 0 }
 
-// Bytes returns the long variable key bytes, or nil for fixed keys. Hash
-// probe keys never call Bytes: their codecs consume the raw field
-// directly (returning a slice of the receiver would allocate a copy).
-func (k Key) Bytes() []byte { return k.bytes }
+// Bytes returns the ordered bytes of a variable key, or nil for fixed
+// keys (Rust catalog name keys).
+func (k Key) Bytes() []byte { return k.Var }
 
-// RawKey builds a variable key from ordered bytes of at most 40 (Rust
-// HashKey value). The bytes are copied into the key, so the caller's
-// buffer may be a stack local.
-func RawKey(bytes []byte) Key {
-	var k Key
-	copy(k.Raw[:], bytes)
-	k.isRaw = true
-	return k
+// FixedBytes returns the canonical compare bytes of a fixed key, or nil
+// for a variable key.
+func (k Key) FixedBytes() []byte {
+	if k.Size == 0 {
+		return nil
+	}
+	return k.data[:k.Size]
 }
 
-// Less reports k < other. A variable key compares greater than any fixed
-// key, but codecs never mix the two forms.
+// Limb reads the numeric value of the N-byte canonical bytes as a
+// single u64: a 4-byte key zero-extends, an 8-byte key is the value, and
+// wider keys report their leading u64 (variable keys report zero).
+func (k Key) limb() uint64 {
+	switch k.Size {
+	case 0:
+		return 0
+	case 4:
+		return uint64(beU32(k.data[:4]))
+	default:
+		return beU64(k.data[:8])
+	}
+}
+
+// U32 decodes the canonical compare bytes of a 4-byte fixed key
+// (wider keys report their leading 32 bits; codecs call it only for
+// 4-byte keys).
+func (k Key) U32() uint32 { return beU32(k.data[:4]) }
+
+// U64 decodes the canonical compare bytes of an 8-byte fixed key
+// (a 4-byte key zero-extends to its numeric value).
+func (k Key) U64() uint64 {
+	switch k.Size {
+	case 0:
+		return 0
+	case 4:
+		return uint64(beU32(k.data[:4]))
+	default:
+		return beU64(k.data[:8])
+	}
+}
+
+// U128 decodes the canonical compare bytes of a 16-byte fixed key into
+// the numeric high and low limbs; narrower keys zero-extend into the low
+// limb.
+func (k Key) U128() (hi, lo uint64) {
+	switch k.Size {
+	case 0, 4:
+		return 0, uint64(beU32(k.data[:4]))
+	case 8:
+		return 0, beU64(k.data[:8])
+	default:
+		hi = beU64(k.data[:8])
+		lo = beU64(k.data[8:16])
+		return hi, lo
+	}
+}
+
+// Less reports k < other. A fixed key compares its canonical bytes
+// bytewise, which equals the numeric order of the key type; a variable
+// key compares its ordered bytes. Codecs never mix the two forms.
 func (k Key) Less(other Key) bool {
-	if k.isRaw || other.isRaw {
-		return bytes.Compare(k.Raw[:], other.Raw[:]) < 0
+	if k.Size == 0 || other.Size == 0 {
+		return bytes.Compare(k.Var, other.Var) < 0
 	}
-	if k.bytes != nil || other.bytes != nil {
-		return bytes.Compare(k.bytes, other.bytes) < 0
-	}
-	return k.Hi < other.Hi || (k.Hi == other.Hi && k.Lo < other.Lo)
+	return bytes.Compare(k.data[:k.Size], other.data[:other.Size]) < 0
 }
 
 // Equal reports k == other.
 func (k Key) Equal(other Key) bool {
-	if k.isRaw || other.isRaw {
-		return bytes.Equal(k.Raw[:], other.Raw[:])
+	if k.Size == 0 || other.Size == 0 {
+		return bytes.Equal(k.Var, other.Var)
 	}
-	if k.bytes != nil || other.bytes != nil {
-		return bytes.Equal(k.bytes, other.bytes)
-	}
-	return k.Hi == other.Hi && k.Lo == other.Lo
+	return k.Size == other.Size && bytes.Equal(k.data[:k.Size], other.data[:other.Size])
 }
 
+// KeyOfU32 builds a 4-byte fixed key from its numeric value. The
+// parameter is generic over uint32-like named types (address values),
+// so callers never convert.
+func KeyOfU32[V ~uint32](value V) Key {
+	var k Key
+	k.Size = 4
+	k.data[0] = byte(value >> 24)
+	k.data[1] = byte(value >> 16)
+	k.data[2] = byte(value >> 8)
+	k.data[3] = byte(value)
+	return k
+}
+
+// KeyOfU64 builds an 8-byte fixed key from its numeric value.
+func KeyOfU64[V ~uint64](value V) Key {
+	var k Key
+	k.Size = 8
+	bePutU64(k.data[:8], uint64(value))
+	return k
+}
+
+// KeyOfU128 builds a 16-byte fixed key from its numeric high and low
+// limbs.
+func KeyOfU128[V ~uint64](hi, lo V) Key {
+	var k Key
+	k.Size = 16
+	bePutU64(k.data[:8], uint64(hi))
+	bePutU64(k.data[8:16], uint64(lo))
+	return k
+}
+
+// KeyOfFixed builds a fixed key from its canonical compare bytes (4, 8,
+// 12, 16, or 32..40 bytes), copying them into the value.
+func KeyOfFixed(bytes []byte) Key {
+	var k Key
+	k.Size = uint8(len(bytes))
+	copy(k.data[:], bytes)
+	return k
+}
+
+// RawKey builds a hash key from its up-to-40 ordered probe bytes (Rust
+// HashKey value): the digest bytes followed by each suffix word
+// big-endian, the form produced by the writer's hashKey/hashProbe
+// helpers. The bytes are copied into the key.
+func RawKey(bytes []byte) Key { return KeyOfFixed(bytes) }
+
 // VarKey builds a variable key from its ordered bytes.
-func VarKey(bytes []byte) Key { return Key{bytes: bytes} }
+func VarKey(bytes []byte) Key { return Key{Var: bytes} }
 
 // Codec is the per-tree wire contract (Rust fixed_tree::Codec). Branch
 // cells are key bytes followed by a 4-byte child page number; leaf cells

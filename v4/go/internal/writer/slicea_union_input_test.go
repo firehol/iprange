@@ -61,7 +61,7 @@ func finishWorkflowInput(store *DraftStore, input *UnionInput) error {
 	return nil
 }
 
-func key6(value uint64) tree.Key { return tree.Key{Lo: value} }
+func key6(value uint64) tree.Key { return tree.KeyOfU128(uint64(0), value) }
 
 // TestUnionInputRandomBufferedMatchesScalarReference is the Go mirror of
 // the Rust buffered_coverage_union_matches_a_scalar_reference LCG
@@ -101,7 +101,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 	for address, wanted := range expected {
 		found := false
 		for _, record := range records {
-			if record.from.Hi <= uint64(address) && uint64(address) <= record.to.Hi {
+			if record.from.U32() <= uint32(address) && uint32(address) <= record.to.U32() {
 				found = true
 				break
 			}
@@ -116,7 +116,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 		}
 	}
 	for index := 1; index < len(records); index++ {
-		if !(records[index-1].to.Hi+1 < records[index].from.Hi) {
+		if !(records[index-1].to.U32()+1 < records[index].from.U32()) {
 			t.Fatalf("records %+v and %+v overlap or touch", records[index-1], records[index])
 		}
 	}
@@ -142,7 +142,7 @@ func TestUnionInputRebridgesGap(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if records[0].from.Hi != 15 || records[0].to.Hi != 45 || records[0].value != 1 {
+	if records[0].from.U32() != 15 || records[0].to.U32() != 45 || records[0].value != 1 {
 		t.Fatalf("sealed record = %+v, want [15,45] value 1", records[0])
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -171,7 +171,7 @@ func TestUnionInputOrderedNormalizesToSingleInterval(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if records[0].from.Hi != 0 || records[0].to.Hi != inputs-1 || records[0].value != 42 {
+	if records[0].from.U32() != 0 || records[0].to.U32() != inputs-1 || records[0].value != 42 {
 		t.Fatalf("sealed record = %+v, want [0,%d] value 42", records[0], inputs-1)
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -222,12 +222,18 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 		if len(records) != 2 {
 			t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
 		}
-		// IPv4 keys live in Hi; IPv6 keys in Lo (range codec key space).
-		from0, to0 := records[0].from.Hi, records[0].to.Hi
-		from1, to1 := records[1].from.Hi, records[1].to.Hi
+		// IPv4 keys are 4-byte keys; IPv6 keys are 16-byte keys.
+		var from0, to0, from1, to1 uint64
 		if family == format.AddressFamilyIPv6 {
-			from0, to0 = records[0].from.Lo, records[0].to.Lo
-			from1, to1 = records[1].from.Lo, records[1].to.Lo
+			_, from0 = records[0].from.U128()
+			_, to0 = records[0].to.U128()
+			_, from1 = records[1].from.U128()
+			_, to1 = records[1].to.U128()
+		} else {
+			from0 = uint64(records[0].from.U32())
+			to0 = uint64(records[0].to.U32())
+			from1 = uint64(records[1].from.U32())
+			to1 = uint64(records[1].to.U32())
 		}
 		if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
 			records[0].value != 7 || records[1].value != 7 {
@@ -270,7 +276,7 @@ func TestUnionInputEmptyMapUnorderedRanges(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical member record", records)
 	}
-	if records[0].from.Hi != 15 || records[0].to.Hi != 45 || records[0].value != member.id {
+	if records[0].from.U32() != 15 || records[0].to.U32() != 45 || records[0].value != member.id {
 		t.Fatalf("sealed record = %+v, want [15,45] member %d", records[0], member.id)
 	}
 	if draft.meta.RangeRecordCount != 1 {

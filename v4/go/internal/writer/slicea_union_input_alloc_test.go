@@ -37,7 +37,7 @@ func pushOrderedAllocs(t *testing.T, count int) float64 {
 		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
-			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {
+			if _, err := pushPrivateUntracked(ctx, tree.KeyOfU32(uint32(from)), tree.KeyOfU32(uint32(from+1)), 1, &input); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -64,7 +64,7 @@ func pushGeneralAllocs(t *testing.T, count int) float64 {
 		ctx := store.beginRangeEdit(family, store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
 		for i := 0; i < count; i++ {
 			from := uint64(i) * 3
-			if _, err := pushPrivateUntracked(ctx, tree.Key{Hi: from}, tree.Key{Hi: from + 1}, 1, &input); err != nil {
+			if _, err := pushPrivateUntracked(ctx, tree.KeyOfU32(uint32(from)), tree.KeyOfU32(uint32(from+1)), 1, &input); err != nil {
 				t.Fatal(err)
 			}
 		}

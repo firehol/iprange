@@ -286,10 +286,10 @@ func (in *exactFeedWorkflow) addRanges4(ranges []AddressRange4) error {
 				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
 			if in.emptyMapCreate {
-				if err := edit.AddEmptyMapFeedRange(tree.Key{Hi: uint64(r.From)}, tree.Key{Hi: uint64(r.To)}, in.member, &in.coverage); err != nil {
+				if err := edit.AddEmptyMapFeedRange(tree.KeyOfU32(r.From), tree.KeyOfU32(r.To), in.member, &in.coverage); err != nil {
 					return in.w.abortAfter(err)
 				}
-			} else if err := edit.AddFeedCoverage(tree.Key{Hi: uint64(r.From)}, tree.Key{Hi: uint64(r.To)}, &in.coverage); err != nil {
+			} else if err := edit.AddFeedCoverage(tree.KeyOfU32(r.From), tree.KeyOfU32(r.To), &in.coverage); err != nil {
 				return in.w.abortAfter(err)
 			}
 			work.RangeConsumed(1)
@@ -342,8 +342,8 @@ func (in *exactFeedWorkflow) addRanges6(ranges []AddressRange6) error {
 			if r.FromHi > r.ToHi || (r.FromHi == r.ToHi && r.FromLo > r.ToLo) {
 				return in.w.abortAfter(&format.Error{Code: format.CodeInvalidArgument, Detail: "range start exceeds range end"})
 			}
-			from := tree.Key{Hi: r.FromHi, Lo: r.FromLo}
-			to := tree.Key{Hi: r.ToHi, Lo: r.ToLo}
+			from := tree.KeyOfU128(r.FromHi, r.FromLo)
+			to := tree.KeyOfU128(r.ToHi, r.ToLo)
 			if in.emptyMapCreate {
 				if err := edit.AddEmptyMapFeedRange(from, to, in.member, &in.coverage); err != nil {
 					return in.w.abortAfter(err)

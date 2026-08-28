@@ -204,7 +204,7 @@ func (b *rangeBulkBuilder) pushLeafCell(store tree.Store, first tree.Key, cell [
 }
 
 func (b *rangeBulkBuilder) canAppend(record rangeRecord) (bool, error) {
-	if record.from.Hi > record.to.Hi || (record.from.Hi == record.to.Hi && record.from.Lo > record.to.Lo) {
+	if record.to.Less(record.from) {
 		return false, invalid("range start is after its end")
 	}
 	if b.valueKind != format.ValueKindDirect && record.value == 0 {
@@ -367,12 +367,12 @@ func rangeLeafType(family uint8) format.PageType   { return format.PageTypeRange
 func rangeBranchType(family uint8) format.PageType { return format.PageTypeRangeBranch }
 func nextKey(family uint8, key tree.Key) (tree.Key, bool) {
 	if family == format.AddressFamilyIPv4 {
-		if key.Hi == 0xFFFFFFFF {
+		if key.U32() == 0xFFFFFFFF {
 			return tree.Key{}, false
 		}
-		return tree.Key{Hi: key.Hi + 1}, true
+		return tree.KeyOfU32(key.U32() + 1), true
 	}
-	hi, lo := key.Hi, key.Lo
+	hi, lo := key.U128()
 	lo++
 	if lo == 0 {
 		hi++
@@ -380,7 +380,7 @@ func nextKey(family uint8, key tree.Key) (tree.Key, bool) {
 			return tree.Key{}, false
 		}
 	}
-	return tree.Key{Hi: hi, Lo: lo}, true
+	return tree.KeyOfU128(hi, lo), true
 }
 
 const (
@@ -391,15 +391,17 @@ const (
 func encodeRangeRecord(family uint8, record rangeRecord, output []byte) (int, error) {
 	if family == format.AddressFamilyIPv4 {
 		if err := format.EncodeRangeRecordV4(format.RangeRecordV4{
-			From: uint32(record.from.Hi), To: uint32(record.to.Hi), Value: record.value,
+			From: record.from.U32(), To: record.to.U32(), Value: record.value,
 		}, output); err != nil {
 			return 0, err
 		}
 		return format.RangeRecordV4Size, nil
 	}
+	fromHi, fromLo := record.from.U128()
+	toHi, toLo := record.to.U128()
 	if err := format.EncodeRangeRecordV6(format.RangeRecordV6{
-		FromHi: record.from.Hi, FromLo: record.from.Lo,
-		ToHi: record.to.Hi, ToLo: record.to.Lo,
+		FromHi: fromHi, FromLo: fromLo,
+		ToHi: toHi, ToLo: toLo,
 		Value: record.value,
 	}, output); err != nil {
 		return 0, err
@@ -409,11 +411,12 @@ func encodeRangeRecord(family uint8, record rangeRecord, output []byte) (int, er
 
 func encodeRangeBranch(family uint8, first tree.Key, child uint32, output []byte) (int, error) {
 	if family == format.AddressFamilyIPv4 {
-		format.PutU32(output, uint32(first.Hi))
+		format.PutU32(output, first.U32())
 		format.PutU32(output[4:], child)
 		return 8, nil
 	}
-	format.PutU128(output, first.Hi, first.Lo)
+	hi, lo := first.U128()
+	format.PutU128(output, hi, lo)
 	format.PutU32(output[16:], child)
 	return 20, nil
 }

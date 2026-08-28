@@ -84,7 +84,7 @@ func catalogIndexCodec() treeCodec {
 			if err != nil {
 				return tree.Key{}, false
 			}
-			return tree.Key{Lo: uint64(index)}, true
+			return tree.KeyOfU32(index), true
 		},
 		branchChild: func(cell []byte) (uint32, bool) {
 			_, child, err := format.DecodeCatalogIndexBranchFields(cell)
@@ -98,7 +98,7 @@ func catalogIndexCodec() treeCodec {
 			if err != nil {
 				return tree.Key{}, false
 			}
-			return tree.Key{Lo: uint64(index)}, true
+			return tree.KeyOfU32(index), true
 		},
 	}
 }

@@ -86,7 +86,7 @@ func (m *rangeMemoryStore) RangeRecordRemoved(uint32) error { return nil }
 
 func rangesV4(m *rangeMemoryStore, root uint32) []format.RangeRecordV4 {
 	var result []format.RangeRecordV4
-	key := tree.Key{}
+	key := tree.KeyOfU32(uint32(0))
 	for {
 		value, ok, err := tree.AtOrAfter(rangeCodec4{}, m, root, key)
 		if err != nil {
@@ -95,7 +95,7 @@ func rangesV4(m *rangeMemoryStore, root uint32) []format.RangeRecordV4 {
 		if !ok {
 			return result
 		}
-		result = append(result, format.RangeRecordV4{From: uint32(value.from.Hi), To: uint32(value.to.Hi), Value: value.value})
+		result = append(result, format.RangeRecordV4{From: value.from.U32(), To: value.to.U32(), Value: value.value})
 		next, ok := rangeCodec4{}.Next(value.from)
 		if !ok {
 			break
@@ -107,7 +107,7 @@ func rangesV4(m *rangeMemoryStore, root uint32) []format.RangeRecordV4 {
 
 func rangesV6(m *rangeMemoryStore, root uint32) []format.RangeRecordV6 {
 	var result []format.RangeRecordV6
-	key := tree.Key{}
+	key := tree.KeyOfU128(uint64(0), uint64(0))
 	for {
 		value, ok, err := tree.AtOrAfter(rangeCodec6{}, m, root, key)
 		if err != nil {
@@ -116,9 +116,11 @@ func rangesV6(m *rangeMemoryStore, root uint32) []format.RangeRecordV6 {
 		if !ok {
 			return result
 		}
+		fromHi, fromLo := value.from.U128()
+		toHi, toLo := value.to.U128()
 		result = append(result, format.RangeRecordV6{
-			FromHi: value.from.Hi, FromLo: value.from.Lo,
-			ToHi: value.to.Hi, ToLo: value.to.Lo,
+			FromHi: fromHi, FromLo: fromLo,
+			ToHi: toHi, ToLo: toLo,
 			Value: value.value,
 		})
 		next, ok := rangeCodec6{}.Next(value.from)
@@ -146,8 +148,8 @@ func newV4Ctx(m *rangeMemoryStore, root *uint32, count *uint64) *rangeCtx {
 // literal vector (little-endian from, to, value).
 func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 	r := rangeRecord{
-		from:  tree.Key{Hi: 0x01020304},
-		to:    tree.Key{Hi: 0x05060708},
+		from:  tree.KeyOfU32(uint32(0x01020304)),
+		to:    tree.KeyOfU32(uint32(0x05060708)),
 		value: 0x090a0b0c,
 	}
 	var scratch [3][format.RangeRecordV6Size]byte
@@ -180,8 +182,8 @@ func TestBigEndianPortableRangeRecordMatchesLiteralBytes(t *testing.T) {
 // encode_record).
 func TestIpv6RangeRecordMatchesLiteralBytes(t *testing.T) {
 	r := rangeRecord{
-		from:  tree.Key{Hi: 0x0102030405060708, Lo: 0x090a0b0c0d0e0f10},
-		to:    tree.Key{Hi: 0x1112131415161718, Lo: 0x191a1b1c1d1e1f20},
+		from:  tree.KeyOfU128(uint64(0x0102030405060708), uint64(0x090a0b0c0d0e0f10)),
+		to:    tree.KeyOfU128(uint64(0x1112131415161718), uint64(0x191a1b1c1d1e1f20)),
 		value: 0x2a2b2c2d,
 	}
 	var scratch [3][format.RangeRecordV6Size]byte
@@ -294,10 +296,10 @@ func TestEndpointArithmeticHandlesBothFullAddressSpaces(t *testing.T) {
 	root := uint32(0)
 	count := uint64(0)
 	ctx := newV4Ctx(m, &root, &count)
-	if _, err := rangeAssign(ctx, tree.Key{}, tree.Key{Hi: 0xFFFFFFFF}, 11); err != nil {
+	if _, err := rangeAssign(ctx, tree.KeyOfU32(uint32(0)), tree.KeyOfU32(uint32(0xFFFFFFFF)), 11); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rangeAssign(ctx, v4key(1), tree.Key{Hi: 0xFFFFFFFE}, 12); err != nil {
+	if _, err := rangeAssign(ctx, v4key(1), tree.KeyOfU32(uint32(0xFFFFFFFE)), 12); err != nil {
 		t.Fatal(err)
 	}
 	checkRanges4(t, rangesV4(m, root), []format.RangeRecordV4{
@@ -315,10 +317,10 @@ func TestEndpointArithmeticHandlesBothFullAddressSpaces(t *testing.T) {
 	ctx6.count = &count6
 	ctx6.untracked = false
 	ctx6.scratch = &m6.scratch
-	if _, err := rangeAssign(ctx6, tree.Key{}, tree.Key{Hi: ^uint64(0), Lo: ^uint64(0)}, 21); err != nil {
+	if _, err := rangeAssign(ctx6, tree.KeyOfU128(uint64(0), uint64(0)), tree.KeyOfU128(^uint64(0), ^uint64(0)), 21); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rangeAssign(ctx6, tree.Key{Lo: 1}, tree.Key{Hi: ^uint64(0), Lo: ^uint64(0) - 1}, 22); err != nil {
+	if _, err := rangeAssign(ctx6, tree.KeyOfU128(uint64(0), uint64(1)), tree.KeyOfU128(^uint64(0), ^uint64(0)-1), 22); err != nil {
 		t.Fatal(err)
 	}
 	checkRanges6(t, rangesV6(m6, root6), []format.RangeRecordV6{
@@ -511,7 +513,7 @@ func TestManyDisjointRangesSplitLeavesAndCowOnlyOncePerPath(t *testing.T) {
 	}
 }
 
-func v4key(v uint32) tree.Key { return tree.Key{Hi: uint64(v)} }
+func v4key(v uint32) tree.Key { return tree.KeyOfU32(v) }
 
 func checkRanges4(t *testing.T, got []format.RangeRecordV4, want []format.RangeRecordV4) {
 	t.Helper()

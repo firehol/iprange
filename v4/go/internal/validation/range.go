@@ -185,7 +185,7 @@ func walkRangeLeaf4(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 			// failure here is the Rust Corrupt propagation.
 			return tree.Key{}, false, formatError(err)
 		}
-		if order.observe(tree.Key{Lo: uint64(record.From)}) {
+		if order.observe(tree.KeyOfU32(record.From)) {
 			if err := emitRangeFinding(ctx, pageNumber, ReasonTreeOrderInvalid); err != nil {
 				return tree.Key{}, false, err
 			}
@@ -230,7 +230,7 @@ func walkRangeLeaf6(ctx *context, pageNumber uint32, cells *format.LayoutInspect
 		if err != nil {
 			return tree.Key{}, false, formatError(err)
 		}
-		if order.observe(tree.Key{Hi: record.FromHi, Lo: record.FromLo}) {
+		if order.observe(tree.KeyOfU128(record.FromHi, record.FromLo)) {
 			if err := emitRangeFinding(ctx, pageNumber, ReasonTreeOrderInvalid); err != nil {
 				return tree.Key{}, false, err
 			}
@@ -364,7 +364,7 @@ func walkRangeBranch4(ctx *context, pageNumber uint32, cells *format.LayoutInspe
 		if err != nil {
 			return tree.Key{}, false, formatError(err)
 		}
-		key := tree.Key{Lo: uint64(first)}
+		key := tree.KeyOfU32(first)
 		if err := recordBranchKey(ctx, pageNumber, ObjectRangeTree, key, &keys); err != nil {
 			return tree.Key{}, false, err
 		}
@@ -393,7 +393,7 @@ func walkRangeBranch6(ctx *context, pageNumber uint32, cells *format.LayoutInspe
 		if err != nil {
 			return tree.Key{}, false, formatError(err)
 		}
-		key := tree.Key{Hi: firstHi, Lo: firstLo}
+		key := tree.KeyOfU128(firstHi, firstLo)
 		if err := recordBranchKey(ctx, pageNumber, ObjectRangeTree, key, &keys); err != nil {
 			return tree.Key{}, false, err
 		}

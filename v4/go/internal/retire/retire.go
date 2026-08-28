@@ -6,6 +6,8 @@
 package retire
 
 import (
+	"encoding/binary"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
 )
@@ -30,8 +32,14 @@ type Key struct {
 	First uint32
 }
 
-// ToTree converts the key to the tree comparison primitive.
-func (k Key) ToTree() tree.Key { return tree.Key{Hi: k.Txn, Lo: uint64(k.First)} }
+// ToTree converts the key to the tree comparison primitive: the 12
+// canonical compare bytes (big-endian txn, big-endian first page).
+func (k Key) ToTree() tree.Key {
+	var bytes [12]byte
+	binary.BigEndian.PutUint64(bytes[0:8], k.Txn)
+	binary.BigEndian.PutUint32(bytes[8:12], k.First)
+	return tree.KeyOfFixed(bytes[:])
+}
 
 // Extent is one contiguous retired range of a transaction (Rust Extent).
 type Extent struct {
@@ -85,10 +93,11 @@ func (codec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error) {
 	if len(cell) < keySize {
 		return 0, corrupt("retirement key is truncated")
 	}
-	if compare := cmpU64(format.U64(cell[txnOffset:]), target.Hi); compare != 0 {
+	bytes := target.FixedBytes()
+	if compare := cmpU64(format.U64(cell[txnOffset:]), binary.BigEndian.Uint64(bytes[0:8])); compare != 0 {
 		return compare, nil
 	}
-	return cmpU32(format.U32(cell[firstOffset:]), uint32(target.Lo)), nil
+	return cmpU32(format.U32(cell[firstOffset:]), binary.BigEndian.Uint32(bytes[8:12])), nil
 }
 
 func (codec) ReadLeaf(cell []byte) (Extent, error) {
@@ -107,8 +116,9 @@ func (codec) ReadLeaf(cell []byte) (Extent, error) {
 }
 
 func (codec) WriteKey(key tree.Key, output []byte) {
-	format.PutU64(output[txnOffset:], key.Hi)
-	format.PutU32(output[firstOffset:], uint32(key.Lo))
+	bytes := key.FixedBytes()
+	format.PutU64(output[txnOffset:], binary.BigEndian.Uint64(bytes[0:8]))
+	format.PutU32(output[firstOffset:], binary.BigEndian.Uint32(bytes[8:12]))
 }
 
 func encode(extent Extent) []byte {

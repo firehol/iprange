@@ -34,8 +34,8 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V4(from, to uint32, value format.
 			return err
 		}
 		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.Key{Hi: uint64(from)},
-			to:    tree.Key{Hi: uint64(to)},
+			from:  tree.KeyOfU32(from),
+			to:    tree.KeyOfU32(to),
 			value: structure,
 		}); err != nil {
 			return err
@@ -66,8 +66,8 @@ func pushNetworkEnrichmentV1WordsV4[W membershipWords](b *OutputBuilder, from, t
 			return err
 		}
 		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.Key{Hi: uint64(from)},
-			to:    tree.Key{Hi: uint64(to)},
+			from:  tree.KeyOfU32(from),
+			to:    tree.KeyOfU32(to),
 			value: structure,
 		}); err != nil {
 			return err
@@ -89,8 +89,8 @@ func (b *OutputBuilder) PushNetworkEnrichmentV1V6(fromHi, fromLo, toHi, toLo uin
 			return err
 		}
 		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.Key{Hi: fromHi, Lo: fromLo},
-			to:    tree.Key{Hi: toHi, Lo: toLo},
+			from:  tree.KeyOfU128(fromHi, fromLo),
+			to:    tree.KeyOfU128(toHi, toLo),
 			value: structure,
 		}); err != nil {
 			return err
@@ -118,8 +118,8 @@ func pushNetworkEnrichmentV1WordsV6[W membershipWords](b *OutputBuilder, fromHi,
 			return err
 		}
 		if err := b.ranges.push(b, rangeRecord{
-			from:  tree.Key{Hi: fromHi, Lo: fromLo},
-			to:    tree.Key{Hi: toHi, Lo: toLo},
+			from:  tree.KeyOfU128(fromHi, fromLo),
+			to:    tree.KeyOfU128(toHi, toLo),
 			value: structure,
 		}); err != nil {
 			return err

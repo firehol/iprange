@@ -62,7 +62,7 @@ func (p *HistoryProjection) Push4(from, to uint32, lastSeen uint32, check func()
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge.push(p.store, tree.Key{Hi: uint64(from)}, tree.Key{Hi: uint64(to)}, lastSeen, check)
+	return p.merge.push(p.store, tree.KeyOfU32(from), tree.KeyOfU32(to), lastSeen, check)
 }
 
 // Push6 feeds one inclusive IPv6 source range into the projection merge
@@ -75,7 +75,7 @@ func (p *HistoryProjection) Push6(fromHi, fromLo, toHi, toLo uint64, lastSeen ui
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge.push(p.store, tree.Key{Hi: fromHi, Lo: fromLo}, tree.Key{Hi: toHi, Lo: toLo}, lastSeen, check)
+	return p.merge.push(p.store, tree.KeyOfU128(fromHi, fromLo), tree.KeyOfU128(toHi, toLo), lastSeen, check)
 }
 
 // Finish ends the projection merge and assembles the projection report

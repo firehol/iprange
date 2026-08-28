@@ -216,7 +216,7 @@ func (idCodec) BranchRecordBounds() (int, int) {
 }
 
 func (idCodec) WriteBranch(key tree.Key, child uint32, output []byte) (int, error) {
-	binary.LittleEndian.PutUint32(output, uint32(key.Hi))
+	binary.LittleEndian.PutUint32(output, key.U32())
 	binary.LittleEndian.PutUint32(output[4:], child)
 	return membershipIDBranchSize, nil
 }
@@ -233,12 +233,12 @@ func (idCodec) ReadKey(cell []byte, level uint16) (tree.Key, error) {
 		if len(cell) < membershipIDBase {
 			return tree.Key{}, corrupt("membership dictionary record is malformed")
 		}
-		return tree.Key{Hi: uint64(binary.LittleEndian.Uint32(cell[membershipIDOffset:]))}, nil
+		return tree.KeyOfU32(binary.LittleEndian.Uint32(cell[membershipIDOffset:])), nil
 	}
 	if len(cell) < membershipIDBranchSize {
 		return tree.Key{}, corrupt("membership ID branch record is malformed")
 	}
-	return tree.Key{Hi: uint64(binary.LittleEndian.Uint32(cell[0:4]))}, nil
+	return tree.KeyOfU32(binary.LittleEndian.Uint32(cell[0:4])), nil
 }
 
 // CompareKey compares one cell key without materializing a Key (Rust
@@ -250,12 +250,12 @@ func (idCodec) CompareKey(cell []byte, level uint16, target tree.Key) (int, erro
 		if len(cell) < membershipIDBase {
 			return 0, corrupt("membership dictionary record is malformed")
 		}
-		return cmpU32(binary.LittleEndian.Uint32(cell[membershipIDOffset:]), uint32(target.Hi)), nil
+		return cmpU32(binary.LittleEndian.Uint32(cell[membershipIDOffset:]), target.U32()), nil
 	}
 	if len(cell) < membershipIDBranchSize {
 		return 0, corrupt("membership ID branch record is malformed")
 	}
-	return cmpU32(binary.LittleEndian.Uint32(cell[0:4]), uint32(target.Hi)), nil
+	return cmpU32(binary.LittleEndian.Uint32(cell[0:4]), target.U32()), nil
 }
 
 func (idCodec) ReadLeaf(cell []byte) (membershipRecord, error) {
@@ -263,7 +263,7 @@ func (idCodec) ReadLeaf(cell []byte) (membershipRecord, error) {
 }
 
 func (idCodec) WriteKey(key tree.Key, output []byte) {
-	binary.LittleEndian.PutUint32(output, uint32(key.Hi))
+	binary.LittleEndian.PutUint32(output, key.U32())
 }
 
 // writeHashKey encodes one hash-tree LEAF record into dst (Rust
@@ -357,7 +357,7 @@ func (hashCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error)
 	if _, _, _, err := decodeHashKey(cell); err != nil {
 		return 0, err
 	}
-	return tree.CompareRawKey(cell, membershipHashKeySize, &target.Raw)
+	return tree.CompareRawKey(cell, membershipHashKeySize, &target)
 }
 
 func (hashCodec) ReadLeaf(cell []byte) (membershipHashRecord, error) {
@@ -373,7 +373,7 @@ func (hashCodec) WriteKey(key tree.Key, output []byte) {
 	// count and id); the tree Key is the numeric orientation, so the
 	// trailing eight bytes reverse. The probe bytes are the key's raw
 	// inline field, never a slice of a local.
-	raw := key.Raw
+	raw := key.FixedBytes()
 	copy(output[hashDigestOffset:hashWordCountOffset], raw[:hashWordCountOffset])
 	output[hashWordCountOffset] = raw[hashWordCountOffset+3]
 	output[hashWordCountOffset+1] = raw[hashWordCountOffset+2]

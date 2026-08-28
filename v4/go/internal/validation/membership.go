@@ -74,7 +74,7 @@ func membershipIDCodec() treeCodec {
 			if err != nil {
 				return tree.Key{}, false
 			}
-			return tree.Key{Lo: uint64(firstID)}, true
+			return tree.KeyOfU32(firstID), true
 		},
 		branchChild: func(cell []byte) (uint32, bool) {
 			_, child, err := format.DecodeMembershipIDBranchFields(cell)
@@ -88,7 +88,7 @@ func membershipIDCodec() treeCodec {
 			if err != nil {
 				return tree.Key{}, false
 			}
-			return tree.Key{Lo: uint64(record.ID)}, true
+			return tree.KeyOfU32(record.ID), true
 		},
 	}
 }

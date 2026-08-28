@@ -68,8 +68,8 @@ func TestWorkHistoryProjectionMergePins(t *testing.T) {
 	var rangeCount uint64
 	addresses := format.CardinalityZero()
 	for _, r := range ranges {
-		from := tree.Key{Hi: uint64(r[0])}
-		to := tree.Key{Hi: uint64(r[1])}
+		from := tree.KeyOfU32(r[0])
+		to := tree.KeyOfU32(r[1])
 		if err := c.Mutate(func(edit *WriterEdit) error {
 			return edit.PushHistory(merge, from, to, r[2], nilCheck)
 		}); err != nil {

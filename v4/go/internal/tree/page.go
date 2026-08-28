@@ -183,32 +183,43 @@ func fixedLowerBound(page []byte, header *Header, cellLen, keySize int, key Key,
 // comparePrefixKey compares one fixed cell's key prefix with the target
 // key without materializing a Key (Rust key_at plus the derived Ord of
 // the key type, inlined). The canonical layouts are: 4-byte and 8-byte
-// little-endian widths compared into Key.Hi, 16-byte little-endian into
-// (Key.Hi, Key.Lo), and 32+ byte raw probe cells whose digest bytes
-// compare byte-for-byte while every little-endian u32 suffix word
-// compares numerically with the probe's big-endian word. Narrower or
-// wider widths are geometry errors; codecs with other key layouts
-// (variable leaves, composite keys) stay on Codec.CompareKey.
+// little-endian cell widths compared against the target's canonical
+// big-endian bytes, 12-byte (u64 transaction, u32 page), 16-byte
+// little-endian into the numeric high and low limbs, and 32+ byte raw
+// probe cells whose digest bytes compare byte-for-byte while every
+// little-endian u32 suffix word compares numerically with the probe's
+// big-endian word. Narrower or wider widths are geometry errors; codecs
+// with other key layouts (variable leaves, composite keys) stay on
+// Codec.CompareKey.
 func comparePrefixKey(cell []byte, keySize int, key Key) (int, error) {
 	switch keySize {
 	case 4:
 		if len(cell) < 4 {
 			return 0, corrupt("tree key is truncated")
 		}
-		return cmpU32(format.U32(cell), uint32(key.Hi)), nil
+		return cmpU32(format.U32(cell), key.U32()), nil
 	case 8:
 		if len(cell) < 8 {
 			return 0, corrupt("tree key is truncated")
 		}
-		return cmpU64(format.U64(cell), key.Hi), nil
+		return cmpU64(format.U64(cell), key.U64()), nil
+	case 12:
+		if len(cell) < 12 {
+			return 0, corrupt("tree key is truncated")
+		}
+		if compare := cmpU64(format.U64(cell), key.U64()); compare != 0 {
+			return compare, nil
+		}
+		return cmpU32(format.U32(cell[8:12]), beU32(key.data[8:12])), nil
 	case 16:
 		if len(cell) < 16 {
 			return 0, corrupt("tree key is truncated")
 		}
 		hi, lo := format.U128(cell)
-		return cmpU128(hi, lo, key.Hi, key.Lo), nil
+		thi, tlo := key.U128()
+		return cmpU128(hi, lo, thi, tlo), nil
 	default:
-		return CompareRawKey(cell, keySize, &key.Raw)
+		return CompareRawKey(cell, keySize, &key)
 	}
 }
 
@@ -220,15 +231,15 @@ func comparePrefixKey(cell []byte, keySize int, key Key) (int, error) {
 // Codecs with digest-plus-numeric keys (membership hash, structure
 // hash) share this single ordering authority with the inline prefix
 // probe.
-func CompareRawKey(cell []byte, keySize int, raw *[40]byte) (int, error) {
-	if len(cell) < keySize || keySize > len(raw) || keySize < 32 {
+func CompareRawKey(cell []byte, keySize int, target *Key) (int, error) {
+	if len(cell) < keySize || keySize > len(target.data) || keySize < 32 {
 		return 0, corrupt("tree key is truncated")
 	}
-	if compare := bytes.Compare(cell[:32], raw[:32]); compare != 0 {
+	if compare := bytes.Compare(cell[:32], target.data[:32]); compare != 0 {
 		return compare, nil
 	}
 	for at := 32; at+4 <= keySize; at += 4 {
-		if compare := cmpU32(format.U32(cell[at:at+4]), beU32(raw[at:at+4])); compare != 0 {
+		if compare := cmpU32(format.U32(cell[at:at+4]), beU32(target.data[at:at+4])); compare != 0 {
 			return compare, nil
 		}
 	}
@@ -237,6 +248,22 @@ func CompareRawKey(cell []byte, keySize int, raw *[40]byte) (int, error) {
 
 func beU32(b []byte) uint32 {
 	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func beU64(b []byte) uint64 {
+	return uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
+		uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
+}
+
+func bePutU64(b []byte, v uint64) {
+	b[0] = byte(v >> 56)
+	b[1] = byte(v >> 48)
+	b[2] = byte(v >> 40)
+	b[3] = byte(v >> 32)
+	b[4] = byte(v >> 24)
+	b[5] = byte(v >> 16)
+	b[6] = byte(v >> 8)
+	b[7] = byte(v)
 }
 
 func cmpU32(a, b uint32) int {

@@ -102,7 +102,7 @@ func (deltaCodec) ReadKey(cell []byte, _ uint16) (tree.Key, error) {
 	if len(cell) < deltaChangeOffset {
 		return tree.Key{}, corrupt("refcount delta key is truncated")
 	}
-	return tree.Key{Hi: uint64(format.U32(cell))}, nil
+	return tree.KeyOfU32(format.U32(cell)), nil
 }
 
 // PrefixKeyProbe opts the codec into the inline prefix probe: fixed
@@ -115,7 +115,7 @@ func (deltaCodec) CompareKey(cell []byte, _ uint16, target tree.Key) (int, error
 	if len(cell) < deltaChangeOffset {
 		return 0, corrupt("refcount delta key is truncated")
 	}
-	return cmpU32(format.U32(cell[deltaIDOffset:deltaChangeOffset]), uint32(target.Hi)), nil
+	return cmpU32(format.U32(cell[deltaIDOffset:deltaChangeOffset]), target.U32()), nil
 }
 
 func (deltaCodec) ReadLeaf(cell []byte) (memberDelta, error) {
@@ -123,7 +123,7 @@ func (deltaCodec) ReadLeaf(cell []byte) (memberDelta, error) {
 }
 
 func (deltaCodec) WriteKey(key tree.Key, output []byte) {
-	format.PutU32(output[deltaIDOffset:deltaChangeOffset], uint32(key.Hi))
+	format.PutU32(output[deltaIDOffset:deltaChangeOffset], key.U32())
 }
 
 func decodeMemberDelta(cell []byte) (memberDelta, error) {
@@ -202,7 +202,7 @@ func trackMembershipDelta(store tree.RetiringStore, root *uint32, id uint32, cha
 		if err != nil {
 			return err
 		}
-		retired, _, err := tree.MutateLeafU64(deltaCodec{}, store, root, tree.Key{Hi: uint64(id)},
+		retired, _, err := tree.MutateLeafU64(deltaCodec{}, store, root, tree.KeyOfU32(id),
 			deltaChangeOffset, tree.RetiredPages{}, func(leaf memberDelta) (tree.LeafU64Mutation, error) {
 				return tree.LeafU64Mutation{DoReplace: true, Replace: uint64(next)}, nil
 			})
@@ -234,7 +234,7 @@ func findMemberDelta(store tree.Store, root uint32, id uint32) (memberDelta, boo
 	if root == 0 {
 		return memberDelta{}, false, nil
 	}
-	found, ok, err := tree.Predecessor(deltaCodec{}, store, root, tree.Key{Hi: uint64(id)})
+	found, ok, err := tree.Predecessor(deltaCodec{}, store, root, tree.KeyOfU32(id))
 	if err != nil {
 		return memberDelta{}, false, err
 	}

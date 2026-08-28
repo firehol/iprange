@@ -298,7 +298,7 @@ func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
 		t.Fatalf("spliced count = %d, want 1", store.draft.meta.RangeRecordCount)
 	}
 	records := readDraftRangeTree(t, store, store.draft.meta)
-	if len(records) != 1 || records[0].from.Hi != 0 || records[0].to.Hi != 8000 || records[0].value != 42 {
+	if len(records) != 1 || records[0].from.U32() != 0 || records[0].to.U32() != 8000 || records[0].value != 42 {
 		t.Fatalf("spliced tree = %+v, want the single covering record [0,8000] value 42", records)
 	}
 	if snapshot.RangesCoalesced != inputs {
