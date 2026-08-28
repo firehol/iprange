@@ -86,27 +86,16 @@ func (s *DraftStore) finishPrivateConstantRanges6(input *unionInput[key6]) error
 }
 
 // AssignV4 assigns one inclusive IPv4 range on the draft (Rust
-// DraftStore::assign_v4).
+// DraftStore::assign_v4; the draft-private gap path when the tree is
+// private).
 func (s *DraftStore) AssignV4(from, to uint32, value uint32) (bool, error) {
-	ctx := s.beginRangeEdit4(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	changed, err := rangeAssign(ctx, key4(from), key4(to), value)
-	if err != nil {
-		return false, err
-	}
-	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
-	return changed, nil
+	return s.assign4(key4(from), key4(to), value)
 }
 
 // AssignV6 assigns one inclusive IPv6 range on the draft (Rust
 // DraftStore::assign_v6).
 func (s *DraftStore) AssignV6(fromHi, fromLo, toHi, toLo uint64, value uint32) (bool, error) {
-	ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	changed, err := rangeAssign(ctx, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value)
-	if err != nil {
-		return false, err
-	}
-	s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
-	return changed, nil
+	return s.assign6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value)
 }
 
 // ClearV4 clears one inclusive IPv4 range on the draft (Rust
@@ -135,10 +124,18 @@ func (s *DraftStore) ClearV6(fromHi, fromLo, toHi, toLo uint64) (bool, error) {
 
 // assign4 assigns one inclusive IPv4 range on the draft (Rust
 // DraftStore::assign over Ipv4Key; the per-family internal form used by
-// the structured arms).
+// the structured arms). A draft-private range tree takes the
+// single-descent private gap path exactly like the Rust assign_private;
+// a shared committed tree uses the general replace.
 func (s *DraftStore) assign4(from, to key4, value uint32) (bool, error) {
 	ctx := s.beginRangeEdit4(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	changed, err := rangeAssign(ctx, from, to, value)
+	var changed bool
+	var err error
+	if s.draft.rangeTreePrivate {
+		changed, err = rangeAssignPrivate(ctx, from, to, value)
+	} else {
+		changed, err = rangeAssign(ctx, from, to, value)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -149,7 +146,13 @@ func (s *DraftStore) assign4(from, to key4, value uint32) (bool, error) {
 // assign6 is the IPv6 form of assign4.
 func (s *DraftStore) assign6(from, to key6, value uint32) (bool, error) {
 	ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	changed, err := rangeAssign(ctx, from, to, value)
+	var changed bool
+	var err error
+	if s.draft.rangeTreePrivate {
+		changed, err = rangeAssignPrivate(ctx, from, to, value)
+	} else {
+		changed, err = rangeAssign(ctx, from, to, value)
+	}
 	if err != nil {
 		return false, err
 	}

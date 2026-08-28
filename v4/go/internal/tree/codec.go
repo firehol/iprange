@@ -21,9 +21,17 @@ import (
 // HashKey). Variable keys (catalog names) keep their ordered bytes in
 // Var with Size zero. Codecs never mix the two forms. The value carries
 // no heap reference for fixed keys, so hot-path copies stay on the stack.
+//
+// The hi and lo limbs cache the numeric value of the canonical compare
+// bytes (hi is the leading u64, lo the next; narrower keys zero-extend
+// into lo). Every fixed-key probe compares one cell key against the
+// numeric value, so the limbs turn the per-probe big-endian byte
+// assembly of U32/U64/U128 into a single load.
 type Key struct {
 	data [40]byte
 	Size uint8
+	hi   uint64
+	lo   uint64
 	Var  []byte
 }
 
@@ -57,38 +65,31 @@ func (k Key) limb() uint64 {
 	}
 }
 
-// U32 decodes the canonical compare bytes of a 4-byte fixed key
-// (wider keys report their leading 32 bits; codecs call it only for
-// 4-byte keys).
-func (k Key) U32() uint32 { return beU32(k.data[:4]) }
-
-// U64 decodes the canonical compare bytes of an 8-byte fixed key
-// (a 4-byte key zero-extends to its numeric value).
-func (k Key) U64() uint64 {
-	switch k.Size {
-	case 0:
-		return 0
-	case 4:
-		return uint64(beU32(k.data[:4]))
-	default:
-		return beU64(k.data[:8])
+// U32 returns the numeric value of a 4-byte fixed key (wider keys
+// report their leading 32 bits; codecs call it only for 4-byte keys).
+func (k Key) U32() uint32 {
+	if k.Size == 4 {
+		return uint32(k.lo)
 	}
+	return uint32(k.hi)
 }
 
-// U128 decodes the canonical compare bytes of a 16-byte fixed key into
-// the numeric high and low limbs; narrower keys zero-extend into the low
-// limb.
-func (k Key) U128() (hi, lo uint64) {
-	switch k.Size {
-	case 0, 4:
-		return 0, uint64(beU32(k.data[:4]))
-	case 8:
-		return 0, beU64(k.data[:8])
-	default:
-		hi = beU64(k.data[:8])
-		lo = beU64(k.data[8:16])
-		return hi, lo
+// U64 returns the numeric value of an 8-byte fixed key (a 4-byte key
+// zero-extends to its numeric value).
+func (k Key) U64() uint64 {
+	if k.Size < 8 {
+		return k.lo
 	}
+	return k.hi
+}
+
+// U128 decodes the numeric high and low limbs of a 16-byte fixed key;
+// narrower keys zero-extend into the low limb.
+func (k Key) U128() (hi, lo uint64) {
+	if k.Size == 8 {
+		return 0, k.hi
+	}
+	return k.hi, k.lo
 }
 
 // Less reports k < other. A fixed key compares its canonical bytes
@@ -115,6 +116,7 @@ func (k Key) Equal(other Key) bool {
 func KeyOfU32[V ~uint32](value V) Key {
 	var k Key
 	k.Size = 4
+	k.lo = uint64(value)
 	k.data[0] = byte(value >> 24)
 	k.data[1] = byte(value >> 16)
 	k.data[2] = byte(value >> 8)
@@ -126,6 +128,7 @@ func KeyOfU32[V ~uint32](value V) Key {
 func KeyOfU64[V ~uint64](value V) Key {
 	var k Key
 	k.Size = 8
+	k.hi = uint64(value)
 	bePutU64(k.data[:8], uint64(value))
 	return k
 }
@@ -135,17 +138,33 @@ func KeyOfU64[V ~uint64](value V) Key {
 func KeyOfU128[V ~uint64](hi, lo V) Key {
 	var k Key
 	k.Size = 16
+	k.hi = uint64(hi)
+	k.lo = uint64(lo)
 	bePutU64(k.data[:8], uint64(hi))
 	bePutU64(k.data[8:16], uint64(lo))
 	return k
 }
 
 // KeyOfFixed builds a fixed key from its canonical compare bytes (4, 8,
-// 12, 16, or 32..40 bytes), copying them into the value.
+// 12, 16, or 32..40 bytes), copying them into the value. Numeric keys
+// cache their decoded limbs for the fixed-key probes; hash keys (32..40
+// bytes) never read the limbs.
 func KeyOfFixed(bytes []byte) Key {
 	var k Key
 	k.Size = uint8(len(bytes))
 	copy(k.data[:], bytes)
+	switch k.Size {
+	case 4:
+		k.lo = uint64(beU32(bytes[:4]))
+	case 8:
+		k.hi = beU64(bytes[:8])
+	case 12:
+		k.hi = beU64(bytes[:8])
+		k.lo = uint64(beU32(bytes[8:12]))
+	case 16:
+		k.hi = beU64(bytes[:8])
+		k.lo = beU64(bytes[8:16])
+	}
 	return k
 }
 
