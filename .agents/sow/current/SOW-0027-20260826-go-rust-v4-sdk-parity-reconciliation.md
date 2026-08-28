@@ -266,8 +266,17 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    platforms without a worker build. The routed facade tests and the
    worker harness follow the same matrix (worker_harness_build_test.go
    builds the real worker natively, .exe suffix on windows). Local
-   linux/amd64 validation green; native rounds follow on the
-   authorized hosts (darwin, freebsd, windows).
+   linux/amd64 validation green and the native rounds on the
+   authorized hosts completed: plakam4mini (darwin/arm64) plain +
+   v4work green, freebsd (amd64) plain + v4work green (after clearing
+   a root-owned stale Go module cache that had filled the disk), and
+   costa-win11 (windows/amd64) plain + v4work green after two
+   windows-only fixes: the routed recovery double needs the .exe
+   suffix that go test -c appends, and cmd/iprange-v4-bench touched
+   syscall.Stat_t directly (the physical block count now comes from
+   build-tagged statBlocks helpers). The routed facade equivalence
+   tests (validation, inspection, recovery, guard-pending cleanup)
+   run through the real worker on every worker-supported platform.
 2. Immutable-feed builder (P1, sol): Go has no one-inode immutable
    feed construction (parity_manifest.tsv immutable_feed row missing;
    scenario_sdk.go substitutes live+snapshot; Rust lib.rs exports
