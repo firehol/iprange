@@ -409,6 +409,7 @@ func loadManifest(t *testing.T) conformanceManifest {
 		"go/direct-ipv4.iprdb",
 		"go/first-seen-ipv6.iprdb",
 		"go/history-membership-ipv4.iprdb",
+		"go/immutable-feed-ipv4.iprdb",
 		"go/membership-ipv4.iprdb",
 		"go/membership-ipv6.iprdb",
 		"go/structured-ipv4.iprdb",

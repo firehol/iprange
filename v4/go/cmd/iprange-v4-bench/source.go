@@ -313,3 +313,23 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// NextBatch is the public RangeSource4 seam over the bench batch
+// source (Rust RangeSource::next_batch: a non-empty batch or the end).
+func (s *feedShapeSource) NextBatch() ([]iprangedb.AddressRange4, error) {
+	batch, more := s.nextBatch()
+	if !more {
+		return nil, nil
+	}
+	return batch, nil
+}
+
+// NextBatch is the public RangeSource4 seam over the bench batch
+// source.
+func (s *addressSource) NextBatch() ([]iprangedb.AddressRange4, error) {
+	batch, more := s.nextBatch()
+	if !more {
+		return nil, nil
+	}
+	return batch, nil
+}

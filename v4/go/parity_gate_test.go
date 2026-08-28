@@ -198,13 +198,12 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 	// Implementing an item flips its row to present and shrinks the
 	// list in the same commit.
 	requiredMissing := map[string]string{
-		"LiveWriter::reclaim":               "live_writer/reclaim.rs bounded reader-safe reclamation (SOW-0027 closure ledger item 4)",
-		"immutable_feed.rs create_immutable_feed_v4/v6": "one-inode immutable feed construction (SOW-0027 closure ledger item 2, m5 slice F)",
-		"CancellationToken::from_poll":      "Rust async poll integration is not portable to Go; the nil token is the uncancellable form (recorded divergence)",
-		"scratch_maintenance remove_checkpointed_scratch": "public scratch-removal export; the internal machine exists in internal/recovery",
-		"binary-format-v4.md:3155+ version-matched worker": "worker containment on every supported platform (SOW-0027 closure ledger item 1, m5 slice E)",
+		"LiveWriter::reclaim":                                "live_writer/reclaim.rs bounded reader-safe reclamation (SOW-0027 closure ledger item 4)",
+		"CancellationToken::from_poll":                       "Rust async poll integration is not portable to Go; the nil token is the uncancellable form (recorded divergence)",
+		"scratch_maintenance remove_checkpointed_scratch":    "public scratch-removal export; the internal machine exists in internal/recovery",
+		"binary-format-v4.md:3155+ version-matched worker":   "worker containment on every supported platform (SOW-0027 closure ledger item 1, m5 slice E)",
 		"publication/security/apple.rs filesec creator-only": "darwin creator-only publication machine is internal (implemented and proven in the authorized arm64 round)",
-		"lib-reexport Cardinality129":       "public typed cardinality re-export; Go keeps Cardinality129 internal",
+		"lib-reexport Cardinality129":                        "public typed cardinality re-export; Go keeps Cardinality129 internal",
 	}
 	for ref, note := range requiredMissing {
 		if _, listed := missingRefs[ref]; !listed {

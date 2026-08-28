@@ -14,50 +14,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
-// referenceBatchSlotSize and referenceBatchEntryLimit are the Rust
-// immutable reference-batch shape constants
-// (immutable_output/reference_batch.rs: Slot{id: u32, count: i64} is 16
-// bytes; ENTRY_LIMIT is 1024), the same constants the algebra output
-// charges with.
-const (
-	referenceBatchSlotSize   = 16
-	referenceBatchEntryLimit = 1024
-)
-
-// chargeReferenceBatch sizes and charges one reference batch against the
-// snapshot heap exactly like Rust ReferenceBatch::new: the entry capacity
-// is the floor power of two of the affordable slot pairs (two 16-byte
-// slots per entry), capped at 1024; a heap that cannot fit one entry
-// disables the batch with no charge. The charged bytes are deducted from
-// the remaining heap.
-func chargeReferenceBatch(heap *uint64) int {
-	affordable := *heap / (2 * referenceBatchSlotSize)
-	if affordable > referenceBatchEntryLimit {
-		affordable = referenceBatchEntryLimit
-	}
-	entries := floorPowerOfTwo(int(affordable))
-	if entries == 0 {
-		return 0
-	}
-	*heap -= uint64(entries) * 2 * referenceBatchSlotSize
-	return entries
-}
-
-// floorPowerOfTwo returns the largest power of two at or below value,
-// or 0 for a non-positive value (Rust floor_power_of_two with its
-// explicit zero guard: a heap that cannot fit one entry disables the
-// batch with no charge).
-func floorPowerOfTwo(value int) int {
-	if value <= 0 {
-		return 0
-	}
-	power := 1
-	for power <= value>>1 {
-		power <<= 1
-	}
-	return power
-}
-
 // copyInto runs the whole logical copy (Rust copy_into + copy_logical):
 // feeds, the family sweep, then metadata.
 func copyInto(source *reader.ImmutableReader, builder *writer.OutputBuilder, budget *Budget, check func() error) error {

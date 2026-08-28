@@ -349,6 +349,68 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    option re-opens only if measurements show it is the cheapest
    remaining win).
 
+
+### Slice F implementation decisions (2026-08-28, recorded before code)
+
+Resolved design decisions for the one-inode immutable feed builder
+(Rust immutable_feed.rs parity), all bounded by the review-gate rule
+(Rust is the authority; Go idioms and absolute performance apply):
+
+1. Public API shape: CreateImmutableFeedV4/V6 with the Rust argument
+   order and terminals. The Go source seam mirrors Rust
+   source::RangeSource::next_batch as two interfaces,
+   RangeSource4{NextBatch() ([]AddressRange4, error)} and
+   RangeSource6{NextBatch() ([]AddressRange6, error)}: nil,nil ends,
+   an empty batch is refused with ErrorInvalidArgument, and batches are
+   caller-owned (zero copy). The failing terminal mirrors
+   SnapshotPreparationFailure: *ImmutableFeedPreparationFailure{Cause,
+   Cleanup}. The successful terminal is ImmutableFeedResult{Report,
+   Publication} with CleanupState(), and the report carries
+   InputRecordCount, NormalizedIntervalCount, and the exact
+   Cardinality129 address count (Rust ImmutableFeedReport).
+2. Machine ownership: the build machine lives in internal/writer
+   (immutable_feed.go + immutable_workspace.go) and imports
+   internal/publication for the attempt lifecycle. Rationale: normalize
+   reuses the writer-owned coverage-union machinery
+   (pushPrivateUntracked/finishInputUntracked/UnionInput/range bulk
+   builder) and the tree Store surfaces directly; no writer internal is
+   exported, and the writer -> publication import is acyclic. The
+   workspace is a fresh Go tree.Store/RetiringStore/RangeStore/
+   ForwardStore over mapping pages [max_output_pages, total_pages) of
+   the attempt inode with the Rust FREE_MAGIC/FREE_NEXT/FREE_TXN free
+   list (immutable_output/unordered/workspace.rs parity), so the page
+   allocation, inspect, update, copy, and discard paths run through the
+   single generic tree core exactly like DraftStore.
+3. OutputBuilder extent: a writer-internal constructor extends the
+   empty attempt file to (output + workspace) pages and maps the full
+   extent read-write through a duplicated descriptor (Rust
+   new_owned_with_extent + Mapping::read_write over clone_file); the
+   workspace mapping is a second mapping of the same inode and is
+   unmapped before Finish shrinks and seals (drop(workspace) parity).
+   The append-only reserve_page authority and the BudgetExceeded bound
+   on max_output_pages stay in OutputBuilder unchanged.
+4. Budget: ImmutableFeedBudget{MaxHeapBytes, MaxOutputPages,
+   MaxWorkspacePages, MaxOpenFiles}; max_output_pages < 2 or
+   max_open_files < 3 is InsufficientResourceBudget, output +
+   workspace over MaxPageCount (or arithmetic overflow) is
+   PageSpaceExhausted, each Rust-verbatim at prepare_budget position
+   (before any destination artifact). The reference batch charges the
+   operation heap exactly like the snapshot (membership batch only:
+   the feed output has ValueKindMembership).
+5. Bench: scenario_sdk.go sdkCreateImmutableFeedV4 and the workflow
+   sources call the new public API directly; the bench source types
+   implement the new interfaces; the live+snapshot substitute and the
+   sdkImmutableFeedReport/Budget adapter types go away.
+6. Conformance: one new Go-produced fixture
+   (conformance/go/immutable-feed-ipv4.iprdb, produced through
+   CreateImmutableFeedV4) cross-opened by the Rust corpus verify; the
+   producer split (6 rust / n go) stays explicit in cases.json.
+7. Parity ledger: the single missing row splits into two present rows
+   (create_immutable_feed_v4 -> CreateImmutableFeedV4,
+   create_immutable_feed_v6 -> CreateImmutableFeedV6) and the
+   required-missing list entry is removed in the same commit; surface
+   rows cover the new exported methods.
+
 Slice plan and validation: A input guards (tests), B commit
 identities (gate + cross-open), C metadata + streaming (allocation
 pins), D parity gate (gate test), E worker matrix (native hosts:

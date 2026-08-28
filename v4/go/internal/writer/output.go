@@ -236,6 +236,57 @@ func newOutputBuilderOverFile(file *os.File, spec OutputSpec, budget OutputBudge
 	return assembleOutputBuilder(m, file.Name(), spec, budget, membershipBatchEntries, structureBatchEntries), nil
 }
 
+// NewImmutableFeedOutputBuilder starts one immutable membership output
+// over an existing empty file with a physical extent beyond the output
+// page budget (Rust new_owned_with_extent over the workflow::create
+// file with physical_pages = output + workspace pages; the workspace
+// shares the inode at high page offsets). The file must be empty, is
+// extended to physicalPages*PageSize, and is mapped read-write through
+// a duplicated descriptor. The caller keeps the original descriptor;
+// the returned builder owns only its mapping. The append-only
+// reserve_page authority still bounds output pages by
+// budget.MaxOutputPages, so the high workspace pages are never
+// reachable through the builder. membershipBatchEntries is the
+// reference-batch entry count charged from the operation heap by the
+// caller.
+func NewImmutableFeedOutputBuilder(file *os.File, spec OutputSpec, budget OutputBudget, physicalPages uint64, membershipBatchEntries int) (*OutputBuilder, error) {
+	return newOutputBuilderOverFileExtent(file, spec, budget, physicalPages, membershipBatchEntries, 0)
+}
+
+// newOutputBuilderOverFileExtent is the shared extent constructor of
+// NewImmutableFeedOutputBuilder, keeping the structured batch arm for
+// the writer-internal callers of the same shape.
+func newOutputBuilderOverFileExtent(file *os.File, spec OutputSpec, budget OutputBudget, physicalPages uint64, membershipBatchEntries, structureBatchEntries int) (*OutputBuilder, error) {
+	if err := requireNewOutput(spec, budget); err != nil {
+		return nil, err
+	}
+	if physicalPages < budget.MaxOutputPages || physicalPages > format.MaxPageCount {
+		return nil, invalid("immutable construction extent is invalid")
+	}
+	extent, err := checkedMul(physicalPages, format.PageSize, "immutable construction extent")
+	if err != nil {
+		return nil, err
+	}
+	// Rust require_new_output proves the created file is still empty
+	// before the extent extension: an already-written file is never
+	// adopted into a fresh output.
+	fi, err := file.Stat()
+	if err != nil {
+		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if fi.Size() != 0 {
+		return nil, invalid("immutable output file is not empty")
+	}
+	if err := file.Truncate(int64(extent)); err != nil {
+		return nil, &format.Error{Code: format.CodeIO, Detail: "truncate: " + err.Error()}
+	}
+	m, err := mapping.MapFile(file, extent, true)
+	if err != nil {
+		return nil, err
+	}
+	return assembleOutputBuilder(m, file.Name(), spec, budget, membershipBatchEntries, structureBatchEntries), nil
+}
+
 // assembleOutputBuilder builds the append-only output state over one
 // read-write mapping (the shared tail of the path-based and over-file
 // constructors; the reference batches are sized from the operation

@@ -8,14 +8,10 @@
 // differs (mapped in the per-helper comments).
 //
 // Name mapping notes (Rust -> Go):
-//   - create_immutable_feed_v4 -> sdkCreateImmutableFeedV4: the public Go
-//     SDK has no one-inode immutable feed builder
-//     (parity_manifest.tsv: "immutable_feed.rs create_immutable_feed_v4/v6
-//     missing"), so the port composes the same observable outcome from
-//     public operations: CreateLive (membership) + BeginCreateFeed +
-//     AddRangesV4 + Commit, then SnapshotTo (live source) into the
-//     destination. The returned report maps
-//     ImmutableFeedReport::{input_record_count, normalized_interval_count}.
+//   - create_immutable_feed_v4 -> iprangedb.CreateImmutableFeedV4: the
+//     one-inode immutable feed builder (immutable_feed_public.go; the
+//     Rust immutable_feed.rs parity row is present), fed by the bench
+//     batch sources through the public RangeSource4 seam.
 //   - seeded_direct / seeded_direct_with_tag -> sdkSeededDirect /
 //     sdkSeededDirectWithTag.
 //   - populated / populated_rotating -> sdkPopulated / sdkPopulatedRotating.
@@ -40,8 +36,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 )
@@ -88,31 +82,30 @@ func sdkImmutableFeed(size int, auxiliary int) (*scenarioResult, error) {
 	}
 	budget := sdkImmutableFeedBudgetFor(size)
 	cancellation := iprangedb.NewCancellationToken()
-	var report sdkImmutableFeedReport
-	var publication iprangedb.PublicationResult
+	var result iprangedb.ImmutableFeedResult
 	operationErr, measured := operation(func() error {
 		var err error
-		report, publication, err = sdkCreateImmutableFeedV4(
+		result, err = iprangedb.CreateImmutableFeedV4(
 			database.main, valueTag, name, nil, iprangedb.PolicyFailIfExists,
-			source, size, budget, cancellation,
+			source, &budget, cancellation,
 		)
 		return err
 	})
 	if operationErr != nil {
 		return nil, operationErr
 	}
-	if err := sdkRequirePublished(publication); err != nil {
+	if err := sdkRequirePublished(result.Publication); err != nil {
 		return nil, err
 	}
-	if report.InputRecordCount != uint64(size) || report.NormalizedIntervalCount != uint64(size) {
-		return nil, fmt.Errorf("unexpected immutable-feed report: %+v", report)
+	if result.Report.InputRecordCount != uint64(size) || result.Report.NormalizedIntervalCount != uint64(size) {
+		return nil, fmt.Errorf("unexpected immutable-feed report: %+v", result.Report)
 	}
 	return immutableResult(immutableResultSpec{
 		Name:         "immutable-feed-random",
 		Size:         size,
 		Auxiliary:    0,
 		WorkUnits:    uint64(size),
-		EmittedUnits: report.NormalizedIntervalCount,
+		EmittedUnits: result.Report.NormalizedIntervalCount,
 	}, database, measured, database.main)
 }
 
@@ -792,14 +785,15 @@ func sdkWorkflowExecute(
 	if err != nil {
 		return zero, err
 	}
-	currentReport, currentPublication, err := sdkCreateImmutableFeedV4(
+	budget := sdkImmutableFeedBudgetFor(size)
+	current, err := iprangedb.CreateImmutableFeedV4(
 		files.current, downloadedTag, sdkFeedNameMust(0), nil, iprangedb.PolicyFailIfExists,
-		source, size, sdkImmutableFeedBudgetFor(size), cancellation,
+		source, &budget, cancellation,
 	)
 	if err != nil {
 		return zero, err
 	}
-	if err := sdkRequirePublished(currentPublication); err != nil {
+	if err := sdkRequirePublished(current.Publication); err != nil {
 		return zero, err
 	}
 	currentReader, err := iprangedb.OpenImmutable(files.current)
@@ -932,7 +926,7 @@ func sdkWorkflowExecute(
 	_ = currentReader.Close()
 
 	scanned, sumErr := sdkCheckedSum([]uint64{
-		currentReport.InputRecordCount,
+		current.Report.InputRecordCount,
 		first.InputRecordCount,
 		last.InputRecordCount,
 		base.InputRecordCount,
@@ -949,7 +943,7 @@ func sdkWorkflowExecute(
 		return zero, fmt.Errorf("complete-workflow counter overflow")
 	}
 	emitted, sumErr := sdkCheckedSum([]uint64{
-		currentReport.NormalizedIntervalCount,
+		current.Report.NormalizedIntervalCount,
 		history.AfterIntervalCount,
 		aggregate.FeedResultCount,
 		aggregate.PairResultCount,
@@ -1078,14 +1072,15 @@ func sdkSeedPriorRound(
 	if err != nil {
 		return err
 	}
-	_, publication, err := sdkCreateImmutableFeedV4(
+	budget := sdkImmutableFeedBudgetFor(size)
+	fed, err := iprangedb.CreateImmutableFeedV4(
 		files.previous, downloadedTag, sdkFeedNameMust(0), nil, iprangedb.PolicyFailIfExists,
-		source, size, sdkImmutableFeedBudgetFor(size), cancellation,
+		source, &budget, cancellation,
 	)
 	if err != nil {
 		return err
 	}
-	if err := sdkRequirePublished(publication); err != nil {
+	if err := sdkRequirePublished(fed.Publication); err != nil {
 		return err
 	}
 	previousReader, err := iprangedb.OpenImmutable(files.previous)
@@ -1366,108 +1361,18 @@ func sdkAllScope(reader *iprangedb.LiveReader, cancellation *iprangedb.Cancellat
 }
 
 // ---------------------------------------------------------------------------
-// immutable single-feed publication composition (Rust
-// create_immutable_feed_v4; no public Go equivalent, see file header)
+// immutable single-feed publication budget (Rust sdk::immutable_budget)
 // ---------------------------------------------------------------------------
 
-type sdkAddressRangeSource interface {
-	nextBatch() ([]iprangedb.AddressRange4, bool)
-}
-
-type sdkImmutableFeedReport struct {
-	InputRecordCount        uint64
-	NormalizedIntervalCount uint64
-}
-
-type sdkImmutableFeedBudget struct {
-	maxHeapBytes      uint64
-	maxOutputPages    uint64
-	maxWorkspacePages uint64
-	maxOpenFiles      uint32
-}
-
 // sdkImmutableFeedBudgetFor mirrors Rust sdk::immutable_budget.
-func sdkImmutableFeedBudgetFor(size int) sdkImmutableFeedBudget {
+func sdkImmutableFeedBudgetFor(size int) iprangedb.ImmutableFeedBudget {
 	pages := uint64((size+7)/8) + 20_000
-	return sdkImmutableFeedBudget{
-		maxHeapBytes:      sdkQueryHeap,
-		maxOutputPages:    pages,
-		maxWorkspacePages: pages,
-		maxOpenFiles:      3,
+	return iprangedb.ImmutableFeedBudget{
+		MaxHeapBytes:      sdkQueryHeap,
+		MaxOutputPages:    pages,
+		MaxWorkspacePages: pages,
+		MaxOpenFiles:      3,
 	}
-}
-
-// sdkCreateImmutableFeedV4 mirrors Rust create_immutable_feed_v4 through
-// public Go operations: one fresh membership live database is created in
-// a private temporary directory, the named feed is created from the
-// unordered address-range source, committed, and the committed
-// generation is snapshot-published into destination with the requested
-// publication policy. The returned publication is the snapshot's
-// publication; the report is the create-feed workflow report.
-func sdkCreateImmutableFeedV4(
-	destination string,
-	valueTag iprangedb.ValueTag,
-	feedName iprangedb.FeedName,
-	metadataJSON []byte,
-	policy iprangedb.PublicationPolicy,
-	source sdkAddressRangeSource,
-	records int,
-	budget sdkImmutableFeedBudget,
-	cancellation *iprangedb.CancellationToken,
-) (sdkImmutableFeedReport, iprangedb.PublicationResult, error) {
-	zero := sdkImmutableFeedReport{}
-	workspace, err := os.MkdirTemp("", "iprange-v4-bench-immutable-feed")
-	if err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	defer os.RemoveAll(workspace)
-	livePath := filepath.Join(workspace, "live.v4")
-	if _, err := iprangedb.CreateLive(livePath, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, valueTag, 1, cancellation); err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	writer, err := iprangedb.OpenLiveWriter(livePath, toPageBudget(transactionBudget(records, 1)), cancellation)
-	if err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	workflow, err := writer.BeginCreateFeed(feedName, cancellation)
-	if err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	for {
-		batch, more := source.nextBatch()
-		if !more {
-			break
-		}
-		if err := workflow.AddRangesV4(batch); err != nil {
-			return zero, iprangedb.PublicationResult{}, err
-		}
-	}
-	finished, err := workflow.FinishInput()
-	if err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	if !finished.IsChanged() {
-		return zero, iprangedb.PublicationResult{}, fmt.Errorf("immutable feed creation changed nothing: %+v", finished.Report())
-	}
-	report := finished.Report()
-	if err := requireCommitted(finished.Commit()); err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	if err := closeWriter(writer); err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	snapshot, err := iprangedb.SnapshotTo(livePath, iprangedb.SnapshotSourceLive, destination, policy, &iprangedb.SnapshotBudget{
-		MaxHeapBytes:   budget.maxHeapBytes,
-		MaxOutputPages: budget.maxOutputPages,
-		MaxOpenFiles:   budget.maxOpenFiles,
-	}, cancellation)
-	if err != nil {
-		return zero, iprangedb.PublicationResult{}, err
-	}
-	return sdkImmutableFeedReport{
-		InputRecordCount:        report.InputRecordCount,
-		NormalizedIntervalCount: report.InputNormalizedIntervalCount,
-	}, snapshot.Publication, nil
 }
 
 // ---------------------------------------------------------------------------

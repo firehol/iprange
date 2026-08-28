@@ -196,11 +196,11 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	heap := budget.MaxHeapBytes
 	membershipEntries := 0
 	if spec.ValueKind == format.ValueKindMembership || spec.ValueKind == format.ValueKindStructured {
-		membershipEntries = chargeReferenceBatch(&heap)
+		membershipEntries = writer.ChargeReferenceBatch(&heap)
 	}
 	structureEntries := 0
 	if spec.ValueKind == format.ValueKindStructured {
-		structureEntries = chargeReferenceBatch(&heap)
+		structureEntries = writer.ChargeReferenceBatch(&heap)
 	}
 	available := &Budget{MaxHeapBytes: heap, MaxOutputPages: budget.MaxOutputPages, MaxOpenFiles: budget.MaxOpenFiles}
 	builder, err := writer.NewStructuredOutputBuilderOverFile(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, membershipEntries, structureEntries)

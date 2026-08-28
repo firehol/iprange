@@ -18,7 +18,8 @@ writer-offcontract	LiveWriter::begin_structured_transaction		removed	removed sli
 writer-offcontract	LiveWriter::project_history		removed	removed slice 2c; owned by LiveWriter.ProjectHistory
 writer-offcontract	LiveWriter::begin_membership_import	LiveWriter.BeginMembershipImport	present	Complete name-based import from a pinned membership reader (membership_import_public.go)
 writer-offcontract	LiveWriter::reclaim		missing	Rust live_writer/reclaim.rs bounded reader-safe reclamation; no Go equivalent
-writer-offcontract	immutable_feed.rs create_immutable_feed_v4/v6		missing	One-inode immutable feed construction absent in Go
+immutable-output	immutable_feed.rs create_immutable_feed_v4	CreateImmutableFeedV4	present	immutable_feed_public.go; one-inode unordered feed construction through RangeSource4
+immutable-output	immutable_feed.rs create_immutable_feed_v6	CreateImmutableFeedV6	present	immutable_feed_public.go; one-inode unordered feed construction through RangeSource6
 live-writer	commit_resolution.rs resolve_commit	ResolveCommit	present	commit_resolution_public.go; two-meta classify with sync and sidecar proof; public CommitResolutionMode/CommitResolution/CommitResolutionResult/LocalFileRelation types
 live-writer	live_lifecycle.rs CreateLive	CreateLive	present	lifecycle_public.go:160
 live-writer	live_lifecycle.rs InitializeLive	InitializeLive	present	lifecycle_public.go:177
@@ -289,3 +290,6 @@ surface	same-name Rust method value	NetworkEnrichmentV1View.Value	present	genera
 surface	same-name Rust method wire	ValueTag.Wire	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method word	MembershipView.Word	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method word_count	MembershipView.WordCount	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	-	ImmutableFeedResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method error	ImmutableFeedPreparationFailure.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method unwrap	ImmutableFeedPreparationFailure.Unwrap	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart

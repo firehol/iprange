@@ -365,6 +365,39 @@ func regenStructuredIPv4NoThreat(t *testing.T, dir string) {
 	regenPublish(t, live, filepath.Join(dir, "structured-ipv4-nothreat.iprdb"))
 }
 
+// regenImmutableFeedIPv4 writes immutable-feed-ipv4.iprdb into dir:
+// one feed built by the one-inode immutable feed builder
+// (CreateImmutableFeedV4) from an unordered range source, with
+// producer-tagged metadata. The fixture proves the Go immutable-feed
+// writer path cross-opens through the shared corpus verify.
+func regenImmutableFeedIPv4(t *testing.T, dir string) {
+	t.Helper()
+	tag, err := NewValueTag([]byte("downloaded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := NewFeedName("feed-000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := sliceSource4{
+		{From: 0x0a000001, To: 0x0a00000a}, // 10.0.0.1-10.0.0.10
+		{From: 0x0a000014, To: 0x0a000019}, // 10.0.0.20-10.0.0.25
+		{From: 0xc0a80100, To: 0xc0a801ff}, // 192.168.1.0-192.168.1.255
+	}
+	result, err := CreateImmutableFeedV4(
+		filepath.Join(dir, "immutable-feed-ipv4.iprdb"),
+		tag, name, []byte(`{"fixture":"go-immutable-feed-ipv4","producer":"go"}`),
+		PolicyFailIfExists, &source, immutableFeedBudgetFor(), NewCancellationToken(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("fixture publication = %v, want published", result.Publication.Publication)
+	}
+}
+
 // regenPublish snapshots one closed live pair into the corpus (Rust
 // generate.rs snapshot_to parity): the live main is the scratch source
 // and the corpus receives the compact snapshot output, so the corpus
@@ -428,6 +461,7 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	regenDirectIPv4(t, goDir)
 	regenFirstSeenIPv6(t, goDir)
 	regenHistoryMembershipIPv4(t, goDir)
+	regenImmutableFeedIPv4(t, goDir)
 	regenMembershipIPv4(t, goDir)
 	regenMembershipIPv6(t, goDir)
 	regenStructuredIPv4(t, goDir)
@@ -479,6 +513,7 @@ func TestRegenerateGoFixtures(t *testing.T) {
 	}
 	publish("direct-ipv4.iprdb")
 	publish("first-seen-ipv6.iprdb")
+	publish("immutable-feed-ipv4.iprdb")
 	publish("history-membership-ipv4.iprdb")
 	publish("membership-ipv4.iprdb")
 	publish("membership-ipv6.iprdb")
