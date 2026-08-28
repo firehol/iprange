@@ -277,13 +277,23 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    build-tagged statBlocks helpers). The routed facade equivalence
    tests (validation, inspection, recovery, guard-pending cleanup)
    run through the real worker on every worker-supported platform.
-2. Immutable-feed builder (P1, sol): Go has no one-inode immutable
+2. Immutable-feed builder (P1, sol): Go had no one-inode immutable
    feed construction (parity_manifest.tsv immutable_feed row missing;
-   scenario_sdk.go substitutes live+snapshot; Rust lib.rs exports
-   create_immutable_feed_v4/v6). The update-ipsets-workflow benchmark
-   is therefore not apples-to-apples. Fix (slice F): public
-   CreateImmutableFeedV4/V6 mirroring Rust immutable_feed.rs, then
-   swap the benchmark source and re-measure.
+   scenario_sdk.go substituted live+snapshot; Rust lib.rs exports
+   create_immutable_feed_v4/v6), so the update-ipsets-workflow
+   benchmark was not apples-to-apples. DONE (slice F): public
+   CreateImmutableFeedV4/V6 (immutable_feed_public.go) mirror Rust
+   immutable_feed.rs over the writer machine
+   (internal/writer/immutable_feed.go + immutable_workspace.go): the
+   unordered source drains into a mapped workspace at high page
+   offsets of the private attempt inode, the ordered cursor streams
+   the normalized coverage tree into the append-only output pages,
+   and the reservation machine publishes. The benchmark sources now
+   feed the real builder through the RangeSource4 seam; the parity
+   rows are present; a Go-produced conformance fixture
+   (go/immutable-feed-ipv4.iprdb) cross-opens in the Rust corpus
+   verify. Re-measured at the g identity (apples-to-apples workflow
+   ratio 2.189, see item 9).
 3. Commit outcome resolution (P1, sol): CommitResult (writer_public.go:
    61) lacks DirectoryIdentity/MainIdentity that Rust CommitResult
    carries (live_writer/result.rs:129) and ResolveCommit accepts only
@@ -341,13 +351,22 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    sections.
 9. Performance mandate (sol): committed ratios show nested-overwrite
    4.044x (target 2-3.5x), lookups 1.835/1.830x (target 1.2-1.6x),
-   validation 2.235x (target 1.5-2x), and the workflow comparison is
-   not comparable until slice F lands. Fix (slice F measurement +
-   slice G): apples-to-apples re-measurement, then close the residuals
-   that remain cost-effective (the nested-overwrite 1/2/3 decision is
-   superseded: the milestone stays open, so the duplication/codegen
-   option re-opens only if measurements show it is the cheapest
-   remaining win).
+   validation 2.235x (target 1.5-2x), and the workflow comparison was
+   not comparable until slice F landed. MEASURED (slice F, g identity,
+   rust-ratio-acceptance-20260828g.csv, interleaved matched 5-sample
+   runs): membership-import 1.682, nested-overwrite 4.200,
+   update-ipsets-workflow 2.189 (first apples-to-apples one-inode
+   measurement; Go elapsed 2,450 ms, inside the 2-3.5x write
+   envelope), live-direct-random-lookup 1.784,
+   immutable-direct-random-lookup 1.792, live-validation 2.299. The
+   four unchanged scenarios moved within the rounds' run-to-run noise
+   (f to g deltas -2.8% to +3.9%). The CI gate (i log) is 18/18
+   within-limit, ratios 0.396-1.025, workflow 0.488 (the workflow
+   baseline re-bases at the g identity: the scenario code path
+   changed). Remaining cost-effective residuals (slice G): the
+   nested-overwrite/validation targets stay open; the duplication/
+   codegen option re-opens only if measurements show it is the
+   cheapest remaining win.
 
 
 ### Slice F implementation decisions (2026-08-28, recorded before code)
@@ -420,6 +439,19 @@ adversarial reviews + final 5-reviewer round + closure records.
 Every slice: gofmt/vet, plain + v4work tests under nice, race/checkptr
 on the touched packages, gate/ratio evidence refresh when behavior or
 hot paths change.
+
+Slice F delivery (2026-08-28, commit f4e43df9): the one-inode
+immutable feed builder, its public CreateImmutableFeedV4/V6 surface,
+the bench swap, the parity flip, and the conformance fixture shipped
+in one commit. Validation: gofmt/vet clean, plain + v4work suites
+green, full race/checkptr green, the Go conformance suite and the Rust
+corpus verify cross-open the new Go-produced fixture, and the six
+headline ratio rows re-measured at the g identity (item 9). The
+immutable-feed-random bench row drops the live+snapshot substitute:
+100k ranges build in ~95 ms with 1,179 alloc calls and a 355-page
+output (live+snapshot previously produced ~1.45 MB output and the
+workflow ran ~1 s slower). Slice G (mmap/file-I/O adversarial
+reviews, final 5-reviewer round, closure records) remains.
 
 
 

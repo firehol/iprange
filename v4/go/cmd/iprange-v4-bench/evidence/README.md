@@ -147,3 +147,25 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   2.235 (was 2.301). The six P3 fixes did not regress any measured
   case; nested-overwrite improved 4.184 -> 4.044 and validation 2.301
   -> 2.235 in the same interleaved window.
+- `ci-go-v4-local-20260828i.log`: the gate run at the slice-F state
+  (one-inode immutable feed builder; the update-ipsets benchmark now
+  calls the public CreateImmutableFeedV4 instead of composing
+  live-create plus snapshot), 18/18 within-limit, ratios 0.396-1.025.
+  update-ipsets-workflow 1M median 2,468 ms (ratio 0.488 against the
+  pre-swap accepted Go baseline; the workflow scenario's baseline
+  re-bases at the g identity because the benchmark code path changed).
+- `rust-ratio-acceptance-20260828g.csv`: the post-slice-F Go-vs-Rust
+  ratio table from interleaved matched 5-sample runs (raw rows in
+  `rust-ratio-go-samples-20260828g.csv` /
+  `rust-ratio-rust-samples-20260828g.csv`). Ratios: membership-import
+  1.682 (was 1.636), nested-overwrite 4.200 (was 4.044),
+  update-ipsets-workflow 2.189 (was 3.209, previously not comparable:
+  the benchmark substituted live-create plus snapshot; the g number is
+  the first apples-to-apples one-inode comparison),
+  live-direct-random-lookup 1.784 (was 1.835),
+  immutable-direct-random-lookup 1.792 (was 1.830), live-validation
+  2.299 (was 2.235). The four unchanged scenarios are within the
+  rounds' run-to-run noise; the workflow Go elapsed dropped from
+  3,478 ms to 2,450 ms, and the ratio from 3.209 to 2.189, inside the
+  SOW 2-3.5x write envelope (the milestone-4 acceptance item 9
+  expectation).
