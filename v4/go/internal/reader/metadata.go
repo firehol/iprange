@@ -27,8 +27,37 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	if meta.MetadataRoot == 0 {
 		return nil, false, nil
 	}
+	if meta.MetadataUncompressed > uint64(maxInt) {
+		return nil, false, corrupt("metadata length is not addressable")
+	}
+	// One exact allocation for the declared uncompressed size; the
+	// stream validation (overflow probe, trailing bytes, adler32)
+	// runs inside ReadMetadataJSONInto on the same chain walk.
+	value := make([]byte, int(meta.MetadataUncompressed))
+	if _, _, err := r.ReadMetadataJSONInto(value); err != nil {
+		return nil, true, err
+	}
+	return value, true, nil
+}
+
+// ReadMetadataJSONInto fills caller storage with the exact decompressed
+// metadata bytes (Rust metadata::read): absent metadata reports present
+// false; an undersized caller buffer is refused with the buffer-too-small
+// class before any page is read. The chain is walked exactly once and
+// inflated directly into output (no owned accumulation).
+func (r *ImmutableReader) ReadMetadataJSONInto(output []byte) (int, bool, error) {
+	meta := r.meta
+	if meta.MetadataRoot == 0 {
+		return 0, false, nil
+	}
+	if meta.MetadataUncompressed > uint64(len(output)) {
+		return 0, true, &format.Error{Code: format.CodeBufferTooSmall, Detail: "metadata output buffer is too small"}
+	}
+	if meta.MetadataUncompressed > uint64(maxInt) {
+		return 0, true, corrupt("metadata length is not addressable")
+	}
 	if meta.MetadataCompressed < 6 {
-		return nil, false, corrupt("metadata stream shorter than zlib header+trailer")
+		return 0, true, corrupt("metadata stream shorter than zlib header+trailer")
 	}
 	stream := &metadataStream{
 		page:      r.page,
@@ -43,34 +72,33 @@ func (r *ImmutableReader) ReadMetadataJSON() ([]byte, bool, error) {
 	// header) are captured and checked before any inflation starts,
 	// preserving the two-pass reader's check order.
 	if err := stream.primeHeader(); err != nil {
-		return nil, false, err
+		return 0, true, err
 	}
-	// One exact allocation for the declared uncompressed size plus the
-	// one-byte overflow probe: a truncation is ErrUnexpectedEOF, an
-	// over-long stream leaves the probe byte set. No growth reallocations.
-	out := make([]byte, int(meta.MetadataUncompressed)+1)
+	out := output[:int(meta.MetadataUncompressed)]
 	zr := flate.NewReader(stream)
-	if _, err := io.ReadFull(zr, out[:int(meta.MetadataUncompressed)]); err != nil {
+	if _, err := io.ReadFull(zr, out); err != nil {
 		zr.Close()
 		var formatErr *format.Error
 		if errors.As(err, &formatErr) {
-			return nil, false, err
+			return 0, true, err
 		}
-		return nil, false, corrupt("metadata deflate stream: %v", err)
+		return 0, true, corrupt("metadata deflate stream: %v", err)
 	}
-	n, err := io.ReadFull(zr, out[int(meta.MetadataUncompressed):])
+	// One-byte overflow probe: a truncation is io.EOF with n == 0, an
+	// over-long stream fills the probe byte (n != 0).
+	var probe [1]byte
+	n, err := io.ReadFull(zr, probe[:])
 	zr.Close()
 	if n != 0 || err != io.EOF {
-		return nil, false, corrupt("metadata decompressed %d declared %d", int(meta.MetadataUncompressed)+n, meta.MetadataUncompressed)
+		return 0, true, corrupt("metadata decompressed %d declared %d", int(meta.MetadataUncompressed)+n, meta.MetadataUncompressed)
 	}
 	if stream.read != stream.count-6 {
-		return nil, false, corrupt("metadata stream trailing bytes")
+		return 0, true, corrupt("metadata stream trailing bytes")
 	}
-	out = out[:int(meta.MetadataUncompressed)]
 	if binary.BigEndian.Uint32(stream.trailer()) != adler32.Checksum(out) {
-		return nil, false, corrupt("metadata adler32 trailer")
+		return 0, true, corrupt("metadata adler32 trailer")
 	}
-	return out, true, nil
+	return int(meta.MetadataUncompressed), true, nil
 }
 
 // metadataStream serves the DEFLATE payload of a validated metadata chain
@@ -317,3 +345,7 @@ func (s *metadataStream) Read(p []byte) (int, error) {
 	}
 	return 0, io.EOF
 }
+
+// maxInt is the int range ceiling used to reject unaddressable metadata
+// lengths before any slice arithmetic (Rust usize::try_from parity).
+const maxInt = int(^uint(0) >> 1)

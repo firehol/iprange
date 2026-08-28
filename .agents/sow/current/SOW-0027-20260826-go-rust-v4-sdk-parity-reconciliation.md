@@ -293,9 +293,13 @@ package. Verified item ledger (evidence -> closure contract -> fix):
    promise reusable zero-allocation buffers but the facades allocate
    a fresh output slice per callback batch and the zeroalloc tests
    permit it (aggregation_public.go:95, join_public.go:135,
-   streaming_facades_zeroalloc_test.go:85). Fix (slice C): reuse one
-   growable output slice across batches, tighten the allocation pins,
-   and correct the docs.
+   streaming_facades_zeroalloc_test.go:85). DONE (slice C): all five
+   facade yields (aggregate cardinality/overlap, direct join, cross and
+   uncovered membership join) reuse one growable output slice per
+   yield, the uncovered-feed names join the per-distinct-name cache
+   (removing the former per-record string allocation), the docs state
+   the reuse contract, and the allocation-pin comment now matches the
+   measured behavior.
 7. Parity gate completeness (P2, sol): the manifest holds 86 curated
    rows (61 present, 25 informational missing) against 507 Rust
    exports; missing rows with an empty Go symbol never fail

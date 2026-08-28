@@ -110,7 +110,10 @@ type DirectJoinBudget struct {
 // is the feed's unmapped total; the budget bounds the distinct cell
 // count, and exceeding it fails with ErrorInsufficientResourceBudget.
 // cellYield receives bounded batches from one reusable per-operation
-// buffer; a nil yield discards. The source must be a direct-value
+// buffer; a nil yield discards. The facade reuses one growable output
+// slice across batches, so steady-state conversion allocates nothing
+// (the per-distinct-name string cache is the only retained allocation).
+// The source must be a direct-value
 // database of the scope's address family; the live variant resolves
 // the join through the reader's pinned generation.
 func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinBudget, cellYield func([]DirectJoinCell) error, cancellation *CancellationToken) (DirectJoinReport, error) {
@@ -133,11 +136,18 @@ func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinB
 		return DirectJoinReport{}, err
 	}
 	names := make(map[string]string)
+	var directOutput []DirectJoinCell
 	report, err := s.r.core().JoinDirect(s.data, s.family(), sourceReader, limit, cancellation.check, func(batch []reader.DirectJoinCell) error {
 		if cellYield == nil {
 			return nil
 		}
-		out := make([]DirectJoinCell, len(batch))
+		// One growable output slice reused across batches (Rust
+		// batch-lifetime parity: a batch stays valid only until the
+		// next batch is delivered).
+		if cap(directOutput) < len(batch) {
+			directOutput = make([]DirectJoinCell, len(batch))
+		}
+		out := directOutput[:len(batch)]
 		for i, record := range batch {
 			name, ok := names[string(record.Feed)]
 			if !ok {
@@ -162,7 +172,10 @@ func (s *MembershipScope) JoinDirect(source DirectJoinSource, budget DirectJoinB
 // same address family and delivers the exact cross overlaps (ascending
 // left feed, then right feed) and the per-side uncovered feeds (left
 // side first). crossYield and uncoveredYield receive bounded batches
-// from one reusable per-operation buffer each; nil yields discard.
+// from one reusable per-operation buffer each; nil yields discard. Both
+// facades reuse one growable output slice across batches, so
+// steady-state conversion allocates nothing (the per-distinct-name
+// string cache is the only retained allocation).
 func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func([]MembershipCrossCell) error, uncoveredYield func([]UncoveredFeed) error, cancellation *CancellationToken) (MembershipJoinReport, error) {
 	if right == nil {
 		return MembershipJoinReport{}, &Error{Code: ErrorInvalidArgument, Detail: "membership join requires a right scope"}
@@ -177,13 +190,18 @@ func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func
 		return MembershipJoinReport{}, &Error{Code: ErrorWrongAddressFamily, Detail: "membership join source families differ"}
 	}
 	names := make(map[string]string)
+	var crossOutput []MembershipCrossCell
+	var uncoveredOutput []UncoveredFeed
 	report, err := s.r.core().JoinMembership(
 		s.data, right.data, s.family(), right.r.core(), cancellation.check,
 		func(batch []reader.MembershipCrossCell) error {
 			if crossYield == nil {
 				return nil
 			}
-			out := make([]MembershipCrossCell, len(batch))
+			if cap(crossOutput) < len(batch) {
+				crossOutput = make([]MembershipCrossCell, len(batch))
+			}
+			out := crossOutput[:len(batch)]
 			for i, record := range batch {
 				left, ok := names[string(record.Left)]
 				if !ok {
@@ -203,11 +221,19 @@ func (s *MembershipScope) JoinMembership(right *MembershipScope, crossYield func
 			if uncoveredYield == nil {
 				return nil
 			}
-			out := make([]UncoveredFeed, len(batch))
+			if cap(uncoveredOutput) < len(batch) {
+				uncoveredOutput = make([]UncoveredFeed, len(batch))
+			}
+			out := uncoveredOutput[:len(batch)]
 			for i, record := range batch {
+				name, ok := names[string(record.Feed)]
+				if !ok {
+					name = string(record.Feed)
+					names[name] = name
+				}
 				out[i] = UncoveredFeed{
 					Side:      record.Side,
-					Feed:      string(record.Feed),
+					Feed:      name,
 					Addresses: record.Addresses,
 				}
 			}

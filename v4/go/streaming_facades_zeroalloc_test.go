@@ -82,12 +82,13 @@ func TestStreamingFacadesDoNotAllocatePerDeliveredRecord(t *testing.T) {
 	if consumed == 0 {
 		t.Fatal("sink consumed no data: the measurement window is dead")
 	}
-	// Allowed: one owned string per distinct delivered name (names), the
-	// per-batch output slices and the sink-side batch machinery, plus a
-	// deterministic-measurement floor of 96 objects. A per-record
-	// allocation (or a toolchain escape regression of the short-lived
-	// conversions) adds one object per delivered record, which exceeds
-	// the bound by an order of magnitude.
+	// Allowed: one owned string per distinct delivered name (names),
+	// the sink-side batch machinery, plus a deterministic-measurement
+	// floor of 96 objects. The facade reuses one growable output slice
+	// per yield, so the steady-state conversion allocates nothing; a
+	// per-record allocation (or a toolchain escape regression of the
+	// short-lived conversions) adds one object per delivered record,
+	// which exceeds the bound by an order of magnitude.
 	bound := float64(names) + 96
 	if got-baseline > bound {
 		t.Fatalf("aggregate: facade allocated %.1f allocs/run over the nil-sink baseline for %d records / %d names (bound %.1f): per-record allocation", got-baseline, records, names, bound)

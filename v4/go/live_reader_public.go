@@ -276,6 +276,34 @@ func (r *LiveReader) LookupFeed(name string) (FeedEntry, bool, error) {
 	return FeedEntry{Index: entry.FeedIndex, Name: string(entry.Name)}, true, nil
 }
 
+// MetadataJSONLen returns the exact decompressed metadata byte length
+// of the pinned generation (Rust live_reader.rs metadata_json_len):
+// present is false when metadata is absent.
+func (r *LiveReader) MetadataJSONLen() (uint64, bool, error) {
+	core, err := r.lr.Core()
+	if err != nil {
+		return 0, false, publicError(err)
+	}
+	length, present := core.MetadataJSONLen()
+	return length, present, nil
+}
+
+// ReadMetadataJSON fills caller storage with the exact decompressed
+// opaque metadata bytes of the pinned generation (Rust live_reader.rs
+// read_metadata_json): an undersized buffer is refused with
+// ErrorBufferTooSmall before any page is read.
+func (r *LiveReader) ReadMetadataJSON(output []byte) (int, bool, error) {
+	core, err := r.lr.Core()
+	if err != nil {
+		return 0, false, publicError(err)
+	}
+	length, present, err := core.ReadMetadataJSONInto(output)
+	if err != nil {
+		return 0, present, publicError(err)
+	}
+	return length, present, nil
+}
+
 // MetadataJSON returns the exact decompressed opaque metadata bytes of
 // the pinned generation. present is false when metadata is absent; empty
 // bytes with present true are the distinct empty state.

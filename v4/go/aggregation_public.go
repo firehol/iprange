@@ -4,7 +4,10 @@
 // requested pair plan folds the same pass into exact per-pair overlaps.
 // Sinks receive bounded batches from one reusable per-operation buffer
 // (32 records), so delivery never allocates per result; nil sinks
-// discard. All operation heap charges mirror the Rust size_of model, so
+// discard. The facade reuses one growable output slice per yield, so
+// the conversion to the public batch types also allocates nothing
+// steady-state (the per-distinct-name string cache is the only retained
+// allocation). All operation heap charges mirror the Rust size_of model, so
 // identical scopes admit identically. Feeding names are owned string
 // copies; the mapped catalog views are converted here, at the package
 // boundary, exactly once per delivered record.
@@ -86,13 +89,21 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 	// by every delivered record (the byte-keyed lookup converts on the
 	// stack; only the cached string is retained).
 	names := make(map[string]string)
+	var cardOutput []FeedCardinality
+	var overlapOutput []FeedOverlap
 	report, err := s.r.core().AggregateScope(
 		s.data, s.family(), mode.kind, mode.target, mode.pairs, cancellation.check,
 		func(batch []reader.FeedCardinality) error {
 			if feedYield == nil {
 				return nil
 			}
-			out := make([]FeedCardinality, len(batch))
+			// One growable output slice reused across batches: the
+			// yield contract keeps each batch valid only until the
+			// next batch is delivered (Rust batch-lifetime parity).
+			if cap(cardOutput) < len(batch) {
+				cardOutput = make([]FeedCardinality, len(batch))
+			}
+			out := cardOutput[:len(batch)]
 			for i, record := range batch {
 				name, ok := names[string(record.Feed)]
 				if !ok {
@@ -107,7 +118,10 @@ func (s *MembershipScope) Aggregate(mode MembershipAggregationMode, feedYield fu
 			if overlapYield == nil {
 				return nil
 			}
-			out := make([]FeedOverlap, len(batch))
+			if cap(overlapOutput) < len(batch) {
+				overlapOutput = make([]FeedOverlap, len(batch))
+			}
+			out := overlapOutput[:len(batch)]
 			for i, record := range batch {
 				left, ok := names[string(record.Left)]
 				if !ok {

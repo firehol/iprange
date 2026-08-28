@@ -524,6 +524,34 @@ func (p *Pin) LookupFeedInto(name string, dst []byte) (FeedInfo, bool, error) {
 	return info, true, nil
 }
 
+// MetadataJSONLen returns the exact decompressed metadata byte length
+// (Rust database.rs metadata_json_len): present is false when metadata
+// is absent; the length is the declared uncompressed size, read from
+// the meta without walking the metadata chain.
+func (r *ImmutableReader) MetadataJSONLen() (uint64, bool, error) {
+	if err := r.checkOpen(); err != nil {
+		return 0, false, err
+	}
+	length, present := r.inner.MetadataJSONLen()
+	return length, present, nil
+}
+
+// ReadMetadataJSON fills caller storage with the exact decompressed
+// opaque metadata bytes (Rust database.rs read_metadata_json): an
+// undersized buffer is refused with ErrorBufferTooSmall before any page
+// is read. present is false when metadata is absent; a true present
+// with zero bytes is the distinct empty state.
+func (r *ImmutableReader) ReadMetadataJSON(output []byte) (int, bool, error) {
+	if err := r.checkOpen(); err != nil {
+		return 0, false, err
+	}
+	length, present, err := r.inner.ReadMetadataJSONInto(output)
+	if err != nil {
+		return 0, present, publicError(err)
+	}
+	return length, present, nil
+}
+
 // MetadataJSON returns the exact decompressed opaque metadata bytes. present
 // is false when metadata is absent; empty bytes with present true are the
 // distinct empty state.

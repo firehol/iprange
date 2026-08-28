@@ -60,6 +60,10 @@ reader	ImmutableReader::metadata_json	ImmutableReader.MetadataJSON	present	name 
 reader	ImmutableReader::metadata_json_len		missing	Length accessor absent (MetadataJSON returns bytes)
 live-reader	LiveReader::open	OpenLiveReader	present	live_reader_public.go
 live-reader	LiveReader::metadata_json	LiveReader.MetadataJSON	present	name variant
+reader	ImmutableReader::read_metadata_json	ImmutableReader.ReadMetadataJSON	present	reader_public.go caller-buffer metadata read (Rust database.rs read_metadata_json); reads into caller storage after the buffer-too-small refusal
+reader	ImmutableReader::metadata_json_len	ImmutableReader.MetadataJSONLen	present	reader_public.go exact metadata length without walking the chain (Rust database.rs metadata_json_len)
+reader	LiveReader::read_metadata_json	LiveReader.ReadMetadataJSON	present	live_reader_public.go caller-buffer metadata read over the pinned generation (Rust live_reader.rs read_metadata_json)
+reader	LiveReader::metadata_json_len	LiveReader.MetadataJSONLen	present	live_reader_public.go exact metadata length over the pinned generation (Rust live_reader.rs metadata_json_len)
 live-reader	LiveReader::lookup_membership_v4	Pin.LookupMembershipV4	present	owner variant (pin on live reader)
 live-reader	LiveReader::lookup_membership_v6	Pin.LookupMembershipV6	present	owner variant
 cancellation	CancellationToken::new	NewCancellationToken	present	name variant
