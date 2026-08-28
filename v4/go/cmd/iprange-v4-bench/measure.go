@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -137,15 +136,17 @@ func openFileDescriptors() *uint64 {
 }
 
 // fileSizeOf mirrors Rust measure::file_size: logical length plus the
-// physical block count (st_blocks x 512) where the platform reports it.
+// physical block count (st_blocks x 512) where the platform reports it
+// (unix Stat_t carries Blocks; other platforms report the logical size
+// only, exactly like the Rust reported-size rules).
 func fileSizeOf(path string) (fileSize, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fileSize{}, err
 	}
 	size := fileSize{logical: uint64(info.Size())}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Blocks > 0 {
-		physical := uint64(stat.Blocks) * 512
+	if blocks := statBlocks(info); blocks > 0 {
+		physical := uint64(blocks) * 512
 		size.physical = &physical
 	}
 	return size, nil

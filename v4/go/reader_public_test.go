@@ -80,6 +80,7 @@ func TestPublicReaderMetadataBufferApis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer absent.Close()
 	if _, present, err := absent.MetadataJSONLen(); err != nil || present {
 		t.Fatalf("absent metadata len = (%v, %v), want absent", present, err)
 	}
