@@ -37,7 +37,7 @@ Therefore, binding for every gate in this SOW:
 
 - CPU: Go/Rust same-session matched ratio must be <= 1.3x (the 20-30%
   envelope) for every measured scenario; >= 2x is an automatic failure.
-- Memory: Go peak RSS / allocations must stay within +30% of Rust.
+- Memory: Go peak RSS must stay within +30% of Rust.
 - Evidence: every acceptance claim needs same-session matched measurements
   (both harnesses on the same host, release builds, alternating runs, medians
   recorded) committed as a CSV under v4/go/cmd/iprange-v4-bench/evidence/.
@@ -47,6 +47,14 @@ Therefore, binding for every gate in this SOW:
   user; they are VOID and must not be cited as acceptance criteria. The
   regression review's finding "performance acceptance was bypassed" stands
   and is resolved only by this criterion.
+- User-confirmed interpretation 2026-08-29 (requested by the external
+  review because the exact gate does not follow mechanically from the
+  quote): CPU acceptance is option A - <= 1.3x for EVERY substantial
+  acceptance scenario, with no blended-overall fallback; memory
+  acceptance is option A - peak RSS <= 1.3x, while allocation counts
+  and allocation traffic remain diagnostic only and are not a gate
+  (Rust performs zero allocations in the lookup path while Go performs
+  one 16-byte setup allocation, so a count gate is not comparable).
 - Current honest position against the binding criterion (matched host,
   2026-08-29): nested-overwrite 3.44-3.74x, live/immutable direct lookups
   1.74-1.91x, membership-import ~1.7x, update-ipsets-workflow ~2.2x,
