@@ -276,6 +276,46 @@ A v6 read scenario for both benches is a listed follow-up, not part
 of this slice. Both full suites pass under the 32 GB address-space
 cap.
 
+Slice I-2 first pass, emitted descent and replacement application
+(2026-08-29): the profile after the pointer-fold showed the residual
+was inside the EMITTED entries' generic helpers, not the seam: the
+family entries called the generic privatePathSelect (cum 310 ms),
+lowerBound wrapper, branchChild/codecCell, and replaceTarget/
+applyReplacement, and the runtime itab lookups cost ~100 ms on their
+own. The generator (internal/tree/genfamilies) now emits the
+tree-core pieces with the family constants folded: rangeCellSize,
+parseRange (type/discriminator checks close over the family), branchChild
+and replaceBranchChild (fixed key-plus-child entry decode/rebuild),
+privateRangePath (the full descent: emitted parse + direct
+fixedLowerBoundU32/U128 + emitted branchChild; COW touch stays
+shared), replacementFits, applyCells, applyReplacement (fits path
+inlined; the rare split path keeps the generic reference machinery),
+and replaceTarget with family routing. InsertIfLocalGap routes its
+descent and leaf bound through the emitted path; ReplaceLocalPredecessorWith
+routes its replacement through the emitted replaceTarget. Equivalence
+is enforced by the existing differential tests
+(TestRangeFamilyEmittedMatchesGenericV4/V6: 800 randomized mutations
+per family, per-operation work counters and byte-identical page state)
+plus the full plain and v4work suites, vet, and gofmt. Measured at
+this identity (matched host, 1M, runs 2026-08-29): nested-overwrite
+Go 1,014-1,046 ms (median ~1,020 ms, down from the 1,074-1,092 ms
+band) vs Rust 285.6-306.1 ms (median 296.4 ms) = ~3.5x (was 3.74x).
+Fresh profile at this identity: InsertIfLocalGap cum down from 550 to
+~340 ms, the writer wrapper chain (gapLocalInsert/
+predecessorReplace flat ~80-90 ms each) and the seam's 340-byte
+by-value LocalReject interface assertions are now the largest flat
+items; the descent is ~180 ms and the emitted replacement application
+~200 ms. The remaining wall is per-op machinery overhead in safe Go
+(one draft txn, so no COW page copies are in the profile): store-
+interface calls, family-interface dispatch in the generic writer
+chain, bounds checks, and header decodes. Write scenario stays FAIL
+against the binding <=1.3x criterion; next bounded step is the
+chain-folding of the remaining by-value reject/insert proof copies
+through the seam (SOW-predicted larger lever), then re-measure
+membership-import and update-ipsets-workflow, and the store-concrete
+writer layer remains the larger structural option if the user
+authorizes it.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact
