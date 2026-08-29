@@ -30,7 +30,8 @@ type width struct {
 	Name        string
 	Width       int
 	Pre         string
-	Truncate    string
+	Probe       string // "key, err := search.U32(middle)" (per-probe)
+	ProbeTail   string // tail exact-match probe
 	Compare     string // "compare := ..." body
 	CompareTail string // "compare = ..." body
 }
@@ -40,51 +41,53 @@ var widths = []width{
 		Name:        "U32",
 		Width:       4,
 		Pre:         "target := key.U32()",
-		Truncate:    "if len(cell) < 4 {\n\t\t\treturn 0, false, corrupt(\"tree key is truncated\")\n\t\t}",
-		Compare:     `compare := cmpU32(format.U32(cell), target)`,
-		CompareTail: `compare = cmpU32(format.U32(cell), target)`,
+		Probe:       "middleKey, ok := search.U32(middle)",
+		ProbeTail:   "lowerKey, ok := search.U32(lower)",
+		Compare:     `compare := cmpU32(middleKey, target)`,
+		CompareTail: `compare = cmpU32(lowerKey, target)`,
 	},
 	{
 		Name:        "U64",
 		Width:       8,
 		Pre:         "target := key.U64()",
-		Truncate:    "if len(cell) < 8 {\n\t\t\treturn 0, false, corrupt(\"tree key is truncated\")\n\t\t}",
-		Compare:     `compare := cmpU64(format.U64(cell), target)`,
-		CompareTail: `compare = cmpU64(format.U64(cell), target)`,
+		Probe:       "middleKey, ok := search.U64(middle)",
+		ProbeTail:   "lowerKey, ok := search.U64(lower)",
+		Compare:     `compare := cmpU64(middleKey, target)`,
+		CompareTail: `compare = cmpU64(lowerKey, target)`,
 	},
 	{
-		Name:     "U64U32",
-		Width:    12,
-		Pre:      "targetHi := key.U64()\n\ttargetLo := beU32(key.data[8:12])",
-		Truncate: "if len(cell) < 12 {\n\t\t\treturn 0, false, corrupt(\"tree key is truncated\")\n\t\t}",
-		Compare: `compare := cmpU64(format.U64(cell), targetHi)
+		Name:      "U64U32",
+		Width:     12,
+		Pre:       "targetHi := key.U64()\n\ttargetLo := beU32(key.data[8:12])",
+		Probe:     "middleHi, middleLo, ok := search.U64U32(middle)",
+		ProbeTail: "lowerHi, lowerLo, ok := search.U64U32(lower)",
+		Compare: `compare := cmpU64(middleHi, targetHi)
 		if compare == 0 {
-			compare = cmpU32(format.U32(cell[8:12]), targetLo)
+			compare = cmpU32(middleLo, targetLo)
 		}`,
-		CompareTail: `compare = cmpU64(format.U64(cell), targetHi)
+		CompareTail: `compare = cmpU64(lowerHi, targetHi)
 		if compare == 0 {
-			compare = cmpU32(format.U32(cell[8:12]), targetLo)
+			compare = cmpU32(lowerLo, targetLo)
 		}`,
 	},
 	{
-		Name:     "U128",
-		Width:    16,
-		Pre:      "targetHi, targetLo := key.U128()",
-		Truncate: "if len(cell) < 16 {\n\t\t\treturn 0, false, corrupt(\"tree key is truncated\")\n\t\t}",
+		Name:      "U128",
+		Width:     16,
+		Pre:       "targetHi, targetLo := key.U128()",
+		Probe:     "middleHi, middleLo, ok := search.U128(middle)",
+		ProbeTail: "lowerHi, lowerLo, ok := search.U128(lower)",
 		// The wire u128 cell keeps the low limb at offset 0 and the
 		// high limb at offset 8 (format.U128/PutU128); the probe must
 		// decode through format.U128, never raw limb order.
-		Compare: `hi, lo := format.U128(cell)
-		compare := cmpU128(hi, lo, targetHi, targetLo)`,
-		CompareTail: `hi, lo := format.U128(cell)
-		compare = cmpU128(hi, lo, targetHi, targetLo)`,
+		Compare:     `compare := cmpU128(middleHi, middleLo, targetHi, targetLo)`,
+		CompareTail: `compare = cmpU128(lowerHi, lowerLo, targetHi, targetLo)`,
 	},
 }
 
 // bodyTemplate is the single authoritative search-loop shape. Every
 // width instantiates the same loop; only the geometry guard, the hoisted
 // targets, the truncated-cell check, and the compare differ.
-var bodyTemplate = template.Must(template.New("body").Parse(`func fixedLowerBound{{ .Name }}(page []byte, header *Header, cellLen int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
+var bodyTemplate = template.Must(template.New("body").Parse(`func fixedLowerBound{{ .Name }}(page []byte, header *Header, cellLen int, key Key, insertion bool) (int, bool, error) {
 	if cellLen < {{ .Width }} {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -100,16 +103,10 @@ var bodyTemplate = template.Must(template.New("body").Parse(`func fixedLowerBoun
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(middle)
-		if err != nil {
+		{{ .Probe }}
+		if !ok {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
-		if validate != nil {
-			if err := validate(cell); err != nil {
-				return 0, false, err
-			}
-		}
-		{{ .Truncate }}
 		{{ .Compare }}
 		lastCompare = compare
 		lastIndex = middle
@@ -124,16 +121,10 @@ var bodyTemplate = template.Must(template.New("body").Parse(`func fixedLowerBoun
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.Cell(lower)
-			if err != nil {
+			{{ .ProbeTail }}
+			if !ok {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}
-			if validate != nil {
-				if err := validate(cell); err != nil {
-					return 0, false, err
-				}
-			}
-			{{ .Truncate }}
 			{{ .CompareTail }}
 		}
 		exists = compare == 0

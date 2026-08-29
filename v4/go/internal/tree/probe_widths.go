@@ -18,7 +18,7 @@ import (
 // (Rust fixed_tree/page.rs lower_bound with an inlined key_at). The
 // target limbs are hoisted before the loop and the compare is
 // straight-line per probe.
-func fixedLowerBoundU32(page []byte, header *Header, cellLen int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
+func fixedLowerBoundU32(page []byte, header *Header, cellLen int, key Key, insertion bool) (int, bool, error) {
 	if cellLen < 4 {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -34,19 +34,11 @@ func fixedLowerBoundU32(page []byte, header *Header, cellLen int, key Key, inser
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(middle)
-		if err != nil {
+		middleKey, ok := search.U32(middle)
+		if !ok {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
-		if validate != nil {
-			if err := validate(cell); err != nil {
-				return 0, false, err
-			}
-		}
-		if len(cell) < 4 {
-			return 0, false, corrupt("tree key is truncated")
-		}
-		compare := cmpU32(format.U32(cell), target)
+		compare := cmpU32(middleKey, target)
 		lastCompare = compare
 		lastIndex = middle
 		if compare < 0 {
@@ -60,19 +52,11 @@ func fixedLowerBoundU32(page []byte, header *Header, cellLen int, key Key, inser
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.Cell(lower)
-			if err != nil {
+			lowerKey, ok := search.U32(lower)
+			if !ok {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}
-			if validate != nil {
-				if err := validate(cell); err != nil {
-					return 0, false, err
-				}
-			}
-			if len(cell) < 4 {
-				return 0, false, corrupt("tree key is truncated")
-			}
-			compare = cmpU32(format.U32(cell), target)
+			compare = cmpU32(lowerKey, target)
 		}
 		exists = compare == 0
 	}
@@ -86,7 +70,7 @@ func fixedLowerBoundU32(page []byte, header *Header, cellLen int, key Key, inser
 // (Rust fixed_tree/page.rs lower_bound with an inlined key_at). The
 // target limbs are hoisted before the loop and the compare is
 // straight-line per probe.
-func fixedLowerBoundU64(page []byte, header *Header, cellLen int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
+func fixedLowerBoundU64(page []byte, header *Header, cellLen int, key Key, insertion bool) (int, bool, error) {
 	if cellLen < 8 {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -102,19 +86,11 @@ func fixedLowerBoundU64(page []byte, header *Header, cellLen int, key Key, inser
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(middle)
-		if err != nil {
+		middleKey, ok := search.U64(middle)
+		if !ok {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
-		if validate != nil {
-			if err := validate(cell); err != nil {
-				return 0, false, err
-			}
-		}
-		if len(cell) < 8 {
-			return 0, false, corrupt("tree key is truncated")
-		}
-		compare := cmpU64(format.U64(cell), target)
+		compare := cmpU64(middleKey, target)
 		lastCompare = compare
 		lastIndex = middle
 		if compare < 0 {
@@ -128,19 +104,11 @@ func fixedLowerBoundU64(page []byte, header *Header, cellLen int, key Key, inser
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.Cell(lower)
-			if err != nil {
+			lowerKey, ok := search.U64(lower)
+			if !ok {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}
-			if validate != nil {
-				if err := validate(cell); err != nil {
-					return 0, false, err
-				}
-			}
-			if len(cell) < 8 {
-				return 0, false, corrupt("tree key is truncated")
-			}
-			compare = cmpU64(format.U64(cell), target)
+			compare = cmpU64(lowerKey, target)
 		}
 		exists = compare == 0
 	}
@@ -154,7 +122,7 @@ func fixedLowerBoundU64(page []byte, header *Header, cellLen int, key Key, inser
 // (Rust fixed_tree/page.rs lower_bound with an inlined key_at). The
 // target limbs are hoisted before the loop and the compare is
 // straight-line per probe.
-func fixedLowerBoundU64U32(page []byte, header *Header, cellLen int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
+func fixedLowerBoundU64U32(page []byte, header *Header, cellLen int, key Key, insertion bool) (int, bool, error) {
 	if cellLen < 12 {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -171,21 +139,13 @@ func fixedLowerBoundU64U32(page []byte, header *Header, cellLen int, key Key, in
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(middle)
-		if err != nil {
+		middleHi, middleLo, ok := search.U64U32(middle)
+		if !ok {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
-		if validate != nil {
-			if err := validate(cell); err != nil {
-				return 0, false, err
-			}
-		}
-		if len(cell) < 12 {
-			return 0, false, corrupt("tree key is truncated")
-		}
-		compare := cmpU64(format.U64(cell), targetHi)
+		compare := cmpU64(middleHi, targetHi)
 		if compare == 0 {
-			compare = cmpU32(format.U32(cell[8:12]), targetLo)
+			compare = cmpU32(middleLo, targetLo)
 		}
 		lastCompare = compare
 		lastIndex = middle
@@ -200,21 +160,13 @@ func fixedLowerBoundU64U32(page []byte, header *Header, cellLen int, key Key, in
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.Cell(lower)
-			if err != nil {
+			lowerHi, lowerLo, ok := search.U64U32(lower)
+			if !ok {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}
-			if validate != nil {
-				if err := validate(cell); err != nil {
-					return 0, false, err
-				}
-			}
-			if len(cell) < 12 {
-				return 0, false, corrupt("tree key is truncated")
-			}
-			compare = cmpU64(format.U64(cell), targetHi)
+			compare = cmpU64(lowerHi, targetHi)
 			if compare == 0 {
-				compare = cmpU32(format.U32(cell[8:12]), targetLo)
+				compare = cmpU32(lowerLo, targetLo)
 			}
 		}
 		exists = compare == 0
@@ -229,7 +181,7 @@ func fixedLowerBoundU64U32(page []byte, header *Header, cellLen int, key Key, in
 // (Rust fixed_tree/page.rs lower_bound with an inlined key_at). The
 // target limbs are hoisted before the loop and the compare is
 // straight-line per probe.
-func fixedLowerBoundU128(page []byte, header *Header, cellLen int, key Key, insertion bool, validate func(cell []byte) error) (int, bool, error) {
+func fixedLowerBoundU128(page []byte, header *Header, cellLen int, key Key, insertion bool) (int, bool, error) {
 	if cellLen < 16 {
 		return 0, false, corrupt("fixed slotted-page search shape is invalid")
 	}
@@ -245,20 +197,11 @@ func fixedLowerBoundU128(page []byte, header *Header, cellLen int, key Key, inse
 	for lower < upper {
 		middle := lower + (upper-lower)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(middle)
-		if err != nil {
+		middleHi, middleLo, ok := search.U128(middle)
+		if !ok {
 			return 0, false, corrupt("slotted-page cell is outside the record area")
 		}
-		if validate != nil {
-			if err := validate(cell); err != nil {
-				return 0, false, err
-			}
-		}
-		if len(cell) < 16 {
-			return 0, false, corrupt("tree key is truncated")
-		}
-		hi, lo := format.U128(cell)
-		compare := cmpU128(hi, lo, targetHi, targetLo)
+		compare := cmpU128(middleHi, middleLo, targetHi, targetLo)
 		lastCompare = compare
 		lastIndex = middle
 		if compare < 0 {
@@ -272,20 +215,11 @@ func fixedLowerBoundU128(page []byte, header *Header, cellLen int, key Key, inse
 		compare := lastCompare
 		if lastIndex != lower {
 			work.KeyProbe(1)
-			cell, err := search.Cell(lower)
-			if err != nil {
+			lowerHi, lowerLo, ok := search.U128(lower)
+			if !ok {
 				return 0, false, corrupt("slotted-page cell is outside the record area")
 			}
-			if validate != nil {
-				if err := validate(cell); err != nil {
-					return 0, false, err
-				}
-			}
-			if len(cell) < 16 {
-				return 0, false, corrupt("tree key is truncated")
-			}
-			hi, lo := format.U128(cell)
-			compare = cmpU128(hi, lo, targetHi, targetLo)
+			compare = cmpU128(lowerHi, lowerLo, targetHi, targetLo)
 		}
 		exists = compare == 0
 	}

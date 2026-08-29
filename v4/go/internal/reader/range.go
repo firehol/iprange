@@ -157,7 +157,7 @@ func rangeBranchChild4(sl format.SlottedPage, addr uint32, pageCount uint64) (ui
 	if err != nil {
 		return 0, err
 	}
-	best, err := greatestFixedV4(search, int(sl.Header.ItemCount), addr)
+	best, err := greatestFixedV4(&search, int(sl.Header.ItemCount), addr)
 	if err != nil || best < 0 {
 		return 0, err
 	}
@@ -179,7 +179,7 @@ func rangeBranchChild6(sl format.SlottedPage, addrHi, addrLo uint64, pageCount u
 	if err != nil {
 		return 0, err
 	}
-	best, err := greatestFixedV6(search, int(sl.Header.ItemCount), addrHi, addrLo)
+	best, err := greatestFixedV6(&search, int(sl.Header.ItemCount), addrHi, addrLo)
 	if err != nil || best < 0 {
 		return 0, err
 	}
@@ -202,7 +202,7 @@ func rangeLeafLookup4(leaf format.SlottedPage, addr uint32) (format.RangeRecordV
 	if err != nil {
 		return format.RangeRecordV4{}, false, err
 	}
-	best, err := greatestFixedV4(search, int(leaf.Header.ItemCount), addr)
+	best, err := greatestFixedV4(&search, int(leaf.Header.ItemCount), addr)
 	if err != nil || best < 0 {
 		return format.RangeRecordV4{}, false, err
 	}
@@ -229,7 +229,7 @@ func rangeLeafLookup6(leaf format.SlottedPage, addrHi, addrLo uint64) (format.Ra
 	if err != nil {
 		return format.RangeRecordV6{}, false, err
 	}
-	best, err := greatestFixedV6(search, int(leaf.Header.ItemCount), addrHi, addrLo)
+	best, err := greatestFixedV6(&search, int(leaf.Header.ItemCount), addrHi, addrLo)
 	if err != nil || best < 0 {
 		return format.RangeRecordV6{}, false, err
 	}

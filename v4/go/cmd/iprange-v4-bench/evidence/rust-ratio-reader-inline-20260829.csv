@@ -1,0 +1,3 @@
+scenario,go_median_ns,rust_median_ns,ratio,go_samples,rust_samples,notes
+live-direct-random-lookup,372976328,222981674,1.67,4,3,same-session matched host; typed inlineable probes
+immutable-direct-random-lookup,340671440,205705231,1.66,4,3,same-session matched host; typed inlineable probes

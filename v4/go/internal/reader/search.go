@@ -73,17 +73,17 @@ func cmpU128(ahi, alo, bhi, blo uint64) int {
 // inlined). The page shape was validated once by the caller's fixed
 // search view; every probe reads the persistent slot and the 4-byte
 // from key only.
-func greatestFixedV4(search format.FixedSearch, n int, addr uint32) (int, error) {
+func greatestFixedV4(search *format.FixedSearch, n int, addr uint32) (int, error) {
 	lo, hi := 0, n
 	best := -1
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(mid)
-		if err != nil {
-			return -1, err
+		midKey, ok := search.U32(mid)
+		if !ok {
+			return -1, format.FixedCellOutside()
 		}
-		if format.U32(cell[:4]) <= addr {
+		if midKey <= addr {
 			best = mid
 			lo = mid + 1
 		} else {
@@ -94,17 +94,16 @@ func greatestFixedV4(search format.FixedSearch, n int, addr uint32) (int, error)
 }
 
 // greatestFixedV6 is the v6 form of greatestFixedV4 (16-byte from key).
-func greatestFixedV6(search format.FixedSearch, n int, addrHi, addrLo uint64) (int, error) {
+func greatestFixedV6(search *format.FixedSearch, n int, addrHi, addrLo uint64) (int, error) {
 	lo, hi := 0, n
 	best := -1
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		work.KeyProbe(1)
-		cell, err := search.Cell(mid)
-		if err != nil {
-			return -1, err
+		keyHi, keyLo, ok := search.U128(mid)
+		if !ok {
+			return -1, format.FixedCellOutside()
 		}
-		keyHi, keyLo := format.U128(cell[:16])
 		if keyHi < addrHi || (keyHi == addrHi && keyLo <= addrLo) {
 			best = mid
 			lo = mid + 1

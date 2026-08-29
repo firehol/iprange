@@ -55,19 +55,25 @@ func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel
 func lowerBound[T any](codec Codec[T], page []byte, header *Header, key Key, insertion bool) (int, bool, error) {
 	if _, prefix := codec.(PrefixKeyProbe); prefix {
 		if cellLen, fixed := FixedCellSize(codec, header.Level); fixed {
+			// Emitted width loops probe the typed key words directly
+			// (no cell slice, no per-probe validation callback); a
+			// codec that validates extra cell fields takes the generic
+			// validated loop regardless of its width.
+			if _, validated := codec.(ProbeValidator); !validated {
+				switch codec.KeySize() {
+				case 4:
+					return fixedLowerBoundU32(page, header, cellLen, key, insertion)
+				case 8:
+					return fixedLowerBoundU64(page, header, cellLen, key, insertion)
+				case 12:
+					return fixedLowerBoundU64U32(page, header, cellLen, key, insertion)
+				case 16:
+					return fixedLowerBoundU128(page, header, cellLen, key, insertion)
+				}
+			}
 			var validate func(cell []byte) error
 			if v, ok := codec.(ProbeValidator); ok {
 				validate = v.ValidateProbeCell
-			}
-			switch codec.KeySize() {
-			case 4:
-				return fixedLowerBoundU32(page, header, cellLen, key, insertion, validate)
-			case 8:
-				return fixedLowerBoundU64(page, header, cellLen, key, insertion, validate)
-			case 12:
-				return fixedLowerBoundU64U32(page, header, cellLen, key, insertion, validate)
-			case 16:
-				return fixedLowerBoundU128(page, header, cellLen, key, insertion, validate)
 			}
 			return fixedLowerBound(page, header, cellLen, codec.KeySize(), key, insertion, validate)
 		}

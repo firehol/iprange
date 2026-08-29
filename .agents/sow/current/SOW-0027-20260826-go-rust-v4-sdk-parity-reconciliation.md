@@ -221,6 +221,31 @@ are being A/B-tested, not declared a floor). Evidence:
 v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-writer-gap-20260829.csv.
 Full plain and v4work suites pass with the 32 GB address-space cap.
 
+Read-path inlineable probe slice (2026-08-29, binding-criterion
+tracking): the external review's read-path leads were implemented and
+measured instead of declaring a floor. format.FixedSearch now uses
+pointer receivers; the typed accessors U32/U64/U64U32/U128 return
+(value, bool) with a pre-built errFixedCellOutside so the compiler
+inlines them into the search loops (verified via objdump: no per-probe
+call; U128 stays 7 cost over the inline budget and remains a call, v6
+follow-up). The reader's greatestFixedV4/V6 consume the typed probes
+and the tree's emitted fixedLowerBoundU32/U64/U64U32 loops were
+regenerated on the same accessors (validated codecs of any width keep
+the generic validated loop). Measured at this identity (matched host,
+same-session medians, evidence
+rust-ratio-reader-inline-20260829.csv): live-direct-random-lookup Go
+373.0 ms vs Rust 223.0 ms = 1.67x (was 1.74-1.91x); immutable-direct-
+random-lookup Go 340.7 ms vs Rust 205.7 ms = 1.66x (was ~1.91x).
+PGO builds measured as noise (~1%, rejected). Both full suites pass
+under the 32 GB address-space cap. Honest position against the
+binding <=1.3x criterion: reads improved ~10-13% but are still 1.66x;
+the residual is the per-lookup descent + header decode + per-probe
+persistent-slot validation and safe-slice overhead against Rust's
+unchecked loads (slotted_page.rs cell_at is unsafe with the same
+validation); reaching 1.3x in safe Go is not evidenced and likely
+requires either unsafe or a different search structure - tabled for
+the user with the evidence when the remaining slices are done.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact
