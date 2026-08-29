@@ -28,7 +28,13 @@ live here at the top of the SOW, not in SWARM.md.
 
 ## Status
 
-Status: completed
+Status: in-progress
+
+Sub-state (2026-08-29): reopened by the regression review recorded in
+the appended "Regression - 2026-08-29" section. The close was accepted
+back into current/ because the external review's verified findings
+(performance acceptance, worker containment, mixed-language evidence,
+parity gate, final-review scope) invalidate the completed close.
 
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
@@ -2504,3 +2510,90 @@ status, the artifact updates, and the move to done/.
 None. This SOW records an incorrect prior acceptance and the
 reconciliation that closed it, not a later regression of previously
 proven behavior.
+
+
+## Regression - 2026-08-29
+
+The completed close (commits 770484eb and 39bf2c66) was revisited by
+an external single-sol reviewer (read-only). Every material claim of
+that review was re-verified against the code, the specs, the CI
+workflows, and this SOW's own records. The close is reopened for five
+verified defects:
+
+1. P1 - Performance acceptance was bypassed. The user-set mandate
+   (read 1.2-1.6x, validation 1.5-2x, write 2-3.5x Rust) is still
+   exceeded at the close identity: nested-overwrite 4.200x,
+   live/immutable lookups 1.784/1.792x, live-validation 2.299x
+   (v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-acceptance-
+   20260828g.csv). This SOW recorded an open user decision for the
+   residual acceptance (the milestone-close decision paragraph in the
+   milestone-4 records) and no user decision was recorded before the
+   close; the close substituted a reviewer's P3 adjudication for the
+   required product acceptance. SOW-0030 confirms no user decision
+   exists. The earlier conversation direction (user: make this
+   optimal; pick the best-performance option) was not recorded in the
+   SOW either.
+2. P1 - Worker containment violates the specification.
+   binary-format-v4.md section 19 requires faultable validation and
+   recovery scans to run in a version-matched worker and to fail
+   before scanning when the worker is unavailable.
+   v4/go/internal/routing/routing_other.go runs the in-process
+   machines on every platform outside (linux||darwin||freebsd||
+   windows) x (amd64||arm64), and v4/go/doc.go documents that as
+   supported behavior. The worker binary cannot even compile on those
+   platforms today (internal/worker/atomics.go has assembly-backed
+   mapped-control atomics only for amd64/arm64), and CI actively runs
+   the full Go suite on linux/s390x (.github/workflows/big-endian.yml),
+   so the faultable scans run in the application process on a
+   CI-supported target. Unsupported targets must fail closed, per the
+   spec.
+3. P1 - Required mixed-language evidence is incomplete. The accepted
+   criteria require cross-language coverage of stale reader slots,
+   sidecar replacement, transition/reservation states, and publication
+   inspection. The implemented battery has five modes (reader,
+   exclusion, pinned, resolve, snapshot; v4/go/mixed_live_test.go); the
+   four coordination cases above do not exist as cross-language tests
+   in either direction.
+4. P2 - The parity gate does not prove Rust-to-Go parity. The gate
+   enumerates exported functions and methods only and explicitly
+   excludes types and constants (v4/go/parity_gate_test.go), it never
+   consumes the Rust export inventory (v4/go/parity_rust_public.tsv,
+   which is malformed around the lib-reexport rows), and it recorded
+   Cardinality129 as missing/internal while the type is publicly
+   exported as an alias (v4/go/types.go). A green gate therefore
+   cannot detect a newly missing Rust operation.
+5. P2 - The final reviewers did not review the final code. The
+   recorded final round covered 093ddb64..607d2086; the close commits
+   changed eleven Go files afterwards, and only two of the five
+   reviewers re-verified the working tree. No five-reviewer round ran
+   on the actual final revision.
+
+Why the previous validation missed these: the close treated reviewer
+adjudication as user acceptance on a recorded product decision; the
+supported-platform matrix was self-defined by the worker build state
+instead of the spec and the CI matrix; the parity gate verified
+Go-surface presence only, never the Rust inventory; and the final
+review round predated the final commits.
+
+Repair plan (recorded before implementation):
+
+- Performance: record the user's decision (implement the
+  best-performance option or explicitly accept the residual ratios)
+  and execute it; re-measure at the new identity.
+- Worker containment: fail closed with a typed error before any scan
+  on platforms without a worker build; update doc.go, the parity
+  records, and the s390x-relevant tests/CI expectations.
+- Mixed-language matrix: add the missing coordination modes (stale
+  slots, sidecar replacement, transition/reservation states,
+  publication inspection) to both directions of the mixed battery.
+- Parity gate: extend the surface enumeration to exported types and
+  constants, fix the Cardinality129 record, repair the Rust export
+  inventory, and make the gate consume it so a newly missing Rust
+  operation fails CI.
+- Final review: repeat the full five-reviewer round on the actual
+  final revision, then close in one lifecycle commit (status change,
+  artifact updates, and done/ move together).
+
+Validation for the repair: every slice keeps the standing battery
+(plain + v4work suites, vet, gofmt, race/checkptr, parity gate, Rust
+conformance corpus, matched Rust-ratio evidence), all under nice.
