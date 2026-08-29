@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Wire primitive and shared-codec unit tests (Rust worker/wire.rs): the
 // little-endian scalar codecs, the path and sized-bytes envelopes, the

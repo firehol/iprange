@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Validation-mode client arm tests (Rust worker/client/validation.rs
 // client_tests.rs): the completed and streaming sessions against the

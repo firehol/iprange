@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Publication-fact wire codecs (Rust worker/wire_publication.rs): the
 // private output attempt, the full publication attempt/result, the

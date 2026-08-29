@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd
+//go:build (linux || darwin || freebsd) && (amd64 || arm64)
 
 package worker
 

@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Worker-side fault memory (Rust worker.rs thread-local
 // UNREADABLE_SOURCE_PAGES with set_unreadable_source_pages /

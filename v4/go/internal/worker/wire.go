@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Worker wire codecs (Rust worker/wire.rs): the little-endian
 // Writer/Reader primitives over the two mapped payload buffers (the

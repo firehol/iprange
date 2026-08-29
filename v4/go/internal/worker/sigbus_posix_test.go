@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd
+//go:build (linux || darwin || freebsd) && (amd64 || arm64)
 
 // Subprocess proofs of the SIGBUS isolation handler over a real mapped
 // fault (Rust worker/posix.rs tests, run natively on linux, darwin, and

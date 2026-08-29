@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Command iprange-v4-worker is the isolated mapped-fault worker process
 // of the Go v4 SDK (Rust iprange-livedb/src/bin/iprange-v4-worker.rs +

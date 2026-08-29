@@ -40,7 +40,7 @@ func (m *rangeMemoryStore) Inspect(pageNumber uint32) ([]byte, error) {
 }
 
 func (m *rangeMemoryStore) Allocate() (uint32, error) {
-	if len(m.pages) >= 1<<32 {
+	if uint64(len(m.pages)) >= 1<<32 {
 		return 0, invalid("test page space exhausted")
 	}
 	pageNumber := uint32(len(m.pages))

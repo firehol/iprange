@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Control-page unit tests (no signals, no subprocesses): header layout,
 // exact-extent open, arm/disarm, and the fault-record rejection state.

@@ -1,4 +1,4 @@
-//go:build linux && amd64 && v4work
+//go:build linux && amd64 && v4work && (amd64 || arm64)
 
 // The 15-case previous-disposition signal matrix (Rust
 // worker/posix.rs::tests::signal_chain_subprocess_matrix), running under

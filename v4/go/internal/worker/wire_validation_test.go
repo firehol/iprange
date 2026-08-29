@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Validation-mode wire unit tests (Rust worker/wire_validation.rs): the
 // request with all three mode arms, the completed and operational-

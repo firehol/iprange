@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Fixed wire enum tags of the publication facts (Rust
 // wire_publication.rs enum_codec section): every tag table of the

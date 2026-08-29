@@ -47,7 +47,7 @@ func (m *memoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
 }
 
 func (m *memoryStore) Allocate() (uint32, error) {
-	if len(m.pages) >= 1<<32 {
+	if uint64(len(m.pages)) >= 1<<32 {
 		return 0, invalid("test page space exhausted")
 	}
 	pageNumber := uint32(len(m.pages))

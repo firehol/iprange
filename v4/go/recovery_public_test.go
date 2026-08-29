@@ -76,6 +76,9 @@ func publicRecoverySource(t *testing.T, path string) {
 // proves the facade converts the internal failure cause onto the
 // public error type with the exact class.
 func TestRecoverImmutablePublicSinkFailureReportsThePublicErrorClass(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	requirePublicationSecurity(t)
 	installWorkerForTest(t)
 	dir := t.TempDir()
@@ -112,6 +115,9 @@ func TestRecoverImmutablePublicSinkFailureReportsThePublicErrorClass(t *testing.
 // TestRecoverImmutablePublicNilBudgetRefusesBeforeAnyPathAccess pins
 // the facade boundary guard (the snapshot nil-budget precedent).
 func TestRecoverImmutablePublicNilBudgetRefusesBeforeAnyPathAccess(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	result, failure := RecoverImmutable("/nonexistent/source.v4", nil, "/nonexistent/output.v4", nil, nil, nil)
 	if failure == nil {
 		t.Fatal("nil budget accepted")
@@ -128,6 +134,9 @@ func TestRecoverImmutablePublicNilBudgetRefusesBeforeAnyPathAccess(t *testing.T)
 // TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt pins
 // the pre-creation cancellation position through the public token.
 func TestRecoverImmutablePublicCancellationRefusesBeforeTheAttempt(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	requireFileCreation(t)
 	installWorkerForTest(t)
 	dir := t.TempDir()

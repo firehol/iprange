@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Per-mode worker drivers (Rust worker.rs run_validation / run_recovery
 // / inspect / cleanup and the callback proxies): each driver reads its

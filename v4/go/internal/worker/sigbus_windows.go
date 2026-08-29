@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && (amd64 || arm64)
 
 // Windows mapped-fault containment machine (Rust worker/windows.rs
 // parity): the isolated worker registers one first-priority vectored

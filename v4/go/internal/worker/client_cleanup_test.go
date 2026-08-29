@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Cleanup-mode wire and arm tests (Rust worker/cleanup.rs + wire_
 // cleanup.rs): the publication seam's three discard arms run against

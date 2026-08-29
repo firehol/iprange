@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Worker client drive seam (Rust worker/client.rs): spawning the
 // isolated worker process, the version handshake, the drive loop with

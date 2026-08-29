@@ -11,6 +11,7 @@
 package live
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"unsafe"
@@ -23,29 +24,26 @@ import (
 const directoryScanBufferSize = 32 << 10
 
 // readInt returns the size-byte unsigned integer in native byte order
-// at offset off (Go os dir_unix.go readInt).
+// at offset off (Go os dir_unix.go readInt): the kernel fills dirent
+// integer fields in the platform's native byte order, so big-endian
+// targets (s390x, ppc64, mips/mips64) need the BE decode.
 func readInt(b []byte, off, size uintptr) (u uint64, ok bool) {
 	if len(b) < int(off+size) {
 		return 0, false
 	}
-	_ = b[off : off+size]
+	field := b[off : off+size]
 	switch size {
 	case 1:
-		u = uint64(b[off])
+		return uint64(field[0]), true
 	case 2:
-		_ = b[off+1]
-		u = uint64(b[off]) | uint64(b[off+1])<<8
+		return uint64(binary.NativeEndian.Uint16(field)), true
 	case 4:
-		_ = b[off+3]
-		u = uint64(b[off]) | uint64(b[off+1])<<8 | uint64(b[off+2])<<16 | uint64(b[off+3])<<24
+		return uint64(binary.NativeEndian.Uint32(field)), true
 	case 8:
-		_ = b[off+7]
-		u = uint64(b[off]) | uint64(b[off+1])<<8 | uint64(b[off+2])<<16 | uint64(b[off+3])<<24 |
-			uint64(b[off+4])<<32 | uint64(b[off+5])<<40 | uint64(b[off+6])<<48 | uint64(b[off+7])<<56
+		return binary.NativeEndian.Uint64(field), true
 	default:
 		return 0, false
 	}
-	return u, true
 }
 
 // direntReclen returns the record length of one dirent record (Go os

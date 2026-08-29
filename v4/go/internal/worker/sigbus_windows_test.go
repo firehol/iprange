@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && (amd64 || arm64)
 
 // Subprocess proofs of the Windows vectored EXCEPTION_IN_PAGE_ERROR
 // containment handler (Rust worker/windows.rs tests): the owned-fault

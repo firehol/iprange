@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Full worker control-page surface (Rust worker/control.rs, wire-era
 // methods): the header identity, the session fields (pid, opcode, poll

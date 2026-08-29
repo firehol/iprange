@@ -1,3 +1,5 @@
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
+
 // Package worker owns the isolated mapped-fault worker coordination: the
 // 1 MiB control mapping (Rust worker/control.rs) and the SIGBUS isolation
 // handler (Rust worker/posix.rs). The control file is a mapped

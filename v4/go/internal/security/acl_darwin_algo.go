@@ -48,10 +48,10 @@ func kauthFilesecSize(entries int) int {
 const (
 	darwinSysFchmodExtended = uintptr(283)
 	darwinSysFstatExtended  = uintptr(281)
-	darwinRemoveACL         = uintptr(1)                  // libc _FILESEC_REMOVE_ACL
-	darwinUIDNone           = uintptr(0xFFFFFFFFFFFFFF9B) // KAUTH_UID_NONE (~0-100)
-	darwinGIDNone           = uintptr(0xFFFFFFFFFFFFFF9B) // KAUTH_GID_NONE (~0-100)
-	darwinModeUnchanged     = uintptr(^uintptr(0))        // -1: leave mode untouched
+	darwinRemoveACL         = uintptr(1)           // libc _FILESEC_REMOVE_ACL
+	darwinUIDNone           = ^uintptr(100)        // KAUTH_UID_NONE (2^64-101 on 64-bit; the darwin sentinel, portable to 32-bit words)
+	darwinGIDNone           = ^uintptr(100)        // KAUTH_GID_NONE (darwin sentinel parity)
+	darwinModeUnchanged     = uintptr(^uintptr(0)) // -1: leave mode untouched
 )
 
 // darwinACLAppliedAt classifies one fchmod_extended outcome (Rust

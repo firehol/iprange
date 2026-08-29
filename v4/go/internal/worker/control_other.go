@@ -1,51 +1,13 @@
-//go:build !linux && !darwin && !freebsd && !windows
+//go:build !((linux || darwin || freebsd || windows) && (amd64 || arm64))
 
+// Package worker has no implementation on this platform. The
+// mapped-fault control surface, the SIGBUS/VEH handlers, and the
+// client arms exist only on the worker cross-build matrix (linux,
+// darwin, freebsd, and windows for amd64 and arm64; the mapped-control
+// atomics are hand-written assembly for exactly those combinations).
+// Nothing in the SDK routes here: the routing facade refuses faultable
+// operations with the typed worker-unavailable class before any source
+// scan or destination mutation (binary-format-v4.md section 19). This
+// file exists only so module-wide builds and test sweeps do not fail
+// on "build constraints exclude all Go files".
 package worker
-
-import (
-	"github.com/firehol/iprange/v4/go/internal/format"
-)
-
-// Control is the platform stub: the mapped-fault worker surface is
-// implemented for linux, darwin, freebsd, and windows (the raw-syscall
-// POSIX machines and the Windows VEH machine); any other platform keeps
-// this typed refusal stance. Every constructor refuses before path
-// access, exactly like the mapping owner's platform refusals, so the
-// package cross-compiles while the worker surface stays typed and
-// honest.
-type Control struct{}
-
-// workerRefusal is the single typed refusal for the whole worker surface
-// on platforms without a proven implementation.
-func workerRefusal() error {
-	return &format.Error{Code: format.CodeOSUnsupported, Detail: "worker mapped-fault isolation is not implemented on this platform"}
-}
-
-// CreateParent refuses worker creation on unsupported platforms.
-func CreateParent() (*Control, error) {
-	return nil, workerRefusal()
-}
-
-// OpenWorker refuses worker attachment on unsupported platforms.
-func OpenWorker(_ string) (*Control, error) {
-	return nil, workerRefusal()
-}
-
-// RemovePath is unreachable on unsupported platforms (no Control exists).
-func (*Control) RemovePath() error { return nil }
-
-// Arm refuses probing on unsupported platforms.
-func (*Control) Arm(_ uint64, _ MappingRole, _ uintptr, _ uint64) error {
-	return workerRefusal()
-}
-
-// Disarm is a no-op on unsupported platforms (no Control exists).
-func (*Control) Disarm() {}
-
-// FaultRecord refuses record reads on unsupported platforms.
-func (*Control) FaultRecord() (FaultRecord, error) {
-	return FaultRecord{}, workerRefusal()
-}
-
-// Close is a no-op on unsupported platforms (no Control exists).
-func (*Control) Close() {}

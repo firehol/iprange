@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Validation-mode wire codecs (Rust worker/wire_validation.rs): the
 // validation request, the completed/operational-failure result with

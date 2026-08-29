@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Recovery-mode client arm (Rust worker/client/recovery.rs): the
 // parent side of one worker recovery session, composed over the

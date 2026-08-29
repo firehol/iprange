@@ -1,4 +1,4 @@
-//go:build freebsd
+//go:build freebsd && (amd64 || arm64)
 
 // FreeBSD mapped-fault containment machine (Rust worker/posix.rs on
 // FreeBSD): the isolated worker pins one thread, installs a SIGBUS

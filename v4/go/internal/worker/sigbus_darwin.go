@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && (amd64 || arm64)
 
 // Darwin mapped-fault containment machine (Rust worker/posix.rs on
 // macOS): the isolated worker pins one thread, installs a SIGBUS

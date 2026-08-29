@@ -19,6 +19,9 @@ import (
 const formatPageSizePublic = format.PageSize
 
 func TestPublicValidateCancellation(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	token := NewCancellationToken()
 	token.Cancel()
 	_, failure := Validate("", ValidationModeImmutableCurrent, HeapOnly(1<<20, 1), token, nil)
@@ -40,6 +43,9 @@ func TestPublicValidateCancellation(t *testing.T) {
 // cleanly (through the isolated worker on linux/amd64), and the
 // released reader slot is claimable again.
 func TestPublicValidateLiveCleanSweep(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	requireLiveCreation(t)
 	installWorkerForTest(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
@@ -119,6 +125,9 @@ func TestPublicValidateLiveCleanSweep(t *testing.T) {
 // (page_count * page size equals the current reader's committed
 // length) and leaves no findings.
 func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
+	if !workerRouted() {
+		t.Skip("faultable facade requires the version-matched worker binary (worker cross-build matrix)")
+	}
 	requireLiveCreation(t)
 	installWorkerForTest(t)
 	type pair struct {

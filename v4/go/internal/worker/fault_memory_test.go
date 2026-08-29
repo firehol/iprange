@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Fault-memory tests (Rust worker.rs UNREADABLE_SOURCE_PAGES thread
 // local): the sorting and duplicate refusal of the session source-page

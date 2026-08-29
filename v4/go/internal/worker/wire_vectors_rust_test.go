@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Byte-identical cross-language worker-wire fixtures (SOW-0025
 // milestone-3 gate fix, SOW-0027 slice 2d native round): the worker-wire

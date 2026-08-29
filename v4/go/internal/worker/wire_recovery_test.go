@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Recovery-mode wire unit tests (Rust worker/wire_recovery.rs): the
 // request and outcome envelopes, the streamed unknown envelope, the

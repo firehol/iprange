@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || windows
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
 // Wire-era control-page unit tests (no signals, no subprocesses): the
 // extended header identity, the session fields, the payload and

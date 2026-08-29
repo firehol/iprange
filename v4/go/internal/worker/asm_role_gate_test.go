@@ -1,3 +1,5 @@
+//go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
+
 package worker
 
 import "testing"
