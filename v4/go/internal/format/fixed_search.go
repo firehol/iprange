@@ -12,6 +12,11 @@ type FixedSearch struct {
 	page    []byte
 	header  PageHeader
 	cellLen int
+	// maxStart is PageSize - cellLen, precomputed once by the shape
+	// check so every probe compares one field load (Rust keeps the
+	// same expression; the field keeps the probe under the compiler's
+	// inlining budget).
+	maxStart int
 }
 
 // NewFixedSearch validates the page shape once (Rust FixedSearch::new):
@@ -24,7 +29,7 @@ func NewFixedSearch(page []byte, header PageHeader, cellLen int) (FixedSearch, e
 		cellLen == 0 || cellLen > PageSize {
 		return FixedSearch{}, headerErr("fixed slotted-page search shape is invalid")
 	}
-	return FixedSearch{page: page, header: header, cellLen: cellLen}, nil
+	return FixedSearch{page: page, header: header, cellLen: cellLen, maxStart: PageSize - cellLen}, nil
 }
 
 // errFixedCellOutside is the one persistent-offset failure of every
@@ -46,7 +51,7 @@ func (f *FixedSearch) Cell(index int) ([]byte, error) {
 	work.CellProbe(1)
 	work.SlotRead(1)
 	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > PageSize-f.cellLen {
+	if start < int(f.header.Upper) || start > f.maxStart {
 		return nil, errFixedCellOutside
 	}
 	return f.page[start : start+f.cellLen], nil
@@ -63,7 +68,7 @@ func (f *FixedSearch) U32(index int) (uint32, bool) {
 	work.CellProbe(1)
 	work.SlotRead(1)
 	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > PageSize-f.cellLen {
+	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, false
 	}
 	return U32(f.page[start:]), true
@@ -78,7 +83,7 @@ func (f *FixedSearch) U64(index int) (uint64, bool) {
 	work.CellProbe(1)
 	work.SlotRead(1)
 	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > PageSize-f.cellLen {
+	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, false
 	}
 	return U64(f.page[start:]), true
@@ -94,7 +99,7 @@ func (f *FixedSearch) U64U32(index int) (uint64, uint32, bool) {
 	work.CellProbe(1)
 	work.SlotRead(1)
 	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > PageSize-f.cellLen {
+	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, 0, false
 	}
 	return U64(f.page[start:]), U32(f.page[start+8:]), true
@@ -104,15 +109,13 @@ func (f *FixedSearch) U64U32(index int) (uint64, uint32, bool) {
 // u128 low/high limb pair (format.U128/PutU128 wire order: low limb at
 // offset 0, high limb at offset 8).
 func (f *FixedSearch) U128(index int) (uint64, uint64, bool) {
-	if f.cellLen < 16 {
-		return 0, 0, false
-	}
 	work.CellProbe(1)
 	work.SlotRead(1)
 	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
-	if start < int(f.header.Upper) || start > PageSize-f.cellLen {
+	if start < int(f.header.Upper) || start > f.maxStart || f.cellLen < 16 {
 		return 0, 0, false
 	}
-	hi, lo := U128(f.page[start:])
+	lo := U64(f.page[start:])
+	hi := U64(f.page[start+8:])
 	return hi, lo, true
 }

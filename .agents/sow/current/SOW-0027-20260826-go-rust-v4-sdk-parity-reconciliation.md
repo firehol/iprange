@@ -246,6 +246,28 @@ validation); reaching 1.3x in safe Go is not evidenced and likely
 requires either unsafe or a different search structure - tabled for
 the user with the evidence when the remaining slices are done.
 
+Read-path U128 inline completion (2026-08-29, same slice): the v6
+follow-up recorded above is resolved. FixedSearch precomputes maxStart
+(PageSize - cellLen) once at construction, and the U128 probe drops its
+standalone cellLen<16 early return in favor of the width guard folded
+into the single extent check (start < upper || start > maxStart ||
+cellLen < 16), keeping the Rust cell_at extent semantics and the
+no-out-of-page guarantee with one return path. Compiler-verified: the
+U128 probe is now inlineable (cost 80, was 84-87) and
+greatestFixedV6/fixedLowerBoundU128 contain no per-probe call
+(objdump: only runtime.panicBounds guards remain; the remaining
+bounds checks are the documented safe-slice overhead vs Rust's unsafe
+cell_at loads). The benchmark matrix is IPv4-only for read scenarios
+(readSeededDirect seeds AddressFamilyIPv4 in both languages), so the
+v6 probe fix has no numeric matrix delta; the latest matched
+interleaved samplings (5 Go + 5 Rust each) sit inside the variance of
+the committed reader evidence: live Go 370.8 ms / Rust 234.3 ms =
+1.58x and immutable Go 348.3 ms / Rust 199.4 ms = 1.75x vs the
+committed 1.67x / 1.66x (Rust drift 223-247 ms live across sessions).
+A v6 read scenario for both benches is a listed follow-up, not part
+of this slice. Both full suites pass under the 32 GB address-space
+cap.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact
