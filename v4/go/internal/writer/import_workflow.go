@@ -66,7 +66,7 @@ func (e *WriterEdit) PushImportRange4(merge *ImportMerge, from, to uint32, id, w
 
 // PushImportRange6 is the IPv6 form of PushImportRange4.
 func (e *WriterEdit) PushImportRange6(merge *ImportMerge, fromHi, fromLo, toHi, toLo uint64, id, words uint32, check func() error) error {
-	return merge.push6(e.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, translatedMembership{id: id, words: words}, check)
+	return merge.push6(e.store, key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, translatedMembership{id: id, words: words}, check)
 }
 
 // FinishImportMerge4 completes the IPv4 import merge and returns the

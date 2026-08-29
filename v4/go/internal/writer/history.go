@@ -853,7 +853,7 @@ func familyInclusiveCardinalityOf[K any](codec rangeFamily[K], from, to K) (form
 	}
 	from6 := any(from).(key6)
 	to6 := any(to).(key6)
-	size, err := format.IPv6Inclusive(from6.hi, from6.lo, to6.hi, to6.lo)
+	size, err := format.IPv6Inclusive(from6.Hi, from6.Lo, to6.Hi, to6.Lo)
 	if err != nil {
 		return format.CardinalityZero(), overflow("IPv6 interval cardinality")
 	}

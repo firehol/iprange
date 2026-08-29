@@ -312,13 +312,13 @@ func writeNormalized4(workspace *immutableWorkspace, builder *OutputBuilder, spe
 				return format.CardinalityZero(), err
 			}
 		}
-		if record.value != 1 {
+		if record.Value != 1 {
 			return format.CardinalityZero(), corrupt("immutable feed workspace contains a non-coverage value")
 		}
-		if err := builder.PushInternedMembershipV4(uint32(record.from), uint32(record.to), membership); err != nil {
+		if err := builder.PushInternedMembershipV4(uint32(record.From), uint32(record.To), membership); err != nil {
 			return format.CardinalityZero(), err
 		}
-		count, err := format.IPv4Inclusive(uint32(record.from), uint32(record.to))
+		count, err := format.IPv4Inclusive(uint32(record.From), uint32(record.To))
 		if err != nil {
 			return format.CardinalityZero(), err
 		}
@@ -401,8 +401,8 @@ func normalizeFeed6(workspace *immutableWorkspace, nextBatch func() ([]FeedRange
 				if next == 0 {
 					return normalizedFeed[key6]{}, overflow("workflow input record count")
 				}
-				from := key6{hi: record.FromHi, lo: record.FromLo}
-				to := key6{hi: record.ToHi, lo: record.ToLo}
+				from := key6{Hi: record.FromHi, Lo: record.FromLo}
+				to := key6{Hi: record.ToHi, Lo: record.ToLo}
 				if _, err := pushPrivateUntracked(ctx, from, to, 1, &input); err != nil {
 					return normalizedFeed[key6]{}, err
 				}
@@ -458,13 +458,13 @@ func writeNormalized6(workspace *immutableWorkspace, builder *OutputBuilder, spe
 				return format.CardinalityZero(), err
 			}
 		}
-		if record.value != 1 {
+		if record.Value != 1 {
 			return format.CardinalityZero(), corrupt("immutable feed workspace contains a non-coverage value")
 		}
-		if err := builder.PushInternedMembershipV6(record.from.hi, record.from.lo, record.to.hi, record.to.lo, membership); err != nil {
+		if err := builder.PushInternedMembershipV6(record.From.Hi, record.From.Lo, record.To.Hi, record.To.Lo, membership); err != nil {
 			return format.CardinalityZero(), err
 		}
-		count, err := format.IPv6Inclusive(record.from.hi, record.from.lo, record.to.hi, record.to.lo)
+		count, err := format.IPv6Inclusive(record.From.Hi, record.From.Lo, record.To.Hi, record.To.Lo)
 		if err != nil {
 			return format.CardinalityZero(), err
 		}

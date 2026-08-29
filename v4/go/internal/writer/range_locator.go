@@ -252,7 +252,7 @@ type privateInputInsert[K any] struct {
 // probed first, then the ordinary local gap, learning the inserted leaf
 // after a successful local insert.
 func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *privateInput[K]) (privateInputInsert[K], error) {
-	if ctx.family.Less(r.to, r.from) {
+	if ctx.family.Less(r.To, r.From) {
 		return privateInputInsert[K]{}, invalid("range start is after its end")
 	}
 	if input.disabled() {
@@ -311,7 +311,7 @@ func probeCached[K any](ctx *rangeCtx[K], r rangeRecord[K], input *privateInput[
 	if !input.locator.enabled() || (input.adaptive && !input.probeLocator) || *ctx.root == 0 {
 		return cachedProbe{}, nil
 	}
-	selected, has := input.locator.candidate(ctx.family, r.from)
+	selected, has := input.locator.candidate(ctx.family, r.From)
 	if !has {
 		work.LeafLocatorMiss(1)
 		work.LeafLocatorFallback(1)
@@ -321,13 +321,13 @@ func probeCached[K any](ctx *rangeCtx[K], r rangeRecord[K], input *privateInput[
 	if err != nil {
 		return cachedProbe{}, err
 	}
-	gap := privateGap[K]{family: ctx.family, r: r}
+	gap := privateGap[K]{Family: ctx.family, R: r}
 	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, cell, gap)
 	if err != nil {
 		return cachedProbe{}, err
 	}
 	if inserted == tree.CachedInsertInserted {
-		if err := rangeRecordAdded(ctx, r.value); err != nil {
+		if err := rangeRecordAdded(ctx, r.Value); err != nil {
 			return cachedProbe{}, err
 		}
 		work.LeafLocatorHit(1)
@@ -348,7 +348,7 @@ func decodeCodecKey[K any](codec rangeFamily[K], key tree.Key) K {
 		return any(key4(key.U32())).(K)
 	}
 	hi, lo := key.U128()
-	return any(key6{hi: hi, lo: lo}).(K)
+	return any(key6{Hi: hi, Lo: lo}).(K)
 }
 
 // AssignmentInput is the public per-workflow private assignment input

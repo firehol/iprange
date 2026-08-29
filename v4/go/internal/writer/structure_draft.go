@@ -134,9 +134,9 @@ func (s *DraftStore) assignStructureInputV6(fromHi, fromLo, toHi, toLo uint64, s
 		return s.ClearV6(fromHi, fromLo, toHi, toLo)
 	}
 	if s.draft.rangeTreePrivate {
-		return s.assignInput6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, structure.id, input)
+		return s.assignInput6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, structure.id, input)
 	}
-	return s.assign6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, structure.id)
+	return s.assign6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, structure.id)
 }
 
 // deleteCurrentStructuredFeed deletes one feed and removes it from every
@@ -168,7 +168,7 @@ func (s *DraftStore) deleteCurrentStructuredFeed(feed FeedEntry, check func() er
 			s.commitRangeEdit(&s.draft.meta.RangeRoot, &s.draft.meta.RangeRecordCount, changed)
 		}
 	} else {
-		max6 := key6{hi: ^uint64(0), lo: ^uint64(0)}
+		max6 := key6{Hi: ^uint64(0), Lo: ^uint64(0)}
 		ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
 		changed, err = rangeTransform(ctx, key6{}, max6, func(store RangeStore, value optionalValue) (optionalValue, error) {
 			if !value.present {

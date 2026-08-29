@@ -286,7 +286,7 @@ func (s *DraftStore) deleteFeedMembershipDifference(member MembershipHandle, che
 	if s.draft.meta.AddressFamily == format.AddressFamilyIPv4 {
 		return s.applyMembership4(key4(0), key4(0xFFFFFFFF), member, MembershipDifference, check)
 	}
-	max6 := key6{hi: ^uint64(0), lo: ^uint64(0)}
+	max6 := key6{Hi: ^uint64(0), Lo: ^uint64(0)}
 	return s.applyMembership6(key6{}, max6, member, MembershipDifference, check)
 }
 
@@ -299,7 +299,7 @@ func (s *DraftStore) applyMembershipV4(from, to uint32, member MembershipHandle,
 // applyMembershipV6 applies one membership operation over an inclusive
 // IPv6 interval (Rust DraftStore::apply_membership_v6).
 func (s *DraftStore) applyMembershipV6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, operation MembershipOperation, check func() error) (bool, error) {
-	return s.applyMembership6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, member, operation, check)
+	return s.applyMembership6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, member, operation, check)
 }
 
 // deleteCurrentFeedMembership deletes one feed and clears its bit from

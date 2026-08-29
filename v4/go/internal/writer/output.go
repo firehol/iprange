@@ -478,7 +478,7 @@ func (b *OutputBuilder) PushDirectV4(from, to, value uint32) error {
 		if err := b.requireMode(format.ValueKindDirect, format.AddressFamilyIPv4); err != nil {
 			return err
 		}
-		return b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value})
+		return b.ranges4.push(b, rangeRecord[key4]{From: key4(from), To: key4(to), Value: value})
 	})
 }
 
@@ -488,7 +488,7 @@ func (b *OutputBuilder) PushDirectV6(fromHi, fromLo, toHi, toLo uint64, value ui
 		if err := b.requireMode(format.ValueKindDirect, format.AddressFamilyIPv6); err != nil {
 			return err
 		}
-		return b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value})
+		return b.ranges6.push(b, rangeRecord[key6]{From: key6{Hi: fromHi, Lo: fromLo}, To: key6{Hi: toHi, Lo: toLo}, Value: value})
 	})
 }
 
@@ -517,7 +517,7 @@ func pushMembershipWordsV4[W membershipWords](b *OutputBuilder, from, to uint32,
 		if err != nil {
 			return err
 		}
-		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{From: key4(from), To: key4(to), Value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -548,7 +548,7 @@ func pushMembershipWordsV6[W membershipWords](b *OutputBuilder, fromHi, fromLo, 
 		if err != nil {
 			return err
 		}
-		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{From: key6{Hi: fromHi, Lo: fromLo}, To: key6{Hi: toHi, Lo: toLo}, Value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -562,7 +562,7 @@ func (b *OutputBuilder) PushInternedMembershipV4(from, to, value uint32) error {
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv4); err != nil {
 			return err
 		}
-		if err := b.ranges4.push(b, rangeRecord[key4]{from: key4(from), to: key4(to), value: value}); err != nil {
+		if err := b.ranges4.push(b, rangeRecord[key4]{From: key4(from), To: key4(to), Value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)
@@ -576,7 +576,7 @@ func (b *OutputBuilder) PushInternedMembershipV6(fromHi, fromLo, toHi, toLo uint
 		if err := b.requireMode(format.ValueKindMembership, format.AddressFamilyIPv6); err != nil {
 			return err
 		}
-		if err := b.ranges6.push(b, rangeRecord[key6]{from: key6{hi: fromHi, lo: fromLo}, to: key6{hi: toHi, lo: toLo}, value: value}); err != nil {
+		if err := b.ranges6.push(b, rangeRecord[key6]{From: key6{Hi: fromHi, Lo: fromLo}, To: key6{Hi: toHi, Lo: toLo}, Value: value}); err != nil {
 			return err
 		}
 		return b.addMembershipReference(value)

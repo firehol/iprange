@@ -80,6 +80,54 @@ fix. The full plain and v4work suites pass with a 32 GB address-space
 cap (the previous un-capped writer run peaked above 60 GB anonymous
 RSS on this scenario).
 
+Sub-state (2026-08-29, write-path generator design): the nested-overwrite
+residual is mapped. Fresh profile at the probe slice (1M nested-
+overwrite, 1.17 s total): insertPrivateGap cum 660 ms (56%), the gap
+machinery (InsertIfLocalGap cum 620 ms, 53%) and the strict-replace
+chain (ReplaceLocalPredecessorWith cum 260 ms) dominate; runtime itab
+lookups alone cost 90 ms (7.7%). The Rust reference monomorphizes the
+same chain (range_mutation.rs over RangeCodec<Ipv4Key>/<Ipv6Key>),
+eliminating every per-record interface hop; Go pays rangeFamily,
+LocalGap, Codec, and ReadKeyLimbs interface dispatch plus per-record
+Key copies and double cell decodes at each seam.
+
+Slice I-1 design (implementing user option A, item 2): a second
+generator, internal/tree/genfamilies (mirroring the genprobe pattern),
+emits per-family concrete gap/replace layers in internal/tree -
+range_gap_v4.go and range_gap_v6.go - each carrying the concrete range
+family (key/record encode-decode, Next/Previous/Less/Equal, KeyOf), the
+private-gap probe, the gap selector, and family-specialized
+insertIfLocalGap / insertIfCachedInteriorGap / insertRejectedGap /
+replaceLocalPredecessorWith / replaceLocalRun entries with the codec
+and probe calls inlined (Rust's range_tree.rs lives inside the crate
+for the same reason). The writer keeps its generic family interface for
+the non-emitted paths; the existing per-family DraftStore entry points
+(assign4/6, assignInput4/6, clear4/6) route to the emitted entries
+through thin writer-side wrappers. Behavioral equivalence is enforced
+by differential tests (emitted versus generic on the memory store over
+randomized assign/clear/transform runs) plus the existing work-counter
+pins, conformance, and full suites. Success targets: nested-overwrite
+inside the 2-3.5x Rust-ratio envelope (today 4.04x/1M, Go 1,166-1,247
+ms vs Rust ~298-305 ms), then re-measure membership-import and
+update-ipsets-workflow. Slice I-2 (follow-up): the strict-replace
+writer chain (replaceStrictlyInside/replaceStrictCells/trim*/coalesce)
+through the same emitted seam.
+
+Slice I-1a delivered (2026-08-29): the canonical range family now lives
+in internal/tree/range_family.go (RangeKey4/RangeKey6/RangeRecord/
+RangeFamily/RangeCodec4/RangeCodec6/RangePrivateGap - Rust range_tree.rs
+lives inside the crate for the same reason), and the writer's
+range_codec.go aliases those types (key4/key6/rangeRecord/rangeFamily/
+rangeCodec4/rangeCodec6/privateGap). The writer's field accesses were
+renamed to the exported forms (from/from.From, to/To, value/Value,
+hi/Hi, lo/Lo, family/Family, r/R) under compiler guidance; only
+writer-local structs (change, segment, optionalValue, incomingRange,
+valueKind) keep their unexported fields. Behavior-neutral: plain and
+v4work full suites green, nested-overwrite timing unchanged. This
+shared type identity is what lets the emitted per-family gap layer
+return the same LocalInsert/LocalReject types the writer's generic
+machinery consumes.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact

@@ -75,7 +75,7 @@ func (p *HistoryProjection) Push6(fromHi, fromLo, toHi, toLo uint64, lastSeen ui
 	if p.core.draft == nil {
 		return &format.Error{Code: format.CodeNoPendingTransaction, Detail: "no changed transaction is pending"}
 	}
-	return p.merge6.push(p.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, lastSeen, check)
+	return p.merge6.push(p.store, key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, lastSeen, check)
 }
 
 // Finish ends the projection merge and assembles the projection report

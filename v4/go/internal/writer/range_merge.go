@@ -106,9 +106,9 @@ func newMergeOutput[K any](transaction uint64, valueKind uint8, family rangeFami
 // emit appends one output record, coalescing it into the pending record
 // when the values match and the ranges are adjacent (Rust Output::emit).
 func (o *mergeOutput[K]) emit(store *DraftStore, record rangeRecord[K]) error {
-	if o.hasPending && o.pending.value == record.value {
-		if next, ok := o.builder.family.Next(o.pending.to); ok && o.builder.family.Equal(next, record.from) {
-			o.pending.to = record.to
+	if o.hasPending && o.pending.Value == record.Value {
+		if next, ok := o.builder.family.Next(o.pending.To); ok && o.builder.family.Equal(next, record.From) {
+			o.pending.To = record.To
 			work.RangeCoalesced(1)
 			return nil
 		}
@@ -145,7 +145,7 @@ func (o *mergeOutput[K]) finish(store *DraftStore) (uint32, uint64, error) {
 // Output::push).
 func (o *mergeOutput[K]) push(store *DraftStore, record rangeRecord[K]) error {
 	if o.hasRefcount {
-		if err := o.refcounts.add(store, record.value, 1); err != nil {
+		if err := o.refcounts.add(store, record.Value, 1); err != nil {
 			return err
 		}
 	}
@@ -288,12 +288,12 @@ func (m *orderedMerge[V, P, K]) push(store *DraftStore, incoming incomingRange[V
 		if !m.hasOld {
 			return m.emit(store, copy.from, copy.to, noneValue(), someIncoming(copy.value))
 		}
-		if m.family.Less(m.old.to, copy.from) {
+		if m.family.Less(m.old.To, copy.from) {
 			if err := m.accountOld(store); err != nil {
 				return err
 			}
 			old := m.old
-			if err := m.emit(store, old.from, old.to, someValue(old.value), noneIncoming[V]()); err != nil {
+			if err := m.emit(store, old.From, old.To, someValue(old.Value), noneIncoming[V]()); err != nil {
 				return err
 			}
 			if err := m.advanceOld(store); err != nil {
@@ -301,44 +301,44 @@ func (m *orderedMerge[V, P, K]) push(store *DraftStore, incoming incomingRange[V
 			}
 			continue
 		}
-		if m.family.Less(copy.to, m.old.from) {
+		if m.family.Less(copy.to, m.old.From) {
 			return m.emit(store, copy.from, copy.to, noneValue(), someIncoming(copy.value))
 		}
 		if err := m.accountOld(store); err != nil {
 			return err
 		}
-		if m.family.Less(m.old.from, copy.from) {
+		if m.family.Less(m.old.From, copy.from) {
 			end, err := orderedPrevious(m.family, copy.from, "ordered merge old prefix")
 			if err != nil {
 				return err
 			}
 			old := m.old
-			if err := m.emit(store, old.from, end, someValue(old.value), noneIncoming[V]()); err != nil {
+			if err := m.emit(store, old.From, end, someValue(old.Value), noneIncoming[V]()); err != nil {
 				return err
 			}
-			m.old.from = copy.from
+			m.old.From = copy.from
 			continue
 		}
-		if m.family.Less(copy.from, m.old.from) {
-			end, err := orderedPrevious(m.family, m.old.from, "ordered merge input prefix")
+		if m.family.Less(copy.from, m.old.From) {
+			end, err := orderedPrevious(m.family, m.old.From, "ordered merge input prefix")
 			if err != nil {
 				return err
 			}
 			if err := m.emit(store, copy.from, end, noneValue(), someIncoming(copy.value)); err != nil {
 				return err
 			}
-			copy.from = m.old.from
+			copy.from = m.old.From
 			continue
 		}
-		end := m.old.to
+		end := m.old.To
 		if m.family.Less(copy.to, end) {
 			end = copy.to
 		}
 		old := m.old
-		if err := m.emit(store, old.from, end, someValue(old.value), someIncoming(copy.value)); err != nil {
+		if err := m.emit(store, old.From, end, someValue(old.Value), someIncoming(copy.value)); err != nil {
 			return err
 		}
-		if m.family.Equal(m.old.to, end) {
+		if m.family.Equal(m.old.To, end) {
 			if err := m.advanceOld(store); err != nil {
 				return err
 			}
@@ -347,7 +347,7 @@ func (m *orderedMerge[V, P, K]) push(store *DraftStore, incoming incomingRange[V
 			if err != nil {
 				return err
 			}
-			m.old.from = next
+			m.old.From = next
 		}
 		if m.family.Equal(copy.to, end) {
 			return nil
@@ -376,7 +376,7 @@ func (m *orderedMerge[V, P, K]) finish(store *DraftStore, check func() error) (P
 			return zero, err
 		}
 		old := m.old
-		if err := m.emit(store, old.from, old.to, someValue(old.value), noneIncoming[V]()); err != nil {
+		if err := m.emit(store, old.From, old.To, someValue(old.Value), noneIncoming[V]()); err != nil {
 			return zero, err
 		}
 		if err := m.advanceOld(store); err != nil {
@@ -422,8 +422,8 @@ func (m *orderedMerge[V, P, K]) finishPreserved(store *DraftStore, check func() 
 			return zero, err
 		}
 		old := m.old
-		value := old.value
-		if err := m.policy.observe(old.from, old.to, someValue(value), noneIncoming[V](), someValue(value)); err != nil {
+		value := old.Value
+		if err := m.policy.observe(old.From, old.To, someValue(value), noneIncoming[V](), someValue(value)); err != nil {
 			return zero, err
 		}
 		if err := m.advanceOld(store); err != nil {
@@ -457,7 +457,7 @@ func (m *orderedMerge[V, P, K]) emit(store *DraftStore, from, to K, old optional
 		return err
 	}
 	if new.present {
-		return m.output.emit(store, rangeRecord[K]{from: from, to: to, value: new.value})
+		return m.output.emit(store, rangeRecord[K]{From: from, To: to, Value: new.value})
 	}
 	return nil
 }
@@ -470,7 +470,7 @@ func (m *orderedMerge[V, P, K]) accountOld(store *DraftStore) error {
 			return corrupt("ordered merge lost its old range")
 		}
 		if m.hasOldRefcounts {
-			if err := m.oldRefcounts.add(store, m.old.value, -1); err != nil {
+			if err := m.oldRefcounts.add(store, m.old.Value, -1); err != nil {
 				return err
 			}
 		}
@@ -534,7 +534,7 @@ func mergeCoverage[P any, K any](store *DraftStore, source format.Meta, base for
 		if err != nil {
 			return 0, zero, err
 		}
-		if err := merge.push(store, incomingRange[uint32, K]{from: record.from, to: record.to, value: record.value}, check); err != nil {
+		if err := merge.push(store, incomingRange[uint32, K]{from: record.From, to: record.To, value: record.Value}, check); err != nil {
 			return 0, zero, err
 		}
 	}

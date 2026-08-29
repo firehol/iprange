@@ -188,8 +188,8 @@ func (u *unionInput[K]) pushOrdered(ctx *rangeCtx[K], codec rangeFamily[K], r ra
 		provenAscending := false
 		if u.hasPending {
 			next := u.pending
-			provenAscending = codec.Less(r.to, next.from) &&
-				(r.value != next.value || !touchesCodec(codec, r.to, next.from))
+			provenAscending = codec.Less(r.To, next.From) &&
+				(r.Value != next.Value || !touchesCodec(codec, r.To, next.From))
 		}
 		if !provenAscending {
 			u.ordered = orderedPrefix[K]{state: orderedFinished}
@@ -209,7 +209,7 @@ func (u *unionInput[K]) pushOrdered(ctx *rangeCtx[K], codec rangeFamily[K], r ra
 		return false, false, err
 	}
 	if pushed {
-		count, err := familyInclusiveCardinalityOf(codec, r.from, r.to)
+		count, err := familyInclusiveCardinalityOf(codec, r.From, r.To)
 		if err != nil {
 			return false, false, err
 		}
@@ -261,29 +261,29 @@ func (u *unionInput[K]) queue(codec rangeFamily[K], incoming rangeRecord[K]) (pe
 	}
 	pending = u.pending
 	touching := false
-	if !codec.Less(incoming.from, pending.from) {
-		touching = touchesCodec(codec, pending.to, incoming.from)
+	if !codec.Less(incoming.From, pending.From) {
+		touching = touchesCodec(codec, pending.To, incoming.From)
 	} else {
-		touching = touchesCodec(codec, incoming.to, pending.from)
+		touching = touchesCodec(codec, incoming.To, pending.From)
 	}
-	if pending.value == incoming.value && touching {
+	if pending.Value == incoming.Value && touching {
 		extendsTowardPrevious := false
 		if u.hasGap {
 			switch u.pendingGap {
 			case tree.EdgeFirst:
-				extendsTowardPrevious = codec.Less(pending.to, incoming.to)
+				extendsTowardPrevious = codec.Less(pending.To, incoming.To)
 			case tree.EdgeLast:
-				extendsTowardPrevious = codec.Less(incoming.from, pending.from)
+				extendsTowardPrevious = codec.Less(incoming.From, pending.From)
 			}
 		}
 		if extendsTowardPrevious {
 			u.hasGap = false
 		}
-		if codec.Less(incoming.from, pending.from) {
-			pending.from = incoming.from
+		if codec.Less(incoming.From, pending.From) {
+			pending.From = incoming.From
 		}
-		if codec.Less(pending.to, incoming.to) {
-			pending.to = incoming.to
+		if codec.Less(pending.To, incoming.To) {
+			pending.To = incoming.To
 		}
 		u.pending = pending
 		u.hasPending = true
@@ -296,7 +296,7 @@ func (u *unionInput[K]) queue(codec rangeFamily[K], incoming rangeRecord[K]) (pe
 	u.hasPending = true
 	if touching {
 		u.hasGap = false
-	} else if codec.Less(pending.from, incoming.from) {
+	} else if codec.Less(pending.From, incoming.From) {
 		u.pendingGap = tree.EdgeLast
 		u.hasGap = true
 	} else {
@@ -333,7 +333,7 @@ func pushPrivateUntracked[K any](ctx *rangeCtx[K], from, to K, value uint32, inp
 	if ctx.family.Less(to, from) {
 		return false, invalid("range start is after its end")
 	}
-	pending, knownGap, hasGap, apply := input.queue(ctx.family, rangeRecord[K]{from: from, to: to, value: value})
+	pending, knownGap, hasGap, apply := input.queue(ctx.family, rangeRecord[K]{From: from, To: to, Value: value})
 	if !apply {
 		return false, nil
 	}
@@ -350,7 +350,7 @@ func pushPrivateUntracked[K any](ctx *rangeCtx[K], from, to K, value uint32, inp
 	if !wasGeneral && input.union.isGeneral() {
 		input.enableGeneral()
 		if p, _, _, has := input.takePending(); has {
-			c, err := unionPrivateUntrackedGeneral(ctx, p.from, p.to, p.value, &input.assignment)
+			c, err := unionPrivateUntrackedGeneral(ctx, p.From, p.To, p.Value, &input.assignment)
 			if err != nil {
 				return false, err
 			}
@@ -395,7 +395,7 @@ func finishInputUntracked[K any](ctx *rangeCtx[K], input *unionInput[K]) (bool, 
 // general assignment input (Rust apply_pending).
 func applyPending[K any](ctx *rangeCtx[K], pending rangeRecord[K], knownGap tree.Edge, hasGap bool, input *unionInput[K]) (bool, error) {
 	if input.union.isGeneral() {
-		return unionPrivateUntrackedGeneral(ctx, pending.from, pending.to, pending.value, &input.assignment)
+		return unionPrivateUntrackedGeneral(ctx, pending.From, pending.To, pending.Value, &input.assignment)
 	}
 	return unionPrivateUntrackedGap(ctx, pending, knownGap, hasGap, &input.union)
 }
@@ -403,7 +403,7 @@ func applyPending[K any](ctx *rangeCtx[K], pending rangeRecord[K], knownGap tree
 // unionPrivateUntrackedGap applies one range through the monotonic union
 // state (Rust union_private_untracked_gap).
 func unionPrivateUntrackedGap[K any](ctx *rangeCtx[K], incoming rangeRecord[K], knownGap tree.Edge, hasGap bool, state *unionState[K]) (bool, error) {
-	if ctx.family.Less(incoming.to, incoming.from) {
+	if ctx.family.Less(incoming.To, incoming.From) {
 		return false, invalid("range start is after its end")
 	}
 	return applyPrivate(ctx, incoming, state, knownGap, hasGap)
@@ -415,7 +415,7 @@ func unionPrivateUntrackedGeneral[K any](ctx *rangeCtx[K], from, to K, value uin
 	if ctx.family.Less(to, from) {
 		return false, invalid("range start is after its end")
 	}
-	incoming := rangeRecord[K]{from: from, to: to, value: value}
+	incoming := rangeRecord[K]{From: from, To: to, Value: value}
 	if input.disabled() {
 		return applyGeneral(ctx, incoming)
 	}
@@ -449,13 +449,13 @@ func insertPrivateEdge[K any](ctx *rangeCtx[K], incoming rangeRecord[K], positio
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord[K]]{}, err
 	}
-	gap := privateGap[K]{family: ctx.family, r: incoming}
+	gap := privateGap[K]{Family: ctx.family, R: incoming}
 	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, cell, position, edge, hasGap && knownGap == edge, gap)
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord[K]]{}, err
 	}
 	if result.Inserted {
-		if err := rangeRecordAdded(ctx, incoming.value); err != nil {
+		if err := rangeRecordAdded(ctx, incoming.Value); err != nil {
 			return tree.EdgeInsert[rangeRecord[K]]{}, err
 		}
 	}
@@ -468,7 +468,7 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 	if state.order == unionOrderGeneral {
 		return applyGeneral(ctx, incoming)
 	}
-	order, direction, hasDirection := state.plan(ctx.family, incoming.from)
+	order, direction, hasDirection := state.plan(ctx.family, incoming.From)
 	hasCached := hasDirection && state.hasEdge
 	if !hasDirection && state.hasEdge {
 		if err := finishPrivateUntracked(ctx, state); err != nil {
@@ -487,7 +487,7 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 			return false, err
 		}
 		if result.Inserted {
-			state.finish(incoming.from, order, result.Edge)
+			state.finish(incoming.From, order, result.Edge)
 			return true, nil
 		}
 		rejected, hasRejected = result.Reject, result.Rejected
@@ -502,7 +502,7 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 				e := tree.RootEdge(*ctx.root)
 				edge = &e
 			}
-			state.finish(incoming.from, order, edge)
+			state.finish(incoming.From, order, edge)
 			return true, nil
 		}
 		rejected, hasRejected = result.Reject, result.Rejected
@@ -519,7 +519,7 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 		e := tree.ConsistentEdge(position)
 		edge = &e
 	}
-	state.finish(incoming.from, order, edge)
+	state.finish(incoming.From, order, edge)
 	return changed, nil
 }
 
@@ -582,27 +582,27 @@ type localUnionDecision[K any] struct {
 // local_union_plan): ok=false sends the range to the general run.
 func localUnionPlan[K any](family rangeFamily[K], rejected tree.LocalReject[rangeRecord[K]], incoming rangeRecord[K]) (localUnionDecision[K], bool) {
 	predecessor, hasPredecessor := rejected.Predecessor()
-	if hasPredecessor && !family.Less(predecessor.to, incoming.to) {
+	if hasPredecessor && !family.Less(predecessor.To, incoming.To) {
 		return localUnionDecision[K]{noChange: true}, true
 	}
-	usePredecessor := hasPredecessor && touchesCodec(family, predecessor.to, incoming.from)
+	usePredecessor := hasPredecessor && touchesCodec(family, predecessor.To, incoming.From)
 	if !usePredecessor && !hasPredecessor && !rejected.PredecessorComplete() {
 		return localUnionDecision[K]{}, false
 	}
 	merged := incoming
 	if usePredecessor {
-		merged.from = predecessor.from
-		if family.Less(merged.to, predecessor.to) {
-			merged.to = predecessor.to
+		merged.From = predecessor.From
+		if family.Less(merged.To, predecessor.To) {
+			merged.To = predecessor.To
 		}
 	}
 	successor, hasSuccessor := rejected.Successor()
-	useSuccessor := hasSuccessor && touchesCodec(family, merged.to, successor.from)
+	useSuccessor := hasSuccessor && touchesCodec(family, merged.To, successor.From)
 	if useSuccessor {
-		if family.Less(successor.to, merged.to) {
+		if family.Less(successor.To, merged.To) {
 			return localUnionDecision[K]{}, false
 		}
-		merged.to = successor.to
+		merged.To = successor.To
 	} else if !hasSuccessor && !rejected.SuccessorComplete() {
 		return localUnionDecision[K]{}, false
 	}
@@ -641,7 +641,7 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 			return false, tree.PrivatePosition{}, false, err
 		}
 	}
-	if hasPredecessor && !ctx.family.Less(predecessor.to, incoming.to) {
+	if hasPredecessor && !ctx.family.Less(predecessor.To, incoming.To) {
 		return false, rejected.IntoPosition(), true, nil
 	}
 	merged := incoming
@@ -651,12 +651,12 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 	// key the tree may not own.
 	var runStart K
 	hasFirst := false
-	if hasPredecessor && touchesCodec(ctx.family, predecessor.to, incoming.from) {
-		merged.from = predecessor.from
-		if ctx.family.Less(merged.to, predecessor.to) {
-			merged.to = predecessor.to
+	if hasPredecessor && touchesCodec(ctx.family, predecessor.To, incoming.From) {
+		merged.From = predecessor.From
+		if ctx.family.Less(merged.To, predecessor.To) {
+			merged.To = predecessor.To
 		}
-		runStart = merged.from
+		runStart = merged.From
 		hasFirst = true
 	} else {
 		successor, hasSuccessor := rejected.Successor()
@@ -667,8 +667,8 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 				return false, tree.PrivatePosition{}, false, err
 			}
 		}
-		if hasSuccessor && touchesCodec(ctx.family, merged.to, successor.from) {
-			runStart = successor.from
+		if hasSuccessor && touchesCodec(ctx.family, merged.To, successor.From) {
+			runStart = successor.From
 			hasFirst = true
 		}
 	}
@@ -686,17 +686,17 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 	removed := uint64(0)
 	for {
 		result, err := tree.RemoveLeafRun(ctx.family, ctx.store, ctx.root, ctx.family.KeyOf(nextStart), func(r rangeRecord[K]) (bool, error) {
-			if r.value != incoming.value {
+			if r.Value != incoming.Value {
 				return false, corrupt("constant-value tree contains another value")
 			}
-			if !touchesCodec(ctx.family, merged.to, r.from) {
+			if !touchesCodec(ctx.family, merged.To, r.From) {
 				return false, nil
 			}
-			if ctx.family.Less(r.from, merged.from) {
-				merged.from = r.from
+			if ctx.family.Less(r.From, merged.From) {
+				merged.From = r.From
 			}
-			if ctx.family.Less(merged.to, r.to) {
-				merged.to = r.to
+			if ctx.family.Less(merged.To, r.To) {
+				merged.To = r.To
 			}
 			return true, nil
 		})
@@ -714,7 +714,7 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 		if !result.HasFollowing {
 			break
 		}
-		if !touchesCodec(ctx.family, merged.to, result.Following.Leaf.from) {
+		if !touchesCodec(ctx.family, merged.To, result.Following.Leaf.From) {
 			break
 		}
 		nextStart = decodeCodecKey(ctx.family, result.Following.Key)

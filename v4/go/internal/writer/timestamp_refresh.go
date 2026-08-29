@@ -216,7 +216,7 @@ type batchedRemovals6 struct {
 }
 
 func (b *batchedRemovals6) push(removal firstSeenRemoval[key6]) error {
-	b.records[b.length] = FirstSeenRemoval6{FromHi: removal.from.hi, FromLo: removal.from.lo, ToHi: removal.to.hi, ToLo: removal.to.lo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
+	b.records[b.length] = FirstSeenRemoval6{FromHi: removal.from.Hi, FromLo: removal.from.Lo, ToHi: removal.to.Hi, ToLo: removal.to.Lo, FirstSeen: removal.firstSeen, Addresses: removal.addresses}
 	b.length++
 	if b.length == firstSeenRemovalBatch {
 		return b.flush()

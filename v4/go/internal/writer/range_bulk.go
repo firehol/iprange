@@ -174,7 +174,7 @@ func (b *rangeBulkBuilder[K]) tryPush(store tree.Store, record rangeRecord[K]) (
 	if err != nil {
 		return false, err
 	}
-	if err := b.pushLeafCell(store, record.from, cell[:cellLen]); err != nil {
+	if err := b.pushLeafCell(store, record.From, cell[:cellLen]); err != nil {
 		return false, err
 	}
 	b.previous = record
@@ -213,25 +213,25 @@ func (b *rangeBulkBuilder[K]) pushLeafCell(store tree.Store, first K, cell []byt
 }
 
 func (b *rangeBulkBuilder[K]) canAppend(record rangeRecord[K]) (bool, error) {
-	if b.family.Less(record.to, record.from) {
+	if b.family.Less(record.To, record.From) {
 		return false, invalid("range start is after its end")
 	}
-	if b.valueKind != format.ValueKindDirect && record.value == 0 {
+	if b.valueKind != format.ValueKindDirect && record.Value == 0 {
 		return false, corrupt("indirect range value is zero")
 	}
 	if !b.hasPrevious {
 		return true, nil
 	}
 	previous := b.previous
-	if b.family.Equal(previous.to, record.from) || !b.family.Less(previous.to, record.from) {
+	if b.family.Equal(previous.To, record.From) || !b.family.Less(previous.To, record.From) {
 		return false, nil
 	}
 	// The comparator above covers from<=to; the canonical rules reject
 	// overlap and adjacency with the same value (Rust can_append): from
 	// must be strictly after the previous to, and adjacent same-value
 	// ranges must be merged by the caller.
-	next, ok := b.family.Next(previous.to)
-	if ok && previous.value == record.value && b.family.Equal(next, record.from) {
+	next, ok := b.family.Next(previous.To)
+	if ok && previous.Value == record.Value && b.family.Equal(next, record.From) {
 		return false, nil
 	}
 	return true, nil

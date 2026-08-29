@@ -301,8 +301,8 @@ func TestFeedMergeEmptyMapCreate(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("sealed records = %d, want 2", len(records))
 	}
-	if uint32(records[0].from) != 0 || uint32(records[0].to) != 9 || records[0].value != member.id ||
-		uint32(records[1].from) != 20 || uint32(records[1].to) != 29 || records[1].value != member.id {
+	if uint32(records[0].From) != 0 || uint32(records[0].To) != 9 || records[0].Value != member.id ||
+		uint32(records[1].From) != 20 || uint32(records[1].To) != 29 || records[1].Value != member.id {
 		t.Fatalf("sealed records = %+v, want member@[0,9] and member@[20,29]", records)
 	}
 }
@@ -435,17 +435,17 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		{0, 3}, {4, 4}, {5, 12}, {13, 15}, {16, 19}, {20, 22}, {25, 35},
 	}
 	for index, record := range records {
-		if uint32(record.from) != uint32(want[index][0]) || uint32(record.to) != uint32(want[index][1]) {
+		if uint32(record.From) != uint32(want[index][0]) || uint32(record.To) != uint32(want[index][1]) {
 			t.Fatalf("merged record %d = %+v, want range %v", index, record, want[index])
 		}
 	}
-	if records[0].value != recentBit || records[3].value != combined || records[4].value != recentBit ||
-		records[5].value != member.id || records[6].value != veryRecentBit {
+	if records[0].Value != recentBit || records[3].Value != combined || records[4].Value != recentBit ||
+		records[5].Value != member.id || records[6].Value != veryRecentBit {
 		t.Fatalf("unchanged segment values = %d %d %d %d %d, want the committed ids",
-			records[0].value, records[3].value, records[4].value, records[5].value, records[6].value)
+			records[0].Value, records[3].Value, records[4].Value, records[5].Value, records[6].Value)
 	}
-	if records[1].value == records[2].value || records[1].value == recentBit || records[2].value == combined ||
-		records[1].value == member.id || records[2].value == member.id {
+	if records[1].Value == records[2].Value || records[1].Value == recentBit || records[2].Value == combined ||
+		records[1].Value == member.id || records[2].Value == member.id {
 		t.Fatal("covered segments did not intern fresh union bitmaps")
 	}
 	unrelated, _, err := store.lookupFeed("unrelated")
@@ -457,13 +457,13 @@ func TestFeedMergeCoverageAppliesMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	var probe [3]byte
-	if err := store.selectedMembershipBits(records[1].value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(records[1].Value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 0 || probe[1] != 1 || probe[2] != 1 {
 		t.Fatalf("[4,4] bits = %v %v %v, want recent+member only", probe[0], probe[1], probe[2])
 	}
-	if err := store.selectedMembershipBits(records[2].value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
+	if err := store.selectedMembershipBits(records[2].Value, []uint32{unrelated.Index, recent.Index, memberFeed.Index}, probe[:], nilCheck); err != nil {
 		t.Fatal(err)
 	}
 	if probe[0] != 1 || probe[1] != 1 || probe[2] != 1 {

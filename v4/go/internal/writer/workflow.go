@@ -160,7 +160,7 @@ func (e *WriterEdit) PushHistory4(merge *historyMerge[key4], from, to uint32, la
 // PushHistory6 feeds one inclusive IPv6 source range into the
 // projection merge (Rust WriterEdit::push_history over Ipv6Key).
 func (e *WriterEdit) PushHistory6(merge *historyMerge[key6], fromHi, fromLo, toHi, toLo uint64, lastSeen uint32, check func() error) error {
-	return merge.push(e.store, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, lastSeen, check)
+	return merge.push(e.store, key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, lastSeen, check)
 }
 
 // FinishHistory4 ends the IPv4 projection merge and assembles the
@@ -399,7 +399,7 @@ func (e *WriterEdit) AddEmptyMapFeedRange4(from, to uint32, member MembershipHan
 
 // AddEmptyMapFeedRange6 is the IPv6 form of AddEmptyMapFeedRange4.
 func (e *WriterEdit) AddEmptyMapFeedRange6(fromHi, fromLo, toHi, toLo uint64, member MembershipHandle, input *UnionInput) error {
-	return e.store.addEmptyMapFeedRange6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, member, &input.v6)
+	return e.store.addEmptyMapFeedRange6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, member, &input.v6)
 }
 
 // FinishEmptyMapFeedRanges4 seals the constant IPv4 ranges and accounts
@@ -424,7 +424,7 @@ func (e *WriterEdit) AddFeedCoverage4(from, to uint32, input *UnionInput) error 
 
 // AddFeedCoverage6 is the IPv6 form of AddFeedCoverage4.
 func (e *WriterEdit) AddFeedCoverage6(fromHi, fromLo, toHi, toLo uint64, input *UnionInput) error {
-	return e.store.addFeedCoverage6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, &input.v6)
+	return e.store.addFeedCoverage6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, &input.v6)
 }
 
 // FinishFeedCoverage4 seals the pending IPv4 coverage input (Rust
@@ -453,7 +453,7 @@ func (e *WriterEdit) AssignInputV4(from, to uint32, value uint32, input *Assignm
 // AssignInputV6 assigns one IPv6 range through the direct replacement
 // assignment input (Rust WriterEdit::assign_input_v6).
 func (e *WriterEdit) AssignInputV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *AssignmentInput) (bool, error) {
-	return e.store.assignInput6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value, &input.v6)
+	return e.store.assignInput6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, value, &input.v6)
 }
 
 // AddPrivateConstantRangeV4 pushes one untracked constant IPv4 range
@@ -467,7 +467,7 @@ func (e *WriterEdit) AddPrivateConstantRangeV4(from, to uint32, value uint32, in
 // into the draft range tree (Rust WriterEdit::add_private_constant_range
 // for IPv6; timestamp refresh inputs).
 func (e *WriterEdit) AddPrivateConstantRangeV6(fromHi, fromLo, toHi, toLo uint64, value uint32, input *UnionInput) error {
-	return e.store.addPrivateConstantRange6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value, &input.v6)
+	return e.store.addPrivateConstantRange6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, value, &input.v6)
 }
 
 // FinishPrivateConstantRanges seals one untracked constant-range input

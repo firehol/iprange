@@ -90,7 +90,7 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 	for address, wanted := range expected {
 		found := false
 		for _, record := range records {
-			if uint32(record.from) <= uint32(address) && uint32(address) <= uint32(record.to) {
+			if uint32(record.From) <= uint32(address) && uint32(address) <= uint32(record.To) {
 				found = true
 				break
 			}
@@ -100,12 +100,12 @@ func TestUnionInputRandomBufferedMatchesScalarReference(t *testing.T) {
 		}
 	}
 	for _, record := range records {
-		if record.value != 1 {
-			t.Fatalf("record %+v has value %d, want 1", record, record.value)
+		if record.Value != 1 {
+			t.Fatalf("record %+v has value %d, want 1", record, record.Value)
 		}
 	}
 	for index := 1; index < len(records); index++ {
-		if !(uint32(records[index-1].to)+1 < uint32(records[index].from)) {
+		if !(uint32(records[index-1].To)+1 < uint32(records[index].From)) {
 			t.Fatalf("records %+v and %+v overlap or touch", records[index-1], records[index])
 		}
 	}
@@ -131,7 +131,7 @@ func TestUnionInputRebridgesGap(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if uint32(records[0].from) != 15 || uint32(records[0].to) != 45 || records[0].value != 1 {
+	if uint32(records[0].From) != 15 || uint32(records[0].To) != 45 || records[0].Value != 1 {
 		t.Fatalf("sealed record = %+v, want [15,45] value 1", records[0])
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -160,7 +160,7 @@ func TestUnionInputOrderedNormalizesToSingleInterval(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical interval", records)
 	}
-	if uint32(records[0].from) != 0 || uint32(records[0].to) != inputs-1 || records[0].value != 42 {
+	if uint32(records[0].From) != 0 || uint32(records[0].To) != inputs-1 || records[0].Value != 42 {
 		t.Fatalf("sealed record = %+v, want [0,%d] value 42", records[0], inputs-1)
 	}
 	if store.draft.workflowRangeCount != 1 {
@@ -194,7 +194,7 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 				}
 			} else {
 				ctx := store.beginRangeEdit6(store.draft.workflowRangeRoot, store.draft.workflowRangeCount)
-				if _, err := pushPrivateUntracked(ctx, key6{hi: 0, lo: interval[0]}, key6{hi: 0, lo: interval[1]}, 7, &input.v6); err != nil {
+				if _, err := pushPrivateUntracked(ctx, key6{Hi: 0, Lo: interval[0]}, key6{Hi: 0, Lo: interval[1]}, 7, &input.v6); err != nil {
 					t.Fatal(err)
 				}
 				store.draft.workflowRangeRoot = store.rangeRoot
@@ -224,10 +224,10 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 			if len(records) != 2 {
 				t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
 			}
-			from0, to0 := uint64(records[0].from), uint64(records[0].to)
-			from1, to1 := uint64(records[1].from), uint64(records[1].to)
+			from0, to0 := uint64(records[0].From), uint64(records[0].To)
+			from1, to1 := uint64(records[1].From), uint64(records[1].To)
 			if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
-				records[0].value != 7 || records[1].value != 7 {
+				records[0].Value != 7 || records[1].Value != 7 {
 				t.Fatalf("%v sealed records = %+v, want [0,10] and [20,21] value 7", family, records)
 			}
 		} else {
@@ -238,10 +238,10 @@ func TestUnionInputLateOverlapFallsBackBothFamilies(t *testing.T) {
 			if len(records) != 2 {
 				t.Fatalf("%v sealed records = %+v, want two canonical intervals", family, records)
 			}
-			from0, to0 := records[0].from.lo, records[0].to.lo
-			from1, to1 := records[1].from.lo, records[1].to.lo
+			from0, to0 := records[0].From.Lo, records[0].To.Lo
+			from1, to1 := records[1].From.Lo, records[1].To.Lo
 			if from0 != 0 || to0 != 10 || from1 != 20 || to1 != 21 ||
-				records[0].value != 7 || records[1].value != 7 {
+				records[0].Value != 7 || records[1].Value != 7 {
 				t.Fatalf("%v sealed records = %+v, want [0,10] and [20,21] value 7", family, records)
 			}
 		}
@@ -282,7 +282,7 @@ func TestUnionInputEmptyMapUnorderedRanges(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("sealed records = %+v, want one canonical member record", records)
 	}
-	if uint32(records[0].from) != 15 || uint32(records[0].to) != 45 || records[0].value != member.id {
+	if uint32(records[0].From) != 15 || uint32(records[0].To) != 45 || records[0].Value != member.id {
 		t.Fatalf("sealed record = %+v, want [15,45] member %d", records[0], member.id)
 	}
 	if draft.meta.RangeRecordCount != 1 {

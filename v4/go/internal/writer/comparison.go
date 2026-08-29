@@ -110,7 +110,7 @@ func compareMapsTyped[K any](store *DraftStore, base format.Meta, codec rangeFam
 				if !ok {
 					return Comparison{}, overflow("range comparison cursor")
 				}
-				old.from = next
+				old.From = next
 			}
 			switch step.right {
 			case compareConsume:
@@ -122,10 +122,10 @@ func compareMapsTyped[K any](store *DraftStore, base format.Meta, codec rangeFam
 				if !ok {
 					return Comparison{}, overflow("range comparison cursor")
 				}
-				newValue.from = next
+				newValue.From = next
 			}
 		case oldOK:
-			count, err := familyInclusiveCardinalityOf(codec, old.from, old.to)
+			count, err := familyInclusiveCardinalityOf(codec, old.From, old.To)
 			if err != nil {
 				return Comparison{}, err
 			}
@@ -141,7 +141,7 @@ func compareMapsTyped[K any](store *DraftStore, base format.Meta, codec rangeFam
 				return Comparison{}, err
 			}
 		default:
-			count, err := familyInclusiveCardinalityOf(codec, newValue.from, newValue.to)
+			count, err := familyInclusiveCardinalityOf(codec, newValue.From, newValue.To)
 			if err != nil {
 				return Comparison{}, err
 			}
@@ -187,20 +187,20 @@ type compareStep[K any] struct {
 // runs on inclusive key intervals, and the returned step describes how
 // each side advances.
 func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right rangeRecord[K], result *Comparison, check func() error) (compareStep[K], error) {
-	if rfamily.Less(left.to, right.from) {
+	if rfamily.Less(left.To, right.From) {
 		return stepLeftOnly(rfamily, family, left, result)
 	}
-	if rfamily.Less(right.to, left.from) {
+	if rfamily.Less(right.To, left.From) {
 		return stepRightOnly(rfamily, family, right, result)
 	}
 	leftValue, rightValue := left, right
 	step := compareStep[K]{left: compareKeep, right: compareKeep}
-	if rfamily.Less(leftValue.from, rightValue.from) {
-		end, ok := rfamily.Previous(rightValue.from)
+	if rfamily.Less(leftValue.From, rightValue.From) {
+		end, ok := rfamily.Previous(rightValue.From)
 		if !ok {
 			return compareStep[K]{}, overflow("range comparison prefix")
 		}
-		count, err := familyInclusiveCardinalityOf(rfamily, leftValue.from, end)
+		count, err := familyInclusiveCardinalityOf(rfamily, leftValue.From, end)
 		if err != nil {
 			return compareStep[K]{}, err
 		}
@@ -212,13 +212,13 @@ func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right r
 		if err != nil {
 			return compareStep[K]{}, err
 		}
-		leftValue.from = rightValue.from
-	} else if rfamily.Less(rightValue.from, leftValue.from) {
-		end, ok := rfamily.Previous(leftValue.from)
+		leftValue.From = rightValue.From
+	} else if rfamily.Less(rightValue.From, leftValue.From) {
+		end, ok := rfamily.Previous(leftValue.From)
 		if !ok {
 			return compareStep[K]{}, overflow("range comparison prefix")
 		}
-		count, err := familyInclusiveCardinalityOf(rfamily, rightValue.from, end)
+		count, err := familyInclusiveCardinalityOf(rfamily, rightValue.From, end)
 		if err != nil {
 			return compareStep[K]{}, err
 		}
@@ -230,13 +230,13 @@ func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right r
 		if err != nil {
 			return compareStep[K]{}, err
 		}
-		rightValue.from = leftValue.from
+		rightValue.From = leftValue.From
 	}
-	end := leftValue.to
-	if rfamily.Less(rightValue.to, end) {
-		end = rightValue.to
+	end := leftValue.To
+	if rfamily.Less(rightValue.To, end) {
+		end = rightValue.To
 	}
-	count, err := familyInclusiveCardinalityOf(rfamily, leftValue.from, end)
+	count, err := familyInclusiveCardinalityOf(rfamily, leftValue.From, end)
 	if err != nil {
 		return compareStep[K]{}, err
 	}
@@ -248,7 +248,7 @@ func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right r
 	if err != nil {
 		return compareStep[K]{}, err
 	}
-	if leftValue.value == rightValue.value {
+	if leftValue.Value == rightValue.Value {
 		result.Unchanged, err = addComparisonCount(result.Unchanged, count)
 	} else {
 		result.Changed, err = addComparisonCount(result.Changed, count)
@@ -259,13 +259,13 @@ func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right r
 	if err := check(); err != nil {
 		return compareStep[K]{}, err
 	}
-	if rfamily.Equal(leftValue.to, end) {
+	if rfamily.Equal(leftValue.To, end) {
 		step.left = compareConsume
 	} else {
 		step.left = compareAfter
 		step.leftEnd = end
 	}
-	if rfamily.Equal(rightValue.to, end) {
+	if rfamily.Equal(rightValue.To, end) {
 		step.right = compareConsume
 	} else {
 		step.right = compareAfter
@@ -277,7 +277,7 @@ func compareRangePair[K any](rfamily rangeFamily[K], family uint8, left, right r
 // stepLeftOnly classifies one left-only record (Rust
 // left_before_right: removed).
 func stepLeftOnly[K any](rfamily rangeFamily[K], family uint8, left rangeRecord[K], result *Comparison) (compareStep[K], error) {
-	count, err := familyInclusiveCardinalityOf(rfamily, left.from, left.to)
+	count, err := familyInclusiveCardinalityOf(rfamily, left.From, left.To)
 	if err != nil {
 		return compareStep[K]{}, err
 	}
@@ -295,7 +295,7 @@ func stepLeftOnly[K any](rfamily rangeFamily[K], family uint8, left rangeRecord[
 // stepRightOnly classifies one right-only record (Rust
 // right_before_left: added).
 func stepRightOnly[K any](rfamily rangeFamily[K], family uint8, right rangeRecord[K], result *Comparison) (compareStep[K], error) {
-	count, err := familyInclusiveCardinalityOf(rfamily, right.from, right.to)
+	count, err := familyInclusiveCardinalityOf(rfamily, right.From, right.To)
 	if err != nil {
 		return compareStep[K]{}, err
 	}

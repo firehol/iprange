@@ -95,7 +95,7 @@ func (s *DraftStore) AssignV4(from, to uint32, value uint32) (bool, error) {
 // AssignV6 assigns one inclusive IPv6 range on the draft (Rust
 // DraftStore::assign_v6).
 func (s *DraftStore) AssignV6(fromHi, fromLo, toHi, toLo uint64, value uint32) (bool, error) {
-	return s.assign6(key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo}, value)
+	return s.assign6(key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo}, value)
 }
 
 // ClearV4 clears one inclusive IPv4 range on the draft (Rust
@@ -114,7 +114,7 @@ func (s *DraftStore) ClearV4(from, to uint32) (bool, error) {
 // DraftStore::clear_v6).
 func (s *DraftStore) ClearV6(fromHi, fromLo, toHi, toLo uint64) (bool, error) {
 	ctx := s.beginRangeEdit6(s.draft.meta.RangeRoot, s.draft.meta.RangeRecordCount)
-	changed, err := rangeClear(ctx, key6{hi: fromHi, lo: fromLo}, key6{hi: toHi, lo: toLo})
+	changed, err := rangeClear(ctx, key6{Hi: fromHi, Lo: fromLo}, key6{Hi: toHi, Lo: toLo})
 	if err != nil {
 		return false, err
 	}

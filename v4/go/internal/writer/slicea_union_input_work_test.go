@@ -26,7 +26,7 @@ import (
 func directUnionRange(store *DraftStore, state *unionState[key4], from, to key4, value uint32) (bool, error) {
 	ctx := store.beginRangeEdit4(store.draft.meta.RangeRoot, store.draft.meta.RangeRecordCount)
 	ctx.markUntracked()
-	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord[key4]{from: from, to: to, value: value}, tree.EdgeFirst, false, state)
+	changed, err := unionPrivateUntrackedGap(ctx, rangeRecord[key4]{From: from, To: to, Value: value}, tree.EdgeFirst, false, state)
 	if err != nil {
 		return false, err
 	}
@@ -236,7 +236,7 @@ func TestWorkUnionAssignmentLocatorV4V6(t *testing.T) {
 			if family == format.AddressFamilyIPv4 {
 				_, err = store.assignInput4(key4(uint32(key)), key4(uint32(key+1)), ordinal, &input)
 			} else {
-				_, err = store.assignInput6(key6{hi: 0, lo: key}, key6{hi: 0, lo: key + 1}, ordinal, &input6)
+				_, err = store.assignInput6(key6{Hi: 0, Lo: key}, key6{Hi: 0, Lo: key + 1}, ordinal, &input6)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -303,7 +303,7 @@ func TestWorkUnionInputSpliceLargeRun(t *testing.T) {
 		t.Fatalf("spliced count = %d, want 1", store.draft.meta.RangeRecordCount)
 	}
 	records := readDraftRangeTree(t, store, rangeCodec4{}, store.draft.meta)
-	if len(records) != 1 || uint32(records[0].from) != 0 || uint32(records[0].to) != 8000 || records[0].value != 42 {
+	if len(records) != 1 || uint32(records[0].From) != 0 || uint32(records[0].To) != 8000 || records[0].Value != 42 {
 		t.Fatalf("spliced tree = %+v, want the single covering record [0,8000] value 42", records)
 	}
 	if snapshot.RangesCoalesced != inputs {
