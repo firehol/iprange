@@ -39,6 +39,12 @@ packaging/iprange.spec
 v4/rust/target/
 v4/go/bin/
 
+# Go bench/worker binaries (built locally; never committed)
+v4/go/genprobe
+v4/go/iprange-v4-bench
+v4/go/cmd/iprange-v4-bench/iprange-v4-bench
+v4/go/cmd/iprange-v4-bench/iprange-v4-worker
+
 # Local generated build trees and test executables
 /build-*/
 /src/.dirstamp

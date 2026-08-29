@@ -36,6 +36,50 @@ back into current/ because the external review's verified findings
 (performance acceptance, worker containment, mixed-language evidence,
 parity gate, final-review scope) invalidate the completed close.
 
+User decision 2026-08-29 (performance closure, regression item 1):
+option A - implement the remaining performance work. Read path:
+per-width probe specialization inside the single tree core
+(target lookups ~1.4-1.5x). Write path: per-family specialization of
+the gap/replace machinery via a code generator (one authoritative
+generic source, monomorphized per-family output like Rust; target
+nested-overwrite inside the 2-3.5x envelope). Validation: re-measure
+after the probe work and profile the worker-spawn share. Every step
+is measured against the 18-case CI gate and the matched Rust-ratio
+matrix at that identity.
+
+Sub-state (2026-08-29, read-path probe slice): the per-width probe
+specialization (regression item 1, first half) is implemented and
+committed. internal/tree/genprobe emits four width-specialized
+fixed-cell search loops (fixedLowerBoundU32/U64/U64U32/U128) from one
+authoritative template (gen.go: `go generate ./internal/tree`), and
+lowerBound dispatches 4/8/12/16-byte codecs to them. The A/B
+measurement (pristine HEAD vs the slice, alternating runs of the
+direct-random-lookup scenarios) shows the probes are performance-
+neutral on the v4 read path: live-direct-random-lookup 393.9 vs
+391.0 ms medians, immutable 362.3 vs 359.9 ms (noise-level). Profile
+evidence explains why: the direct-lookup reader path (LookupDirect4)
+uses its own reader-side greatestFixedV4/V6 search loops in
+internal/reader/search.go, not the tree probe; the tree probes serve
+the writer and cursor paths. The remaining read-path costs are
+per-page header decode / slotted-page open and per-probe cell
+validation, not the compare.
+
+REGRESSION FOUND AND FIXED IN THIS SLICE: the first generator draft
+emitted the u128 compare in raw limb order (high limb at cell offset
+0), but the wire u128 layout keeps the LOW limb at offset 0 and the
+high limb at offset 8 (format.U128/PutU128). Every specialized v6 tree
+search therefore inverted asymmetric limbs: IPv6 range tree lookups
+were silently wrong and the writer's rangesV6 test walk looped
+forever, allocating tens of GB until the OOM killer fired. Fixed: the
+emitted compare decodes through format.U128. Pinned by two new tests
+in internal/tree/probe_widths_test.go: TestWidthProbesMatchGenericSearch
+(per-width specialized vs generic equivalence over asymmetric keys)
+and TestV6EndpointWalkTerminates (the exact endpoint scenario that
+previously OOM'd). Both fail with the buggy compare and pass with the
+fix. The full plain and v4work suites pass with a 32 GB address-space
+cap (the previous un-capped writer run peaked above 60 GB anonymous
+RSS on this scenario).
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact
@@ -2577,9 +2621,10 @@ review round predated the final commits.
 
 Repair plan (recorded before implementation):
 
-- Performance: record the user's decision (implement the
-  best-performance option or explicitly accept the residual ratios)
-  and execute it; re-measure at the new identity.
+- Performance: RESOLVED 2026-08-29 (user decision A): implement the
+  per-width read-probe specialization, the code-generated per-family
+  write-path specialization, and the validation re-measure; re-measure
+  at the new identity.
 - Worker containment: fail closed with a typed error before any scan
   on platforms without a worker build; update doc.go, the parity
   records, and the s390x-relevant tests/CI expectations.

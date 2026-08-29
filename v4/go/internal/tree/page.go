@@ -59,6 +59,16 @@ func lowerBound[T any](codec Codec[T], page []byte, header *Header, key Key, ins
 			if v, ok := codec.(ProbeValidator); ok {
 				validate = v.ValidateProbeCell
 			}
+			switch codec.KeySize() {
+			case 4:
+				return fixedLowerBoundU32(page, header, cellLen, key, insertion, validate)
+			case 8:
+				return fixedLowerBoundU64(page, header, cellLen, key, insertion, validate)
+			case 12:
+				return fixedLowerBoundU64U32(page, header, cellLen, key, insertion, validate)
+			case 16:
+				return fixedLowerBoundU128(page, header, cellLen, key, insertion, validate)
+			}
 			return fixedLowerBound(page, header, cellLen, codec.KeySize(), key, insertion, validate)
 		}
 	}
