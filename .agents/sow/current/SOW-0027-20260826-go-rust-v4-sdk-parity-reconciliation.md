@@ -128,6 +128,41 @@ shared type identity is what lets the emitted per-family gap layer
 return the same LocalInsert/LocalReject types the writer's generic
 machinery consumes.
 
+Slice I-1b delivered (2026-08-29): the second generator,
+internal/tree/genfamilies (gen.go: `go generate ./internal/tree`), emits
+the per-family concrete gap/replace layer - range_gap_v4.go and
+range_gap_v6.go - from one authoritative template: the concrete
+rangeProbe4/6 (LocalGap by value), gapSelector4/6, and the exported
+family seams InsertIfLocalGap4/6, InsertIfCachedInteriorGap4/6,
+InsertIfEdgeGap4/6, InsertRejectedGap4/6, ReplaceLocalPredecessorWith4/6,
+ReplaceLocalRun4/6 (record-based probe construction, codec calls
+inlined). The writer routes every gap-layer tree call through the
+per-family seam of internal/writer/range_specialize.go (gapLocalInsert,
+gapCachedInterior, gapEdgeInsert, gapRejectedInsert, predecessorReplace,
+localRunReplace), with the generic gap.go entries kept as the reference
+fallback; the pre-widened ctx.storeView is used at all tree-core call
+sites and insertBranch's common path no longer allocates its two
+branch-cell buffers (the split path keeps the general replacement
+machinery). Equivalence is enforced by the new v4work differential
+tests TestRangeFamilyEmittedMatchesGenericV4/V6: 800 randomized
+mutations per family replayed on two memory stores (local gap, cached
+interior, edge, rejected-completion, predecessor-replacement and
+local-run operations), each step agreeing on outcome, per-operation
+work counters (all Snapshot fields), and byte-identical page state.
+Full plain and v4work suites pass with the 32 GB address-space cap.
+Measured at this identity (matched host, run 2026-08-29): nested-
+overwrite 1M Go 1,194-1,238 ms (5 runs, median ~1,210) vs Rust ~303 ms
+(4.0x, unchanged from 1a); membership-import and the read paths
+unchanged. Fresh profiles show the residual is not dispatch: the
+emitted layer and the generic layer profile within noise of each other,
+and the wall is spread across the writer wrapper chain (insertPrivate-
+InputGap/insertPrivateGap/gapLocalInsert flat ~280 ms total), the
+by-value LocalInsert/LocalReject/privateInputInsert copies through
+those wrappers, and the descent/search/slot machinery itself. Slice
+I-2 (strict-replace chain through the same family seam) remains the
+next step; a chain-folding pass (fewer 300-byte by-value reject copies
+per record) is expected to be the larger lever of the two.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact

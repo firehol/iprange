@@ -279,7 +279,7 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 	}
 	if result.Inserted {
 		if locatorEnabled {
-			first, err := tree.PrivateLeafFirst(ctx.family, ctx.store, result.PageNumber)
+			first, err := tree.PrivateLeafFirst(ctx.family, ctx.storeView, result.PageNumber)
 			if err != nil {
 				return privateInputInsert[K]{}, err
 			}
@@ -321,8 +321,7 @@ func probeCached[K any](ctx *rangeCtx[K], r rangeRecord[K], input *privateInput[
 	if err != nil {
 		return cachedProbe{}, err
 	}
-	gap := privateGap[K]{Family: ctx.family, R: r}
-	inserted, err := tree.InsertIfCachedInteriorGap(ctx.family, ctx.store, selected.pageNumber, cell, gap)
+	inserted, err := gapCachedInterior(ctx, r, cell, selected.pageNumber)
 	if err != nil {
 		return cachedProbe{}, err
 	}

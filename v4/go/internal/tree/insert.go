@@ -405,7 +405,51 @@ func insertBranch[T any](codec Codec[T], store Store, frame Frame, leftFirst Key
 	if err := newBranchCell(codec, rightFirst, rightPage, &right); err != nil {
 		return branchSplit{}, false, err
 	}
-	edit := Replacement{index: frame.Index, cells: [][]byte{left.Bytes(), right.Bytes()}}
+	leftBytes := left.Bytes()
+	rightBytes := right.Bytes()
+	if frame.Index >= int(header.ItemCount) {
+		return branchSplit{}, false, corrupt("B+tree replacement is invalid")
+	}
+	oldCell, err := codecCell(codec, page, &header, frame.Index)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	// Replace one branch cell with the two new cells in place when the
+	// page has room (Rust replacement_fits + apply_cells). The two
+	// CellBufs and their slice headers live entirely on this frame, so
+	// the common branch-insert path performs no allocation; only the
+	// rare split path goes through the general replacement machinery.
+	if len(leftBytes)+len(rightBytes)+2 <= len(oldCell)+int(header.Upper-header.Lower) {
+		work.EditFitProbe(1)
+		page, tag, err := store.Update(frame.PageNumber)
+		if err != nil {
+			return branchSplit{}, false, err
+		}
+		ok, err := format.SlottedReplace(page, &header, frame.Index, len(oldCell), leftBytes)
+		if err != nil {
+			return branchSplit{}, false, err
+		}
+		if !ok {
+			return branchSplit{}, false, corrupt("B+tree replacement no longer fits")
+		}
+		current, err := parse(codec, page, ^uint64(0), header.Level, true)
+		if err != nil {
+			return branchSplit{}, false, err
+		}
+		ok, err = format.SlottedInsert(page, &current, frame.Index+1, rightBytes)
+		if err != nil {
+			return branchSplit{}, false, err
+		}
+		if !ok {
+			return branchSplit{}, false, corrupt("B+tree replacement insertion no longer fits")
+		}
+		if err := store.RestoreDirty(frame.PageNumber, tag); err != nil {
+			return branchSplit{}, false, err
+		}
+		work.FirstFenceUpdate(1)
+		return branchSplit{}, false, nil
+	}
+	edit := Replacement{index: frame.Index, cells: [][]byte{leftBytes, rightBytes}}
 	split, ok, err := applyReplacement(codec, store, frame.PageNumber, &header, edit)
 	if err != nil {
 		return branchSplit{}, false, err

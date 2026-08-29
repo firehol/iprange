@@ -300,9 +300,9 @@ func replaceStrictlyInside[K any](ctx *rangeCtx[K], old rangeRecord[K], change c
 
 func replaceStrictCells[K any](ctx *rangeCtx[K], oldKey K, cells [][]byte, hint tree.LocalReject[rangeRecord[K]], hasHint bool, retired *tree.RetiredPages) error {
 	if hasHint {
-		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.store, ctx.root, hint, ctx.family.KeyOf(oldKey), cells)
+		return predecessorReplace(ctx, hint, oldKey, cells)
 	}
-	r, err := tree.ReplaceLeafWith(ctx.family, ctx.store, ctx.root, ctx.family.KeyOf(oldKey), cells, *retired)
+	r, err := tree.ReplaceLeafWith(ctx.family, ctx.storeView, ctx.root, ctx.family.KeyOf(oldKey), cells, *retired)
 	*retired = r
 	return err
 }
@@ -459,7 +459,7 @@ func insert[K any](ctx *rangeCtx[K], r rangeRecord[K]) error {
 		return err
 	}
 	var retired tree.RetiredPages
-	retired, inserted, err := tree.Insert(ctx.family, ctx.store, ctx.root, cell, retired)
+	retired, inserted, err := tree.Insert(ctx.family, ctx.storeView, ctx.root, cell, retired)
 	if err != nil {
 		return err
 	}
@@ -477,7 +477,7 @@ func insert[K any](ctx *rangeCtx[K], r rangeRecord[K]) error {
 // rangeRemove deletes one existing range record (Rust remove).
 func rangeRemove[K any](ctx *rangeCtx[K], r rangeRecord[K]) error {
 	var retired tree.RetiredPages
-	retired, err := tree.DeleteExisting(ctx.family, ctx.store, ctx.root, ctx.family.KeyOf(r.From), retired)
+	retired, err := tree.DeleteExisting(ctx.family, ctx.storeView, ctx.root, ctx.family.KeyOf(r.From), retired)
 	if err != nil {
 		return err
 	}
@@ -497,8 +497,7 @@ func insertPrivateGap[K any](ctx *rangeCtx[K], r rangeRecord[K]) (tree.LocalInse
 	if err != nil {
 		return tree.LocalInsert[rangeRecord[K]]{}, err
 	}
-	gap := privateGap[K]{Family: ctx.family, R: r}
-	retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.store, ctx.root, cell, tree.RetiredPages{}, gap)
+	retired, result, err := gapLocalInsert(ctx, r, cell, tree.RetiredPages{})
 	if err != nil {
 		return tree.LocalInsert[rangeRecord[K]]{}, err
 	}
@@ -520,7 +519,7 @@ func insertPrivateRejected[K any](ctx *rangeCtx[K], r rangeRecord[K], rejected t
 	if err != nil {
 		return tree.PrivatePosition{}, false, err
 	}
-	position, fits, err := tree.InsertRejectedGap(ctx.family, ctx.store, ctx.root, cell, rejected)
+	position, fits, err := gapRejectedInsert(ctx, cell, rejected)
 	if err != nil {
 		return tree.PrivatePosition{}, false, err
 	}
@@ -564,11 +563,11 @@ func rangeRecordRemoved[K any](ctx *rangeCtx[K], value uint32) error {
 }
 
 func readPredecessor[K any](ctx *rangeCtx[K], root uint32, key K) (rangeRecord[K], bool, error) {
-	return tree.Predecessor(ctx.family, ctx.store, root, ctx.family.KeyOf(key))
+	return tree.Predecessor(ctx.family, ctx.storeView, root, ctx.family.KeyOf(key))
 }
 
 func readAtOrAfter[K any](ctx *rangeCtx[K], root uint32, key K) (rangeRecord[K], bool, error) {
-	return tree.AtOrAfter(ctx.family, ctx.store, root, ctx.family.KeyOf(key))
+	return tree.AtOrAfter(ctx.family, ctx.storeView, root, ctx.family.KeyOf(key))
 }
 
 // addCount adds n to the record count with overflow failure (Rust

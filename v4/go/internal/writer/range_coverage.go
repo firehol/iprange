@@ -436,7 +436,7 @@ func finishPrivateUntracked[K any](ctx *rangeCtx[K], state *unionState[K]) error
 	if !state.hasEdge {
 		return nil
 	}
-	if err := tree.FlushEdge(ctx.family, ctx.store, ctx.root, &state.edge); err != nil {
+	if err := tree.FlushEdge(ctx.family, ctx.storeView, ctx.root, &state.edge); err != nil {
 		return err
 	}
 	return nil
@@ -449,8 +449,7 @@ func insertPrivateEdge[K any](ctx *rangeCtx[K], incoming rangeRecord[K], positio
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord[K]]{}, err
 	}
-	gap := privateGap[K]{Family: ctx.family, R: incoming}
-	result, err := tree.InsertIfEdgeGap(ctx.family, ctx.store, ctx.root, cell, position, edge, hasGap && knownGap == edge, gap)
+	result, err := gapEdgeInsert(ctx, incoming, cell, position, edge, hasGap && knownGap == edge)
 	if err != nil {
 		return tree.EdgeInsert[rangeRecord[K]]{}, err
 	}
@@ -556,7 +555,7 @@ func mergeRejected[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tr
 	if err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
-	if err := tree.ReplaceLocalRun(ctx.family, ctx.store, ctx.root, rejected, decision.run, cell); err != nil {
+	if err := localRunReplace(ctx, rejected, decision.run, cell); err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
 	if decision.removed < 1 || *ctx.count < decision.removed-1 {
@@ -636,7 +635,7 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 	predecessor, hasPredecessor := rejected.Predecessor()
 	if !hasPredecessor && !rejected.PredecessorComplete() {
 		var err error
-		predecessor, hasPredecessor, err = tree.ExternalPredecessor(ctx.family, ctx.store, rejected.Target.Path)
+		predecessor, hasPredecessor, err = tree.ExternalPredecessor(ctx.family, ctx.storeView, rejected.Target.Path)
 		if err != nil {
 			return false, tree.PrivatePosition{}, false, err
 		}
@@ -662,7 +661,7 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 		successor, hasSuccessor := rejected.Successor()
 		if !hasSuccessor && !rejected.SuccessorComplete() {
 			var err error
-			successor, hasSuccessor, err = tree.ExternalSuccessor(ctx.family, ctx.store, rejected.Target.Path)
+			successor, hasSuccessor, err = tree.ExternalSuccessor(ctx.family, ctx.storeView, rejected.Target.Path)
 			if err != nil {
 				return false, tree.PrivatePosition{}, false, err
 			}
@@ -685,7 +684,7 @@ func unionRun[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tree.Lo
 	nextStart := runStart
 	removed := uint64(0)
 	for {
-		result, err := tree.RemoveLeafRun(ctx.family, ctx.store, ctx.root, ctx.family.KeyOf(nextStart), func(r rangeRecord[K]) (bool, error) {
+		result, err := tree.RemoveLeafRun(ctx.family, ctx.storeView, ctx.root, ctx.family.KeyOf(nextStart), func(r rangeRecord[K]) (bool, error) {
 			if r.Value != incoming.Value {
 				return false, corrupt("constant-value tree contains another value")
 			}
