@@ -31,7 +31,7 @@ func TestFaultableOperationsFailClosedWithoutWorker(t *testing.T) {
 		t.Fatalf("RecoverOffline: failure = %v, want OSUnsupported cause", offlineFailure)
 	}
 
-	_, liveFailure := RecoverLive(missing, nil, t.TempDir()+"/live-out.iprdb", RecoveryHeapOnly(1<<20, 100, 2), nil, NewCancellationToken())
+	_, liveFailure := RecoverLive(missing, nil, t.TempDir()+"/live-out.iprdb", RecoveryHeapOnly(1<<20, 100, 3), nil, NewCancellationToken())
 	if liveFailure == nil || liveFailure.Cause == nil || !isOSUnsupported(t, liveFailure.Cause) {
 		t.Fatalf("RecoverLive: failure = %v, want OSUnsupported cause", liveFailure)
 	}
