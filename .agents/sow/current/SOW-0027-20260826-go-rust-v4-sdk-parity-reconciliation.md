@@ -26,6 +26,35 @@ open for incremental delta re-reviews; they are restarted only between
 milestones. No reviewer model other than the lead's own is used. These rules
 live here at the top of the SOW, not in SWARM.md.
 
+
+## Binding Performance Acceptance (user words, 2026-08-28; restored 2026-08-29)
+
+The only user-set performance criterion on record, verbatim: "I think it is
+reasonable to say that Go can be 20-30% slower [than Rust] and could use
+20-30% more memory. But 4x, 5x, 7x, 9x I don't think is acceptable."
+
+Therefore, binding for every gate in this SOW:
+
+- CPU: Go/Rust same-session matched ratio must be <= 1.3x (the 20-30%
+  envelope) for every measured scenario; >= 2x is an automatic failure.
+- Memory: Go peak RSS / allocations must stay within +30% of Rust.
+- Evidence: every acceptance claim needs same-session matched measurements
+  (both harnesses on the same host, release builds, alternating runs, medians
+  recorded) committed as a CSV under v4/go/cmd/iprange-v4-bench/evidence/.
+- The numeric envelopes formerly recorded as "the accepted milestone-4
+  mandate" (reads ~1.2-1.6x, validation ~1.5-2x, writes ~2-3.5x) were
+  assistant-authored inferences from the user's words, never approved by the
+  user; they are VOID and must not be cited as acceptance criteria. The
+  regression review's finding "performance acceptance was bypassed" stands
+  and is resolved only by this criterion.
+- Current honest position against the binding criterion (matched host,
+  2026-08-29): nested-overwrite 3.44-3.74x, live/immutable direct lookups
+  1.74-1.91x, membership-import ~1.7x, update-ipsets-workflow ~2.2x,
+  live-validation ~1.2-1.4x. All scenarios except live-validation FAIL the
+  1.3x criterion; the work continues under user option A until each scenario
+  is inside the envelope or evidence-backed impossibility is brought to the
+  user for an explicit decision.
+
 ## Status
 
 Status: in-progress
@@ -177,15 +206,18 @@ pointer, and noteRejection takes only the presence boolean through the
 new pointer-receiver LocalReject.HasLocalNeighbor (no value-receiver
 copies). Range assignments and clears pass nil. Measured at this
 identity (matched host, 1M, same-session medians): nested-overwrite
-Go 1,083.9 ms (7 runs) vs Rust 290.0 ms (3 runs) = 3.74x; against the
-accepted Rust baseline of 314.9 ms (accepted-baseline.csv) the ratio
-is 3.44x - inside the 2-3.5x envelope either way, down from 4.04-4.2x
-at the reopened identity and from 1,166-1,247 ms to a 1,074-1,092 ms
-band. No other scenario regressed: membership-import 1.73x,
+Go 1,083.9 ms (7 runs) vs Rust 290.0 ms (3 runs) = 3.74x (3.44x
+against the older accepted-baseline.csv reference of 314.9 ms). Both
+ratios FAIL the binding <=1.3x criterion restored 2026-08-29 (the
+2-3.5x write envelope was assistant-authored and voided); the
+improvement is real - down from 4.04-4.2x and from 1,166-1,247 ms to
+a 1,074-1,092 ms band - but the write gate stays FAIL. No other scenario regressed: membership-import 1.73x,
 update-ipsets-workflow 2.21x, live-validation 1.21x, live and
-immutable direct lookups 1.74-1.91x (read path still outside its
-1.2-1.6x target; the residual is the per-probe validated fixed-cell
-fetch of internal/reader/search.go, not dispatch). Evidence:
+immutable direct lookups 1.74-1.91x. Against the binding <=1.3x
+criterion every scenario except live-validation fails; the read
+residual is under active optimization (FixedSearch value-receiver and
+per-probe 64-byte copies were identified by the external review and
+are being A/B-tested, not declared a floor). Evidence:
 v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-writer-gap-20260829.csv.
 Full plain and v4work suites pass with the 32 GB address-space cap.
 
@@ -1545,21 +1577,20 @@ P2 harness guard). All findings fixed in the follow-up commit:
   at 1,668 lines exceeds the soft 500-line guideline but is cohesive
   (one workflow per scenario, clear sections).
 
-Milestone-4 performance mandate (user decision 2026-08-28): the
-recorded 4-9x write-path deltas and 2-4x read-path deltas are NOT
-acceptable as explained designed costs; Go must not be significantly
-inferior to Rust. Both harnesses were re-verified as optimized
-production builds (Rust bench profile opt-level 3, same binary that
-produced the evidence; Go plain go build, gc, GOAMD64=v1; GOAMD64=v3
-changes nothing). Milestone 4 extends with three optimization slices
-before acceptance: 4c specialized key-only fixed-tree search probes
-(no per-probe closure/interface dispatch; the #1 hot symbol in every
-delta), 4d write-seam allocation removal (membership-import 3M
-allocs / 1.5 GB vs Rust 20 / 470 B; batched mutation scopes, reused
-buffers), 4e re-measure + re-baseline + re-gate + evidence refresh.
-Targets: read paths ~1.2-1.6x Rust, validation ~1.5-2x, write paths
-~2-3.5x; absolute parity is not promised (GC and Go generics are
-real), the 4-9x class must be eliminated.
+Milestone-4 performance mandate (recorded 2026-08-28; envelope VOIDED
+2026-08-29 per the Binding Performance Acceptance above): the recorded
+4-9x write-path deltas and 2-4x read-path deltas are NOT acceptable as
+explained designed costs; Go must not be significantly inferior to
+Rust. Both harnesses were re-verified as optimized production builds
+(Rust bench profile opt-level 3, same binary that produced the
+evidence; Go plain go build, gc, GOAMD64=v1; GOAMD64=v3 changes
+nothing). Milestone 4 extends with three optimization slices before
+acceptance: 4c specialized key-only fixed-tree search probes (4d
+write-seam allocation removal, 4e re-measure + re-baseline + re-gate +
+evidence refresh. The numeric targets formerly listed here (reads
+~1.2-1.6x, validation ~1.5-2x, writes ~2-3.5x) were assistant-authored
+inference, not user approval, and are replaced by the binding <=1.3x
+criterion; the 4-9x class must be eliminated in any case.
 
 Slice 4c/4d implementation record (2026-08-28, commits 483fc37f and
 follow-ups): the per-probe closure plus interface ReadKey plus
