@@ -425,7 +425,7 @@ func unionPrivateUntrackedGeneral[K any](ctx *rangeCtx[K], from, to K, value uin
 	case result.inserted:
 		return true, nil
 	default:
-		changed, _, _, err := mergeRejected(ctx, incoming, result.reject)
+		changed, _, _, err := mergeRejected(ctx, incoming, *result.reject)
 		return changed, err
 	}
 }

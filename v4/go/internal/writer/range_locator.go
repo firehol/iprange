@@ -152,6 +152,11 @@ type privateInput[K any] struct {
 	pendingLocatorBytes uint64
 	adaptive            bool
 	family              rangeFamily[K]
+	// rejectSlot reuses one rejection proof across the records of one
+	// edit: the gap layer returns the ~340-byte proof by value, the
+	// writer copies it into the slot once, and every downstream frame
+	// of the replace chain passes the 8-byte pointer.
+	rejectSlot tree.LocalReject[rangeRecord[K]]
 }
 
 // newAssignmentInput starts the eager assignment input (Rust
@@ -211,19 +216,15 @@ func locatorFamily[K any](codec rangeFamily[K]) uint8 {
 }
 
 // noteRejection adapts the probe policy after one rejected local probe
-// (Rust PrivateInput::note_rejection).
-func (p *privateInput[K]) noteRejection(rejected tree.LocalReject[rangeRecord[K]]) {
+// (Rust PrivateInput::note_rejection). Only the presence of a local
+// neighbor matters here, so the call site passes the pointer-receiver
+// probe result instead of the decoded record copies.
+func (p *privateInput[K]) noteRejection(hasLocalNeighbor bool) {
 	p.locator.clear()
 	if !p.adaptive {
 		return
 	}
-	localConflict := false
-	if _, has := rejected.Predecessor(); has {
-		localConflict = true
-	}
-	if _, has := rejected.Successor(); has {
-		localConflict = true
-	}
+	localConflict := hasLocalNeighbor
 	if localConflict {
 		if p.localConflicts != 255 {
 			p.localConflicts++
@@ -240,10 +241,12 @@ func (p *privateInput[K]) noteRejection(rejected tree.LocalReject[rangeRecord[K]
 
 // privateInputInsert is the outcome of one locator-backed private probe
 // (Rust PrivateInputInsert): the range was inserted, or the probe
-// rejected with the positioned proof for the caller's merge.
+// rejected with the positioned proof for the caller's merge. The
+// rejection points into the input's reused slot and stays valid only
+// until the next record of the same edit.
 type privateInputInsert[K any] struct {
 	inserted bool
-	reject   tree.LocalReject[rangeRecord[K]]
+	reject   *tree.LocalReject[rangeRecord[K]]
 	rejected bool
 }
 
@@ -263,7 +266,9 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 		if result.Inserted {
 			return privateInputInsert[K]{inserted: true}, nil
 		}
-		return privateInputInsert[K]{reject: result.Reject, rejected: true}, nil
+		input.rejectSlot = result.Reject
+		input.noteRejection(input.rejectSlot.HasLocalNeighbor())
+		return privateInputInsert[K]{reject: &input.rejectSlot, rejected: true}, nil
 	}
 	locatorEnabled := input.locator.enabled()
 	probe, err := probeCached(ctx, r, input)
@@ -292,8 +297,9 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 		}
 		return privateInputInsert[K]{inserted: true}, nil
 	}
-	input.noteRejection(result.Reject)
-	return privateInputInsert[K]{reject: result.Reject, rejected: true}, nil
+	input.rejectSlot = result.Reject
+	input.noteRejection(input.rejectSlot.HasLocalNeighbor())
+	return privateInputInsert[K]{reject: &input.rejectSlot, rejected: true}, nil
 }
 
 // cachedProbe is the outcome of one cached-leaf probe (Rust CachedProbe:

@@ -163,6 +163,32 @@ I-2 (strict-replace chain through the same family seam) remains the
 next step; a chain-folding pass (fewer 300-byte by-value reject copies
 per record) is expected to be the larger lever of the two.
 
+Slice I-1b follow-up, pointer-folded rejection proof
+(2026-08-29): profiling after I-1b showed the residual was not
+dispatch - the ~340-byte LocalReject proof returned by the gap layer
+was copied by value at every wrapper frame of the overwrite chain
+(insertPrivateInputGap/insertPrivateGap/gapLocalInsert -> assignWithHint
+-> rangeReplaceWithHint -> replaceStrictlyInside -> replaceStrictCells
+-> predecessorReplace), roughly eight 340-byte copies per record.
+The writer now threads the rejection by pointer: privateInput owns one
+reused rejectSlot, insertPrivateInputGap copies the proof into it once
+and returns *LocalReject, the whole replace chain passes the 8-byte
+pointer, and noteRejection takes only the presence boolean through the
+new pointer-receiver LocalReject.HasLocalNeighbor (no value-receiver
+copies). Range assignments and clears pass nil. Measured at this
+identity (matched host, 1M, same-session medians): nested-overwrite
+Go 1,083.9 ms (7 runs) vs Rust 290.0 ms (3 runs) = 3.74x; against the
+accepted Rust baseline of 314.9 ms (accepted-baseline.csv) the ratio
+is 3.44x - inside the 2-3.5x envelope either way, down from 4.04-4.2x
+at the reopened identity and from 1,166-1,247 ms to a 1,074-1,092 ms
+band. No other scenario regressed: membership-import 1.73x,
+update-ipsets-workflow 2.21x, live-validation 1.21x, live and
+immutable direct lookups 1.74-1.91x (read path still outside its
+1.2-1.6x target; the residual is the per-probe validated fixed-cell
+fetch of internal/reader/search.go, not dispatch). Evidence:
+v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-writer-gap-20260829.csv.
+Full plain and v4work suites pass with the 32 GB address-space cap.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact

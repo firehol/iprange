@@ -180,6 +180,16 @@ func (r LocalReject[T]) Successor() (T, bool) {
 }
 
 // PredecessorComplete reports the predecessor side was fully examined.
+// HasLocalNeighbor reports whether the rejection carries a decoded
+// predecessor or successor cell (Rust reject.has_predecessor() ||
+// reject.has_successor()). The pointer receiver lets hot writer paths
+// test the proof's presence without copying the ~340-byte rejection
+// record; the accessor methods above remain for callers that need the
+// decoded values.
+func (r *LocalReject[T]) HasLocalNeighbor() bool {
+	return r.predecessor.valid || r.successor.valid
+}
+
 func (r LocalReject[T]) PredecessorComplete() bool { return r.predecessorComplete }
 
 // SuccessorComplete reports the successor side was fully examined.

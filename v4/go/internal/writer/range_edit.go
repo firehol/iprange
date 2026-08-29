@@ -83,7 +83,7 @@ func (ctx *rangeCtx[K]) encodeRecord(slot int, r rangeRecord[K]) ([]byte, error)
 
 // assign replaces the [from, to] interval with one value (Rust assign).
 func rangeAssign[K any](ctx *rangeCtx[K], from, to K, value uint32) (bool, error) {
-	return rangeReplaceWithHint(ctx, change[K]{from: from, to: to, value: someValue(value)}, tree.LocalReject[rangeRecord[K]]{}, false)
+	return rangeReplaceWithHint(ctx, change[K]{from: from, to: to, value: someValue(value)}, nil, false)
 }
 
 // assignPrivate inserts one range into the private tree when the physical
@@ -99,19 +99,22 @@ func rangeAssignPrivate[K any](ctx *rangeCtx[K], from, to K, value uint32) (bool
 	case result.Inserted:
 		return true, nil
 	default:
-		return assignWithHint(ctx, r, result.Reject, result.Rejected)
+		return assignWithHint(ctx, r, &result.Reject, result.Rejected)
 	}
 }
 
 // assignWithHint completes a private assignment through a previous gap
-// rejection (Rust assign_with_hint).
-func assignWithHint[K any](ctx *rangeCtx[K], r rangeRecord[K], hint tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
+// rejection (Rust assign_with_hint). The rejection is threaded by
+// pointer through the whole replace chain: the ~340-byte proof record
+// is copied exactly once (out of the tree return), not at every
+// wrapper frame, on the hot overwrite path.
+func assignWithHint[K any](ctx *rangeCtx[K], r rangeRecord[K], hint *tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
 	return rangeReplaceWithHint(ctx, change[K]{from: r.From, to: r.To, value: someValue(r.Value)}, hint, hasHint)
 }
 
 // clear removes the [from, to] interval (Rust clear).
 func rangeClear[K any](ctx *rangeCtx[K], from, to K) (bool, error) {
-	return rangeReplaceWithHint(ctx, change[K]{from: from, to: to}, tree.LocalReject[rangeRecord[K]]{}, false)
+	return rangeReplaceWithHint(ctx, change[K]{from: from, to: to}, nil, false)
 }
 
 // retireTree retires every page of one private range tree (Rust
@@ -139,7 +142,7 @@ func rangeTransform[K any](ctx *rangeCtx[K], from, to K, operation func(store Ra
 			return false, err
 		}
 		if !sameOptional(value, segment.value) {
-			if _, err := rangeReplaceWithHint(ctx, change[K]{from: cursor, to: segment.to, value: value}, tree.LocalReject[rangeRecord[K]]{}, false); err != nil {
+			if _, err := rangeReplaceWithHint(ctx, change[K]{from: cursor, to: segment.to, value: value}, nil, false); err != nil {
 				return false, err
 			}
 			changed = true
@@ -184,7 +187,7 @@ func segmentAt[K any](ctx *rangeCtx[K], from, to K) (segment[K], error) {
 	return segment[K]{to: to}, nil
 }
 
-func rangeReplaceWithHint[K any](ctx *rangeCtx[K], change change[K], hint tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
+func rangeReplaceWithHint[K any](ctx *rangeCtx[K], change change[K], hint *tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
 	if ctx.family.Less(change.to, change.from) {
 		return false, invalid("range start is after its end")
 	}
@@ -228,7 +231,7 @@ func rangeReplaceWithHint[K any](ctx *rangeCtx[K], change change[K], hint tree.L
 
 // replaceStrictlyInside replaces one range strictly inside an existing
 // range with up to three records (Rust replace_strictly_inside).
-func replaceStrictlyInside[K any](ctx *rangeCtx[K], old rangeRecord[K], change change[K], hint tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
+func replaceStrictlyInside[K any](ctx *rangeCtx[K], old rangeRecord[K], change change[K], hint *tree.LocalReject[rangeRecord[K]], hasHint bool) (bool, error) {
 	leftPrevious, ok := ctx.family.Previous(change.from)
 	if !ok {
 		return false, corrupt("range rewrite does not advance")
@@ -298,7 +301,7 @@ func replaceStrictlyInside[K any](ctx *rangeCtx[K], old rangeRecord[K], change c
 	return true, nil
 }
 
-func replaceStrictCells[K any](ctx *rangeCtx[K], oldKey K, cells [][]byte, hint tree.LocalReject[rangeRecord[K]], hasHint bool, retired *tree.RetiredPages) error {
+func replaceStrictCells[K any](ctx *rangeCtx[K], oldKey K, cells [][]byte, hint *tree.LocalReject[rangeRecord[K]], hasHint bool, retired *tree.RetiredPages) error {
 	if hasHint {
 		return predecessorReplace(ctx, hint, oldKey, cells)
 	}

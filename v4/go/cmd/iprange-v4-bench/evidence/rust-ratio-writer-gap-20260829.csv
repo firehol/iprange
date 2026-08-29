@@ -1,0 +1,2 @@
+scenario,go_median_ns,rust_median_ns,ratio,go_samples,rust_samples,notes
+nested-overwrite,1083918500,290043740,3.74,7,3,same-session matched host

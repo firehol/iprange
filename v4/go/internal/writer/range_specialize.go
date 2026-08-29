@@ -86,14 +86,14 @@ func gapRejectedInsert[K any](ctx *rangeCtx[K], cell []byte, rejected tree.Local
 
 // predecessorReplace routes ReplaceLocalPredecessorWith to the emitted
 // family entry.
-func predecessorReplace[K any](ctx *rangeCtx[K], rejected tree.LocalReject[rangeRecord[K]], key K, cells [][]byte) error {
+func predecessorReplace[K any](ctx *rangeCtx[K], rejected *tree.LocalReject[rangeRecord[K]], key K, cells [][]byte) error {
 	switch family := any(ctx.family).(type) {
 	case tree.RangeCodec4:
-		return tree.ReplaceLocalPredecessorWith4(family, ctx.storeView, ctx.root, any(rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), ctx.family.KeyOf(key), cells)
+		return tree.ReplaceLocalPredecessorWith4(family, ctx.storeView, ctx.root, any(*rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), ctx.family.KeyOf(key), cells)
 	case tree.RangeCodec6:
-		return tree.ReplaceLocalPredecessorWith6(family, ctx.storeView, ctx.root, any(rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), ctx.family.KeyOf(key), cells)
+		return tree.ReplaceLocalPredecessorWith6(family, ctx.storeView, ctx.root, any(*rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), ctx.family.KeyOf(key), cells)
 	default:
-		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.storeView, ctx.root, rejected, ctx.family.KeyOf(key), cells)
+		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.storeView, ctx.root, *rejected, ctx.family.KeyOf(key), cells)
 	}
 }
 
