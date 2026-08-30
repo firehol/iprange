@@ -437,12 +437,35 @@ tests) in one bounded slice; the performed-mapped-bytes comparison
 is already negative on the Go side, so the counters will prove
 equality only after that slice.
 
-Direction item 4 (concrete-store writer A/B) remains the remaining
-write-side lead, deferred until the read-page and work-counter
-slices record their evidence. The write path stands at 2.31x
-(nested-overwrite, committed 726e205f evidence); read path at
-1.63-1.66x; validation and the mixed-language / parity-gate closure
-items remain open per the milestone-5 package.
+Direction item 4 measured and REJECTED - concrete-store writer A/B
+(2026-08-30): the remaining write-side lead was the Store-interface
+dispatch (ReadPage/TouchPage/Allocate/CopyPage) inside the emitted
+tree entries. Exact-region profile at the current identity
+(nested-overwrite 1M, bench process only - the earlier apparent
+validation cost was an artifact of globbing the bench and spawned
+worker profile files together; worker validation runs outside the
+measured region via validate_output): the top costs are
+fixedLowerBoundU32 flat 120 ms (17.6%), privateRangePath4 cum
+220 ms (32%), the replacement cursor machinery, DecodePageHeader,
+and parseRange; no itab/dispatch node appears in the top 22, so the
+entire Store-interface dispatch class is bounded at ~2-3% by its
+call count per operation, far below the 1.3x write gap (723.7 ms ->
+~407 ms needed, -44%). Making the emitted entries concrete-store
+would additionally repeat the monomorphization-bloat mechanism that
+the codec type-parameter slice (measured +10.5% regression, recorded
+above) already demonstrated. Sol direction items 1-6 are therefore
+all delivered or measured-and-rejected; the write path stands at
+2.31x and the read path at 1.63-1.66x with no bounded safe-Go lead
+remaining that can close the 1.3x gap. Per the direction, the
+language-floor decision returns to the user with this evidence
+package at the SOW-0027 closure decision point; meanwhile the
+remaining milestone-5 closure items (mixed-language coordination
+matrix, real Rust-export parity gate, final five-reviewer round,
+one-commit close, lessons) continue. The pre-existing 35 Rust lib
+test failures (recovery/immutable_output/worker, identical on
+pristine HEAD, environment-dependent) are recorded for the closure
+round; Go plain + v4work suites, vet, gofmt all green at 30a30549.
+
 
 
 
