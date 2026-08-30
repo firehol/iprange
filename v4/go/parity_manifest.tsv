@@ -88,7 +88,7 @@ recovery	recovery.rs recover_offline	RecoverOffline	present	recovery_public.go
 recovery	recovery.rs recover_live	RecoverLive	present	recovery_public.go
 worker	binary-format-v4.md:3155+ version-matched worker		missing	Implemented (m5 slice E + regression 2026-08-29): the routed facade (internal/routing/routing_worker.go) calls the version-matched worker on every worker cross-build platform (linux/darwin/freebsd/windows x amd64/arm64) with no silent in-process fallback; platforms without a worker build refuse with ErrorOSUnsupported before any scan (routing_other.go fail-closed, binary-format-v4.md section 19). Internal mechanism, no root symbol; the public Validate/Recover* rows are present.
 platform	publication/security/apple.rs filesec creator-only		missing	Darwin raw-syscall machine implemented (internal/security acl_darwin.go: fchmod_extended/fstat_extended) and proven in the authorized macOS arm64 round (plain, v4work, race+checkptr green at 631d83c8); no root symbol (internal machine, like remove_checkpointed_scratch)
-cards	lib-reexport Cardinality129		missing	Go keeps Cardinality129 internal (internal/format); the public typed cardinality surface is not exported
+cards	lib-reexport Cardinality129	Cardinality129	present	Go exports the exact 129-bit counter as an alias of the internal/format type; the method rows below record the arithmetic surface
 go-surface	-	AlgebraFeedSelectionAll	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	AlgebraFeedSelectionNamed	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	AlgebraOutputModeFlat	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
@@ -103,24 +103,24 @@ go-surface	-	CardinalityZero	present	generated surface row; go-surface extras ar
 go-surface	-	DefaultBudget	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	DirectJoinSourceImmutable	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	Error.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	FeedName.String	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	FeedName::as_str	FeedName.String	present	Go string value String is Rust FeedName::as_str (feed_name.go)
 go-surface	-	FinishedHistoryProjection.IsChanged	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	FinishedWorkflow.IsChanged	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	FullIPv6Space	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	HeapOnly	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	IPv4Inclusive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	Cardinality129::ipv4_inclusive	IPv4Inclusive	present	Go free function IPv4Inclusive is the Rust inclusive IPv4 interval count (types.go)
 go-surface	-	IPv6FromHalves	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	IPv6Inclusive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	ImmutableReader.DirectRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	ImmutableReader.DirectRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	ImmutableReader.NetworkEnrichmentV1CursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	ImmutableReader.NetworkEnrichmentV1CursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	Cardinality129::ipv6_inclusive	IPv6Inclusive	present	Go free function IPv6Inclusive is the Rust inclusive IPv6 interval count (types.go)
+surface	ImmutableReader::direct_range_source_v4	ImmutableReader.DirectRangesV4	present	Go streams the Rust direct-range source through this method
+surface	ImmutableReader::direct_range_source_v6	ImmutableReader.DirectRangesV6	present	Go streams the Rust direct-range source through this method
+surface	ImmutableReader::network_enrichment_v1_cursor_v4	ImmutableReader.NetworkEnrichmentV1CursorV4	present	Go names the enrichment cursor method NetworkEnrichmentV1CursorV4
+surface	ImmutableReader::network_enrichment_v1_cursor_v6	ImmutableReader.NetworkEnrichmentV1CursorV6	present	Go names the enrichment cursor method NetworkEnrichmentV1CursorV6
 go-surface	-	ImmutableReader.Pin	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	InspectPublicationResidue	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	LiveReader.DirectRangesV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	LiveReader.DirectRangesV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	LiveReader.NetworkEnrichmentV1CursorV4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	LiveReader.NetworkEnrichmentV1CursorV6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	PublicationResidueRemoval::inspect_publication_residue	InspectPublicationResidue	present	publication residue inspection (publication_public.go)
+surface	LiveReader::direct_range_source_v4	LiveReader.DirectRangesV4	present	Go streams the Rust direct-range source through this method
+surface	LiveReader::direct_range_source_v6	LiveReader.DirectRangesV6	present	Go streams the Rust direct-range source through this method
+surface	LiveReader::network_enrichment_v1_cursor_v4	LiveReader.NetworkEnrichmentV1CursorV4	present	Go names the enrichment cursor method NetworkEnrichmentV1CursorV4
+surface	LiveReader::network_enrichment_v1_cursor_v6	LiveReader.NetworkEnrichmentV1CursorV6	present	Go names the enrichment cursor method NetworkEnrichmentV1CursorV6
 go-surface	-	LiveReader.Pin	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	MembershipAggregationAllPairs	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	MembershipAggregationCardinalities	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
@@ -129,14 +129,14 @@ go-surface	-	MembershipAggregationTargetAgainstScope	present	generated surface r
 go-surface	-	MembershipImportSourceImmutable	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	MembershipImportSourceLive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	NewCardinality129	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	NewFeedName	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	NewMembershipAlgebra	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	NewValueTag	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	FeedName::new	NewFeedName	present	validated feed-name constructor (feed_name.go)
+surface	MembershipAlgebra::new	NewMembershipAlgebra	present	scope-algebra constructor (membership_algebra_public.go)
+surface	ValueTag::new	NewValueTag	present	canonical value-tag constructor (types.go)
 go-surface	-	Pin.LookupFeedInto	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	Pin.LookupNetworkEnrichmentV1V4	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	Pin.LookupNetworkEnrichmentV1V6	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	RecoveryHeapOnly	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
-go-surface	-	RemovePublicationResidue	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	PublicationResidueRemoval::remove_publication_residue	RemovePublicationResidue	present	publication residue removal (publication_public.go)
 go-surface	-	ResetLiveCoordination	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	ResolveCreateLive	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 go-surface	-	ResolveInterruptedLiveTransition	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
@@ -293,3 +293,525 @@ surface	same-name Rust method word_count	MembershipView.WordCount	present	genera
 surface	-	ImmutableFeedResult.CleanupState	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method error	ImmutableFeedPreparationFailure.Error	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method unwrap	ImmutableFeedPreparationFailure.Unwrap	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	Cardinality129::checked_add	Cardinality129.Add	present	Go alias method Add is the checked add; overflow returns ErrCardinalityOverflow
+surface	Cardinality129::checked_sub	Cardinality129.Sub	present	Go alias method Sub is the checked sub; overflow returns ErrCardinalityOverflow
+surface	CleanupArtifacts::get	CleanupArtifacts.At	present	Rust index getter; Go names it At (internal/publication alias)
+surface	CleanupArtifacts::iter	CleanupArtifacts.Slice	present	Rust iterator; Go exposes the underlying slice
+surface	CommitCleanupArtifacts::iter	LiveCommitCleanupArtifacts.Entry	present	Go exposes the commit cleanup ledger through Entry/Empty
+surface	CreateFeed::add_ranges_v4_slice	CreateFeed.AddRangesV4	present	Rust slice-variant export; the Go method is the same operation
+surface	CreateFeed::add_ranges_v6_slice	CreateFeed.AddRangesV6	present	Rust slice-variant export; the Go method is the same operation
+surface	DirectReplacement::add_ranges_v4_slice	DirectReplacement.AddRangesV4	present	Rust slice-variant export; the Go method is the same operation
+surface	DirectReplacement::add_ranges_v6_slice	DirectReplacement.AddRangesV6	present	Rust slice-variant export; the Go method is the same operation
+surface	FirstSeenRefresh::add_ranges_v4_slice	FirstSeenRefresh.AddRangesV4	present	Rust slice-variant export; the Go method is the same operation
+surface	FirstSeenRefresh::add_ranges_v6_slice	FirstSeenRefresh.AddRangesV6	present	Rust slice-variant export; the Go method is the same operation
+surface	LastSeenRefresh::add_ranges_v4_slice	LastSeenRefresh.AddRangesV4	present	Rust slice-variant export; the Go method is the same operation
+surface	LastSeenRefresh::add_ranges_v6_slice	LastSeenRefresh.AddRangesV6	present	Rust slice-variant export; the Go method is the same operation
+surface	ReplaceFeed::add_ranges_v4_slice	ReplaceFeed.AddRangesV4	present	Rust slice-variant export; the Go method is the same operation
+surface	ReplaceFeed::add_ranges_v6_slice	ReplaceFeed.AddRangesV6	present	Rust slice-variant export; the Go method is the same operation
+surface	DirectTransaction::clear_v4	LiveDirectTransaction.ClearV4	present	Go direct-transaction method ClearV4
+surface	DirectTransaction::clear_v6	LiveDirectTransaction.ClearV6	present	Go direct-transaction method ClearV6
+surface	DirectTransaction::metadata_json	LiveWriter.MetadataJSON	present	Go exposes direct-transaction metadata on the LiveWriter handle (live_writer_public.go)
+surface	DirectTransaction::metadata_json_len	LiveWriter.MetadataJSONLen	present	Go exposes direct-transaction metadata length on the LiveWriter handle
+surface	DirectTransaction::read_metadata_json	LiveWriter.ReadMetadataJSON	present	Go reads direct-transaction metadata through the LiveWriter handle
+surface	ImmutableFeedResult::create_immutable_feed_v4	CreateImmutableFeedV4	present	associated constructor on the Rust result type; the Go free function is the same operation
+surface	ImmutableFeedResult::create_immutable_feed_v6	CreateImmutableFeedV6	present	associated constructor on the Rust result type; the Go free function is the same operation
+surface	ImmutableReader::named_feed_source_v4	ImmutableReader.FeedRangeCursorV4	present	Rust returns a FeedRangeSourceV4; Go opens the named-feed range cursor
+surface	ImmutableReader::named_feed_source_v6	ImmutableReader.FeedRangeCursorV6	present	Rust returns a FeedRangeSourceV6; Go opens the named-feed range cursor
+surface	LiveReader::named_feed_source_v4	LiveReader.FeedRangeCursorV4	present	Rust returns a FeedRangeSourceV4; Go opens the named-feed range cursor
+surface	LiveReader::named_feed_source_v6	LiveReader.FeedRangeCursorV6	present	Rust returns a FeedRangeSourceV6; Go opens the named-feed range cursor
+surface	MembershipScope::all	MembershipQuery.AllFeeds	present	Rust scope constructor; Go resolves the scope on the membership query
+surface	MembershipScope::named	MembershipQuery.NamedFeeds	present	Rust scope constructor; Go resolves the scope on the membership query
+surface	PreparedWorkflow::commit	FinishedWorkflow.Commit	present	Go names the prepared workflow handle FinishedWorkflow (feed_workflow_public.go)
+surface	PreparedHistoryProjection::commit	FinishedHistoryProjection.Commit	present	Go names the prepared projection handle FinishedHistoryProjection (history_projection_public.go)
+surface	PreparedWorkflow::abort	FinishedWorkflow.Abort	present	Go names the prepared workflow handle FinishedWorkflow (feed_workflow_public.go)
+surface	PreparedHistoryProjection::abort	FinishedHistoryProjection.Abort	present	Go names the prepared projection handle FinishedHistoryProjection (history_projection_public.go)
+surface	PreparedWorkflow::report	FinishedWorkflow.Report	present	Go names the prepared workflow handle FinishedWorkflow (feed_workflow_public.go)
+surface	PreparedHistoryProjection::report	FinishedHistoryProjection.Report	present	Go names the prepared projection handle FinishedHistoryProjection (history_projection_public.go)
+surface	PreparedWorkflow::set_metadata_json	FinishedWorkflow.SetMetadataJSON	present	Go names the prepared workflow handle FinishedWorkflow (feed_workflow_public.go)
+surface	PreparedHistoryProjection::set_metadata_json	FinishedHistoryProjection.SetMetadataJSON	present	Go names the prepared projection handle FinishedHistoryProjection (history_projection_public.go)
+surface	PreparedWorkflow::clear_metadata_json	FinishedWorkflow.ClearMetadataJSON	present	Go names the prepared workflow handle FinishedWorkflow (feed_workflow_public.go)
+surface	PreparedHistoryProjection::clear_metadata_json	FinishedHistoryProjection.ClearMetadataJSON	present	Go names the prepared projection handle FinishedHistoryProjection (history_projection_public.go)
+surface	PublicationResidueHandle::close	PublicationResidueHandle.Close	present	Go alias method Close (internal/publication)
+surface	RecoveryCandidateInspection::candidate	RecoveryCandidateInspection.Candidate	present	Go alias method Candidate (internal/recovery)
+surface	RecoveryCandidateInspection::candidate_count	RecoveryCandidateInspection.CandidateCount	present	Go alias method CandidateCount (internal/recovery)
+surface	RecoveryCandidateInspection::candidates	RecoveryCandidateInspection.Candidates	present	Go alias method Candidates (internal/recovery)
+surface	RecoverySourceCleanupGuard::cleanup_pending	RecoverySourceCleanupGuard.CleanupPending	present	Go alias method CleanupPending (internal/recovery)
+surface	RecoverySourceCleanupGuard::last_problem	RecoverySourceCleanupGuard.LastProblem	present	Go alias method LastProblem (internal/recovery)
+surface	RecoverySourceCleanupGuard::retry_cleanup	RecoverySourceCleanupGuard.RetryCleanup	present	Go alias method RetryCleanup (internal/recovery)
+surface	TransactionFeedCursor::next_feed	TransactionFeedCursor.Next	present	Go names the transaction feed cursor method Next
+surface	ValidationProgress::examined_for	ValidationProgress.ExaminedFor	present	Go alias method ExaminedFor (internal/validation)
+surface	ValidationProgress::findings_for	ValidationProgress.FindingsFor	present	Go alias method FindingsFor (internal/validation)
+surface	ValueTag::from_wire	NewValueTag	present	Rust from_wire is the same canonical constructor as Go NewValueTag (types.go)
+surface	ValueTag::direct_semantic	ValueTagFirstSeen	present	Go models the direct semantics as ValueTagFirstSeen and ValueTagLastSeen
+surface	live_writer.rs metadata_json	LiveWriter.MetadataJSON	present	inventory module-row duplicate of LiveWriter::metadata_json
+surface	live_writer.rs metadata_json_len	LiveWriter.MetadataJSONLen	present	inventory module-row duplicate of LiveWriter::metadata_json_len
+surface	live_writer.rs read_metadata_json	LiveWriter.ReadMetadataJSON	present	inventory module-row duplicate of LiveWriter::read_metadata_json
+surface	live_writer/result.rs as_bytes	LocalBasename.Bytes	present	inventory module-row duplicate of LocalBasename::as_bytes
+surface	FeedName::as_bytes		removed	Go string value converts to bytes with []byte(name); no method needed
+surface	ImmutableReader::lookup_network_enrichment_v1_v4		removed	Go resolves single-key enrichment through NetworkEnrichmentV1CursorV4.Seek/NextRange; no direct view lookup
+surface	ImmutableReader::lookup_network_enrichment_v1_v6		removed	Go resolves single-key enrichment through NetworkEnrichmentV1CursorV6.Seek/NextRange; no direct view lookup
+surface	LiveReader::lookup_network_enrichment_v1_v4		removed	Go resolves single-key enrichment through NetworkEnrichmentV1CursorV4.Seek/NextRange; no direct view lookup
+surface	LiveReader::lookup_network_enrichment_v1_v6		removed	Go resolves single-key enrichment through NetworkEnrichmentV1CursorV6.Seek/NextRange; no direct view lookup
+surface	LiveWriter::commit		removed	Go commits per-transaction on LiveDirectTransaction/StructuredTransaction/MembershipTransaction/PreparedFeedChange; Rust LiveWriter::commit is the binding-layer commit of the current operation
+surface	LiveWriter::set_metadata_json		removed	Go sets metadata on transaction and prepared handles, not on the writer handle
+surface	LiveWriter::clear_metadata_json		removed	Go clears metadata on transaction and prepared handles, not on the writer handle
+surface	MembershipAlgebra::require_operation_reservation		removed	operation reservations are internal machinery; Go does not expose them
+surface	MembershipScope::named_from		removed	Go resolves scopes only from the membership query; no external-scope injection
+surface	MembershipScope::address_family		removed	Go keeps the scope family internal (MembershipScope.family)
+surface	MembershipScope::aggregate_reserved		removed	reserved-aggregation results are internal machinery; Go does not expose them
+surface	MembershipScope::require_operation_reservation		removed	operation reservations are internal machinery; Go does not expose them
+surface	SliceSource::new		removed	Go accepts plain Go slices directly as inputs; no slice-source adapter type
+surface	RecoveryCandidate::commit_nonce		removed	Go keeps recovery candidate access in internal/recovery; the public surface exposes RecoveryCandidateInspection (recovery_public.go)
+surface	RecoveryCandidate::database_id		removed	Go keeps recovery candidate access in internal/recovery; the public surface exposes RecoveryCandidateInspection (recovery_public.go)
+surface	RecoveryCandidate::label		removed	Go keeps recovery candidate access in internal/recovery; the public surface exposes RecoveryCandidateInspection (recovery_public.go)
+surface	RecoveryCandidate::source_identity		removed	Go keeps recovery candidate access in internal/recovery; the public surface exposes RecoveryCandidateInspection (recovery_public.go)
+surface	RecoveryCandidate::transaction_id		removed	Go keeps recovery candidate access in internal/recovery; the public surface exposes RecoveryCandidateInspection (recovery_public.go)
+c-abi	Reader::close		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owners ImmutableReader.Close / LiveReader.Close
+c-abi	Reader::cursor_next		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go cursors advance with NextRange (direct/feed-range/enrichment cursors)
+c-abi	Reader::cursor_seek_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner DirectCursorV4.Seek
+c-abi	Reader::cursor_seek_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner DirectCursorV6.Seek
+c-abi	Reader::enumerate_feeds		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.FeedCursor
+c-abi	Reader::info		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owners ImmutableReader.Info / LiveReader.Info
+c-abi	Reader::lookup_direct_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.LookupDirectV4
+c-abi	Reader::lookup_direct_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.LookupDirectV6
+c-abi	Reader::lookup_feed		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.LookupFeed
+c-abi	Reader::lookup_membership_token_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go exposes membership words through MembershipView (Word/WordCount/ReadWords)
+c-abi	Reader::lookup_membership_token_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go exposes membership words through MembershipView (Word/WordCount/ReadWords)
+c-abi	Reader::lookup_network_enrichment_v1_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go NetworkEnrichmentV1CursorV4.Seek/NextRange
+c-abi	Reader::lookup_network_enrichment_v1_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go NetworkEnrichmentV1CursorV6.Seek/NextRange
+c-abi	Reader::matching_feeds_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipQuery.MatchingFeedsV4
+c-abi	Reader::matching_feeds_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipQuery.MatchingFeedsV6
+c-abi	Reader::membership_contains		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go does not export a membership-contains predicate; word access exists
+c-abi	Reader::membership_contains_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go does not export a membership-contains predicate; word access exists
+c-abi	Reader::membership_contains_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go does not export a membership-contains predicate; word access exists
+c-abi	Reader::membership_present_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go does not export a membership-present predicate; word access exists
+c-abi	Reader::membership_present_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go does not export a membership-present predicate; word access exists
+c-abi	Reader::membership_word		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.Word
+c-abi	Reader::membership_word_count		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.WordCount
+c-abi	Reader::membership_word_count_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.WordCount
+c-abi	Reader::membership_word_count_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.WordCount
+c-abi	Reader::membership_word_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.Word
+c-abi	Reader::membership_word_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.Word
+c-abi	Reader::membership_words		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.ReadWords
+c-abi	Reader::membership_words_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.ReadWords
+c-abi	Reader::membership_words_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipView.ReadWords
+c-abi	Reader::metadata_json_len		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.MetadataJSONLen
+c-abi	Reader::open_direct_cursor		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owners LiveReader.DirectCursorV4 / ImmutableReader.DirectCursorV4
+c-abi	Reader::open_feed_cursor		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.FeedCursor
+c-abi	Reader::open_immutable		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner OpenImmutable
+c-abi	Reader::open_live		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner OpenLiveReader
+c-abi	Reader::open_membership_cursor		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.MembershipQuery
+c-abi	Reader::open_network_enrichment_v1_cursor		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.NetworkEnrichmentV1CursorV4
+c-abi	Reader::read_metadata_json		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveReader.ReadMetadataJSON
+c-abi	Writer::address_family		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); the Go live-writer family is fixed at open; no counter-op
+c-abi	Writer::begin_direct		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginDirect
+c-abi	Writer::begin_membership		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginMembershipTransaction
+c-abi	Writer::begin_structured		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginStructuredTransaction
+c-abi	Writer::clear_metadata_json		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go clears metadata on transaction and prepared handles
+c-abi	Writer::direct_assign_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.AssignV4
+c-abi	Writer::direct_assign_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.AssignV6
+c-abi	Writer::direct_clear_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.ClearV4
+c-abi	Writer::direct_clear_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.ClearV6
+c-abi	Writer::empty_membership		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.EmptyMembership
+c-abi	Writer::enumerate_transaction_feeds		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.FeedCursor
+c-abi	Writer::feed_delete		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.DeleteFeed
+c-abi	Writer::feed_ensure		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.EnsureFeed
+c-abi	Writer::feed_lookup		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.LookupFeed
+c-abi	Writer::feed_rename		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.RenameFeed
+c-abi	Writer::is_clean		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go dirtiness is per-transaction state; no counter-op
+c-abi	Writer::membership_add_feed		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.AddFeed
+c-abi	Writer::membership_apply_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.ApplyV4
+c-abi	Writer::membership_apply_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner MembershipTransaction.ApplyV6
+c-abi	Writer::metadata_json_len		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.MetadataJSONLen
+c-abi	Writer::network_enrichment_v1_intern		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner StructuredTransaction.InternNetworkEnrichmentV1
+c-abi	Writer::open		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner OpenLiveWriter
+c-abi	Writer::read_metadata_json		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.ReadMetadataJSON
+c-abi	Writer::set_metadata_json		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go sets metadata on transaction and prepared handles
+c-abi	Writer::structured_assign_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner StructuredTransaction.AssignV4
+c-abi	bootstrap.rs open		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go opens through OpenImmutable / OpenLiveReader / OpenLiveWriter
+c-abi	c_abi_support.rs worker_main		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); the Go worker containment lives in internal/routing
+c-abi	c_abi_support/writer.rs abort_source_failure		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); C-bound fault-vector machinery; no Go counter-op
+c-abi	c_abi_support/writer.rs add_coverage_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); C-bound range coverage input; no Go counter-op
+c-abi	c_abi_support/writer.rs add_coverage_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); C-bound range coverage input; no Go counter-op
+c-abi	c_abi_support/writer.rs add_direct_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.AssignV4
+c-abi	c_abi_support/writer.rs add_direct_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveDirectTransaction.AssignV6
+c-abi	c_abi_support/writer.rs begin_create_feed		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginCreateFeed
+c-abi	c_abi_support/writer.rs begin_direct_replacement		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginDirectReplacement
+c-abi	c_abi_support/writer.rs begin_first_seen_refresh		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginFirstSeenRefresh
+c-abi	c_abi_support/writer.rs begin_last_seen_refresh		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginLastSeenRefresh
+c-abi	c_abi_support/writer.rs begin_membership_import		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginMembershipImport
+c-abi	c_abi_support/writer.rs begin_replace_feed		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.BeginReplaceFeed
+c-abi	c_abi_support/writer.rs finish_first_seen_with_removals_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner FirstSeenRefresh.FinishInputWithRemovalsV4
+c-abi	c_abi_support/writer.rs finish_first_seen_with_removals_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner FirstSeenRefresh.FinishInputWithRemovalsV6
+c-abi	c_abi_support/writer.rs project_history		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.ProjectHistory
+c-abi	c_abi_support/writer.rs project_history_from		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner LiveWriter.ProjectHistory (single Go projection entry)
+c-abi	c_abi_support/writer.rs structured_assign_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner StructuredTransaction.AssignV6
+c-abi	c_abi_support/writer.rs structured_clear_v4		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner StructuredTransaction.ClearV4
+c-abi	c_abi_support/writer.rs structured_clear_v6		removed	Rust C ABI binding export (c-abi-v4.md, #[doc(hidden)] c_abi_support); Go owner StructuredTransaction.ClearV6
+go-surface	-	Cardinality129.Bit128	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.Hi	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.Lo	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.Compare	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.String	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.Uint128	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	Cardinality129.Uint64	present	Go alias method on Cardinality129 (internal/format)
+go-surface	-	CleanupArtifacts.Empty	present	Go method on the CleanupArtifacts alias (internal/publication)
+go-surface	-	CleanupArtifacts.Len	present	Go method on the CleanupArtifacts alias (internal/publication)
+go-surface	-	CleanupArtifacts.Push	present	Go method on the CleanupArtifacts alias (internal/publication)
+go-surface	-	CleanupArtifacts.State	present	Go method on the CleanupArtifacts alias (internal/publication)
+go-surface	-	PublicationResidueHandle.Remove	present	Go method on the PublicationResidueHandle alias (internal/publication)
+go-surface	-	PublicationResidueRemoval.CleanupState	present	Go cleanup-state accessor on the PublicationResidueRemoval alias
+go-surface	-	PublicationResult.CleanupState	present	Go cleanup-state accessor on the PublicationResult alias
+go-surface	-	RecoveryCandidateLabel.String	present	Go accessor on the RecoveryCandidateLabel alias (internal/recovery)
+go-surface	-	RecoveryPreparationFailure.CleanupState	present	Go cleanup-state accessor on the RecoveryPreparationFailure alias
+go-surface	-	RecoveryResult.CleanupState	present	Go cleanup-state accessor on the RecoveryResult alias
+go-surface	-	RecoverySinkFunc.Unknown	present	Go accessor on the RecoverySinkFunc alias (internal/recovery)
+go-surface	-	SinkFunc.Finding	present	Go accessor on the SinkFunc alias (internal/validation)
+go-surface	-	ValidationBudget.Validate	present	Go alias method (internal/validation)
+go-surface	-	ValidationFailure.CleanupState	present	Go cleanup-state accessor on the ValidationFailure alias
+go-surface	-	AbandonedArtifactRemoval	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedPublicationTempEntry	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedPublicationTempList	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationEntry	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationEvidence	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationList	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPhase	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPhaseMainMayHaveBeenAttempted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPhasePrepared	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPolicy	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPolicyFailIfExists	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPolicyReplaceExisting	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPolicyReplaceExistingNoRollback	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedReservationPrevious	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedScratchAuthentication	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedScratchEntry	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbandonedScratchList	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbortOutcomeAbortIncomplete	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AbortOutcomeAborted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AddressFamilyIPv4	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	AddressFamilyIPv6	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport AddressRange	AddressRange4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport AddressRange	AddressRange6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	CallerCertified	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CleanupState	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CleanupStateClean	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CleanupStateResiduePossible	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CloseOutcomeCloseIncomplete	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CloseOutcomeClosed	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitCommitted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitNotCommitted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitOutcomeUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionCommitted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionModeImmutable	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionModeLive	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionNotCommitted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionSupersededUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitResolutionUnresolvable	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CommitStatus	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CoordinationCleanup	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CoordinationCleanupCleanupGuard	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CoordinationCleanupNone	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CoordinationCleanupRetainedReaderCloseRequired	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CoordinationCleanupRetainedWriterCloseRequired	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CreationSecurity	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CreationStateCreated	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CreationStateNotCreated	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	CreationStateOutcomeUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContentAbsent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContentDesired	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContentOther	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContentPrevious	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DestinationContentUnclassified	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport DirectRange	DirectRangeV4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport DirectRange	DirectRangeV6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	DirectSemanticFirstSeen	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DirectSemanticGeneric	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	DirectSemanticLastSeen	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ErrorAbortIncomplete	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorAccessPolicyUnsupported	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorArithmeticOverflow	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorBufferTooSmall	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorCancelled	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorCleanupConflict	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorCleanupInProgress	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorConflict	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorCoordinationSequenceExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorCurrentGenerationUnprovable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorDestinationNameMismatch	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorDirectoryIdentityMismatch	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorDurabilityUnsupported	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorFaultWorkerFailed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorFaultWorkerUnavailable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorFeedIndexExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorForeignReference	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorForkedHandle	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorFormatInvalid	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorHandleBusy	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorHandleClosed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorIO	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorInsufficientResourceBudget	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorInvalidArgument	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorInvalidEnum	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorInvalidLength	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveCoordinationCleanupRequired	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveCoordinationMalformedRequiresReset	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveCoordinationUnsupported	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveOpenCleanupRequired	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveRecoveryCoordinationUnavailable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveRecoveryCurrentGenerationUnprovable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorLiveRecoveryCurrentGenerationUnreadable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorMembershipIdExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorMisalignedPointer	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNameExists	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNameInvalid	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNameNotFound	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNoPendingTransaction	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNotV4	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorNullPointer	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorOSUnsupported	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorPageSpaceExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorPanic	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorPublicationUnsupported	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorRangeReversed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorReaderCapacityExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorRecoveryCandidateChanged	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorRecoveryPreparationFailed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorReservedNonzero	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorSinkFailed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorSnapshotPreparationFailed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorSourceFailed	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorStaleReference	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorStoppedBySink	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorStructureIdExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorTransactionAborted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorTransactionIdExhausted	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorTransitionSuperseded	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorUnresolvable	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorUnsupportedStructure	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWorkLimitTooSmall	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWriterBusy	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongAddressFamily	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongHandleKind	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongState	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongStructureKind	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongValueKind	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	ErrorWrongValueTag	present	Go error-code constant adapting the Rust error::ErrorCode variant of the same meaning
+go-surface	-	FeedInfo	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	FileIdentity	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport FirstSeenRemoval	FirstSeenRemoval4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport FirstSeenRemovalSink	FirstSeenRemoval4Sink	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport FirstSeenRemoval	FirstSeenRemoval6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport FirstSeenRemovalSink	FirstSeenRemoval6Sink	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport HistoryProjectionSource	HistoryProjectionSourceImmutable	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport HistoryProjectionSource	HistoryProjectionSourceKind	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport HistoryProjectionSource	HistoryProjectionSourceLive	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	Housekeeping	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	HousekeepingArtifact	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	HousekeepingCrashReappearancePossible	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	HousekeepingNone	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	HousekeepingVisible	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport Ipv4Key	IPv4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport Ipv6Key	IPv6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport AbortResult	LiveAbortResult	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport CloseResult	LiveCloseResult	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport CommitCleanupArtifact	LiveCommitCleanupArtifact	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport CommitCleanupArtifacts	LiveCommitCleanupArtifacts	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	LiveCommitResult	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveCoordinationLocationAbsent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveCoordinationLocationCanonical	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveCoordinationLocationPrivate	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveCoordinationLocationUnclassified	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport DirectTransaction	LiveDirectTransaction	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	LiveResetDiscardPrevious	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResetRollbackSafe	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueKindCanonical	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueKindPrivateReset	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueStatusAbsent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueStatusCompleted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueStatusOutcomeUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueStatusReady	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveResidueStatusRemoved	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionInitialize	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionReset	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionResolutionComplete	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionResolutionRollback	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionStatusInitialized	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionStatusOutcomeUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LiveTransitionStatusUnchanged	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LocalFileIdentity	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LocalFileRelationDifferentLocalFile	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LocalFileRelationSameLocalFile	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LogicalChanged	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	LogicalNoChange	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport MAX_METADATA_UNCOMPRESSED	MaxMetadataUncompressed	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	MembershipDifference	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MembershipIntersection	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MembershipReplace	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MembershipUnion	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MembershipXor	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MetaSelectionProvenCurrent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MetaSelectionSoleMeta0	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	MetaSelectionSoleMeta1	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport NetworkEnrichmentV1Range	NetworkEnrichmentV1RangeV4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport NetworkEnrichmentV1Range	NetworkEnrichmentV1RangeV6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	ObjectCatalogIndexTree	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectCatalogNameTree	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectFeedUsedBitmap	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectFileGeometry	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectFreeBitmap	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMembershipBlob	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMembershipDictionary	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMembershipReverseIndex	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMembershipUsedBitmap	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMeta	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectMetadata	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectRangeTree	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectRetirementBlob	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectRetirementTree	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectStructureDictionary	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectStructureReverseIndex	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ObjectStructureUsedBitmap	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	OfflineQuiescenceCertification	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport TransactionBudget	PageBudget	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	PhysicalByteInterval	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	Pin	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PolicyFailIfExists	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PolicyReplaceExisting	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PolicyReplaceExistingNoRollback	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PrivateOutputAttempt	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationDigest	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationNotPublished	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationOutcomeUnknown	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationOutputEvidence	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationPublished	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueCoordinationAbsent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueCoordinationLiveSidecar	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueCoordinationPublicationReservation	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueCoordinationUnselectable	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueMainContentOther	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResidueMainContentV4	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResolutionComplete	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResolutionRemove	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationResult	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	PublicationTuple	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RangeDirectionBackward	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RangeDirectionForward	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	lib-reexport RangeSource	RangeSource4	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	lib-reexport RangeSource	RangeSource6	present	Go-adapted type; Rust counterpart recorded in the gate divergence set
+go-surface	-	ReasonAllocationPartitionInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonArithmeticOverflow	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonBitmapSummaryInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonBlobInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonCatalogBijectionInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonCatalogBitmapInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonCatalogInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonCatalogNameInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonFileGeometryInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonIoError	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipActiveFeedInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipBitmapInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipHashInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipMissing	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipRefcountInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMembershipReverseIndexInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetaInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetaStaticMismatch	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetaUnavailable	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetadataInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetadataLengthInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonMetadataZlibInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageAlias	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageBornTxnInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageCrcMismatch	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageHeaderInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageOutOfBounds	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageReservedNonzero	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonPageTypeMismatch	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRangeNotCoalesced	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRangeOverlap	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRangeReversed	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRetirementListInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRetirementOrderInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonRootCountInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureHashInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureMembershipInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureMissing	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructurePayloadInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureRefcountInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonStructureReverseIndexInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonTreeCycle	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonTreeFenceInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonTreeLevelInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReasonTreeOrderInvalid	present	Go validation-reason constant adapting the Rust validation reason vocabulary
+go-surface	-	ReclaimOutcome	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ReclaimOutcomeCommitted	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ReclaimOutcomeNoChange	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryBudget	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryCandidateLabel	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryCandidateNewest	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryCandidatePrevious	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryCandidateUnorderedMeta0	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryCandidateUnorderedMeta1	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryInspectionImmutable	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryInspectionLive	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryInspectionMode	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryInspectionOffline	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryLogicalCounts	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryPageCounts	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryPreparationFailure	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryReport	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryResult	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryScratchAttempt	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoverySink	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoverySinkContinue	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoverySinkControl	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoverySinkFunc	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoverySinkStop	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	RecoveryUnknownEnvelope	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ScratchOwnerKind	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ScratchOwnerRecovery	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ScratchOwnerValidation	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	SinkContinue	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	SinkFunc	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	SinkStop	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	SnapshotSourceImmutable	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	SnapshotSourceLive	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	StructureKindNetworkEnrichmentV1	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	StructureKindNone	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	UncoveredLeft	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	UncoveredRight	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidatedGeneration	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationAddressFence	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationBudget	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationFailure	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationFinding	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationMode	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationModeImmutableCurrent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationModeLiveCurrent	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationModeOfflineCandidate	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationObject	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationObjectCount	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationReason	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationReasonCount	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationResult	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationSink	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValidationSinkControl	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValueKindDirect	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValueKindMembership	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	ValueKindStructured	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingCandidateEnvelope	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingCandidateInertPayload	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingCandidateKind	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingEntry	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingList	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingPayloadIdentity	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WindowsHousekeepingRemoval	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowCreateFeed	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowDirectReplacement	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowFirstSeenRefresh	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowLastSeenRefresh	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowMembershipImport	present	Go surface type/constant with no same-name Rust export (adapted shape)
+go-surface	-	WorkflowReplaceFeed	present	Go surface type/constant with no same-name Rust export (adapted shape)

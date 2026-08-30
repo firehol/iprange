@@ -489,9 +489,44 @@ value read-back after two foreign commits), commit resolution, and
 snapshot opening - six parent tests per direction, all green with
 IPRANGE_V4_MIXED_LIVE=1 in both directions on linux/amd64.
 
-
-
-
+Parity gate overhauled to consume the full Rust export inventory
+(2026-08-30): closing the sol P2 closure blockers ("the parity gate does
+not prove Rust->Go parity - it inspects only Go functions/methods,
+excludes types/constants, never consumes parity_rust_public.tsv, and
+lets missing rows with an empty Go symbol pass"). The raw inventory
+(v4/go/parity_rust_public.tsv) was regenerated from the frozen original
+and deduplicated to 495 clean rows (0 brace fragments, 344 operations +
+151 type rows, sorted); the new TestParityRustInventoryIsFullyRecorded
+enforces three directions against the compiled surface: (A) every
+inventory operation must be ledger-recorded - 344 ops all covered by
+exact keys, "same-name Rust method" short keys with owner pinning, or
+"<module.rs> <function>" keys; (B) every inventory type must exist as an
+exported Go type or be listed in the expanded rustTypeDivergence set
+(34 recorded Go/Rust type-shape differences, each naming its Go
+adaptation); (C) every exported Go type/constant must be
+ledger-recorded or inventory-matched. rootSymbols now collects exported
+types and constants as well as functions, and follows exported type
+aliases one level into internal packages (35 alias-visible methods such
+as Cardinality129.Add from internal/format) so the gate sees the true
+compiled surface - fixing the recorded false claim sol found in the old ledger
+("lib-reexport Cardinality129 | missing | public typed cardinality
+re-export; Go keeps Cardinality129 internal" while types.go:142
+exports the alias). The ledger grew from
+294 to 816 rows: 693 present, 4 required-missing, 82 deliberate Rust
+C ABI binding absences (class c-abi; c-abi-v4.md #[doc(hidden)]
+c_abi_support exports with their Go owners recorded in the notes), 19
+closed-by-decision Go-adaptation absences (removed), and 346 go-surface
+type/constant records grouped by semantic note (error-code constants,
+validation-reason constants, adapted shapes). The old
+TestParityLedgerMatchesTheGoSurface keeps the ledger-vs-Go closure
+(now type-aware: present rows accept an exported type/constant).
+Tripwire mutation-proven at this identity: deleting one go-surface type
+row fails Direction C (unrecorded-type), deleting one divergence entry
+fails Direction B (inventory-type-missing), deleting one upgraded
+operation row fails Direction A (inventory-operation-unrecorded).
+Validation: go test ./..., go test -tags v4work ./..., go vet ./...,
+gofmt all green (linux/amd64). Files: v4/go/parity_gate_test.go,
+v4/go/parity_manifest.tsv, v4/go/parity_rust_public.tsv.
 
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
