@@ -58,43 +58,39 @@ func (r *ImmutableReader) lookupRange4(root uint32, addr uint32) (uint32, bool, 
 		if err != nil {
 			return 0, false, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		// One authoritative expected-tree-header parse: exact range
+		// branch/leaf type and aux by level, level bound and expected
+		// level, and canonical slotted geometry together (Rust
+		// slotted_page::parse_tree). Level 0 pages are leaves by the
+		// parser's own kind-by-level rule, so no second type switch runs.
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), level, !first)
 		if err != nil {
 			return 0, false, err
 		}
 		if first {
 			level = h.Level // the root's own level starts the descent
 			first = false
-		} else if h.Level != level {
-			return 0, false, corrupt("range level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-		if err != nil {
-			return 0, false, err
-		}
-		switch h.PageType {
-		case format.PageTypeRangeBranch:
-			if level == 0 {
-				return 0, false, corrupt("zero-level range branch")
-			}
-			child, err := rangeBranchChild4(sl, addr, r.meta.PageCount)
-			if err != nil {
-				return 0, false, err
-			}
-			if child == 0 {
-				return 0, false, nil // no branch key qualifies: absent
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeRangeLeaf:
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
 			rec, found, err := rangeLeafLookup4(sl, addr)
 			if err != nil || !found {
 				return 0, false, err
 			}
 			return rec.Value, true, nil
-		default:
-			return 0, false, corrupt("unexpected range page type %d", h.PageType)
 		}
+		if level == 0 {
+			return 0, false, corrupt("zero-level range branch")
+		}
+		child, err := rangeBranchChild4(sl, addr, r.meta.PageCount)
+		if err != nil {
+			return 0, false, err
+		}
+		if child == 0 {
+			return 0, false, nil // no branch key qualifies: absent
+		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 
@@ -107,43 +103,34 @@ func (r *ImmutableReader) lookupRange6(root uint32, addrHi, addrLo uint64) (uint
 		if err != nil {
 			return 0, false, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), level, !first)
 		if err != nil {
 			return 0, false, err
 		}
 		if first {
 			level = h.Level // the root's own level starts the descent
 			first = false
-		} else if h.Level != level {
-			return 0, false, corrupt("range level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-		if err != nil {
-			return 0, false, err
-		}
-		switch h.PageType {
-		case format.PageTypeRangeBranch:
-			if level == 0 {
-				return 0, false, corrupt("zero-level range branch")
-			}
-			child, err := rangeBranchChild6(sl, addrHi, addrLo, r.meta.PageCount)
-			if err != nil {
-				return 0, false, err
-			}
-			if child == 0 {
-				return 0, false, nil // no branch key qualifies: absent
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeRangeLeaf:
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
 			rec, found, err := rangeLeafLookup6(sl, addrHi, addrLo)
 			if err != nil || !found {
 				return 0, false, err
 			}
 			return rec.Value, true, nil
-		default:
-			return 0, false, corrupt("unexpected range page type %d", h.PageType)
 		}
+		if level == 0 {
+			return 0, false, corrupt("zero-level range branch")
+		}
+		child, err := rangeBranchChild6(sl, addrHi, addrLo, r.meta.PageCount)
+		if err != nil {
+			return 0, false, err
+		}
+		if child == 0 {
+			return 0, false, nil // no branch key qualifies: absent
+		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 
@@ -272,43 +259,33 @@ func (r *ImmutableReader) walkRange4(pgno uint32, visit func(RangeVisit4) error)
 	if err != nil {
 		return err
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
+	h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), 0, false)
 	if err != nil {
 		return err
 	}
-	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-	if err != nil {
-		return err
-	}
-	switch h.PageType {
-	case format.PageTypeRangeBranch:
-		if h.Level == 0 {
-			return corrupt("zero-level range branch")
-		}
-		for i := 0; i < int(sl.Header.ItemCount); i++ {
-			b, err := sl.Record(i)
-			if err != nil {
-				return err
-			}
-			_, child, err := format.DecodeRangeEntryV4(b)
-			if err != nil {
-				return err
-			}
-			if !format.PageNumberValid(child, r.meta.PageCount) {
-				return corrupt("range child out of range")
-			}
-			// The child must sit exactly one level below this branch; the
-			// recursion depth is therefore bounded by MaxTreeLevel.
-			if err := r.walkRangeDescend4(child, h.Level-1, visit); err != nil {
-				return err
-			}
-		}
-		return nil
-	case format.PageTypeRangeLeaf:
+	sl := format.SlottedPage{Page: page, Header: h}
+	if h.Level == 0 {
 		return r.walkRangeLeaf4(sl, visit)
-	default:
-		return corrupt("unexpected range page type %d", h.PageType)
 	}
+	for i := 0; i < int(sl.Header.ItemCount); i++ {
+		b, err := sl.Record(i)
+		if err != nil {
+			return err
+		}
+		_, child, err := format.DecodeRangeEntryV4(b)
+		if err != nil {
+			return err
+		}
+		if !format.PageNumberValid(child, r.meta.PageCount) {
+			return corrupt("range child out of range")
+		}
+		// The child must sit exactly one level below this branch; the
+		// recursion depth is therefore bounded by MaxTreeLevel.
+		if err := r.walkRangeDescend4(child, h.Level-1, visit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ImmutableReader) walkRangeDescend4(pgno uint32, expectedLevel uint16, visit func(RangeVisit4) error) error {
@@ -316,47 +293,31 @@ func (r *ImmutableReader) walkRangeDescend4(pgno uint32, expectedLevel uint16, v
 	if err != nil {
 		return err
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
+	h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), expectedLevel, true)
 	if err != nil {
 		return err
 	}
-	if h.Level != expectedLevel {
-		return corrupt("range level %d expected %d", h.Level, expectedLevel)
-	}
-	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-	if err != nil {
-		return err
-	}
-	switch h.PageType {
-	case format.PageTypeRangeBranch:
-		if h.Level == 0 {
-			return corrupt("zero-level range branch")
-		}
-		for i := 0; i < int(sl.Header.ItemCount); i++ {
-			b, err := sl.Record(i)
-			if err != nil {
-				return err
-			}
-			_, child, err := format.DecodeRangeEntryV4(b)
-			if err != nil {
-				return err
-			}
-			if !format.PageNumberValid(child, r.meta.PageCount) {
-				return corrupt("range child out of range")
-			}
-			if err := r.walkRangeDescend4(child, h.Level-1, visit); err != nil {
-				return err
-			}
-		}
-		return nil
-	case format.PageTypeRangeLeaf:
-		if h.Level != 0 {
-			return corrupt("range leaf level %d", h.Level)
-		}
+	sl := format.SlottedPage{Page: page, Header: h}
+	if h.Level == 0 {
 		return r.walkRangeLeaf4(sl, visit)
-	default:
-		return corrupt("unexpected range page type %d", h.PageType)
 	}
+	for i := 0; i < int(sl.Header.ItemCount); i++ {
+		b, err := sl.Record(i)
+		if err != nil {
+			return err
+		}
+		_, child, err := format.DecodeRangeEntryV4(b)
+		if err != nil {
+			return err
+		}
+		if !format.PageNumberValid(child, r.meta.PageCount) {
+			return corrupt("range child out of range")
+		}
+		if err := r.walkRangeDescend4(child, h.Level-1, visit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ImmutableReader) walkRangeLeaf4(sl format.SlottedPage, visit func(RangeVisit4) error) error {
@@ -393,41 +354,31 @@ func (r *ImmutableReader) walkRange6(pgno uint32, visit func(RangeVisit6) error)
 	if err != nil {
 		return err
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
+	h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), 0, false)
 	if err != nil {
 		return err
 	}
-	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-	if err != nil {
-		return err
-	}
-	switch h.PageType {
-	case format.PageTypeRangeBranch:
-		if h.Level == 0 {
-			return corrupt("zero-level range branch")
-		}
-		for i := 0; i < int(sl.Header.ItemCount); i++ {
-			b, err := sl.Record(i)
-			if err != nil {
-				return err
-			}
-			_, _, child, err := format.DecodeRangeEntryV6(b)
-			if err != nil {
-				return err
-			}
-			if !format.PageNumberValid(child, r.meta.PageCount) {
-				return corrupt("range child out of range")
-			}
-			if err := r.walkRangeDescend6(child, h.Level-1, visit); err != nil {
-				return err
-			}
-		}
-		return nil
-	case format.PageTypeRangeLeaf:
+	sl := format.SlottedPage{Page: page, Header: h}
+	if h.Level == 0 {
 		return r.walkRangeLeaf6(sl, visit)
-	default:
-		return corrupt("unexpected range page type %d", h.PageType)
 	}
+	for i := 0; i < int(sl.Header.ItemCount); i++ {
+		b, err := sl.Record(i)
+		if err != nil {
+			return err
+		}
+		_, _, child, err := format.DecodeRangeEntryV6(b)
+		if err != nil {
+			return err
+		}
+		if !format.PageNumberValid(child, r.meta.PageCount) {
+			return corrupt("range child out of range")
+		}
+		if err := r.walkRangeDescend6(child, h.Level-1, visit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ImmutableReader) walkRangeDescend6(pgno uint32, expectedLevel uint16, visit func(RangeVisit6) error) error {
@@ -435,47 +386,31 @@ func (r *ImmutableReader) walkRangeDescend6(pgno uint32, expectedLevel uint16, v
 	if err != nil {
 		return err
 	}
-	h, err := format.DecodePageHeader(page, r.meta.TxnID)
+	h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(r.meta.AddressFamily), expectedLevel, true)
 	if err != nil {
 		return err
 	}
-	if h.Level != expectedLevel {
-		return corrupt("range level %d expected %d", h.Level, expectedLevel)
-	}
-	sl, err := format.OpenSlottedHeader(page, h, h.PageType, uint32(r.meta.AddressFamily), format.SlotItemsPerPage)
-	if err != nil {
-		return err
-	}
-	switch h.PageType {
-	case format.PageTypeRangeBranch:
-		if h.Level == 0 {
-			return corrupt("zero-level range branch")
-		}
-		for i := 0; i < int(sl.Header.ItemCount); i++ {
-			b, err := sl.Record(i)
-			if err != nil {
-				return err
-			}
-			_, _, child, err := format.DecodeRangeEntryV6(b)
-			if err != nil {
-				return err
-			}
-			if !format.PageNumberValid(child, r.meta.PageCount) {
-				return corrupt("range child out of range")
-			}
-			if err := r.walkRangeDescend6(child, h.Level-1, visit); err != nil {
-				return err
-			}
-		}
-		return nil
-	case format.PageTypeRangeLeaf:
-		if h.Level != 0 {
-			return corrupt("range leaf level %d", h.Level)
-		}
+	sl := format.SlottedPage{Page: page, Header: h}
+	if h.Level == 0 {
 		return r.walkRangeLeaf6(sl, visit)
-	default:
-		return corrupt("unexpected range page type %d", h.PageType)
 	}
+	for i := 0; i < int(sl.Header.ItemCount); i++ {
+		b, err := sl.Record(i)
+		if err != nil {
+			return err
+		}
+		_, _, child, err := format.DecodeRangeEntryV6(b)
+		if err != nil {
+			return err
+		}
+		if !format.PageNumberValid(child, r.meta.PageCount) {
+			return corrupt("range child out of range")
+		}
+		if err := r.walkRangeDescend6(child, h.Level-1, visit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ImmutableReader) walkRangeLeaf6(sl format.SlottedPage, visit func(RangeVisit6) error) error {

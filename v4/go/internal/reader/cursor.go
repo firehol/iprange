@@ -193,32 +193,21 @@ func (c *treeCursor) readPage(pageNumber uint32, expected int) (nodeView, bool, 
 	if err != nil {
 		return nodeView{}, false, err
 	}
-	h, err := format.DecodePageHeader(page, c.r.meta.TxnID)
+	checkLevel := expected >= 0
+	var expectedLevel uint16
+	if checkLevel {
+		expectedLevel = uint16(expected)
+	}
+	h, err := format.ParseTreeHeader(page, c.r.meta.TxnID, c.branchType, c.leafType, c.aux, expectedLevel, checkLevel)
 	if err != nil {
 		// Rust parse_tree maps every header problem to the Corrupt class.
 		return nodeView{}, false, corrupt("slotted-page header is invalid: " + err.Error())
 	}
-	if expected >= 0 && int(h.Level) != expected {
-		return nodeView{}, false, corrupt("tree level %d expected %d", h.Level, expected)
-	}
-	sl, err := format.OpenSlottedHeader(page, h, h.PageType, c.aux, format.SlotItemsPerPage)
-	if err != nil {
-		return nodeView{}, false, err
-	}
-	switch h.PageType {
-	case c.branchType:
-		if h.Level == 0 {
-			return nodeView{}, false, corrupt("zero-level tree branch")
-		}
+	sl := format.SlottedPage{Page: page, Header: h}
+	if h.Level != 0 {
 		return nodeView{sl: sl, level: h.Level, itemCount: sl.Header.ItemCount}, false, nil
-	case c.leafType:
-		if h.Level != 0 {
-			return nodeView{}, false, corrupt("tree leaf at nonzero level %d", h.Level)
-		}
-		return nodeView{sl: sl, level: h.Level, itemCount: sl.Header.ItemCount}, true, nil
-	default:
-		return nodeView{}, false, corrupt("unexpected tree page type %d", h.PageType)
 	}
+	return nodeView{sl: sl, level: h.Level, itemCount: sl.Header.ItemCount}, true, nil
 }
 
 // branchAt decodes and validates one branch record at position pos.
@@ -305,17 +294,18 @@ func (c *treeCursor) advance() (uint32, int, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		h, err := format.DecodePageHeader(page, c.r.meta.TxnID)
+		// The frame was validated when first visited; re-inspect through
+		// the authoritative tree-header parser so a branch frame must
+		// still hold a branch page of this family (no general page-type
+		// classification, no second exact check).
+		h, err := format.ParseTreeHeader(page, c.r.meta.TxnID, c.branchType, c.leafType, c.aux, 0, false)
 		if err != nil {
 			return 0, 0, err
 		}
-		if h.PageType != c.branchType {
+		if h.Level == 0 {
 			return 0, 0, corrupt("tree branch changed during traversal")
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, c.aux, format.SlotItemsPerPage)
-		if err != nil {
-			return 0, 0, err
-		}
+		sl := format.SlottedPage{Page: page, Header: h}
 		if uint16(sl.Header.ItemCount) != fr.itemCount {
 			return 0, 0, corrupt("tree branch changed during traversal")
 		}

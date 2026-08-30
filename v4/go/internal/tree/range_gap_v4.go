@@ -205,22 +205,9 @@ func rangeCellSize4(level uint16) int {
 // so the type and discriminator checks fold to two compares).
 func parseRange4(page []byte, selectedTxn uint64, expectedLevel uint16, checkLevel bool) (Header, error) {
 	work.PageParse(1)
-	h, err := format.DecodePageHeader(page, selectedTxn)
+	h, err := format.ParseTreeHeader(page, selectedTxn, format.PageTypeRangeBranch, format.PageTypeRangeLeaf, uint32(format.AddressFamilyIPv4), expectedLevel, checkLevel)
 	if err != nil {
 		return Header{}, corrupt("slotted-page header is invalid: " + err.Error())
-	}
-	expectedType := format.PageTypeRangeLeaf
-	if h.Level != 0 {
-		expectedType = format.PageTypeRangeBranch
-	}
-	if h.PageType != expectedType || h.Aux != uint32(format.AddressFamilyIPv4) {
-		return Header{}, corrupt("slotted-page type or discriminator is invalid")
-	}
-	if checkLevel && expectedLevel != h.Level {
-		return Header{}, corrupt("slotted-page child level is invalid")
-	}
-	if !format.SlottedShapeValid(&h) {
-		return Header{}, corrupt("slotted-page bounds are invalid")
 	}
 	return h, nil
 }

@@ -19,22 +19,9 @@ type Header = format.PageHeader
 // would be one object per visited page per operation.
 func parse[T any](codec Codec[T], page []byte, selectedTxn uint64, expectedLevel uint16, checkLevel bool) (Header, error) {
 	work.PageParse(1)
-	h, err := format.DecodePageHeader(page, selectedTxn)
+	h, err := format.ParseTreeHeader(page, selectedTxn, codec.BranchType(), codec.LeafType(), codec.Aux(), expectedLevel, checkLevel)
 	if err != nil {
 		return Header{}, corrupt("slotted-page header is invalid: " + err.Error())
-	}
-	expectedType := codec.LeafType()
-	if h.Level != 0 {
-		expectedType = codec.BranchType()
-	}
-	if h.PageType != expectedType || h.Aux != codec.Aux() {
-		return Header{}, corrupt("slotted-page type or discriminator is invalid")
-	}
-	if checkLevel && expectedLevel != h.Level {
-		return Header{}, corrupt("slotted-page child level is invalid")
-	}
-	if !format.SlottedShapeValid(&h) {
-		return Header{}, corrupt("slotted-page bounds are invalid")
 	}
 	return h, nil
 }

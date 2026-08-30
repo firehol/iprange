@@ -191,38 +191,16 @@ func (r *ImmutableReader) LookupMembershipID(id uint32) (MembershipView, error) 
 		if err != nil {
 			return MembershipView{}, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeMembershipIDBranch, format.PageTypeMembershipIDLeaf, 0, level, !first)
 		if err != nil {
 			return MembershipView{}, err
 		}
 		if first {
 			level = h.Level // the root's own level starts the descent
 			first = false
-		} else if h.Level != level {
-			return MembershipView{}, corrupt("membership level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
-		if err != nil {
-			return MembershipView{}, err
-		}
-		switch h.PageType {
-		case format.PageTypeMembershipIDBranch:
-			if level == 0 {
-				return MembershipView{}, corrupt("zero-level membership branch")
-			}
-			child, err := membershipBranchChild(sl, id, r.meta.PageCount)
-			if err != nil {
-				return MembershipView{}, err
-			}
-			if child == 0 {
-				// An absent branch key means the ID tree has no record for
-				// this id; a stored range value naming it is corruption
-				// (mirroring membership_view.rs).
-				return MembershipView{}, corrupt("range names an absent membership ID")
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeMembershipIDLeaf:
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
 			_, leaf, found, err := membershipLeafFind(sl, id, r.meta.MembershipIDLimit, r.meta.FeedIndexLimit, r.meta.PageCount)
 			if err != nil {
 				return MembershipView{}, err
@@ -239,9 +217,22 @@ func (r *ImmutableReader) LookupMembershipID(id uint32) (MembershipView, error) 
 				blobRoot:  leaf.BlobRoot,
 				leaf:      leaf,
 			}, nil
-		default:
-			return MembershipView{}, corrupt("unexpected membership page type %d", h.PageType)
 		}
+		if level == 0 {
+			return MembershipView{}, corrupt("zero-level membership branch")
+		}
+		child, err := membershipBranchChild(sl, id, r.meta.PageCount)
+		if err != nil {
+			return MembershipView{}, err
+		}
+		if child == 0 {
+			// An absent branch key means the ID tree has no record for
+			// this id; a stored range value naming it is corruption
+			// (mirroring membership_view.rs).
+			return MembershipView{}, corrupt("range names an absent membership ID")
+		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 

@@ -1,0 +1,5 @@
+scenario,size,aux,pristine_p50_ns,slice_p50_ns,ratio,slice_alloc_calls,pristine_alloc_calls,slice_alloc_bytes,pristine_alloc_bytes,note
+live-direct-random-lookup,1000000,0,383801075,357411314,0.931,16,16,31380,31612,interleaved same-session 5x1 samples; slice = authoritative expected-tree-header parser (ParseTreeHeader)
+immutable-direct-random-lookup,1000000,0,351006693,319636610,0.911,16,16,40036,42356,interleaved same-session 5x1 samples; slice = authoritative expected-tree-header parser (ParseTreeHeader)
+nested-overwrite,1000000,0,691951903,686544570,0.992,16158144,16153048,66092,65396,interleaved same-session 5x1 samples; slice = authoritative expected-tree-header parser (ParseTreeHeader)
+membership-import,1000000,421,89357776,82924802,0.928,1475720,1475720,53104,53332,interleaved same-session 5x1 samples; slice = authoritative expected-tree-header parser (ParseTreeHeader)

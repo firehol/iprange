@@ -84,6 +84,70 @@ after the probe work and profile the worker-spawn share. Every step
 is measured against the 18-case CI gate and the matched Rust-ratio
 matrix at that identity.
 
+User decision 2026-08-30 (language floor, closure decision point):
+the bounded safe-Go leads were measured-and-rejected for the write
+path, but the external single-sol review rejected the floor claim and
+the user chose option 2 - keep SOW-0027 open for a BOUNDED continuation
+(not open-ended optimization). Binding CPU <=1.3x Rust per scenario and
+peak RSS <=1.3x remain in force; no unsafe code is authorized. The
+bounded scope (recorded from the review direction):
+
+1. One complete final-identity matrix: membership-import, nested-
+   overwrite, update-ipsets-workflow, IPv4 live+immutable lookups,
+   IPv6 live+immutable lookups, live-validation; CPU and peak RSS for
+   every scenario; five alternating Go/Rust release samples, same host.
+   Historical validation/RSS measurements are not acceptable for the
+   final identity.
+2. Complete necessary-work instrumentation: writer page visits,
+   copied/moved bytes, zeroed bytes, probe/validation sites with
+   equivalent Go/Rust definitions; "Go-less because Go does not count
+   it" is unknown, not parity.
+3. Profile validation properly: separate parent setup, worker
+   startup/handshake, mapping, and graph walk; measure multiple sizes;
+   recompute CPU and RSS at the final identity.
+4. Two bounded safe-Go A/B experiments: (a) one authoritative
+   expected-tree-header parser mirroring Rust inspect_tree_header so
+   tree paths validate exact branch/leaf type, auxiliary value, level,
+   and geometry without the general IsBranch classification followed by
+   another exact-type check; (b) an IPv4 fixed-search loop with the
+   safe fixed-page view and slot/key load integrated directly into the
+   generated loop. Retain only if measurement and assembly show a real
+   win. No unsafe code.
+5. Repair SOW tracking: remove the stale "complete/accepted write
+   envelope" Outcome; update SOW-0030 to cover every accepted residual
+   under the binding <=1.3x CPU/RSS contract or keep the work inside
+   SOW-0027; give the IPv6 benchmark and counter-parity work real SOW
+   ownership.
+6. Run the five-reviewer final round on the actual final commit after
+   all evidence and record repairs; record explicit delta PASS
+   verdicts.
+
+Return for a language-floor decision only after these items are
+complete; the upper-bound calculation must cover all remaining
+dominant Go-only costs, not only the estimated 2-3% store-dispatch
+class.
+
+Sub-state (2026-08-30, direction item 4a - authoritative
+expected-tree-header parser): one expected-tree-header parser now owns
+every slotted tree path. format.ParseTreeHeader (inspect.go) validates
+common header, born transaction, exact expected branch/leaf type and
+aux by level, level bound/expected level, and canonical slotted shape
+in one self-contained pass (Rust slotted_page::inspect_tree_header/
+parse_tree); format.InspectTreeHeader composes the same authority for
+the classified validation/recovery form. The reader range lookups and
+walks, catalog name+index descents, membership-ID descent, cursor
+readPage/resume, and the tree parse[T]/generated parseRange4/6 all
+route through it, removing the general DecodePageHeader IsBranch
+classification plus the second exact-type re-check/switch per page.
+Escape verified: no new allocations on any path (identical alloc
+counts vs pristine). Interleaved same-session A/B vs pristine HEAD
+(5x1 each, evidence/tree-header-parser-ab-20260830.csv):
+live-direct-random-lookup 0.931x, immutable-direct-random-lookup
+0.911x, nested-overwrite 0.992x, membership-import 0.928x. Reads
+improve ~7-9% and writes are neutral, so the slice is retained. Both
+full suites (plain + v4work), vet both modes, gofmt, race on reader,
+and genfamilies idempotence pass.
+
 Sub-state (2026-08-29, read-path probe slice): the per-width probe
 specialization (regression item 1, first half) is implemented and
 committed. internal/tree/genprobe emits four width-specialized

@@ -28,39 +28,30 @@ func (r *ImmutableReader) LookupFeedIndex(index uint32) (FeedEntry, bool, error)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeCatalogIndexBranch, format.PageTypeCatalogIndexLeaf, 0, level, !first)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
 		if first {
 			level = h.Level
 			first = false
-		} else if h.Level != level {
-			return FeedEntry{}, false, corrupt("catalog level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
+			return indexLeafLookup(sl, index, r.meta.FeedIndexLimit)
+		}
+		if level == 0 {
+			return FeedEntry{}, false, corrupt("zero-level index branch")
+		}
+		child, err := indexBranchChild(sl, index, r.meta.PageCount)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
-		switch h.PageType {
-		case format.PageTypeCatalogIndexBranch:
-			if level == 0 {
-				return FeedEntry{}, false, corrupt("zero-level index branch")
-			}
-			child, err := indexBranchChild(sl, index, r.meta.PageCount)
-			if err != nil {
-				return FeedEntry{}, false, err
-			}
-			if child == 0 {
-				return FeedEntry{}, false, nil // no entry qualifies: absent
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeCatalogIndexLeaf:
-			return indexLeafLookup(sl, index, r.meta.FeedIndexLimit)
-		default:
-			return FeedEntry{}, false, corrupt("unexpected index page type %d", h.PageType)
+		if child == 0 {
+			return FeedEntry{}, false, nil // no entry qualifies: absent
 		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 

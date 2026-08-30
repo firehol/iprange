@@ -51,32 +51,91 @@ const (
 	TreeHeaderProblemShape
 )
 
-// InspectTreeHeader mirrors slotted_page::inspect_tree_header: the exact
-// problem order (common, born, kind-at-level, level, shape) and the raw
-// shape rule. The header is valid exactly when the problem is None.
-func InspectTreeHeader(page []byte, selectedTxn uint64, branchType, leafType byte, aux uint32, expectedLevel *uint16) (PageHeader, TreeHeaderProblem) {
-	var header PageHeader
+// ParseTreeHeader is the single authoritative expected-tree-header parser
+// (Rust slotted_page::inspect_tree_header): the exact problem order
+// (common, born, kind-at-level, level, shape) and the raw shape rule, in
+// the error form tree paths return. It is self-contained: the header
+// decode and every check are inline in this one body, so the hot path pays
+// exactly one non-inlined call per page - not a chain. Tree paths call
+// this once instead of the general DecodePageHeader classification
+// followed by an exact-type re-check; the expected type is derived from
+// the level (leaf at level zero, branch above), so page type,
+// discriminator, level, and shape are all decided together. The
+// expected-level pointer keeps the recovery form's nil-means-any
+// semantics; hot paths pass nil when they do not yet know the level (the
+// root's own level starts every descent).
+func ParseTreeHeader(page []byte, selectedTxn uint64, branchType, leafType PageType, aux uint32, expectedLevel uint16, checkLevel bool) (PageHeader, error) {
 	if !PageCommonValid(page) {
-		return header, TreeHeaderProblemHeader
+		return PageHeader{}, headerErr("slotted-page header is invalid")
 	}
-	header = decodeRawPageHeader(page)
+	header := PageHeader{
+		PageType:   PageType(page[HeaderType]),
+		PageFlags:  page[HeaderFlags],
+		HeaderSize: U16(page[HeaderSizePos : HeaderSizePos+2]),
+		BornTxn:    U64(page[HeaderBorn : HeaderBorn+8]),
+		ItemCount:  U16(page[HeaderCount : HeaderCount+2]),
+		Level:      U16(page[HeaderLevel : HeaderLevel+2]),
+		Lower:      U16(page[HeaderLower : HeaderLower+2]),
+		Upper:      U16(page[HeaderUpper : HeaderUpper+2]),
+		Aux:        U32(page[HeaderAux : HeaderAux+4]),
+		PageCRC32C: U32(page[HeaderCRC : HeaderCRC+4]),
+	}
 	if !PageBornValid(page, selectedTxn) {
-		return header, TreeHeaderProblemBorn
+		return PageHeader{}, headerErr("slotted-page transaction is invalid")
 	}
 	expectedType := leafType
 	if header.Level != 0 {
 		expectedType = branchType
 	}
-	if !PageKindValid(page, expectedType, aux) {
-		return header, TreeHeaderProblemType
+	if !PageKindValid(page, byte(expectedType), aux) {
+		return PageHeader{}, headerErr("slotted-page type or discriminator is invalid")
 	}
-	if header.Level > MaxTreeLevel || (expectedLevel != nil && *expectedLevel != header.Level) {
-		return header, TreeHeaderProblemLevel
+	if header.Level > MaxTreeLevel || (checkLevel && expectedLevel != header.Level) {
+		return PageHeader{}, headerErr("slotted-page child level is invalid")
 	}
 	if !SlottedShapeValid(&header) {
-		return header, TreeHeaderProblemShape
+		return PageHeader{}, headerErr("slotted-page bounds are invalid")
 	}
-	return header, TreeHeaderProblemNone
+	return header, nil
+}
+
+// InspectTreeHeader mirrors slotted_page::inspect_tree_header for the
+// problem-classified consumers (validation and recovery): it reports which
+// class refused the page instead of an error. The classification runs the
+// spec-ordered primitives over the page only after ParseTreeHeader refused
+// it, so the two forms share one truth and the classified form stays on
+// the cold validation/recovery path.
+func InspectTreeHeader(page []byte, selectedTxn uint64, branchType, leafType byte, aux uint32, expectedLevel *uint16) (PageHeader, TreeHeaderProblem) {
+	checkLevel := expectedLevel != nil
+	var expected uint16
+	if checkLevel {
+		expected = *expectedLevel
+	}
+	header, err := ParseTreeHeader(page, selectedTxn, PageType(branchType), PageType(leafType), aux, expected, checkLevel)
+	if err == nil {
+		return header, TreeHeaderProblemNone
+	}
+	// Classify: the first spec-ordered primitive that fails identifies the
+	// refusal class (common, born, kind-at-level, level, shape). This runs
+	// only after a refusal, so the hot path never pays for it.
+	if !PageCommonValid(page) {
+		return PageHeader{}, TreeHeaderProblemHeader
+	}
+	if !PageBornValid(page, selectedTxn) {
+		return PageHeader{}, TreeHeaderProblemBorn
+	}
+	header = decodeRawPageHeader(page)
+	expectedType := leafType
+	if header.Level != 0 {
+		expectedType = branchType
+	}
+	if !PageKindValid(page, expectedType, aux) {
+		return PageHeader{}, TreeHeaderProblemType
+	}
+	if header.Level > MaxTreeLevel || (checkLevel && expected != header.Level) {
+		return PageHeader{}, TreeHeaderProblemLevel
+	}
+	return PageHeader{}, TreeHeaderProblemShape
 }
 
 // decodeRawPageHeader reads one raw page header after the common-valid
@@ -123,7 +182,7 @@ func InspectStructureTableHeader(page []byte, selectedTxn uint64, aux uint32, ex
 	if header.Level != 0 {
 		expectedType = byte(PageTypeStructureIDDirectory)
 	}
-	if !PageKindValid(page, expectedType, aux) {
+	if !PageKindValid(page, byte(expectedType), aux) {
 		return header, TreeHeaderProblemType
 	}
 	lower := uint16(StructureLeafEnd)

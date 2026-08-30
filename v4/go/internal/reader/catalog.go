@@ -29,43 +29,34 @@ func (r *ImmutableReader) LookupFeed(name string) (FeedEntry, bool, error) {
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeCatalogNameBranch, format.PageTypeCatalogNameLeaf, 0, level, !first)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
 		if first {
 			level = h.Level // the root's own level starts the descent
 			first = false
-		} else if h.Level != level {
-			return FeedEntry{}, false, corrupt("catalog level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
-		if err != nil {
-			return FeedEntry{}, false, err
-		}
-		switch h.PageType {
-		case format.PageTypeCatalogNameBranch:
-			if level == 0 {
-				return FeedEntry{}, false, corrupt("zero-level name branch")
-			}
-			child, err := nameBranchChild(sl, name, r.meta.PageCount)
-			if err != nil {
-				return FeedEntry{}, false, err
-			}
-			if child == 0 {
-				return FeedEntry{}, false, nil // no entry qualifies: absent
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeCatalogNameLeaf:
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
 			entry, found, err := nameLeafLookup(sl, name, r.meta.FeedIndexLimit)
 			if err != nil || !found {
 				return FeedEntry{}, false, err
 			}
 			return entry, true, nil
-		default:
-			return FeedEntry{}, false, corrupt("unexpected name page type %d", h.PageType)
 		}
+		if level == 0 {
+			return FeedEntry{}, false, corrupt("zero-level name branch")
+		}
+		child, err := nameBranchChild(sl, name, r.meta.PageCount)
+		if err != nil {
+			return FeedEntry{}, false, err
+		}
+		if child == 0 {
+			return FeedEntry{}, false, nil // no entry qualifies: absent
+		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 
@@ -193,43 +184,34 @@ func (r *ImmutableReader) LookupFeedBytes(name []byte) (FeedEntry, bool, error) 
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
-		h, err := format.DecodePageHeader(page, r.meta.TxnID)
+		h, err := format.ParseTreeHeader(page, r.meta.TxnID, format.PageTypeCatalogNameBranch, format.PageTypeCatalogNameLeaf, 0, level, !first)
 		if err != nil {
 			return FeedEntry{}, false, err
 		}
 		if first {
 			level = h.Level // the root's own level starts the descent
 			first = false
-		} else if h.Level != level {
-			return FeedEntry{}, false, corrupt("catalog level %d expected %d", h.Level, level)
 		}
-		sl, err := format.OpenSlottedHeader(page, h, h.PageType, 0, format.SlotItemsPerPage)
-		if err != nil {
-			return FeedEntry{}, false, err
-		}
-		switch h.PageType {
-		case format.PageTypeCatalogNameBranch:
-			if level == 0 {
-				return FeedEntry{}, false, corrupt("zero-level name branch")
-			}
-			child, err := nameBranchChildBytes(sl, name, r.meta.PageCount)
-			if err != nil {
-				return FeedEntry{}, false, err
-			}
-			if child == 0 {
-				return FeedEntry{}, false, nil // no entry qualifies: absent
-			}
-			work.TreeDescent(1)
-			cur, level = child, level-1
-		case format.PageTypeCatalogNameLeaf:
+		sl := format.SlottedPage{Page: page, Header: h}
+		if h.Level == 0 {
 			entry, found, err := nameLeafLookupBytes(sl, name, r.meta.FeedIndexLimit)
 			if err != nil || !found {
 				return FeedEntry{}, false, err
 			}
 			return entry, true, nil
-		default:
-			return FeedEntry{}, false, corrupt("unexpected name page type %d", h.PageType)
 		}
+		if level == 0 {
+			return FeedEntry{}, false, corrupt("zero-level name branch")
+		}
+		child, err := nameBranchChildBytes(sl, name, r.meta.PageCount)
+		if err != nil {
+			return FeedEntry{}, false, err
+		}
+		if child == 0 {
+			return FeedEntry{}, false, nil // no entry qualifies: absent
+		}
+		work.TreeDescent(1)
+		cur, level = child, level-1
 	}
 }
 
