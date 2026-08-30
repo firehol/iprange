@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use iprange_livedb::{
     snapshot_to,
     validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl},
-    CancellationToken, CloseOutcome, CommitDurability, CommitResult, Ipv4Key, LiveReader,
+    CancellationToken, CloseOutcome, CommitDurability, CommitResult, Ipv4Key, Ipv6Key, LiveReader,
     LiveWriter, SnapshotPublicationPolicy, SnapshotSourceMode,
 };
 
@@ -112,6 +112,8 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "immutable-direct-lookup" => read::immutable_direct_lookup(size),
         "live-direct-random-lookup" => read::live_direct_random_lookup(size),
         "immutable-direct-random-lookup" => read::immutable_direct_random_lookup(size),
+        "live-direct-random-lookup-v6" => read::live_direct_random_lookup_v6(size),
+        "immutable-direct-random-lookup-v6" => read::immutable_direct_random_lookup_v6(size),
         "live-direct-scan" => read::live_direct_scan(size),
         "immutable-direct-scan" => read::immutable_direct_scan(size),
         "structured-build-random" => structured::build_random(size, auxiliary),
@@ -190,6 +192,43 @@ pub(crate) fn count_random_points(
     points: &[Ipv4Key],
     repetitions: usize,
     mut present: impl FnMut(Ipv4Key) -> Result<bool, String>,
+) -> Result<u64, String> {
+    let mut hits = 0u64;
+    for _ in 0..repetitions {
+        for &address in points {
+            hits += u64::from(present(address)?);
+        }
+    }
+    Ok(black_box(hits))
+}
+
+pub(crate) fn random_points_v6(size: usize) -> Result<Vec<Ipv6Key>, String> {
+    let mut points = Vec::new();
+    points
+        .try_reserve_exact(size)
+        .map_err(|_| "random point benchmark allocation failed".to_owned())?;
+    for index in 0..size {
+        let index = u32::try_from(index)
+            .map_err(|_| "random point benchmark exceeds the IPv6 workload space".to_owned())?;
+        let start = index
+            .checked_mul(4)
+            .ok_or_else(|| "random point benchmark exceeds the IPv6 workload space".to_owned())?;
+        points.push(Ipv6Key::from_u128(u128::from(start)));
+    }
+
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+    for upper in (1..points.len()).rev() {
+        let random = splitmix64(&mut state);
+        let index = ((u128::from(random) * (upper + 1) as u128) >> 64) as usize;
+        points.swap(upper, index);
+    }
+    Ok(points)
+}
+
+pub(crate) fn count_random_points_v6(
+    points: &[Ipv6Key],
+    repetitions: usize,
+    mut present: impl FnMut(Ipv6Key) -> Result<bool, String>,
 ) -> Result<u64, String> {
     let mut hits = 0u64;
     for _ in 0..repetitions {

@@ -21,7 +21,9 @@ func init() {
 	registerScenario("live-direct-lookup", scenarioLiveDirectLookup)
 	registerScenario("immutable-direct-lookup", scenarioImmutableDirectLookup)
 	registerScenario("live-direct-random-lookup", scenarioLiveDirectRandomLookup)
+	registerScenario("live-direct-random-lookup-v6", scenarioLiveDirectRandomLookupV6)
 	registerScenario("immutable-direct-random-lookup", scenarioImmutableDirectRandomLookup)
+	registerScenario("immutable-direct-random-lookup-v6", scenarioImmutableDirectRandomLookupV6)
 	registerScenario("live-direct-scan", scenarioLiveDirectScan)
 	registerScenario("immutable-direct-scan", scenarioImmutableDirectScan)
 	registerScenario("live-open", scenarioLiveOpen)
@@ -91,6 +93,191 @@ func readSeededDirect(label string, size int, readerCapacity uint32) (*testDatab
 		return nil, err
 	}
 	return database, nil
+}
+
+// readSeededDirectV6 mirrors readSeededDirect over the IPv6 family:
+// one seeded live direct database of size disjoint low-32-bit ranges
+// (Rust seeded_direct_v6 + DirectSourceV6).
+func readSeededDirectV6(label string, size int, readerCapacity uint32) (*testDatabase, error) {
+	tag, err := iprangedb.NewValueTag([]byte("timestamp"))
+	if err != nil {
+		return nil, err
+	}
+	database, err := newTestDatabase(label)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv6, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken()); err != nil {
+		return nil, err
+	}
+	cancellation := iprangedb.NewCancellationToken()
+	writer, err := iprangedb.OpenLiveWriter(database.main, toPageBudget(transactionBudget(size, 1)), cancellation)
+	if err != nil {
+		return nil, err
+	}
+	workflow, err := writer.BeginDirectReplacement(cancellation)
+	if err != nil {
+		return nil, err
+	}
+	source, err := newDirectSourceV6(size)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		batch, ok := source.nextBatch()
+		if !ok {
+			break
+		}
+		converted := make([]iprangedb.DirectRangeV6, len(batch))
+		for index, r := range batch {
+			converted[index] = iprangedb.DirectRangeV6{
+				FromHi: 0, FromLo: r.fromLo,
+				ToHi: 0, ToLo: r.toLo,
+				Value: r.value,
+			}
+		}
+		if err := workflow.AddRangesV6(converted); err != nil {
+			return nil, err
+		}
+	}
+	finished, err := workflow.FinishInput()
+	if err != nil {
+		return nil, err
+	}
+	if !finished.IsChanged() {
+		return nil, fmt.Errorf("replacement unexpectedly changed nothing: %+v", finished.Report())
+	}
+	if err := requireCommitted(finished.Commit()); err != nil {
+		return nil, err
+	}
+	if err := closeWriter(writer); err != nil {
+		return nil, err
+	}
+	return database, nil
+}
+
+// randomPointsV6 builds the dispersed low-32-bit IPv6 point list the v6
+// random lookup scenarios sweep (Rust random_points + Ipv6Key::from_u128
+// on the same shuffled index*4 list).
+func randomPointsV6(size int) ([]iprangedb.IPv6, error) {
+	points, err := randomPoints(size)
+	if err != nil {
+		return nil, err
+	}
+	output := make([]iprangedb.IPv6, len(points))
+	for index, point := range points {
+		output[index] = iprangedb.IPv6{Hi: 0, Lo: uint64(point)}
+	}
+	return output, nil
+}
+
+// countRandomPointsV6 mirrors countRandomPoints over IPv6 keys.
+func countRandomPointsV6(points []iprangedb.IPv6, repetitions int, present func(iprangedb.IPv6) (bool, error)) (uint64, error) {
+	var hits uint64
+	for range repetitions {
+		for _, address := range points {
+			found, err := present(address)
+			if err != nil {
+				return 0, err
+			}
+			if found {
+				hits++
+			}
+		}
+	}
+	return hits, nil
+}
+
+// scenarioLiveDirectRandomLookupV6 mirrors Rust
+// read::live_direct_random_lookup_v6: shuffled IPv6 direct lookups
+// through a live reader.
+func scenarioLiveDirectRandomLookupV6(size, _ int) (*scenarioResult, error) {
+	database, err := readSeededDirectV6("live-direct-random-lookup-v6", size, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer database.cleanup()
+	points, err := randomPointsV6(size)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := iprangedb.OpenLiveReader(database.main, nil)
+	if err != nil {
+		return nil, err
+	}
+	repetitions, workUnits, err := readerWork(size)
+	if err != nil {
+		return nil, err
+	}
+	var hits uint64
+	opErr, measured := operation(func() error {
+		var err error
+		hits, err = countRandomPointsV6(points, repetitions, func(address iprangedb.IPv6) (bool, error) {
+			_, found, err := reader.LookupDirectV6(address)
+			if err != nil {
+				return false, err
+			}
+			return found, nil
+		})
+		return err
+	})
+	if opErr != nil {
+		return nil, opErr
+	}
+	if err := readRequireCount("live random direct v6 lookup", hits, workUnits, "addresses"); err != nil {
+		return nil, err
+	}
+	if err := closeLiveReader(reader); err != nil {
+		return nil, err
+	}
+	return result("live-direct-random-lookup-v6", size, 0, workUnits, database, measured, database.main)
+}
+
+// scenarioImmutableDirectRandomLookupV6 mirrors Rust
+// read::immutable_direct_random_lookup_v6: shuffled IPv6 direct lookups
+// through the snapshot.
+func scenarioImmutableDirectRandomLookupV6(size, _ int) (*scenarioResult, error) {
+	database, err := readSeededDirectV6("immutable-direct-random-lookup-v6", size, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer database.cleanup()
+	snapshot, err := immutableSnapshot(database, size)
+	if err != nil {
+		return nil, err
+	}
+	points, err := randomPointsV6(size)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := iprangedb.OpenImmutable(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	repetitions, workUnits, err := readerWork(size)
+	if err != nil {
+		return nil, err
+	}
+	var hits uint64
+	opErr, measured := operation(func() error {
+		var err error
+		hits, err = countRandomPointsV6(points, repetitions, func(address iprangedb.IPv6) (bool, error) {
+			_, found, err := reader.LookupDirectV6(address)
+			if err != nil {
+				return false, err
+			}
+			return found, nil
+		})
+		return err
+	})
+	if opErr != nil {
+		return nil, opErr
+	}
+	if err := readRequireCount("immutable random direct v6 lookup", hits, workUnits, "addresses"); err != nil {
+		return nil, err
+	}
+	_ = reader.Close()
+	return result("immutable-direct-random-lookup-v6", size, 0, workUnits, database, measured, snapshot)
 }
 
 // scenarioLiveDirectLookup mirrors Rust read::live_direct_lookup

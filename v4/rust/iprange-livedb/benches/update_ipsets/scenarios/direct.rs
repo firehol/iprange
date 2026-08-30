@@ -141,6 +141,18 @@ pub(super) fn seeded_direct_with_tag(
     Ok(database)
 }
 
+pub(super) fn seeded_direct_v6(
+    label: &str,
+    size: usize,
+    reader_capacity: u32,
+) -> Result<TestDatabase, String> {
+    let database = create_direct_v6(label, direct_tag(b"timestamp")?, reader_capacity)?;
+    let (operation, _) =
+        measure::operation(|| apply_direct_v6(&database, DirectSourceV6::unordered(size)?, size));
+    operation?;
+    Ok(database)
+}
+
 fn create_direct(label: &str, tag: ValueTag, reader_capacity: u32) -> Result<TestDatabase, String> {
     let database = TestDatabase::new(label)?;
     create_live(
