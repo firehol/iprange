@@ -2958,8 +2958,9 @@ Artifact maintenance gate:
   are the normative contract this SOW conforms to, and no behavior
   change requiring a spec edit landed.
 - End-user/operator docs: v4/go/doc.go now states the worker
-  cross-build matrix and the in-process stance of non-worker
-  platforms; the bench evidence README documents every committed
+  cross-build matrix and the fail-closed stance of non-worker
+  platforms (ErrorOSUnsupported before any scan; no in-process
+  fallback); the bench evidence README documents every committed
   artifact.
 - End-user/operator skills: none exist.
 - SOW lifecycle: SOW-0027 moves to done/ as completed in the close
