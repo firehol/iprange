@@ -376,7 +376,6 @@ func (s *DraftStore) sealPrivatePages(checkpoint func() error) error {
 			if err := format.SealPageChecksum(page); err != nil {
 				return err
 			}
-			work.BytesMoved(8) // Rust seal_mapped: put_u32(0) + put_u32(checksum)
 		}
 		pageNumber = next
 	}

@@ -117,5 +117,6 @@ func SealPageChecksum(page []byte) error {
 		return &Error{Code: CodeFormatInvalid, Detail: "page too short for checksum seal"}
 	}
 	PutU32(page[PageChecksumOffset:], crc)
+	work.BytesMoved(8) // Rust seal_mapped: put_u32(0) + put_u32(checksum)
 	return nil
 }

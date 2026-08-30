@@ -182,6 +182,51 @@ The record-only repairs (Boole P1, Sagan P3s, Turing P2/P3) land in
 the follow-up commit with this sub-state; final delta re-review
 verdicts are appended here after they are issued.
 
+Delta re-review (commit 61eb4109):
+- Turing (APIs/records): PASS. The stale Milestone-5 deliverable
+  record cites the final-identity matrix and the voided SOW-0017
+  dependency is gone; the validation-ratio reconciliation is
+  recorded; stale-number greps (1.66/1.63/2.31/2.299, "blocked by
+  SOW-0017", "is complete") return only historical/void-marked hits.
+  P3 (non-blocking): the final-matrix raw samples were not committed
+  - closed by committing rust-ratio-final-samples-20260830.csv
+  (commit af397bc5), whose medians reproduce the matrix exactly and
+  whose validation rows show the 1.16x-1.8x per-sample spread.
+- Boole (Rust parity): VERIFIED, then two more findings found and
+  closed. The same-size slotted replace phantom term (P1-1) is fixed
+  and the re-measured bytes_moved dropped from +2,385,418 to -230;
+  the -230 moved and -4,096 zeroed bytes were then both attributed
+  to the one uninstrumented mapped-page authority left in the
+  evidence window: format.Meta.EncodeMapped (Rust counts 230 moved +
+  4096 zeroed per meta encode through PageMut). meta_encode.go now
+  mirrors those counts (commit ce718360); re-measured: bytes_moved
+  69,145,640 = Rust EXACT and bytes_zeroed 8,487,946 = Rust EXACT.
+  Final authority sweep: PASS for the evidence-window authorities
+  with two recorded P3s, both closed in the follow-up commit: (a)
+  immutable-output seal counted nothing - the seal byte count moved
+  into the single authority format.SealPageChecksum (BytesMoved(8)
+  mirroring Rust seal_mapped's two put_u32s; the draft-path caller
+  duplicate removed), keeping the nested-overwrite numbers exactly
+  unchanged; (b) writer/structure_table.go has no work counters -
+  it is outside every evidence window (structure_* rows are all
+  zero), so it is recorded as a tracked counter-parity note in this
+  SOW rather than instrumented blind, and the "identical at every
+  authority" parity claim is scoped to the evidence-window
+  authorities.
+- Sagan (Go idioms): PASS. RestoreDirty identifiers fully renamed to
+  FinishEdit (zero occurrences remain), the ParseTreeHeader doc
+  wording matches the real bool parameter, generator re-emission and
+  gofmt verified at 61eb4109.
+- Hegel (performance): PASS at 33b3a8dd (matrix consistency, floor
+  assessment, retain rules, spot-check); no delta re-review was
+  needed for 61eb4109/af397bc5/ce718360 because the counter
+  instrumentation is test-only and does not touch the measured hot
+  paths (counters are v4work-only no-ops).
+- Herschel (wire/integrity): PASS at 33b3a8dd; the counter fixes
+  (put.go, meta_encode.go) are test-only, so no wire re-check was
+  required (meta_encode.go writes the same bytes; only the
+  v4work-only counters were added).
+
 Sub-state (2026-08-30, direction item 5 - tracking repair applied):
 the stale close records are corrected in this same commit. The Outcome
 section no longer claims completion or cites the voided write envelope; it
@@ -3404,8 +3449,12 @@ runs before that decision is presented.
   scenarios and the necessary-work counter parity (the two items this
   SOW previously tracked as follow-up) were delivered inside this SOW
   (commits 39df5b0b and 0abb7488); the only items that remain are the
-  language-floor decision above and the SOW-0030 residual ownership
-  below it.
+  language-floor decision above, the SOW-0030 residual ownership below
+  it, and one tracked evidence-scope note: writer/structure_table.go
+  is outside every necessary-work evidence window and carries no work
+  counters; it joins the counter evidence set (with Rust-mirroring
+  per-call formulas) in the first SOW that exercises structured-table
+  counters, per the final-round scope ruling.
 
 ## Regression Log
 
