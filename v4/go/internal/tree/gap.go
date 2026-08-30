@@ -54,6 +54,17 @@ type LocalGap interface {
 }
 
 // LocalInsert is the outcome of a local gap insertion (Rust LocalInsert).
+// LocalGapOutcome is the compact result of one local-gap insert attempt:
+// the inserted flag and the leaf page number. The rejection proof is
+// written through a caller-provided *LocalReject slot, so the hot
+// overwrite path never returns the ~340-byte LocalInsert by value
+// (Rust returns Option<LocalInsert>; the emitted layer mirrors the
+// zero-copy form).
+type LocalGapOutcome struct {
+	Inserted   bool
+	PageNumber uint32
+}
+
 type LocalInsert[T any] struct {
 	// Inserted reports whether the cell was inserted into the local leaf.
 	Inserted bool

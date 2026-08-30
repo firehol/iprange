@@ -259,14 +259,13 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 		return privateInputInsert[K]{}, invalid("range start is after its end")
 	}
 	if input.disabled() {
-		result, err := insertPrivateGap(ctx, r)
+		inserted, _, err := insertPrivateGap(ctx, r, &input.rejectSlot)
 		if err != nil {
 			return privateInputInsert[K]{}, err
 		}
-		if result.Inserted {
+		if inserted {
 			return privateInputInsert[K]{inserted: true}, nil
 		}
-		input.rejectSlot = result.Reject
 		input.noteRejection(input.rejectSlot.HasLocalNeighbor())
 		return privateInputInsert[K]{reject: &input.rejectSlot, rejected: true}, nil
 	}
@@ -278,18 +277,18 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 	if probe.inserted {
 		return privateInputInsert[K]{inserted: true}, nil
 	}
-	result, err := insertPrivateGap(ctx, r)
+	inserted, pageNumber, err := insertPrivateGap(ctx, r, &input.rejectSlot)
 	if err != nil {
 		return privateInputInsert[K]{}, err
 	}
-	if result.Inserted {
+	if inserted {
 		if locatorEnabled {
-			first, err := tree.PrivateLeafFirst(ctx.family, ctx.storeView, result.PageNumber)
+			first, err := tree.PrivateLeafFirst(ctx.family, ctx.storeView, pageNumber)
 			if err != nil {
 				return privateInputInsert[K]{}, err
 			}
 			fk := decodeCodecKey(ctx.family, first)
-			input.locator.learn(ctx.family, fk, result.PageNumber, probe.candidate, probe.hasCandidate)
+			input.locator.learn(ctx.family, fk, pageNumber, probe.candidate, probe.hasCandidate)
 			if input.adaptive {
 				input.probeLocator = true
 				input.localConflicts = 0
@@ -297,7 +296,6 @@ func insertPrivateInputGap[K any](ctx *rangeCtx[K], r rangeRecord[K], input *pri
 		}
 		return privateInputInsert[K]{inserted: true}, nil
 	}
-	input.rejectSlot = result.Reject
 	input.noteRejection(input.rejectSlot.HasLocalNeighbor())
 	return privateInputInsert[K]{reject: &input.rejectSlot, rejected: true}, nil
 }

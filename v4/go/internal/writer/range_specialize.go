@@ -19,22 +19,35 @@ import (
 )
 
 // gapLocalInsert routes InsertIfLocalGap to the emitted family entry.
-func gapLocalInsert[K any](ctx *rangeCtx[K], r rangeRecord[K], cell []byte, retired tree.RetiredPages) (tree.RetiredPages, tree.LocalInsert[rangeRecord[K]], error) {
+// The rejection proof is written through the caller-owned reject slot
+// (the private input's slot on the locator path, the context slot
+// otherwise) and the emitted entry returns only the compact
+// inserted/page outcome: the hot overwrite path never moves the
+// ~340-byte LocalInsert by value across the seam.
+func gapLocalInsert[K any](ctx *rangeCtx[K], r rangeRecord[K], cell []byte, retired tree.RetiredPages, reject *tree.LocalReject[rangeRecord[K]]) (tree.RetiredPages, tree.LocalGapOutcome, error) {
 	switch family := any(ctx.family).(type) {
 	case tree.RangeCodec4:
-		retired, result, err := tree.InsertIfLocalGap4(family, ctx.storeView, ctx.root, cell, retired, any(r).(tree.RangeRecord[tree.RangeKey4]))
+		retired, outcome, err := tree.InsertIfLocalGap4(family, ctx.storeView, ctx.root, cell, retired, any(r).(tree.RangeRecord[tree.RangeKey4]), any(reject).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]))
 		if err != nil {
-			return tree.RetiredPages{}, tree.LocalInsert[rangeRecord[K]]{}, err
+			return tree.RetiredPages{}, tree.LocalGapOutcome{}, err
 		}
-		return retired, any(result).(tree.LocalInsert[rangeRecord[K]]), nil
+		return retired, outcome, nil
 	case tree.RangeCodec6:
-		retired, result, err := tree.InsertIfLocalGap6(family, ctx.storeView, ctx.root, cell, retired, any(r).(tree.RangeRecord[tree.RangeKey6]))
+		retired, outcome, err := tree.InsertIfLocalGap6(family, ctx.storeView, ctx.root, cell, retired, any(r).(tree.RangeRecord[tree.RangeKey6]), any(reject).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]))
 		if err != nil {
-			return tree.RetiredPages{}, tree.LocalInsert[rangeRecord[K]]{}, err
+			return tree.RetiredPages{}, tree.LocalGapOutcome{}, err
 		}
-		return retired, any(result).(tree.LocalInsert[rangeRecord[K]]), nil
+		return retired, outcome, nil
 	default:
-		return tree.InsertIfLocalGap(ctx.family, ctx.storeView, ctx.root, cell, retired, privateGap[K]{Family: ctx.family, R: r})
+		retired, result, err := tree.InsertIfLocalGap(ctx.family, ctx.storeView, ctx.root, cell, retired, privateGap[K]{Family: ctx.family, R: r})
+		if err != nil {
+			return tree.RetiredPages{}, tree.LocalGapOutcome{}, err
+		}
+		outcome := tree.LocalGapOutcome{Inserted: result.Inserted, PageNumber: result.PageNumber}
+		if result.Rejected {
+			*reject = result.Reject
+		}
+		return retired, outcome, nil
 	}
 }
 
@@ -85,26 +98,28 @@ func gapRejectedInsert[K any](ctx *rangeCtx[K], cell []byte, rejected tree.Local
 }
 
 // predecessorReplace routes ReplaceLocalPredecessorWith to the emitted
-// family entry.
+// family entry. The rejection proof travels by pointer end to end: the
+// emitted entries dereference the caller-owned slot, so the seam never
+// copies the ~340-byte record into a type assertion.
 func predecessorReplace[K any](ctx *rangeCtx[K], rejected *tree.LocalReject[rangeRecord[K]], key K, cells [][]byte) error {
 	switch family := any(ctx.family).(type) {
 	case tree.RangeCodec4:
-		return tree.ReplaceLocalPredecessorWith4(family, ctx.storeView, ctx.root, any(*rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), ctx.family.KeyOf(key), cells)
+		return tree.ReplaceLocalPredecessorWith4(family, ctx.storeView, ctx.root, any(rejected).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), ctx.family.KeyOf(key), cells)
 	case tree.RangeCodec6:
-		return tree.ReplaceLocalPredecessorWith6(family, ctx.storeView, ctx.root, any(*rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), ctx.family.KeyOf(key), cells)
+		return tree.ReplaceLocalPredecessorWith6(family, ctx.storeView, ctx.root, any(rejected).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), ctx.family.KeyOf(key), cells)
 	default:
 		return tree.ReplaceLocalPredecessorWith(ctx.family, ctx.storeView, ctx.root, *rejected, ctx.family.KeyOf(key), cells)
 	}
 }
 
 // localRunReplace routes ReplaceLocalRun to the emitted family entry.
-func localRunReplace[K any](ctx *rangeCtx[K], rejected tree.LocalReject[rangeRecord[K]], run tree.LocalRun, replacement []byte) error {
+func localRunReplace[K any](ctx *rangeCtx[K], rejected *tree.LocalReject[rangeRecord[K]], run tree.LocalRun, replacement []byte) error {
 	switch family := any(ctx.family).(type) {
 	case tree.RangeCodec4:
-		return tree.ReplaceLocalRun4(family, ctx.storeView, ctx.root, any(rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), run, replacement)
+		return tree.ReplaceLocalRun4(family, ctx.storeView, ctx.root, any(rejected).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey4]]), run, replacement)
 	case tree.RangeCodec6:
-		return tree.ReplaceLocalRun6(family, ctx.storeView, ctx.root, any(rejected).(tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), run, replacement)
+		return tree.ReplaceLocalRun6(family, ctx.storeView, ctx.root, any(rejected).(*tree.LocalReject[tree.RangeRecord[tree.RangeKey6]]), run, replacement)
 	default:
-		return tree.ReplaceLocalRun(ctx.family, ctx.storeView, ctx.root, rejected, run, replacement)
+		return tree.ReplaceLocalRun(ctx.family, ctx.storeView, ctx.root, *rejected, run, replacement)
 	}
 }

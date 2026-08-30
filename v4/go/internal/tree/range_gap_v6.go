@@ -293,7 +293,7 @@ func replaceBranchChild6(store Store, pageNumber uint32, index int, child uint32
 // committed page along the path (the inlined form of privatePathSelect:
 // page validation, the fixed-key search, and the branch-child decode are
 // family constants; the COW touch stays shared).
-func privateRangePath6(store Store, root *uint32, key Key, retired RetiredPages) (PrivateLeaf, RetiredPages, error) {
+func privateRangePath6(store Store, root *uint32, key Key, retired RetiredPages, leaf *PrivateLeaf) (RetiredPages, error) {
 	work.TreeLookup(1)
 	var path Path
 	pageNumber := *root
@@ -306,11 +306,11 @@ func privateRangePath6(store Store, root *uint32, key Key, retired RetiredPages)
 	for {
 		page, err := store.Inspect(pageNumber)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		header, err := parseRange6(page, store.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		born := format.U64(page[format.HeaderBorn:])
 		if header.Level == 0 {
@@ -318,12 +318,12 @@ func privateRangePath6(store Store, root *uint32, key Key, retired RetiredPages)
 			if born != store.TargetTxn() {
 				copied, err := touch(store, pageNumber, &retired)
 				if err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 				activePage = copied
 				if hasParent {
 					if err := replaceBranchChild6(store, parentPage, parentIndex, copied); err != nil {
-						return PrivateLeaf{}, RetiredPages{}, err
+						return retired, err
 					}
 				} else {
 					*root = copied
@@ -333,39 +333,40 @@ func privateRangePath6(store Store, root *uint32, key Key, retired RetiredPages)
 				// selection, and the source mapping view may be a growth
 				// or COW buffer the draft no longer owns.
 				if page, err = store.Inspect(copied); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 				if header, err = parseRange6(page, store.TargetTxn(), expectedLevel, checkLevel); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 			}
-			return PrivateLeaf{Path: path, PageNumber: activePage, Header: header, Page: page}, retired, nil
+			*leaf = PrivateLeaf{Path: path, PageNumber: activePage, Header: header, Page: page}
+			return retired, nil
 		}
 		index, _, err := fixedLowerBoundU128(page, &header, rangeCellSize6(header.Level), key, false)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		child, err := branchChild6(page, &header, index, store.PageLimit())
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		activePage := pageNumber
 		if born != store.TargetTxn() {
 			copied, err := touch(store, pageNumber, &retired)
 			if err != nil {
-				return PrivateLeaf{}, RetiredPages{}, err
+				return retired, err
 			}
 			activePage = copied
 			if hasParent {
 				if err := replaceBranchChild6(store, parentPage, parentIndex, copied); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 			} else {
 				*root = copied
 			}
 		}
 		if err := path.Push(Frame{PageNumber: activePage, Index: index, ItemCount: int(header.ItemCount)}); err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		hasParent = true
 		parentPage = activePage
@@ -451,7 +452,7 @@ func applyReplacement6(codec RangeCodec6, store Store, pageNumber uint32, header
 		}
 		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
 	}
-	return splitReplacement(codec, store, pageNumber, header, edit)
+	return splitReplacement6(codec, store, pageNumber, header, edit)
 }
 
 // replaceTarget6 replaces one leaf cell with 2-3 cells and
@@ -472,61 +473,234 @@ func replaceTarget6(codec RangeCodec6, store Store, root *uint32, target LeafTar
 	return propagateSplit(codec, store, root, &target.Path, target.PageNumber, split.leftFirst, split.rightPage, split.rightFirst, 0)
 }
 
+// requireLeaf6 validates one leaf cell of the family (the
+// inlined form of RequireLeaf: the leaf size is a family constant and
+// the decode is a direct concrete codec call, so the probe never
+// re-interfaces the codec or consults MaxLeafSize).
+func requireLeaf6(codec RangeCodec6, leafCell []byte) error {
+	if len(leafCell) == 0 || len(leafCell) > format.RangeRecordV6Size {
+		return invalid("wrong B+tree leaf size")
+	}
+	work.LeafValidation(1)
+	_, err := codec.ReadLeaf(leafCell)
+	return err
+}
+
+// codecCell6 reads one fixed-cell slot of the family (the
+// inlined form of codecCell: the cell width is a family constant, so
+// the fixed slotted read is direct and the error maps identically).
+func codecCell6(page []byte, header *Header, index int) ([]byte, error) {
+	cell, err := format.SlottedCell(page, header, index, rangeCellSize6(header.Level))
+	if err != nil {
+		return nil, corrupt("slotted-page cell is outside the record area")
+	}
+	return cell, nil
+}
+
+// truncate6 keeps the first keep logical records of one
+// fixed-cell page (the inlined form of truncate: the fixed path with the
+// family cell width).
+func truncate6(page []byte, header *Header, keep int) (Header, error) {
+	shape, err := format.SlottedTruncateFixed(page, header, keep, rangeCellSize6(header.Level))
+	if err != nil {
+		return Header{}, corrupt(err.Error())
+	}
+	return shapeHeader(header, shape), nil
+}
+
+// replacementCell6 maps one virtual index to a replacement
+// cell or an existing fixed cell (the inlined form of replacementCell).
+func replacementCell6(source []byte, header *Header, edit Replacement, index int) ([]byte, error) {
+	if offset := index - edit.index; offset >= 0 && offset < len(edit.cells) {
+		return edit.cells[offset], nil
+	}
+	sourceIndex := index
+	if index >= edit.index+len(edit.cells) {
+		sourceIndex = index - len(edit.cells) + 1
+	}
+	return codecCell6(source, header, sourceIndex)
+}
+
+// buildReplacement6 builds one fresh page from a source page
+// and one replacement over [start, end) (the inlined form of
+// buildReplacement: page type, aux, and cell widths are family
+// constants).
+func buildReplacement6(source []byte, header *Header, edit Replacement, start, end int, output []byte) error {
+	pageType := format.PageTypeRangeLeaf
+	if header.Level != 0 {
+		pageType = format.PageTypeRangeBranch
+	}
+	b := format.NewSlottedBuilder(output, pageType, format.U64(source[format.HeaderBorn:]), header.Level, uint32(format.AddressFamilyIPv6))
+	for index := start; index < end; index++ {
+		cell, err := replacementCell6(source, header, edit, index)
+		if err != nil {
+			return err
+		}
+		if err := b.Push(output, cell); err != nil {
+			return corrupt("B+tree page build failed: " + err.Error())
+		}
+	}
+	return b.Finish(output)
+}
+
+// replacementSplitIndex6 picks the split point of one fixed
+// cell replacement (the inlined form of replacementSplitIndex: ranges
+// are always fixed cells, so the width-based midpoint is direct).
+func replacementSplitIndex6(header *Header, edit Replacement) (int, error) {
+	return fixedSplitIndex(edit.total(int(header.ItemCount)), rangeCellSize6(header.Level))
+}
+
+// keepLeftReplacement6 keeps the left side of one split
+// replacement on the original page (the inlined form of
+// keepLeftReplacement).
+func keepLeftReplacement6(store Store, pageNumber uint32, header *Header, edit Replacement, middle int) error {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	if middle <= edit.index {
+		_, err := truncate6(page, header, middle)
+		if err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	if middle < edit.index+len(edit.cells) {
+		left, err := truncate6(page, header, edit.index+1)
+		if err != nil {
+			return err
+		}
+		if err := applyCells6(page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	keep := middle - (len(edit.cells) - 1)
+	left, err := truncate6(page, header, keep)
+	if err != nil {
+		return err
+	}
+	if err := applyCells6(page, &left, edit.index, edit.cells); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
+}
+
+// firstKey6 reads the first key of one family page (the
+// inlined form of FirstKey: page validation and the first cell read are
+// family constants).
+func firstKey6(codec RangeCodec6, store Store, pageNumber uint32, level uint16) (Key, error) {
+	targetTxn := store.TargetTxn()
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return Key{}, err
+	}
+	header, err := parseRange6(page, targetTxn, level, true)
+	if err != nil {
+		return Key{}, err
+	}
+	cell, err := codecCell6(page, &header, 0)
+	if err != nil {
+		return Key{}, err
+	}
+	return codec.ReadKey(cell, header.Level)
+}
+
+// splitReplacement6 splits one leaf replacement across two
+// pages (the inlined form of splitReplacement: split index, page build,
+// left keep, and both first keys use the family-specialized helpers).
+func splitReplacement6(codec RangeCodec6, store Store, pageNumber uint32, header *Header, edit Replacement) (branchSplit, bool, error) {
+	total := edit.total(int(header.ItemCount))
+	middle, err := replacementSplitIndex6(header, edit)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	rightPage, err := store.Allocate()
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	src, dst, tag, err := store.CopyPage(pageNumber, rightPage)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := buildReplacement6(src, header, edit, middle, total, dst); err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := store.RestoreDirty(rightPage, tag); err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := keepLeftReplacement6(store, pageNumber, header, edit, middle); err != nil {
+		return branchSplit{}, false, err
+	}
+	work.PageSplit(1)
+	rightFirst, err := firstKey6(codec, store, rightPage, header.Level)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	leftFirst, err := firstKey6(codec, store, pageNumber, header.Level)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	return branchSplit{rightPage: rightPage, rightFirst: rightFirst, leftFirst: leftFirst, level: header.Level}, true, nil
+}
+
 // InsertIfLocalGap6 inserts one leaf cell into the physical gap
 // around its key when the gap is fully local to the probed leaf (Rust
 // insert_if_local_gap; the family-specialized form of InsertIfLocalGap
 // that the writer routes to).
-func InsertIfLocalGap6(codec RangeCodec6, store Store, root *uint32, leafCell []byte, retired RetiredPages, r RangeRecord[RangeKey6]) (RetiredPages, LocalInsert[RangeRecord[RangeKey6]], error) {
+func InsertIfLocalGap6(codec RangeCodec6, store Store, root *uint32, leafCell []byte, retired RetiredPages, r RangeRecord[RangeKey6], reject *LocalReject[RangeRecord[RangeKey6]]) (RetiredPages, LocalGapOutcome, error) {
 	gap := rangeProbe6{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+	if err := requireLeaf6(codec, leafCell); err != nil {
+		return retired, LocalGapOutcome{}, err
 	}
 	if *root == 0 {
 		pageNumber, err := NewLeaf(codec, store, leafCell)
 		if err != nil {
-			return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+			return retired, LocalGapOutcome{}, err
 		}
 		*root = pageNumber
-		return retired, LocalInsert[RangeRecord[RangeKey6]]{Inserted: true, PageNumber: pageNumber}, nil
+		return retired, LocalGapOutcome{Inserted: true, PageNumber: pageNumber}, nil
 	}
 	key, err := codec.ReadKey(leafCell, 0)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
-	leaf, retired, err := privateRangePath6(store, root, key, retired)
+	var leaf PrivateLeaf
+	retired, err = privateRangePath6(store, root, key, retired, &leaf)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if retired.Len() != 0 {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, corrupt("private B+tree contains a committed page")
+		return retired, LocalGapOutcome{}, corrupt("private B+tree contains a committed page")
 	}
 	header := leaf.Header
 	selector := gapSelector6{codec: codec, key: key, cellLen: len(leafCell), gap: gap}
 	index, exists, err := fixedLowerBoundU128(leaf.Page, &header, rangeCellSize6(0), key, true)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	decision, err := selector.selectAt(leaf.Page, header, &leaf.Path, index, exists)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if !decision.insert {
-		reject, err := rejection(leaf.Path, leaf.PageNumber, leaf.Header, decision)
+		built, err := rejection(leaf.Path, leaf.PageNumber, leaf.Header, decision)
 		if err != nil {
-			return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+			return retired, LocalGapOutcome{}, err
 		}
-		return retired, LocalInsert[RangeRecord[RangeKey6]]{Reject: reject, Rejected: true}, nil
+		*reject = built
+		return retired, LocalGapOutcome{}, nil
 	}
 	target := LeafTarget{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: decision.index, Exists: false}
 	pageNumber := target.PageNumber
 	positioned, fits, err := insertGapTarget(codec, store, root, leafCell, target, key, decision.fits)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if fits {
 		pageNumber = positioned.PageNumber
 	}
-	return retired, LocalInsert[RangeRecord[RangeKey6]]{Inserted: true, PageNumber: pageNumber}, nil
+	return retired, LocalGapOutcome{Inserted: true, PageNumber: pageNumber}, nil
 }
 
 // InsertIfCachedInteriorGap6 probes one cached private leaf for a
@@ -535,7 +709,7 @@ func InsertIfLocalGap6(codec RangeCodec6, store Store, root *uint32, leafCell []
 // InsertIfCachedInteriorGap).
 func InsertIfCachedInteriorGap6(codec RangeCodec6, store Store, pageNumber uint32, leafCell []byte, r RangeRecord[RangeKey6]) (CachedInsert, error) {
 	gap := rangeProbe6{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf6(codec, leafCell); err != nil {
 		return CachedInsertMiss, err
 	}
 	key, err := codec.ReadKey(leafCell, 0)
@@ -577,7 +751,7 @@ func InsertIfCachedInteriorGap6(codec RangeCodec6, store Store, pageNumber uint3
 // family-specialized form of InsertIfEdgeGap).
 func InsertIfEdgeGap6(codec RangeCodec6, store Store, root *uint32, leafCell []byte, cached *PrivateEdge, edge Edge, knownGap bool, r RangeRecord[RangeKey6]) (EdgeInsert[RangeRecord[RangeKey6]], error) {
 	gap := rangeProbe6{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf6(codec, leafCell); err != nil {
 		return EdgeInsert[RangeRecord[RangeKey6]]{}, err
 	}
 	if *root == 0 {
@@ -692,7 +866,7 @@ func InsertIfEdgeGap6(codec RangeCodec6, store Store, root *uint32, leafCell []b
 // insert_rejected_gap; the family-specialized form of
 // InsertRejectedGap).
 func InsertRejectedGap6(codec RangeCodec6, store Store, root *uint32, leafCell []byte, rejected LocalReject[RangeRecord[RangeKey6]]) (PrivatePosition, bool, error) {
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf6(codec, leafCell); err != nil {
 		return PrivatePosition{}, false, err
 	}
 	key, err := codec.ReadKey(leafCell, 0)
@@ -714,7 +888,7 @@ func requireReplacement6(codec RangeCodec6, key Key, cells [][]byte) error {
 	var firstHi, firstLo uint64
 	var previousHi, previousLo uint64
 	for index, cell := range cells {
-		if err := RequireLeaf(codec, cell); err != nil {
+		if err := requireLeaf6(codec, cell); err != nil {
 			return err
 		}
 		hi, lo, err := codec.ReadKeyLimbs(cell)
@@ -738,7 +912,7 @@ func requireReplacement6(codec RangeCodec6, key Key, cells [][]byte) error {
 // predecessor cell with a 2-3 cell replacement (Rust
 // replace_local_predecessor_with; the family-specialized form of
 // ReplaceLocalPredecessorWith).
-func ReplaceLocalPredecessorWith6(codec RangeCodec6, store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey6]], key Key, cells [][]byte) error {
+func ReplaceLocalPredecessorWith6(codec RangeCodec6, store Store, root *uint32, rejected *LocalReject[RangeRecord[RangeKey6]], key Key, cells [][]byte) error {
 	if err := requireReplacement6(codec, key, cells); err != nil {
 		return err
 	}
@@ -754,8 +928,8 @@ func ReplaceLocalPredecessorWith6(codec RangeCodec6, store Store, root *uint32, 
 // ReplaceLocalRun6 overwrites one local neighbor cell (or the
 // contiguous pair) of a rejected gap with one replacement cell (Rust
 // replace_local_run; the family-specialized form of ReplaceLocalRun).
-func ReplaceLocalRun6(codec RangeCodec6, store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey6]], run LocalRun, replacement []byte) error {
-	if err := RequireLeaf(codec, replacement); err != nil {
+func ReplaceLocalRun6(codec RangeCodec6, store Store, root *uint32, rejected *LocalReject[RangeRecord[RangeKey6]], run LocalRun, replacement []byte) error {
+	if err := requireLeaf6(codec, replacement); err != nil {
 		return err
 	}
 	start := 0

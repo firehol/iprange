@@ -316,6 +316,46 @@ membership-import and update-ipsets-workflow, and the store-concrete
 writer layer remains the larger structural option if the user
 authorizes it.
 
+Slice I-3, result-transport and emitted split path (2026-08-30,
+external-review direction): the floor claim was premature; the
+external review showed compiler-emitted struct copies (MOVUPS) at
+scale - gapLocalInsert 1,024, InsertIfLocalGap4 645, predecessorReplace
+360 - and the old whole-scenario profile included database
+construction. Evidence tooling first: IPRANGE_CPU_PROFILE now brackets
+exactly the timed operation() callback instead of the whole case
+(cmds/iprange-v4-bench measure.go + driver.go), so profiles cover only
+the measured region (98%+ sample coverage of the timed loop). Then the
+result-transport slice: LocalGapOutcome carries the compact
+inserted/page result; the emitted InsertIfLocalGap4/6 write the
+~340-byte LocalReject through a caller-owned slot (the private input's
+rejectSlot on the locator path); privateRangePath4/6 populate a
+caller-owned *PrivateLeaf; ReplaceLocalPredecessorWith4/6 and
+ReplaceLocalRun4/6 take *LocalReject so the seam's any(*rejected)
+assertion (a 340-byte deref+copy per record) became an 8-byte pointer
+assertion; the generic gap/replace entries stay as the differential
+reference (default seam branch). Escape analysis verified: allocation
+counts unchanged (27.7k for 1M ops, same as before). Second part of
+the slice: the split path was NOT rare in this workload - the generic
+splitReplacement/buildReplacement showed 100-120 ms cum (12%) - so the
+generator now emits requireLeaf (fixed leaf size + direct decode),
+codecCell, truncate, replacementCell, buildReplacement,
+replacementSplitIndex, keepLeftReplacement, firstKey, and
+splitReplacement (which drops the redundant page Inspect entirely);
+applyReplacement routes the not-fits branch to the emitted splitter and
+every emitted entry validates through requireLeaf. Measured at this
+identity (same-session matched, 1M, exact-region): nested-overwrite
+Go 723.7 ms vs Rust 312.8 ms = 2.31x (was 3.74x at the 2026-08-29
+pointer-fold, 3.5x after I-2, 2.71x after the result-transport part;
+MOVUPS in the hot chain down from 3,082 to ~1,650 total). differential
+tests (800 randomized mutations, work counters + byte-identical pages),
+both full suites, vet, and gofmt pass. Evidence:
+v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-writer-transport-20260830.csv.
+membership-import measured 74-78 ms Go vs 44-47 ms Rust (~1.65x,
+within session noise of the 1.44-1.73x band) and update-ipsets-workflow
+~2.0x; the read scenarios are untouched by this slice. Direction item 3
+(remove the per-operation writer family dispatch) is the next
+measured step.
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact

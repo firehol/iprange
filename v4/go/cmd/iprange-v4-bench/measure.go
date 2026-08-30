@@ -9,6 +9,7 @@ package main
 import (
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,26 @@ func memAllocationStats() allocationStats {
 	return allocationStats{calls: stats.Mallocs, bytes: stats.TotalAlloc}
 }
 
+// cpuProfileFile is the pprof file opened by the driver when
+// IPRANGE_CPU_PROFILE is set. operation() brackets only the exact timed
+// callback with the profile, so the sample covers the measured region
+// and not the scenario's database construction (bench-only tooling).
+var cpuProfileFile *os.File
+
+func startExactCPUProfile() {
+	if cpuProfileFile != nil {
+		_ = pprof.StartCPUProfile(cpuProfileFile)
+	}
+}
+
+func stopExactCPUProfile() {
+	if cpuProfileFile != nil {
+		pprof.StopCPUProfile()
+		_ = cpuProfileFile.Close()
+		cpuProfileFile = nil
+	}
+}
+
 func operation(callback func() error) (error, measurement) {
 	perfCommand([]byte("enable\n"))
 	rssBefore := currentRSSKib()
@@ -49,7 +70,9 @@ func operation(callback func() error) (error, measurement) {
 	runtime.GC()
 	started := time.Now()
 	before := memAllocationStats()
+	startExactCPUProfile()
 	err := callback()
+	stopExactCPUProfile()
 	after := memAllocationStats()
 	elapsed := time.Since(started)
 	fdsAfter := openFileDescriptors()

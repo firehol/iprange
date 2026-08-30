@@ -1,0 +1,2 @@
+scenario,go_median_ns,rust_median_ns,ratio,go_samples,rust_samples,notes
+nested-overwrite,723720030,312827070,2.31,5,5,same-session matched host interleaved; result-transport and emitted split-path slices (exact-region profiling)

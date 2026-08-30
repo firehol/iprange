@@ -91,7 +91,15 @@ var genericSeam4 = rangeDiffSeam[RangeRecord[RangeKey4]]{
 var emittedSeam4 = rangeDiffSeam[RangeRecord[RangeKey4]]{
 	name: "emitted-v4",
 	insertLocal: func(codec Codec[RangeRecord[RangeKey4]], store Store, root *uint32, cell []byte, retired RetiredPages, r RangeRecord[RangeKey4]) (RetiredPages, LocalInsert[RangeRecord[RangeKey4]], error) {
-		return InsertIfLocalGap4(codec.(RangeCodec4), store, root, cell, retired, r)
+		var reject LocalReject[RangeRecord[RangeKey4]]
+		retired, outcome, err := InsertIfLocalGap4(codec.(RangeCodec4), store, root, cell, retired, r, &reject)
+		if err != nil {
+			return RetiredPages{}, LocalInsert[RangeRecord[RangeKey4]]{}, err
+		}
+		if outcome.Inserted {
+			return retired, LocalInsert[RangeRecord[RangeKey4]]{Inserted: true, PageNumber: outcome.PageNumber}, nil
+		}
+		return retired, LocalInsert[RangeRecord[RangeKey4]]{Reject: reject, Rejected: true}, nil
 	},
 	cachedInterior: func(codec Codec[RangeRecord[RangeKey4]], store Store, pageNumber uint32, cell []byte, r RangeRecord[RangeKey4]) (CachedInsert, error) {
 		return InsertIfCachedInteriorGap4(codec.(RangeCodec4), store, pageNumber, cell, r)
@@ -100,10 +108,10 @@ var emittedSeam4 = rangeDiffSeam[RangeRecord[RangeKey4]]{
 		return InsertRejectedGap4(codec.(RangeCodec4), store, root, cell, rejected)
 	},
 	replacePredecessor: func(codec Codec[RangeRecord[RangeKey4]], store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey4]], key Key, cells [][]byte) error {
-		return ReplaceLocalPredecessorWith4(codec.(RangeCodec4), store, root, rejected, key, cells)
+		return ReplaceLocalPredecessorWith4(codec.(RangeCodec4), store, root, &rejected, key, cells)
 	},
 	replaceRun: func(codec Codec[RangeRecord[RangeKey4]], store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey4]], run LocalRun, replacement []byte) error {
-		return ReplaceLocalRun4(codec.(RangeCodec4), store, root, rejected, run, replacement)
+		return ReplaceLocalRun4(codec.(RangeCodec4), store, root, &rejected, run, replacement)
 	},
 	edgeGap: func(codec Codec[RangeRecord[RangeKey4]], store Store, root *uint32, cell []byte, cached *PrivateEdge, edge Edge, knownGap bool, r RangeRecord[RangeKey4]) (EdgeInsert[RangeRecord[RangeKey4]], error) {
 		return InsertIfEdgeGap4(codec.(RangeCodec4), store, root, cell, cached, edge, knownGap, r)
@@ -141,7 +149,15 @@ var genericSeam6 = rangeDiffSeam[RangeRecord[RangeKey6]]{
 var emittedSeam6 = rangeDiffSeam[RangeRecord[RangeKey6]]{
 	name: "emitted-v6",
 	insertLocal: func(codec Codec[RangeRecord[RangeKey6]], store Store, root *uint32, cell []byte, retired RetiredPages, r RangeRecord[RangeKey6]) (RetiredPages, LocalInsert[RangeRecord[RangeKey6]], error) {
-		return InsertIfLocalGap6(codec.(RangeCodec6), store, root, cell, retired, r)
+		var reject LocalReject[RangeRecord[RangeKey6]]
+		retired, outcome, err := InsertIfLocalGap6(codec.(RangeCodec6), store, root, cell, retired, r, &reject)
+		if err != nil {
+			return RetiredPages{}, LocalInsert[RangeRecord[RangeKey6]]{}, err
+		}
+		if outcome.Inserted {
+			return retired, LocalInsert[RangeRecord[RangeKey6]]{Inserted: true, PageNumber: outcome.PageNumber}, nil
+		}
+		return retired, LocalInsert[RangeRecord[RangeKey6]]{Reject: reject, Rejected: true}, nil
 	},
 	cachedInterior: func(codec Codec[RangeRecord[RangeKey6]], store Store, pageNumber uint32, cell []byte, r RangeRecord[RangeKey6]) (CachedInsert, error) {
 		return InsertIfCachedInteriorGap6(codec.(RangeCodec6), store, pageNumber, cell, r)
@@ -150,10 +166,10 @@ var emittedSeam6 = rangeDiffSeam[RangeRecord[RangeKey6]]{
 		return InsertRejectedGap6(codec.(RangeCodec6), store, root, cell, rejected)
 	},
 	replacePredecessor: func(codec Codec[RangeRecord[RangeKey6]], store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey6]], key Key, cells [][]byte) error {
-		return ReplaceLocalPredecessorWith6(codec.(RangeCodec6), store, root, rejected, key, cells)
+		return ReplaceLocalPredecessorWith6(codec.(RangeCodec6), store, root, &rejected, key, cells)
 	},
 	replaceRun: func(codec Codec[RangeRecord[RangeKey6]], store Store, root *uint32, rejected LocalReject[RangeRecord[RangeKey6]], run LocalRun, replacement []byte) error {
-		return ReplaceLocalRun6(codec.(RangeCodec6), store, root, rejected, run, replacement)
+		return ReplaceLocalRun6(codec.(RangeCodec6), store, root, &rejected, run, replacement)
 	},
 	edgeGap: func(codec Codec[RangeRecord[RangeKey6]], store Store, root *uint32, cell []byte, cached *PrivateEdge, edge Edge, knownGap bool, r RangeRecord[RangeKey6]) (EdgeInsert[RangeRecord[RangeKey6]], error) {
 		return InsertIfEdgeGap6(codec.(RangeCodec6), store, root, cell, cached, edge, knownGap, r)

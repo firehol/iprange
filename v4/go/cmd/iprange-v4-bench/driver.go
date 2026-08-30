@@ -65,13 +65,8 @@ func runCase(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		if err := pprof.StartCPUProfile(file); err != nil {
-			_ = file.Close()
-			return err
-		}
+		cpuProfileFile = file
 		result, err := dispatchScenario(arguments[1], size, aux)
-		pprof.StopCPUProfile()
-		_ = file.Close()
 		if err != nil {
 			return err
 		}

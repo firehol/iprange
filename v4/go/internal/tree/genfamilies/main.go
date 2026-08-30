@@ -332,7 +332,7 @@ func replaceBranchChild{{ .Suffix }}(store Store, pageNumber uint32, index int, 
 // committed page along the path (the inlined form of privatePathSelect:
 // page validation, the fixed-key search, and the branch-child decode are
 // family constants; the COW touch stays shared).
-func privateRangePath{{ .Suffix }}(store Store, root *uint32, key Key, retired RetiredPages) (PrivateLeaf, RetiredPages, error) {
+func privateRangePath{{ .Suffix }}(store Store, root *uint32, key Key, retired RetiredPages, leaf *PrivateLeaf) (RetiredPages, error) {
 	work.TreeLookup(1)
 	var path Path
 	pageNumber := *root
@@ -345,11 +345,11 @@ func privateRangePath{{ .Suffix }}(store Store, root *uint32, key Key, retired R
 	for {
 		page, err := store.Inspect(pageNumber)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		header, err := parseRange{{ .Suffix }}(page, store.TargetTxn(), expectedLevel, checkLevel)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		born := format.U64(page[format.HeaderBorn:])
 		if header.Level == 0 {
@@ -357,12 +357,12 @@ func privateRangePath{{ .Suffix }}(store Store, root *uint32, key Key, retired R
 			if born != store.TargetTxn() {
 				copied, err := touch(store, pageNumber, &retired)
 				if err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 				activePage = copied
 				if hasParent {
 					if err := replaceBranchChild{{ .Suffix }}(store, parentPage, parentIndex, copied); err != nil {
-						return PrivateLeaf{}, RetiredPages{}, err
+						return retired, err
 					}
 				} else {
 					*root = copied
@@ -372,39 +372,40 @@ func privateRangePath{{ .Suffix }}(store Store, root *uint32, key Key, retired R
 				// selection, and the source mapping view may be a growth
 				// or COW buffer the draft no longer owns.
 				if page, err = store.Inspect(copied); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 				if header, err = parseRange{{ .Suffix }}(page, store.TargetTxn(), expectedLevel, checkLevel); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 			}
-			return PrivateLeaf{Path: path, PageNumber: activePage, Header: header, Page: page}, retired, nil
+			*leaf = PrivateLeaf{Path: path, PageNumber: activePage, Header: header, Page: page}
+			return retired, nil
 		}
 		index, _, err := {{ .LowerBound }}(page, &header, rangeCellSize{{ .Suffix }}(header.Level), key, false)
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		child, err := branchChild{{ .Suffix }}(page, &header, index, store.PageLimit())
 		if err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		activePage := pageNumber
 		if born != store.TargetTxn() {
 			copied, err := touch(store, pageNumber, &retired)
 			if err != nil {
-				return PrivateLeaf{}, RetiredPages{}, err
+				return retired, err
 			}
 			activePage = copied
 			if hasParent {
 				if err := replaceBranchChild{{ .Suffix }}(store, parentPage, parentIndex, copied); err != nil {
-					return PrivateLeaf{}, RetiredPages{}, err
+					return retired, err
 				}
 			} else {
 				*root = copied
 			}
 		}
 		if err := path.Push(Frame{PageNumber: activePage, Index: index, ItemCount: int(header.ItemCount)}); err != nil {
-			return PrivateLeaf{}, RetiredPages{}, err
+			return retired, err
 		}
 		hasParent = true
 		parentPage = activePage
@@ -490,7 +491,7 @@ func applyReplacement{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumb
 		}
 		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
 	}
-	return splitReplacement(codec, store, pageNumber, header, edit)
+	return splitReplacement{{ .Suffix }}(codec, store, pageNumber, header, edit)
 }
 
 // replaceTarget{{ .Suffix }} replaces one leaf cell with 2-3 cells and
@@ -511,61 +512,234 @@ func replaceTarget{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint3
 	return propagateSplit(codec, store, root, &target.Path, target.PageNumber, split.leftFirst, split.rightPage, split.rightFirst, 0)
 }
 
+// requireLeaf{{ .Suffix }} validates one leaf cell of the family (the
+// inlined form of RequireLeaf: the leaf size is a family constant and
+// the decode is a direct concrete codec call, so the probe never
+// re-interfaces the codec or consults MaxLeafSize).
+func requireLeaf{{ .Suffix }}(codec {{ .CodecType }}, leafCell []byte) error {
+	if len(leafCell) == 0 || len(leafCell) > {{ .LeafSizeExpr }} {
+		return invalid("wrong B+tree leaf size")
+	}
+	work.LeafValidation(1)
+	_, err := codec.ReadLeaf(leafCell)
+	return err
+}
+
+// codecCell{{ .Suffix }} reads one fixed-cell slot of the family (the
+// inlined form of codecCell: the cell width is a family constant, so
+// the fixed slotted read is direct and the error maps identically).
+func codecCell{{ .Suffix }}(page []byte, header *Header, index int) ([]byte, error) {
+	cell, err := format.SlottedCell(page, header, index, rangeCellSize{{ .Suffix }}(header.Level))
+	if err != nil {
+		return nil, corrupt("slotted-page cell is outside the record area")
+	}
+	return cell, nil
+}
+
+// truncate{{ .Suffix }} keeps the first keep logical records of one
+// fixed-cell page (the inlined form of truncate: the fixed path with the
+// family cell width).
+func truncate{{ .Suffix }}(page []byte, header *Header, keep int) (Header, error) {
+	shape, err := format.SlottedTruncateFixed(page, header, keep, rangeCellSize{{ .Suffix }}(header.Level))
+	if err != nil {
+		return Header{}, corrupt(err.Error())
+	}
+	return shapeHeader(header, shape), nil
+}
+
+// replacementCell{{ .Suffix }} maps one virtual index to a replacement
+// cell or an existing fixed cell (the inlined form of replacementCell).
+func replacementCell{{ .Suffix }}(source []byte, header *Header, edit Replacement, index int) ([]byte, error) {
+	if offset := index - edit.index; offset >= 0 && offset < len(edit.cells) {
+		return edit.cells[offset], nil
+	}
+	sourceIndex := index
+	if index >= edit.index+len(edit.cells) {
+		sourceIndex = index - len(edit.cells) + 1
+	}
+	return codecCell{{ .Suffix }}(source, header, sourceIndex)
+}
+
+// buildReplacement{{ .Suffix }} builds one fresh page from a source page
+// and one replacement over [start, end) (the inlined form of
+// buildReplacement: page type, aux, and cell widths are family
+// constants).
+func buildReplacement{{ .Suffix }}(source []byte, header *Header, edit Replacement, start, end int, output []byte) error {
+	pageType := format.PageTypeRangeLeaf
+	if header.Level != 0 {
+		pageType = format.PageTypeRangeBranch
+	}
+	b := format.NewSlottedBuilder(output, pageType, format.U64(source[format.HeaderBorn:]), header.Level, {{ .AuxExpr }})
+	for index := start; index < end; index++ {
+		cell, err := replacementCell{{ .Suffix }}(source, header, edit, index)
+		if err != nil {
+			return err
+		}
+		if err := b.Push(output, cell); err != nil {
+			return corrupt("B+tree page build failed: " + err.Error())
+		}
+	}
+	return b.Finish(output)
+}
+
+// replacementSplitIndex{{ .Suffix }} picks the split point of one fixed
+// cell replacement (the inlined form of replacementSplitIndex: ranges
+// are always fixed cells, so the width-based midpoint is direct).
+func replacementSplitIndex{{ .Suffix }}(header *Header, edit Replacement) (int, error) {
+	return fixedSplitIndex(edit.total(int(header.ItemCount)), rangeCellSize{{ .Suffix }}(header.Level))
+}
+
+// keepLeftReplacement{{ .Suffix }} keeps the left side of one split
+// replacement on the original page (the inlined form of
+// keepLeftReplacement).
+func keepLeftReplacement{{ .Suffix }}(store Store, pageNumber uint32, header *Header, edit Replacement, middle int) error {
+	page, tag, err := store.Update(pageNumber)
+	if err != nil {
+		return err
+	}
+	if middle <= edit.index {
+		_, err := truncate{{ .Suffix }}(page, header, middle)
+		if err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	if middle < edit.index+len(edit.cells) {
+		left, err := truncate{{ .Suffix }}(page, header, edit.index+1)
+		if err != nil {
+			return err
+		}
+		if err := applyCells{{ .Suffix }}(page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
+			return err
+		}
+		return store.RestoreDirty(pageNumber, tag)
+	}
+	keep := middle - (len(edit.cells) - 1)
+	left, err := truncate{{ .Suffix }}(page, header, keep)
+	if err != nil {
+		return err
+	}
+	if err := applyCells{{ .Suffix }}(page, &left, edit.index, edit.cells); err != nil {
+		return err
+	}
+	return store.RestoreDirty(pageNumber, tag)
+}
+
+// firstKey{{ .Suffix }} reads the first key of one family page (the
+// inlined form of FirstKey: page validation and the first cell read are
+// family constants).
+func firstKey{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumber uint32, level uint16) (Key, error) {
+	targetTxn := store.TargetTxn()
+	page, err := store.Inspect(pageNumber)
+	if err != nil {
+		return Key{}, err
+	}
+	header, err := parseRange{{ .Suffix }}(page, targetTxn, level, true)
+	if err != nil {
+		return Key{}, err
+	}
+	cell, err := codecCell{{ .Suffix }}(page, &header, 0)
+	if err != nil {
+		return Key{}, err
+	}
+	return codec.ReadKey(cell, header.Level)
+}
+
+// splitReplacement{{ .Suffix }} splits one leaf replacement across two
+// pages (the inlined form of splitReplacement: split index, page build,
+// left keep, and both first keys use the family-specialized helpers).
+func splitReplacement{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumber uint32, header *Header, edit Replacement) (branchSplit, bool, error) {
+	total := edit.total(int(header.ItemCount))
+	middle, err := replacementSplitIndex{{ .Suffix }}(header, edit)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	rightPage, err := store.Allocate()
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	src, dst, tag, err := store.CopyPage(pageNumber, rightPage)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := buildReplacement{{ .Suffix }}(src, header, edit, middle, total, dst); err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := store.RestoreDirty(rightPage, tag); err != nil {
+		return branchSplit{}, false, err
+	}
+	if err := keepLeftReplacement{{ .Suffix }}(store, pageNumber, header, edit, middle); err != nil {
+		return branchSplit{}, false, err
+	}
+	work.PageSplit(1)
+	rightFirst, err := firstKey{{ .Suffix }}(codec, store, rightPage, header.Level)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	leftFirst, err := firstKey{{ .Suffix }}(codec, store, pageNumber, header.Level)
+	if err != nil {
+		return branchSplit{}, false, err
+	}
+	return branchSplit{rightPage: rightPage, rightFirst: rightFirst, leftFirst: leftFirst, level: header.Level}, true, nil
+}
+
 // InsertIfLocalGap{{ .Suffix }} inserts one leaf cell into the physical gap
 // around its key when the gap is fully local to the probed leaf (Rust
 // insert_if_local_gap; the family-specialized form of InsertIfLocalGap
 // that the writer routes to).
-func InsertIfLocalGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, leafCell []byte, retired RetiredPages, r {{ .RecordType }}) (RetiredPages, LocalInsert[{{ .RecordType }}], error) {
+func InsertIfLocalGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, leafCell []byte, retired RetiredPages, r {{ .RecordType }}, reject *LocalReject[{{ .RecordType }}]) (RetiredPages, LocalGapOutcome, error) {
 	gap := rangeProbe{{ .Suffix }}{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+	if err := requireLeaf{{ .Suffix }}(codec, leafCell); err != nil {
+		return retired, LocalGapOutcome{}, err
 	}
 	if *root == 0 {
 		pageNumber, err := NewLeaf(codec, store, leafCell)
 		if err != nil {
-			return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+			return retired, LocalGapOutcome{}, err
 		}
 		*root = pageNumber
-		return retired, LocalInsert[{{ .RecordType }}]{Inserted: true, PageNumber: pageNumber}, nil
+		return retired, LocalGapOutcome{Inserted: true, PageNumber: pageNumber}, nil
 	}
 	key, err := codec.ReadKey(leafCell, 0)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
-	leaf, retired, err := privateRangePath{{ .Suffix }}(store, root, key, retired)
+	var leaf PrivateLeaf
+	retired, err = privateRangePath{{ .Suffix }}(store, root, key, retired, &leaf)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if retired.Len() != 0 {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, corrupt("private B+tree contains a committed page")
+		return retired, LocalGapOutcome{}, corrupt("private B+tree contains a committed page")
 	}
 	header := leaf.Header
 	selector := gapSelector{{ .Suffix }}{codec: codec, key: key, cellLen: len(leafCell), gap: gap}
 	index, exists, err := {{ .LowerBound }}(leaf.Page, &header, rangeCellSize{{ .Suffix }}(0), key, true)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	decision, err := selector.selectAt(leaf.Page, header, &leaf.Path, index, exists)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if !decision.insert {
-		reject, err := rejection(leaf.Path, leaf.PageNumber, leaf.Header, decision)
+		built, err := rejection(leaf.Path, leaf.PageNumber, leaf.Header, decision)
 		if err != nil {
-			return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+			return retired, LocalGapOutcome{}, err
 		}
-		return retired, LocalInsert[{{ .RecordType }}]{Reject: reject, Rejected: true}, nil
+		*reject = built
+		return retired, LocalGapOutcome{}, nil
 	}
 	target := LeafTarget{Path: leaf.Path, PageNumber: leaf.PageNumber, Header: leaf.Header, Index: decision.index, Exists: false}
 	pageNumber := target.PageNumber
 	positioned, fits, err := insertGapTarget(codec, store, root, leafCell, target, key, decision.fits)
 	if err != nil {
-		return RetiredPages{}, LocalInsert[{{ .RecordType }}]{}, err
+		return retired, LocalGapOutcome{}, err
 	}
 	if fits {
 		pageNumber = positioned.PageNumber
 	}
-	return retired, LocalInsert[{{ .RecordType }}]{Inserted: true, PageNumber: pageNumber}, nil
+	return retired, LocalGapOutcome{Inserted: true, PageNumber: pageNumber}, nil
 }
 
 // InsertIfCachedInteriorGap{{ .Suffix }} probes one cached private leaf for a
@@ -574,7 +748,7 @@ func InsertIfLocalGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *ui
 // InsertIfCachedInteriorGap).
 func InsertIfCachedInteriorGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumber uint32, leafCell []byte, r {{ .RecordType }}) (CachedInsert, error) {
 	gap := rangeProbe{{ .Suffix }}{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf{{ .Suffix }}(codec, leafCell); err != nil {
 		return CachedInsertMiss, err
 	}
 	key, err := codec.ReadKey(leafCell, 0)
@@ -616,7 +790,7 @@ func InsertIfCachedInteriorGap{{ .Suffix }}(codec {{ .CodecType }}, store Store,
 // family-specialized form of InsertIfEdgeGap).
 func InsertIfEdgeGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, leafCell []byte, cached *PrivateEdge, edge Edge, knownGap bool, r {{ .RecordType }}) (EdgeInsert[{{ .RecordType }}], error) {
 	gap := rangeProbe{{ .Suffix }}{codec: codec, r: r}
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf{{ .Suffix }}(codec, leafCell); err != nil {
 		return EdgeInsert[{{ .RecordType }}]{}, err
 	}
 	if *root == 0 {
@@ -731,7 +905,7 @@ func InsertIfEdgeGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uin
 // insert_rejected_gap; the family-specialized form of
 // InsertRejectedGap).
 func InsertRejectedGap{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, leafCell []byte, rejected LocalReject[{{ .RecordType }}]) (PrivatePosition, bool, error) {
-	if err := RequireLeaf(codec, leafCell); err != nil {
+	if err := requireLeaf{{ .Suffix }}(codec, leafCell); err != nil {
 		return PrivatePosition{}, false, err
 	}
 	key, err := codec.ReadKey(leafCell, 0)
@@ -753,7 +927,7 @@ func requireReplacement{{ .Suffix }}(codec {{ .CodecType }}, key Key, cells [][]
 	var firstHi, firstLo uint64
 	var previousHi, previousLo uint64
 	for index, cell := range cells {
-		if err := RequireLeaf(codec, cell); err != nil {
+		if err := requireLeaf{{ .Suffix }}(codec, cell); err != nil {
 			return err
 		}
 		hi, lo, err := codec.ReadKeyLimbs(cell)
@@ -777,7 +951,7 @@ func requireReplacement{{ .Suffix }}(codec {{ .CodecType }}, key Key, cells [][]
 // predecessor cell with a 2-3 cell replacement (Rust
 // replace_local_predecessor_with; the family-specialized form of
 // ReplaceLocalPredecessorWith).
-func ReplaceLocalPredecessorWith{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, rejected LocalReject[{{ .RecordType }}], key Key, cells [][]byte) error {
+func ReplaceLocalPredecessorWith{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, rejected *LocalReject[{{ .RecordType }}], key Key, cells [][]byte) error {
 	if err := requireReplacement{{ .Suffix }}(codec, key, cells); err != nil {
 		return err
 	}
@@ -793,8 +967,8 @@ func ReplaceLocalPredecessorWith{{ .Suffix }}(codec {{ .CodecType }}, store Stor
 // ReplaceLocalRun{{ .Suffix }} overwrites one local neighbor cell (or the
 // contiguous pair) of a rejected gap with one replacement cell (Rust
 // replace_local_run; the family-specialized form of ReplaceLocalRun).
-func ReplaceLocalRun{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, rejected LocalReject[{{ .RecordType }}], run LocalRun, replacement []byte) error {
-	if err := RequireLeaf(codec, replacement); err != nil {
+func ReplaceLocalRun{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uint32, rejected *LocalReject[{{ .RecordType }}], run LocalRun, replacement []byte) error {
+	if err := requireLeaf{{ .Suffix }}(codec, replacement); err != nil {
 		return err
 	}
 	start := 0

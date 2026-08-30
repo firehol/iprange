@@ -57,6 +57,13 @@ type rangeCtx[K any] struct {
 	// stack targets escape, so the context points at the DraftStore
 	// array allocated once per draft, never per record.
 	scratch *[3][format.RangeRecordV6Size]byte
+	// rejectSlot reuses one rejection proof across the records of one
+	// operation (Rust LocalReject locals): the private-gap seam fills it
+	// through a caller-owned pointer so the hot overwrite path never
+	// returns the ~340-byte proof by value. The slot is consumed before
+	// the next record overwrites it; operations that must retain a
+	// rejection across further gap attempts use a local slot instead.
+	rejectSlot tree.LocalReject[rangeRecord[K]]
 }
 
 // change is one requested range rewrite (Rust Change).
@@ -93,14 +100,14 @@ func rangeAssignPrivate[K any](ctx *rangeCtx[K], from, to K, value uint32) (bool
 		return false, invalid("range start is after its end")
 	}
 	r := rangeRecord[K]{From: from, To: to, Value: value}
-	switch result, err := insertPrivateGap(ctx, r); {
-	case err != nil:
+	inserted, _, err := insertPrivateGap(ctx, r, &ctx.rejectSlot)
+	if err != nil {
 		return false, err
-	case result.Inserted:
-		return true, nil
-	default:
-		return assignWithHint(ctx, r, &result.Reject, result.Rejected)
 	}
+	if inserted {
+		return true, nil
+	}
+	return assignWithHint(ctx, r, &ctx.rejectSlot, true)
 }
 
 // assignWithHint completes a private assignment through a previous gap
@@ -495,24 +502,24 @@ func rangeRemove[K any](ctx *rangeCtx[K], r rangeRecord[K]) error {
 
 // insertPrivateGap inserts one range into the private tree through the gap
 // machinery (Rust insert_private_gap).
-func insertPrivateGap[K any](ctx *rangeCtx[K], r rangeRecord[K]) (tree.LocalInsert[rangeRecord[K]], error) {
+func insertPrivateGap[K any](ctx *rangeCtx[K], r rangeRecord[K], reject *tree.LocalReject[rangeRecord[K]]) (bool, uint32, error) {
 	cell, err := ctx.encodeRecord(0, r)
 	if err != nil {
-		return tree.LocalInsert[rangeRecord[K]]{}, err
+		return false, 0, err
 	}
-	retired, result, err := gapLocalInsert(ctx, r, cell, tree.RetiredPages{})
+	retired, outcome, err := gapLocalInsert(ctx, r, cell, tree.RetiredPages{}, reject)
 	if err != nil {
-		return tree.LocalInsert[rangeRecord[K]]{}, err
+		return false, 0, err
 	}
 	if retired.Len() != 0 {
-		return tree.LocalInsert[rangeRecord[K]]{}, corrupt("private range insertion retired a page")
+		return false, 0, corrupt("private range insertion retired a page")
 	}
-	if result.Inserted {
+	if outcome.Inserted {
 		if err := rangeRecordAdded(ctx, r.Value); err != nil {
-			return tree.LocalInsert[rangeRecord[K]]{}, err
+			return false, 0, err
 		}
 	}
-	return result, nil
+	return outcome.Inserted, outcome.PageNumber, nil
 }
 
 // insertPrivateRejected completes a rejected private gap insertion after

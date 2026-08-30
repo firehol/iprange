@@ -491,11 +491,12 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 		}
 		rejected, hasRejected = result.Reject, result.Rejected
 	} else {
-		result, err := insertPrivateGap(ctx, incoming)
+		var rejectedSlot tree.LocalReject[rangeRecord[K]]
+		inserted, _, err := insertPrivateGap(ctx, incoming, &rejectedSlot)
 		if err != nil {
 			return false, err
 		}
-		if result.Inserted {
+		if inserted {
 			var edge *tree.PrivateEdge
 			if wasEmpty {
 				e := tree.RootEdge(*ctx.root)
@@ -504,7 +505,7 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 			state.finish(incoming.From, order, edge)
 			return true, nil
 		}
-		rejected, hasRejected = result.Reject, result.Rejected
+		rejected, hasRejected = rejectedSlot, true
 	}
 	if !hasRejected {
 		return false, corrupt("private union gap rejection is missing")
@@ -525,17 +526,15 @@ func applyPrivate[K any](ctx *rangeCtx[K], incoming rangeRecord[K], state *union
 // applyGeneral applies one range through the general merge path (Rust
 // apply_general).
 func applyGeneral[K any](ctx *rangeCtx[K], incoming rangeRecord[K]) (bool, error) {
-	result, err := insertPrivateGap(ctx, incoming)
+	var rejectedSlot tree.LocalReject[rangeRecord[K]]
+	inserted, _, err := insertPrivateGap(ctx, incoming, &rejectedSlot)
 	if err != nil {
 		return false, err
 	}
-	if result.Inserted {
+	if inserted {
 		return true, nil
 	}
-	if !result.Rejected {
-		return false, corrupt("general union gap rejection is missing")
-	}
-	changed, _, _, err := mergeRejected(ctx, incoming, result.Reject)
+	changed, _, _, err := mergeRejected(ctx, incoming, rejectedSlot)
 	return changed, err
 }
 
@@ -555,7 +554,7 @@ func mergeRejected[K any](ctx *rangeCtx[K], incoming rangeRecord[K], rejected tr
 	if err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
-	if err := localRunReplace(ctx, rejected, decision.run, cell); err != nil {
+	if err := localRunReplace(ctx, &rejected, decision.run, cell); err != nil {
 		return false, tree.PrivatePosition{}, false, err
 	}
 	if decision.removed < 1 || *ctx.count < decision.removed-1 {
