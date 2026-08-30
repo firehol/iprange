@@ -289,20 +289,22 @@ and Rust harness runs): pages_visited 685,291 vs 688,025 (-2,734,
 both languages fetch exactly once per edit - the small delta is
 growth-step sequencing, mapping_growths 1 vs 3, remap-time page views;
 the earlier "one fewer page per edit" wording was corrected at final
-review); bytes_moved 69,145,410 vs 69,145,640 (-230 bytes, 0.0003%):
-the +3.4% over-count was a phantom start-upper term in the same-size
-slotted replace (Go counted it unconditionally; Rust keeps copy_within
-inside the shrink != 0 guard), found by the final-round Rust-parity
-reviewer, fixed in v4/go/internal/format/put.go with the pin corrected
-(put_work_test.go), and re-measured to parity; the remaining -230 bytes
-(0.0003%) is a diagnostic-count residual in the slotted-edit stream,
-sub-1% wall-time, no gate impact; bytes_zeroed 8,483,850 vs 8,487,946
-(-4,096 = one full page: Go zeroes one fewer reserve/initialize page
-than Rust). Every other counter row matches or stays go-less
-(mapping_remaps 1 vs 3; leaf_validations -199,997 and cell_probes
--1,361 report strictly less redundant validation/probe work on
-identical semantics). Live-direct-random-lookup rows are unchanged
-(3M pages visited/parsed on both sides). Pins updated in
+review); bytes_moved 69,145,640 vs 69,145,640 (EXACT MATCH) and
+bytes_zeroed 8,487,946 vs 8,487,946 (EXACT MATCH) after two
+counter-authority fixes found by the final-round Rust-parity reviewer:
+(a) the same-size slotted replace counted a phantom start-upper
+"moved" term unconditionally while Rust keeps copy_within inside the
+shrink != 0 guard (fixed in v4/go/internal/format/put.go, pin
+corrected in put_work_test.go); (b) format.Meta.EncodeMapped had no
+work counters at all - Rust counts 230 moved + 4096 zeroed per meta
+encode through PageMut (contract.rs encode_fields fill(0) plus the
+field and CRC writes), which was exactly the previously "un-attributed"
+-230 bytes and the -4,096 zeroed bytes (fixed in
+v4/go/internal/format/meta_encode.go). Every other counter row matches
+or stays go-less (mapping_remaps 1 vs 3; leaf_validations -199,997 and
+cell_probes -1,361 report strictly less redundant validation/probe
+work on identical semantics). Live-direct-random-lookup rows are
+unchanged (3M pages visited/parsed on both sides). Pins updated in
 draft_work_test.go, open_work_test.go, put_work_test.go to the new
 authority counts. Both full suites (plain + v4work), vet, gofmt, and
 genfamilies idempotence pass.

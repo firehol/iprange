@@ -5,6 +5,8 @@
 
 package format
 
+import "github.com/firehol/iprange/v4/go/internal/work"
+
 // EncodeMapped writes this meta into one complete mapped page and seals
 // the meta CRC (Rust MetaV4::encode_mapped: encode_fields then
 // crc32c_page_mut_with_zeroed at META_CRC_OFFSET). The caller provides
@@ -14,6 +16,7 @@ func (m *Meta) EncodeMapped(page []byte) error {
 		return headerErr("meta page not a complete page")
 	}
 	clear(page) // Rust encode_fields page.fill(0): zero the mapped page in place
+	work.BytesZeroed(PageSize)
 	copy(page[0:8], MainMagic[:])
 	PutU16(page[8:10], MetaSize)
 	page[10] = PageShift
@@ -55,5 +58,12 @@ func (m *Meta) EncodeMapped(page []byte) error {
 	// reserved bytes stay zero and the checksum is computed with the
 	// field itself zeroed (MetaCRC32C), then stored.
 	PutU32(page[252:256], MetaCRC32C(page))
+	// Rust counts every field write through PageMut (contract.rs
+	// MetaV4::encode_fields): 230 moved bytes per encode - magic 8 +
+	// size 2 + 4 tag/kind bytes + value tag 16 + database id 16 + txn 8 +
+	// nonce 16 + 9x u64 (72) + 10x u32 roots (40) + allocator reserve 16
+	// + structure 2x u64 (16) + 3x u32 (12) + CRC 4 - and the page fill
+	// above counts 4096 zeroed (Rust page.fill(0)).
+	work.BytesMoved(230)
 	return nil
 }

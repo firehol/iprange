@@ -2,8 +2,8 @@ scenario,field,go_count,rust_count,delta,verdict,note
 nested-overwrite,aggregation_contributions,0,0,0,match,
 nested-overwrite,aggregation_results,0,0,0,match,
 nested-overwrite,bitmap_probes,0,0,0,match,
-nested-overwrite,bytes_moved,69145410,69145640,-230,go-less,per-call formulas now byte-identical to Rust at every authority; the same-size slotted replace no longer counts the phantom start-upper shift (final-review P1 fix); measured residual -230 bytes (0.0003%), diagnostic only
-nested-overwrite,bytes_zeroed,8483850,8487946,-4096,go-less,Go zeroes one fewer full page (one fewer reserve/initialize page than Rust)
+nested-overwrite,bytes_moved,69145640,69145640,0,match,per-call formulas byte-identical to Rust at every mapped-page authority; the same-size slotted replace phantom start-upper shift and the uninstrumented Meta.EncodeMapped were fixed during the final review (put.go, meta_encode.go)
+nested-overwrite,bytes_zeroed,8487946,8487946,0,match,Meta.EncodeMapped now counts the 4096-byte page fill like Rust contract.rs encode_fields fill(0)
 nested-overwrite,catalog_interns,0,0,0,match,
 nested-overwrite,catalog_lookups,0,0,0,match,
 nested-overwrite,cell_probes,2830634,2831995,-1361,go-less,

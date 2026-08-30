@@ -205,11 +205,12 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   under-count rows above): pages_visited 685,291 vs 688,025 (Go less;
   the previous row was 0 vs 688,025 "go-less unknown"; the delta is
   growth-step sequencing, mapping_growths 1 vs 3, not per-edit fetch
-  semantics), bytes_moved 69,145,410 vs 69,145,640 (-230 bytes,
-  0.0003%; the earlier +3.4% over-count was a phantom start-upper term
-  in the same-size slotted replace, found and fixed at the final
-  review), bytes_zeroed 8,483,850 vs 8,487,946 (-4,096),
-  mapping_remaps 1 vs 3.
+  semantics), bytes_moved 69,145,640 vs 69,145,640 (EXACT MATCH) and
+  bytes_zeroed 8,487,946 vs 8,487,946 (EXACT MATCH) after the final
+  review fixed the same-size slotted replace phantom term (put.go) and
+  instrumented the previously uncounted Meta.EncodeMapped
+  (meta_encode.go, 230 moved + 4096 zeroed per encode mirroring Rust
+  contract.rs), mapping_remaps 1 vs 3.
 - `validation-phases-20260830.csv`: live-validation at 100k/1M/4M with
   the parent/worker/mapping/walk split (IPRANGE_WORKER_PHASES bench
   hook): CPU 1.66x/1.62x/1.67x, peak RSS 1.87x/1.40x/1.16x; the worker
