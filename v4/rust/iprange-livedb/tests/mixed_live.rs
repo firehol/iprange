@@ -18,9 +18,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use iprange_livedb::{
-    create_live, resolve_commit, snapshot_to, AddressFamily, CancellationToken, CommitResolution,
-    CommitResolutionMode, CommitResult, Error, ImmutableReader, Ipv4Key, LiveReader, LiveWriter,
-    LocalFileRelation, ReclaimResult, SnapshotBudget, SnapshotPublicationPolicy,
+    create_live, inspect_publication_residue, publication::DestinationContent, resolve_commit,
+    resolve_interrupted_live_transition, resolve_publication, snapshot_to, AddressFamily,
+    CancellationToken, CommitResolution, CommitResolutionMode, CommitResult, Error,
+    ImmutableReader, Ipv4Key, LiveReader, LiveResidueStatus, LiveTransitionResolutionMode,
+    LiveWriter, LocalFileRelation, PublicationResidueCoordination, PublicationResolutionMode,
+    PublicationStatus, ReclaimResult, SnapshotBudget, SnapshotPublicationPolicy,
     SnapshotSourceMode, StructureKind, TransactionBudget, ValueKind, ValueTag,
 };
 
@@ -99,6 +102,97 @@ fn go_test_binary() -> Option<PathBuf> {
         return None;
     }
     Some(out)
+}
+/// Locates the library's own unit-test binary (contains the
+/// `publication::crash_tests::crash_child` and
+/// `live_crash_tests::crash_child` subprocess entries). Cargo does not
+/// export the lib test-binary path, so it is discovered with
+/// `--message-format=json`; the mixed_live integration binary links the
+/// lib without `cfg(test)`, so only the lib's own test binary carries
+/// the fault.rs crash points.
+fn rust_lib_test_binary() -> Option<PathBuf> {
+    if Command::new("cargo").arg("--version").output().is_err() {
+        eprintln!("mixed_live: cargo toolchain not found; skipping the Rust-fabrication direction");
+        return None;
+    }
+    let manifest = env!("CARGO_MANIFEST_DIR").to_string() + "/Cargo.toml";
+    let output = Command::new("nice")
+        .args([
+            "cargo",
+            "test",
+            "--manifest-path",
+            manifest.as_str(),
+            "--lib",
+            "--no-run",
+            "--message-format=json",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "mixed_live: cargo test --lib --no-run failed; skipping the Rust-fabrication direction"
+        );
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if msg["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let Some(executable) = msg["executable"].as_str() else {
+            continue;
+        };
+        if executable.is_empty() {
+            continue;
+        }
+        if msg["target"]["name"].as_str() == Some("iprange_livedb") {
+            return Some(PathBuf::from(executable));
+        }
+    }
+    None
+}
+
+/// Runs the lib's publication crash child at one reservation point and
+/// requires Rust's code 86 (fault.rs exit; parity with the Go v4work
+/// fabrication children).
+fn run_publication_crash_child(binary: &Path, main: &Path, point: &str) {
+    let status = Command::new(binary)
+        .arg("--ignored")
+        .arg("--exact")
+        .arg("publication::crash_tests::crash_child")
+        .arg("--test-threads=1")
+        .arg("--nocapture")
+        .arg("--quiet")
+        .env("IPRANGE_V4_PUBLICATION_CRASH_PATH", main)
+        .env("IPRANGE_V4_TEST_CRASH_AT", point)
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(86),
+        "publication crash child at {point}"
+    );
+}
+
+/// Runs the lib's live crash child at one create point and requires
+/// Rust's code 86 (fault.rs exit).
+fn run_live_crash_child(binary: &Path, main: &Path, point: &str) {
+    let status = Command::new(binary)
+        .arg("--ignored")
+        .arg("--exact")
+        .arg("live_crash_tests::crash_child")
+        .arg("--test-threads=1")
+        .arg("--nocapture")
+        .arg("--quiet")
+        .env("IPRANGE_V4_TEST_PATH", main)
+        .env("IPRANGE_V4_TEST_ACTION", "create")
+        .env("IPRANGE_V4_TEST_CRASH_AT", point)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(86), "live crash child at {point}");
 }
 
 struct GoChildRun {
@@ -453,6 +547,88 @@ fn go_child_reads_cross_language_snapshot() {
     drop(std::fs::remove_file(&binary));
 }
 
+#[test]
+fn go_child_inspects_cross_language_reservation() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(go_binary) = go_test_binary() else {
+        return;
+    };
+    let Some(rust_lib) = rust_lib_test_binary() else {
+        return;
+    };
+    // Rust prepares one canonical SHA-512-bound publication reservation:
+    // the crash child dies at publication.after_reservation_directory_sync
+    // (canonical, selectable Prepared state) and leaves its complete
+    // private output behind. The Go child must inspect and resolve it.
+    let main = unique_path("reservation-main");
+    run_publication_crash_child(
+        &rust_lib,
+        &main,
+        "publication.after_reservation_directory_sync",
+    );
+    assert!(!main.exists());
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child(&go_binary, &main, "reservation");
+    finish_go_child(&mut run, deadline, "reservation");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&go_binary));
+}
+
+#[test]
+fn go_child_rolls_back_cross_language_creating_transition() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(go_binary) = go_test_binary() else {
+        return;
+    };
+    let Some(rust_lib) = rust_lib_test_binary() else {
+        return;
+    };
+    // Rust prepares one live creating intermediate: the crash child dies
+    // at create.after_sidecar_sync (main absent, sidecar creating). The
+    // Go child must roll the interrupted create back to a clean state.
+    let main = unique_path("creating-main");
+    run_live_crash_child(&rust_lib, &main, "create.after_sidecar_sync");
+    assert!(!main.exists());
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child(&go_binary, &main, "transition");
+    finish_go_child(&mut run, deadline, "transition");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&go_binary));
+}
+
+#[test]
+fn go_child_completes_cross_language_ready_transition() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(go_binary) = go_test_binary() else {
+        return;
+    };
+    let Some(rust_lib) = rust_lib_test_binary() else {
+        return;
+    };
+    // Rust prepares one live ready intermediate: the crash child dies at
+    // create.after_ready_sync (main complete, sidecar ready). The Go
+    // child must complete the transition and open the created database.
+    let main = unique_path("ready-main");
+    run_live_crash_child(&rust_lib, &main, "create.after_ready_sync");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child(&go_binary, &main, "transition-ready");
+    finish_go_child(&mut run, deadline, "transition-ready");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&go_binary));
+}
+
 // ---------------------------------------------------------------------
 // Rust child entry (spawned by the Go parent, mode via env).
 
@@ -536,6 +712,60 @@ fn mixed_live_rust_child() {
             let reader = ImmutableReader::open(&snapshot).unwrap();
             assert_eq!(reader.info().transaction_id, 2);
             assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(7));
+        }
+        Ok("reservation") => {
+            // The parent (Go) prepared one canonical SHA-512-bound
+            // publication reservation; inspect and resolve it here.
+            let inspected = inspect_publication_residue(&main, &CancellationToken::new()).unwrap();
+            assert_eq!(
+                inspected.coordination,
+                PublicationResidueCoordination::PublicationReservation
+            );
+            assert!(inspected.publication.is_some());
+            let resolved = resolve_publication(
+                &main,
+                None,
+                PublicationResolutionMode::Complete,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+            assert_eq!(resolved.publication, PublicationStatus::Published);
+            assert_eq!(resolved.destination_content, DestinationContent::Desired);
+            let reader = ImmutableReader::open(&main).unwrap();
+            assert!(reader.info().transaction_id >= 1);
+        }
+        Ok("transition") => {
+            // The parent (Go) prepared one live creating intermediate;
+            // rolling it back must leave a clean absent state.
+            let recovered = resolve_interrupted_live_transition(
+                &main,
+                LiveTransitionResolutionMode::Rollback,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+            assert_eq!(recovered.status, LiveResidueStatus::Removed);
+            assert!(!main.exists());
+            let mut sidecar = main.as_os_str().to_os_string();
+            sidecar.push(".readers");
+            assert!(!Path::new(&sidecar).exists());
+        }
+        Ok("transition-ready") => {
+            // The parent (Go) prepared one live ready intermediate;
+            // completing it must produce an openable generation-1
+            // database.
+            let recovered = resolve_interrupted_live_transition(
+                &main,
+                LiveTransitionResolutionMode::Complete,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+            assert!(matches!(
+                recovered.status,
+                LiveResidueStatus::Ready | LiveResidueStatus::Completed
+            ));
+            let mut reader = LiveReader::open(&main, &CancellationToken::new()).unwrap();
+            assert_eq!(reader.info().unwrap().transaction_id, 1);
+            reader.close().unwrap();
         }
         other => panic!("unknown mixed_live mode {other:?}"),
     }

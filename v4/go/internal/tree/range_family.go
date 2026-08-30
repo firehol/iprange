@@ -256,17 +256,17 @@ func (g RangePrivateGap[K]) decode(cell []byte) (RangeRecord[K], error) {
 	return g.Family.ReadLeaf(cell)
 }
 
-// Previous implements the non-generic LocalGap probe by value (Rust
-// LocalGap::previous): the decision needs the decoded record, but the
-// interface returns the raw probing cell so the generic tree selector
-// can decode it once into the reject value.
-func (g RangePrivateGap[K]) Previous(exact bool, cell []byte) (LocalPrevious, []byte, error) {
+// Previous implements the LocalGap probe by value (Rust
+// LocalGap::previous): a Reject decision carries the already-decoded
+// record (Rust LocalPrevious::Reject(previous)), so the selector never
+// re-decodes the probing cell.
+func (g RangePrivateGap[K]) Previous(exact bool, cell []byte) (LocalPrevious, RangeRecord[K], error) {
 	if cell == nil {
-		return LocalPreviousAccept, nil, nil
+		return LocalPreviousAccept, RangeRecord[K]{}, nil
 	}
 	previous, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, RangeRecord[K]{}, err
 	}
 	bridges := false
 	if next, ok := g.Family.Next(previous.To); ok {
@@ -274,27 +274,26 @@ func (g RangePrivateGap[K]) Previous(exact bool, cell []byte) (LocalPrevious, []
 	}
 	if exact || !g.Family.Less(previous.To, g.R.From) ||
 		(previous.Value == g.R.Value && bridges) {
-		return LocalPreviousReject, cell, nil
+		return LocalPreviousReject, previous, nil
 	}
-	return LocalPreviousAccept, nil, nil
+	return LocalPreviousAccept, RangeRecord[K]{}, nil
 }
 
-// Next implements the non-generic LocalGap probe by value (Rust
-// LocalGap::next).
-func (g RangePrivateGap[K]) Next(cell []byte) (LocalNext, []byte, error) {
+// Next implements the LocalGap probe by value (Rust LocalGap::next).
+func (g RangePrivateGap[K]) Next(cell []byte) (LocalNext, RangeRecord[K], error) {
 	if cell == nil {
-		return LocalNextAccept, nil, nil
+		return LocalNextAccept, RangeRecord[K]{}, nil
 	}
 	next, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, RangeRecord[K]{}, err
 	}
 	bridges := false
 	if boundary, ok := g.Family.Next(g.R.To); ok {
 		bridges = g.Family.Equal(boundary, next.From)
 	}
 	if g.Family.Less(g.R.To, next.From) && (next.Value != g.R.Value || !bridges) {
-		return LocalNextAccept, nil, nil
+		return LocalNextAccept, RangeRecord[K]{}, nil
 	}
-	return LocalNextReject, cell, nil
+	return LocalNextReject, next, nil
 }

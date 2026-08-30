@@ -166,6 +166,36 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   immutable-direct-random-lookup 1.792 (was 1.830), live-validation
   2.299 (was 2.235). The four unchanged scenarios are within the
   rounds' run-to-run noise; the workflow Go elapsed dropped from
-  3,478 ms to 2,450 ms, and the ratio from 3.209 to 2.189, inside the
-  SOW 2-3.5x write envelope (the milestone-4 acceptance item 9
-  expectation).
+  3,478 ms to 2,450 ms, and the ratio from 3.209 to 2.189. VOIDED:
+  the "inside the SOW 2-3.5x write envelope" acceptance of this entry
+  is historical. The 2-3.5x write envelope was superseded on
+  2026-08-29 by the binding <=1.3x acceptance (user decision 1A/2A,
+  recorded in SOW-0027); every later ratio is measured against that
+  binding and fails it as recorded in the entries below. This file is
+  the archival trace; the acceptance-gate numbers live in SOW-0027.
+
+- `rust-ratio-reader-inline-20260829.csv`: same-session matched Go-vs-Rust
+  read ratios after the reader-accessor inlining slice
+  (live-direct-random-lookup 1.67, immutable-direct-random-lookup 1.66;
+  typed inlineable probes, exact-region measurement).
+- `rust-ratio-writer-gap-20260829.csv`: same-session matched Go-vs-Rust
+  nested-overwrite ratio 3.74 after the gap-machinery copy-elimination
+  slice (Go 1,083.9 ms, Rust 290.0 ms), vs the earlier Rust baseline.
+- `dispatch-removal-ab-20260830.csv`: interleaved Go-only A/B of the
+  per-operation family-dispatch slice (nested-overwrite +10.52%,
+  membership-import +6.06%, update-ipsets-workflow -0.78%); the
+  measured regression rejected the family-dispatch removal and reused
+  the result in the bounded safe-Go decision.
+- `rust-ratio-writer-transport-20260830.csv`: same-session matched
+  Go-vs-Rust nested-overwrite 2.31 (Go 723.7 ms, Rust 312.8 ms) after
+  the result-transport and emitted split-path slices (exact-region
+  profiling).
+- `rust-ratio-reader-fixed-page-20260830.csv`: same-session matched
+  Go-vs-Rust reads after the fixed-size `[4096]byte` page-view slice
+  (live-direct-random-lookup 1.66, immutable-direct-random-lookup 1.63).
+- `necessary-work-compare-20260830.csv`: the Go/Rust necessary-work
+  counter comparison over the exact benchmark flows (36 active counter
+  rows: 25 exact matches, 10 go-less, 1 go-more definitional reader
+  leaf-validation, one genuine Go less-work win mapping_remaps 1 vs 3);
+  the Go counters still under-count mapping-layer page visits and tree
+  COW/cell bytes (tracked follow-up).

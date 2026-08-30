@@ -4,23 +4,29 @@
 
 Status: open
 
-Sub-state: pending; created by the SOW-0027 close (2026-08-29). SOW-0017
-(snapshot signing) is the next active SOW; this pending SOW documents the
-reviewer-adjudicated performance residuals recorded in SOW-0027 so the
-deferred items stay represented per the Followup Discipline. It is not
-startable until SOW-0017 unblocks and the user schedules it.
+Sub-state: pending; created 2026-08-29 to represent the measured
+Go-vs-Rust read-path and validation residuals of SOW-0027, which remains
+in-progress (reopened 2026-08-29; the performance acceptance is still
+open). SOW-0017 (snapshot signing) is the next active SOW after the
+current one; this pending SOW documents the tracked residuals so they
+stay represented per the Followup Discipline. It is not startable until
+SOW-0017 unblocks and the user schedules it.
 
 ## Requirements
 
 ### Purpose
 
 Close the measured Go-vs-Rust read-path and validation performance gaps of
-the v4 SDK that the SOW-0027 final review adjudicated as acceptable
-closure residuals with tracked follow-up work: live/immutable direct
-lookups 1.784/1.792x Rust (target envelope 1.2-1.6x) and live-validation
-2.299x (target 1.5-2x), plus the nested-overwrite 4.200x re-evaluation
-(write target envelope 2-3.5x) if future measurements show the
-duplication/codegen option is the cheapest remaining win.
+the v4 SDK against the binding SOW-0027 performance acceptance
+(user 1A/2A, 2026-08-29): CPU <=1.3x Rust for every substantial
+acceptance scenario and peak RSS <=1.3x, no unsafe ever. Current
+committed evidence: live-direct-random-lookup 1.66x and
+immutable-direct-random-lookup 1.63x (rust-ratio-reader-fixed-page-
+20260830.csv), live-validation 2.299x (rust-ratio-acceptance-
+20260828g.csv, historical). The bounded safe-Go write leads are
+measured-and-rejected in SOW-0027; the write language-floor decision
+returns to the user at SOW-0027's closure decision point, and this SOW
+stays scoped to the read-path and validation specialization.
 
 ### User Request
 
@@ -42,12 +48,15 @@ Facts:
   specialization of the fixedLowerBound probe loops (expected lookups
   ~1.4-1.5x, into/near the read envelope) and a parent/worker split
   profile to quantify the designed containment share of validation.
-- The duplication/codegen option for nested-overwrite is explicitly
-  rejected at closure: the profile evidence says the expected win
-  (~3.3-3.6x) does not reliably meet the 2-3.5x envelope, so it is
-  not cost-justified unless future measurements change that picture.
-- SOW-0027 is completed and moved to done/; SOW-0017 is the single
-  active SOW after it.
+- The duplication/codegen option for nested-overwrite is measured and
+  rejected: the dispatch-removal A/B measured a regression
+  (dispatch-removal-ab-20260830.csv: +10.52% nested-overwrite) and the
+  result-transport slice left nested-overwrite at 2.31x
+  (rust-ratio-writer-transport-20260830.csv); no bounded safe-Go lead
+  remains that can close the <=1.3x binding, so the language-floor
+  decision returns to the user at SOW-0027's closure decision point.
+- SOW-0027 remains in-progress (reopened 2026-08-29); SOW-0017 is the
+  next active SOW only after SOW-0027 closes.
 
 Inferences:
 

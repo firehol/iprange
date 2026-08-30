@@ -98,14 +98,25 @@ reader verifies both sets).
   suites.
 - Mixed live cooperation runs the same live database across languages in
   both directions: generation read-back (registration/release, sidecar
-  replacement across generations, transition/reservation states, and
-  publication inspection), writer exclusion, reclamation waiting for
-  pinned readers plus stale-slot release (oldest-reader safety), the
+  replacement across generations), writer exclusion, reclamation waiting
+  for pinned readers plus stale-slot release (oldest-reader safety), the
   canonical commit-resolution attempt set (committed, same-transaction
   different-nonce, superseded-unknown), and compact-snapshot cross-open
-  through each reader. The children are explicit entry points of the other
-  language's test binary, built at test time; the battery is env-gated
-  and linux/amd64-only so plain suites stay fast:
+  through each reader. Every resolvable reservation or live-transition
+  phase is also prepared by one implementation and inspected/resolved by
+  the other: one side leaves a canonical SHA-512-bound publication
+  reservation (crash child at publication.after_reservation_
+  directory_sync) and the other inspects it and resolves it to a
+  published main (inspect_publication_residue + resolve_publication in
+  Rust, InspectPublicationResidue + ResolvePublication in Go); one side
+  leaves a live creating intermediate (crash child at
+  create.after_sidecar_sync) and the other rolls it back to a clean
+  state (ResolveInterruptedLiveTransition Rollback), and one side leaves
+  a live ready intermediate (crash child at create.after_ready_sync) and
+  the other completes and opens the created database (Complete mode).
+  The children are explicit entry points of the other language's test
+  binary, built at test time; the battery is env-gated and
+  linux/amd64-only so plain suites stay fast:
   ```bash
   IPRANGE_V4_MIXED_LIVE=1 nice go -C v4/go test . -run TestMixedLiveRustChild -v
   IPRANGE_V4_MIXED_LIVE=1 nice cargo test --manifest-path v4/rust/Cargo.toml --test mixed_live -- --nocapture
@@ -113,7 +124,13 @@ reader verifies both sets).
   Both commands need both toolchains; each skips with a message when the
   other toolchain is missing. The Go parent builds the Rust test binary
   with `cargo test --no-run` (incremental), the Rust parent builds the
-  Go test binary with `go test -c` (incremental).
+  Go test binary with `go test -c` (incremental). The residue-prepare
+  children run the prepared side's own fault machinery: the Go parent
+  builds `-tags v4work` test binaries of internal/publication and
+  internal/live, and the Rust parent runs the lib's own unit-test binary
+  (located via `cargo test --lib --no-run --message-format=json`), each
+  dying with code 86 at the named crash point like the same-language
+  crash matrices.
 - Malformed transformations must produce equivalent public errors (the
   invalid-cases checks in both conformance suites cover this).
 - Byte-identical files are not required. Page placement, mutable tree shape,

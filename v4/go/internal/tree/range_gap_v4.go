@@ -28,15 +28,16 @@ func (g rangeProbe4) decode(cell []byte) (RangeRecord[RangeKey4], error) {
 }
 
 // Previous implements the LocalGap probe by value (Rust
-// LocalGap::previous): the raw probing cell is returned so the selector
-// decodes it once into the reject value.
-func (g rangeProbe4) Previous(exact bool, cell []byte) (LocalPrevious, []byte, error) {
+// LocalGap::previous): a Reject decision carries the already-decoded
+// record (Rust LocalPrevious::Reject(previous)), so the selector never
+// re-decodes the probing cell.
+func (g rangeProbe4) Previous(exact bool, cell []byte) (LocalPrevious, RangeRecord[RangeKey4], error) {
 	if cell == nil {
-		return LocalPreviousAccept, nil, nil
+		return LocalPreviousAccept, RangeRecord[RangeKey4]{}, nil
 	}
 	previous, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, RangeRecord[RangeKey4]{}, err
 	}
 	bridges := false
 	if next, ok := g.codec.Next(previous.To); ok {
@@ -44,28 +45,28 @@ func (g rangeProbe4) Previous(exact bool, cell []byte) (LocalPrevious, []byte, e
 	}
 	if exact || !g.codec.Less(previous.To, g.r.From) ||
 		(previous.Value == g.r.Value && bridges) {
-		return LocalPreviousReject, cell, nil
+		return LocalPreviousReject, previous, nil
 	}
-	return LocalPreviousAccept, nil, nil
+	return LocalPreviousAccept, RangeRecord[RangeKey4]{}, nil
 }
 
 // Next implements the LocalGap probe by value (Rust LocalGap::next).
-func (g rangeProbe4) Next(cell []byte) (LocalNext, []byte, error) {
+func (g rangeProbe4) Next(cell []byte) (LocalNext, RangeRecord[RangeKey4], error) {
 	if cell == nil {
-		return LocalNextAccept, nil, nil
+		return LocalNextAccept, RangeRecord[RangeKey4]{}, nil
 	}
 	next, err := g.decode(cell)
 	if err != nil {
-		return 0, nil, err
+		return 0, RangeRecord[RangeKey4]{}, err
 	}
 	bridges := false
 	if boundary, ok := g.codec.Next(g.r.To); ok {
 		bridges = g.codec.Equal(boundary, next.From)
 	}
 	if g.codec.Less(g.r.To, next.From) && (next.Value != g.r.Value || !bridges) {
-		return LocalNextAccept, nil, nil
+		return LocalNextAccept, RangeRecord[RangeKey4]{}, nil
 	}
-	return LocalNextReject, cell, nil
+	return LocalNextReject, next, nil
 }
 
 // gapSelector4 is the concrete RangeCodec4 gap selector
@@ -107,16 +108,12 @@ func (g *gapSelector4) probePredecessor(page []byte, header Header, path *Path, 
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
-		decision, raw, err := g.gap.Previous(true, cell)
+		decision, value, err := g.gap.Previous(true, cell)
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		if decision == LocalPreviousAccept {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, corrupt("exact B+tree key was accepted as a gap")
-		}
-		value, err := g.codec.ReadLeaf(raw)
-		if err != nil {
-			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		return rejectCell[RangeRecord[RangeKey4]]{index: index, value: value, valid: true}, true, nil
 	}
@@ -125,16 +122,12 @@ func (g *gapSelector4) probePredecessor(page []byte, header Header, path *Path, 
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
-		decision, raw, err := g.gap.Previous(false, cell)
+		decision, value, err := g.gap.Previous(false, cell)
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		if decision == LocalPreviousAccept {
 			return rejectCell[RangeRecord[RangeKey4]]{}, true, nil
-		}
-		value, err := g.codec.ReadLeaf(raw)
-		if err != nil {
-			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		return rejectCell[RangeRecord[RangeKey4]]{index: index - 1, value: value, valid: true}, true, nil
 	}
@@ -161,16 +154,12 @@ func (g *gapSelector4) probeSuccessor(page []byte, header Header, path *Path, in
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
-		decision, raw, err := g.gap.Next(cell)
+		decision, value, err := g.gap.Next(cell)
 		if err != nil {
 			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		if decision == LocalNextAccept {
 			return rejectCell[RangeRecord[RangeKey4]]{}, true, nil
-		}
-		value, err := g.codec.ReadLeaf(raw)
-		if err != nil {
-			return rejectCell[RangeRecord[RangeKey4]]{}, false, err
 		}
 		return rejectCell[RangeRecord[RangeKey4]]{index: successorIndex, value: value, valid: true}, true, nil
 	}

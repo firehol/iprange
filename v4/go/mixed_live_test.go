@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -105,6 +106,50 @@ func finishChild(t *testing.T, cmd *exec.Cmd, stdin io.WriteCloser, label string
 	case <-time.After(mixedChildTimeout):
 		_ = cmd.Process.Kill()
 		t.Fatalf("%s: rust child timed out", label)
+	}
+}
+
+// goFabricationBinary builds one internal-package v4work test binary
+// (the crash-fabrication child for the reservation and transition
+// modes; the Rust side runs its counterparts from the lib's own
+// unit-test binary). fault.Crash is v4work-only, so the fabricator
+// child must be a v4work build; go test -c keeps the build cached.
+func goFabricationBinary(t *testing.T, pkg, name string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), mixedChildTimeout*2)
+	defer cancel()
+	bin := filepath.Join(t.TempDir(), name)
+	cmd := exec.CommandContext(ctx, "nice", "go", "test", "-c", "-tags", "v4work", "-o", bin, pkg)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test -c -tags v4work %s failed: %v\n%s", pkg, err, out)
+	}
+	return bin
+}
+
+// runGoFabricationChild runs one v4work crash-fabrication child with
+// the named crash point (Rust fault.rs code 86) and the given extra
+// environment, requiring a clean crash exit. The IPRANGE_V4_TEST_* and
+// IPRANGE_V4_PUBLICATION_CRASH_* variables are scrubbed first so no
+// parent fault state leaks into the child (mirrors the same-language
+// reservation/lifecycle crash helpers).
+func runGoFabricationChild(t *testing.T, binary, test, point string, env ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), mixedChildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "-test.run="+test)
+	clean := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "IPRANGE_V4_TEST_") || strings.HasPrefix(kv, "IPRANGE_V4_PUBLICATION_CRASH_") {
+			continue
+		}
+		clean = append(clean, kv)
+	}
+	childEnv := append([]string{"IPRANGE_V4_TEST_CRASH_AT=" + point}, env...)
+	cmd.Env = append(clean, childEnv...)
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 86 {
+		t.Fatalf("go fabrication child at %s: err=%v, want exit 86", point, err)
 	}
 }
 
@@ -324,6 +369,55 @@ func TestMixedLiveRustChild(t *testing.T) {
 			t.Fatalf("rust snapshot child failed: %v", err)
 		}
 	})
+	t.Run("reservation", func(t *testing.T) {
+		// Go prepares one SHA-512-bound canonical publication
+		// reservation (crash child at publication.after_reservation_
+		// directory_sync); the Rust child must inspect and resolve it.
+		main := liveGenPath(t, "go-parent-reservation")
+		pubBin := goFabricationBinary(t, "./internal/publication", "publication.test")
+		runGoFabricationChild(t, pubBin, "^TestReservationCrashChild$",
+			"publication.after_reservation_directory_sync",
+			"IPRANGE_V4_PUBLICATION_CRASH_ACTION=reserve",
+			"IPRANGE_V4_PUBLICATION_CRASH_PATH="+main)
+		cmd := runRustChild(binary, main, "reservation")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust reservation child failed: %v", err)
+		}
+	})
+	t.Run("transition", func(t *testing.T) {
+		// Go prepares one live creating intermediate (crash child at
+		// create.after_sidecar_sync: main absent, sidecar creating);
+		// the Rust child must roll back to a clean absent state.
+		main := liveGenPath(t, "go-parent-transition")
+		liveBin := goFabricationBinary(t, "./internal/live", "live.test")
+		runGoFabricationChild(t, liveBin, "^TestLiveCrashChild$", "create.after_sidecar_sync",
+			"IPRANGE_V4_TEST_ACTION=create",
+			"IPRANGE_V4_TEST_PATH="+main)
+		cmd := runRustChild(binary, main, "transition")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust transition child failed: %v", err)
+		}
+	})
+	t.Run("transition-ready", func(t *testing.T) {
+		// Go prepares one live ready intermediate (crash child at
+		// create.after_ready_sync: main complete, sidecar ready); the
+		// Rust child must complete and open the created database.
+		main := liveGenPath(t, "go-parent-transition-ready")
+		liveBin := goFabricationBinary(t, "./internal/live", "live.test")
+		runGoFabricationChild(t, liveBin, "^TestLiveCrashChild$", "create.after_ready_sync",
+			"IPRANGE_V4_TEST_ACTION=create",
+			"IPRANGE_V4_TEST_PATH="+main)
+		cmd := runRustChild(binary, main, "transition-ready")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust transition-ready child failed: %v", err)
+		}
+	})
 }
 
 // TestMixedLiveGoChild is the child entry the Rust parent spawns
@@ -462,6 +556,79 @@ func TestMixedLiveGoChild(t *testing.T) {
 			t.Fatalf("snapshot lookup 15 = %d ok %v err %v, want 7", got, ok, err)
 		}
 		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case "reservation":
+		// The parent (Rust) prepared one canonical SHA-512-bound
+		// publication reservation; inspect and resolve it here.
+		inspected, err := InspectPublicationResidue(dbPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inspected.Coordination != PublicationResidueCoordinationPublicationReservation {
+			t.Fatalf("residue coordination = %v, want publication reservation", inspected.Coordination)
+		}
+		if inspected.Publication == nil {
+			t.Fatal("residue publication facts missing")
+		}
+		resolved, err := ResolvePublication(dbPath, nil, PublicationResolutionComplete, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Publication != PublicationPublished {
+			t.Fatalf("resolve status = %v, want published", resolved.Publication)
+		}
+		if resolved.DestinationContent != DestinationContentDesired {
+			t.Fatalf("destination content = %v, want desired", resolved.DestinationContent)
+		}
+		r, err := OpenImmutable(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Info(); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case "transition":
+		// The parent (Rust) prepared one live creating intermediate;
+		// rolling it back must leave a clean absent state.
+		recovered, err := ResolveInterruptedLiveTransition(dbPath, LiveTransitionResolutionRollback, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered.Status != LiveResidueStatusRemoved {
+			t.Fatalf("recovery status = %v, want removed", recovered.Status)
+		}
+		if _, err := os.Lstat(dbPath); !os.IsNotExist(err) {
+			t.Fatalf("main present after rollback: %v", err)
+		}
+		if _, err := os.Lstat(dbPath + ".readers"); !os.IsNotExist(err) {
+			t.Fatalf("sidecar present after rollback: %v", err)
+		}
+	case "transition-ready":
+		// The parent (Rust) prepared one live ready intermediate;
+		// completing it must produce an openable generation-1 database.
+		recovered, err := ResolveInterruptedLiveTransition(dbPath, LiveTransitionResolutionComplete, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered.Status != LiveResidueStatusReady && recovered.Status != LiveResidueStatusCompleted {
+			t.Fatalf("recovery status = %v, want ready or completed", recovered.Status)
+		}
+		r, err := OpenLiveReader(dbPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := r.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.TransactionID != 1 {
+			t.Fatalf("ready database transaction id = %d, want 1", info.TransactionID)
+		}
+		if _, err := r.Close(); err != nil {
 			t.Fatal(err)
 		}
 	default:

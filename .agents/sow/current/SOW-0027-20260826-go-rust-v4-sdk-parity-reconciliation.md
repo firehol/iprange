@@ -409,8 +409,8 @@ v4/go/cmd/iprange-v4-bench/necessary_work_v4work_test.go (go test
 v4/rust/iprange-livedb/src/necessary_work_tests.rs (cargo test
 --lib necessary_work_tests -- --nocapture). Both sides use the exact
 benchmark flows (same permutation, nested pattern, splitmix64 point
-shuffle, reader_work repetitions). Result (37 active counter rows):
-25 exact matches; 11 go-less (no Go counter exceeds Rust); 1
+shuffle, reader_work repetitions). Result (36 active counter rows):
+25 exact matches; 10 go-less (no Go counter exceeds Rust); 1
 go-more (reader leaf_validations 1M vs 0 - Go counts the selected
 leaf-record decode, Rust counts leaf_validation only on write-side
 decodes: definitional, byte-identical page state proven by the tree
@@ -506,18 +506,22 @@ exported Go type or be listed in the expanded rustTypeDivergence set
 adaptation); (C) every exported Go type/constant must be
 ledger-recorded or inventory-matched. rootSymbols now collects exported
 types and constants as well as functions, and follows exported type
-aliases one level into internal packages (35 alias-visible methods such
+aliases one level into internal packages (34 alias-visible methods such
 as Cardinality129.Add from internal/format) so the gate sees the true
 compiled surface - fixing the recorded false claim sol found in the old ledger
 ("lib-reexport Cardinality129 | missing | public typed cardinality
 re-export; Go keeps Cardinality129 internal" while types.go:142
 exports the alias). The ledger grew from
-294 to 816 rows: 693 present, 4 required-missing, 82 deliberate Rust
-C ABI binding absences (class c-abi; c-abi-v4.md #[doc(hidden)]
-c_abi_support exports with their Go owners recorded in the notes), 19
-closed-by-decision Go-adaptation absences (removed), and 346 go-surface
-type/constant records grouped by semantic note (error-code constants,
-validation-reason constants, adapted shapes). The old
+294 to 816 rows: 693 present (including the 408 go-surface
+type/constant/method rows: 377 exported types/constants plus 31
+alias-visible methods, grouped by semantic note - error-code
+constants, validation-reason constants, adapted shapes), 4
+required-missing, and 119 deliberate absences (82 Rust C ABI binding
+absences class c-abi; c-abi-v4.md #[doc(hidden)] c_abi_support
+exports with their Go owners recorded in the notes; 37
+closed-by-decision Go-adaptation removals across the surface and
+writer-offcontract classes). The breakdown sums: 693 + 4 + 119 = 816.
+The old
 TestParityLedgerMatchesTheGoSurface keeps the ledger-vs-Go closure
 (now type-aware: present rows accept an exported type/constant).
 Tripwire mutation-proven at this identity: deleting one go-surface type
@@ -528,31 +532,102 @@ Validation: go test ./..., go test -tags v4work ./..., go vet ./...,
 gofmt all green (linux/amd64). Files: v4/go/parity_gate_test.go,
 v4/go/parity_manifest.tsv, v4/go/parity_rust_public.tsv.
 
-SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
-normative live-only writer surface (off-contract Writer removed; advanced
-direct, membership, and structured transactions; feed lifecycle; exact
-direct replacement; first/last-seen refresh; history projection;
-membership import; cancellation), one-inode immutable feed construction
-(CreateImmutableFeedV4/V6), exact commit-outcome resolution, bounded
-oldest-reader-safe reclamation, clean-writer read-your-writes metadata,
-metadata buffer APIs, reusable zero-allocation streaming facades, the
-parity ledger covering the complete Go function surface, worker
-containment on every worker-supported platform, and the shared symmetric
-conformance corpus (6 Rust + 8 Go fixtures, all cross-opening in both
-implementations). Binding user decisions: activation sequencing vs
-SOW-0017 (Open Decision 1, 2026-08-26) and milestone-4 extension B
-(universal-key elimination, 2026-08-28; recorded verbatim under
-Historical milestone records). The post-slice-F Rust-ratio acceptance
-evidence is v4/go/cmd/iprange-v4-bench/evidence/
-rust-ratio-acceptance-20260828g.csv: update-ipsets-workflow 2.189x (Go
-2,450 ms, first apples-to-apples one-inode measurement, inside the
-2-3.5x write envelope), membership-import 1.682x, nested-overwrite
-4.200x, live/immutable lookups 1.784/1.792x, live-validation 2.299x;
-the read and validation residuals are tracked follow-up work (see
-Followup). The milestone-5 package (slices A-F), its five-reviewer
-close rounds, and the four-reviewer full-codebase mmap/file-I/O gate
-are recorded below; all earlier milestone records are superseded and
-kept verbatim under Historical milestone records.
+Milestone-5 deliverable record (2026-08-30, current state):
+SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation - the
+normative live-only writer surface (off-contract Writer removed;
+advanced direct, membership, and structured transactions; feed
+lifecycle; exact direct replacement; first/last-seen refresh; history
+projection; membership import; cancellation), one-inode immutable feed
+construction (CreateImmutableFeedV4/V6), exact commit-outcome
+resolution, bounded oldest-reader-safe reclamation, clean-writer
+read-your-writes metadata, metadata buffer APIs, reusable
+zero-allocation streaming facades, the parity ledger covering the
+complete Go function surface, worker containment that fails closed on
+every platform without a worker build (routing_other.go), and the
+shared symmetric conformance corpus (6 Rust + 8 Go fixtures, all
+cross-opening in both implementations). Binding user decisions:
+activation sequencing vs SOW-0017 (Open Decision 1, 2026-08-26),
+milestone-4 extension B (universal-key elimination, 2026-08-28;
+recorded verbatim under Historical milestone records), and the
+performance acceptance (1A/2A, 2026-08-29): CPU <=1.3x Rust for every
+substantial acceptance scenario, peak RSS <=1.3x, no unsafe ever.
+The 2-3.5x write envelope of the superseded -g acceptance is VOIDED
+by that binding. Current committed evidence against the <=1.3x
+binding: reads 1.66x live / 1.63x immutable
+(rust-ratio-reader-fixed-page-20260830.csv), nested-overwrite 2.31x
+(rust-ratio-writer-transport-20260830.csv), live-validation 2.299x
+(rust-ratio-acceptance-20260828g.csv historical); every scenario
+FAILS the binding and is recorded as such. Read/validation
+specialization is tracked by pending SOW-0030 (blocked by SOW-0017);
+the bounded safe-Go write leads are measured-and-rejected (recorded
+below); the language-floor decision returns to the user at this SOW's
+closure decision point. The milestone-5 package (slices A-F), its
+five-reviewer close rounds, and the four-reviewer full-codebase
+mmap/file-I/O gate are recorded below; all earlier milestone records
+are superseded and kept verbatim under Historical milestone records.
+
+Final-round record (5 level-1 reviewers of the lead's model, final-review
+skill adversarial, at HEAD fcf6973e; reviewers kept open for the delta
+re-review):
+- Boole (Rust parity): FAIL - P1-1 the validation bitmap WordCache never
+  pinned its cache key on an absent-leaf probe (word_cache.go), so a
+  later probe of a previously loaded region reused the stale empty answer
+  (false MembershipActiveFeedInvalid + full per-word descent divergence
+  from Rust word_cache.rs); P2-1 insert.go shadowed SlottedReplace's real
+  error behind the generic no-longer-fits class; P3-1 the gap probe
+  decoded the probing leaf cell one extra time vs Rust LocalGap.
+- Sagan (Go idioms): FAIL - P2 (one composite) plus P3s; all stated
+  as small idiomatic deviations, grouped and fixed together with the
+  Rust-parity findings.
+- Hegel (performance): PASS for evidence/code consistency; P3s: the
+  same gap-probe decode (fixed with P3-1) and a writer probe-isolation
+  A/B record note (accepted; the A/B is not run because the bounded
+  safe-Go leads are exhausted - recorded in the direction-item 4
+  measured-and-rejected status above).
+- Herschel (wire/integrity): FAIL - P2 the spec-mandated cross-language
+  publication-reservation and live creating/ready transition phases
+  (binary-format-v4.md section 21) were not covered by the mixed
+  battery.
+- Turing (APIs/records): FAIL - P2 stale close-out paragraph citing the
+  VOIDED 2-3.5x envelope and old numbers; two tracked follow-ups (v6
+  read bench, Go counters to full Rust parity) not represented in
+  Followup; Followup's in-process stance contradicted the shipped
+  fail-closed routing; SOW-0030 claimed this SOW completed; P3:
+  ledger/counter/alias counts and the evidence README gap (6 newer CSVs
+  undocumented, 20260828g envelope citation still live).
+Fixes, all verified (2026-08-30):
+- P1-1 fixed: the absent-child branch pins w.leafBase/leafPage and the
+  cache key (v4/go/internal/validation/word_cache.go), plus regression
+  test TestBitmapWordCacheAbsentRegionCacheKey.
+- P2-1 fixed: applyEdit returns SlottedReplace's own error from the
+  replace branch (v4/go/internal/tree/insert.go).
+- P3-1 fixed: LocalGap[T any] carries the already-decoded record (Rust
+  LocalPrevious::Reject/LocalNext::Reject); the generic selector and the
+  genfamilies-emitted rangeProbe4/6 never re-decode the probing cell
+  (v4/go/internal/tree/gap.go, range_family.go, genfamilies/main.go,
+  regenerated range_gap_v4.go / range_gap_v6.go, gap_test.go).
+- Herschel P2 fixed: the mixed battery now prepares each SHA-512-bound
+  publication reservation and each live creating/ready intermediate in
+  one language and inspects/resolves it in the other, in both
+  directions (publication.after_reservation_directory_sync ->
+  InspectPublicationResidue/ResolvePublication; create.after_sidecar_
+  sync -> Rollback -> Removed; create.after_ready_sync -> Complete ->
+  openable txn-1). Go-parent fabrication runs the internal/publication
+  and internal/live v4work test binaries; Rust-parent fabrication runs
+  the lib's own unit-test binary with the existing crash children;
+  files v4/go/mixed_live_test.go, v4/rust/iprange-livedb/tests/
+  mixed_live.rs, v4/conformance/README.md.
+- Turing P2/P3 fixed: stale close-out paragraph rewritten to the
+  <=1.3x binding with current numbers; Followup below; ledger 408
+  go-surface rows (377 types + 31 methods), 36 counter rows (25 match /
+  10 go-less / 1 go-more), 34 alias-visible methods; evidence README
+  voids the -g envelope citation and documents the 6 newer CSVs;
+  SOW-0030 status line corrected.
+Validation at the fixed identity: go test ./... and go test -tags v4work
+./... (32 GB address-space cap), go vet ./... both modes, gofmt,
+genfamilies regeneration idempotent, rustfmt, and both directions of
+the mixed battery (IPRANGE_V4_MIXED_LIVE=1) - 9 Go-parent modes and 9
+Rust-parent tests, all green on linux/amd64.
 
 ### Milestone-5 (2026-08-28): closure-parity work package
 
@@ -2751,6 +2826,14 @@ Tests or equivalent validation (all under `nice`, at the close identity):
   authorized hosts (see Real-use evidence).
 - .agents/sow/audit.sh: SOW-0027 status/directory and required gates
   pass (run at the close identity).
+- Final-round delta (2026-08-30): go test ./... and go test -tags
+  v4work ./... green under the 32 GB address-space cap, go vet ./...
+  both modes, gofmt clean, genfamilies regeneration idempotent
+  (range_gap_v4/v6 regenerate byte-identically), rustfmt clean on the
+  mixed battery; the mixed battery runs green in both directions with
+  IPRANGE_V4_MIXED_LIVE=1 (Go parent: 9 modes incl. reservation,
+  transition, transition-ready; Rust parent: 9 tests incl. the three
+  new cross-language residue cases), linux/amd64.
 
 Real-use evidence:
 
@@ -2970,31 +3053,41 @@ status, the artifact updates, and the move to done/.
 
 ## Followup
 
-- Tracked, reviewer-adjudicated performance residuals (Hooke, PASS
-  for closure with evidence; represented by pending
-  SOW-0030-20260829-v4-read-and-validation-specialization.md,
-  startable after SOW-0017 unblocks):
-  - lookups 1.784/1.792x vs the 1.2-1.6x target: per-width
-    specialization of the fixedLowerBound probes (expected ~1.4-1.5x;
-    the cheapest remaining read-side win; prioritized).
-  - live-validation 2.299x vs the 1.5-2x target: profile the
-    worker-spawn/containment vs walker split first; the ratio embeds
-    the designed containment cost.
-  - nested-overwrite 4.200x vs the 2-3.5x target: the duplication/
-    codegen option is re-opened only if future measurements show it
-    is the cheapest remaining win; current profile evidence says it
-    is not.
+- Performance acceptance (binding 1A/2A, <=1.3x CPU per scenario and
+  peak RSS, no unsafe): reads 1.66/1.63x, nested-overwrite 2.31x,
+  live-validation 2.299x all FAIL the binding and are open. The
+  bounded safe-Go write leads are exhausted and measured-and-rejected
+  (direction items 1-6, recorded above); the language-floor decision
+  returns to the user at this SOW's closure decision point with the
+  exact-region profiles and the measured upper-bound calculation.
+- Read/validation specialization (tracked): pending
+  SOW-0030-20260829-v4-read-and-validation-specialization.md
+  (per-width fixedLowerBound probes; worker-spawn/containment split
+  profile for validation), startable after SOW-0017 unblocks.
+- A v6 read scenario for both benches (tracked): listed as follow-up
+  in the read-path probe slice status; add a v6 direct-lookup case to
+  cmd/iprange-v4-bench and the Rust bench and re-measure the read
+  ratio.
+- Go counters to full Rust parity (tracked): count mapping-layer page
+  visits on writer paths and page bytes in the tree COW/cell paths
+  (internal/tree + draft_store CopyPage), updating the Go and Rust
+  pins in one bounded slice (necessary-work-compare-20260830.csv
+  records the current 36-row compare: 25 match, 10 go-less, 1
+  go-more).
 - Explicitly accepted divergences (recorded, not defects): Rust
   CancellationToken::from_poll is not portable to Go (nil token is
   the uncancellable form); the apple filesec creator-only machine and
   Cardinality129 stay internal with evidence notes in the parity
-  ledger; platforms without a worker build keep the documented
-  in-process stance.
+  ledger; platforms without a worker build refuse validation,
+  inspection, and recovery fail-closed with ErrorOSUnsupported
+  (v4/go/internal/routing/routing_other.go; no in-process fallback).
 - SOW-0017: snapshot signing remains dependent on accepted completion
   of this unsigned SDK parity SOW; it unblocks after this close is
   accepted.
-- No untracked deferred implementation item remains: every other item
-  from the milestone-5 ledger is implemented and verified above.
+- No untracked deferred implementation item remains: the milestone-5
+  ledger is implemented and verified, and the three tracked items
+  above (SOW-0030, v6 read bench, Go counter parity) are real
+  pending work.
 
 ## Regression Log
 

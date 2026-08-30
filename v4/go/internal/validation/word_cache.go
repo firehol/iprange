@@ -35,7 +35,7 @@ func (w *bitmapWordCache) word(ctx *context, wordIndex uint32) (uint64, error) {
 	}
 	leafBase := bit / bitmap.LeafBits * bitmap.LeafBits
 	if !w.cached || w.leafBase != leafBase {
-		if err := w.loadLeaf(ctx, bit); err != nil {
+		if err := w.loadLeaf(ctx, bit, leafBase); err != nil {
 			return 0, err
 		}
 	}
@@ -56,7 +56,7 @@ func (w *bitmapWordCache) word(ctx *context, wordIndex uint32) (uint64, error) {
 // loadLeaf resolves and caches the leaf page covering bit (Rust
 // WordCache::load_leaf: the descent re-proves every header and an absent
 // child answers empty).
-func (w *bitmapWordCache) loadLeaf(ctx *context, bit uint64) error {
+func (w *bitmapWordCache) loadLeaf(ctx *context, bit, leafBase uint64) error {
 	level, err := bitmap.RequiredLevel(w.limit)
 	if err != nil {
 		return formatError(err)
@@ -96,6 +96,13 @@ func (w *bitmapWordCache) loadLeaf(ctx *context, bit uint64) error {
 			return err
 		}
 		if child == 0 {
+			// Rust WordCache::load_leaf pins the cache key to the
+			// probed region even on a miss: a later probe of a
+			// different region must not reuse this cached empty
+			// answer, and repeated probes of the same absent region
+			// must stay cached (word_cache.rs absent-child branch).
+			w.leafBase = leafBase
+			w.leafPage = 0
 			w.cached = true
 			w.present = false
 			return nil

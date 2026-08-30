@@ -227,16 +227,22 @@ func applyEdit[T any](codec Codec[T], page []byte, header *Header, edit Edit) er
 	var changed bool
 	var err error
 	if edit.replace {
+		// The replace branch returns SlottedReplace's own error
+		// directly: a shadowed block-scoped err would otherwise mask
+		// the corruption detail behind the generic no-longer-fits
+		// class (the Rust authority reports the specific slot error).
 		oldCell, err := codecCell(codec, page, header, edit.index)
 		if err != nil {
 			return err
 		}
-		changed, err = format.SlottedReplace(page, header, edit.index, len(oldCell), edit.cell)
+		if changed, err = format.SlottedReplace(page, header, edit.index, len(oldCell), edit.cell); err != nil {
+			return err
+		}
 	} else {
 		changed, err = format.SlottedInsert(page, header, edit.index, edit.cell)
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
 	}
 	if !changed {
 		return corrupt("B+tree edit no longer fits")
