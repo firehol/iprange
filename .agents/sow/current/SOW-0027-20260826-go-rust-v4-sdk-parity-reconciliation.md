@@ -132,6 +132,56 @@ complete; the upper-bound calculation must cover all remaining
 dominant Go-only costs, not only the estimated 2-3% store-dispatch
 class.
 
+Sub-state (2026-08-30, direction item 6 - five-reviewer delta round
+on the final identity): the five level-1 reviewers (same scopes and
+models as the standing Review Gate) re-reviewed the actual final
+commit range 516f3fa8..33b3a8dd with the final-identity evidence.
+Initial verdicts:
+
+- Boole (Rust parity): FAIL - one fixable P1: the same-size slotted
+  replace counted a phantom start-upper "moved" term unconditionally
+  while Rust keeps copy_within inside the shrink != 0 guard
+  (v4/go/internal/format/put.go; Rust slotted_page.rs). The P1 is
+  fixed in the follow-up commit: Go now counts len(cell)+4 on a
+  same-size replace, the pin is corrected (put_work_test.go), and
+  the re-measured bytes_moved is 69,145,410 vs Rust 69,145,640
+  (-230 bytes, 0.0003%; the +3.4% over-count is gone). Boole also
+  corrected the pages_visited narrative (growth-step sequencing,
+  not per-edit fetch semantics) and passed the parser, FinishEdit,
+  IPv6-bench, and reverted-probe items. Re-review of the P1 fix is
+  recorded in the next sub-state.
+- Sagan (Go idioms): PASS - two P3s fixed in the follow-up commit:
+  stale RestoreDirty doc-comment names replaced with FinishEdit
+  across the tree/writer tests, and the ParseTreeHeader doc wording
+  ("pass nil" -> "pass checkLevel=false"). Idempotence of the
+  generator re-emission and gofmt were verified.
+- Hegel (performance): PASS - the final matrix is internally
+  consistent (every median recomputed from the raw alternating
+  samples), the floor claim is evidence-backed (bounds-check
+  elimination is the only remaining lever on the closest scenarios
+  and requires unsafe), the retain rules were applied, and an
+  independent 3-sample spot-check of nested-overwrite reproduced
+  the committed medians within noise. P3 notes: the bytes_moved
+  attribution, closed by Boole's P1 fix above, and the dual
+  validation-ratio narrative, reconciled in the item-3 sub-state.
+- Herschel (wire/integrity): PASS - conformance corpus (14 fixtures,
+  both directions), the 9/9 mixed-language modes per direction, the
+  FinishEdit Inspect-view audit, and the wire-format diff all clean.
+  P3 notes accepted (not fixed, deliberate): unreachable defensive
+  corruption messages remain as fail-dangerous guards, and
+  corrupt-page error text changed at the parser migration while
+  valid-page acceptance is identical.
+- Turing (APIs/records): FAIL - one P2: the Milestone-5 deliverable
+  record block still cited pre-final-identity numbers and the
+  (voided) SOW-0030/SOW-0017 dependency. Fixed in the follow-up
+  commit (final matrix numbers, dependency removed); the dual
+  validation-ratio P3 is reconciled in the item-3 sub-state.
+  Re-review of the record fixes is recorded in the next sub-state.
+
+The record-only repairs (Boole P1, Sagan P3s, Turing P2/P3) land in
+the follow-up commit with this sub-state; final delta re-review
+verdicts are appended here after they are issued.
+
 Sub-state (2026-08-30, direction item 5 - tracking repair applied):
 the stale close records are corrected in this same commit. The Outcome
 section no longer claims completion or cites the voided write envelope; it
@@ -204,8 +254,13 @@ graph: ~2.8 ms / 100k, ~15 ms / 1M, ~51 ms / 4M. Worker CPU profiles at
 InspectLayout -> walkRangeLeaf4/inspectFixedExtents/markExtent); no
 mmap, syscall, or handshake frames, so the mapping open is microsecond-
 scale and the walk is the entire measured cost. The historical 2.299x
-validation ratio (20260828g) is superseded by ~1.62-1.67x at the final
-identity; the residual vs the binding <=1.3x is the walk itself, not
+validation ratio (20260828g) is superseded at the final identity: the
+validation-phases rows are single-sample runs (1.66x / 1.62x / 1.67x at
+100k / 1M / 4M), while the acceptance matrix median for the 1M scenario
+is 1.322x (rust-ratio-final-20260830.csv, five-sample; the raw
+single-sample range is 1.16-1.8x on a 12-16 ms operation, which is why
+the medians differ); the five-sample matrix number is the acceptance
+evidence. The residual vs the binding <=1.3x is the walk itself, not
 containment overhead.
 
 Sub-state (2026-08-30, direction item 2 - necessary-work parity
@@ -228,17 +283,25 @@ workspace markers; (c) the edit tag stamp now reuses the Update page view
 throughout the tree/bitmap/writer flows), mirroring Rust update_page/
 copy_page closures that fetch the page exactly once per edit. Result
 (necessary-work-compare-20260830b.csv, nested-overwrite 100k, fresh Go
-and Rust harness runs): pages_visited 685,291 vs 688,025 (-2,734: Go
-fetches one fewer page per edit; the previous row was 0 vs 688,025,
-"go-less unknown"); bytes_moved 71,531,058 vs 69,145,640 (+3.4%, now
-fully attributed per authority: insert 61.4M, replace ~4.0M, truncate
-2.8M, builder 2.8M, init 5.6M, tag stamps 0.41M, claim 0.02M, seal 0.01M
-- the residual is a counting difference inside the slotted-edit stream,
-to attribute in the final review round); bytes_zeroed 8,483,850 vs
-8,487,946 (-4,096 = one full page: Go zeroes one fewer reserve/
-initialize page than Rust). Every other counter row matches or stays
-go-less (mapping_remaps 1 vs 3). Live-direct-random-lookup rows are
-unchanged (3M pages visited/parsed on both sides). Pins updated in
+and Rust harness runs): pages_visited 685,291 vs 688,025 (-2,734,
+0.4%; the mapping-layer visit definition is identical on both sides and
+both languages fetch exactly once per edit - the small delta is
+growth-step sequencing, mapping_growths 1 vs 3, remap-time page views;
+the earlier "one fewer page per edit" wording was corrected at final
+review); bytes_moved 69,145,410 vs 69,145,640 (-230 bytes, 0.0003%):
+the +3.4% over-count was a phantom start-upper term in the same-size
+slotted replace (Go counted it unconditionally; Rust keeps copy_within
+inside the shrink != 0 guard), found by the final-round Rust-parity
+reviewer, fixed in v4/go/internal/format/put.go with the pin corrected
+(put_work_test.go), and re-measured to parity; the remaining -230 bytes
+(0.0003%) is a diagnostic-count residual in the slotted-edit stream,
+sub-1% wall-time, no gate impact; bytes_zeroed 8,483,850 vs 8,487,946
+(-4,096 = one full page: Go zeroes one fewer reserve/initialize page
+than Rust). Every other counter row matches or stays go-less
+(mapping_remaps 1 vs 3; leaf_validations -199,997 and cell_probes
+-1,361 report strictly less redundant validation/probe work on
+identical semantics). Live-direct-random-lookup rows are unchanged
+(3M pages visited/parsed on both sides). Pins updated in
 draft_work_test.go, open_work_test.go, put_work_test.go to the new
 authority counts. Both full suites (plain + v4work), vet, gofmt, and
 genfamilies idempotence pass.
@@ -760,15 +823,20 @@ performance acceptance (1A/2A, 2026-08-29): CPU <=1.3x Rust for every
 substantial acceptance scenario, peak RSS <=1.3x, no unsafe ever.
 The 2-3.5x write envelope of the superseded -g acceptance is VOIDED
 by that binding. Current committed evidence against the <=1.3x
-binding: reads 1.66x live / 1.63x immutable
-(rust-ratio-reader-fixed-page-20260830.csv), nested-overwrite 2.31x
-(rust-ratio-writer-transport-20260830.csv), live-validation 2.299x
-(rust-ratio-acceptance-20260828g.csv historical); every scenario
-FAILS the binding and is recorded as such. Read/validation
-specialization is tracked by pending SOW-0030 (blocked by SOW-0017);
-the bounded safe-Go write leads are measured-and-rejected (recorded
-below); the language-floor decision returns to the user at this SOW's
-closure decision point. The milestone-5 package (slices A-F), its
+binding is the final-identity matrix (rust-ratio-final-20260830.csv,
+five alternating same-session release samples at HEAD 39df5b0b):
+membership-import 1.529x, nested-overwrite 2.355x,
+update-ipsets-workflow 1.925x, live/immutable direct lookups
+1.525x/1.582x (v4) and 1.326x/1.357x (v6), live-validation 1.322x;
+peak RSS fails two of eight (live v4 1.351x, live-validation 1.402x).
+EVERY scenario FAILS the binding and is recorded as such; earlier
+tables (reader-fixed-page 1.66/1.63x, writer-transport 2.31x,
+20260828g) predate the final identity and are archival. Residual
+performance ownership is the rewritten pending SOW-0030 (startable
+only after the language-floor decision; no SOW-0017 dependency); the
+bounded safe-Go leads are measured-and-rejected unless retained with
+evidence (recorded below); the language-floor decision returns to the
+user at this SOW's closure decision point. The milestone-5 package (slices A-F), its
 five-reviewer close rounds, and the four-reviewer full-codebase
 mmap/file-I/O gate are recorded below; all earlier milestone records
 are superseded and kept verbatim under Historical milestone records.

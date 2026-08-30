@@ -2,7 +2,7 @@ scenario,field,go_count,rust_count,delta,verdict,note
 nested-overwrite,aggregation_contributions,0,0,0,match,
 nested-overwrite,aggregation_results,0,0,0,match,
 nested-overwrite,bitmap_probes,0,0,0,match,
-nested-overwrite,bytes_moved,71531058,69145640,2385418,go-more,identical per-call formulas at the mapped-page write authorities; +3.4% total concentrated in slotted-insert slot-array shifts, to attribute in the final review
+nested-overwrite,bytes_moved,69145410,69145640,-230,go-less,per-call formulas now byte-identical to Rust at every authority; the same-size slotted replace no longer counts the phantom start-upper shift (final-review P1 fix); measured residual -230 bytes (0.0003%), diagnostic only
 nested-overwrite,bytes_zeroed,8483850,8487946,-4096,go-less,Go zeroes one fewer full page (one fewer reserve/initialize page than Rust)
 nested-overwrite,catalog_interns,0,0,0,match,
 nested-overwrite,catalog_lookups,0,0,0,match,
@@ -40,7 +40,7 @@ nested-overwrite,pages_reclaimed,0,0,0,match,
 nested-overwrite,pages_retired,0,0,0,match,
 nested-overwrite,pages_sealed,1376,1376,0,match,
 nested-overwrite,pages_split,1373,1373,0,match,
-nested-overwrite,pages_visited,685291,688025,-2734,go-less,mapping-layer definition on both sides; Go reuses the Update view for the tag stamp (FinishEdit), so it fetches one fewer page per edit than Rust
+nested-overwrite,pages_visited,685291,688025,-2734,go-less,mapping-layer definition identical on both sides; the -2,734 (0.4%) is growth-step sequencing (mapping_growths 1 vs 3) remap-time page views, not per-edit fetch semantics (both languages fetch exactly once per edit)
 nested-overwrite,ranges_coalesced,0,0,0,match,
 nested-overwrite,ranges_consumed,299999,299999,0,match,
 nested-overwrite,ranges_emitted,299998,299998,0,match,

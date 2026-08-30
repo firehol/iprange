@@ -337,7 +337,7 @@ func (r *RetiredPages) Clear() { r.len = 0 }
 //
 // Inspect returns one mapped page view. Update returns one private page
 // view for mutation together with the dirty-chain tag captured before
-// the mutation; the caller must restore the tag with RestoreDirty after
+// the mutation; the caller must restore the tag with FinishEdit after
 // a successful mutation, because page-header writes clear the checksum
 // slot that carries the tag until prepare seals the page (Rust
 // Store::update_page re-arms the tag after the write closure).

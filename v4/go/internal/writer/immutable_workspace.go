@@ -117,7 +117,7 @@ func (w *immutableWorkspace) Allocate() (uint32, error) {
 
 // Update returns one mapped workspace page ready for mutation (Rust
 // Store::update_page). The workspace has no dirty chain: the tag is
-// always zero and RestoreDirty is the matching no-op.
+// always zero and FinishEdit is the matching no-op.
 func (w *immutableWorkspace) Update(pageNumber uint32) ([]byte, uint32, error) {
 	if err := w.requireAllocated(pageNumber); err != nil {
 		return nil, 0, err
@@ -129,7 +129,7 @@ func (w *immutableWorkspace) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return page, 0, nil
 }
 
-// RestoreDirty is the no-op tag restore of the tag-free workspace
+// FinishEdit is the no-op tag restore of the tag-free workspace
 // (Rust PageMut has no dirty-chain re-arm).
 func (w *immutableWorkspace) FinishEdit(page []byte, tag uint32) error {
 	if tag != 0 {

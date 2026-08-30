@@ -162,10 +162,12 @@ func SlottedReplace(page []byte, header *PageHeader, index, oldLen int, cell []b
 		copy(page[newStart:], cell)
 		PutU16(page[SlottedHeaderSize+index*2:], uint16(newStart))
 		PutU16(page[HeaderUpper:], uint16(int(l.upper)+shrink))
+		moved := len(cell) + 4
 		if shrink != 0 {
 			work.BytesZeroed(uint64(shrink))
+			moved += start - int(l.upper)
 		}
-		work.BytesMoved(uint64(start - int(l.upper) + len(cell) + 4))
+		work.BytesMoved(uint64(moved))
 	}
 	return true, nil
 }

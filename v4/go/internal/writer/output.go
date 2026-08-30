@@ -108,7 +108,7 @@ type OutputBuilder struct {
 	// pageProbe is the armed output region of one in-flight page
 	// mutation (Rust with_output_protection spanning update_page and
 	// copy_page): Update and CopyPage arm it before the page fetch,
-	// RestoreDirty releases it after the caller's mutation, and every
+	// FinishEdit releases it after the caller's mutation, and every
 	// store entry point consumes an aborted window first (Go has no
 	// RAII drop, so the release point of a failed mutation is the next
 	// store operation or Close instead of the Rust closure return).
@@ -924,7 +924,7 @@ func (b *OutputBuilder) reservePage() (uint32, error) {
 // require_output_owner). The output region is armed before the page
 // fetch and stays armed across the caller's mutation (Rust
 // with_output_protection); the caller mutates the page and then calls
-// RestoreDirty, which re-verifies the output ownership and releases the
+// FinishEdit, which re-verifies the output ownership and releases the
 // window. The output has no dirty chain, so the captured tag is always
 // zero.
 func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
@@ -959,7 +959,7 @@ func (b *OutputBuilder) FinishEdit(page []byte, tag uint32) error {
 
 // CopyPage returns the source and destination page views of one copy;
 // both views stay inside the mapping and the destination ownership is
-// re-checked through RestoreDirty after the caller copies (Rust
+// re-checked through FinishEdit after the caller copies (Rust
 // copy_page; both page fetches run inside the armed Output probe). The
 // output has no dirty chain, so the destination tag is always zero;
 // work.PageCopied counts the copy.

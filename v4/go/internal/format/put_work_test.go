@@ -32,9 +32,12 @@ func TestReplaceSameSizeDoesNotScanSlots(t *testing.T) {
 	}
 	// record_start reads the target slot once; the slot array is not
 	// scanned (Rust asserts slot_scan_steps == 0 for this edit). The
-	// same-size replace writes the 2-byte cell plus the slot and upper
-	// stamps (2+2+2+2: Rust replace_cell write_source + put_u16 x2).
-	expectFmtCounters(t, work.Snapshot{SlotReads: 1, BytesMoved: 8})
+	// same-size replace rewrites the 2-byte cell and stamps the slot and
+	// upper headers (2+2+2: Rust replace_cell write_source + put_u16 x2);
+	// the free-space gap above upper is never moved on a same-size edit,
+	// mirroring Rust's shrink==0 branch which keeps copy_within inside
+	// the shrink != 0 guard.
+	expectFmtCounters(t, work.Snapshot{SlotReads: 1, BytesMoved: 6})
 }
 
 // TestTruncateFailureLeavesPageUntouched pins that truncate validates the

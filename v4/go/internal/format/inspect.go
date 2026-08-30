@@ -61,9 +61,9 @@ const (
 // followed by an exact-type re-check; the expected type is derived from
 // the level (leaf at level zero, branch above), so page type,
 // discriminator, level, and shape are all decided together. The
-// expected-level pointer keeps the recovery form's nil-means-any
-// semantics; hot paths pass nil when they do not yet know the level (the
-// root's own level starts every descent).
+// expected-level flag keeps the recovery form's level-agnostic semantics;
+// hot paths pass checkLevel=false when they do not yet know the level
+// (the root's own level starts every descent).
 func ParseTreeHeader(page []byte, selectedTxn uint64, branchType, leafType PageType, aux uint32, expectedLevel uint16, checkLevel bool) (PageHeader, error) {
 	if !PageCommonValid(page) {
 		return PageHeader{}, headerErr("slotted-page header is invalid")

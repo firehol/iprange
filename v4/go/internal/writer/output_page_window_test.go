@@ -1,6 +1,6 @@
 // The OutputBuilder page window (Rust with_output_protection across
 // update_page/copy_page): Update and CopyPage arm the output region
-// before the page fetch and RestoreDirty releases it after the caller's
+// before the page fetch and FinishEdit releases it after the caller's
 // mutation, so a worker-session fault inside the mutation window is
 // recorded with the Output role instead of chaining. The stub session
 // probe observes the arm/release pairing; the real worker control path
@@ -67,7 +67,7 @@ func wantOutputRegion(t *testing.T, b *writer.OutputBuilder, rec *probeRecorder)
 
 // stampOutputPage marks one fresh output data page owned by the output
 // transaction (the same bytes the tree codecs write when they create a
-// page header), so RestoreDirty's ownership re-check accepts it.
+// page header), so FinishEdit's ownership re-check accepts it.
 func stampOutputPage(page []byte, txn uint64) {
 	copy(page[0:4], format.PageMagic[:])
 	format.PutU64(page[format.HeaderBorn:], txn)
@@ -75,7 +75,7 @@ func stampOutputPage(page []byte, txn uint64) {
 
 // TestOutputPageWindowSpansTheMutation pins the closed window: Update
 // arms the output region before the fetch, the arm is still held while
-// the caller mutates, and RestoreDirty releases it after the ownership
+// the caller mutates, and FinishEdit releases it after the ownership
 // re-check (Rust update_page under with_output_protection).
 func TestOutputPageWindowSpansTheMutation(t *testing.T) {
 	b, _ := newOutput(t, directSpec(format.AddressFamilyIPv4), generousBudget())
@@ -99,16 +99,16 @@ func TestOutputPageWindowSpansTheMutation(t *testing.T) {
 		t.Fatalf("the page window released during the mutation: releases=%d", rec.releases)
 	}
 	if err := b.FinishEdit(page, tag); err != nil {
-		t.Fatalf("RestoreDirty: %v", err)
+		t.Fatalf("FinishEdit: %v", err)
 	}
 	if rec.releases != 1 {
-		t.Fatalf("RestoreDirty did not release exactly the one armed window: releases=%d", rec.releases)
+		t.Fatalf("FinishEdit did not release exactly the one armed window: releases=%d", rec.releases)
 	}
 	wantOutputRegion(t, b, rec)
 }
 
 // TestOutputPageWindowCopyPageSpansTheCopy pins the copy window: one
-// arm covers both page fetches, the caller's copy, and the RestoreDirty
+// arm covers both page fetches, the caller's copy, and the FinishEdit
 // re-check (Rust copy_page under with_output_protection).
 func TestOutputPageWindowCopyPageSpansTheCopy(t *testing.T) {
 	b, _ := newOutput(t, directSpec(format.AddressFamilyIPv4), generousBudget())
@@ -137,10 +137,10 @@ func TestOutputPageWindowCopyPageSpansTheCopy(t *testing.T) {
 		t.Fatalf("the page window released during the copy: releases=%d", rec.releases)
 	}
 	if err := b.FinishEdit(dst, tag); err != nil {
-		t.Fatalf("RestoreDirty: %v", err)
+		t.Fatalf("FinishEdit: %v", err)
 	}
 	if rec.releases != 1 {
-		t.Fatalf("RestoreDirty did not release exactly the one armed window: releases=%d", rec.releases)
+		t.Fatalf("FinishEdit did not release exactly the one armed window: releases=%d", rec.releases)
 	}
 	if len(rec.roles) != 1 {
 		t.Fatalf("CopyPage armed %d probes, want exactly one armed window", len(rec.roles))
@@ -150,7 +150,7 @@ func TestOutputPageWindowCopyPageSpansTheCopy(t *testing.T) {
 
 // TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation
 // pins the recorded Go deviation: without RAII, an aborted mutation
-// (no RestoreDirty) releases the armed window at the next store entry
+// (no FinishEdit) releases the armed window at the next store entry
 // point, so no session can keep a stale armed region across builder use.
 func TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation(t *testing.T) {
 	b, _ := newOutput(t, directSpec(format.AddressFamilyIPv4), generousBudget())
@@ -168,7 +168,7 @@ func TestOutputPageWindowAbortedMutationReleasesAtTheNextStoreOperation(t *testi
 	if rec.releases != 0 {
 		t.Fatalf("Update released before the abort: releases=%d", rec.releases)
 	}
-	// Abort: no RestoreDirty; the next store operation consumes the
+	// Abort: no FinishEdit; the next store operation consumes the
 	// stale window (Allocate arms nothing itself).
 	if _, err := b.Allocate(); err != nil {
 		t.Fatalf("Allocate after abort: %v", err)

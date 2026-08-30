@@ -195,7 +195,7 @@ func (s *DraftStore) Allocate() (uint32, error) {
 
 // Update returns one private mapped page view ready for mutation with the
 // dirty-chain tag captured before the mutation (Rust Store::update_page).
-// The caller must restore the tag with RestoreDirty after a successful
+// The caller must restore the tag with FinishEdit after a successful
 // mutation, because page-header writes clear the checksum slot that
 // carries the tag until prepare seals the page. Committed pages are
 // refused (Rust update_page).
@@ -227,7 +227,7 @@ func (s *DraftStore) FinishEdit(page []byte, tag uint32) error {
 // CopyPage returns the source and destination page views of one COW copy;
 // the destination must already be private for the draft. The destination's
 // dirty-chain tag is captured before the copy; the caller copies the bytes
-// and then restores the tag with RestoreDirty (Rust Store::copy_page).
+// and then restores the tag with FinishEdit (Rust Store::copy_page).
 func (s *DraftStore) CopyPage(source, destination uint32) ([]byte, []byte, uint32, error) {
 	if err := requirePage(source, s.draft.meta.PageCount); err != nil {
 		return nil, nil, 0, err
